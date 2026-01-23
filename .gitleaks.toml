@@ -1,0 +1,60 @@
+# Gitleaks configuration for Aurora
+# https://github.com/gitleaks/gitleaks
+
+title = "Aurora Gitleaks Configuration"
+
+# Use the default gitleaks rules as a base
+[extend]
+useDefault = true
+
+# Paths to ignore (regex patterns)
+[allowlist]
+paths = [
+  # Lock files
+  '''\.lock$''',
+  '''package-lock\.json$''',
+  '''yarn\.lock$''',
+
+  # Build artifacts
+  '''\.min\.js$''',
+  '''\.next/''',
+  '''node_modules/''',
+  '''\.git/''',
+
+  # Test fixtures
+  '''docker-compose\.test\.yaml$''',
+
+  # Helm templates (contain template variables, not real secrets)
+  '''k8s/templates/.*\.tpl$''',
+  '''k8s/templates/.*\.yaml$''',
+
+  # Environment example files
+  '''\.env\.example$''',
+  '''\.env\.sample$''',
+]
+
+# Regex patterns to ignore (for specific false positives)
+regexes = [
+  # GitHub Actions expressions like ${{ secrets.FOO }}
+  '''\$\{\{\s*secrets\.[^}]+\}\}''',
+
+  # Placeholder/example values
+  '''(?i)(example|sample|placeholder|changeme|your[_-]?secret)''',
+]
+
+# Specific commits to ignore (if needed)
+# commits = ["abc123"]
+
+# Stop words that indicate a value is not a real secret
+stopwords = [
+  "example",
+  "sample",
+  "placeholder",
+  "changeme",
+  "password",
+  "secret",
+  "CHANGEME",
+  "PLACEHOLDER",
+  "xxxxx",
+  "XXXXX",
+]

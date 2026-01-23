@@ -1,0 +1,315 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 0 0% 3.9%;
+    --card: 0 0% 100%;
+    --card-foreground: 0 0% 3.9%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 0 0% 3.9%;
+    --primary: 0 0% 9%;
+    --primary-foreground: 0 0% 98%;
+    --secondary: 0 0% 96.1%;
+    --secondary-foreground: 0 0% 9%;
+    --muted: 0 0% 96.1%;
+    --muted-foreground: 0 0% 45.1%;
+    --accent: 0 0% 96.1%;
+    --accent-foreground: 0 0% 9%;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 0 0% 89.8%;
+    --input: 0 0% 89.8%;
+    --ring: 0 0% 3.9%;
+    --chart-1: 12 76% 61%;
+    --chart-2: 173 58% 39%;
+    --chart-3: 197 37% 24%;
+    --chart-4: 43 74% 66%;
+    --chart-5: 27 87% 67%;
+    --radius: 0.5rem;
+  }
+  .dark {
+    --background: 0 0% 3.9%;
+    --foreground: 0 0% 98%;
+    --card: 0 0% 3.9%;
+    --card-foreground: 0 0% 98%;
+    --popover: 0 0% 3.9%;
+    --popover-foreground: 0 0% 98%;
+    --primary: 0 0% 98%;
+    --primary-foreground: 0 0% 9%;
+    --secondary: 0 0% 14.9%;
+    --secondary-foreground: 0 0% 98%;
+    --muted: 0 0% 14.9%;
+    --muted-foreground: 0 0% 63.9%;
+    --accent: 0 0% 14.9%;
+    --accent-foreground: 0 0% 98%;
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 0 0% 14.9%;
+    --input: 0 0% 14.9%;
+    --ring: 0 0% 83.1%;
+    --chart-1: 220 70% 50%;
+    --chart-2: 160 60% 45%;
+    --chart-3: 30 80% 55%;
+    --chart-4: 280 65% 60%;
+    --chart-5: 340 75% 55%;
+  }
+}
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+}
+
+/* Table styles are now handled by the Table component in /components/ui/table.tsx */
+
+/* Thinking dots animation for chatbot */
+@keyframes wave {
+  0%, 100% {
+    transform: translateY(0);
+    opacity: 0.3;
+  }
+  50% {
+    transform: translateY(-5px);
+    opacity: 1;
+  }
+}
+
+.animate-wave-1 {
+  animation: wave 1.2s ease-in-out infinite;
+}
+
+.animate-wave-2 {
+  animation: wave 1.2s ease-in-out infinite;
+  animation-delay: 0.2s;
+}
+
+.animate-wave-3 {
+  animation: wave 1.2s ease-in-out infinite;
+  animation-delay: 0.4s;
+}
+
+/* Color wave animation for text loading */
+@keyframes colorWave {
+  0% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0% 50%;
+  }
+}
+
+.color-wave-text {
+  background: linear-gradient(
+    45deg,
+    #c0c0c0,  /* Bright silver */
+    #868686,  /* Medium silver */
+    #474747,  /* Dark silver */
+    #c0c0c0  
+  );
+  background-size: 300% 300%;
+  animation: colorWave 3s ease infinite;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  display: inline-block;
+}
+
+/* Hide scrollbar but maintain scrolling functionality */
+/* For Webkit browsers (Chrome, Safari, etc.) */
+.hide-scrollbar::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
+}
+
+/* For Firefox */
+.hide-scrollbar {
+  scrollbar-width: none;
+}
+
+/* For IE and Edge */
+.hide-scrollbar {
+  -ms-overflow-style: none;
+}
+
+/* Code block styles - using Prism okaidia theme */
+/* Only override font properties, preserve Prism.js colors */
+pre[class*="language-"] {
+  font-size: 13px !important;
+  line-height: 1.4 !important;
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace !important;
+}
+
+code[class*="language-"] {
+  font-size: 13px !important;
+  line-height: 1.4 !important;
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace !important;
+}
+
+/* Ensure Prism.js syntax highlighting colors are preserved */
+.token.comment,
+.token.prolog,
+.token.doctype,
+.token.cdata {
+  color: #8292a2;
+}
+
+.token.punctuation {
+  color: #f8f8f2;
+}
+
+.token.namespace {
+  opacity: 0.7;
+}
+
+.token.property,
+.token.tag,
+.token.constant,
+.token.symbol,
+.token.deleted {
+  color: #f92672;
+}
+
+.token.boolean,
+.token.number {
+  color: #ae81ff;
+}
+
+.token.selector,
+.token.attr-name,
+.token.string,
+.token.char,
+.token.builtin,
+.token.inserted {
+  color: #a6e22e;
+}
+
+.token.operator,
+.token.entity,
+.token.url,
+.language-css .token.string,
+.style .token.string,
+.token.variable {
+  color: #f8f8f2;
+}
+
+.token.atrule,
+.token.attr-value,
+.token.function,
+.token.class-name {
+  color: #e6db74;
+}
+
+.token.keyword {
+  color: #66d9ef;
+}
+
+.token.regex,
+.token.important {
+  color: #fd971f;
+}
+
+.token.important,
+.token.bold {
+  font-weight: bold;
+}
+
+.token.italic {
+  font-style: italic;
+}
+
+.token.entity {
+  cursor: help;
+}
+
+/* Additional overrides to ensure Prism.js theme is preserved */
+/* Override any Tailwind prose styles for code blocks */
+.prose pre[class*="language-"] {
+  background: transparent !important;
+  color: inherit !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  overflow: visible !important;
+}
+
+.prose code[class*="language-"] {
+  background: transparent !important;
+  color: inherit !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  font-size: inherit !important;
+  font-weight: inherit !important;
+}
+
+/* Ensure Prism.js background colors are preserved */
+pre[class*="language-"] {
+  background: #272822 !important;
+  color: #f8f8f2 !important;
+  text-shadow: 0 1px rgba(0, 0, 0, 0.3) !important;
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace !important;
+  font-size: 13px !important;
+  line-height: 1.4 !important;
+  direction: ltr !important;
+  text-align: left !important;
+  white-space: pre !important;
+  word-spacing: normal !important;
+  word-break: normal !important;
+  word-wrap: normal !important;
+  tab-size: 4 !important;
+  hyphens: none !important;
+  border-radius: 0 !important;
+  margin: 0 !important;
+  padding: 1.5rem !important;
+}
+
+/* Ensure code elements within pre elements inherit the styling */
+pre[class*="language-"] > code[class*="language-"] {
+  background: transparent !important;
+  color: inherit !important;
+  text-shadow: inherit !important;
+  font-family: inherit !important;
+  font-size: inherit !important;
+  line-height: inherit !important;
+  padding: 1rem !important;
+  margin: 0 !important;
+  display: block !important;
+}
+
+/* Override any prose styles that might interfere */
+.prose :not(pre) > code[class*="language-"] {
+  background: transparent !important;
+  color: inherit !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  font-size: inherit !important;
+  font-weight: inherit !important;
+}
+
+/* Remove quotes that Tailwind Typography adds to inline code elements */
+.prose code::before,
+.prose code::after {
+  content: none !important;
+}
+
+/* Also remove quotes from code elements that aren't inside pre */
+.prose :not(pre) > code::before,
+.prose :not(pre) > code::after {
+  content: none !important;
+}
+/* Shimmer animation for sandbox dialog */
+@keyframes shimmer {
+  0% {
+    transform: translateX(-100%) skewX(-12deg);
+  }
+  100% {
+    transform: translateX(200%) skewX(-12deg);
+  }
+}

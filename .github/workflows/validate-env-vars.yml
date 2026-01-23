@@ -1,0 +1,57 @@
+name: Validate Environment Variables
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [ main, release ]
+    paths:
+      - 'client/**/*.ts'
+      - 'client/**/*.tsx'
+      - 'client/**/*.js'
+      - 'client/**/*.jsx'
+      - 'server/**/*.py'
+      - '.env.example'
+      - 'docker-compose*.yml'
+      - 'docker-compose*.yaml'
+      - 'prod.docker-compose.yml'
+      - 'prod.docker-compose.yaml'
+      - 'scripts/validate-env-vars.sh'
+  push:
+    branches: [ main, release ]
+    paths:
+      - 'client/**/*.ts'
+      - 'client/**/*.tsx'
+      - 'client/**/*.js'
+      - 'client/**/*.jsx'
+      - 'server/**/*.py'
+      - '.env.example'
+      - 'docker-compose*.yml'
+      - 'docker-compose*.yaml'
+      - 'prod.docker-compose.yml'
+      - 'prod.docker-compose.yaml'
+      - 'scripts/validate-env-vars.sh'
+
+jobs:
+  validate-env-vars:
+    name: Validate Environment Variables
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run environment variables validation
+        env:
+          ENV_CONTENT: ${{ secrets.ENV_CONTENT }}
+        run: |
+          bash scripts/validate-env-vars.sh
+
+      - name: Upload validation report (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: env-validation-report
+          path: |
+            /tmp/env-*.txt
+          retention-days: 7
+          if-no-files-found: ignore

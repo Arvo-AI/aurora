@@ -1,0 +1,205 @@
+name: Build Validation
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [ main, release ]
+
+permissions:
+  contents: read
+
+jobs:
+  build-dev:
+    name: Dev - ${{ matrix.service }}
+    runs-on: ubuntu-24.04
+    # Only run builds on the main repository, not on forks
+    if: github.event.pull_request.head.repo.full_name == github.repository || github.event_name != 'pull_request'
+    environment: ${{ github.ref == 'refs/heads/main' && 'staging' || (startsWith(github.ref, 'refs/heads/release/') && 'production' || 'development') }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - service: aurora-server
+            context: ./server
+            file: Dockerfile
+            target: dev
+          - service: frontend
+            context: ./client
+            file: Dockerfile
+            target: dev
+          - service: user-terminal
+            context: ./server
+            file: Dockerfile-user-terminal
+            target: ""
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Display build info
+        run: |
+          echo "Building dev/${{ matrix.service }}"
+          echo "Branch: ${{ github.ref_name }}"
+
+      - name: Prepare build args
+        id: build_args
+        env:
+          ENV_CONTENT: ${{ secrets.ENV_CONTENT }}
+        run: |
+          if [ -z "$ENV_CONTENT" ]; then
+            echo "ERROR: ENV_CONTENT secret is not set"
+            echo "This workflow should only run on the main repository with proper secrets configured"
+            exit 1
+          fi
+          echo "$ENV_CONTENT" > .env
+
+          # Read .env into newline-separated string for build-args
+          BUILD_ARGS=$(grep -v '^#' .env | grep -v '^$' || true)
+
+          # Use EOF delimiter for multiline output
+          echo "args<<EOF" >> $GITHUB_OUTPUT
+          echo "$BUILD_ARGS" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          driver-opts: image=moby/buildkit:latest
+
+      - name: Build ${{ matrix.service }}
+        uses: docker/build-push-action@v5
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.context }}/${{ matrix.file }}
+          target: ${{ matrix.target || '' }}
+          push: false
+          load: true
+          tags: aurora_${{ matrix.service }}:dev
+          build-args: ${{ steps.build_args.outputs.args }}
+          cache-from: type=gha,scope=${{ matrix.service }}-dev
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}-dev
+
+      - name: Verify image
+        run: |
+          if docker images --format "{{.Repository}}:{{.Tag}}" | grep -q "^aurora_${{ matrix.service }}:dev$"; then
+            echo "aurora_${{ matrix.service }}:dev built successfully"
+          else
+            echo "Failed to build aurora_${{ matrix.service }}:dev"
+            exit 1
+          fi
+
+  build-prod:
+    name: Prod - ${{ matrix.service }}
+    runs-on: ubuntu-24.04
+    # Only run builds on the main repository, not on forks
+    if: github.event.pull_request.head.repo.full_name == github.repository || github.event_name != 'pull_request'
+    environment: ${{ github.ref == 'refs/heads/main' && 'staging' || (startsWith(github.ref, 'refs/heads/release/') && 'production' || 'development') }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - service: aurora-server
+            context: ./server
+            file: Dockerfile
+            target: prod
+          - service: frontend
+            context: ./client
+            file: Dockerfile
+            target: prod
+          - service: user-terminal
+            context: ./server
+            file: Dockerfile-user-terminal
+            target: ""
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Display build info
+        run: |
+          echo "Building prod/${{ matrix.service }}"
+          echo "Branch: ${{ github.ref_name }}"
+
+      - name: Prepare build args
+        id: build_args
+        env:
+          ENV_CONTENT: ${{ secrets.ENV_CONTENT }}
+        run: |
+          if [ -z "$ENV_CONTENT" ]; then
+            echo "ERROR: ENV_CONTENT secret is not set"
+            echo "This workflow should only run on the main repository with proper secrets configured"
+            exit 1
+          fi
+          echo "$ENV_CONTENT" > .env
+
+          # Read .env into newline-separated string for build-args
+          BUILD_ARGS=$(grep -v '^#' .env | grep -v '^$' || true)
+
+          # Use EOF delimiter for multiline output
+          echo "args<<EOF" >> $GITHUB_OUTPUT
+          echo "$BUILD_ARGS" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          driver-opts: image=moby/buildkit:latest
+
+      - name: Build ${{ matrix.service }}
+        uses: docker/build-push-action@v5
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.context }}/${{ matrix.file }}
+          target: ${{ matrix.target || '' }}
+          push: false
+          load: true
+          tags: aurora_${{ matrix.service }}:prod
+          build-args: ${{ steps.build_args.outputs.args }}
+          cache-from: type=gha,scope=${{ matrix.service }}-prod
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}-prod
+
+      - name: Verify image
+        run: |
+          if docker images --format "{{.Repository}}:{{.Tag}}" | grep -q "^aurora_${{ matrix.service }}:prod$"; then
+            echo "aurora_${{ matrix.service }}:prod built successfully"
+          else
+            echo "Failed to build aurora_${{ matrix.service }}:prod"
+            exit 1
+          fi
+
+  build-summary:
+    name: Build Summary
+    runs-on: ubuntu-24.04
+    needs: [build-dev, build-prod]
+    if: always()
+    steps:
+      - name: Check build results
+        run: |
+          echo "================================================"
+          echo "Build Validation Summary"
+          echo "================================================"
+          echo ""
+          echo "Dev Build:  ${{ needs.build-dev.result }}"
+          echo "Prod Build: ${{ needs.build-prod.result }}"
+          echo ""
+          echo "================================================"
+
+          FAILED=false
+
+          if [ "${{ needs.build-dev.result }}" != "success" ]; then
+            echo "Dev build failed"
+            FAILED=true
+          fi
+
+          if [ "${{ needs.build-prod.result }}" != "success" ]; then
+            echo "Prod build failed"
+            FAILED=true
+          fi
+
+          if [ "$FAILED" = "true" ]; then
+            echo ""
+            echo "One or more builds failed"
+            exit 1
+          fi
+
+          echo "All builds passed successfully"

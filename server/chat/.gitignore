@@ -1,0 +1,49 @@
+*.env
+__pycache__
+.DS_Store
+.vscode
+.idea
+*.pyc
+*.log
+.venv
+*.gguf
+*.sql
+
+venv/
+__pycache__/
+
+# dependencies
+frontend/node_modules
+frontend/.pnp
+.pnp.js
+.yarn/install-state.gz
+
+# testing
+frontend/coverage
+
+# next.js
+frontend/.next/
+frontend/out/
+
+# production
+frontend/build
+
+# misc
+.DS_Store
+*.pem
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# local env files
+.env*.local
+
+# vercel
+.vercel
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+mysql-init/desktop.ini

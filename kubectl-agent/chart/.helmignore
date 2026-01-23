@@ -1,0 +1,9 @@
+# Patterns to ignore when building packages.
+.git/
+.gitignore
+.helmignore
+.DS_Store
+*.swp
+*.bak
+*.tmp
+.README-DEV.md

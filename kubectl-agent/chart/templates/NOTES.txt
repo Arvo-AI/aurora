@@ -1,0 +1,17 @@
+{{- if or (not .Values.aurora.agentToken) (eq .Values.aurora.agentToken "") }}
+Warning: set aurora.agentToken:
+  helm upgrade {{ .Release.Name }} aurora/aurora-kubectl-agent \
+    --namespace {{ .Release.Namespace }} --reuse-values \
+    --set aurora.agentToken="<YOUR_TOKEN>"
+{{- else }}
+Aurora kubectl Agent installed.
+Namespace: {{ .Release.Namespace }}
+Release:   {{ .Release.Name }}
+Cluster:   {{ .Values.aurora.clusterId | default "auto-generated" }}
+Backend:   {{ .Values.aurora.backendUrl }}
+WebSocket: {{ .Values.aurora.wsEndpoint }}
+Resources: SA {{ include "aurora-kubectl-agent.serviceAccountName" . }}, ClusterRole/Binding, Deployment, Service, Secret
+Status:    kubectl get pods -n {{ .Release.Namespace }} -l app=aurora-kubectl-agent
+Logs:      kubectl logs -n {{ .Release.Namespace }} -l app=aurora-kubectl-agent --tail=50 -f
+{{- end }}
+

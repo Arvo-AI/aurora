@@ -1,0 +1,18 @@
+apiVersion: v2
+name: aurora-kubectl-agent
+description: Aurora agent for secure kubectl access from on-premise Kubernetes clusters
+type: application
+version: 1.0.3
+appVersion: "1.0.3"
+keywords:
+  - aurora
+  - kubectl
+  - kubernetes
+  - agent
+home: https://github.com/Arvo-AI
+sources:
+  - https://github.com/Arvo-AI
+maintainers:
+  - name: Arvo AI
+    email: info@arvoai.ca
+

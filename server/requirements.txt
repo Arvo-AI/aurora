@@ -1,0 +1,85 @@
+azure-identity==1.13.0
+azure-mgmt-resource==23.0.1
+blinker==1.9.0
+boto3==1.36.26
+cachetools==5.5.0
+certifi==2024.12.14
+charset-normalizer==3.4.0
+click==8.1.8
+Flask==3.1.0
+Flask-Cors==4.0.0
+flask-jwt-extended>=4.4.4
+google-api-core>=2.24.0  # Flexible for langchain compatibility
+google-api-python-client==2.86.0
+google-auth>=2.45.0  # Required by langchain-google-genai 4.x
+google-auth-httplib2>=0.1.0
+google-cloud-bigquery==3.27.0
+google-cloud-billing==1.15.0
+google-cloud-core==2.4.1
+google-cloud-monitoring==2.24.0
+google-crc32c==1.6.0
+hvac>=2.1.0  # HashiCorp Vault client for OSS secrets backend
+google-resumable-media==2.7.2
+googleapis-common-protos==1.66.0
+grpc-google-iam-v1==0.14.0
+grpcio==1.62.2
+grpcio-status==1.62.2
+idna==3.10
+itsdangerous==2.2.0
+Jinja2==3.1.5
+kubernetes==26.1.0
+langchain==1.2.6
+langchain_community==0.3.31
+langchain_core==1.2.7
+langchain_openai==1.1.7
+langchain-anthropic>=0.3.0
+langchain-google-genai>=2.0.0
+langgraph==1.0.6
+MarkupSafe==3.0.2
+msal==1.22.0
+openai>=1.109.1,<3.0.0
+anthropic>=0.18.0
+google-cloud-aiplatform>=1.38.0
+packaging==24.2
+proto-plus==1.25.0
+protobuf>=4.25.0,<5.0.0
+psycopg2-binary
+bcrypt>=4.0.0
+pyasn1==0.6.1
+pyasn1_modules==0.4.1
+pydantic>=2.9.0  # Flexible for langchain compatibility
+pypdf>=4.0.0
+python-dateutil==2.9.0.post0
+python-dotenv==1.0.1
+requests==2.32.5
+rsa==4.9
+six==1.17.0
+typing_extensions==4.12.2
+urllib3>=1.25.4,<2.1
+Werkzeug==3.1.3
+weaviate_client>=4.15.0  # Updated for httpx>=0.28 compatibility
+websockets==14.1
+pyyaml==6.0.1
+celery==5.3.6
+redis==5.0.1
+google-cloud-resource-manager==1.13.1
+google-cloud-iam==2.19.0
+google-cloud-service-usage==1.13.1
+google-cloud-asset>=3.29.0,<4.0.0
+
+# typing-extensions>=4.0.0
+
+
+# Web search functionality
+beautifulsoup4>=4.11.0
+
+# For Deployment Servers (staging, production)
+gunicorn==23.0.0
+gevent==25.9.1
+
+# OVH Cloud Integration
+ovh==1.1.0
+Flask-Limiter>=3.5.0
+
+# SSH client for VM credential validation
+paramiko>=3.4.0

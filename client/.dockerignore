@@ -1,0 +1,32 @@
+# --- Node modules (exclude all variations) ---
+node_modules
+node_modules/
+**/node_modules
+
+# --- Next.js build outputs ---
+.next
+out
+
+# --- OS-specific files ---
+.DS_Store
+Thumbs.db
+
+# --- IDE-specific directories ---
+.vscode
+.idea
+
+# --- Git folder ---
+.git
+
+# --- Logs ---
+*.log
+npm-debug.log
+yarn-error.log
+pnpm-debug.log
+
+# --- Coverage (if tests produce coverage reports) ---
+coverage
+
+# --- Other potential build artifacts (depending on your setup) ---
+dist
+build

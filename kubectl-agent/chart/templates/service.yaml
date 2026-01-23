@@ -1,0 +1,23 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "aurora-kubectl-agent.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "aurora-kubectl-agent.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.agent.service.type }}
+  ports:
+    - port: {{ .Values.agent.service.port }}
+      targetPort: {{ .Values.agent.service.targetPort }}
+      protocol: TCP
+      name: http
+    {{- if .Values.monitoring.metrics.enabled }}
+    - port: {{ .Values.monitoring.metrics.port }}
+      targetPort: {{ .Values.monitoring.metrics.port }}
+      protocol: TCP
+      name: metrics
+    {{- end }}
+  selector:
+    {{- include "aurora-kubectl-agent.selectorLabels" . | nindent 4 }}
+

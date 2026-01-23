@@ -1,0 +1,54 @@
+# SearXNG Configuration for Aurora
+# This is a basic configuration that enables JSON API access
+
+use_default_settings: true
+
+general:
+  debug: false
+  instance_name: "Aurora SearXNG"
+
+server:
+  port: 8080
+  bind_address: "0.0.0.0"
+  # secret_key is set via SEARXNG_SECRET environment variable
+  limiter: false  # Disable rate limiting for internal use
+  image_proxy: true
+
+search:
+  safe_search: 0
+  default_lang: "en"
+  formats:
+    - html
+    - json
+
+engines:
+  # Enable major search engines
+  - name: google
+    engine: google
+    shortcut: go
+
+  - name: duckduckgo
+    engine: duckduckgo
+    shortcut: ddg
+
+  - name: bing
+    engine: bing
+    shortcut: bi
+
+  - name: wikipedia
+    engine: wikipedia
+    shortcut: wp
+
+  - name: github
+    engine: github
+    shortcut: gh
+
+  - name: stackoverflow
+    engine: stackexchange
+    shortcut: so
+    api_site: 'stackoverflow'
+    categories: [it, q&a]
+
+  - name: reddit
+    engine: reddit
+    shortcut: re

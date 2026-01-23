@@ -1,0 +1,85 @@
+# Ignore __pycache__ directories
+__pycache__/
+
+# Ignore all .pyc and .pyo files (compiled Python files)
+*.pyc
+*.pyo
+*.pyd
+
+# Ignore environment files (optional but commonly used)
+.env*
+!.env.example
+.venv
+venv/
+.venv-secrets/
+aurora-service-account.json
+
+node_modules/
+node_modules
+
+# Next.js build output (use ** to match nested directories)
+**/.next/
+
+# mac os
+.DS_Store
+
+# AWS CLI installation artifacts
+awscliv2.zip
+*.pem
+*.key
+service-account.json
+
+# for dev work
+*sublime-flux-414616-f5577144763d.json
+*sublime-flux-414616-f5577144763d.json
+*auroracloud.json
+*Phase1_Implementation_Summary.md
+migrations/phase1_stateless_migration.py
+Roo-Code/
+/chat/logs
+/terraform_workdir
+server/terraform_workdir
+k8s/values.yaml
+
+# Configuration files with local changes
+# config.py  # Re-enabled: config only reads from env, no secrets
+*.env.master
+config/env/.env.prod
+
+# Production configuration files (keep on remote, ignore locally)
+docker-compose-prod.yml
+rebuild _scripts/env.prod.template
+rebuild _scripts/rebuild_prod.sh
+rebuild _scripts/rebuild_prod.bat
+
+# Large database files
+scripts/gcp/chroma_db/chroma.sqlite3
+scripts/README.md
+celerybeat-schedule
+celerybeat.pid
+server/aurora-service-account.json
+
+scripts/terminal_pods/*
+minikube-linux-amd64
+
+#windsurf rules
+.windsurf/rules
+
+# OIDC issuer generated keys and temp files
+keystore/
+key.json
+*.pem
+*.pub
+
+# others
+*.sql
+
+# local k8s values
+values-local.yaml
+
+# Build and publish scripts (keep local only)
+scripts/build-kubectl-agent.sh
+scripts/publish-helm-chart.sh
+
+# Third-party helm charts (Datadog)
+helm-charts/.worktrees/

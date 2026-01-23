@@ -1,0 +1,2 @@
+"""Slack integration routes package."""
+

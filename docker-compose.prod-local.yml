@@ -1,0 +1,568 @@
+# ============================================================================
+# Aurora Production-Local Docker Compose
+# ============================================================================
+# This configuration provides a production-like environment for local testing.
+# It includes persistent storage for Vault and SeaweedFS, making it suitable
+# for evaluating Aurora on a developer's machine.
+#
+# Usage:
+#   make init              # First-time setup (generates secrets, initializes Vault)
+#   make prod-local         # Start the stack
+#   make prod-local-down    # Stop the stack
+#   make prod-local-clean   # Stop and remove volumes
+#
+# Key differences from prod.docker-compose.yml:
+#   - Vault runs in file storage mode (persistent, production-like)
+#   - SeaweedFS has persistent volumes
+#   - Sensible defaults for local testing
+#   - No GCP service account required (optional)
+# ============================================================================
+
+x-common-env: &common-env
+  # Global
+  AURORA_ENV: ${AURORA_ENV}
+
+  # Database - unified credentials
+  POSTGRES_USER: ${POSTGRES_USER}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+  POSTGRES_DB: ${POSTGRES_DB}
+  POSTGRES_HOST: ${POSTGRES_HOST}
+  POSTGRES_PORT: ${POSTGRES_PORT}
+
+  # Redis
+  REDIS_URL: ${REDIS_URL}
+
+  # Object Storage (S3-compatible - SeaweedFS by default)
+  STORAGE_BUCKET: ${STORAGE_BUCKET}
+  STORAGE_ENDPOINT_URL: ${STORAGE_ENDPOINT_URL}
+  STORAGE_ACCESS_KEY: ${STORAGE_ACCESS_KEY}
+  STORAGE_SECRET_KEY: ${STORAGE_SECRET_KEY}
+  STORAGE_REGION: ${STORAGE_REGION}
+  STORAGE_USE_SSL: ${STORAGE_USE_SSL}
+  STORAGE_VERIFY_SSL: ${STORAGE_VERIFY_SSL}
+  STORAGE_CACHE_ENABLED: ${STORAGE_CACHE_ENABLED}
+  STORAGE_CACHE_TTL: ${STORAGE_CACHE_TTL}
+
+  # Terraform Timeouts
+
+  # Weaviate
+  WEAVIATE_HOST: ${WEAVIATE_HOST}
+  WEAVIATE_PORT: ${WEAVIATE_PORT}
+  WEAVIATE_GRPC_PORT: ${WEAVIATE_GRPC_PORT}
+
+  # Knowledge Base storage uses the pluggable storage system (SeaWeedFS/S3-compatible)
+  # Configure via STORAGE_* environment variables
+
+  # AWS base credentials for role assumption
+  AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+  AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+  AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION}
+
+  # Feature Flags (all disabled by default for minimal local setup)
+  NEXT_PUBLIC_ENABLE_OVH: ${NEXT_PUBLIC_ENABLE_OVH}
+  NEXT_PUBLIC_ENABLE_SLACK: ${NEXT_PUBLIC_ENABLE_SLACK}
+  NEXT_PUBLIC_ENABLE_PAGERDUTY_OAUTH: ${NEXT_PUBLIC_ENABLE_PAGERDUTY_OAUTH}
+  NEXT_PUBLIC_ENABLE_CONFLUENCE: ${NEXT_PUBLIC_ENABLE_CONFLUENCE}
+  # Slack OAuth (needed by celery_worker for formatting responses)
+  SLACK_CLIENT_ID: ${SLACK_CLIENT_ID}
+  SLACK_CLIENT_SECRET: ${SLACK_CLIENT_SECRET}
+  SLACK_SIGNING_SECRET: ${SLACK_SIGNING_SECRET}
+
+  # OVH OAuth2
+  OVH_EU_CLIENT_ID: ${OVH_EU_CLIENT_ID}
+  OVH_EU_CLIENT_SECRET: ${OVH_EU_CLIENT_SECRET}
+  OVH_CA_CLIENT_ID: ${OVH_CA_CLIENT_ID}
+  OVH_CA_CLIENT_SECRET: ${OVH_CA_CLIENT_SECRET}
+  OVH_US_CLIENT_ID: ${OVH_US_CLIENT_ID}
+  OVH_US_CLIENT_SECRET: ${OVH_US_CLIENT_SECRET}
+
+  # LLM & AI Services (required - at least one)
+  OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
+  OPENAI_API_KEY: ${OPENAI_API_KEY}
+  ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+  GOOGLE_AI_API_KEY: ${GOOGLE_AI_API_KEY}
+  LLM_PROVIDER_MODE: ${LLM_PROVIDER_MODE}
+  TAVILY_API_KEY: ${TAVILY_API_KEY}
+  SEARXNG_URL: ${SEARXNG_URL}
+  RCA_OPTIMIZE_COSTS: ${RCA_OPTIMIZE_COSTS}
+
+  # Pod Isolation (disabled for local)
+  ENABLE_POD_ISOLATION: ${ENABLE_POD_ISOLATION}
+
+  # Security
+  FLASK_SECRET_KEY: ${FLASK_SECRET_KEY}
+
+  # URLs
+  NEXT_PUBLIC_BACKEND_URL: ${NEXT_PUBLIC_BACKEND_URL}
+  BACKEND_URL: ${BACKEND_URL}
+
+  # Secrets Backend (HashiCorp Vault)
+  VAULT_ADDR: ${VAULT_ADDR}
+  VAULT_TOKEN: ${VAULT_TOKEN}
+  VAULT_KV_MOUNT: ${VAULT_KV_MOUNT}
+
+  # Email Notifications (SMTP) - optional for local
+  SMTP_HOST: ${SMTP_HOST}
+  SMTP_PORT: ${SMTP_PORT}
+  SMTP_USER: ${SMTP_USER}
+  SMTP_PASSWORD: ${SMTP_PASSWORD}
+  SMTP_FROM_EMAIL: ${SMTP_FROM_EMAIL}
+  SMTP_FROM_NAME: ${SMTP_FROM_NAME}
+  FRONTEND_URL: ${FRONTEND_URL}
+
+services:
+  aurora-server:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+      target: prod
+    image: aurora_server:latest
+    container_name: aurora-server
+    ports:
+      - "${FLASK_PORT}:${FLASK_PORT}"
+    volumes:
+      - terraform-workdir:/app/terraform_workdir
+      - /var/run/docker.sock:/var/run/docker.sock
+    command: ["python", "main_compute.py"]
+    environment:
+      <<: *common-env
+      OTEL_SERVICE_NAME: aurora-server
+      FLASK_PORT: ${FLASK_PORT}
+
+      # Frontend/Backend URLs
+      FRONTEND_URL: ${FRONTEND_URL}
+      BACKEND_URL: ${BACKEND_URL}
+      NEXT_PUBLIC_BACKEND_URL: ${NEXT_PUBLIC_BACKEND_URL}
+      NGROK_URL: ${NGROK_URL}
+
+      # GCP Auth (optional - only if GCP connector enabled)
+      CLIENT_ID: ${CLIENT_ID}
+      CLIENT_SECRET: ${CLIENT_SECRET}
+
+      # AWS
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION}
+
+      # Cloud Provider Cache Settings (applies to all providers)
+      AURORA_SETUP_CACHE_ENABLED: ${AURORA_SETUP_CACHE_ENABLED}
+      AURORA_SETUP_CACHE_TTL: ${AURORA_SETUP_CACHE_TTL}
+      AURORA_VERIFY_CLI_IDENTITY: ${AURORA_VERIFY_CLI_IDENTITY}
+      AURORA_CACHE_TOKEN_IN_REDIS: ${AURORA_CACHE_TOKEN_IN_REDIS}
+
+      # GitHub OAuth (optional)
+      GH_OAUTH_CLIENT_ID: ${GH_OAUTH_CLIENT_ID}
+      GH_OAUTH_CLIENT_SECRET: ${GH_OAUTH_CLIENT_SECRET}
+      
+      # PagerDuty OAuth (optional)
+      PAGERDUTY_CLIENT_ID: ${PAGERDUTY_CLIENT_ID}
+      PAGERDUTY_CLIENT_SECRET: ${PAGERDUTY_CLIENT_SECRET}
+
+      # Slack OAuth (optional)
+      SLACK_CLIENT_ID: ${SLACK_CLIENT_ID}
+      SLACK_CLIENT_SECRET: ${SLACK_CLIENT_SECRET}
+      SLACK_SIGNING_SECRET: ${SLACK_SIGNING_SECRET}
+
+      # Security & Rate Limiting
+      RATE_LIMITING_ENABLED: ${RATE_LIMITING_ENABLED}
+      RATE_LIMIT_BYPASS_TOKEN: ${RATE_LIMIT_BYPASS_TOKEN}
+      RATE_LIMIT_HEADERS_ENABLED: ${RATE_LIMIT_HEADERS_ENABLED}
+
+      # OVH OAuth2
+      OVH_CA_CLIENT_ID: ${OVH_CA_CLIENT_ID}
+      OVH_CA_CLIENT_SECRET: ${OVH_CA_CLIENT_SECRET}
+      OVH_EU_CLIENT_ID: ${OVH_EU_CLIENT_ID}
+      OVH_EU_CLIENT_SECRET: ${OVH_EU_CLIENT_SECRET}
+      OVH_US_CLIENT_ID: ${OVH_US_CLIENT_ID}
+      OVH_US_CLIENT_SECRET: ${OVH_US_CLIENT_SECRET}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      weaviate:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      vault:
+        condition: service_healthy
+      seaweedfs-filer:
+        condition: service_healthy
+    restart: unless-stopped
+
+  celery_worker:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+      target: prod
+    image: aurora_celery-worker:latest
+    volumes:
+      - terraform-workdir:/app/terraform_workdir
+      - /var/run/docker.sock:/var/run/docker.sock
+    command: >
+      celery -A celery_config worker
+        --loglevel=info
+    environment:
+      <<: *common-env
+      OTEL_SERVICE_NAME: celery-worker
+      CHATBOT_INTERNAL_URL: ${CHATBOT_INTERNAL_URL}
+
+      # Frontend/Backend URLs
+      FRONTEND_URL: ${FRONTEND_URL}
+      BACKEND_URL: ${BACKEND_URL}
+      NEXT_PUBLIC_BACKEND_URL: ${NEXT_PUBLIC_BACKEND_URL}
+
+      # Cloud Provider Cache Settings (applies to all providers)
+      AURORA_SETUP_CACHE_ENABLED: ${AURORA_SETUP_CACHE_ENABLED}
+      AURORA_SETUP_CACHE_TTL: ${AURORA_SETUP_CACHE_TTL}
+      AURORA_VERIFY_CLI_IDENTITY: ${AURORA_VERIFY_CLI_IDENTITY}
+      AURORA_CACHE_TOKEN_IN_REDIS: ${AURORA_CACHE_TOKEN_IN_REDIS}
+
+      # AWS
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION}
+
+      OVH_CA_CLIENT_ID: ${OVH_CA_CLIENT_ID}
+      OVH_CA_CLIENT_SECRET: ${OVH_CA_CLIENT_SECRET}
+      OVH_EU_CLIENT_ID: ${OVH_EU_CLIENT_ID}
+      OVH_EU_CLIENT_SECRET: ${OVH_EU_CLIENT_SECRET}
+      OVH_US_CLIENT_ID: ${OVH_US_CLIENT_ID}
+      OVH_US_CLIENT_SECRET: ${OVH_US_CLIENT_SECRET}
+    depends_on:
+      - redis
+      - vault
+    restart: unless-stopped
+
+  celery_beat:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+      target: prod
+    image: aurora_celery-beat:latest
+    environment:
+      <<: *common-env
+      OTEL_SERVICE_NAME: celery-beat
+
+      # Frontend/Backend URLs
+      FRONTEND_URL: ${FRONTEND_URL}
+      BACKEND_URL: ${BACKEND_URL}
+      NEXT_PUBLIC_BACKEND_URL: ${NEXT_PUBLIC_BACKEND_URL}
+
+    command: >
+      celery -A celery_config beat
+        --loglevel=info
+    depends_on:
+      - redis
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: aurora-redis
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  searxng:
+    image: searxng/searxng:latest
+    container_name: aurora-searxng
+    ports:
+      - "8082:8080"
+    volumes:
+      - ./config/searxng:/etc/searxng
+    environment:
+      - SEARXNG_BASE_URL=${SEARXNG_BASE_URL}
+      - SEARXNG_SECRET=${SEARXNG_SECRET}
+    restart: unless-stopped
+
+  # Vault in file storage mode (persistent, production-like)
+  # NOTE: Uses file storage with persistent volumes and auto-initialization.
+  # For production deployments, use the K8s Helm chart.
+  vault:
+    image: hashicorp/vault:1.15
+    container_name: aurora-vault
+    ports:
+      - "8200:8200"
+    environment:
+      VAULT_ADDR: http://127.0.0.1:8200
+      VAULT_LOG_LEVEL: info
+      SKIP_SETCAP: "true"
+    cap_add:
+      - IPC_LOCK
+    entrypoint: vault
+    command: ["server", "-config=/vault/config/vault.hcl"]
+    volumes:
+      - ./config/vault/vault.hcl:/vault/config/vault.hcl:ro
+      - vault-data:/vault/data
+      - vault-init:/vault/init
+    healthcheck:
+      test: ["CMD", "sh", "-c", "vault status || [ $$? -eq 2 ]"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+    restart: unless-stopped
+
+  vault-init:
+    image: busybox:latest
+    container_name: aurora-vault-init
+    restart: "no"
+    volumes:
+      - ./scripts/vault-init-persistent.sh:/vault-init.sh:ro
+      - vault-init:/vault/init
+    environment:
+      VAULT_ADDR: http://vault:8200
+      VAULT_KV_MOUNT: ${VAULT_KV_MOUNT}
+    command: ["sh", "/vault-init.sh"]
+    depends_on:
+      vault:
+        condition: service_healthy
+
+
+  chatbot:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+      target: prod
+    image: aurora_chatbot:latest
+    stdin_open: true
+    tty: true
+    ports:
+      - "5006:5006"
+    command: ["python", "main_chatbot.py"]
+    volumes:
+      - terraform-workdir:/app/terraform_workdir
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      <<: *common-env
+      OTEL_SERVICE_NAME: chatbot
+
+      # Frontend URL
+      FRONTEND_URL: ${FRONTEND_URL}
+      CHATBOT_INTERNAL_URL: ${CHATBOT_INTERNAL_URL}
+
+
+
+      # Caching & Performance
+
+      # Pod & MCP Settings
+      CHATBOT_POD_TTL: ${CHATBOT_POD_TTL}
+      ENABLE_POD_ISOLATION: ${ENABLE_POD_ISOLATION}
+      TERMINAL_NAMESPACE: ${TERMINAL_NAMESPACE}
+      TERMINAL_IMAGE: ${TERMINAL_IMAGE}
+      TERMINAL_POD_TTL: ${TERMINAL_POD_TTL}
+    depends_on:
+      weaviate:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      vault:
+        condition: service_healthy
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:15-alpine
+    container_name: aurora-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  weaviate:
+    image: cr.weaviate.io/semitechnologies/weaviate:1.27.6
+    container_name: weaviate
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command:
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8080"
+      - --scheme
+      - http
+    ports:
+      - "8080:8080"
+      - "50051:50051"
+    volumes:
+      - weaviate_data:/var/lib/weaviate
+    restart: unless-stopped
+    environment:
+      AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: "true"
+      PERSISTENCE_DATA_PATH: "/var/lib/weaviate"
+      ENABLE_API_BASED_MODULES: "true"
+      CLUSTER_HOSTNAME: "node1"
+      ENABLE_MODULES: "text2vec-transformers"
+      TRANSFORMERS_INFERENCE_API: "http://t2v-transformers:8080"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "wget",
+          "-q",
+          "--spider",
+          "http://localhost:8080/v1/.well-known/ready",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  t2v-transformers:
+    image: cr.weaviate.io/semitechnologies/transformers-inference:sentence-transformers-all-MiniLM-L6-v2
+    environment:
+      ENABLE_CUDA: '0'
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./client
+      dockerfile: Dockerfile
+      target: prod
+      args:
+        NEXT_PUBLIC_BACKEND_URL: ${NEXT_PUBLIC_BACKEND_URL}
+        NEXT_PUBLIC_WEBSOCKET_URL: ${NEXT_PUBLIC_WEBSOCKET_URL}
+        NEXT_PUBLIC_ENABLE_OVH: ${NEXT_PUBLIC_ENABLE_OVH}
+        NEXT_PUBLIC_ENABLE_SLACK: ${NEXT_PUBLIC_ENABLE_SLACK}
+        NEXT_PUBLIC_ENABLE_PAGERDUTY_OAUTH: ${NEXT_PUBLIC_ENABLE_PAGERDUTY_OAUTH}
+        NEXT_PUBLIC_ENABLE_CONFLUENCE: ${NEXT_PUBLIC_ENABLE_CONFLUENCE}
+    image: aurora_frontend:latest
+    environment:
+      # Next.js production configuration
+      NODE_ENV: production
+
+      # Server-side only (Next.js API routes)
+      BACKEND_URL: ${BACKEND_URL}
+      FRONTEND_URL: ${FRONTEND_URL}
+
+      # Auth.js configuration (required)
+      AUTH_SECRET: ${AUTH_SECRET}
+    ports:
+      - "3000:3000"
+    depends_on:
+      - aurora-server
+    restart: unless-stopped
+
+  # SeaweedFS - S3-compatible Object Storage (Apache 2.0 licensed)
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  seaweedfs-master:
+    image: chrislusf/seaweedfs:latest
+    container_name: aurora-seaweedfs-master
+    command: >
+      master
+      -ip=seaweedfs-master
+      -ip.bind=0.0.0.0
+      -port=9333
+      -mdir=/data/master
+      -defaultReplication=000
+    ports:
+      - "9333:9333"
+      - "19333:19333"
+    volumes:
+      - seaweedfs_master_data:/data/master
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:9333/cluster/status"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  seaweedfs-volume:
+    image: chrislusf/seaweedfs:latest
+    container_name: aurora-seaweedfs-volume
+    command: >
+      volume
+      -mserver=seaweedfs-master:9333
+      -ip.bind=0.0.0.0
+      -port=8081
+      -dir=/data
+      -max=100
+    ports:
+      - "8081:8081"
+    volumes:
+      - seaweedfs_volume_data:/data
+    depends_on:
+      seaweedfs-master:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:8081/status"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  seaweedfs-filer:
+    image: chrislusf/seaweedfs:latest
+    container_name: aurora-seaweedfs-filer
+    command: >
+      filer
+      -master=seaweedfs-master:9333
+      -ip.bind=0.0.0.0
+      -port=8888
+      -s3
+      -s3.port=8333
+      -s3.allowEmptyFolder=true
+      -s3.config=/etc/seaweedfs/s3.json
+    ports:
+      - "8888:8888"
+      - "8333:8333"
+    volumes:
+      - seaweedfs_filer_data:/data
+      - ./config/seaweedfs/s3.json:/etc/seaweedfs/s3.json:ro
+    depends_on:
+      seaweedfs-master:
+        condition: service_healthy
+      seaweedfs-volume:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:8888/"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  seaweedfs-init:
+    image: amazon/aws-cli:latest
+    container_name: aurora-seaweedfs-init
+    restart: "no"
+    entrypoint: /bin/sh
+    command: >
+      -c "
+        echo 'Waiting for SeaweedFS S3 API...'
+        sleep 5
+        echo 'Creating aurora-storage bucket...'
+        aws --endpoint-url http://seaweedfs-filer:8333 s3 mb s3://aurora-storage 2>/dev/null || true
+        echo 'SeaweedFS initialization complete!'
+      "
+    environment:
+      AWS_ACCESS_KEY_ID: "admin"
+      AWS_SECRET_ACCESS_KEY: "admin"
+      AWS_DEFAULT_REGION: "us-east-1"
+    depends_on:
+      seaweedfs-filer:
+        condition: service_healthy
+
+volumes:
+  postgres-data:
+  weaviate_data:
+  terraform-workdir:
+  seaweedfs_master_data:
+  seaweedfs_volume_data:
+  seaweedfs_filer_data:
+  vault-data:
+  vault-init:

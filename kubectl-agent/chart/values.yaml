@@ -1,0 +1,257 @@
+# Aurora kubectl Agent - Default Values
+# This agent runs inside your on-prem Kubernetes cluster to provide
+# Aurora with secure kubectl access without exposing credentials
+
+# Backend connection configuration
+aurora:
+  # Backend URL where the agent connects
+  # Set this to your Aurora instance URL
+  backendUrl: "https://your-aurora-instance.com"
+  
+  # WebSocket endpoint for receiving commands
+  wsEndpoint: "wss://your-aurora-instance.com/kubectl-agent"
+  
+  # Agent authentication token (generated during setup)
+  # IMPORTANT: Override this value during installation
+  agentToken: ""
+
+# Agent deployment configuration
+agent:
+  # Number of agent replicas (recommended: 1-2 for HA)
+  replicaCount: 1
+  
+  image:
+    # Set this to your container registry
+    # Example: gcr.io/your-project/aurora-kubectl-agent
+    # Example: docker.io/your-org/aurora-kubectl-agent
+    # Example: ghcr.io/your-org/aurora-kubectl-agent
+    repository: gcr.io/sublime-flux-414616/aurora-kubectl-agent
+    tag: "1.0.3"
+    pullPolicy: Always
+  
+  # Resources for the agent pod
+  resources:
+    requests:
+      memory: "128Mi"
+      cpu: "100m"
+    limits:
+      memory: "256Mi"
+      cpu: "200m"
+  
+  # Security context for the agent pod
+  # Pod security context
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    fsGroup: 1000
+  
+  # Container security context
+  securityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop:
+        - ALL
+  
+  # Additional environment variables (optional)
+  # Example: Proxy configuration for corporate firewalls
+  # env:
+  #   - name: HTTP_PROXY
+  #     value: "http://proxy.corp.com:8080"
+  #   - name: HTTPS_PROXY
+  #     value: "http://proxy.corp.com:8080"
+  #   - name: NO_PROXY
+  #     value: "localhost,127.0.0.1,.cluster.local,.svc"
+  env: []
+  
+  # Liveness and readiness probes
+  livenessProbe:
+    enabled: true
+    httpGet:
+      path: /health
+      port: 8080
+    initialDelaySeconds: 30
+    periodSeconds: 15
+    timeoutSeconds: 5
+    failureThreshold: 3
+  
+  readinessProbe:
+    enabled: true
+    httpGet:
+      path: /ready
+      port: 8080
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+  
+  # Service configuration (for health checks)
+  service:
+    type: ClusterIP
+    port: 8080
+    targetPort: 8080
+
+# RBAC configuration
+rbac:
+  # Create RBAC resources (ServiceAccount, ClusterRole, ClusterRoleBinding)
+  create: true
+  
+  # ServiceAccount name (auto-generated if empty)
+  serviceAccountName: ""
+  
+  # ClusterRole permissions for kubectl access
+  # These are the permissions Aurora will have in your cluster
+  rules:
+    # Core resources - read access
+    - apiGroups: [""]
+      resources:
+        - pods
+        - pods/log
+        - pods/status
+        - services
+        - endpoints
+        - nodes
+        - namespaces
+        - events
+        - configmaps
+        - secrets
+        - persistentvolumes
+        - persistentvolumeclaims
+        - resourcequotas
+        - limitranges
+      verbs: ["get", "list", "watch"]
+    
+    # Apps resources - read access
+    - apiGroups: ["apps"]
+      resources:
+        - deployments
+        - daemonsets
+        - replicasets
+        - statefulsets
+      verbs: ["get", "list", "watch"]
+    
+    # Batch resources - read access
+    - apiGroups: ["batch"]
+      resources:
+        - jobs
+        - cronjobs
+      verbs: ["get", "list", "watch"]
+    
+    # Networking resources - read access
+    - apiGroups: ["networking.k8s.io"]
+      resources:
+        - ingresses
+        - networkpolicies
+      verbs: ["get", "list", "watch"]
+    
+    # Autoscaling resources - read access
+    - apiGroups: ["autoscaling"]
+      resources:
+        - horizontalpodautoscalers
+      verbs: ["get", "list", "watch"]
+    
+    # Policy resources - read access
+    - apiGroups: ["policy"]
+      resources:
+        - poddisruptionbudgets
+      verbs: ["get", "list", "watch"]
+    
+    # Storage resources - read access
+    - apiGroups: ["storage.k8s.io"]
+      resources:
+        - storageclasses
+        - volumeattachments
+      verbs: ["get", "list", "watch"]
+    
+    # RBAC resources - read access (for security auditing)
+    - apiGroups: ["rbac.authorization.k8s.io"]
+      resources:
+        - roles
+        - rolebindings
+        - clusterroles
+        - clusterrolebindings
+      verbs: ["get", "list", "watch"]
+    
+    # Metrics access
+    - apiGroups: ["metrics.k8s.io"]
+      resources:
+        - pods
+        - nodes
+      verbs: ["get", "list"]
+    
+    # Non-resource URLs (health, metrics, version)
+    - nonResourceURLs:
+        - /healthz
+        - /livez
+        - /readyz
+        - /version
+        - /metrics
+      verbs: ["get"]
+
+# Network configuration
+network:
+  # Egress firewall rules - Aurora backend endpoints
+  # Add these to your firewall allowlist for outbound connections
+  allowedEgressHosts:
+    - "your-aurora-instance.com:443"
+    - "your-aurora-instance.com:80"
+  
+  # Connection settings
+  reconnectInterval: 30  # seconds
+  heartbeatInterval: 60  # seconds
+  commandTimeout: 300    # seconds (5 minutes)
+
+# Monitoring and logging
+monitoring:
+  # Enable Prometheus metrics endpoint
+  metrics:
+    enabled: true
+    port: 9090
+  
+  # Logging configuration
+  logging:
+    level: info  # debug, info, warn, error
+    format: json  # json or text
+
+# Pod annotations and labels
+podAnnotations: {}
+# prometheus.io/scrape: "true"
+# prometheus.io/port: "9090"
+
+podLabels:
+  app: aurora-kubectl-agent
+  component: agent
+
+# Node selector for agent placement
+nodeSelector: {}
+# kubernetes.io/hostname: node-1
+
+# Tolerations for node taints
+tolerations: []
+# - key: "key1"
+#   operator: "Equal"
+#   value: "value1"
+#   effect: "NoSchedule"
+
+# Affinity rules
+affinity: {}
+# podAntiAffinity:
+#   preferredDuringSchedulingIgnoredDuringExecution:
+#     - weight: 100
+#       podAffinityTerm:
+#         labelSelector:
+#           matchExpressions:
+#             - key: app
+#               operator: In
+#               values:
+#                 - aurora-kubectl-agent
+#         topologyKey: kubernetes.io/hostname
+
+# Priority class for pod scheduling
+priorityClassName: ""
+
+# Pod disruption budget
+podDisruptionBudget:
+  enabled: false
+  minAvailable: 1
+  # maxUnavailable: 1
+

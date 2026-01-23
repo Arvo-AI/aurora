@@ -1,0 +1,96 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "aurora-kubectl-agent.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "aurora-kubectl-agent.labels" . | nindent 4 }}
+    {{- with .Values.podLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  replicas: {{ .Values.agent.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "aurora-kubectl-agent.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "aurora-kubectl-agent.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "aurora-kubectl-agent.serviceAccountName" . }}
+      {{- with .Values.agent.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      containers:
+        - name: agent
+          image: "{{ .Values.agent.image.repository }}:{{ .Values.agent.image.tag }}"
+          imagePullPolicy: {{ .Values.agent.image.pullPolicy }}
+          {{- with .Values.agent.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          env:
+            - name: AGENT_VERSION
+              value: {{ .Chart.Version | quote }}
+          {{- with .Values.agent.env }}
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          envFrom:
+            - secretRef:
+                name: {{ include "aurora-kubectl-agent.fullname" . }}-config
+          ports:
+            - name: http
+              containerPort: {{ .Values.agent.service.targetPort }}
+              protocol: TCP
+            {{- if .Values.monitoring.metrics.enabled }}
+            - name: metrics
+              containerPort: {{ .Values.monitoring.metrics.port }}
+              protocol: TCP
+            {{- end }}
+          {{- if .Values.agent.livenessProbe.enabled }}
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.agent.livenessProbe.httpGet.path }}
+              port: {{ .Values.agent.livenessProbe.httpGet.port }}
+            initialDelaySeconds: {{ .Values.agent.livenessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.agent.livenessProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.agent.livenessProbe.timeoutSeconds }}
+            failureThreshold: {{ .Values.agent.livenessProbe.failureThreshold }}
+          {{- end }}
+          {{- if .Values.agent.readinessProbe.enabled }}
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.agent.readinessProbe.httpGet.path }}
+              port: {{ .Values.agent.readinessProbe.httpGet.port }}
+            initialDelaySeconds: {{ .Values.agent.readinessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.agent.readinessProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.agent.readinessProbe.timeoutSeconds }}
+            failureThreshold: {{ .Values.agent.readinessProbe.failureThreshold }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.agent.resources | nindent 12 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+

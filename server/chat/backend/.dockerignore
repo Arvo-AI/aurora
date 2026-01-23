@@ -1,0 +1,75 @@
+# Ignore version control files
+.git
+.gitignore
+
+# Ignore documentation
+documentation/
+aurora_initial_frontend/
+docs/
+frontend/
+
+
+# Ignore Docker-related files
+docker-compose.yml
+Dockerfile
+
+# Ignore sensitive or temporary files
+.env
+*.log
+*.tmp
+__pycache__/
+*.pyc
+data/
+node_modules
+.DS_Store
+.sql
+venv/
+.venv
+.venv/
+mysql-init/
+**/__pycache__/
+**/*.pyc
+**/.env
+**/schema/*.json
+.vscode/
+
+# Archive files
+*.zip
+*.tar.gz
+*.rar
+*.7z
+
+# Temporary files and caches
+*.swp
+*.swo
+*.bak
+*.tmp
+*.out
+*.o
+*.class
+
+# Build and compilation outputs
+dist/
+build/
+*.map
+target/
+
+# IDE/editor configurations
+.idea/
+.vscode/
+*.iml
+*.sublime-workspace
+*.sublime-project
+
+# Logs and debugging
+logs/
+*.log
+*.debug
+debug.log
+trace.log
+*.pid
+
+
+
+# Ignore tests
+tests/

@@ -1,0 +1,176 @@
+# Example installation values for different scenarios
+
+# ============================================================================
+# Minimal Installation (Development)
+# ============================================================================
+# minimal-values.yaml
+aurora:
+  agentToken: "your-token-here"
+  backendUrl: "http://localhost:5080"  # Local dev backend
+  wsEndpoint: "ws://localhost:5080/kubectl-agent"
+
+monitoring:
+  logging:
+    level: debug
+
+# Install: helm install aurora-kubectl-agent ./kubectl-agent/chart -f minimal-values.yaml
+
+# ============================================================================
+# Production Installation (On-Premise Enterprise)
+# ============================================================================
+# production-values.yaml
+aurora:
+  agentToken: "prod-secure-token-abc123"
+  clusterId: "prod-k8s-01"
+  backendUrl: "https://aurora.your-company.com"
+  wsEndpoint: "wss://aurora.your-company.com/kubectl-agent"
+
+agent:
+  replicaCount: 2  # HA setup
+  
+  image:
+    repository: your-registry/aurora-kubectl-agent
+    tag: "1.0.3"
+    pullPolicy: IfNotPresent
+  
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "200m"
+    limits:
+      memory: "512Mi"
+      cpu: "500m"
+
+monitoring:
+  metrics:
+    enabled: true
+  logging:
+    level: info
+    format: json
+
+podAnnotations:
+  prometheus.io/scrape: "true"
+  prometheus.io/port: "9090"
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          labelSelector:
+            matchExpressions:
+              - key: app
+                operator: In
+                values:
+                  - aurora-kubectl-agent
+          topologyKey: kubernetes.io/hostname
+
+nodeSelector:
+  node-role.kubernetes.io/infra: "true"
+
+# Install: helm install aurora-kubectl-agent ./kubectl-agent/chart -f production-values.yaml
+
+# ============================================================================
+# Corporate Firewall / Proxy Setup
+# ============================================================================
+# proxy-values.yaml
+aurora:
+  agentToken: "your-token-here"
+  backendUrl: "https://aurora.your-company.com"
+  wsEndpoint: "wss://aurora.your-company.com/kubectl-agent"
+
+agent:
+  env:
+    - name: HTTP_PROXY
+      value: "http://proxy.corp.com:8080"
+    - name: HTTPS_PROXY
+      value: "http://proxy.corp.com:8080"
+    - name: NO_PROXY
+      value: "localhost,127.0.0.1,.cluster.local,.svc"
+
+network:
+  reconnectInterval: 60  # Longer interval for slower networks
+  heartbeatInterval: 120
+  commandTimeout: 600  # 10 minutes for long-running commands
+
+# Install: helm install aurora-kubectl-agent ./kubectl-agent/chart -f proxy-values.yaml
+
+# ============================================================================
+# Custom RBAC (Restricted Permissions)
+# ============================================================================
+# restricted-rbac-values.yaml
+aurora:
+  agentToken: "your-token-here"
+
+rbac:
+  create: true
+  rules:
+    # Only allow access to specific namespaces
+    - apiGroups: [""]
+      resources: ["pods", "pods/log", "services"]
+      verbs: ["get", "list", "watch"]
+    
+    # Only specific app resources
+    - apiGroups: ["apps"]
+      resources: ["deployments"]
+      verbs: ["get", "list", "watch"]
+    
+    # Deny secret access (remove from default)
+    # (Don't include secrets in rules)
+
+# Install: helm install aurora-kubectl-agent ./kubectl-agent/chart -f restricted-rbac-values.yaml
+
+# ============================================================================
+# High Availability Multi-Region
+# ============================================================================
+# ha-values.yaml
+aurora:
+  agentToken: "your-token-here"
+  clusterId: "us-west-prod-01"
+  backendUrl: "https://aurora.your-company.com"
+  wsEndpoint: "wss://aurora.your-company.com/kubectl-agent"
+
+agent:
+  replicaCount: 3
+  
+  image:
+    repository: your-registry/aurora-kubectl-agent
+    tag: "1.0.3"
+  
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "250m"
+    limits:
+      memory: "512Mi"
+      cpu: "500m"
+
+podDisruptionBudget:
+  enabled: true
+  maxUnavailable: 1
+
+affinity:
+  podAntiAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      - labelSelector:
+          matchExpressions:
+            - key: app
+              operator: In
+              values:
+                - aurora-kubectl-agent
+        topologyKey: topology.kubernetes.io/zone
+
+tolerations:
+  - key: "dedicated"
+    operator: "Equal"
+    value: "monitoring"
+    effect: "NoSchedule"
+
+priorityClassName: system-cluster-critical
+
+# Install: helm install aurora-kubectl-agent ./kubectl-agent/chart -f ha-values.yaml
+

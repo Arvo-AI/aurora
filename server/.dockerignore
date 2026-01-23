@@ -1,0 +1,81 @@
+# Ignore version control files
+.git
+.gitignore
+github/
+
+# Ignore documentation
+documentation/
+docs/
+.txt
+.md
+
+# Ignore frontend
+aurora_initial_frontend/
+
+# Ignore sensitive or temporary files
+*.log
+*.tmp
+__pycache__/
+*.pyc
+data/
+node_modules
+.DS_Store
+.sql
+venv/
+.venv
+.venv/
+mysql-init/
+**/__pycache__/
+**/*.pyc
+.vscode/
+
+# Archive files
+*.zip
+*.tar.gz
+*.rar
+*.7z
+
+# Temporary files and caches
+*.swp
+*.swo
+*.bak
+*.tmp
+*.out
+*.o
+*.class
+
+# Build and compilation outputs
+dist/
+build/
+*.map
+target/
+
+# IDE/editor configurations
+.idea/
+.vscode/
+*.iml
+*.sublime-workspace
+*.sublime-project
+
+# Logs and debugging
+logs/
+*.log
+*.debug
+debug.log
+trace.log
+*.pid
+
+Roo-Code/
+
+# Ignore tests
+tests/
+
+# Ignore service account files and sensitive JSON files
+*.json
+service-account*.json
+aurora-service-account.json
+*-service-account.json
+
+# Keep package.json if it exists (though this is a Python project)
+!package.json
+
