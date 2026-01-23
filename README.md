@@ -51,30 +51,7 @@ make prod-local
 - `client/` Next.js frontend
 - `docker-compose.yaml` local stack (postgres, redis, weaviate, vault, seaweedfs)
 
-## Quickstart
-Requirements: Docker with the Compose plugin.
 
-```bash
-cp .env.example .env
-make dev
-
-# Get Vault root token and add to .env
-# Check the vault-init container logs for the root token:
-docker logs vault-init 2>&1 | grep "Root Token:"
-# You'll see output like:
-# ===================================================
-# Vault initialization complete!
-# Root Token: hvs.xxxxxxxxxxxxxxxxxxxxxxxxxxxx
-# IMPORTANT: Set VAULT_TOKEN=hvs.xxxxxxxxxxxxxxxxxxxxxxxxxxxx in your .env file
-#            to connect Aurora services to Vault.
-# ===================================================
-# Copy the root token value and add it to your .env file:
-nano .env  # Add VAULT_TOKEN=hvs.xxxxxxxxxxxxxxxxxxxxxxxxxxxx
-
-# Restart Aurora to load the Vault token
-make down
-make dev
-```
 
 Open http://localhost:3000 (API: http://localhost:5080, Chatbot WS: ws://localhost:5006)
 
