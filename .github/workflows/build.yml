@@ -1,9 +1,10 @@
 name: Build Validation
 
+# Temporarily paused - uncomment to re-enable
 on:
   workflow_dispatch:
-  pull_request:
-    branches: [ main, release ]
+  # pull_request:
+  #   branches: [ main, release ]
 
 permissions:
   contents: read
