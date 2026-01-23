@@ -25,10 +25,10 @@ def get_authenticated_user_id():
     return get_user_id_from_request()
 
 
-@onboarding_bp.route('/aws/credentials/check', methods=['GET', 'OPTIONS'])
-def check_aws_credentials():
+@onboarding_bp.route('/aws/env/check', methods=['GET', 'OPTIONS'])
+def check_aws_environment():
     """
-    Check if Aurora has AWS credentials configured (AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY).
+    Check if Aurora has AWS environment configured (AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY).
     
     Returns:
         {
@@ -66,7 +66,7 @@ def check_aws_credentials():
         })
         
     except Exception as e:
-        logger.error(f"Failed to check AWS credentials: {e}")
+        logger.error(f"Failed to check AWS environment: {e}")
         return jsonify({"error": "Internal server error"}), 500
 
 

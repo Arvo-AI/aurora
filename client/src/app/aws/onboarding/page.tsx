@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -15,7 +15,7 @@ import {
 } from 'lucide-react';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL;
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5080';
 
 interface OnboardingData {
   workspaceId: string;
@@ -80,7 +80,7 @@ export default function AWSOnboardingPage() {
   useEffect(() => {
     const checkCredentials = async () => {
       try {
-        const response = await fetch(`${BACKEND_URL}/aws/credentials/check`, {
+        const response = await fetch(`${BACKEND_URL}/aws/env/check`, {
           method: 'GET',
           credentials: 'include',
         });
@@ -117,14 +117,7 @@ export default function AWSOnboardingPage() {
     fetchUserId();
   }, []);
 
-  // Fetch onboarding data when userId is available
-  useEffect(() => {
-    if (userId) {
-      fetchOnboardingData();
-    }
-  }, [userId]);
-
-  const fetchOnboardingData = async () => {
+  const fetchOnboardingData = useCallback(async () => {
     if (!userId) return;
 
     setIsLoading(true);
@@ -210,7 +203,14 @@ export default function AWSOnboardingPage() {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [userId]);
+
+  // Fetch onboarding data when userId is available
+  useEffect(() => {
+    if (userId) {
+      fetchOnboardingData();
+    }
+  }, [userId, fetchOnboardingData]);
 
   const handleSetRole = async () => {
     if (!roleArn || !workspaceId || !userId) {
@@ -388,27 +388,23 @@ export default function AWSOnboardingPage() {
 
               <div className="break-words">
                 <p className="text-white/90 font-medium mb-1">3. Add to <code className="bg-black/50 px-1 py-0.5 rounded text-xs">.env</code>:</p>
-                <pre className="bg-black/50 p-3 rounded border border-white/10 text-xs mt-2 overflow-x-auto whitespace-pre-wrap break-all">
-AWS_ACCESS_KEY_ID=your-access-key-id
+                <pre className="bg-black/50 p-3 rounded border border-white/10 text-xs mt-2 overflow-x-auto whitespace-pre break-all">{`AWS_ACCESS_KEY_ID=your-access-key-id
 AWS_SECRET_ACCESS_KEY=your-secret-access-key
-AWS_DEFAULT_REGION=us-east-1
-                </pre>
+AWS_DEFAULT_REGION=us-east-1`}</pre>
               </div>
 
               <div className="break-words">
                 <p className="text-white/90 font-medium mb-1">4. Rebuild and restart:</p>
-                <pre className="bg-black/50 p-3 rounded border border-white/10 text-xs mt-2 overflow-x-auto whitespace-pre-wrap break-all">
-make down
+                <pre className="bg-black/50 p-3 rounded border border-white/10 text-xs mt-2 overflow-x-auto whitespace-pre break-all">{`make down
 make dev-build
-make dev
-                </pre>
+make dev`}</pre>
               </div>
             </div>
 
             <div className="flex flex-col sm:flex-row gap-3">
               <Button
                 onClick={() => {
-                  fetch(`${BACKEND_URL}/aws/credentials/check`, {
+                  fetch(`${BACKEND_URL}/aws/env/check`, {
                     method: 'GET',
                     credentials: 'include',
                   })
@@ -675,7 +671,7 @@ make dev
                 <Input
                   placeholder="arn:aws:iam::123456789012:role/AuroraRole"
                   value={roleArn}
-                  onChange={(e) => setRoleArn(e.target.value)}
+                  onChange={(e: React.ChangeEvent<HTMLInputElement>) => setRoleArn(e.target.value)}
                   className="bg-white/5 text-white border-white/10 focus-visible:ring-white/20 font-mono text-sm"
                 />
                 <p className="text-xs text-white/40">Enter the ARN of the IAM role you created above</p>
