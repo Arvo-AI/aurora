@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - 'docs/**'
     paths:
       - 'website/**'
       - '.github/workflows/docs.yml'
@@ -46,6 +47,7 @@ jobs:
           path: website/build
 
   deploy:
+    if: github.ref == 'refs/heads/main'
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
