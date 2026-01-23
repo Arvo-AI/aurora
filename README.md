@@ -44,8 +44,6 @@ make prod-local
 
 > **Note**: Aurora works **without any cloud provider accounts**! The LLM API key is the only external requirement. Cloud connectors (GCP, AWS, Azure) are optional and can be enabled later if needed.
 
-## Architecture
-
 ## Repo overview
 - `server/` Python API, chatbot, Celery workers
 - `client/` Next.js frontend
