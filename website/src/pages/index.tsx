@@ -117,7 +117,7 @@ function QuickstartSection() {
             <div className={styles.stepContent}>
               <div className={styles.stepTitle}>Add your LLM API key</div>
               <div className={styles.stepDescription}>
-                Edit <code className={styles.stepCode}>.env</code> and add <code className={styles.stepCode}>OPENROUTER_API_KEY</code>
+                Edit <code className={styles.stepCode}>.env</code> and add your preferred LLM provider key
               </div>
             </div>
           </div>
