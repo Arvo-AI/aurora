@@ -18,3 +18,7 @@ export const isSlackEnabled = () => {
 export const isConfluenceEnabled = () => {
   return process.env.NEXT_PUBLIC_ENABLE_CONFLUENCE === 'true';
 };
+ 
+export const isScalewayEnabled = () => {
+  return process.env.NEXT_PUBLIC_ENABLE_SCALEWAY === 'true';
+};
