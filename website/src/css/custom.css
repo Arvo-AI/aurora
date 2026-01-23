@@ -709,3 +709,129 @@ h4:hover .hash-link {
     max-width: 100%;
   }
 }
+
+/* Search bar customization */
+.navbar__search-input {
+  background-color: #0a0a0a;
+  border: 1px solid #1a1a1a;
+  color: #ededed;
+}
+
+[data-theme='light'] .navbar__search-input {
+  background-color: #f5f5f5;
+  border-color: #eaeaea;
+  color: #333;
+}
+
+/* Hide the keyboard shortcut hint (Cmd+K) */
+.DocSearch-Button-Keys,
+.navbar__search-input::placeholder,
+[class*="searchHintContainer"],
+.aa-DetachedSearchButtonPlaceholder kbd,
+button[class*="searchButton"] kbd,
+.DocSearch-Button kbd {
+  display: none !important;
+}
+
+/* Search modal/dropdown dark theme */
+.aa-Panel,
+.aa-DetachedContainer,
+.DocSearch-Modal {
+  background: #0a0a0a !important;
+  border: 1px solid #1a1a1a !important;
+}
+
+.aa-Item,
+.DocSearch-Hit {
+  background: #0a0a0a !important;
+  color: #ededed !important;
+}
+
+.aa-Item:hover,
+.aa-Item[aria-selected="true"],
+.DocSearch-Hit[aria-selected="true"] {
+  background: #1a1a1a !important;
+}
+
+.aa-ItemContentTitle,
+.DocSearch-Hit-title {
+  color: #ededed !important;
+}
+
+.aa-ItemContentDescription,
+.DocSearch-Hit-path {
+  color: #888 !important;
+}
+
+/* Local search plugin specific styles */
+[class*="searchResultItem"],
+[class*="searchResult"] {
+  background: #0a0a0a !important;
+  border-color: #1a1a1a !important;
+}
+
+[class*="searchResultItem"]:hover,
+[class*="searchResultItem"]:first-child {
+  background: #1a1a1a !important;
+}
+
+[class*="searchResultItemHeading"] {
+  color: #ededed !important;
+}
+
+[class*="searchResultItemPath"],
+[class*="searchResultItemSummary"] {
+  color: #888 !important;
+}
+
+/* Search dropdown container */
+[class*="searchBarContainer"] [class*="dropdownMenu"],
+.dropdown__menu {
+  background: #0a0a0a !important;
+  border: 1px solid #1a1a1a !important;
+}
+
+/* Fix first result visibility */
+[class*="searchResultsColumn"] {
+  padding-top: 0.5rem;
+}
+
+[class*="searchResultsColumn"] > :first-child {
+  margin-top: 0;
+}
+
+[data-theme='light'] .aa-Panel,
+[data-theme='light'] .aa-DetachedContainer,
+[data-theme='light'] .DocSearch-Modal,
+[data-theme='light'] [class*="searchResultItem"],
+[data-theme='light'] [class*="searchResult"] {
+  background: #fafafa !important;
+  border-color: #eaeaea !important;
+}
+
+[data-theme='light'] .aa-Item,
+[data-theme='light'] .DocSearch-Hit,
+[data-theme='light'] [class*="searchResultItem"] {
+  background: #fafafa !important;
+}
+
+[data-theme='light'] .aa-Item:hover,
+[data-theme='light'] .aa-Item[aria-selected="true"],
+[data-theme='light'] .DocSearch-Hit[aria-selected="true"],
+[data-theme='light'] [class*="searchResultItem"]:hover,
+[data-theme='light'] [class*="searchResultItem"]:first-child {
+  background: #f0f0f0 !important;
+}
+
+[data-theme='light'] .aa-ItemContentTitle,
+[data-theme='light'] .DocSearch-Hit-title,
+[data-theme='light'] [class*="searchResultItemHeading"] {
+  color: #333 !important;
+}
+
+[data-theme='light'] .aa-ItemContentDescription,
+[data-theme='light'] .DocSearch-Hit-path,
+[data-theme='light'] [class*="searchResultItemPath"],
+[data-theme='light'] [class*="searchResultItemSummary"] {
+  color: #666 !important;
+}
