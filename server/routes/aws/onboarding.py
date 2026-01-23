@@ -25,6 +25,51 @@ def get_authenticated_user_id():
     return get_user_id_from_request()
 
 
+@onboarding_bp.route('/aws/credentials/check', methods=['GET', 'OPTIONS'])
+def check_aws_credentials():
+    """
+    Check if Aurora has AWS credentials configured (AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY).
+    
+    Returns:
+        {
+            "configured": bool,
+            "hasAccessKey": bool,
+            "hasSecretKey": bool,
+            "accountId": str | null  # Only if credentials are configured and valid
+        }
+    """
+    if request.method == 'OPTIONS':
+        return create_cors_response()
+    
+    try:
+        access_key_id = os.getenv('AWS_ACCESS_KEY_ID')
+        secret_access_key = os.getenv('AWS_SECRET_ACCESS_KEY')
+        
+        has_access_key = bool(access_key_id)
+        has_secret_key = bool(secret_access_key)
+        configured = has_access_key and has_secret_key
+        
+        account_id = None
+        if configured:
+            # Try to get account ID using the credentials
+            try:
+                from utils.aws.aws_sts_client import get_aurora_account_id
+                account_id = get_aurora_account_id()
+            except Exception as e:
+                logger.debug(f"Could not get account ID even though credentials are set: {e}")
+        
+        return jsonify({
+            "configured": configured,
+            "hasAccessKey": has_access_key,
+            "hasSecretKey": has_secret_key,
+            "accountId": account_id
+        })
+        
+    except Exception as e:
+        logger.error(f"Failed to check AWS credentials: {e}")
+        return jsonify({"error": "Internal server error"}), 500
+
+
 @onboarding_bp.route('/workspaces/<workspace_id>/aws/links', methods=['GET', 'OPTIONS'])
 def get_aws_onboarding_links(workspace_id):
     """
