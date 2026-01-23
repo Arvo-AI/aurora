@@ -11,6 +11,7 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y \
     libpq-dev \
     gcc \
+    g++ \
     python3-dev \
     postgresql \
     postgresql-client \
