@@ -8,6 +8,7 @@ import { Loader2, Check, ExternalLink, LogOut, ChevronDown, ChevronRight, GitBra
 import Image from 'next/image';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useGitHubStatus } from '@/hooks/use-github-status';
+import { ToastAction } from "@/components/ui/toast";
 
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL;
 
@@ -72,23 +73,54 @@ export class GitHubIntegrationService {
   }
 
   static async initiateOAuth(userId: string): Promise<string> {
-    const response = await fetch(`${BACKEND_URL}/github/login`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ userId }),
-    });
+    try {
+      const response = await fetch(`${BACKEND_URL}/github/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId }),
+      });
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(errorText || 'Failed to initiate GitHub OAuth');
+      if (!response.ok) {
+        let errorData;
+        try {
+          errorData = await response.json();
+        } catch {
+          const errorText = await response.text();
+          const error = new Error(errorText || 'Failed to initiate GitHub OAuth');
+          (error as any).isHandled = true;
+          throw error;
+        }
+        
+        // Check for configuration error
+        if (errorData?.error_code === 'GITHUB_NOT_CONFIGURED') {
+          const configError = new Error(errorData.message || 'GitHub OAuth is not configured');
+          (configError as any).errorCode = 'GITHUB_NOT_CONFIGURED';
+          (configError as any).isHandled = true;
+          throw configError;
+        }
+        
+        const error = new Error(errorData?.message || errorData?.error || 'Failed to initiate GitHub OAuth');
+        (error as any).isHandled = true;
+        throw error;
+      }
+
+      const data = await response.json();
+      if (!data?.oauth_url) {
+        const error = new Error('GitHub OAuth URL was not returned by the server');
+        (error as any).isHandled = true;
+        throw error;
+      }
+
+      return data.oauth_url;
+    } catch (error: any) {
+      // Re-throw with handled flag to prevent React from treating it as uncaught
+      if (error.isHandled) {
+        throw error;
+      }
+      // For any unexpected errors, mark as handled
+      (error as any).isHandled = true;
+      throw error;
     }
-
-    const data = await response.json();
-    if (!data?.oauth_url) {
-      throw new Error('GitHub OAuth URL was not returned by the server');
-    }
-
-    return data.oauth_url;
   }
 
   static async disconnect(userId: string): Promise<void> {
@@ -503,13 +535,50 @@ export default function GitHubProviderIntegration() {
         }
       }, 1000);
     } catch (error: any) {
-      console.error("OAuth error:", error);
-      toast({
-        title: "Connection Failed",
-        description: error.message || "Failed to connect to GitHub",
-        variant: "destructive",
-      });
+      // Prevent error from being logged as uncaught
+      if (error.isHandled) {
+        // Error is already marked as handled, just log for debugging
+        console.log("OAuth error (handled):", error.message);
+      } else {
+        console.error("OAuth error:", error);
+      }
+      
+      // Check if this is a configuration error
+      if (error.errorCode === 'GITHUB_NOT_CONFIGURED' || error.message?.includes('not configured')) {
+        const readmeAction = (
+          <ToastAction
+            altText="View GitHub setup guide"
+            onClick={() => {
+              window.open(
+                "https://github.com/arvo-ai/aurora/blob/main/server/connectors/github_connector/README.md",
+                "_blank",
+                "noopener,noreferrer"
+              );
+            }}
+            className="flex items-center gap-1"
+          >
+            <ExternalLink className="h-3 w-3" />
+            View Setup Guide
+          </ToastAction>
+        );
+        
+        toast({
+          title: "GitHub OAuth Not Configured",
+          description: "GitHub OAuth environment variables are not configured. Please configure them to connect GitHub.",
+          variant: "destructive",
+          action: readmeAction,
+        });
+      } else {
+        toast({
+          title: "Connection Failed",
+          description: error.message || "Failed to connect to GitHub",
+          variant: "destructive",
+        });
+      }
       setIsLoading(false);
+      
+      // Prevent error from propagating and causing app crash
+      return;
     }
   };
 
