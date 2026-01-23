@@ -20,6 +20,23 @@ nano .env  # Add OPENROUTER_API_KEY=sk-or-v1-...
 
 # 4. Start Aurora
 make prod-local
+
+# 5. Get Vault root token and add to .env
+#    Check the vault-init container logs for the root token:
+docker logs vault-init 2>&1 | grep "Root Token:"
+#    You'll see output like:
+#    ===================================================
+#    Vault initialization complete!
+#    Root Token: hvs.xxxxxxxxxxxxxxxxxxxxxxxxxxxx
+#    IMPORTANT: Set VAULT_TOKEN=hvs.xxxxxxxxxxxxxxxxxxxxxxxxxxxx in your .env file
+#               to connect Aurora services to Vault.
+#    ===================================================
+#    Copy the root token value and add it to your .env file:
+nano .env  # Add VAULT_TOKEN=hvs.xxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+# 6. Restart Aurora to load the Vault token
+make down
+make prod-local
 ```
 
 **That's it!** Open http://localhost:3000 in your browser.
@@ -39,6 +56,23 @@ Requirements: Docker with the Compose plugin.
 
 ```bash
 cp .env.example .env
+make dev
+
+# Get Vault root token and add to .env
+# Check the vault-init container logs for the root token:
+docker logs vault-init 2>&1 | grep "Root Token:"
+# You'll see output like:
+# ===================================================
+# Vault initialization complete!
+# Root Token: hvs.xxxxxxxxxxxxxxxxxxxxxxxxxxxx
+# IMPORTANT: Set VAULT_TOKEN=hvs.xxxxxxxxxxxxxxxxxxxxxxxxxxxx in your .env file
+#            to connect Aurora services to Vault.
+# ===================================================
+# Copy the root token value and add it to your .env file:
+nano .env  # Add VAULT_TOKEN=hvs.xxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+# Restart Aurora to load the Vault token
+make down
 make dev
 ```
 
