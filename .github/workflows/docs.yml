@@ -47,7 +47,7 @@ jobs:
           path: website/build
 
   deploy:
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/docs/docusaurus-site'
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
