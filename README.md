@@ -24,7 +24,6 @@ make prod-local
 
 **That's it!** Open http://localhost:3000 in your browser.
 
-📖 **Full Quick Start Guide**: See [docs/QUICK_START.md](./docs/QUICK_START.md) for detailed instructions and troubleshooting.
 
 > **Note**: Aurora works **without any cloud provider accounts**! The LLM API key is the only external requirement. Cloud connectors (GCP, AWS, Azure) are optional and can be enabled later if needed.
 
