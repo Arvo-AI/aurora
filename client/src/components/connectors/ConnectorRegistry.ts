@@ -194,6 +194,7 @@ class ConnectorRegistry {
       category: "Infrastructure",
       path: "/scaleway/onboarding",
       storageKey: "isScalewayConnected",
+      useCustomConnection: true,
     });
 
     this.register({
