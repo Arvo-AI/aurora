@@ -8,15 +8,18 @@ import {
 import GitHubProviderIntegration from "@/components/github-provider-integration";
 import GcpProviderIntegration from "@/components/gcp-provider-integration";
 import OvhProviderIntegration from "@/components/ovh-provider-integration";
+import ScalewayProviderIntegration from "@/components/scaleway-provider-integration";
 
 interface ConnectorDialogsProps {
   connectorId: string;
   showGitHubDialog: boolean;
   showGcpDialog: boolean;
   showOvhDialog: boolean;
+  showScalewayDialog: boolean;
   onGitHubDialogChange: (open: boolean) => void;
   onGcpDialogChange: (open: boolean) => void;
   onOvhDialogChange: (open: boolean) => void;
+  onScalewayDialogChange: (open: boolean) => void;
   onGitHubDialogClose: () => void;
 }
 
@@ -25,9 +28,11 @@ export function ConnectorDialogs({
   showGitHubDialog,
   showGcpDialog,
   showOvhDialog,
+  showScalewayDialog,
   onGitHubDialogChange,
   onGcpDialogChange,
   onOvhDialogChange,
+  onScalewayDialogChange,
   onGitHubDialogClose,
 }: ConnectorDialogsProps) {
   return (
@@ -61,6 +66,17 @@ export function ConnectorDialogs({
               <DialogTitle>OVH Cloud Project Management</DialogTitle>
             </DialogHeader>
             <OvhProviderIntegration onDisconnect={() => onOvhDialogChange(false)} />
+          </DialogContent>
+        </Dialog>
+      )}
+
+      {connectorId === "scaleway" && (
+        <Dialog open={showScalewayDialog} onOpenChange={onScalewayDialogChange}>
+          <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle>Scaleway Project Management</DialogTitle>
+            </DialogHeader>
+            <ScalewayProviderIntegration onDisconnect={() => onScalewayDialogChange(false)} />
           </DialogContent>
         </Dialog>
       )}
