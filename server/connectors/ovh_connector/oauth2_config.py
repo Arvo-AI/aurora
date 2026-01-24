@@ -58,7 +58,7 @@ def get_oauth2_config() -> Dict[str, Dict[str, str]]:
             if not base_url:
                 logger.error(f"Missing redirect URI for {region} (set NEXT_PUBLIC_BACKEND_URL)")
                 continue
-            redirect_uri = f"{base_url}/ovh/oauth2/callback"
+            redirect_uri = f"{base_url}/ovh_api/ovh/oauth2/callback"
 
             config[region] = {
                 'client_id': client_id,
