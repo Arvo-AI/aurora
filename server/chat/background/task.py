@@ -406,6 +406,7 @@ async def _execute_background_chat(
         state = State(
             user_id=user_id,
             session_id=session_id,
+            incident_id=incident_id,
             provider_preference=provider_preference,
             selected_project_id=None,
             messages=[human_message],

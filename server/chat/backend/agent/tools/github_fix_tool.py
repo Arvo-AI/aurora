@@ -110,9 +110,12 @@ def _save_fix_suggestion(
             )
             result = cursor.fetchone()
             conn.commit()
-            return result[0] if result else None
+            suggestion_id = result[0] if result else None
+            if suggestion_id:
+                logger.info(f"Saved fix suggestion {suggestion_id} for incident {incident_id}")
+            return suggestion_id
     except Exception as e:
-        logger.error(f"Failed to save fix suggestion: {e}")
+        logger.error(f"Failed to save fix suggestion: {e}", exc_info=True)
         return None
 
 
