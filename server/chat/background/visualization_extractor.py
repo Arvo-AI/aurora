@@ -42,7 +42,7 @@ class VisualizationExtractor:
         from chat.backend.agent.providers import create_chat_model
         # Use Claude 3.5 Haiku for fast, cost-effective extraction
         self.llm = create_chat_model(
-            "anthropic/claude-3.5-haiku",
+            "z-ai/glm-4.7",
             temperature=0.3,
             streaming=False
         )
@@ -78,9 +78,12 @@ class VisualizationExtractor:
     def _build_prompt(self, messages: List[Dict], existing: Optional[VisualizationData]) -> str:
         """Build extraction prompt with context."""
         messages_text = "\n\n".join([
-            f"Tool: {m.get('tool', 'unknown')}\nOutput:\n{m.get('output', '')[:500]}"
+            f"Tool: {m.get('tool', 'unknown')}\nOutput:\n{m.get('output', '')[:3000]}"
             for m in messages[-10:]  # Last 10 only
         ])
+        
+        logger.info(f"[VizExtractor] Prompt length: {len(messages_text)} chars, messages: {len(messages)}")
+        logger.info(f"[VizExtractor] First 500 chars of tool output: {messages_text[:500]}")
         
         existing_context = ""
         if existing and existing.nodes:

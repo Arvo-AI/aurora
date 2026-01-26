@@ -233,11 +233,13 @@ def send_tool_completion(tool_name: str, output: str, status: str = "completed",
                 viz_trigger = VisualizationTrigger(incident_id)
                 
                 logging.debug(f"[Visualization] Checking trigger for tool={tool_name}, incident={incident_id}")
+                output_str = str(output)
+                logging.info(f"[VizDebug] Tool output length: {len(output_str)} chars, first 200: {output_str[:200]}")
                 if viz_trigger.should_trigger(tool_name, output):
                     # Pass the current tool call directly (we already have all the data)
                     tool_call = [{
                         'tool': tool_name,
-                        'output': str(output)[:5000]  # Limit size for celery
+                        'output': output_str[:5000]  # Limit size for celery
                     }]
                     
                     from chat.background.visualization_generator import update_visualization
