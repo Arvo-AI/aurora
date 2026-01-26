@@ -278,13 +278,34 @@ def run_background_chat(
             
             # Generate final complete visualization
             try:
+                # Extract tool calls from state to pass to final viz
+                tool_calls_for_viz = []
+                try:
+                    from chat.backend.agent.tools.cloud_tools import get_state_context
+                    state = get_state_context()
+                    if state and hasattr(state, 'messages'):
+                        for msg in state.messages:
+                            if hasattr(msg, '__class__') and 'ToolMessage' in msg.__class__.__name__:
+                                tool_name = getattr(msg, 'name', 'unknown')
+                                # Only include infrastructure tools
+                                if tool_name in ['on_prem_kubectl', 'cloud_exec', 'gcp_compute', 'aws_ec2', 'azure_vm']:
+                                    tool_calls_for_viz.append({
+                                        'tool': tool_name,
+                                        'output': str(getattr(msg, 'content', ''))[:5000],
+                                    })
+                        logger.info(f"[BackgroundChat] Extracted {len(tool_calls_for_viz)} tool calls for final visualization")
+                except Exception as extract_err:
+                    logger.warning(f"[BackgroundChat] Failed to extract tool calls for final viz: {extract_err}")
+                
                 from chat.background.visualization_generator import update_visualization
+                import json
                 update_visualization.apply_async(
                     kwargs={
                         'incident_id': incident_id,
                         'user_id': user_id,
                         'session_id': session_id,
-                        'force_full': True
+                        'force_full': True,
+                        'tool_calls_json': json.dumps(tool_calls_for_viz) if tool_calls_for_viz else None
                     },
                     countdown=5
                 )

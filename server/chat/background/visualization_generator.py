@@ -18,7 +18,8 @@ logger = logging.getLogger(__name__)
     bind=True,
     max_retries=1,
     name="chat.background.update_visualization",
-    time_limit=30,
+    time_limit=120,  # Increased from 30s to 120s for LLM processing
+    soft_time_limit=100,
 )
 def update_visualization(
     self,
@@ -83,29 +84,42 @@ def update_visualization(
 
 
 def _fetch_recent_tool_calls(session_id: str, user_id: str, limit: int = 10) -> List[Dict]:
-    """Fetch recent tool calls from chat session messages."""
+    """Fetch recent tool calls from database (chat_sessions.messages)."""
     try:
-        # Get state context which has live messages
-        from chat.backend.agent.tools.cloud_tools import get_state_context
-        state = get_state_context()
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("""
+                    SELECT messages
+                    FROM chat_sessions
+                    WHERE id = %s
+                """, (session_id,))
+                
+                row = cursor.fetchone()
         
-        if not state or not hasattr(state, 'messages'):
-            logger.warning(f"[Visualization] No state context or messages found for session {session_id}")
+        if not row or not row[0]:
+            logger.warning(f"[Visualization] No messages found for session {session_id}")
             return []
         
+        messages = row[0]  # Already parsed as list by psycopg2
         tool_calls = []
-        for msg in state.messages:
-            # Check for ToolMessage type
-            if hasattr(msg, '__class__') and 'ToolMessage' in msg.__class__.__name__:
-                tool_calls.append({
-                    'tool': getattr(msg, 'name', 'unknown'),
-                    'output': str(getattr(msg, 'content', '')),
-                })
         
+        # Extract tool messages from the messages array
+        for msg in messages:
+            # Check if it's a tool message (has 'name' field)
+            if isinstance(msg, dict) and 'name' in msg:
+                tool_name = msg.get('name', 'unknown')
+                # Only include infrastructure tools
+                if tool_name in ['on_prem_kubectl', 'cloud_exec', 'gcp_compute', 'aws_ec2', 'azure_vm']:
+                    tool_calls.append({
+                        'tool': tool_name,
+                        'output': str(msg.get('content', '')),
+                    })
+        
+        logger.info(f"[Visualization] Fetched {len(tool_calls)} tool calls from database for session {session_id}")
         return tool_calls[-limit:] if tool_calls else []
     
     except Exception as e:
-        logger.error(f"[Visualization] Failed to fetch tool calls from state: {e}")
+        logger.error(f"[Visualization] Failed to fetch tool calls from database: {e}")
         return []
 
 
