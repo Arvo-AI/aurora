@@ -352,10 +352,9 @@ For Atlassian Cloud (`*.atlassian.net`):
 4. Click **Create**
 5. Go to **Permissions** > **Confluence API** > **Add** > **Configure**
 6. Add scopes:
-   - `read:confluence-content.all`
-   - `read:confluence-space.summary`
-   - `read:confluence-props`
-   - `read:confluence-content.summary`
+   - `read:page:confluence`
+   - `read:space:confluence`
+   - `read:user:confluence`
 7. Go to **Authorization** > **Add** callback URL:
    - `http://localhost:3000/confluence/callback` (development)
    - `https://your-domain.com/confluence/callback` (production)
