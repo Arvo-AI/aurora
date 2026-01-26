@@ -3,6 +3,10 @@ Shared RCA (Root Cause Analysis) prompt builder for background alert processing.
 
 This module creates provider-aware, persistence-focused RCA prompts that leverage
 all available tools and follow the detailed investigation guidelines in the system prompt.
+
+Aurora Learn Integration:
+- When Aurora Learn is enabled, searches for similar past incidents with positive feedback
+- Injects context from helpful RCAs to improve new investigations
 """
 
 from typing import Any, Dict, List, Optional
@@ -10,6 +14,149 @@ import logging
 import os
 
 logger = logging.getLogger(__name__)
+
+
+# ============================================================================
+# Aurora Learn - Similar RCA Context Injection
+# ============================================================================
+
+
+def _is_aurora_learn_enabled(user_id: str) -> bool:
+    """Check if Aurora Learn is enabled for a user. Defaults to True."""
+    if not user_id:
+        return False
+    try:
+        from utils.auth.stateless_auth import get_user_preference
+        setting = get_user_preference(user_id, "aurora_learn_enabled", default=True)
+        return setting is True or setting == "true"
+    except Exception as e:
+        logger.warning(f"Error checking Aurora Learn setting: {e}")
+        return True  # Default to enabled
+
+
+def inject_aurora_learn_context(
+    prompt_parts: list,
+    user_id: Optional[str],
+    alert_title: str,
+    alert_service: str,
+    source_type: str,
+) -> None:
+    """
+    Append Aurora Learn context to prompt_parts if similar RCAs are found.
+
+    This is a convenience wrapper for connector modules to inject Aurora Learn
+    context into their RCA prompts without duplicating the try/except pattern.
+
+    Args:
+        prompt_parts: List of prompt strings to append to (modified in place)
+        user_id: User ID for Aurora Learn lookup
+        alert_title: Title of the alert
+        alert_service: Service associated with the alert
+        source_type: Source type (grafana, datadog, etc.)
+    """
+    if not user_id:
+        return
+
+    similar_context = _get_similar_good_rcas_context(
+        user_id=user_id,
+        alert_title=alert_title,
+        alert_service=alert_service,
+        source_type=source_type,
+    )
+    if similar_context:
+        prompt_parts.append(similar_context)
+
+
+def _get_similar_good_rcas_context(
+    user_id: str,
+    alert_title: str,
+    alert_service: str,
+    source_type: str,
+) -> str:
+    """
+    Check if Aurora Learn is enabled and search for similar good RCAs.
+
+    Returns formatted context string if matches found, empty string otherwise.
+    """
+    if not user_id:
+        return ""
+
+    # Check if Aurora Learn is enabled
+    if not _is_aurora_learn_enabled(user_id):
+        logger.debug(f"Aurora Learn disabled for user {user_id}, skipping context injection")
+        return ""
+
+    try:
+        from routes.incident_feedback.weaviate_client import search_similar_good_rcas
+
+        # Search for similar incidents with positive feedback
+        matches = search_similar_good_rcas(
+            user_id=user_id,
+            alert_title=alert_title,
+            alert_service=alert_service,
+            source_type=source_type,
+            limit=2,
+            min_score=0.7,
+        )
+
+        if not matches:
+            logger.debug(f"No similar good RCAs found for alert: {alert_title[:50]}...")
+            return ""
+
+        # Format matches for injection
+        context_parts = [
+            "",
+            "## CONTEXT FROM SIMILAR PAST INCIDENTS:",
+            "The following past RCAs were rated helpful by the user. Use this context to guide your investigation:",
+            "",
+        ]
+
+        for i, match in enumerate(matches, 1):
+            similarity_pct = int(match["similarity"] * 100)
+            context_parts.extend([
+                f"### Past Incident {i} (Similarity: {similarity_pct}%)",
+                f"- **Alert**: {match.get('alert_title', 'Unknown')}",
+                f"- **Service**: {match.get('alert_service', 'Unknown')}",
+                f"- **Source**: {match.get('source_type', 'Unknown')}",
+                "",
+                "**Summary of what was found:**",
+                match.get("aurora_summary", "No summary available")[:1000],  # Limit length
+                "",
+            ])
+
+            # Add key investigation steps from thoughts (summarized)
+            thoughts = match.get("thoughts", [])
+            if thoughts:
+                # Get the most relevant thoughts (findings and actions)
+                key_thoughts = [
+                    t["content"]
+                    for t in thoughts
+                    if t.get("type") in ("finding", "action", "hypothesis")
+                ][:3]
+                if key_thoughts:
+                    context_parts.append("**Key investigation steps:**")
+                    for thought in key_thoughts:
+                        # Truncate long thoughts
+                        truncated = thought[:200] + "..." if len(thought) > 200 else thought
+                        context_parts.append(f"- {truncated}")
+                    context_parts.append("")
+
+        context_parts.extend([
+            "---",
+            "**Note**: Use the above context as guidance. The current incident may have different root causes.",
+            "",
+        ])
+
+        context = "\n".join(context_parts)
+        logger.info(
+            f"[AURORA LEARN] Injecting context from {len(matches)} similar good RCAs for user {user_id}"
+        )
+        logger.info(f"[AURORA LEARN] Context preview:\n{context[:500]}...")
+        return context
+
+    except Exception as e:
+        logger.warning(f"Error getting similar RCA context: {e}")
+        return ""
 
 
 def get_user_providers(user_id: str) -> List[str]:
@@ -375,6 +522,20 @@ def build_rca_prompt(
             provider_section,
         ])
 
+    # Aurora Learn: Inject context from similar past incidents
+    if user_id:
+        alert_service = alert_details.get('labels', {}).get('service', '') or ''
+        if source == 'netdata':
+            alert_service = alert_details.get('host', '') or ''
+        similar_context = _get_similar_good_rcas_context(
+            user_id=user_id,
+            alert_title=title,
+            alert_service=alert_service,
+            source_type=source,
+        )
+        if similar_context:
+            prompt_parts.append(similar_context)
+
     # Critical persistence instructions
     prompt_parts.extend([
         "",
@@ -516,7 +677,7 @@ def build_netdata_rca_prompt(
     user_id: Optional[str] = None,
 ) -> str:
     """Build RCA prompt from Netdata alert payload."""
-    alarm = payload.get("alarm") or payload.get("title") or "Unknown Alert"
+    alarm = payload.get("name") or payload.get("alarm") or payload.get("title") or "Unknown Alert"
     status = payload.get("status") or "unknown"
     host = payload.get("host") or "unknown"
     chart = payload.get("chart") or "unknown"
