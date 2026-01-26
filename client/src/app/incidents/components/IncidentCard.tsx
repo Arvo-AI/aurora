@@ -24,6 +24,7 @@ import CitationBadge from './CitationBadge';
 import CitationModal from './CitationModal';
 import SuggestionModal from './SuggestionModal';
 import FixSuggestionModal from './FixSuggestionModal';
+import IncidentFeedback from './IncidentFeedback';
 import { Suggestion } from '@/lib/services/incidents';
 
 interface IncidentCardProps {
@@ -489,6 +490,13 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
                 <ExternalLink className="w-4 h-4" />
               )}
             </button>
+          </div>
+        )}
+
+        {/* Feedback Section - only show when analysis is complete */}
+        {incident.auroraStatus === 'complete' && (
+          <div className="mt-6 pt-6 border-t border-zinc-800/50">
+            <IncidentFeedback incidentId={incident.id} />
           </div>
         )}
 

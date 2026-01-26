@@ -11,6 +11,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
+import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
 import { useUserId } from "@/hooks/use-user-id";
 import {
@@ -20,10 +21,12 @@ import {
   FileText,
   BookOpen,
   Brain,
+  Sparkles,
   Check,
   AlertCircle,
   RefreshCw,
 } from "lucide-react";
+import { userPreferencesService } from "@/lib/services/user-preferences";
 
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL;
 const MEMORY_MAX_LENGTH = 5000;
@@ -68,6 +71,11 @@ export function KnowledgeBaseSettings() {
 
   // Polling for processing documents
   const [pollingIds, setPollingIds] = useState<Set<string>>(new Set());
+
+  // Aurora Learn state
+  const [auroraLearnEnabled, setAuroraLearnEnabled] = useState(true);
+  const [isLoadingLearn, setIsLoadingLearn] = useState(true);
+  const [isTogglingLearn, setIsTogglingLearn] = useState(false);
 
   const hasMemoryChanges = memoryContent !== originalMemory;
 
@@ -132,13 +140,58 @@ export function KnowledgeBaseSettings() {
     }
   }, [userId]);
 
+  // Fetch Aurora Learn setting
+  const fetchAuroraLearnSetting = useCallback(async () => {
+    if (!userId) {
+      setIsLoadingLearn(false);
+      return;
+    }
+
+    try {
+      const data = await userPreferencesService.getAuroraLearnSetting();
+      setAuroraLearnEnabled(data.enabled);
+    } catch (error) {
+      console.error("Failed to fetch Aurora Learn setting:", error);
+      // Default to enabled on error
+      setAuroraLearnEnabled(true);
+    } finally {
+      setIsLoadingLearn(false);
+    }
+  }, [userId]);
+
+  // Handle Aurora Learn toggle
+  const handleToggleAuroraLearn = async (enabled: boolean) => {
+    if (!userId) return;
+
+    setIsTogglingLearn(true);
+    try {
+      await userPreferencesService.setAuroraLearnSetting(enabled);
+      setAuroraLearnEnabled(enabled);
+      toast({
+        title: enabled ? "Aurora Learn enabled" : "Aurora Learn disabled",
+        description: enabled
+          ? "Aurora will learn from your feedback to improve future analyses."
+          : "Aurora will no longer save or use feedback for learning.",
+      });
+    } catch (error) {
+      toast({
+        title: "Failed to update setting",
+        description: error instanceof Error ? error.message : "An error occurred",
+        variant: "destructive",
+      });
+    } finally {
+      setIsTogglingLearn(false);
+    }
+  };
+
   // Initial fetch
   useEffect(() => {
     if (userId && !userLoading) {
       fetchMemory();
       fetchDocuments();
+      fetchAuroraLearnSetting();
     }
-  }, [userId, userLoading, fetchMemory, fetchDocuments]);
+  }, [userId, userLoading, fetchMemory, fetchDocuments, fetchAuroraLearnSetting]);
 
   // Polling for processing documents
   useEffect(() => {
@@ -341,7 +394,7 @@ export function KnowledgeBaseSettings() {
     if (!config) return null;
 
     return (
-      <Badge variant={config.variant} className={config.className || undefined}>
+      <Badge variant={config.variant} className={config.className}>
         {config.icon}
         {config.label}
       </Badge>
@@ -370,6 +423,33 @@ export function KnowledgeBaseSettings() {
           Manage your team&apos;s documentation and context for Aurora to reference.
         </p>
       </div>
+
+      {/* Aurora Learn Section */}
+      <Card>
+        <CardHeader>
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Sparkles className="h-5 w-5 text-primary" />
+              <CardTitle>Aurora Learn</CardTitle>
+            </div>
+            {isLoadingLearn ? (
+              <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+            ) : (
+              <Switch
+                checked={auroraLearnEnabled}
+                onCheckedChange={handleToggleAuroraLearn}
+                disabled={isTogglingLearn}
+              />
+            )}
+          </div>
+        </CardHeader>
+        <CardContent>
+          <ul className="text-sm text-muted-foreground space-y-1 list-disc list-inside">
+            <li>Stores feedback locally to improve Aurora for your system</li>
+            <li>All data remains on your infrastructure and is never sent externally</li>
+          </ul>
+        </CardContent>
+      </Card>
 
       {/* Memory Section */}
       <Card>
