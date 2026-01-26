@@ -42,7 +42,7 @@ class VisualizationExtractor:
         from chat.backend.agent.providers import create_chat_model
         # Use Claude 3.5 Haiku for fast, cost-effective extraction
         self.llm = create_chat_model(
-            "anthropic/claude-3-5-haiku-latest",
+            "anthropic/claude-3.5-haiku",
             temperature=0.3,
             streaming=False
         )
