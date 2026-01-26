@@ -13,46 +13,103 @@ from chat.backend.agent.model_mapper import ModelMapper
 logger = logging.getLogger(__name__)
 
 
+class ModelConfig:
+    """Centralized model configuration for all Aurora LLM usage.
+    
+    All model selections are defined here in one place for easy maintenance.
+    Change these values to switch providers across the entire application.
+    """
+    
+    # Primary models for chat and operations
+    MAIN_MODEL = "anthropic/claude-sonnet-4.5"
+    SQL_MODEL = "anthropic/claude-sonnet-4.5"
+    VISION_MODEL = "anthropic/claude-sonnet-4.5"
+    
+    # Background RCA models - with cost optimization
+    # When RCA_OPTIMIZE_COSTS=true:
+    #   - Use Claude 3 Haiku (reliable, fast, and cheap)
+    #   - Works in both direct and OpenRouter modes
+    RCA_MODEL_COST_OPTIMIZED_DIRECT = "anthropic/claude-3-haiku"
+    RCA_MODEL_COST_OPTIMIZED_OPENROUTER = "anthropic/claude-3-haiku"  # Proven reliable
+    RCA_MODEL_HIGH_QUALITY = "anthropic/claude-opus-4.5"  # High-quality RCA (when RCA_OPTIMIZE_COSTS=false)
+    
+    # Summarization and utility models
+    SUMMARIZATION_MODEL = "anthropic/claude-sonnet-4.5"  # For general summarization
+    FAST_SUMMARIZATION_MODEL = "anthropic/claude-sonnet-4.5"  # For quick summaries (tool context)
+    
+    # Suggestion extraction
+    SUGGESTION_MODEL = "anthropic/claude-sonnet-4.5"
+    
+    # Email report generation
+    EMAIL_REPORT_MODEL = "anthropic/claude-sonnet-4.5"
+    
+    @classmethod
+    def get_rca_model(cls, optimize_costs: bool = True, provider_mode: Optional[str] = None) -> str:
+        """Get the appropriate RCA model based on cost optimization setting and provider mode.
+        
+        Args:
+            optimize_costs: If True, use cost-optimized models
+            provider_mode: 'direct', 'auto', or 'openrouter' (defaults to env LLM_PROVIDER_MODE)
+        
+        Returns:
+            Model name appropriate for the provider mode
+        """
+        import os
+        
+        if not optimize_costs:
+            return cls.RCA_MODEL_HIGH_QUALITY
+        
+        # Determine provider mode
+        if provider_mode is None:
+            provider_mode = os.getenv("LLM_PROVIDER_MODE", "direct")
+        
+        # Use appropriate cost-optimized model based on provider mode
+        if provider_mode == "openrouter":
+            return cls.RCA_MODEL_COST_OPTIMIZED_OPENROUTER  # GLM-4.7-Flash via OpenRouter
+        else:
+            return cls.RCA_MODEL_COST_OPTIMIZED_DIRECT  # Claude 3 Haiku via direct API
+
+
 class LLMManager:
     def __init__(
         self,
-        main_model="openai/gpt-5.2",
-        sql_model="openai/gpt-5.2",
-        vision_model="openai/gpt-5.2",
+        main_model: Optional[str] = None,
+        sql_model: Optional[str] = None,
+        vision_model: Optional[str] = None,
         provider_mode: Optional[str] = None,
     ):
         """
         Initialize LLM Manager with support for multiple provider modes.
 
         Args:
-            main_model: Default model for general tasks
-            sql_model: Model for SQL generation
-            vision_model: Model for vision/multimodal tasks
+            main_model: Default model for general tasks (defaults to ModelConfig.MAIN_MODEL)
+            sql_model: Model for SQL generation (defaults to ModelConfig.SQL_MODEL)
+            vision_model: Model for vision/multimodal tasks (defaults to ModelConfig.VISION_MODEL)
             provider_mode: LLM provider mode ('direct', 'auto', 'openrouter')
                           Defaults to env LLM_PROVIDER_MODE or 'direct'
         """
         # Get provider mode from param or environment
         self.provider_mode = provider_mode or os.getenv("LLM_PROVIDER_MODE")
 
-        # Default models
-        self.default_main_model = main_model
-        self.default_sql_model = sql_model
-        self.default_vision_model = vision_model
+        # Use centralized model config if not explicitly overridden
+        self.default_main_model = main_model or ModelConfig.MAIN_MODEL
+        self.default_sql_model = sql_model or ModelConfig.SQL_MODEL
+        self.default_vision_model = vision_model or ModelConfig.VISION_MODEL
 
         # Initialize default LLMs using provider-aware factory
         self.main_llm = create_chat_model(
-            main_model,
+            self.default_main_model,
             temperature=0.4,
             provider_mode=self.provider_mode,
         )
         self.sql_coder = create_chat_model(
-            sql_model,
+            self.default_sql_model,
             temperature=0.4,
             provider_mode=self.provider_mode,
         )
         # Vision-capable model for multimodal content
         self.vision_llm = create_chat_model(
-            vision_model,
+            self.default_vision_model,
             temperature=0.4,
             provider_mode=self.provider_mode,
         )
@@ -329,7 +386,7 @@ class LLMManager:
 
         Args:
             content: The content to summarize
-            model: Optional model to use for summarization (defaults to fast model)
+            model: Optional model to use for summarization (defaults to ModelConfig.SUMMARIZATION_MODEL)
 
         Returns:
             Summarized content
@@ -343,10 +400,10 @@ class LLMManager:
             for i, frame in enumerate(call_stack[-5:]):  # Last 5 frames
                 logger.error(f" Frame {i}: {frame.strip()}")
 
-            # Use Gemini Flash 2.5 - fast, cheap, and excellent for summarization
-            summarization_model = model or "google/gemini-3-pro-preview"
+            # Use centralized model config
+            summarization_model = model or ModelConfig.SUMMARIZATION_MODEL
 
-            logger.error(f" SUMMARIZING: {len(content)} chars -> Gemini Flash 2.5")
+            logger.error(f" SUMMARIZING: {len(content)} chars -> {summarization_model}")
             logger.error(f" CONTENT PREVIEW: {content[:200]}...")
 
             # Create summarization prompt

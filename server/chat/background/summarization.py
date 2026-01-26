@@ -448,10 +448,11 @@ def generate_incident_summary(
             alert_metadata=alert_metadata,
         )
 
-        # Use Flash to generate summary (fast, no tool calls needed)
-        # Uses provider-aware factory - will use direct Google API if configured, else OpenRouter
+        # Use centralized model config for summarization
+        from chat.backend.agent.llm import ModelConfig
+
         llm = create_chat_model(
-            "google/gemini-3-pro-preview",
+            ModelConfig.SUMMARIZATION_MODEL,
             temperature=0.3,
             streaming=False,
         )
@@ -572,10 +573,11 @@ def generate_incident_summary_from_chat(
             citations=all_citations if all_citations else None,
         )
 
-        # Use Flash to generate summary (fast, no tool calls needed)
-        # Uses provider-aware factory - will use direct Google API if configured, else OpenRouter
+        # Use centralized model config for email report generation
+        from chat.backend.agent.llm import ModelConfig
+
         llm = create_chat_model(
-            "google/gemini-3-pro-preview",
+            ModelConfig.EMAIL_REPORT_MODEL,
             temperature=0.3,
             streaming=False,
         )

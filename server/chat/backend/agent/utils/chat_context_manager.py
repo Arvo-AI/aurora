@@ -28,6 +28,7 @@ class ChatContextManager:
         "openai/gpt-5.2": 950000,  # 1M - 50K buffer
         "anthropic/claude-sonnet-4.5": 950000,  # 1M - 50K buffer
         "anthropic/claude-opus-4.5": 180000,  # 200K - 20K buffer
+        "anthropic/claude-3-haiku": 180000,  # 200K - 20K buffer
         "google/gemini-3-pro-preview": 1000000,  # 1M context
         # Default fallback
         "default": 7000,  # Conservative 8K - 1K buffer
@@ -105,9 +106,10 @@ Conversation to summarize:
 Provide a detailed summary that preserves essential context:"""
 
             # Create isolated LLM instance for summarization
+            from ..llm import ModelConfig
             llm_manager = LLMManager()
             summary = llm_manager.summarize(
-                conversation_text, model=summarization_model
+                conversation_text, model=summarization_model or ModelConfig.SUMMARIZATION_MODEL
             )
 
             logger.info(f"Generated conversation summary ({len(summary)} chars)")

@@ -164,8 +164,9 @@ class ToolContextCapture:
         if content_tokens > SUMMARIZATION_THRESHOLD_TOKENS:
             logger.info(f" Tool output length {content_tokens} tokens exceeds {SUMMARIZATION_THRESHOLD_TOKENS} token threshold, summarizing for LLM context")
             try:
+                from ..llm import ModelConfig
                 llm = LLMManager()
-                summary = llm.summarize(original_content, model="google/gemini-2.5-flash")
+                summary = llm.summarize(original_content, model=ModelConfig.FAST_SUMMARIZATION_MODEL)
                 summarized_content = summary + '\n\n[Summarized from longer output]'
                 summary_tokens = count_tokens(summarized_content)
                 logger.debug(f" SUMMARIZATION CREATED: {content_tokens} -> {summary_tokens} tokens")

@@ -112,9 +112,10 @@ class SuggestionExtractor:
 
         try:
             from chat.backend.agent.providers import create_chat_model
+            from chat.backend.agent.llm import ModelConfig
 
             llm = create_chat_model(
-                "google/gemini-3-pro-preview",
+                ModelConfig.SUGGESTION_MODEL,
                 temperature=0.3,
             )
 

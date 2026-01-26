@@ -45,6 +45,11 @@ MODEL_MAPPINGS = {
         "google": "gemini-3-pro-preview",
         "provider": "google",
     },
+    "anthropic/claude-3-haiku": {
+        "openrouter": "anthropic/claude-3-haiku",
+        "anthropic": "claude-3-haiku-20240307",
+        "provider": "anthropic",
+    },
 }
 
 # Reverse mapping: native model name -> OpenRouter format
