@@ -293,9 +293,10 @@ def save_incident_suggestions(incident_id: str, suggestions: List[Suggestion]) -
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
-                # Delete existing suggestions for this incident
+                # Delete existing NON-FIX suggestions for this incident
+                # Preserve fix suggestions created by github_fix tool
                 cursor.execute(
-                    "DELETE FROM incident_suggestions WHERE incident_id = %s",
+                    "DELETE FROM incident_suggestions WHERE incident_id = %s AND type != 'fix'",
                     (incident_id,),
                 )
 

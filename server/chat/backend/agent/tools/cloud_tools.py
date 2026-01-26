@@ -485,6 +485,12 @@ def with_forced_context(func):
             logging.error(f"with_forced_context: No session_id in context for {func.__name__}")
             raise ValueError(f"No session_id available in context for {func.__name__}")
         
+        # Inject incident_id if available (for RCA sessions)
+        context_incident_id = context_state.incident_id if context_state and hasattr(context_state, 'incident_id') else None
+        if context_incident_id:
+            kwargs['incident_id'] = context_incident_id
+            logging.info(f"with_forced_context: Forced incident_id from context: {context_incident_id} for {func.__name__}")
+        
         # Validate user_id format
         user_id = kwargs['user_id']
         from utils.auth.stateless_auth import is_valid_user_id
