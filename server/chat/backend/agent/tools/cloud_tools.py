@@ -37,6 +37,7 @@ from .rag_indexer_tool import rag_index_zip, RAGIndexZipArgs
 from .web_search_tool import web_search, WebSearchArgs
 from .terminal_exec_tool import terminal_exec
 from .tailscale_ssh_tool import tailscale_ssh
+from .confluence_runbook_tool import confluence_runbook_parse, ConfluenceRunbookArgs
 from .splunk_tool import (
     search_splunk,
     list_splunk_indexes,
@@ -1007,6 +1008,7 @@ def get_cloud_tools():
         (cloud_exec_wrapper, "cloud_exec"),
         (terminal_exec, "terminal_exec"),
         (tailscale_ssh, "tailscale_ssh"),
+        (confluence_runbook_parse, "confluence_runbook_parse"),
         (on_prem_kubectl, "on_prem_kubectl"),
         (analyze_zip_file, "analyze_zip_file"),
         # (web_search, "web_search"),  # Moved to dedicated registration below with explicit args_schema
@@ -1084,6 +1086,13 @@ def get_cloud_tools():
                     "target_branch (optional base branch for PR, defaults to main)."
                 ),
                 args_schema=GitHubApplyFixArgs
+            )
+        elif name == "confluence_runbook_parse":
+            tool = StructuredTool.from_function(
+                func=final_func,
+                name=name,
+                description="Fetch and parse a Confluence runbook into markdown and steps for LLM use. Parameter: page_url (string, required).",
+                args_schema=ConfluenceRunbookArgs,
             )
         else:
             tool = StructuredTool.from_function(final_func)

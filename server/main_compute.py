@@ -231,6 +231,13 @@ app.register_blueprint(pagerduty_bp, url_prefix="/pagerduty")
 from routes.knowledge_base import bp as knowledge_base_bp  # noqa: F401
 app.register_blueprint(knowledge_base_bp, url_prefix="/api/knowledge-base")
 
+
+# --- Confluence Integration Routes ---
+from utils.flags.feature_flags import is_confluence_enabled
+if is_confluence_enabled():
+    from routes.confluence import bp as confluence_bp  # noqa: F401
+    app.register_blueprint(confluence_bp, url_prefix="/confluence")
+
 # --- Incidents Routes ---
 from routes.incidents_routes import incidents_bp
 from routes.incidents_sse import incidents_sse_bp
