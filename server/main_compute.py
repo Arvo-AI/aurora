@@ -244,6 +244,10 @@ from routes.incidents_sse import incidents_sse_bp
 app.register_blueprint(incidents_bp)
 app.register_blueprint(incidents_sse_bp)
 
+# --- Visualization Streaming Routes ---
+from routes.visualization_stream import visualization_bp
+app.register_blueprint(visualization_bp)
+
 # --- User & Auth Routes ---
 from routes.user_preferences import user_preferences_bp
 from routes.user_connections import user_connections_bp

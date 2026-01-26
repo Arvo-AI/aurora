@@ -275,6 +275,22 @@ def run_background_chat(
                 )
             except Exception as e:
                 logger.error(f"[BackgroundChat] Failed to enqueue post-RCA summarization for incident {incident_id}: {e}")
+            
+            # Generate final complete visualization
+            try:
+                from chat.background.visualization_generator import update_visualization
+                update_visualization.apply_async(
+                    kwargs={
+                        'incident_id': incident_id,
+                        'user_id': user_id,
+                        'session_id': session_id,
+                        'force_full': True
+                    },
+                    countdown=5
+                )
+                logger.info(f"[BackgroundChat] Queued final visualization for incident {incident_id}")
+            except Exception as e:
+                logger.warning(f"[BackgroundChat] Failed to queue final visualization: {e}")
         
         # Send response back to Slack if this was triggered from Slack
         if trigger_metadata and trigger_metadata.get('source') in ['slack', 'slack_button']:
@@ -379,16 +395,6 @@ async def _execute_background_chat(
         wf = Workflow(agent, session_id)
         logger.info(f"[BackgroundChat] Created workflow for session {session_id}")
         
-        # Set user context for tools
-        set_user_context(
-            user_id=user_id,
-            session_id=session_id,
-            provider_preference=provider_preference,
-            selected_project_id=None,
-            mode=mode,
-        )
-        logger.info(f"[BackgroundChat] Set user context with mode={mode}")
-
         # Build RCA context for system prompt (NOT added to user message)
         rca_context = _build_rca_context(
             user_id=user_id,
@@ -420,6 +426,17 @@ async def _execute_background_chat(
             rca_context=rca_context,  # RCA context for prompt_builder
         )
         logger.info(f"[BackgroundChat] Created state with is_background=True, mode={mode}, model={state.model}, rca_context={'set' if rca_context else 'None'}")
+        
+        # Set user context for tools (AFTER state is created so we can pass it)
+        set_user_context(
+            user_id=user_id,
+            session_id=session_id,
+            provider_preference=provider_preference,
+            selected_project_id=None,
+            mode=mode,
+            state=state,  # Pass state so incident_id is available in context
+        )
+        logger.info(f"[BackgroundChat] Set user context with mode={mode}, incident_id={incident_id}")
         
         # Set UI state (preserve triggerMetadata so it persists when workflow saves)
         wf._ui_state = {

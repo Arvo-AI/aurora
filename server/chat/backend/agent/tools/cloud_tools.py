@@ -215,12 +215,37 @@ def send_websocket_message(message_data: Dict[str, Any], tool_name: str, fallbac
 
 def send_tool_completion(tool_name: str, output: str, status: str = "completed", tool_call_id: Optional[str] = None, tool_input: Optional[Dict] = None):
     """Send tool completion notification via WebSocket if available."""
+    logging.info(f"[VizDebug] send_tool_completion called for {tool_name}")
     try:
         # Get user and session context
         context = get_user_context()
         user_id = context.get('user_id') if isinstance(context, dict) else context
         state_context = get_state_context()
+        logging.info(f"[VizDebug] state_context type: {type(state_context)}, hasattr incident_id: {hasattr(state_context, 'incident_id') if state_context else False}")
         session_id = state_context.session_id if state_context and hasattr(state_context, 'session_id') else None
+        incident_id = state_context.incident_id if state_context and hasattr(state_context, 'incident_id') else None
+        logging.info(f"[VizDebug] Got context - user_id={user_id}, session_id={session_id}, incident_id={incident_id}")
+        
+        # Check if visualization should be triggered (for incident-based background chats)
+        if incident_id:
+            try:
+                from chat.background.visualization_triggers import VisualizationTrigger
+                viz_trigger = VisualizationTrigger(incident_id)
+                
+                logging.debug(f"[Visualization] Checking trigger for tool={tool_name}, incident={incident_id}")
+                if viz_trigger.should_trigger(tool_name, output):
+                    from chat.background.visualization_generator import update_visualization
+                    update_visualization.delay(
+                        incident_id=incident_id,
+                        user_id=user_id,
+                        session_id=session_id,
+                        force_full=False
+                    )
+                    logging.info(f"[Visualization] Triggered update for incident {incident_id} after {tool_name}")
+            except Exception as e:
+                logging.warning(f"[Visualization] Failed to trigger update: {e}")
+        else:
+            logging.debug(f"[Visualization] No incident_id in state_context (state_context={state_context})")
         
         # Try to get the Agent's websocket_sender first (preferred)
         agent_websocket_sender = None
