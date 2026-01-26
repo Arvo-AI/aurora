@@ -8,13 +8,12 @@ Deploy Aurora using Docker Compose for single-server or development deployments.
 
 ## Overview
 
-Aurora provides three Docker Compose configurations:
+Aurora provides two Docker Compose configurations:
 
 | File | Use Case |
 |------|----------|
 | `docker-compose.yaml` | Local development with hot-reload |
-| `docker-compose.prod-local.yml` | Production-like testing locally |
-| `prod.docker-compose.yml` | Production deployment |
+| `docker-compose.prod-local.yml` | Production-like testing and deployment |
 
 ## Production Deployment
 
@@ -247,7 +246,7 @@ curl http://localhost:5080/health
 curl http://localhost:8200/v1/sys/health
 
 # All services
-docker compose -f prod.docker-compose.yml ps
+docker compose -f docker-compose.prod-local.yml ps
 ```
 
 ### Logs
@@ -260,7 +259,7 @@ make prod-logs
 make prod-logs aurora-server
 
 # With timestamps
-docker compose -f prod.docker-compose.yml logs -t aurora-server
+docker compose -f docker-compose.prod-local.yml logs -t aurora-server
 ```
 
 ## Troubleshooting
@@ -269,7 +268,7 @@ docker compose -f prod.docker-compose.yml logs -t aurora-server
 
 ```bash
 # Check status
-docker compose -f prod.docker-compose.yml ps
+docker compose -f docker-compose.prod-local.yml ps
 
 # Check specific service
 docker logs aurora-server

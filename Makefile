@@ -14,14 +14,14 @@ help:
 	@echo "  make rebuild-server     - Rebuild and restart the aurora-server container"
 	@echo "  make restart            - Restart the Docker Compose stack"
 	@echo ""
-	@echo "Production:"
-	@echo "  make prod               - Build and start all containers in production mode"
-	@echo "  make prod-build         - Build all production containers without starting them"
+	@echo "Production (local testing with prod builds):"
+	@echo "  make prod               - Alias for prod-local"
+	@echo "  make prod-build         - Alias for prod-local-build"
 	@echo "  make prod-build-no-cache - Build all production containers without using cache"
-	@echo "  make prod-logs          - Show logs for all production containers (last 50 lines, follows)"
-	@echo "  make prod-down          - Stop and remove all production containers"
-	@echo "  make prod-clean         - Stop production containers and remove volumes"
-	@echo "  make prod-nuke          - Full production cleanup: containers, volumes, images, orphans"
+	@echo "  make prod-logs          - Alias for prod-local-logs"
+	@echo "  make prod-down          - Alias for prod-local-down"
+	@echo "  make prod-clean         - Alias for prod-local-clean"
+	@echo "  make prod-nuke          - Alias for prod-local-nuke"
 	@echo "  make prod-fresh         - Full production cleanup + rebuild without cache + start"
 	@echo ""
 	@echo "Local Production (for testing/evaluation):"
@@ -98,49 +98,30 @@ dev-fresh:
 	docker compose up -d
 	@echo "Fresh rebuild complete!"
 
-# Production commands
-prod:
-	docker compose -f prod.docker-compose.yml up --build -d
+# Production commands (alias to prod-local for consistency)
+prod: prod-local
 
-prod-build:
-	docker compose -f prod.docker-compose.yml build $(ARGS)
+prod-build: prod-local-build
 
-prod-logs:
-	@if [ -z "$(filter-out $@,$(MAKECMDGOALS))" ]; then \
-		docker compose -f prod.docker-compose.yml logs --tail 50 -f; \
-	else \
-		docker compose -f prod.docker-compose.yml logs --tail 50 -f $(filter-out $@,$(MAKECMDGOALS)); \
-	fi
+prod-logs: prod-local-logs
 
-prod-down:
-	docker compose -f prod.docker-compose.yml down
+prod-down: prod-local-down
 
-# Production build without cache
 prod-build-no-cache:
 	@echo "Building all production containers without cache..."
-	docker compose -f prod.docker-compose.yml build --no-cache
+	docker compose -f docker-compose.prod-local.yml build --no-cache
 
-# Stop production containers and remove volumes
-prod-clean:
-	@echo "Stopping production containers and removing volumes..."
-	docker compose -f prod.docker-compose.yml down -v
+prod-clean: prod-local-clean
 
-# Full production cleanup: containers, volumes, images, and orphans
-prod-nuke:
-	@echo "Performing full production cleanup..."
-	docker compose -f prod.docker-compose.yml down -v --rmi local --remove-orphans
-	@echo "Pruning dangling images..."
-	docker image prune -f
-	@echo "Production cleanup complete!"
+prod-nuke: prod-local-nuke
 
-# Full production cleanup + rebuild without cache + start
 prod-fresh:
 	@echo "Performing full fresh production rebuild..."
-	docker compose -f prod.docker-compose.yml down -v --rmi local --remove-orphans
+	docker compose -f docker-compose.prod-local.yml down -v --rmi local --remove-orphans
 	@echo "Building without cache..."
-	docker compose -f prod.docker-compose.yml build --no-cache
+	docker compose -f docker-compose.prod-local.yml build --no-cache
 	@echo "Starting production containers..."
-	docker compose -f prod.docker-compose.yml up -d
+	docker compose -f docker-compose.prod-local.yml up -d
 	@echo "Fresh production rebuild complete!"
 
 # Local Production commands (for testing/evaluation)

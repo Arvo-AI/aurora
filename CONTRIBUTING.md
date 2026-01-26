@@ -309,7 +309,7 @@ When adding new environment variables:
 
 ## Docker Compose
 
-- Always update both `docker-compose.yaml` and `prod.docker-compose.yml`
+- Always update both `docker-compose.yaml` and `docker-compose.prod-local.yml`
 - Keep environment variables in sync between Docker Compose files
 - Test production build: `make prod-build && make prod`
 
