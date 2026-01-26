@@ -53,7 +53,7 @@ async def _handle_kubectl_execute(headers, body, writer):
         await _send_json_response(writer, {"error": "Unauthorized"}, status="403 Forbidden")
         return
     
-    from kubectl_agent_ws_handler import get_agent_websocket_by_cluster, register_command_response_handler, unregister_command_response_handler
+    from utils.kubectl.agent_ws_handler import get_agent_websocket_by_cluster, register_command_response_handler, unregister_command_response_handler
     
     data = json.loads(body.decode())
     user_id, cluster_id, command = data['user_id'], data['cluster_id'], data['command']
