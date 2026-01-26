@@ -28,6 +28,7 @@ class ChatContextManager:
         "openai/gpt-5.2": 950000,  # 1M - 50K buffer
         "anthropic/claude-sonnet-4.5": 950000,  # 1M - 50K buffer
         "anthropic/claude-opus-4.5": 180000,  # 200K - 20K buffer
+        "anthropic/claude-3-haiku": 180000,  # 200K - 20K buffer
         "google/gemini-3-pro-preview": 1000000,  # 1M context
         # Default fallback
         "default": 7000,  # Conservative 8K - 1K buffer
@@ -73,13 +74,10 @@ class ChatContextManager:
 
     @classmethod
     def create_conversation_summary(
-        cls, messages: List[Any], model_name: str = None
+        cls, messages: List[Any]
     ) -> str:
-        """Create a summary of the conversation history."""
+        """Create a summary of the conversation history using centralized model config."""
         try:
-            # Use fast model for summarization
-            summarization_model = model_name or "google/gemini-3-pro-preview"
-
             # Convert messages to a readable format for summarization
             conversation_text = cls._format_messages_for_summary(messages)
 
@@ -105,9 +103,10 @@ Conversation to summarize:
 Provide a detailed summary that preserves essential context:"""
 
             # Create isolated LLM instance for summarization
+            from ..llm import ModelConfig
             llm_manager = LLMManager()
             summary = llm_manager.summarize(
-                conversation_text, model=summarization_model
+                conversation_text, model=ModelConfig.INCIDENT_REPORT_SUMMARIZATION_MODEL
             )
 
             logger.info(f"Generated conversation summary ({len(summary)} chars)")
@@ -249,7 +248,7 @@ Provide a detailed summary that preserves essential context:"""
             logger.info(
                 f"Summarizing entire conversation with {len(messages)} messages"
             )
-            summary_text = cls.create_conversation_summary(messages, model_name)
+            summary_text = cls.create_conversation_summary(messages)
 
             # Create a system message with the summary that replaces everything
             summary_message = SystemMessage(
