@@ -137,5 +137,4 @@ aurora/
 | File | Purpose |
 |------|---------|
 | `docker-compose.yaml` | Development stack |
-| `docker-compose.prod-local.yml` | Production-local testing |
-| `prod.docker-compose.yml` | Production deployment |
+| `docker-compose.prod-local.yml` | Production-like testing and deployment |

@@ -393,9 +393,8 @@ RATE_LIMIT_HEADERS_ENABLED=true
 | File | Purpose |
 |------|---------|
 | `docker-compose.yaml` | Development stack |
-| `docker-compose.prod-local.yml` | Production-like local testing |
-| `prod.docker-compose.yml` | Production deployment |
+| `docker-compose.prod-local.yml` | Production-like testing and deployment |
 
 :::warning Keep Docker Compose Files in Sync
-When adding new environment variables, update all Docker Compose files to ensure consistency.
+When adding new environment variables, update both Docker Compose files to ensure consistency.
 :::
