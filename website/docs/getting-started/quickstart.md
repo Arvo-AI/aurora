@@ -76,7 +76,7 @@ nano .env
 # Or use your preferred editor: code .env, vim .env, etc.
 ```
 
-Add one of these (only one is required):
+Add one of these (Openrouter or Claude API key for RCA):
 
 ```bash
 # Option 1: OpenRouter (recommended)
