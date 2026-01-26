@@ -158,7 +158,7 @@ RUN useradd -m -s /bin/bash -u 10000 appuser && \
     chown -R appuser:appuser /home/appuser
 
 # Copy Tailscale init script
-COPY tailscale-init.sh /home/appuser/tailscale-init.sh
+COPY utils/terminal/tailscale-init.sh /home/appuser/tailscale-init.sh
 RUN chmod +x /home/appuser/tailscale-init.sh && chown appuser:appuser /home/appuser/tailscale-init.sh
 
 USER appuser
