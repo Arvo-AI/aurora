@@ -363,6 +363,7 @@ For Atlassian Cloud (`*.atlassian.net`):
 ##### 2. Configure Environment
 
 ```bash
+NEXT_PUBLIC_ENABLE_CONFLUENCE=true
 CONFLUENCE_CLIENT_ID=your-client-id
 CONFLUENCE_CLIENT_SECRET=your-client-secret
 ```
