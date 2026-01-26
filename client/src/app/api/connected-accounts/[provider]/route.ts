@@ -24,7 +24,7 @@ export async function DELETE(
     const { provider } = await context.params
 
     // Validate provider
-    if (!['gcp', 'azure', 'aws', 'github', 'grafana', 'datadog', 'netdata', 'ovh', 'scaleway', 'tailscale', 'slack', 'splunk'].includes(provider)) {
+    if (!['gcp', 'azure', 'aws', 'github', 'grafana', 'datadog', 'netdata', 'ovh', 'scaleway', 'tailscale', 'slack', 'splunk', 'confluence'].includes(provider)) {
       return NextResponse.json(
         { error: 'Invalid provider' },
         { status: 400 }
@@ -203,6 +203,26 @@ export async function DELETE(
         console.error('Backend error disconnecting Splunk:', errorText)
         return NextResponse.json(
           { error: 'Failed to disconnect Splunk' },
+          { status: response.status }
+        )
+      }
+
+      const data = await response.json()
+      return NextResponse.json(data)
+    }
+
+    // Special handling for Confluence
+    if (provider === 'confluence') {
+      const response = await fetch(`${API_BASE_URL}/confluence/disconnect`, {
+        method: 'DELETE',
+        headers: authHeaders,
+      })
+
+      if (!response.ok) {
+        const errorText = await response.text()
+        console.error('Backend error disconnecting Confluence:', errorText)
+        return NextResponse.json(
+          { error: 'Failed to disconnect Confluence' },
           { status: response.status }
         )
       }
