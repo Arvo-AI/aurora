@@ -717,6 +717,22 @@ def initialize_tables():
                     CREATE INDEX IF NOT EXISTS idx_kb_documents_user_id ON knowledge_base_documents(user_id);
                     CREATE INDEX IF NOT EXISTS idx_kb_documents_status ON knowledge_base_documents(status);
                 """,
+                "incident_feedback": """
+                    CREATE TABLE IF NOT EXISTS incident_feedback (
+                        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                        user_id VARCHAR(255) NOT NULL,
+                        incident_id UUID NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
+                        feedback_type VARCHAR(20) NOT NULL,
+                        comment TEXT,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_incident_feedback_user_incident
+                    ON incident_feedback(user_id, incident_id);
+
+                    CREATE INDEX IF NOT EXISTS idx_incident_feedback_user_id ON incident_feedback(user_id);
+                    CREATE INDEX IF NOT EXISTS idx_incident_feedback_type ON incident_feedback(feedback_type);
+                """,
             }
 
             # List of tables that should have RLS enabled and a policy applied.
@@ -754,6 +770,7 @@ def initialize_tables():
             # Note: incident_suggestions and incident_thoughts are child tables with CASCADE DELETE
             # so they don't need RLS - they're protected by the parent incidents table
             rls_tables.append("incidents")
+            rls_tables.append("incident_feedback")
 
             # Execute table creation scripts
             for table_name, create_script in create_tables.items():
@@ -1134,6 +1151,7 @@ def initialize_tables():
                     "llm_usage_tracking",
                     "kubectl_agent_tokens",
                     "user_manual_vms",
+                    "incident_feedback",
                 ]:
                     # INSERT policy
                     insert_policy_sql = f"""
