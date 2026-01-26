@@ -128,7 +128,7 @@ def submit_feedback(incident_id: str):
                         "error": "Can only provide feedback on completed analyses"
                     }), 400
 
-                # Save feedback to database
+                # Save feedback to database (don't commit yet for helpful feedback)
                 cursor.execute(
                     """
                     INSERT INTO incident_feedback (user_id, incident_id, feedback_type, comment)
@@ -140,7 +140,7 @@ def submit_feedback(incident_id: str):
                 feedback_row = cursor.fetchone()
                 feedback_id = str(feedback_row[0])
 
-                conn.commit()
+                stored_for_learning = False
 
                 # If helpful, store in Weaviate for future reference
                 if feedback_type == "helpful":
@@ -180,8 +180,8 @@ def submit_feedback(incident_id: str):
                         for row in citation_rows
                     ]
 
-                    # Store in Weaviate
-                    store_good_rca(
+                    # Store in Weaviate - if this fails, rollback DB transaction
+                    stored_for_learning = store_good_rca(
                         user_id=user_id,
                         incident_id=incident_id,
                         feedback_id=feedback_id,
@@ -194,18 +194,33 @@ def submit_feedback(incident_id: str):
                         citations=citations,
                     )
 
+                    if not stored_for_learning:
+                        # Weaviate storage failed - rollback DB transaction
+                        conn.rollback()
+                        logger.error(
+                            "[FEEDBACK] Weaviate storage failed, rolling back feedback for incident %s",
+                            incident_id,
+                        )
+                        return jsonify({
+                            "error": "Failed to store feedback for learning. Please try again."
+                        }), 500
+
+                # Commit DB transaction after Weaviate succeeds (or for not_helpful)
+                conn.commit()
+
                 logger.info(
-                    "[FEEDBACK] User %s submitted %s feedback for incident %s",
+                    "[FEEDBACK] User %s submitted %s feedback for incident %s (stored_for_learning=%s)",
                     user_id,
                     feedback_type,
                     incident_id,
+                    stored_for_learning,
                 )
 
                 return jsonify({
                     "success": True,
                     "feedback_id": feedback_id,
                     "feedback_type": feedback_type,
-                    "stored_for_learning": feedback_type == "helpful",
+                    "stored_for_learning": stored_for_learning,
                 }), 201
 
     except Exception as exc:
