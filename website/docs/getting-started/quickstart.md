@@ -37,7 +37,7 @@ You need at least one LLM provider API key:
 | Provider | Get API Key | Notes |
 |----------|-------------|-------|
 | **OpenRouter** (recommended) | [openrouter.ai/keys](https://openrouter.ai/keys) | Access to multiple models, pay-per-use |
-| OpenAI | [platform.openai.com](https://platform.openai.com/api-keys) | GPT-4, GPT-3.5 |
+| OpenAI | [platform.openai.com](https://platform.openai.com/api-keys) | GPT Models |
 | Anthropic | [console.anthropic.com](https://console.anthropic.com/) | Claude models |
 | Google AI | [ai.google.dev](https://ai.google.dev/) | Gemini models |
 
@@ -76,7 +76,7 @@ nano .env
 # Or use your preferred editor: code .env, vim .env, etc.
 ```
 
-Add one of these (only one is required):
+Add one of these (Openrouter or Claude API key for RCA):
 
 ```bash
 # Option 1: OpenRouter (recommended)
