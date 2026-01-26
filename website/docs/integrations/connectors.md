@@ -334,6 +334,89 @@ SLACK_SIGNING_SECRET=your-signing-secret
 
 ---
 
+## Documentation Tools
+
+### Confluence
+
+OAuth 2.0 authentication for Confluence Cloud, or Personal Access Token for Data Center.
+
+#### Option A: Confluence Cloud (OAuth)
+
+For Atlassian Cloud (`*.atlassian.net`):
+
+##### 1. Create OAuth App
+
+1. Go to [Atlassian Developer Console](https://developer.atlassian.com/console/myapps/)
+2. Click **Create** > **OAuth 2.0 integration**
+3. Name: `Aurora`
+4. Click **Create**
+5. Go to **Permissions** > **Confluence API** > **Add** > **Configure**
+6. Add scopes:
+   - `read:confluence-content.all`
+   - `read:confluence-space.summary`
+   - `read:confluence-props`
+   - `read:confluence-content.summary`
+7. Go to **Authorization** > **Add** callback URL:
+   - `http://localhost:3000/confluence/callback` (development)
+   - `https://your-domain.com/confluence/callback` (production)
+8. Go to **Settings** and copy **Client ID** and **Secret**
+
+##### 2. Configure Environment
+
+```bash
+CONFLUENCE_CLIENT_ID=your-client-id
+CONFLUENCE_CLIENT_SECRET=your-client-secret
+```
+
+##### 3. Connect via Aurora UI
+
+1. Navigate to **Connectors** > **Confluence**
+2. Click **Connect with Atlassian**
+3. Authorize Aurora in the Atlassian popup
+4. Connection complete - the site URL is detected automatically
+
+#### Option B: Confluence Data Center (PAT)
+
+For self-hosted Confluence instances:
+
+##### 1. Create Personal Access Token
+
+1. In Confluence, go to your profile > **Settings** > **Personal Access Tokens**
+2. Click **Create token**
+3. Name: `Aurora`
+4. Set expiry as needed
+5. Copy the token
+
+##### 2. Connect via Aurora UI
+
+1. Navigate to **Connectors** > **Confluence**
+2. Select **Confluence Data Center (PAT)**
+3. Enter:
+   - **Base URL**: `https://confluence.yourcompany.com`
+   - **Personal Access Token**: Your PAT
+4. Click **Connect with PAT**
+
+#### URL Limitations
+
+:::warning Short Links Not Supported on Cloud
+Confluence Cloud short links (e.g., `https://company.atlassian.net/wiki/x/ABC123`) cannot be resolved via API. Use full page URLs instead:
+- `https://company.atlassian.net/wiki/spaces/SPACE/pages/123456/Page+Title`
+- `https://company.atlassian.net/wiki/pages/viewpage.action?pageId=123456`
+
+Data Center short links work correctly.
+:::
+
+#### Troubleshooting
+
+| Error | Solution |
+|-------|----------|
+| "Unable to parse Confluence page ID from URL" | Use full page URL instead of short link (Cloud only) |
+| "Confluence page URL does not match configured base URL" | Verify the page is from your connected Confluence instance |
+| "Confluence credentials expired" | Reconnect via the Connectors page |
+| "Failed to validate Confluence PAT" | Verify PAT is valid and not expired |
+
+---
+
 ## Observability Tools
 
 ### PagerDuty
