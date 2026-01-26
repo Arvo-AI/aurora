@@ -11,6 +11,7 @@ from celery_config import celery_app
 from langchain_core.messages import HumanMessage
 
 from chat.backend.agent.providers import create_chat_model
+from chat.backend.agent.llm import ModelConfig
 
 
 def _extract_text_from_response(content: Union[str, List[Any]]) -> str:
@@ -449,10 +450,8 @@ def generate_incident_summary(
         )
 
         # Use centralized model config for summarization
-        from chat.backend.agent.llm import ModelConfig
-
         llm = create_chat_model(
-            ModelConfig.SUMMARIZATION_MODEL,
+            ModelConfig.INCIDENT_REPORT_SUMMARIZATION_MODEL,
             temperature=0.3,
             streaming=False,
         )
@@ -574,8 +573,6 @@ def generate_incident_summary_from_chat(
         )
 
         # Use centralized model config for email report generation
-        from chat.backend.agent.llm import ModelConfig
-
         llm = create_chat_model(
             ModelConfig.EMAIL_REPORT_MODEL,
             temperature=0.3,

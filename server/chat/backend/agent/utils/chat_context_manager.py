@@ -78,9 +78,6 @@ class ChatContextManager:
     ) -> str:
         """Create a summary of the conversation history."""
         try:
-            # Use fast model for summarization
-            summarization_model = model_name or "google/gemini-3-pro-preview"
-
             # Convert messages to a readable format for summarization
             conversation_text = cls._format_messages_for_summary(messages)
 
@@ -109,7 +106,7 @@ Provide a detailed summary that preserves essential context:"""
             from ..llm import ModelConfig
             llm_manager = LLMManager()
             summary = llm_manager.summarize(
-                conversation_text, model=summarization_model or ModelConfig.SUMMARIZATION_MODEL
+                conversation_text, model=model_name or ModelConfig.INCIDENT_REPORT_SUMMARIZATION_MODEL
             )
 
             logger.info(f"Generated conversation summary ({len(summary)} chars)")

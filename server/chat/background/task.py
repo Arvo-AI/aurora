@@ -406,9 +406,6 @@ async def _execute_background_chat(
 
         # Create state with is_background=True and rca_context for system prompt
         # Use centralized model configuration for RCA with provider mode awareness
-        optimize_costs = os.getenv("RCA_OPTIMIZE_COSTS", "").lower() == "true"
-        provider_mode = os.getenv("LLM_PROVIDER_MODE", "direct")
-        
         state = State(
             user_id=user_id,
             session_id=session_id,
@@ -417,10 +414,7 @@ async def _execute_background_chat(
             selected_project_id=None,
             messages=[human_message],
             question=initial_message,
-            model=ModelConfig.get_rca_model(
-                optimize_costs=optimize_costs,
-                provider_mode=provider_mode
-            ),
+            model=ModelConfig.get_rca_model(),
             mode=mode,
             is_background=True,  # Key flag for background behavior
             rca_context=rca_context,  # RCA context for prompt_builder

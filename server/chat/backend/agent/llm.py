@@ -22,59 +22,33 @@ class ModelConfig:
     
     # Primary models for chat and operations
     MAIN_MODEL = "anthropic/claude-sonnet-4.5"
-    SQL_MODEL = "anthropic/claude-sonnet-4.5"
     VISION_MODEL = "anthropic/claude-sonnet-4.5"
     
-    # Background RCA models - with cost optimization
-    # When RCA_OPTIMIZE_COSTS=true:
-    #   - Use Claude 3 Haiku (reliable, fast, and cheap)
-    #   - Works in both direct and OpenRouter modes
-    RCA_MODEL_COST_OPTIMIZED_DIRECT = "anthropic/claude-3-haiku"
-    RCA_MODEL_COST_OPTIMIZED_OPENROUTER = "anthropic/claude-3-haiku"  # Proven reliable
-    RCA_MODEL_HIGH_QUALITY = "anthropic/claude-opus-4.5"  # High-quality RCA (when RCA_OPTIMIZE_COSTS=false)
+    # Background RCA model - selected based on RCA_OPTIMIZE_COSTS env var
+    @staticmethod
+    def get_rca_model() -> str:
+        """Get RCA model based on RCA_OPTIMIZE_COSTS env var (defaults to cost-optimized)."""
+        optimize_costs = os.getenv("RCA_OPTIMIZE_COSTS", "true").lower() == "true"
+        if optimize_costs:
+            return "anthropic/claude-3-haiku"  # Cost-optimized
+        else:
+            return "anthropic/claude-opus-4.5"  # High-quality
     
-    # Summarization and utility models
-    SUMMARIZATION_MODEL = "anthropic/claude-sonnet-4.5"  # For general summarization
-    FAST_SUMMARIZATION_MODEL = "anthropic/claude-sonnet-4.5"  # For quick summaries (tool context)
+    # Summarization models
+    INCIDENT_REPORT_SUMMARIZATION_MODEL = "anthropic/claude-sonnet-4.5"  # For incident reports and chat context
+    TOOL_OUTPUT_SUMMARIZATION_MODEL = "anthropic/claude-sonnet-4.5"  # For summarizing large tool outputs to reduce token usage
     
     # Suggestion extraction
     SUGGESTION_MODEL = "anthropic/claude-sonnet-4.5"
     
     # Email report generation
     EMAIL_REPORT_MODEL = "anthropic/claude-sonnet-4.5"
-    
-    @classmethod
-    def get_rca_model(cls, optimize_costs: bool = True, provider_mode: Optional[str] = None) -> str:
-        """Get the appropriate RCA model based on cost optimization setting and provider mode.
-        
-        Args:
-            optimize_costs: If True, use cost-optimized models
-            provider_mode: 'direct', 'auto', or 'openrouter' (defaults to env LLM_PROVIDER_MODE)
-        
-        Returns:
-            Model name appropriate for the provider mode
-        """
-        import os
-        
-        if not optimize_costs:
-            return cls.RCA_MODEL_HIGH_QUALITY
-        
-        # Determine provider mode
-        if provider_mode is None:
-            provider_mode = os.getenv("LLM_PROVIDER_MODE", "direct")
-        
-        # Use appropriate cost-optimized model based on provider mode
-        if provider_mode == "openrouter":
-            return cls.RCA_MODEL_COST_OPTIMIZED_OPENROUTER  # GLM-4.7-Flash via OpenRouter
-        else:
-            return cls.RCA_MODEL_COST_OPTIMIZED_DIRECT  # Claude 3 Haiku via direct API
 
 
 class LLMManager:
     def __init__(
         self,
         main_model: Optional[str] = None,
-        sql_model: Optional[str] = None,
         vision_model: Optional[str] = None,
         provider_mode: Optional[str] = None,
     ):
@@ -83,7 +57,6 @@ class LLMManager:
 
         Args:
             main_model: Default model for general tasks (defaults to ModelConfig.MAIN_MODEL)
-            sql_model: Model for SQL generation (defaults to ModelConfig.SQL_MODEL)
             vision_model: Model for vision/multimodal tasks (defaults to ModelConfig.VISION_MODEL)
             provider_mode: LLM provider mode ('direct', 'auto', 'openrouter')
                           Defaults to env LLM_PROVIDER_MODE or 'direct'
@@ -91,25 +64,15 @@ class LLMManager:
         # Get provider mode from param or environment
         self.provider_mode = provider_mode or os.getenv("LLM_PROVIDER_MODE")
 
-        # Use centralized model config if not explicitly overridden
-        self.default_main_model = main_model or ModelConfig.MAIN_MODEL
-        self.default_sql_model = sql_model or ModelConfig.SQL_MODEL
-        self.default_vision_model = vision_model or ModelConfig.VISION_MODEL
-
         # Initialize default LLMs using provider-aware factory
         self.main_llm = create_chat_model(
-            self.default_main_model,
-            temperature=0.4,
-            provider_mode=self.provider_mode,
-        )
-        self.sql_coder = create_chat_model(
-            self.default_sql_model,
+            main_model or ModelConfig.MAIN_MODEL,
             temperature=0.4,
             provider_mode=self.provider_mode,
         )
         # Vision-capable model for multimodal content
         self.vision_llm = create_chat_model(
-            self.default_vision_model,
+            vision_model or ModelConfig.VISION_MODEL,
             temperature=0.4,
             provider_mode=self.provider_mode,
         )
@@ -208,7 +171,6 @@ class LLMManager:
         self,
         prompt: LanguageModelInput,
         output_struct: type[BaseModel] | None = None,
-        use_sql_coder: bool = False,
         selected_model: str | None = None,
         user_id: Optional[str] = None,
         session_id: Optional[str] = None,
@@ -237,9 +199,6 @@ class LLMManager:
                     f" Using default vision model: {self.vision_llm.model_name}"
                 )
                 model = self.vision_llm
-        elif use_sql_coder:
-            logger.info(f" Using SQL coder model: {self.sql_coder.model_name}")
-            model = self.sql_coder
         elif selected_model:
             # Use the model selected from frontend
             logger.info(f" Using selected model: {selected_model}")
@@ -284,9 +243,7 @@ class LLMManager:
             if user_id:
                 try:
                     # Determine request type based on parameters
-                    if use_sql_coder:
-                        actual_request_type = "generate_sql"
-                    elif output_struct:
+                    if output_struct:
                         actual_request_type = f"structured_{request_type}"
                     else:
                         actual_request_type = request_type
@@ -355,7 +312,6 @@ class LLMManager:
                         error_message=error_message,
                         request_metadata={
                             "has_images": has_images,
-                            "use_sql_coder": use_sql_coder,
                             "provider_mode": self.provider_mode,
                             "has_usage_data": bool(
                                 input_tokens > 0 and output_tokens > 0
@@ -386,7 +342,7 @@ class LLMManager:
 
         Args:
             content: The content to summarize
-            model: Optional model to use for summarization (defaults to ModelConfig.SUMMARIZATION_MODEL)
+            model: Optional model to use for summarization (defaults to ModelConfig.INCIDENT_REPORT_SUMMARIZATION_MODEL)
 
         Returns:
             Summarized content
@@ -401,7 +357,7 @@ class LLMManager:
                 logger.error(f" Frame {i}: {frame.strip()}")
 
             # Use centralized model config
-            summarization_model = model or ModelConfig.SUMMARIZATION_MODEL
+            summarization_model = model or ModelConfig.INCIDENT_REPORT_SUMMARIZATION_MODEL
 
             logger.error(f" SUMMARIZING: {len(content)} chars -> {summarization_model}")
             logger.error(f" CONTENT PREVIEW: {content[:200]}...")
