@@ -24,15 +24,8 @@ class ModelConfig:
     MAIN_MODEL = "anthropic/claude-sonnet-4.5"
     VISION_MODEL = "anthropic/claude-sonnet-4.5"
     
-    # Background RCA model - selected based on RCA_OPTIMIZE_COSTS env var
-    @staticmethod
-    def get_rca_model() -> str:
-        """Get RCA model based on RCA_OPTIMIZE_COSTS env var (defaults to cost-optimized)."""
-        optimize_costs = os.getenv("RCA_OPTIMIZE_COSTS", "true").lower() == "true"
-        if optimize_costs:
-            return "anthropic/claude-3-haiku"  # Cost-optimized
-        else:
-            return "anthropic/claude-opus-4.5"  # High-quality
+    # Background RCA model - selected based on RCA_OPTIMIZE_COSTS env var (defaults to cost-optimized)
+    RCA_MODEL = "anthropic/claude-3-haiku" if os.getenv("RCA_OPTIMIZE_COSTS", "true").lower() == "true" else "anthropic/claude-opus-4.5"
     
     # Summarization models
     INCIDENT_REPORT_SUMMARIZATION_MODEL = "anthropic/claude-sonnet-4.5"  # For incident reports and chat context

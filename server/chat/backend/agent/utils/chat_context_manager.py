@@ -74,9 +74,9 @@ class ChatContextManager:
 
     @classmethod
     def create_conversation_summary(
-        cls, messages: List[Any], model_name: str = None
+        cls, messages: List[Any]
     ) -> str:
-        """Create a summary of the conversation history."""
+        """Create a summary of the conversation history using centralized model config."""
         try:
             # Convert messages to a readable format for summarization
             conversation_text = cls._format_messages_for_summary(messages)
@@ -106,7 +106,7 @@ Provide a detailed summary that preserves essential context:"""
             from ..llm import ModelConfig
             llm_manager = LLMManager()
             summary = llm_manager.summarize(
-                conversation_text, model=model_name or ModelConfig.INCIDENT_REPORT_SUMMARIZATION_MODEL
+                conversation_text, model=ModelConfig.INCIDENT_REPORT_SUMMARIZATION_MODEL
             )
 
             logger.info(f"Generated conversation summary ({len(summary)} chars)")
@@ -248,7 +248,7 @@ Provide a detailed summary that preserves essential context:"""
             logger.info(
                 f"Summarizing entire conversation with {len(messages)} messages"
             )
-            summary_text = cls.create_conversation_summary(messages, model_name)
+            summary_text = cls.create_conversation_summary(messages)
 
             # Create a system message with the summary that replaces everything
             summary_message = SystemMessage(

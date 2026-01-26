@@ -414,7 +414,7 @@ async def _execute_background_chat(
             selected_project_id=None,
             messages=[human_message],
             question=initial_message,
-            model=ModelConfig.get_rca_model(),
+            model=ModelConfig.RCA_MODEL,
             mode=mode,
             is_background=True,  # Key flag for background behavior
             rca_context=rca_context,  # RCA context for prompt_builder
