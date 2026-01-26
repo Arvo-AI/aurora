@@ -13,7 +13,6 @@ export default function ConfluenceConnectPage() {
   const { toast } = useToast();
   const [status, setStatus] = useState<ConfluenceStatus | null>(null);
   const [isLoading, setIsLoading] = useState(true);
-  const [cloudBaseUrl, setCloudBaseUrl] = useState("");
   const [patBaseUrl, setPatBaseUrl] = useState("");
   const [patToken, setPatToken] = useState("");
   const [isOauthConnecting, setIsOauthConnecting] = useState(false);
@@ -54,7 +53,6 @@ export default function ConfluenceConnectPage() {
         localStorage.removeItem("isConfluenceConnected");
       }
       if (result?.connected && result.baseUrl) {
-        setCloudBaseUrl(result.baseUrl);
         setPatBaseUrl(result.baseUrl);
       }
     } catch (err) {
@@ -88,10 +86,7 @@ export default function ConfluenceConnectPage() {
   const handleOAuthConnect = async () => {
     setIsOauthConnecting(true);
     try {
-      const result = await confluenceService.connect({
-        authType: "oauth",
-        baseUrl: cloudBaseUrl || undefined,
-      });
+      const result = await confluenceService.connect({ authType: "oauth" });
 
       if (result?.authUrl) {
         window.location.href = result.authUrl;
@@ -214,21 +209,6 @@ export default function ConfluenceConnectPage() {
                 Connect your Atlassian Cloud site using OAuth 2.0.
               </CardDescription>
             </CardHeader>
-            <CardContent className="space-y-3">
-              <div className="space-y-2">
-                <Label htmlFor="cloudBaseUrl">Site URL (optional)</Label>
-                <Input
-                  id="cloudBaseUrl"
-                  type="url"
-                  placeholder="https://your-domain.atlassian.net/wiki"
-                  value={cloudBaseUrl}
-                  onChange={(e) => setCloudBaseUrl(e.target.value)}
-                />
-                <p className="text-xs text-muted-foreground">
-                  Leave empty to use the URL returned by Atlassian.
-                </p>
-              </div>
-            </CardContent>
             <CardFooter>
               <Button onClick={handleOAuthConnect} disabled={isOauthConnecting}>
                 {isOauthConnecting ? (
