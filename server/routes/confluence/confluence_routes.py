@@ -22,11 +22,11 @@ from connectors.confluence_connector.client import (
     parse_confluence_page_id,
 )
 from connectors.confluence_connector.runbook_parser import parse_confluence_runbook
-from utils.connection_pool import db_pool
-from utils.cors_utils import create_cors_response
-from utils.oauth2_state_cache import retrieve_oauth2_state, store_oauth2_state
-from utils.stateless_auth import get_user_id_from_request
-from utils.token_management import get_token_data, store_tokens_in_db
+from utils.db.connection_pool import db_pool
+from utils.web.cors_utils import create_cors_response
+from utils.auth.oauth2_state_cache import retrieve_oauth2_state, store_oauth2_state
+from utils.auth.stateless_auth import get_user_id_from_request
+from utils.auth.token_management import get_token_data, store_tokens_in_db
 
 logger = logging.getLogger(__name__)
 

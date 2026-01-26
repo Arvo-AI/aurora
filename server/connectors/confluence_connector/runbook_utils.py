@@ -12,7 +12,7 @@ import requests
 from connectors.confluence_connector.auth import refresh_access_token
 from connectors.confluence_connector.client import ConfluenceClient, parse_confluence_page_id
 from connectors.confluence_connector.runbook_parser import parse_confluence_runbook
-from utils.token_management import get_token_data, store_tokens_in_db
+from utils.auth.token_management import get_token_data, store_tokens_in_db
 
 logger = logging.getLogger(__name__)
 
