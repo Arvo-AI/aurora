@@ -53,70 +53,35 @@ find client/ -type f \( -name "*.ts" -o -name "*.tsx" -o -name "*.js" -o -name "
 sort -u "$USED_VARS_FILE" -o "$USED_VARS_FILE"
 
 # Filter out common false positives (framework/system variables)
-# Next.js internals
-sed -i '/^__NEXT_/d' "$USED_VARS_FILE" 2>/dev/null || true
-sed -i '/^NEXT_PHASE$/d' "$USED_VARS_FILE" 2>/dev/null || true
-sed -i '/^NEXT_DEBUG_BUILD$/d' "$USED_VARS_FILE" 2>/dev/null || true
-sed -i '/^NEXT_PRIVATE_/d' "$USED_VARS_FILE" 2>/dev/null || true
-sed -i '/^NEXT_SSG_FETCH_METRICS$/d' "$USED_VARS_FILE" 2>/dev/null || true
-sed -i '/^NEXT_SERVER_ACTIONS_ENCRYPTION_KEY$/d' "$USED_VARS_FILE" 2>/dev/null || true
-
-# Auth.js internals that users don't need to set can be added here if needed
+# Note: Use grep -v for better cross-platform compatibility
+grep -v -E '^(__NEXT_|NEXT_PHASE$|NEXT_DEBUG_BUILD$|NEXT_PRIVATE_|NEXT_SSG_FETCH_METRICS$|NEXT_SERVER_ACTIONS_ENCRYPTION_KEY$)' "$USED_VARS_FILE" > "${USED_VARS_FILE}.tmp" && mv "${USED_VARS_FILE}.tmp" "$USED_VARS_FILE"
 
 # Vercel deployment vars (only exist in Vercel environment)
-sed -i '/^VERCEL/d' "$USED_VARS_FILE" 2>/dev/null || true
+grep -v '^VERCEL' "$USED_VARS_FILE" > "${USED_VARS_FILE}.tmp" && mv "${USED_VARS_FILE}.tmp" "$USED_VARS_FILE"
 
 # System/Shell variables
-sed -i '/^NODE_ENV$/d' "$USED_VARS_FILE" 2>/dev/null || true
-sed -i '/^PATH$/d' "$USED_VARS_FILE" 2>/dev/null || true
-sed -i '/^HOME$/d' "$USED_VARS_FILE" 2>/dev/null || true
-sed -i '/^USER$/d' "$USED_VARS_FILE" 2>/dev/null || true
-sed -i '/^PWD$/d' "$USED_VARS_FILE" 2>/dev/null || true
-sed -i '/^PORT$/d' "$USED_VARS_FILE" 2>/dev/null || true
+grep -v -E '^(NODE_ENV|PATH|HOME|USER|PWD|PORT)$' "$USED_VARS_FILE" > "${USED_VARS_FILE}.tmp" && mv "${USED_VARS_FILE}.tmp" "$USED_VARS_FILE"
 
 # Build/Test environment variables
-sed -i '/^DEBUG$/d' "$USED_VARS_FILE" 2>/dev/null || true
-sed -i '/^ANALYZE$/d' "$USED_VARS_FILE" 2>/dev/null || true
-sed -i '/^PLAYWRIGHT_BASE_URL$/d' "$USED_VARS_FILE" 2>/dev/null || true
-sed -i '/^GITHUB_ACTIONS$/d' "$USED_VARS_FILE" 2>/dev/null || true
-sed -i '/^CI$/d' "$USED_VARS_FILE" 2>/dev/null || true
+grep -v -E '^(DEBUG|ANALYZE|PLAYWRIGHT_BASE_URL|GITHUB_ACTIONS|CI)$' "$USED_VARS_FILE" > "${USED_VARS_FILE}.tmp" && mv "${USED_VARS_FILE}.tmp" "$USED_VARS_FILE"
 
-# Cloud provider SDK internals (set automatically by SDKs)
-sed -i '/^CLOUDSDK_AUTH_ACCESS_TOKEN$/d' "$USED_VARS_FILE" 2>/dev/null || true
-sed -i '/^CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT$/d' "$USED_VARS_FILE" 2>/dev/null || true
-sed -i '/^CLOUDSDK_IMPERSONATE_SERVICE_ACCOUNT$/d' "$USED_VARS_FILE" 2>/dev/null || true
-sed -i '/^GOOGLE_OAUTH_ACCESS_TOKEN$/d' "$USED_VARS_FILE" 2>/dev/null || true
-sed -i '/^GOOGLE_CLOUD_PROJECT$/d' "$USED_VARS_FILE" 2>/dev/null || true
-sed -i '/^GCLOUD_PROJECT$/d' "$USED_VARS_FILE" 2>/dev/null || true
-sed -i '/^AWS_SESSION_TOKEN$/d' "$USED_VARS_FILE" 2>/dev/null || true
-sed -i '/^AWS_REGION$/d' "$USED_VARS_FILE" 2>/dev/null || true
-sed -i '/^AWS_CONFIG_FILE$/d' "$USED_VARS_FILE" 2>/dev/null || true
-sed -i '/^AWS_SHARED_CREDENTIALS_FILE$/d' "$USED_VARS_FILE" 2>/dev/null || true
-sed -i '/^ARM_SUBSCRIPTION_ID$/d' "$USED_VARS_FILE" 2>/dev/null || true
-sed -i '/^ARM_TENANT_ID$/d' "$USED_VARS_FILE" 2>/dev/null || true
-sed -i '/^AZURE_AD_TENANT_ID$/d' "$USED_VARS_FILE" 2>/dev/null || true
-sed -i '/^AZURE_TENANT_ID$/d' "$USED_VARS_FILE" 2>/dev/null || true
-sed -i '/^TF_CLI_CONFIG_FILE$/d' "$USED_VARS_FILE" 2>/dev/null || true
+# Cloud provider SDK internals (set automatically by SDKs or dynamically at runtime)
+grep -v -E '^(CLOUDSDK_AUTH_ACCESS_TOKEN|CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT|CLOUDSDK_IMPERSONATE_SERVICE_ACCOUNT|GOOGLE_OAUTH_ACCESS_TOKEN|GOOGLE_CLOUD_PROJECT|GCLOUD_PROJECT|GOOGLE_APPLICATION_CREDENTIALS|AWS_SESSION_TOKEN|AWS_REGION|AWS_CONFIG_FILE|AWS_SHARED_CREDENTIALS_FILE|ARM_SUBSCRIPTION_ID|ARM_TENANT_ID|ARM_CLIENT_ID|ARM_CLIENT_SECRET|AZURE_AD_TENANT_ID|AZURE_TENANT_ID|TF_CLI_CONFIG_FILE)$' "$USED_VARS_FILE" > "${USED_VARS_FILE}.tmp" && mv "${USED_VARS_FILE}.tmp" "$USED_VARS_FILE"
 
 # Single letter variables (likely false positives)
-sed -i '/^N$/d' "$USED_VARS_FILE" 2>/dev/null || true
+grep -v '^N$' "$USED_VARS_FILE" > "${USED_VARS_FILE}.tmp" && mv "${USED_VARS_FILE}.tmp" "$USED_VARS_FILE"
 
 # K8s runtime variables (set dynamically in k8s deployments, not in .env)
-sed -i '/^TERMINAL_/d' "$USED_VARS_FILE" 2>/dev/null || true
-sed -i '/^POSTGRES_/d' "$USED_VARS_FILE" 2>/dev/null || true
-sed -i '/^USE_UNTRUSTED_NODES$/d' "$USED_VARS_FILE" 2>/dev/null || true
+grep -v -E '^(TERMINAL_|POSTGRES_|USE_UNTRUSTED_NODES)' "$USED_VARS_FILE" > "${USED_VARS_FILE}.tmp" && mv "${USED_VARS_FILE}.tmp" "$USED_VARS_FILE"
 
 # Secrets injected via CI/CD (not in .env, set via GitHub secrets and --set-file)
-sed -i '/^AURORA_SERVICE_ACCOUNT_JSON$/d' "$USED_VARS_FILE" 2>/dev/null || true
+grep -v '^AURORA_SERVICE_ACCOUNT_JSON$' "$USED_VARS_FILE" > "${USED_VARS_FILE}.tmp" && mv "${USED_VARS_FILE}.tmp" "$USED_VARS_FILE"
 
 # kubectl Agent variables (injected by Helm in customer clusters, not in .env)
-sed -i '/^AURORA_AGENT_TOKEN$/d' "$USED_VARS_FILE" 2>/dev/null || true
-sed -i '/^AGENT_VERSION$/d' "$USED_VARS_FILE" 2>/dev/null || true
+grep -v -E '^(AURORA_AGENT_TOKEN|AGENT_VERSION)$' "$USED_VARS_FILE" > "${USED_VARS_FILE}.tmp" && mv "${USED_VARS_FILE}.tmp" "$USED_VARS_FILE"
 
 # Docker Compose static variables (hardcoded in docker-compose.yml, not user-configurable)
-sed -i '/^CHATBOT_HOST$/d' "$USED_VARS_FILE" 2>/dev/null || true
-sed -i '/^CHATBOT_PORT$/d' "$USED_VARS_FILE" 2>/dev/null || true
-sed -i '/^WEAVIATE_PORT$/d' "$USED_VARS_FILE" 2>/dev/null || true
+grep -v -E '^(CHATBOT_HOST|CHATBOT_PORT|WEAVIATE_PORT)$' "$USED_VARS_FILE" > "${USED_VARS_FILE}.tmp" && mv "${USED_VARS_FILE}.tmp" "$USED_VARS_FILE"
 
 TOTAL_USED=$(wc -l < "$USED_VARS_FILE")
 echo -e "${GREEN}✓ Found ${TOTAL_USED} unique environment variables in code${NC}"
