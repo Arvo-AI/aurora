@@ -23,11 +23,15 @@ def _should_trigger_background_chat(user_id: str, payload: Dict[str, Any]) -> bo
     return True
 
 
-def _build_rca_prompt_from_alert(payload: Dict[str, Any]) -> str:
+def _build_rca_prompt_from_alert(payload: Dict[str, Any], user_id: Optional[str] = None) -> str:
     """Build a simple user-visible prompt from a Splunk alert payload.
 
     Note: Detailed RCA instructions are injected via system prompt (rca_context),
     not in this user message.
+
+    Args:
+        payload: The Splunk alert payload
+        user_id: Optional user ID for Aurora Learn context injection
     """
     search_name = payload.get("search_name") or payload.get("name") or "Unknown Alert"
     result_count = payload.get("result_count") or payload.get("results_count") or 0
@@ -56,6 +60,14 @@ def _build_rca_prompt_from_alert(payload: Dict[str, Any]) -> str:
     if results_str:
         prompt_parts.append("- Sample Results:")
         prompt_parts.append(results_str)
+
+    # Add Aurora Learn context if available
+    try:
+        from chat.background.rca_prompt_builder import inject_aurora_learn_context
+        service = payload.get("app") or payload.get("source") or ""
+        inject_aurora_learn_context(prompt_parts, user_id, search_name, service, "splunk")
+    except Exception as e:
+        logger.warning(f"[AURORA LEARN] Failed to get context: {e}")
 
     return "\n".join(prompt_parts)
 
@@ -266,7 +278,8 @@ def process_splunk_alert(
                                     },
                                 )
 
-                                rca_prompt = _build_rca_prompt_from_alert(payload)
+                                # Build simple RCA prompt with Aurora Learn context injection
+                                rca_prompt = _build_rca_prompt_from_alert(payload, user_id=user_id)
 
                                 run_background_chat.delay(
                                     user_id=user_id,
