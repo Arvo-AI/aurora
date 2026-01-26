@@ -25,27 +25,37 @@ def update_visualization(
     incident_id: str,
     user_id: str,
     session_id: str,
-    force_full: bool = False
+    force_full: bool = False,
+    tool_calls_json: str = None
 ) -> Dict[str, Any]:
     """
-    Incrementally update visualization during RCA investigation.
+    Generate or update visualization for an RCA incident.
     
     Args:
-        incident_id: Incident UUID
-        user_id: User ID
-        session_id: Chat session UUID
-        force_full: If True, analyze full transcript (for final update)
+        incident_id: UUID of the incident
+        user_id: User performing the RCA
+        session_id: Chat session ID
+        force_full: If True, process all available context (final viz)
+        tool_calls_json: JSON string of recent tool calls to process
     """
+    logger.info(f"[Visualization] Starting update for incident {incident_id} (force_full={force_full})")
+    
     try:
-        recent_messages = _fetch_recent_tool_calls(session_id, user_id, limit=15 if force_full else 10)
+        # Get recent tool calls
+        if tool_calls_json:
+            tool_calls = json.loads(tool_calls_json)
+            logger.info(f"[Visualization] Using {len(tool_calls)} tool calls from parameters")
+        else:
+            tool_calls = _fetch_recent_tool_calls(session_id, user_id, limit=10 if not force_full else 50)
+            logger.info(f"[Visualization] Fetched {len(tool_calls)} tool calls from state context")
         
-        if not recent_messages:
+        if not tool_calls:
             return {"status": "skipped", "reason": "no_tool_calls"}
         
         existing_viz = _fetch_existing_visualization(incident_id)
         
         extractor = VisualizationExtractor(llm_manager=LLMManager())
-        updated_viz = extractor.extract_incremental(recent_messages, existing_viz)
+        updated_viz = extractor.extract_incremental(tool_calls, existing_viz)
         
         if not updated_viz.nodes:
             logger.warning(f"[Visualization] No entities extracted for incident {incident_id}")
@@ -73,35 +83,29 @@ def update_visualization(
 
 
 def _fetch_recent_tool_calls(session_id: str, user_id: str, limit: int = 10) -> List[Dict]:
-    """Fetch recent tool calls from chat session."""
+    """Fetch recent tool calls from chat session messages."""
     try:
-        with db_pool.get_admin_connection() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute("""
-                    SELECT llm_context_history
-                    FROM chat_sessions
-                    WHERE id = %s AND user_id = %s
-                """, (session_id, user_id))
-                
-                row = cursor.fetchone()
+        # Get state context which has live messages
+        from chat.backend.agent.tools.cloud_tools import get_state_context
+        state = get_state_context()
         
-        if not row or not row[0]:
+        if not state or not hasattr(state, 'messages'):
+            logger.warning(f"[Visualization] No state context or messages found for session {session_id}")
             return []
         
-        history = json.loads(row[0]) if isinstance(row[0], str) else row[0]
-        
         tool_calls = []
-        for msg in history:
-            if msg.get('type') == 'tool' and msg.get('content'):
+        for msg in state.messages:
+            # Check for ToolMessage type
+            if hasattr(msg, '__class__') and 'ToolMessage' in msg.__class__.__name__:
                 tool_calls.append({
-                    'tool': msg.get('name', 'unknown'),
-                    'output': msg.get('content', ''),
+                    'tool': getattr(msg, 'name', 'unknown'),
+                    'output': str(getattr(msg, 'content', '')),
                 })
         
         return tool_calls[-limit:] if tool_calls else []
     
     except Exception as e:
-        logger.error(f"[Visualization] Failed to fetch tool calls: {e}")
+        logger.error(f"[Visualization] Failed to fetch tool calls from state: {e}")
         return []
 
 

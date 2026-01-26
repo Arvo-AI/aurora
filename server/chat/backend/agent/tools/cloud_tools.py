@@ -234,12 +234,19 @@ def send_tool_completion(tool_name: str, output: str, status: str = "completed",
                 
                 logging.debug(f"[Visualization] Checking trigger for tool={tool_name}, incident={incident_id}")
                 if viz_trigger.should_trigger(tool_name, output):
+                    # Pass the current tool call directly (we already have all the data)
+                    tool_call = [{
+                        'tool': tool_name,
+                        'output': str(output)[:5000]  # Limit size for celery
+                    }]
+                    
                     from chat.background.visualization_generator import update_visualization
                     update_visualization.delay(
                         incident_id=incident_id,
                         user_id=user_id,
                         session_id=session_id,
-                        force_full=False
+                        force_full=False,
+                        tool_calls_json=json.dumps(tool_call)
                     )
                     logging.info(f"[Visualization] Triggered update for incident {incident_id} after {tool_name}")
             except Exception as e:
