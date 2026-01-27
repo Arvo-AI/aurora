@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -15,7 +15,7 @@ import {
 } from 'lucide-react';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL;
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5080';
 
 interface OnboardingData {
   workspaceId: string;
@@ -59,9 +59,13 @@ export default function AWSOnboardingPage() {
   const [error, setError] = useState<string | null>(null);
   const [isSettingRole, setIsSettingRole] = useState(false);
   const [copySuccess, setCopySuccess] = useState(false);
+  const [policyCopySuccess, setPolicyCopySuccess] = useState(false);
+  const [trustPolicyCopySuccess, setTrustPolicyCopySuccess] = useState(false);
   const [isDisconnecting, setIsDisconnecting] = useState(false);
   const [roleArn, setRoleArn] = useState('');
   const [isConfigured, setIsConfigured] = useState(false);
+  const [credentialsConfigured, setCredentialsConfigured] = useState<boolean | null>(null);
+  const [showDocs, setShowDocs] = useState(false);
 
   // Auto-set connected flag when configured
   useEffect(() => {
@@ -71,6 +75,28 @@ export default function AWSOnboardingPage() {
       localStorage.setItem('isAWSFetched', 'false');
     }
   }, [isConfigured]);
+
+  // Check AWS credentials on component mount
+  useEffect(() => {
+    const checkCredentials = async () => {
+      try {
+        const response = await fetch(`${BACKEND_URL}/aws/env/check`, {
+          method: 'GET',
+          credentials: 'include',
+        });
+        if (response.ok) {
+          const data = await response.json();
+          setCredentialsConfigured(data.configured);
+          if (!data.configured) {
+            setShowDocs(true);
+          }
+        }
+      } catch (err) {
+        console.error("Failed to check AWS credentials:", err);
+      }
+    };
+    checkCredentials();
+  }, []);
 
   // Fetch user ID on component mount
   useEffect(() => {
@@ -91,14 +117,7 @@ export default function AWSOnboardingPage() {
     fetchUserId();
   }, []);
 
-  // Fetch onboarding data when userId is available
-  useEffect(() => {
-    if (userId) {
-      fetchOnboardingData();
-    }
-  }, [userId]);
-
-  const fetchOnboardingData = async () => {
+  const fetchOnboardingData = useCallback(async () => {
     if (!userId) return;
 
     setIsLoading(true);
@@ -184,7 +203,14 @@ export default function AWSOnboardingPage() {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [userId]);
+
+  // Fetch onboarding data when userId is available
+  useEffect(() => {
+    if (userId) {
+      fetchOnboardingData();
+    }
+  }, [userId, fetchOnboardingData]);
 
   const handleSetRole = async () => {
     if (!roleArn || !workspaceId || !userId) {
@@ -281,6 +307,18 @@ export default function AWSOnboardingPage() {
     setTimeout(() => setCopySuccess(false), 2000);
   };
 
+  const copyPolicyToClipboard = (text: string) => {
+    navigator.clipboard.writeText(text);
+    setPolicyCopySuccess(true);
+    setTimeout(() => setPolicyCopySuccess(false), 2000);
+  };
+
+  const copyTrustPolicyToClipboard = (text: string) => {
+    navigator.clipboard.writeText(text);
+    setTrustPolicyCopySuccess(true);
+    setTimeout(() => setTrustPolicyCopySuccess(false), 2000);
+  };
+
   if (isLoading) {
     return (
       <div className="min-h-screen bg-black flex items-center justify-center">
@@ -288,6 +326,185 @@ export default function AWSOnboardingPage() {
           <Loader2 className="w-12 h-12 animate-spin mx-auto mb-6 text-blue-400" />
           <p className="text-slate-300 text-lg">Loading AWS onboarding...</p>
         </div>
+      </div>
+    );
+  }
+
+  // Show documentation if credentials are not configured
+  if (showDocs && credentialsConfigured === false) {
+    return (
+      <div className="min-h-screen bg-black flex items-center justify-center p-4 sm:p-6">
+        <Card className="w-full max-w-2xl bg-black border-white/10 overflow-hidden">
+          <CardHeader className="pb-4">
+            <CardTitle className="text-white flex items-center space-x-2 text-lg sm:text-xl">
+              <AlertCircle className="w-5 h-5 flex-shrink-0" />
+              <span className="break-words">AWS Credentials Not Configured</span>
+            </CardTitle>
+            <CardDescription className="text-white/50 mt-2 text-sm">
+              Aurora needs AWS credentials to connect to your AWS account. See the documentation for setup instructions.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4 overflow-x-hidden">
+            <div className="bg-white/5 rounded-lg p-4 border border-white/10 space-y-3 text-sm text-white/70">
+              <div className="break-words">
+                <p className="text-white/90 font-medium mb-1">1. Create an IAM user with this policy:</p>
+                <div className="relative mt-2">
+                  <pre className="bg-black/50 p-3 pr-10 rounded border border-white/10 text-xs overflow-x-auto whitespace-pre-wrap break-all">
+{JSON.stringify({
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": ["sts:AssumeRole"],
+      "Resource": "*"
+    }
+  ]
+}, null, 2)}
+                  </pre>
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    onClick={() => copyPolicyToClipboard(JSON.stringify({
+                      "Version": "2012-10-17",
+                      "Statement": [
+                        {
+                          "Effect": "Allow",
+                          "Action": ["sts:AssumeRole"],
+                          "Resource": "*"
+                        }
+                      ]
+                    }, null, 2))}
+                    className="absolute top-2 right-2 h-6 w-6 border-white/10 hover:bg-white/5 text-white/70"
+                  >
+                    {policyCopySuccess ? <CheckCircle className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                  </Button>
+                </div>
+              </div>
+
+              <div className="break-words">
+                <p className="text-white/90 font-medium mb-1">2. Create access keys in AWS Console</p>
+                <p className="text-white/60 text-xs">Copy the Access key ID and Secret access key</p>
+              </div>
+
+              <div className="break-words">
+                <p className="text-white/90 font-medium mb-1">3. Add to <code className="bg-black/50 px-1 py-0.5 rounded text-xs">.env</code>:</p>
+                <pre className="bg-black/50 p-3 rounded border border-white/10 text-xs mt-2 overflow-x-auto whitespace-pre break-all">{`AWS_ACCESS_KEY_ID=your-access-key-id
+AWS_SECRET_ACCESS_KEY=your-secret-access-key
+AWS_DEFAULT_REGION=us-east-1`}</pre>
+              </div>
+
+              <div className="break-words">
+                <p className="text-white/90 font-medium mb-1">4. Rebuild and restart:</p>
+                <pre className="bg-black/50 p-3 rounded border border-white/10 text-xs mt-2 overflow-x-auto whitespace-pre break-all">{`make down
+make dev-build
+make dev`}</pre>
+              </div>
+            </div>
+
+            <div className="flex flex-col sm:flex-row gap-3">
+              <Button
+                onClick={() => {
+                  fetch(`${BACKEND_URL}/aws/env/check`, {
+                    method: 'GET',
+                    credentials: 'include',
+                  })
+                    .then(res => res.json())
+                    .then(data => {
+                      setCredentialsConfigured(data.configured);
+                      if (data.configured) {
+                        setShowDocs(false);
+                        window.location.reload();
+                      }
+                    });
+                }}
+                className="flex-1 bg-white text-black hover:bg-white/90"
+              >
+                Check Again
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => router.push('/connectors')}
+                className="border-white/10 hover:bg-white/5 text-white/70"
+              >
+                Back to Connectors
+              </Button>
+            </div>
+
+            <div className="text-center pt-2 border-t border-white/10">
+              <p className="text-xs text-white/40 break-words">
+                Full documentation:{' '}
+                <a
+                  href="https://github.com/arvo-ai/aurora/blob/main/server/connectors/aws_connector/README.md"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-white/60 hover:text-white underline break-all"
+                >
+                  README
+                </a>
+              </p>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  // Show error page if credentials are configured but account ID cannot be retrieved (invalid credentials)
+  if (onboardingData && !onboardingData.auroraAccountId && !isConfigured) {
+    return (
+      <div className="min-h-screen bg-black flex items-center justify-center p-4 sm:p-6">
+        <Card className="w-full max-w-2xl bg-black border-white/10 overflow-hidden">
+          <CardHeader className="pb-4">
+            <CardTitle className="text-white flex items-center space-x-2 text-lg sm:text-xl">
+              <AlertCircle className="w-5 h-5 flex-shrink-0 text-yellow-400" />
+              <span className="break-words">AWS Credentials Issue</span>
+            </CardTitle>
+            <CardDescription className="text-white/50 mt-2 text-sm">
+              Aurora detected your AWS credentials, but couldn't verify them with AWS.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4 overflow-x-hidden">
+            <Alert className="bg-yellow-500/10 border-yellow-500/20">
+              <AlertCircle className="h-4 w-4 text-yellow-400" />
+              <AlertDescription className="text-sm text-yellow-400">
+                <strong>Configuration Issue:</strong> Your AWS credentials are set in the .env file, but Aurora couldn't retrieve your AWS account ID. This usually means the credentials are invalid, expired, or don't have the required permissions.
+              </AlertDescription>
+            </Alert>
+
+            <div className="bg-white/5 rounded-lg p-4 border border-white/10 space-y-3 text-sm text-white/70">
+              <p className="text-white/90 font-medium">Please verify:</p>
+              <ul className="list-disc list-inside space-y-2 text-white/60 text-xs">
+                <li>Your <code className="bg-black/50 px-1 py-0.5 rounded">AWS_ACCESS_KEY_ID</code> is correct</li>
+                <li>Your <code className="bg-black/50 px-1 py-0.5 rounded">AWS_SECRET_ACCESS_KEY</code> is correct</li>
+                <li>The credentials haven't expired or been rotated</li>
+                <li>The IAM user has the <code className="bg-black/50 px-1 py-0.5 rounded">sts:AssumeRole</code> permission</li>
+              </ul>
+
+              <div className="pt-3 border-t border-white/10">
+                <p className="text-white/90 font-medium mb-2">After fixing credentials:</p>
+                <pre className="bg-black/50 p-3 rounded border border-white/10 text-xs overflow-x-auto whitespace-pre break-all">{`make down
+make dev-build
+make dev`}</pre>
+              </div>
+            </div>
+
+            <div className="flex flex-col sm:flex-row gap-3">
+              <Button
+                onClick={() => window.location.reload()}
+                className="flex-1 bg-white text-black hover:bg-white/90"
+              >
+                Check Again
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => router.push('/connectors')}
+                className="border-white/10 hover:bg-white/5 text-white/70"
+              >
+                Back to Connectors
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
       </div>
     );
   }
@@ -429,15 +646,8 @@ export default function AWSOnboardingPage() {
 
                   <div>
                     <p className="text-xs text-white/60 mb-1">2. Add this trust policy to the role:</p>
-                    {!onboardingData.auroraAccountId ? (
-                      <Alert className="bg-yellow-500/10 border-yellow-500/20 mt-2">
-                        <AlertCircle className="h-4 w-4 text-yellow-400" />
-                        <AlertDescription className="text-sm text-yellow-400">
-                          Unable to detect Aurora's AWS account ID. Please ensure Aurora has AWS credentials configured. You can still create the role manually - the trust policy should allow the AWS account where Aurora is running to assume the role.
-                        </AlertDescription>
-                      </Alert>
-                    ) : (
-                      <pre className="text-white text-xs whitespace-pre-wrap font-mono bg-black/30 p-3 rounded border border-white/10 mt-2">
+                    <div className="relative mt-2">
+                      <pre className="text-white text-xs whitespace-pre-wrap font-mono bg-black/30 p-3 pr-10 rounded border border-white/10">
 {JSON.stringify({
     "Version": "2012-10-17",
     "Statement": [
@@ -456,7 +666,31 @@ export default function AWSOnboardingPage() {
     ]
 }, null, 2)}
                       </pre>
-                    )}
+                      <Button
+                        variant="outline"
+                        size="icon"
+                        onClick={() => copyTrustPolicyToClipboard(JSON.stringify({
+                          "Version": "2012-10-17",
+                          "Statement": [
+                            {
+                              "Effect": "Allow",
+                              "Principal": {
+                                "AWS": `arn:aws:iam::${onboardingData.auroraAccountId}:root`
+                              },
+                              "Action": "sts:AssumeRole",
+                              "Condition": {
+                                "StringEquals": {
+                                  "sts:ExternalId": onboardingData.externalId
+                                }
+                              }
+                            }
+                          ]
+                        }, null, 2))}
+                        className="absolute top-2 right-2 h-6 w-6 border-white/10 hover:bg-white/5 text-white/70"
+                      >
+                        {trustPolicyCopySuccess ? <CheckCircle className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                      </Button>
+                    </div>
                     <Alert className="bg-yellow-500/10 border-yellow-500/20 mt-2">
                       <AlertCircle className="h-4 w-4 text-yellow-400" />
                       <AlertDescription className="text-xs text-yellow-400">
@@ -488,7 +722,7 @@ export default function AWSOnboardingPage() {
                 <Input
                   placeholder="arn:aws:iam::123456789012:role/AuroraRole"
                   value={roleArn}
-                  onChange={(e) => setRoleArn(e.target.value)}
+                  onChange={(e: React.ChangeEvent<HTMLInputElement>) => setRoleArn(e.target.value)}
                   className="bg-white/5 text-white border-white/10 focus-visible:ring-white/20 font-mono text-sm"
                 />
                 <p className="text-xs text-white/40">Enter the ARN of the IAM role you created above</p>
