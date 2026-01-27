@@ -17,6 +17,7 @@ export default function OvhProviderIntegration({ onDisconnect }: OvhProviderInte
   const [userId, setUserId] = useState<string | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [isSaving, setIsSaving] = useState(false);
   const [isDisconnecting, setIsDisconnecting] = useState(false);
   const [togglingProjectId, setTogglingProjectId] = useState<string | null>(null);
   const { toast } = useToast();
@@ -87,9 +88,10 @@ export default function OvhProviderIntegration({ onDisconnect }: OvhProviderInte
     }
   }
 
-  async function handleSetAsRoot(_providerId: string, projectId: string): Promise<void> {
+  async function handleSetAsRoot(providerId: string, projectId: string): Promise<void> {
     if (!userId) return;
 
+    setIsSaving(true);
     try {
       const response = await fetch('/api/provider-root-project/ovh', {
         method: 'POST',
@@ -117,6 +119,8 @@ export default function OvhProviderIntegration({ onDisconnect }: OvhProviderInte
         description: error.message || "Failed to set root project",
         variant: "destructive",
       });
+    } finally {
+      setIsSaving(false);
     }
   }
 
