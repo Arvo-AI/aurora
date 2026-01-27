@@ -24,9 +24,33 @@ from utils.notifications.slack_notification_service import (
     send_slack_investigation_completed_notification,
 )
 from utils.db.connection_pool import db_pool
+from langchain_core.messages import ToolMessage
+from chat.backend.agent.tools.cloud_tools import get_state_context
+from chat.background.visualization_generator import update_visualization
 
 
 logger = logging.getLogger(__name__)
+
+# Constants
+MAX_TOOL_OUTPUT_CHARS = 5000
+INFRASTRUCTURE_TOOLS = frozenset(['on_prem_kubectl', 'cloud_exec', 'terminal_exec', 'tailscale_ssh'])
+
+
+def _extract_tool_calls_for_viz() -> List[Dict]:
+    """Extract infrastructure tool calls from current state for final visualization."""
+    state = get_state_context()
+    if not state or not hasattr(state, 'messages'):
+        return []
+    
+    tool_calls = []
+    for msg in state.messages:
+        if isinstance(msg, ToolMessage) and msg.name in INFRASTRUCTURE_TOOLS:
+            tool_calls.append({
+                'tool': msg.name,
+                'output': str(msg.content)[:MAX_TOOL_OUTPUT_CHARS]
+            })
+    
+    return tool_calls
 
 _RATE_LIMIT_WINDOW_SECONDS = 300  # 5 minute window
 _RATE_LIMIT_MAX_REQUESTS = 5  # Max 5 background chats per window
@@ -278,40 +302,19 @@ def run_background_chat(
             
             # Generate final complete visualization
             try:
-                # Extract tool calls from state to pass to final viz
-                tool_calls_for_viz = []
-                try:
-                    from chat.backend.agent.tools.cloud_tools import get_state_context
-                    state = get_state_context()
-                    if state and hasattr(state, 'messages'):
-                        for msg in state.messages:
-                            if hasattr(msg, '__class__') and 'ToolMessage' in msg.__class__.__name__:
-                                tool_name = getattr(msg, 'name', 'unknown')
-                                # Only include infrastructure tools
-                                if tool_name in ['on_prem_kubectl', 'cloud_exec', 'terminal_exec', 'tailscale_ssh']:
-                                    tool_calls_for_viz.append({
-                                        'tool': tool_name,
-                                        'output': str(getattr(msg, 'content', ''))[:5000],
-                                    })
-                        logger.info(f"[BackgroundChat] Extracted {len(tool_calls_for_viz)} tool calls for final visualization")
-                except Exception as extract_err:
-                    logger.warning(f"[BackgroundChat] Failed to extract tool calls for final viz: {extract_err}")
+                tool_calls = _extract_tool_calls_for_viz()
+                logger.info(f"[BackgroundChat] Extracted {len(tool_calls)} tool calls for final visualization")
                 
-                from chat.background.visualization_generator import update_visualization
-                import json
-                update_visualization.apply_async(
-                    kwargs={
-                        'incident_id': incident_id,
-                        'user_id': user_id,
-                        'session_id': session_id,
-                        'force_full': True,
-                        'tool_calls_json': json.dumps(tool_calls_for_viz) if tool_calls_for_viz else None
-                    },
-                    countdown=5
-                )
+                update_visualization.apply_async(kwargs={
+                    'incident_id': incident_id,
+                    'user_id': user_id,
+                    'session_id': session_id,
+                    'force_full': True,
+                    'tool_calls_json': json.dumps(tool_calls) if tool_calls else None
+                })
                 logger.info(f"[BackgroundChat] Queued final visualization for incident {incident_id}")
             except Exception as e:
-                logger.warning(f"[BackgroundChat] Failed to queue final visualization: {e}")
+                logger.error(f"[BackgroundChat] Failed to generate final visualization: {e}")
         
         # Send response back to Slack if this was triggered from Slack
         if trigger_metadata and trigger_metadata.get('source') in ['slack', 'slack_button']:
