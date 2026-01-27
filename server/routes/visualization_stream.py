@@ -4,8 +4,8 @@ import logging
 import os
 import time
 from flask import Blueprint, Response, jsonify, stream_with_context
-import psycopg2
 import redis
+from utils.db.connection_pool import db_pool
 
 logger = logging.getLogger(__name__)
 
@@ -60,18 +60,15 @@ def stream_visualization_updates(incident_id: str):
 def get_current_visualization(incident_id: str):
     """Fetch current visualization JSON."""
     try:
-        conn = psycopg2.connect(os.getenv('DATABASE_URL'))
-        cursor = conn.cursor()
-        
-        cursor.execute("""
-            SELECT visualization_code, visualization_updated_at
-            FROM incidents
-            WHERE id = %s
-        """, (incident_id,))
-        
-        row = cursor.fetchone()
-        cursor.close()
-        conn.close()
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("""
+                    SELECT visualization_code, visualization_updated_at
+                    FROM incidents
+                    WHERE id = %s
+                """, (incident_id,))
+                
+                row = cursor.fetchone()
         
         if not row or not row[0]:
             return jsonify({"error": "No visualization found"}), 404
