@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Button } from "@/components/ui/button";
 import { useToast } from '@/hooks/use-toast';
 import { Loader2, RefreshCw, LogOut } from 'lucide-react';
@@ -36,16 +36,10 @@ export default function ScalewayProviderIntegration({ onDisconnect }: ScalewayPr
     fetchUserId();
   }, []);
 
-  useEffect(() => {
-    if (userId) {
-      loadProjects();
-    }
-  }, [userId]);
-
-  async function loadProjects(forceRefresh = false): Promise<void> {
+  const loadProjects = useCallback(async (forceRefresh = false): Promise<void> => {
     setIsLoading(true);
     try {
-      const fetchedProjects = await fetchProjects('scaleway', forceRefresh, projects);
+      const fetchedProjects = await fetchProjects('scaleway', forceRefresh);
       setProjects(fetchedProjects);
     } catch (error: any) {
       console.error('Error loading Scaleway projects:', error);
@@ -57,10 +51,17 @@ export default function ScalewayProviderIntegration({ onDisconnect }: ScalewayPr
     } finally {
       setIsLoading(false);
     }
-  }
+  }, [toast]);
+
+  useEffect(() => {
+    if (userId) {
+      loadProjects();
+    }
+  }, [userId, loadProjects]);
 
   async function handleToggle(projectId: string): Promise<void> {
     setTogglingProjectId(projectId);
+    const originalProjects = projects;
     try {
       const updatedProjects = projects.map(p =>
         p.projectId === projectId ? { ...p, enabled: !p.enabled } : p
@@ -76,7 +77,7 @@ export default function ScalewayProviderIntegration({ onDisconnect }: ScalewayPr
       });
     } catch (error: any) {
       console.error('Error toggling project:', error);
-      loadProjects(true);
+      setProjects(originalProjects);
       toast({
         title: "Error",
         description: error.message || "Failed to update project",
@@ -87,7 +88,7 @@ export default function ScalewayProviderIntegration({ onDisconnect }: ScalewayPr
     }
   }
 
-  async function handleSetAsRoot(_providerId: string, projectId: string): Promise<void> {
+  async function handleSetAsRoot(providerId: string, projectId: string): Promise<void> {
     if (!userId) return;
 
     try {
