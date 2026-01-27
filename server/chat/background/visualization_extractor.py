@@ -78,7 +78,7 @@ class VisualizationExtractor:
     def _build_prompt(self, messages: List[Dict], existing: Optional[VisualizationData]) -> str:
         """Build extraction prompt with context."""
         messages_text = "\n\n".join([
-            f"Tool: {m.get('tool', 'unknown')}\nOutput:\n{m.get('output', '')[:3000]}"
+            f"Tool: {m.get('tool', 'unknown')}\nOutput:\n{m.get('output', '')[:5000]}"
             for m in messages[-10:]  # Last 10 only
         ])
         
@@ -87,8 +87,8 @@ class VisualizationExtractor:
         
         existing_context = ""
         if existing and existing.nodes:
-            node_summary = ", ".join([f"{n.id}({n.status})" for n in existing.nodes[:10]])
-            existing_context = f"\n\nEXISTING ENTITIES: {node_summary}"
+            node_summary = ", ".join([f"{n.id}({n.status})" for n in existing.nodes])
+            existing_context = f"\n\nEXISTING ENTITIES ({len(existing.nodes)} nodes, {len(existing.edges)} edges): {node_summary}"
         
         return f"""Analyze these recent RCA tool calls to extract infrastructure entities and relationships.
 
