@@ -449,6 +449,66 @@ make dev`}</pre>
     );
   }
 
+  // Show error page if credentials are configured but account ID cannot be retrieved (invalid credentials)
+  if (onboardingData && !onboardingData.auroraAccountId && !isConfigured) {
+    return (
+      <div className="min-h-screen bg-black flex items-center justify-center p-4 sm:p-6">
+        <Card className="w-full max-w-2xl bg-black border-white/10 overflow-hidden">
+          <CardHeader className="pb-4">
+            <CardTitle className="text-white flex items-center space-x-2 text-lg sm:text-xl">
+              <AlertCircle className="w-5 h-5 flex-shrink-0 text-yellow-400" />
+              <span className="break-words">AWS Credentials Issue</span>
+            </CardTitle>
+            <CardDescription className="text-white/50 mt-2 text-sm">
+              Aurora detected your AWS credentials, but couldn't verify them with AWS.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4 overflow-x-hidden">
+            <Alert className="bg-yellow-500/10 border-yellow-500/20">
+              <AlertCircle className="h-4 w-4 text-yellow-400" />
+              <AlertDescription className="text-sm text-yellow-400">
+                <strong>Configuration Issue:</strong> Your AWS credentials are set in the .env file, but Aurora couldn't retrieve your AWS account ID. This usually means the credentials are invalid, expired, or don't have the required permissions.
+              </AlertDescription>
+            </Alert>
+
+            <div className="bg-white/5 rounded-lg p-4 border border-white/10 space-y-3 text-sm text-white/70">
+              <p className="text-white/90 font-medium">Please verify:</p>
+              <ul className="list-disc list-inside space-y-2 text-white/60 text-xs">
+                <li>Your <code className="bg-black/50 px-1 py-0.5 rounded">AWS_ACCESS_KEY_ID</code> is correct</li>
+                <li>Your <code className="bg-black/50 px-1 py-0.5 rounded">AWS_SECRET_ACCESS_KEY</code> is correct</li>
+                <li>The credentials haven't expired or been rotated</li>
+                <li>The IAM user has the <code className="bg-black/50 px-1 py-0.5 rounded">sts:AssumeRole</code> permission</li>
+              </ul>
+
+              <div className="pt-3 border-t border-white/10">
+                <p className="text-white/90 font-medium mb-2">After fixing credentials:</p>
+                <pre className="bg-black/50 p-3 rounded border border-white/10 text-xs overflow-x-auto whitespace-pre break-all">{`make down
+make dev-build
+make dev`}</pre>
+              </div>
+            </div>
+
+            <div className="flex flex-col sm:flex-row gap-3">
+              <Button
+                onClick={() => window.location.reload()}
+                className="flex-1 bg-white text-black hover:bg-white/90"
+              >
+                Check Again
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => router.push('/connectors')}
+                className="border-white/10 hover:bg-white/5 text-white/70"
+              >
+                Back to Connectors
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
   if (error && !isConfigured) {
     const formattedError = formatAWSErrorMessage(error);
     return (
@@ -586,16 +646,8 @@ make dev`}</pre>
 
                   <div>
                     <p className="text-xs text-white/60 mb-1">2. Add this trust policy to the role:</p>
-                    {!onboardingData.auroraAccountId ? (
-                      <Alert className="bg-yellow-500/10 border-yellow-500/20 mt-2">
-                        <AlertCircle className="h-4 w-4 text-yellow-400" />
-                        <AlertDescription className="text-sm text-yellow-400">
-                          Unable to detect Aurora's AWS account ID. Please ensure Aurora has AWS credentials configured. You can still create the role manually - the trust policy should allow the AWS account where Aurora is running to assume the role.
-                        </AlertDescription>
-                      </Alert>
-                    ) : (
-                      <div className="relative mt-2">
-                        <pre className="text-white text-xs whitespace-pre-wrap font-mono bg-black/30 p-3 pr-10 rounded border border-white/10">
+                    <div className="relative mt-2">
+                      <pre className="text-white text-xs whitespace-pre-wrap font-mono bg-black/30 p-3 pr-10 rounded border border-white/10">
 {JSON.stringify({
     "Version": "2012-10-17",
     "Statement": [
@@ -613,33 +665,32 @@ make dev`}</pre>
         }
     ]
 }, null, 2)}
-                        </pre>
-                        <Button
-                          variant="outline"
-                          size="icon"
-                          onClick={() => copyTrustPolicyToClipboard(JSON.stringify({
-                            "Version": "2012-10-17",
-                            "Statement": [
-                              {
-                                "Effect": "Allow",
-                                "Principal": {
-                                  "AWS": `arn:aws:iam::${onboardingData.auroraAccountId}:root`
-                                },
-                                "Action": "sts:AssumeRole",
-                                "Condition": {
-                                  "StringEquals": {
-                                    "sts:ExternalId": onboardingData.externalId
-                                  }
+                      </pre>
+                      <Button
+                        variant="outline"
+                        size="icon"
+                        onClick={() => copyTrustPolicyToClipboard(JSON.stringify({
+                          "Version": "2012-10-17",
+                          "Statement": [
+                            {
+                              "Effect": "Allow",
+                              "Principal": {
+                                "AWS": `arn:aws:iam::${onboardingData.auroraAccountId}:root`
+                              },
+                              "Action": "sts:AssumeRole",
+                              "Condition": {
+                                "StringEquals": {
+                                  "sts:ExternalId": onboardingData.externalId
                                 }
                               }
-                            ]
-                          }, null, 2))}
-                          className="absolute top-2 right-2 h-6 w-6 border-white/10 hover:bg-white/5 text-white/70"
-                        >
-                          {trustPolicyCopySuccess ? <CheckCircle className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
-                        </Button>
-                      </div>
-                    )}
+                            }
+                          ]
+                        }, null, 2))}
+                        className="absolute top-2 right-2 h-6 w-6 border-white/10 hover:bg-white/5 text-white/70"
+                      >
+                        {trustPolicyCopySuccess ? <CheckCircle className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                      </Button>
+                    </div>
                     <Alert className="bg-yellow-500/10 border-yellow-500/20 mt-2">
                       <AlertCircle className="h-4 w-4 text-yellow-400" />
                       <AlertDescription className="text-xs text-yellow-400">
