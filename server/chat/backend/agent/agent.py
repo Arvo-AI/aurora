@@ -212,7 +212,7 @@ class Agent:
             tool_capture = getattr(self, 'tool_capture_instance', None)
             if not tool_capture and state.session_id and state.user_id:
                 tool_capture = ToolContextCapture(state.session_id, state.user_id)
-                logging.debug(f"Created new tool capture for session {state.session_id}")                 
+                logging.debug(f"Created new tool capture for session {state.session_id}")
             elif tool_capture:
                 logging.debug(f"Using shared tool_capture instance from workflow")
             
