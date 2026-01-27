@@ -1,4 +1,4 @@
-export type NodeType = 'service' | 'pod' | 'vm' | 'database' | 'event' | 'alert' | 'namespace' | 'node';
+export type NodeType = string;
 export type NodeStatus = 'healthy' | 'degraded' | 'failed' | 'investigating' | 'unknown';
 export type EdgeType = 'dependency' | 'communication' | 'causation' | 'hosts';
 

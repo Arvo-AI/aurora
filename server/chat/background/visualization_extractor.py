@@ -12,7 +12,7 @@ class InfraNode(BaseModel):
     """Infrastructure entity node."""
     id: str = Field(description="Unique identifier (e.g., 'svc-api', 'pod-db-1')")
     label: str = Field(description="Display name (8-15 chars)")
-    type: Literal['service', 'pod', 'vm', 'database', 'event', 'alert', 'namespace', 'node']
+    type: str = Field(description="Infrastructure entity type (e.g., 'pod', 'deployment', 'lambda', 'load-balancer', 'database')")
     status: Literal['healthy', 'degraded', 'failed', 'investigating', 'unknown'] = 'investigating'
 
 
@@ -87,23 +87,60 @@ class VisualizationExtractor:
         existing_context = ""
         if existing and existing.nodes:
             node_summary = ", ".join([f"{n.id}({n.status})" for n in existing.nodes])
-            existing_context = f"\n\nEXISTING ENTITIES ({len(existing.nodes)} nodes, {len(existing.edges)} edges): {node_summary}"
+            existing_context = f"\n\nEXISTING GRAPH ({len(existing.nodes)} nodes, {len(existing.edges)} edges):\n{node_summary}"
         
-        return f"""Analyze these RCA tool calls and extract infrastructure entities as structured data.
+        return f"""You are building a visual incident graph to help SREs quickly understand WHAT caused WHAT during an incident.
 
-TOOL OUTPUTS:
+GOAL: Create a clear, focused graph showing the chain of causation from root cause to user impact.
+
+TOOL OUTPUTS FROM INVESTIGATION:
 {messages_text}
 {existing_context}
 
-Extract infrastructure entities (services, pods, VMs, databases, alerts, namespaces, nodes) and relationships.
+EXTRACTION RULES:
 
-Rules:
-- Labels: 8-15 chars
-- Status: 'investigating' if uncertain, 'failed'/'degraded' only with clear errors
-- Include only incident-relevant entities
-- If existing entities provided, return ONLY new/updated ones
+1. FOCUS ON CAUSALITY:
+   - Prioritize entities directly involved in the failure chain
+   - Use 'causation' edges to show what caused what (e.g., pod restart → service downtime → alert)
+   - Identify the ROOT CAUSE (first point of failure) and set rootCauseId
+   - Mark all downstream affected entities in affectedIds
 
-Return structured data matching VisualizationData schema."""
+2. ENTITY SELECTION (only include if relevant to incident):
+   - Alert/event that triggered investigation
+   - Any infrastructure entities showing failures/degradation
+   - Upstream dependencies that may have caused the issue
+   - Use specific entity types from your infrastructure knowledge:
+     * Kubernetes: pod, deployment, service, statefulset, daemonset, replicaset, node, namespace, ingress, pvc
+     * Cloud: lambda, cloud-function, vm, instance, load-balancer, api-gateway, bucket, queue
+     * Databases: database, postgres, mysql, redis, mongodb, elasticsearch
+     * Monitoring: alert, event, metric
+   - Keep graph focused - omit healthy unrelated infrastructure
+
+3. STATUS ASSIGNMENT (use evidence from tool outputs):
+   - 'failed': Clear errors, crashes, restarts, or unavailability (CrashLoopBackOff, 5xx errors, OOMKilled)
+   - 'degraded': High latency, resource exhaustion, partial failures (CPU/memory pressure, slow responses)
+   - 'investigating': Mentioned in investigation but status unclear
+   - 'healthy': Explicitly confirmed working normally
+   - 'unknown': No status information available
+
+4. RELATIONSHIPS (be specific):
+   - 'causation': A directly caused B (e.g., OOMKilled pod → service unavailable)
+   - 'dependency': A depends on B (e.g., API service → database)
+   - 'hosts': A contains/runs B (e.g., node → pod, namespace → service)
+   - 'communication': A talks to B (e.g., frontend → backend API)
+   - Add descriptive labels explaining the relationship
+
+5. LABELING:
+   - Keep labels concise: 8-15 characters
+   - Use actual names from infrastructure (pod names, service names, etc.)
+   - For nodes: use short identifiers (e.g., 'api-pod-3x7k', 'postgres-db')
+
+6. INCREMENTAL UPDATES:
+   - If existing graph provided, return ONLY new entities or status updates
+   - Update rootCauseId only if you have stronger evidence
+   - Add to affectedIds as more downstream impact is discovered
+
+OUTPUT: Structured VisualizationData showing the incident's causal chain."""
     
     def _merge(self, existing: VisualizationData, new: VisualizationData) -> VisualizationData:
         """Merge new entities with existing ones."""

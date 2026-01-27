@@ -20,3 +20,20 @@
 .react-flow__controls-button svg {
   fill: #fafafa !important;
 }
+
+/* React Flow Attribution styling */
+.react-flow__attribution {
+  background-color: #27272a !important;
+  border-color: #52525b !important;
+  padding: 2px 6px !important;
+  border-radius: 4px !important;
+}
+
+.react-flow__attribution a {
+  color: #71717a !important;
+  font-size: 10px !important;
+}
+
+.react-flow__attribution a:hover {
+  color: #a1a1aa !important;
+}

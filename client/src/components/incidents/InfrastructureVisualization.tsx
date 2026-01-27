@@ -2,7 +2,7 @@
 
 import { useVisualizationStream } from '@/hooks/useVisualizationStream';
 import { InfraNode, NodeStatus, NodeType } from '@/types/visualization';
-import { ReactFlow, Node, Edge, Controls, Background, Panel } from '@xyflow/react';
+import { ReactFlow, Node, Edge, Controls, Background, Panel, Handle, Position } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import './visualization.css';
 import { useMemo } from 'react';
@@ -21,43 +21,46 @@ const statusColors: Record<NodeStatus, { border: string; bg: string; glow: strin
   unknown: { border: '#71717a', bg: '#18181b', glow: 'rgba(113, 113, 122, 0.3)' },
 };
 
-const nodeTypeIcons: Record<NodeType, string> = {
-  service: '⚙️',
-  pod: '📦',
-  vm: '🖥️',
-  database: '🗄️',
-  event: '⚡',
-  alert: '🚨',
-  namespace: '📁',
-  node: '🔧',
-};
-
 function CustomNode({ data }: { data: InfraNode & { isRootCause?: boolean; isAffected?: boolean } }) {
   const colors = statusColors[data.status];
-  const icon = nodeTypeIcons[data.type];
   const isRootCause = data.isRootCause;
   const isAffected = data.isAffected;
 
   return (
-    <div
-      style={{
-        padding: '12px 16px',
-        border: `2px ${isAffected ? 'dashed' : 'solid'} ${colors.border}`,
-        borderRadius: '8px',
-        backgroundColor: colors.bg,
-        minWidth: '120px',
-        boxShadow: isRootCause ? `0 0 20px ${colors.glow}` : `0 0 8px ${colors.glow}`,
-        fontWeight: isRootCause ? 600 : 400,
-      }}
-    >
-      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#fafafa' }}>
-        <span style={{ fontSize: '16px' }}>{icon}</span>
-        <div>
-          <div style={{ fontSize: '13px', fontWeight: 500 }}>{data.label}</div>
-          <div style={{ fontSize: '10px', color: '#a1a1aa', marginTop: '2px' }}>{data.type}</div>
+    <>
+      <Handle type="target" position={Position.Top} style={{ background: '#52525b' }} />
+      <div
+        style={{
+          padding: '12px 16px',
+          border: `2px ${isAffected ? 'dashed' : 'solid'} ${colors.border}`,
+          borderRadius: '8px',
+          backgroundColor: colors.bg,
+          minWidth: '120px',
+          boxShadow: isRootCause ? `0 0 20px ${colors.glow}` : `0 0 8px ${colors.glow}`,
+          fontWeight: isRootCause ? 600 : 400,
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#fafafa' }}>
+          <div style={{ 
+            fontSize: '9px', 
+            fontWeight: 700, 
+            color: '#71717a',
+            backgroundColor: '#27272a',
+            padding: '2px 6px',
+            borderRadius: '4px',
+            letterSpacing: '0.5px',
+            textTransform: 'uppercase'
+          }}>
+            {data.type}
+          </div>
+          <div>
+            <div style={{ fontSize: '13px', fontWeight: 500 }}>{data.label}</div>
+            <div style={{ fontSize: '10px', color: '#a1a1aa', marginTop: '2px', textTransform: 'lowercase' }}>{data.type}</div>
+          </div>
         </div>
       </div>
-    </div>
+      <Handle type="source" position={Position.Bottom} style={{ background: '#52525b' }} />
+    </>
   );
 }
 
@@ -83,9 +86,11 @@ export default function InfrastructureVisualization({ incidentId, className }: P
       source: edge.source,
       target: edge.target,
       label: edge.label,
-      style: { stroke: '#52525b', strokeWidth: 1.5 },
-      labelStyle: { fill: '#a1a1aa', fontSize: 10 },
+      type: 'smoothstep',
       animated: edge.type === 'causation',
+      style: { stroke: '#52525b', strokeWidth: 2 },
+      labelStyle: { fill: '#a1a1aa', fontSize: 10 },
+      markerEnd: { type: 'arrowclosed', color: '#52525b' },
     }));
 
     return { nodes: flowNodes, edges: flowEdges };
@@ -121,10 +126,20 @@ export default function InfrastructureVisualization({ incidentId, className }: P
         nodes={nodes}
         edges={edges}
         nodeTypes={{ custom: CustomNode }}
+        nodesDraggable={true}
+        nodesConnectable={false}
+        elementsSelectable={true}
+        panOnDrag={true}
+        zoomOnScroll={true}
         fitView
         minZoom={0.5}
         maxZoom={1.5}
-        defaultEdgeOptions={{ type: 'smoothstep' }}
+        defaultEdgeOptions={{ 
+          type: 'smoothstep',
+          animated: false,
+          style: { stroke: '#52525b', strokeWidth: 2 },
+          markerEnd: { type: 'arrowclosed', color: '#52525b' }
+        }}
       >
         <Background color="#27272a" gap={16} />
         <Controls showInteractive={false} />
