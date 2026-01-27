@@ -2,9 +2,9 @@
 import json
 import logging
 import os
-import time
 from flask import Blueprint, Response, jsonify, stream_with_context
 import redis
+from utils.auth.stateless_auth import get_user_id_from_request
 from utils.db.connection_pool import db_pool
 
 logger = logging.getLogger(__name__)
@@ -14,37 +14,45 @@ visualization_bp = Blueprint('visualization', __name__)
 
 @visualization_bp.route('/api/incidents/<incident_id>/visualization/stream', methods=['GET'])
 def stream_visualization_updates(incident_id: str):
-    """
-    Server-Sent Events endpoint for real-time visualization updates.
+    """SSE endpoint for real-time visualization updates."""
+    user_id = get_user_id_from_request()
+    if not user_id:
+        return Response("Unauthorized", status=401)
     
-    Usage:
-        const eventSource = new EventSource(`/api/incidents/${id}/visualization/stream`);
-        eventSource.onmessage = (event) => {
-            const data = JSON.parse(event.data);
-            if (data.type === 'update') {
-                // Fetch latest visualization
-            }
-        };
-    """
+    # Verify incident ownership
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT 1 FROM incidents WHERE id = %s AND user_id = %s", (incident_id, user_id))
+                if not cursor.fetchone():
+                    return Response("Forbidden", status=403)
+    except Exception as e:
+        logger.error(f"[Visualization] Auth check failed: {e}")
+        return Response("Internal error", status=500)
+    
     def event_stream():
-        redis_client = redis.from_url(os.getenv('REDIS_URL', 'redis://redis:6379/0'))
-        pubsub = redis_client.pubsub()
-        channel = f"visualization:{incident_id}"
-        pubsub.subscribe(channel)
-        
-        yield f"data: {json.dumps({'type': 'connected', 'incident_id': incident_id})}\n\n"
-        
+        redis_client = None
+        pubsub = None
         try:
+            redis_client = redis.from_url(os.getenv('REDIS_URL', 'redis://redis:6379/0'))
+            pubsub = redis_client.pubsub()
+            channel = f"visualization:{incident_id}"
+            pubsub.subscribe(channel)
+            
+            yield f"data: {json.dumps({'type': 'connected', 'incident_id': incident_id})}\n\n"
+            
             for message in pubsub.listen():
                 if message['type'] == 'message':
                     data = message['data']
                     if isinstance(data, bytes):
                         data = data.decode('utf-8')
                     yield f"data: {data}\n\n"
-                time.sleep(0.1)
-        except GeneratorExit:
-            pubsub.unsubscribe(channel)
-            pubsub.close()
+        finally:
+            if pubsub:
+                pubsub.unsubscribe(channel)
+                pubsub.close()
+            if redis_client:
+                redis_client.close()
     
     return Response(
         stream_with_context(event_stream()),
@@ -59,14 +67,18 @@ def stream_visualization_updates(incident_id: str):
 @visualization_bp.route('/api/incidents/<incident_id>/visualization', methods=['GET'])
 def get_current_visualization(incident_id: str):
     """Fetch current visualization JSON."""
+    user_id = get_user_id_from_request()
+    if not user_id:
+        return jsonify({"error": "Unauthorized"}), 401
+    
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
                 cursor.execute("""
                     SELECT visualization_code, visualization_updated_at
                     FROM incidents
-                    WHERE id = %s
-                """, (incident_id,))
+                    WHERE id = %s AND user_id = %s
+                """, (incident_id, user_id))
                 
                 row = cursor.fetchone()
         

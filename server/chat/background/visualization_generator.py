@@ -7,8 +7,8 @@ from typing import Any, Dict, List, Optional
 import redis
 
 from celery_config import celery_app
-from chat.backend.agent.llm import LLMManager
 from chat.background.visualization_extractor import VisualizationData, VisualizationExtractor
+from chat.background.task import INFRASTRUCTURE_TOOLS, MAX_TOOL_OUTPUT_CHARS
 from utils.db.connection_pool import db_pool
 
 logger = logging.getLogger(__name__)
@@ -27,7 +27,7 @@ def update_visualization(
     user_id: str,
     session_id: str,
     force_full: bool = False,
-    tool_calls_json: str = None
+    tool_calls_json: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     Generate or update visualization for an RCA incident.
@@ -55,7 +55,7 @@ def update_visualization(
         
         existing_viz = _fetch_existing_visualization(incident_id)
         
-        extractor = VisualizationExtractor(llm_manager=LLMManager())
+        extractor = VisualizationExtractor()
         updated_viz = extractor.extract_incremental(tool_calls, existing_viz)
         
         if not updated_viz.nodes:
@@ -105,14 +105,12 @@ def _fetch_recent_tool_calls(session_id: str, user_id: str, limit: int = 10) -> 
         
         # Extract tool messages from the messages array
         for msg in messages:
-            # Check if it's a tool message (has 'name' field)
             if isinstance(msg, dict) and 'name' in msg:
                 tool_name = msg.get('name', 'unknown')
-                # Only include infrastructure tools
-                if tool_name in ['on_prem_kubectl', 'cloud_exec', 'terminal_exec', 'tailscale_ssh']:
+                if tool_name in INFRASTRUCTURE_TOOLS:
                     tool_calls.append({
                         'tool': tool_name,
-                        'output': str(msg.get('content', '')),
+                        'output': str(msg.get('content', ''))[:MAX_TOOL_OUTPUT_CHARS],
                     })
         
         logger.info(f"[Visualization] Fetched {len(tool_calls)} tool calls from database for session {session_id}")
@@ -166,11 +164,14 @@ def _store_visualization(incident_id: str, json_str: str):
 
 def _notify_sse_clients(incident_id: str, version: int):
     """Notify SSE listeners via Redis pub/sub."""
+    redis_client = None
     try:
         redis_client = redis.from_url(os.getenv('REDIS_URL', 'redis://redis:6379/0'))
         channel = f"visualization:{incident_id}"
         message = json.dumps({"type": "update", "version": version})
         redis_client.publish(channel, message)
-    
     except Exception as e:
         logger.warning(f"[Visualization] Failed to notify SSE clients: {e}")
+    finally:
+        if redis_client:
+            redis_client.close()

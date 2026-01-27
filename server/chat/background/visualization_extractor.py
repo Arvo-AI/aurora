@@ -1,11 +1,14 @@
 """Extracts infrastructure entities from RCA transcripts for visualization."""
 import logging
 from datetime import datetime
-from typing import Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, Field
 from chat.backend.agent.llm import LLMManager
 
 logger = logging.getLogger(__name__)
+
+# Import shared constants
+from chat.background.task import MAX_TOOL_OUTPUT_CHARS
 
 
 class InfraNode(BaseModel):
@@ -38,18 +41,19 @@ class VisualizationData(BaseModel):
 class VisualizationExtractor:
     """Extracts infrastructure entities from RCA tool calls."""
     
-    def __init__(self, llm_manager: Optional[LLMManager] = None):
+    def __init__(self):
         from chat.backend.agent.providers import create_chat_model
-        # Use Claude 3.5 Haiku for fast, cost-effective extraction
+        from chat.backend.agent.llm import ModelConfig
+        
         self.llm = create_chat_model(
-            "z-ai/glm-4.7",
+            ModelConfig.VISUALIZATION_MODEL,
             temperature=0.3,
             streaming=False
         )
     
     def extract_incremental(
         self, 
-        recent_messages: List[Dict],
+        recent_messages: List[Dict[str, Any]],
         existing_viz: Optional[VisualizationData] = None
     ) -> VisualizationData:
         """Extract entities from recent tool calls and merge with existing state."""
@@ -75,15 +79,14 @@ class VisualizationExtractor:
             logger.error(f"[VizExtractor] Extraction failed: {e}")
             return existing_viz or VisualizationData()
     
-    def _build_prompt(self, messages: List[Dict], existing: Optional[VisualizationData]) -> str:
+    def _build_prompt(self, messages: List[Dict[str, Any]], existing: Optional[VisualizationData]) -> str:
         """Build extraction prompt with context."""
         messages_text = "\n\n".join([
-            f"Tool: {m.get('tool', 'unknown')}\nOutput:\n{m.get('output', '')[:5000]}"
-            for m in messages[-10:]  # Last 10 only
+            f"Tool: {m.get('tool', 'unknown')}\nOutput:\n{m.get('output', '')[:MAX_TOOL_OUTPUT_CHARS]}"
+            for m in messages[-10:]
         ])
         
-        logger.info(f"[VizExtractor] Prompt length: {len(messages_text)} chars, messages: {len(messages)}")
-        logger.info(f"[VizExtractor] First 500 chars of tool output: {messages_text[:500]}")
+        logger.debug(f"[VizExtractor] Processing {len(messages)} messages, prompt length: {len(messages_text)} chars")
         
         existing_context = ""
         if existing and existing.nodes:
