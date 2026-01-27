@@ -15,7 +15,7 @@ from typing import Any, Optional
 logger = logging.getLogger(__name__)
 
 
-def _extract_text_from_content(content: Any) -> str:
+def _extract_text_from_content(content: Any, include_thinking: bool = False) -> str:
     """
     Extract text content from message content, handling Gemini thinking model responses.
     
@@ -41,7 +41,7 @@ def _extract_text_from_content(content: Any) -> str:
                 # Extract text from both thinking and text blocks
                 # thinking blocks: use 'thinking' key
                 # text blocks: use 'text' key
-                if part_type in ("thinking", "reasoning"):
+                if part_type in ("thinking", "reasoning") and include_thinking:
                     thinking_text = part.get("thinking", "")
                     if thinking_text:
                         text_parts.append(str(thinking_text))

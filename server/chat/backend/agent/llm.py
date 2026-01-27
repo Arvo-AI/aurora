@@ -13,46 +13,59 @@ from chat.backend.agent.model_mapper import ModelMapper
 logger = logging.getLogger(__name__)
 
 
+class ModelConfig:
+    """Centralized model configuration for all Aurora LLM usage.
+    
+    All model selections are defined here in one place for easy maintenance.
+    Change these values to switch providers across the entire application.
+    """
+    
+    # Primary models for chat and operations
+    MAIN_MODEL = "anthropic/claude-sonnet-4.5"
+    VISION_MODEL = "anthropic/claude-sonnet-4.5"
+    
+    # Background RCA model - selected based on RCA_OPTIMIZE_COSTS env var (defaults to cost-optimized)
+    RCA_MODEL = "anthropic/claude-3-haiku" if os.getenv("RCA_OPTIMIZE_COSTS", "true").lower() == "true" else "anthropic/claude-opus-4.5"
+    
+    # Summarization models
+    INCIDENT_REPORT_SUMMARIZATION_MODEL = "anthropic/claude-sonnet-4.5"  # For incident reports and chat context
+    TOOL_OUTPUT_SUMMARIZATION_MODEL = "anthropic/claude-sonnet-4.5"  # For summarizing large tool outputs to reduce token usage
+    
+    # Suggestion extraction
+    SUGGESTION_MODEL = "anthropic/claude-sonnet-4.5"
+    
+    # Email report generation
+    EMAIL_REPORT_MODEL = "anthropic/claude-sonnet-4.5"
+
+
 class LLMManager:
     def __init__(
         self,
-        main_model="openai/gpt-5.2",
-        sql_model="openai/gpt-5.2",
-        vision_model="openai/gpt-5.2",
+        main_model: Optional[str] = None,
+        vision_model: Optional[str] = None,
         provider_mode: Optional[str] = None,
     ):
         """
         Initialize LLM Manager with support for multiple provider modes.
 
         Args:
-            main_model: Default model for general tasks
-            sql_model: Model for SQL generation
-            vision_model: Model for vision/multimodal tasks
+            main_model: Default model for general tasks (defaults to ModelConfig.MAIN_MODEL)
+            vision_model: Model for vision/multimodal tasks (defaults to ModelConfig.VISION_MODEL)
             provider_mode: LLM provider mode ('direct', 'auto', 'openrouter')
                           Defaults to env LLM_PROVIDER_MODE or 'direct'
         """
         # Get provider mode from param or environment
         self.provider_mode = provider_mode or os.getenv("LLM_PROVIDER_MODE")
 
-        # Default models
-        self.default_main_model = main_model
-        self.default_sql_model = sql_model
-        self.default_vision_model = vision_model
-
         # Initialize default LLMs using provider-aware factory
         self.main_llm = create_chat_model(
-            main_model,
-            temperature=0.4,
-            provider_mode=self.provider_mode,
-        )
-        self.sql_coder = create_chat_model(
-            sql_model,
+            main_model or ModelConfig.MAIN_MODEL,
             temperature=0.4,
             provider_mode=self.provider_mode,
         )
         # Vision-capable model for multimodal content
         self.vision_llm = create_chat_model(
-            vision_model,
+            vision_model or ModelConfig.VISION_MODEL,
             temperature=0.4,
             provider_mode=self.provider_mode,
         )
@@ -151,7 +164,6 @@ class LLMManager:
         self,
         prompt: LanguageModelInput,
         output_struct: type[BaseModel] | None = None,
-        use_sql_coder: bool = False,
         selected_model: str | None = None,
         user_id: Optional[str] = None,
         session_id: Optional[str] = None,
@@ -180,9 +192,6 @@ class LLMManager:
                     f" Using default vision model: {self.vision_llm.model_name}"
                 )
                 model = self.vision_llm
-        elif use_sql_coder:
-            logger.info(f" Using SQL coder model: {self.sql_coder.model_name}")
-            model = self.sql_coder
         elif selected_model:
             # Use the model selected from frontend
             logger.info(f" Using selected model: {selected_model}")
@@ -227,9 +236,7 @@ class LLMManager:
             if user_id:
                 try:
                     # Determine request type based on parameters
-                    if use_sql_coder:
-                        actual_request_type = "generate_sql"
-                    elif output_struct:
+                    if output_struct:
                         actual_request_type = f"structured_{request_type}"
                     else:
                         actual_request_type = request_type
@@ -298,7 +305,6 @@ class LLMManager:
                         error_message=error_message,
                         request_metadata={
                             "has_images": has_images,
-                            "use_sql_coder": use_sql_coder,
                             "provider_mode": self.provider_mode,
                             "has_usage_data": bool(
                                 input_tokens > 0 and output_tokens > 0
@@ -329,7 +335,7 @@ class LLMManager:
 
         Args:
             content: The content to summarize
-            model: Optional model to use for summarization (defaults to fast model)
+            model: Optional model to use for summarization (defaults to ModelConfig.INCIDENT_REPORT_SUMMARIZATION_MODEL)
 
         Returns:
             Summarized content
@@ -343,10 +349,10 @@ class LLMManager:
             for i, frame in enumerate(call_stack[-5:]):  # Last 5 frames
                 logger.error(f" Frame {i}: {frame.strip()}")
 
-            # Use Gemini Flash 2.5 - fast, cheap, and excellent for summarization
-            summarization_model = model or "google/gemini-3-pro-preview"
+            # Use centralized model config
+            summarization_model = model or ModelConfig.INCIDENT_REPORT_SUMMARIZATION_MODEL
 
-            logger.error(f" SUMMARIZING: {len(content)} chars -> Gemini Flash 2.5")
+            logger.error(f" SUMMARIZING: {len(content)} chars -> {summarization_model}")
             logger.error(f" CONTENT PREVIEW: {content[:200]}...")
 
             # Create summarization prompt

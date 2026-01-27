@@ -18,7 +18,7 @@ import json
 import time
 import uuid
 import os
-from kubectl_agent_ws_handler import handle_kubectl_agent
+from utils.kubectl.agent_ws_handler import handle_kubectl_agent
 import psycopg2
 from datetime import datetime
 from dotenv import load_dotenv
@@ -50,7 +50,7 @@ from utils.cloud.infrastructure_confirmation import handle_websocket_confirmatio
 from chat.backend.agent.tools.cloud_tools import register_websocket_connection, set_user_context
 from chat.backend.agent.access import ModeAccessController
 from utils.text.text_utils import clean_markdown
-from internal_api_handler import handle_http_request
+from utils.internal.api_handler import handle_http_request
 
 
 class RateLimiter:

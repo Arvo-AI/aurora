@@ -25,7 +25,7 @@ Aurora is a natural-language interface for managing cloud infrastructure. Before
 
 - The [README.md](README.md) for project overview
 - The [AGENTS.md](AGENTS.md) for agent-specific guidelines
-- The [docs/](docs/) directory for additional documentation
+- The [documentation site](https://arvo-ai.github.io/aurora/docs) for additional documentation
 
 ## Development Setup
 
@@ -57,31 +57,62 @@ Aurora is a natural-language interface for managing cloud infrastructure. Before
    git remote add upstream https://github.com/Arvo-AI/aurora.git
    ```
 
-4. **Set up environment variables**
+4. **Initialize configuration**
 
    ```bash
-   cp .env.example .env
+   make init
    ```
 
-   Edit `.env` and fill in the required values. Many features work without cloud provider credentials - configure only what you need.
+   This generates secure secrets automatically.
 
-3. **Start the development environment**
+5. **Edit .env and add your LLM API key**
+
+   Get one from https://openrouter.ai/keys or https://console.anthropic.com/settings/keys
+
+   ```bash
+   nano .env  # Add OPENROUTER_API_KEY=sk-or-v1-... or ANTHROPIC_API_KEY=sk-ant-...
+   ```
+
+6. **Start Aurora in development mode**
 
    ```bash
    make dev
    ```
 
-4. **Access the application**
+   Development mode includes hot reloading for both frontend and backend changes.
+
+7. **Get Vault root token and add to .env**
+
+   Check the vault-init container logs for the root token:
+
+   ```bash
+   docker logs vault-init 2>&1 | grep "Root Token:"
+   ```
+
+   Copy the root token value and add it to your .env file:
+
+   ```bash
+   nano .env  # Add VAULT_TOKEN=hvs.xxxxxxxxxxxxxxxxxxxxxxxxxxxx
+   ```
+
+8. **Restart Aurora to load the Vault token**
+
+   ```bash
+   make down
+   make dev
+   ```
+
+9. **Access the application**
 
    - Frontend: http://localhost:3000
    - REST API: http://localhost:5080
    - Chatbot WebSocket: ws://localhost:5006
 
-5. **Stop the environment**
+10. **Stop the environment**
 
-   ```bash
-   make down
-   ```
+    ```bash
+    make down
+    ```
 
 ### Keeping Your Fork Updated
 
@@ -278,9 +309,7 @@ When adding new environment variables:
 
 ## Docker Compose
 
-## Docker Compose
-
-- Always update both `docker-compose.yaml` and `prod.docker-compose.yml`
+- Always update both `docker-compose.yaml` and `docker-compose.prod-local.yml`
 - Keep environment variables in sync between Docker Compose files
 - Test production build: `make prod-build && make prod`
 

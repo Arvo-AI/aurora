@@ -47,6 +47,7 @@ SUPPORTED_SECRET_PROVIDERS: Set[str] = {
     "scaleway", # Scaleway Cloud
     "tailscale", # Tailscale VPN
     "slack",    # Slack connector tokens
+    "confluence", # Confluence connector tokens
     "aurora",   # Aurora-managed SSH keys
 }
 

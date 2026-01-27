@@ -26,6 +26,7 @@ export default function ConnectorCard({ connector }: ConnectorCardProps) {
   const { toast } = useToast();
   const [showGitHubDialog, setShowGitHubDialog] = useState(false);
   const [showGcpDialog, setShowGcpDialog] = useState(false);
+  const [showOvhDialog, setShowOvhDialog] = useState(false);
   const [userId, setUserId] = useState<string | null>(null);
   const [isConnectingOAuth, setIsConnectingOAuth] = useState(false);
   
@@ -117,6 +118,15 @@ export default function ConnectorCard({ connector }: ConnectorCardProps) {
         await handleGCPOAuth();
       } else {
         setShowGcpDialog(true);
+      }
+      return;
+    }
+
+    if (connector.id === "ovh") {
+      if (!isConnected) {
+        router.push("/ovh/onboarding");
+      } else {
+        setShowOvhDialog(true);
       }
       return;
     }
@@ -309,6 +319,7 @@ export default function ConnectorCard({ connector }: ConnectorCardProps) {
         connectorId={connector.id}
         showGitHubDialog={showGitHubDialog}
         showGcpDialog={showGcpDialog}
+        showOvhDialog={showOvhDialog}
         onGitHubDialogChange={(open) => {
           setShowGitHubDialog(open);
           if (!open) {
@@ -319,6 +330,7 @@ export default function ConnectorCard({ connector }: ConnectorCardProps) {
           }
         }}
         onGcpDialogChange={setShowGcpDialog}
+        onOvhDialogChange={setShowOvhDialog}
         onGitHubDialogClose={() => setShowGitHubDialog(false)}
       />
     </>

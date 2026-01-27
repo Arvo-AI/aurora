@@ -19,7 +19,6 @@ OAuth App authentication for GitHub.
 ```bash
 GH_OAUTH_CLIENT_ID=your-github-client-id
 GH_OAUTH_CLIENT_SECRET=your-github-client-secret
-NEXT_PUBLIC_GITHUB_CLIENT_ID=your-github-client-id
 ```
 
 ## Troubleshooting

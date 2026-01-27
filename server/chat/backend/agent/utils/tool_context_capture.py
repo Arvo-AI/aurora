@@ -5,25 +5,25 @@ This module provides automatic summarization of tool results to reduce token usa
 while preserving full output visibility for users.
 
 Key Features:
-1. **Automatic Summarization**: Tool outputs exceeding 20,000 characters are automatically summarized
+1. **Automatic Summarization**: Tool outputs exceeding 10,000 tokens are automatically summarized
 2. **Dual Message System**: 
    - Frontend receives full output via WebSocket (unchanged user experience)
    - LLM context receives summarized version to save tokens
 3. **Internal Messages**: Summarized tool results use InternalToolMessage class with "internal" flag
 4. **Fallback Handling**: If summarization fails, content is truncated with error indication
-5. **Async Summarization**: Uses fast model (gpt-4o-mini) for quick processing
+5. **Model Selection**: Uses TOOL_OUTPUT_SUMMARIZATION_MODEL for quick processing of large outputs
 
 Architecture:
 - Tool decorators send full output to frontend via WebSocket
 - ToolContextCapture intercepts tool results for LLM context  
-- Content over 20k chars triggers summarization via LLMManager.summarize()
+- Content over 10k tokens triggers summarization via LLMManager.summarize()
 - Summarized content marked as "internal" and hidden from UI
 - LLM gets concise summaries while users see complete data
 
 Usage:
 - Completely automatic and transparent
 - No changes needed to existing tools
-- Threshold configurable via SUMMARIZATION_THRESHOLD constant
+- Threshold configurable via SUMMARIZATION_THRESHOLD_TOKENS constant
 """
 
 import json
@@ -164,8 +164,9 @@ class ToolContextCapture:
         if content_tokens > SUMMARIZATION_THRESHOLD_TOKENS:
             logger.info(f" Tool output length {content_tokens} tokens exceeds {SUMMARIZATION_THRESHOLD_TOKENS} token threshold, summarizing for LLM context")
             try:
+                from ..llm import ModelConfig
                 llm = LLMManager()
-                summary = llm.summarize(original_content, model="google/gemini-2.5-flash")
+                summary = llm.summarize(original_content, model=ModelConfig.TOOL_OUTPUT_SUMMARIZATION_MODEL)
                 summarized_content = summary + '\n\n[Summarized from longer output]'
                 summary_tokens = count_tokens(summarized_content)
                 logger.debug(f" SUMMARIZATION CREATED: {content_tokens} -> {summary_tokens} tokens")

@@ -535,7 +535,7 @@ class Agent:
                     try:
                         from chat.backend.agent.utils.chat_context_manager import ChatContextManager
                         if ChatContextManager.should_summarize_context(prev_messages, model_name):
-                            summary_text = ChatContextManager.create_conversation_summary(prev_messages, model_name)
+                            summary_text = ChatContextManager.create_conversation_summary(prev_messages)
                             chat_history = [(
                                 "system",
                                 "[CONVERSATION SUMMARY - Preflight]\n\n"

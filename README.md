@@ -2,7 +2,7 @@
 
 Aurora is an automated root cause analysis investigation tool that uses agents to help Site Reliability Engineers resolve incidents.
 
-## 🚀 Quick Start (5 Minutes)
+## Quick Start
 
 Get Aurora running locally for testing and evaluation:
 
@@ -42,7 +42,7 @@ make prod-local
 **That's it!** Open http://localhost:3000 in your browser.
 
 
-> **Note**: Aurora works **without any cloud provider accounts**! The LLM API key is the only external requirement. Cloud connectors (GCP, AWS, Azure) are optional and can be enabled later if needed.
+> **Note**: Aurora works **without any cloud provider accounts**! The LLM API key is the only external requirement. Connectors are optional and can be enabled later if needed via the env file.
 
 ## Repo overview
 - `server/` Python API, chatbot, Celery workers

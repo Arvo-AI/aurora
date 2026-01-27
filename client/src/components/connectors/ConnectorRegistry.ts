@@ -181,6 +181,7 @@ class ConnectorRegistry {
         category: "Infrastructure",
         path: "/ovh/onboarding",
         storageKey: "isOVHConnected",
+        useCustomConnection: true,
       });
     }
 
