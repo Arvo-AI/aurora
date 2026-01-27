@@ -213,15 +213,6 @@ class Agent:
             if not tool_capture and state.session_id and state.user_id:
                 tool_capture = ToolContextCapture(state.session_id, state.user_id)
                 logging.debug(f"Created new tool capture for session {state.session_id}")
-                
-                # Attach visualization trigger if incident_id present
-                if hasattr(state, 'incident_id') and state.incident_id:
-                    try:
-                        from chat.background.visualization_triggers import VisualizationTrigger
-                        tool_capture.viz_trigger = VisualizationTrigger(state.incident_id)
-                        logger.info(f"[Visualization] Attached smart triggers to tool_capture for incident {state.incident_id}")
-                    except Exception as e:
-                        logger.warning(f"[Visualization] Failed to attach triggers: {e}")
                         
             elif tool_capture:
                 logging.debug(f"Using shared tool_capture instance from workflow")

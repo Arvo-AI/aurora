@@ -126,26 +126,7 @@ class ToolContextCapture:
         Important for cancelled chats since this removes and tracks running tool calls."""
         logger.debug(f"capture_tool_end called: tool_call_id={tool_call_id}, output_length={len(output)}")
         
-        # Check visualization trigger BEFORE returning (even if tool tracking failed)
-        if hasattr(self, 'viz_trigger') and self.viz_trigger:
-            try:
-                # Extract tool name from tool_call_id or use generic name
-                tool_name = "unknown"
-                if tool_call_id in self.current_tool_calls:
-                    tool_name = self.current_tool_calls[tool_call_id]["tool_name"]
-                
-                logger.info(f"[Visualization] Checking trigger for tool: {tool_name}")
-                if self.viz_trigger.should_trigger(tool_name, output):
-                    from chat.background.visualization_generator import update_visualization
-                    update_visualization.delay(
-                        incident_id=self.viz_trigger.incident_id,
-                        user_id=self.user_id,
-                        session_id=self.session_id,
-                        force_full=False
-                    )
-                    logger.info(f"[Visualization] Triggered update for incident {self.viz_trigger.incident_id} after {tool_name}")
-            except Exception as e:
-                logger.warning(f"[Visualization] Failed to trigger update: {e}")
+        # Removed duplicate visualization trigger logic - handled in cloud_tools.py
         
         if tool_call_id not in self.current_tool_calls:
             logger.warning(f"Tool call {tool_call_id} not found in captured calls")

@@ -222,16 +222,6 @@ async def process_workflow_async(wf, state, websocket, user_id, incident_id=None
     workflow_timeout = 1800  # 30 minutes max for any workflow
     session_id = getattr(state, 'session_id', 'unknown')
 
-    # Initialize visualization trigger if incident_id present
-    viz_trigger = None
-    if incident_id:
-        try:
-            from chat.background.visualization_triggers import VisualizationTrigger
-            viz_trigger = VisualizationTrigger(incident_id)
-            logger.info(f"[Visualization] Initialized smart triggers for incident {incident_id}")
-        except Exception as e:
-            logger.warning(f"[Visualization] Failed to initialize triggers: {e}")
-
     # Helper to save incident thoughts for background chats
     accumulated_thought = []
     last_save_time = [time.time()]  # Use list to allow mutation in nested function
