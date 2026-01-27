@@ -311,7 +311,6 @@ When adding new environment variables:
 
 - Always update both `docker-compose.yaml` and `docker-compose.prod-local.yml`
 - Keep environment variables in sync between Docker Compose files
-- Test production build: `make prod-build && make prod`
 
 ## Questions?
 
