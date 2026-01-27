@@ -126,8 +126,6 @@ class ToolContextCapture:
         Important for cancelled chats since this removes and tracks running tool calls."""
         logger.debug(f"capture_tool_end called: tool_call_id={tool_call_id}, output_length={len(output)}")
         
-        # Removed duplicate visualization trigger logic - handled in cloud_tools.py
-        
         if tool_call_id not in self.current_tool_calls:
             logger.warning(f"Tool call {tool_call_id} not found in captured calls")
             return
