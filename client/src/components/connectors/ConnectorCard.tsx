@@ -27,6 +27,7 @@ export default function ConnectorCard({ connector }: ConnectorCardProps) {
   const [showGitHubDialog, setShowGitHubDialog] = useState(false);
   const [showGcpDialog, setShowGcpDialog] = useState(false);
   const [showOvhDialog, setShowOvhDialog] = useState(false);
+  const [showScalewayDialog, setShowScalewayDialog] = useState(false);
   const [userId, setUserId] = useState<string | null>(null);
   const [isConnectingOAuth, setIsConnectingOAuth] = useState(false);
   
@@ -127,6 +128,15 @@ export default function ConnectorCard({ connector }: ConnectorCardProps) {
         router.push("/ovh/onboarding");
       } else {
         setShowOvhDialog(true);
+      }
+      return;
+    }
+
+    if (connector.id === "scaleway") {
+      if (!isConnected) {
+        router.push("/scaleway/onboarding");
+      } else {
+        setShowScalewayDialog(true);
       }
       return;
     }
@@ -320,6 +330,7 @@ export default function ConnectorCard({ connector }: ConnectorCardProps) {
         showGitHubDialog={showGitHubDialog}
         showGcpDialog={showGcpDialog}
         showOvhDialog={showOvhDialog}
+        showScalewayDialog={showScalewayDialog}
         onGitHubDialogChange={(open) => {
           setShowGitHubDialog(open);
           if (!open) {
@@ -331,6 +342,7 @@ export default function ConnectorCard({ connector }: ConnectorCardProps) {
         }}
         onGcpDialogChange={setShowGcpDialog}
         onOvhDialogChange={setShowOvhDialog}
+        onScalewayDialogChange={setShowScalewayDialog}
         onGitHubDialogClose={() => setShowGitHubDialog(false)}
       />
     </>
