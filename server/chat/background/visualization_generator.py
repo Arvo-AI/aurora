@@ -109,7 +109,7 @@ def _fetch_recent_tool_calls(session_id: str, user_id: str, limit: int = 10) -> 
             if isinstance(msg, dict) and 'name' in msg:
                 tool_name = msg.get('name', 'unknown')
                 # Only include infrastructure tools
-                if tool_name in ['on_prem_kubectl', 'cloud_exec', 'gcp_compute', 'aws_ec2', 'azure_vm']:
+                if tool_name in ['on_prem_kubectl', 'cloud_exec', 'terminal_exec', 'tailscale_ssh']:
                     tool_calls.append({
                         'tool': tool_name,
                         'output': str(msg.get('content', '')),

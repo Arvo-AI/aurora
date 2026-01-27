@@ -288,7 +288,7 @@ def run_background_chat(
                             if hasattr(msg, '__class__') and 'ToolMessage' in msg.__class__.__name__:
                                 tool_name = getattr(msg, 'name', 'unknown')
                                 # Only include infrastructure tools
-                                if tool_name in ['on_prem_kubectl', 'cloud_exec', 'gcp_compute', 'aws_ec2', 'azure_vm']:
+                                if tool_name in ['on_prem_kubectl', 'cloud_exec', 'terminal_exec', 'tailscale_ssh']:
                                     tool_calls_for_viz.append({
                                         'tool': tool_name,
                                         'output': str(getattr(msg, 'content', ''))[:5000],
