@@ -37,3 +37,18 @@
 .react-flow__attribution a:hover {
   color: #a1a1aa !important;
 }
+
+/* Ensure nodes are interactive */
+.react-flow__node {
+  pointer-events: all !important;
+  cursor: grab;
+}
+
+.react-flow__node.dragging {
+  cursor: grabbing;
+}
+
+.react-flow__node.selected {
+  outline: 2px solid #3b82f6;
+  outline-offset: 2px;
+}

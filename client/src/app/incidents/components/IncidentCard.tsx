@@ -26,6 +26,7 @@ import SuggestionModal from './SuggestionModal';
 import FixSuggestionModal from './FixSuggestionModal';
 import { Suggestion } from '@/lib/services/incidents';
 import InfrastructureVisualization from '@/components/incidents/InfrastructureVisualization';
+import { ReactFlowProvider } from '@xyflow/react';
 
 interface IncidentCardProps {
   incident: Incident;
@@ -501,7 +502,9 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
           <div className="border-t border-zinc-800" />
           <div>
             <h2 className="text-lg font-medium text-white mb-4">Infrastructure Analysis</h2>
-            <InfrastructureVisualization incidentId={incident.id} className="h-[500px]" />
+            <ReactFlowProvider>
+              <InfrastructureVisualization incidentId={incident.id} className="h-[500px]" />
+            </ReactFlowProvider>
           </div>
         </>
       )}

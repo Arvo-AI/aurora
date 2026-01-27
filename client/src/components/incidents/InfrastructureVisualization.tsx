@@ -2,10 +2,24 @@
 
 import { useVisualizationStream } from '@/hooks/useVisualizationStream';
 import { InfraNode, NodeStatus, NodeType } from '@/types/visualization';
-import { ReactFlow, Node, Edge, Controls, Background, Panel, Handle, Position } from '@xyflow/react';
+import { 
+  ReactFlow, 
+  Node, 
+  Edge, 
+  Controls, 
+  Background, 
+  Panel, 
+  Handle, 
+  Position,
+  applyNodeChanges,
+  applyEdgeChanges,
+  NodeChange,
+  EdgeChange,
+  useReactFlow
+} from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import './visualization.css';
-import { useMemo } from 'react';
+import { useMemo, useCallback, useState, useEffect } from 'react';
 import { Loader2 } from 'lucide-react';
 
 interface Props {
@@ -64,16 +78,110 @@ function CustomNode({ data }: { data: InfraNode & { isRootCause?: boolean; isAff
   );
 }
 
+function getLayoutedElements(nodes: Node[], edges: Edge[]) {
+  // Simple hierarchical layout algorithm
+  // Build adjacency map to find dependencies
+  const nodeMap = new Map(nodes.map(n => [n.id, n]));
+  const incomingEdges = new Map<string, string[]>();
+  const outgoingEdges = new Map<string, string[]>();
+  
+  nodes.forEach(node => {
+    incomingEdges.set(node.id, []);
+    outgoingEdges.set(node.id, []);
+  });
+  
+  edges.forEach(edge => {
+    outgoingEdges.get(edge.source)?.push(edge.target);
+    incomingEdges.get(edge.target)?.push(edge.source);
+  });
+  
+  // Find root nodes (nodes with no incoming edges)
+  const rootNodes = nodes.filter(node => 
+    (incomingEdges.get(node.id)?.length || 0) === 0
+  );
+  
+  // Assign layers using BFS
+  const layers = new Map<string, number>();
+  const queue = rootNodes.map(n => ({ id: n.id, layer: 0 }));
+  const visited = new Set<string>();
+  
+  while (queue.length > 0) {
+    const { id, layer } = queue.shift()!;
+    if (visited.has(id)) continue;
+    
+    visited.add(id);
+    layers.set(id, layer);
+    
+    const children = outgoingEdges.get(id) || [];
+    children.forEach(childId => {
+      if (!visited.has(childId)) {
+        queue.push({ id: childId, layer: layer + 1 });
+      }
+    });
+  }
+  
+  // Assign layer 0 to any nodes not yet assigned
+  nodes.forEach(node => {
+    if (!layers.has(node.id)) {
+      layers.set(node.id, 0);
+    }
+  });
+  
+  // Group nodes by layer
+  const nodesByLayer = new Map<number, string[]>();
+  layers.forEach((layer, nodeId) => {
+    if (!nodesByLayer.has(layer)) {
+      nodesByLayer.set(layer, []);
+    }
+    nodesByLayer.get(layer)!.push(nodeId);
+  });
+  
+  // Calculate positions
+  const nodeWidth = 150;
+  const nodeHeight = 80;
+  const horizontalSpacing = 120;
+  const verticalSpacing = 100;
+  
+  const layoutedNodes = nodes.map(node => {
+    const layer = layers.get(node.id) || 0;
+    const nodesInLayer = nodesByLayer.get(layer) || [];
+    const indexInLayer = nodesInLayer.indexOf(node.id);
+    
+    const layerWidth = nodesInLayer.length * (nodeWidth + horizontalSpacing);
+    const startX = -layerWidth / 2;
+    
+    return {
+      ...node,
+      targetPosition: 'top' as const,
+      sourcePosition: 'bottom' as const,
+      position: {
+        x: startX + indexInLayer * (nodeWidth + horizontalSpacing),
+        y: layer * (nodeHeight + verticalSpacing),
+      },
+    };
+  });
+
+  return { nodes: layoutedNodes, edges };
+}
+
 export default function InfrastructureVisualization({ incidentId, className }: Props) {
   const { data, isLoading, error } = useVisualizationStream(incidentId);
+  const { fitView } = useReactFlow();
 
-  const { nodes, edges } = useMemo(() => {
-    if (!data?.nodes?.length) return { nodes: [], edges: [] };
+  const nodeTypes = useMemo(() => ({ custom: CustomNode }), []);
 
-    const flowNodes: Node[] = data.nodes.map((node, idx) => ({
+  const [nodes, setNodes] = useState<Node[]>([]);
+  const [edges, setEdges] = useState<Edge[]>([]);
+
+  useEffect(() => {
+    if (!data?.nodes?.length) return;
+
+    const flowNodes: Node[] = data.nodes.map((node) => ({
       id: node.id,
       type: 'custom',
-      position: { x: (idx % 4) * 200, y: Math.floor(idx / 4) * 100 },
+      position: { x: 0, y: 0 },
+      draggable: true,
+      selectable: true,
       data: {
         ...node,
         isRootCause: node.id === data.rootCauseId,
@@ -93,8 +201,21 @@ export default function InfrastructureVisualization({ incidentId, className }: P
       markerEnd: { type: 'arrowclosed', color: '#52525b' },
     }));
 
-    return { nodes: flowNodes, edges: flowEdges };
-  }, [data]);
+    const { nodes: layoutedNodes, edges: layoutedEdges } = getLayoutedElements(flowNodes, flowEdges);
+    setNodes(layoutedNodes);
+    setEdges(layoutedEdges);
+    setTimeout(() => fitView({ padding: 0.2, duration: 300 }), 50);
+  }, [data, fitView]);
+
+  const onNodesChange = useCallback(
+    (changes: NodeChange[]) => setNodes((nds) => applyNodeChanges(changes, nds)),
+    []
+  );
+
+  const onEdgesChange = useCallback(
+    (changes: EdgeChange[]) => setEdges((eds) => applyEdgeChanges(changes, eds)),
+    []
+  );
 
   if (isLoading) {
     return (
@@ -112,7 +233,7 @@ export default function InfrastructureVisualization({ incidentId, className }: P
     );
   }
 
-  if (!nodes.length) {
+  if (!nodes?.length) {
     return (
       <div className={`${className} flex items-center justify-center bg-zinc-900/50 rounded-lg border border-zinc-800`}>
         <p className="text-sm text-zinc-500">No infrastructure data available</p>
@@ -125,11 +246,14 @@ export default function InfrastructureVisualization({ incidentId, className }: P
       <ReactFlow
         nodes={nodes}
         edges={edges}
-        nodeTypes={{ custom: CustomNode }}
+        onNodesChange={onNodesChange}
+        onEdgesChange={onEdgesChange}
+        nodeTypes={nodeTypes}
         nodesDraggable={true}
         nodesConnectable={false}
         elementsSelectable={true}
-        panOnDrag={true}
+        panOnDrag={[1, 2]}
+        selectionOnDrag={false}
         zoomOnScroll={true}
         fitView
         minZoom={0.5}

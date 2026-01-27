@@ -9,6 +9,7 @@
     "lint": "next lint"
   },
   "dependencies": {
+    "@dagrejs/dagre": "^2.0.3",
     "@git-diff-view/core": "^0.0.36",
     "@git-diff-view/file": "^0.0.36",
     "@git-diff-view/react": "^0.0.36",
