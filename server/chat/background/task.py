@@ -76,6 +76,7 @@ def _get_connected_integrations(user_id: str) -> Dict[str, bool]:
     integrations = {
         'splunk': False,
         'github': False,
+        'confluence': False,
     }
 
     try:
@@ -92,6 +93,15 @@ def _get_connected_integrations(user_id: str) -> Dict[str, bool]:
         integrations['github'] = bool(github_creds and github_creds.get("access_token"))
     except Exception as e:
         logger.debug(f"[BackgroundChat] Error checking GitHub: {e}")
+
+    try:
+        from utils.auth.token_management import get_token_data
+        confluence_creds = get_token_data(user_id, "confluence")
+        integrations['confluence'] = bool(
+            confluence_creds and (confluence_creds.get("access_token") or confluence_creds.get("pat_token"))
+        )
+    except Exception as e:
+        logger.debug(f"[BackgroundChat] Error checking Confluence: {e}")
 
     return integrations
 
