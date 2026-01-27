@@ -7,8 +7,8 @@ from chat.backend.agent.llm import LLMManager
 
 logger = logging.getLogger(__name__)
 
-# Import shared constants
-from chat.background.task import MAX_TOOL_OUTPUT_CHARS
+# Tool output truncation limit (matches task.py constant)
+MAX_TOOL_OUTPUT_CHARS = 5000
 
 
 class InfraNode(BaseModel):
@@ -17,7 +17,6 @@ class InfraNode(BaseModel):
     label: str = Field(description="Display name (8-15 chars)")
     type: Literal['service', 'pod', 'vm', 'database', 'event', 'alert', 'namespace', 'node']
     status: Literal['healthy', 'degraded', 'failed', 'investigating', 'unknown'] = 'investigating'
-    metadata: Dict[str, str] = Field(default_factory=dict, description="Additional context")
 
 
 class InfraEdge(BaseModel):
@@ -93,26 +92,21 @@ class VisualizationExtractor:
             node_summary = ", ".join([f"{n.id}({n.status})" for n in existing.nodes])
             existing_context = f"\n\nEXISTING ENTITIES ({len(existing.nodes)} nodes, {len(existing.edges)} edges): {node_summary}"
         
-        return f"""Analyze these recent RCA tool calls to extract infrastructure entities and relationships.
+        return f"""Analyze these RCA tool calls and extract infrastructure entities as structured data.
 
-RECENT TOOL CALLS:
+TOOL OUTPUTS:
 {messages_text}
 {existing_context}
 
-Extract:
-1. NEW infrastructure entities (services, pods, VMs, databases, alerts)
-2. Relationships between entities (dependencies, communication, causation)
-3. Update status if errors/failures detected
-4. Identify root cause if evident
+Extract infrastructure entities (services, pods, VMs, databases, alerts, namespaces, nodes) and relationships.
 
 Rules:
-- Keep labels concise (8-15 chars)
-- Mark as 'investigating' if uncertain
-- Mark 'failed'/'degraded' only with clear error evidence
+- Labels: 8-15 chars
+- Status: 'investigating' if uncertain, 'failed'/'degraded' only with clear errors
 - Include only incident-relevant entities
-- Return ONLY new/updated entities if existing context provided
+- If existing entities provided, return ONLY new/updated ones
 
-Return structured JSON matching VisualizationData schema."""
+Return structured data matching VisualizationData schema."""
     
     def _merge(self, existing: VisualizationData, new: VisualizationData) -> VisualizationData:
         """Merge new entities with existing ones."""

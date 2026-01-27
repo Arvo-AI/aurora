@@ -8,8 +8,11 @@ import redis
 
 from celery_config import celery_app
 from chat.background.visualization_extractor import VisualizationData, VisualizationExtractor
-from chat.background.task import INFRASTRUCTURE_TOOLS, MAX_TOOL_OUTPUT_CHARS
 from utils.db.connection_pool import db_pool
+
+# Constants (avoid circular import with task.py)
+MAX_TOOL_OUTPUT_CHARS = 5000
+INFRASTRUCTURE_TOOLS = frozenset(['on_prem_kubectl', 'cloud_exec', 'terminal_exec', 'tailscale_ssh'])
 
 logger = logging.getLogger(__name__)
 

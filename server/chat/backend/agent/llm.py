@@ -31,8 +31,8 @@ class ModelConfig:
     INCIDENT_REPORT_SUMMARIZATION_MODEL = "anthropic/claude-sonnet-4.5"  # For incident reports and chat context
     TOOL_OUTPUT_SUMMARIZATION_MODEL = "anthropic/claude-sonnet-4.5"  # For summarizing large tool outputs to reduce token usage
     
-    # Visualization extraction model - follows RCA cost optimization
-    VISUALIZATION_MODEL = "anthropic/claude-3-haiku" if os.getenv("RCA_OPTIMIZE_COSTS", "true").lower() == "true" else "anthropic/claude-sonnet-4.5"
+    # Visualization extraction model - always use Sonnet for reliable structured output
+    VISUALIZATION_MODEL = "anthropic/claude-sonnet-4.5"
     
     # Suggestion extraction
     SUGGESTION_MODEL = "anthropic/claude-sonnet-4.5"
