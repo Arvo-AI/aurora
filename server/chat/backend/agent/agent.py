@@ -166,6 +166,7 @@ class Agent:
             from langchain.agents import create_agent
             from langchain_core.callbacks import BaseCallbackHandler
             from .tools.cloud_tools import get_cloud_tools, set_user_context, set_tool_capture
+            from .middleware import ContextTrimMiddleware
 
             logging.info(f"agentic_tool_flow: State has user_id {state.user_id} and session_id {state.session_id}")
             # Set user context for tools
@@ -452,10 +453,14 @@ class Agent:
                 )
             
             # Create the agent using new LangChain 1.2.6+ API
+            # ContextTrimMiddleware prevents context overflow during long ReAct loops
+            # (e.g., RCA with 240 iterations) by trimming messages before each LLM call.
+            # Only affects what the LLM sees — full history is preserved in graph state.
             agent_graph = create_agent(
                 model=streaming_llm,
                 tools=tools,
-                system_prompt=system_prompt_text
+                system_prompt=system_prompt_text,
+                middleware=[ContextTrimMiddleware(model_name=model_name)],
             )
 
       
