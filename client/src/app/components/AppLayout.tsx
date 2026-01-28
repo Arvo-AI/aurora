@@ -7,7 +7,7 @@ import { signOut } from "next-auth/react";
 import Link from "next/link";
 import dynamic from "next/dynamic";
 import { Button } from "@/components/ui/button";
-import { Edit3, Settings, LogOut } from "lucide-react";
+import { Settings, LogOut } from "lucide-react";
 import {
   Tooltip,
   TooltipContent,
@@ -96,23 +96,6 @@ const SidebarStrip = ({
             </TooltipTrigger>
             <TooltipContent side="right" sideOffset={5}>
               <p>Open Sidebar</p>
-            </TooltipContent>
-          </Tooltip>
-          
-          {/* New Chat button */}
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                onClick={onNewChatClick}
-                variant="outline"
-                size="sm"
-                className="h-10 w-10 rounded-full p-0 shadow-md border border-border bg-card flex items-center justify-center"
-              >
-                <Edit3 className="h-5 w-5" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>
-              <p>New Chat</p>
             </TooltipContent>
           </Tooltip>
         </div>
