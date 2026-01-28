@@ -146,10 +146,9 @@ export default function IncidentsPage() {
     <div className="max-w-4xl mx-auto py-8 px-4">
       <div className="mb-8">
         <h1 className="text-3xl font-bold flex items-center gap-2">
-          <Zap className="h-6 w-6 text-orange-500" />
+          <Zap className="h-6 w-6 text-foreground" />
           Incidents
         </h1>
-        <p className="text-muted-foreground mt-1">Aurora automatically investigates all incoming alerts</p>
       </div>
 
       {loading ? (
@@ -163,8 +162,8 @@ export default function IncidentsPage() {
             <div>
               <h2 className="text-sm font-medium text-muted-foreground uppercase tracking-wide mb-3 flex items-center gap-2">
                 <span className="relative flex h-2 w-2">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-orange-400 opacity-75"></span>
-                  <span className="relative inline-flex rounded-full h-2 w-2 bg-orange-500"></span>
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-muted-foreground opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-muted-foreground"></span>
                 </span>
                 Investigating ({activeIncidents.length})
               </h2>
@@ -180,7 +179,7 @@ export default function IncidentsPage() {
           {analyzedIncidents.length > 0 && (
             <div>
               <h2 className="text-sm font-medium text-muted-foreground uppercase tracking-wide mb-3 flex items-center gap-2">
-                <CheckCircle2 className="h-4 w-4 text-blue-500" />
+                <CheckCircle2 className="h-4 w-4 text-muted-foreground" />
                 Analyzed
               </h2>
               <div className="space-y-2">
@@ -230,7 +229,7 @@ function IncidentRow({ incident }: { incident: Incident }) {
 
   return (
     <Link href={`/incidents/${incident.id}`} aria-label={`View incident: ${incident.alert.title}`}>
-      <Card className={`hover:border-primary/50 transition-colors cursor-pointer ${isActive ? 'border-l-4 border-l-orange-500' : ''}`}>
+      <Card className={`hover:border-primary/50 transition-colors cursor-pointer ${isActive ? 'border-l-4 border-l-muted-foreground' : ''}`}>
         <CardContent className="py-3 px-4">
           <div className="flex items-center gap-4">
             {/* Severity - hide if unknown during investigation */}
@@ -250,7 +249,7 @@ function IncidentRow({ incident }: { incident: Incident }) {
                   {incidentsService.formatDuration(incident.startedAt)}
                 </span>
                 {isActive && (
-                  <span className="flex items-center gap-1 text-orange-400">
+                  <span className="flex items-center gap-1 text-muted-foreground">
                     <Loader2 className="h-3 w-3 animate-spin" />
                     Aurora investigating
                   </span>
