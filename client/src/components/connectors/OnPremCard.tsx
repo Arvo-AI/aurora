@@ -37,8 +37,7 @@ export default function OnPremCard() {
       <CardFooter className="flex gap-2">
         <Button 
           onClick={() => router.push("/settings/ssh-keys")}
-          className="w-full bg-white hover:bg-gray-50 text-black border"
-          variant="outline"
+          className="w-full bg-white text-black hover:bg-gray-100"
         >
           <KeyRound className="h-4 w-4 mr-2" />
           SSH Keys
@@ -46,8 +45,7 @@ export default function OnPremCard() {
         
         <Button
           onClick={() => router.push("/vm-config")}
-          className="w-full bg-white hover:bg-gray-50 text-black border"
-          variant="outline"
+          className="w-full bg-white text-black hover:bg-gray-100"
         >
           <Settings className="h-4 w-4 mr-2" />
           VM Config
