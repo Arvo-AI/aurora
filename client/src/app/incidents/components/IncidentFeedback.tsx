@@ -15,6 +15,7 @@ import {
   FeedbackType,
   IncidentFeedback as FeedbackData,
 } from '@/lib/services/incident-feedback';
+import { ApiError } from '@/lib/services/api-client';
 import { useToast } from '@/hooks/use-toast';
 
 interface IncidentFeedbackProps {
@@ -120,17 +121,17 @@ export default function IncidentFeedback({
     setState('submitting');
 
     try {
-      await incidentFeedbackService.submitFeedback(
+      const response = await incidentFeedbackService.submitFeedback(
         incidentId,
         feedbackType,
         skipComment ? undefined : comment
       );
 
       setFeedback({
-        id: '',
-        feedbackType,
+        id: response.feedbackId,
+        feedbackType: response.feedbackType,
         comment: skipComment ? undefined : comment,
-        createdAt: new Date().toISOString(),
+        createdAt: response.createdAt,
       });
       setState('submitted');
 
@@ -142,9 +143,10 @@ export default function IncidentFeedback({
       });
     } catch (err) {
       console.error('Error submitting feedback:', err);
-      const message = err instanceof Error ? err.message : 'Failed to submit feedback';
+      const apiError = err as ApiError;
+      const message = apiError.message || 'Failed to submit feedback';
 
-      if (message.includes('Aurora Learn is disabled')) {
+      if (apiError.code === 'AURORA_LEARN_DISABLED') {
         toast({
           title: 'Aurora Learn is disabled',
           description: 'Enable Aurora Learn in Settings > Knowledge Base to provide feedback.',

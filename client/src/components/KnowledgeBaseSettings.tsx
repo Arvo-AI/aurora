@@ -26,7 +26,7 @@ import {
   AlertCircle,
   RefreshCw,
 } from "lucide-react";
-import { userPreferencesService } from "@/lib/services/user-preferences";
+import { userPreferencesService } from "@/lib/services/incident-feedback";
 
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL;
 const MEMORY_MAX_LENGTH = 5000;
