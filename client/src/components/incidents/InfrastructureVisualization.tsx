@@ -182,11 +182,13 @@ export default function InfrastructureVisualization({ incidentId, className }: P
     if (!document.fullscreenElement) {
       containerRef.current.requestFullscreen();
       setIsFullscreen(true);
+      // Auto-center when entering fullscreen
+      setTimeout(() => fitView({ padding: 0.2, duration: 300 }), 100);
     } else {
       document.exitFullscreen();
       setIsFullscreen(false);
     }
-  }, []);
+  }, [fitView]);
 
   const handleCenter = useCallback(() => {
     fitView({ padding: 0.2, duration: 300 });
@@ -225,7 +227,8 @@ export default function InfrastructureVisualization({ incidentId, className }: P
       type: 'smoothstep',
       animated: edge.type === 'causation',
       style: { stroke: '#52525b', strokeWidth: 2 },
-      labelStyle: { fill: '#a1a1aa', fontSize: 10 },
+      labelStyle: { fill: '#71717a', fontSize: 10, fontWeight: 500 },
+      labelBgStyle: { fill: '#18181b', fillOpacity: 0.9 },
       markerEnd: { type: 'arrowclosed', color: '#52525b' },
     }));
 
