@@ -306,6 +306,38 @@ export default function InfrastructureVisualization({ incidentId, className }: P
             <Maximize size={16} strokeWidth={2} style={{ stroke: '#fafafa', fill: 'none' }} />
           </ControlButton>
         </Controls>
+        
+        {/* Legend */}
+        <Panel position="bottom-right" className="bg-zinc-900/95 px-4 py-3 rounded-md border border-zinc-700">
+          <div className="text-xs space-y-2">
+            <div className="font-semibold text-zinc-300 mb-2">Status Legend</div>
+            <div className="flex items-center gap-2">
+              <div className="w-3 h-3 rounded border-2" style={{ borderColor: '#22c55e', backgroundColor: '#052e16' }} />
+              <span className="text-zinc-400">Healthy</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <div className="w-3 h-3 rounded border-2" style={{ borderColor: '#eab308', backgroundColor: '#422006' }} />
+              <span className="text-zinc-400">Degraded</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <div className="w-3 h-3 rounded border-2" style={{ borderColor: '#ef4444', backgroundColor: '#450a0a' }} />
+              <span className="text-zinc-400">Failed</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <div className="w-3 h-3 rounded border-2" style={{ borderColor: '#f97316', backgroundColor: '#431407' }} />
+              <span className="text-zinc-400">Investigating</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <div className="w-3 h-3 rounded border-2 border-dashed" style={{ borderColor: '#22c55e', backgroundColor: '#052e16' }} />
+              <span className="text-zinc-400">Affected</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <div className="w-3 h-3 rounded border-2" style={{ borderColor: '#ef4444', backgroundColor: '#450a0a', boxShadow: '0 0 8px rgba(239, 68, 68, 0.5)' }} />
+              <span className="text-zinc-400">Root Cause</span>
+            </div>
+          </div>
+        </Panel>
+        
         {data && (
           <Panel position="top-right" className="bg-zinc-900/90 px-3 py-2 rounded-md border border-zinc-700">
             <div className="text-xs text-zinc-400">
