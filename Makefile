@@ -217,6 +217,17 @@ deploy-build:
 		-f client/Dockerfile --target prod \
 		$$BUILD_ARGS \
 		./client --push; \
+	ENABLE_POD_ISOLATION=$$(grep 'ENABLE_POD_ISOLATION:' deploy/helm/aurora/values.generated.yaml | sed 's/.*: *"\(.*\)"/\1/' | head -1); \
+	if [ "$$ENABLE_POD_ISOLATION" = "true" ]; then \
+		echo "Pod isolation enabled, building terminal image: $$IMAGE_REGISTRY/aurora-terminal:$$GIT_SHA"; \
+		docker buildx build --platform linux/amd64 -t $$IMAGE_REGISTRY/aurora-terminal:$$GIT_SHA \
+			-f server/Dockerfile-user-terminal \
+			./server --push; \
+		echo "Updating TERMINAL_IMAGE in values.generated.yaml..."; \
+		sed -i.bak 's|TERMINAL_IMAGE: *"[^"]*"|TERMINAL_IMAGE: "'$$IMAGE_REGISTRY'/aurora-terminal:'$$GIT_SHA'"|' deploy/helm/aurora/values.generated.yaml && rm -f deploy/helm/aurora/values.generated.yaml.bak; \
+	else \
+		echo "Pod isolation disabled, skipping terminal image build"; \
+	fi; \
 	echo "Images built and pushed successfully with tag: $$GIT_SHA"; \
 	echo "Updating values.generated.yaml with new tag..."; \
 	sed -i.bak 's/tag: *"[^"]*"/tag: "'$$GIT_SHA'"/' deploy/helm/aurora/values.generated.yaml && rm -f deploy/helm/aurora/values.generated.yaml.bak
