@@ -76,6 +76,7 @@ key.json
 
 # local k8s values
 values-local.yaml
+values.generated.yaml
 
 # Build and publish scripts (keep local only)
 scripts/build-kubectl-agent.sh

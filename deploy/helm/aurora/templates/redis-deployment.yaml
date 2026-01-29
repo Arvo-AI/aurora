@@ -1,0 +1,30 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "aurora.fullname" . }}-redis
+  labels:
+    {{- include "aurora.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCounts.redis }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "aurora.name" . }}-redis
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+      labels:
+        app.kubernetes.io/name: {{ include "aurora.name" . }}-redis
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/part-of: aurora
+    spec:
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: redis
+              containerPort: 6379
+          resources:
+            {{- toYaml .Values.resources.redis | nindent 12 }}

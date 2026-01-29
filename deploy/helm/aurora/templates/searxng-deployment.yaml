@@ -1,0 +1,42 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "aurora.fullname" . }}-searxng
+  labels:
+    {{- include "aurora.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCounts.searxng }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "aurora.name" . }}-searxng
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+      labels:
+        app.kubernetes.io/name: {{ include "aurora.name" . }}-searxng
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/part-of: aurora
+    spec:
+      containers:
+        - name: searxng
+          image: searxng/searxng:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: SEARXNG_BASE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "aurora.fullname" . }}-config
+                  key: SEARXNG_BASE_URL
+            - name: SEARXNG_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "aurora.fullname" . }}-secrets
+                  key: SEARXNG_SECRET
+          resources:
+            {{- toYaml .Values.resources.searxng | nindent 12 }}

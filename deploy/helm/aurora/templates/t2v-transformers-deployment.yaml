@@ -1,0 +1,33 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "aurora.fullname" . }}-t2v-transformers
+  labels:
+    {{- include "aurora.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCounts.transformers }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "aurora.name" . }}-t2v-transformers
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+      labels:
+        app.kubernetes.io/name: {{ include "aurora.name" . }}-t2v-transformers
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/part-of: aurora
+    spec:
+      containers:
+        - name: transformers
+          image: cr.weaviate.io/semitechnologies/transformers-inference:sentence-transformers-all-MiniLM-L6-v2
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: ENABLE_CUDA
+              value: "0"
+          resources:
+            {{- toYaml .Values.resources.transformers | nindent 12 }}

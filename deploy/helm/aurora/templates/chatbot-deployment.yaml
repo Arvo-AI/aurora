@@ -1,0 +1,61 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "aurora.fullname" . }}-chatbot
+  labels:
+    {{- include "aurora.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCounts.chatbot }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "aurora.name" . }}-chatbot
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+      labels:
+        app.kubernetes.io/name: {{ include "aurora.name" . }}-chatbot
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/part-of: aurora
+    spec:
+      containers:
+        - name: aurora-chatbot
+          image: "{{ .Values.image.registry }}/aurora-server:{{ .Values.image.tag }}"
+          imagePullPolicy: IfNotPresent
+          command: ["python", "main_chatbot.py"]
+          ports:
+            - name: ws
+              containerPort: 5006
+            - name: health
+              containerPort: 5007
+          envFrom:
+            - configMapRef:
+                name: {{ include "aurora.fullname" . }}-config
+            - secretRef:
+                name: {{ include "aurora.fullname" . }}-secrets
+          volumeMounts:
+            - name: terraform-workdir
+              mountPath: /app/terraform_workdir
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 5007
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 5007
+            initialDelaySeconds: 20
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 6
+          resources:
+            {{- toYaml .Values.resources.chatbot | nindent 12 }}
+      volumes:
+        - name: terraform-workdir
+          emptyDir: {}

@@ -1,0 +1,85 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "aurora.fullname" . }}-vault
+  labels:
+    {{- include "aurora.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ include "aurora.fullname" . }}-vault
+  replicas: {{ .Values.replicaCounts.vault }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "aurora.name" . }}-vault
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/vault-config.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+      labels:
+        app.kubernetes.io/name: {{ include "aurora.name" . }}-vault
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/part-of: aurora
+    spec:
+      containers:
+        - name: vault
+          image: hashicorp/vault:1.15
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-c"]
+          args: 
+            - |
+              vault server -config=/vault/config/vault.hcl
+          ports:
+            - name: http
+              containerPort: 8200
+          env:
+            - name: VAULT_ADDR
+              value: "http://127.0.0.1:8200"
+            - name: VAULT_LOG_LEVEL
+              value: "info"
+            - name: SKIP_SETCAP
+              value: "true"
+            - name: SKIP_CHOWN
+              value: "true"
+          volumeMounts:
+            - name: vault-config
+              mountPath: /vault/config
+            - name: vault-data
+              mountPath: /vault/data
+            {{- if and .Values.vault.seal (eq .Values.vault.seal.type "gcpckms") .Values.vault.seal.gcpckms.credentials }}
+            - name: gcp-kms-credentials
+              mountPath: /vault/gcp
+              readOnly: true
+            {{- end }}
+          readinessProbe:
+            exec:
+              command: ["/bin/sh", "-c", "vault status || exit 0"]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            exec:
+              command: ["/bin/sh", "-c", "vault status || exit 0"]
+            initialDelaySeconds: 20
+            periodSeconds: 20
+          resources:
+            {{- toYaml .Values.resources.vault | nindent 12 }}
+      volumes:
+        - name: vault-config
+          configMap:
+            name: {{ include "aurora.fullname" . }}-vault-config
+            items:
+              - key: vault.hcl
+                path: vault.hcl
+        {{- if and .Values.vault.seal (eq .Values.vault.seal.type "gcpckms") .Values.vault.seal.gcpckms.credentials }}
+        - name: gcp-kms-credentials
+          secret:
+            secretName: vault-gcp-kms
+        {{- end }}
+  volumeClaimTemplates:
+    - metadata:
+        name: vault-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: {{ .Values.persistence.vault.size }}

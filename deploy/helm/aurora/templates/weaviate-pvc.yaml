@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "aurora.fullname" . }}-weaviate-data
+  labels:
+    {{- include "aurora.labels" . | nindent 4 }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: {{ .Values.persistence.weaviate.size }}
