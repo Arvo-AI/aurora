@@ -18,7 +18,12 @@
 }
 
 .react-flow__controls-button svg {
-  fill: #fafafa !important;
+  fill: none !important;
+  stroke: currentColor !important;
+}
+
+.react-flow__controls-button svg path {
+  fill: none !important;
 }
 
 /* React Flow Attribution styling */

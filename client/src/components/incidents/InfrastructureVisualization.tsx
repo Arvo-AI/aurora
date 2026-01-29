@@ -7,6 +7,7 @@ import {
   Node, 
   Edge, 
   Controls, 
+  ControlButton,
   Background, 
   Panel, 
   Handle, 
@@ -19,8 +20,8 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import './visualization.css';
-import { useMemo, useCallback, useState, useEffect } from 'react';
-import { Loader2 } from 'lucide-react';
+import { useMemo, useCallback, useState, useEffect, useRef } from 'react';
+import { Loader2, Maximize, RotateCcw } from 'lucide-react';
 
 interface Props {
   incidentId: string;
@@ -167,11 +168,38 @@ function getLayoutedElements(nodes: Node[], edges: Edge[]) {
 export default function InfrastructureVisualization({ incidentId, className }: Props) {
   const { data, isLoading, error } = useVisualizationStream(incidentId);
   const { fitView } = useReactFlow();
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [isFullscreen, setIsFullscreen] = useState(false);
 
   const nodeTypes = useMemo(() => ({ custom: CustomNode }), []);
 
   const [nodes, setNodes] = useState<Node[]>([]);
   const [edges, setEdges] = useState<Edge[]>([]);
+
+  const handleFullscreen = useCallback(() => {
+    if (!containerRef.current) return;
+
+    if (!document.fullscreenElement) {
+      containerRef.current.requestFullscreen();
+      setIsFullscreen(true);
+    } else {
+      document.exitFullscreen();
+      setIsFullscreen(false);
+    }
+  }, []);
+
+  const handleCenter = useCallback(() => {
+    fitView({ padding: 0.2, duration: 300 });
+  }, [fitView]);
+
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      setIsFullscreen(!!document.fullscreenElement);
+    };
+
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
+  }, []);
 
   useEffect(() => {
     if (!data?.nodes?.length) return;
@@ -242,7 +270,7 @@ export default function InfrastructureVisualization({ incidentId, className }: P
   }
 
   return (
-    <div className={`${className} bg-zinc-950 rounded-lg border border-zinc-800 overflow-hidden`}>
+    <div ref={containerRef} className={`${className} bg-zinc-950 rounded-lg border border-zinc-800 overflow-hidden`}>
       <ReactFlow
         nodes={nodes}
         edges={edges}
@@ -254,7 +282,11 @@ export default function InfrastructureVisualization({ incidentId, className }: P
         elementsSelectable={true}
         panOnDrag={true}
         selectionOnDrag={false}
-        zoomOnScroll={true}
+        panOnScroll={true}
+        panOnScrollMode="free"
+        zoomOnScroll={false}
+        zoomOnPinch={true}
+        zoomOnDoubleClick={true}
         fitView
         minZoom={0.5}
         maxZoom={1.5}
@@ -266,7 +298,14 @@ export default function InfrastructureVisualization({ incidentId, className }: P
         }}
       >
         <Background color="#27272a" gap={16} />
-        <Controls showInteractive={false} />
+        <Controls showInteractive={false} showFitView={false}>
+          <ControlButton onClick={handleCenter} title="Center view">
+            <RotateCcw size={16} strokeWidth={2} style={{ stroke: '#fafafa', fill: 'none' }} />
+          </ControlButton>
+          <ControlButton onClick={handleFullscreen} title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}>
+            <Maximize size={16} strokeWidth={2} style={{ stroke: '#fafafa', fill: 'none' }} />
+          </ControlButton>
+        </Controls>
         {data && (
           <Panel position="top-right" className="bg-zinc-900/90 px-3 py-2 rounded-md border border-zinc-700">
             <div className="text-xs text-zinc-400">
