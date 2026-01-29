@@ -252,7 +252,7 @@ export default function InfrastructureVisualization({ incidentId, className }: P
         nodesDraggable={true}
         nodesConnectable={false}
         elementsSelectable={true}
-        panOnDrag={[1, 2]}
+        panOnDrag={true}
         selectionOnDrag={false}
         zoomOnScroll={true}
         fitView

@@ -52,3 +52,12 @@
   outline: 2px solid #3b82f6;
   outline-offset: 2px;
 }
+
+/* Show grab cursor on pane background */
+.react-flow__pane {
+  cursor: grab;
+}
+
+.react-flow__pane.dragging {
+  cursor: grabbing;
+}
