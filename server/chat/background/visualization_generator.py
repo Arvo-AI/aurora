@@ -17,6 +17,17 @@ INFRASTRUCTURE_TOOLS = frozenset(['on_prem_kubectl', 'cloud_exec', 'terminal_exe
 
 logger = logging.getLogger(__name__)
 
+# Module-level singleton extractor (reuses LLM client across invocations)
+_extractor: Optional[VisualizationExtractor] = None
+
+def _get_extractor() -> VisualizationExtractor:
+    """Get or create the singleton VisualizationExtractor."""
+    global _extractor
+    if _extractor is None:
+        _extractor = VisualizationExtractor()
+        logger.info("[Visualization] Created singleton VisualizationExtractor")
+    return _extractor
+
 
 @celery_app.task(
     bind=True,
@@ -59,7 +70,7 @@ def update_visualization(
         
         existing_viz = _fetch_existing_visualization(incident_id)
         
-        extractor = VisualizationExtractor()
+        extractor = _get_extractor()
         updated_viz = extractor.extract_incremental(tool_calls, existing_viz)
         
         if not updated_viz.nodes:
