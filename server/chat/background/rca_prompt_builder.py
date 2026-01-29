@@ -131,7 +131,7 @@ def _get_similar_good_rcas_context(
                 key_thoughts = [
                     t["content"]
                     for t in thoughts
-                    if t.get("type") in ("finding", "action", "hypothesis")
+                    if t.get("type") in ("finding", "action", "hypothesis", "analysis")
                 ][:3]
                 if key_thoughts:
                     context_parts.append("**Key investigation steps:**")
