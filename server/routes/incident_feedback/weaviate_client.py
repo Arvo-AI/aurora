@@ -8,6 +8,7 @@ Stores positively-rated RCAs to provide context for similar future incidents.
 import json
 import logging
 import os
+import threading
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -37,6 +38,7 @@ WEAVIATE_GRPC_PORT = int(os.getenv("WEAVIATE_GRPC_PORT"))
 
 _client: weaviate.WeaviateClient | None = None
 _collection = None
+_client_lock = threading.Lock()
 
 
 def _reset_client() -> None:
@@ -45,8 +47,8 @@ def _reset_client() -> None:
     if _client is not None:
         try:
             _client.close()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"[AURORA LEARN] Error closing client: {e}")
     _client = None
     _collection = None
 
@@ -55,6 +57,7 @@ def _get_weaviate_client():
     """Get or create the Weaviate client instance."""
     global _client, _collection
 
+    # Fast path: check if client is ready without lock
     if _client is not None:
         try:
             if _client.is_ready():
@@ -62,34 +65,44 @@ def _get_weaviate_client():
             logger.warning("[AURORA LEARN] Connection not ready, reconnecting...")
         except Exception:
             logger.warning("[AURORA LEARN] Connection lost, reconnecting...")
-        _reset_client()
 
-    try:
-        openai_api_key = os.getenv("OPENAI_API_KEY")
-        headers = {}
-        if openai_api_key:
-            headers["X-OpenAI-Api-Key"] = openai_api_key
+    # Slow path: acquire lock to create/recreate client
+    with _client_lock:
+        # Double-check after acquiring lock
+        if _client is not None:
+            try:
+                if _client.is_ready():
+                    return _client, _collection
+            except Exception:
+                pass
+            _reset_client()
 
-        _client = weaviate.connect_to_local(
-            host=WEAVIATE_HOST,
-            port=WEAVIATE_PORT,
-            grpc_port=WEAVIATE_GRPC_PORT,
-            headers=headers,
-            additional_config=AdditionalConfig(
-                timeout=Timeout(init=10, query=30, insert=60)
-            ),
-        )
+        try:
+            openai_api_key = os.getenv("OPENAI_API_KEY")
+            headers = {}
+            if openai_api_key:
+                headers["X-OpenAI-Api-Key"] = openai_api_key
 
-        logger.info(f"[AURORA LEARN] Connected to {WEAVIATE_HOST}:{WEAVIATE_PORT}")
+            _client = weaviate.connect_to_local(
+                host=WEAVIATE_HOST,
+                port=WEAVIATE_PORT,
+                grpc_port=WEAVIATE_GRPC_PORT,
+                headers=headers,
+                additional_config=AdditionalConfig(
+                    timeout=Timeout(init=10, query=30, insert=60)
+                ),
+            )
 
-        # Ensure collection exists
-        _collection = _ensure_collection(_client)
+            logger.info(f"[AURORA LEARN] Connected to {WEAVIATE_HOST}:{WEAVIATE_PORT}")
 
-        return _client, _collection
+            # Ensure collection exists
+            _collection = _ensure_collection(_client)
 
-    except Exception as e:
-        logger.error(f"[AURORA LEARN] Failed to connect: {e}")
-        raise
+            return _client, _collection
+
+        except Exception as e:
+            logger.error(f"[AURORA LEARN] Failed to connect: {e}")
+            raise
 
 
 def _ensure_collection(client: weaviate.WeaviateClient):

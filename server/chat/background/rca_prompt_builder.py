@@ -28,7 +28,7 @@ def _is_aurora_learn_enabled(user_id: str) -> bool:
     try:
         from utils.auth.stateless_auth import get_user_preference
         setting = get_user_preference(user_id, "aurora_learn_enabled", default=True)
-        return setting is True or setting == "true"
+        return setting is True
     except Exception as e:
         logger.warning(f"Error checking Aurora Learn setting: {e}")
         return True  # Default to enabled

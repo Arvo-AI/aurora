@@ -34,7 +34,7 @@ def _validate_uuid(value: str) -> bool:
 def _is_aurora_learn_enabled(user_id: str) -> bool:
     """Check if Aurora Learn is enabled for a user. Defaults to True."""
     setting = get_user_preference(user_id, AURORA_LEARN_PREFERENCE_KEY, default=True)
-    return setting is True or setting == "true"
+    return setting is True
 
 
 # ============================================================================
@@ -62,7 +62,10 @@ def submit_feedback(incident_id: str):
 
     # Check if Aurora Learn is enabled
     if not _is_aurora_learn_enabled(user_id):
-        return jsonify({"error": "Aurora Learn is disabled. Enable it in Settings to provide feedback."}), 403
+        return jsonify({
+            "error": "Aurora Learn is disabled. Enable it in Settings to provide feedback.",
+            "error_code": "AURORA_LEARN_DISABLED"
+        }), 403
 
     data = request.get_json()
     if not data:
@@ -133,12 +136,13 @@ def submit_feedback(incident_id: str):
                     """
                     INSERT INTO incident_feedback (user_id, incident_id, feedback_type, comment)
                     VALUES (%s, %s, %s, %s)
-                    RETURNING id
+                    RETURNING id, created_at
                     """,
                     (user_id, incident_id, feedback_type, comment or None),
                 )
                 feedback_row = cursor.fetchone()
                 feedback_id = str(feedback_row[0])
+                created_at = feedback_row[1]
 
                 stored_for_learning = False
 
@@ -218,9 +222,10 @@ def submit_feedback(incident_id: str):
 
                 return jsonify({
                     "success": True,
-                    "feedback_id": feedback_id,
-                    "feedback_type": feedback_type,
-                    "stored_for_learning": stored_for_learning,
+                    "feedbackId": feedback_id,
+                    "feedbackType": feedback_type,
+                    "storedForLearning": stored_for_learning,
+                    "createdAt": created_at.isoformat() if created_at else None,
                 }), 201
 
     except Exception as exc:
