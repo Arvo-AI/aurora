@@ -1,6 +1,6 @@
 """Extracts infrastructure entities from RCA transcripts for visualization."""
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, Field
 
@@ -33,7 +33,7 @@ class VisualizationData(BaseModel):
     rootCauseId: Optional[str] = Field(default=None, description="Node ID of root cause")
     affectedIds: List[str] = Field(default_factory=list, description="Affected node IDs")
     version: int = Field(default=1, description="Incremented on each update")
-    updatedAt: str = Field(default_factory=lambda: datetime.utcnow().isoformat())
+    updatedAt: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
 
 class VisualizationExtractor:
@@ -68,7 +68,7 @@ class VisualizationExtractor:
             if existing_viz:
                 merged = self._merge(existing_viz, new_viz)
                 merged.version = existing_viz.version + 1
-                merged.updatedAt = datetime.utcnow().isoformat()
+                merged.updatedAt = datetime.now(timezone.utc).isoformat()
                 return merged
             
             return new_viz

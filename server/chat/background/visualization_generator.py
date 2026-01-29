@@ -2,7 +2,7 @@
 import json
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 import redis
 
@@ -169,7 +169,7 @@ def _store_visualization(incident_id: str, json_str: str):
                     SET visualization_code = %s,
                         visualization_updated_at = %s
                     WHERE id = %s
-                """, (json_str, datetime.utcnow(), incident_id))
+                """, (json_str, datetime.now(timezone.utc), incident_id))
                 conn.commit()
     
     except Exception as e:
