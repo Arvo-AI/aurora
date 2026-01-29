@@ -302,8 +302,8 @@ def run_background_chat(
             
             # Generate final complete visualization
             try:
-                tool_calls = _extract_tool_calls_for_viz()
-                logger.info(f"[BackgroundChat] Extracted {len(tool_calls)} tool calls for final visualization")
+                tool_calls = result.get('tool_calls', [])
+                logger.info(f"[BackgroundChat] Using {len(tool_calls)} tool calls from result for final visualization")
                 
                 update_visualization.apply_async(kwargs={
                     'incident_id': incident_id,
@@ -491,10 +491,15 @@ async def _execute_background_chat(
         
         logger.info(f"[BackgroundChat] Workflow execution completed - all streams and tool calls finished")
         
+        # Extract tool calls while state context is still available
+        tool_calls = _extract_tool_calls_for_viz()
+        logger.info(f"[BackgroundChat] Extracted {len(tool_calls)} tool calls for visualization")
+        
         return {
             "session_id": session_id,
             "status": "completed",
             "trigger_metadata": trigger_metadata,
+            "tool_calls": tool_calls,
         }
         
     except Exception as e:
