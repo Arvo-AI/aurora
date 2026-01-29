@@ -116,19 +116,22 @@ def _ensure_collection(client: weaviate.WeaviateClient):
 
         collection = client.collections.create(
             name=COLLECTION_NAME,
-            vectorizer_config=Configure.Vectorizer.text2vec_transformers(),  # TODO: migrate to vector_config when Weaviate client is updated
+            vectorizer_config=Configure.Vectorizer.text2vec_transformers(),
             properties=[
-                Property(name="user_id", data_type=DataType.TEXT),
-                Property(name="incident_id", data_type=DataType.TEXT),
-                Property(name="feedback_id", data_type=DataType.TEXT),
+                # Metadata - stored but not vectorized
+                Property(name="user_id", data_type=DataType.TEXT, skip_vectorization=True),
+                Property(name="incident_id", data_type=DataType.TEXT, skip_vectorization=True),
+                Property(name="feedback_id", data_type=DataType.TEXT, skip_vectorization=True),
+                # Core matching signals - vectorized
                 Property(name="alert_title", data_type=DataType.TEXT),
                 Property(name="alert_service", data_type=DataType.TEXT),
                 Property(name="source_type", data_type=DataType.TEXT),
                 Property(name="severity", data_type=DataType.TEXT),
                 Property(name="aurora_summary", data_type=DataType.TEXT),
-                Property(name="thoughts", data_type=DataType.TEXT),  # Serialized JSON
-                Property(name="citations", data_type=DataType.TEXT),  # Serialized JSON
-                Property(name="full_context", data_type=DataType.TEXT),  # For embedding
+                # Retrieved but not vectorized (large JSON / redundant)
+                Property(name="thoughts", data_type=DataType.TEXT, skip_vectorization=True),
+                Property(name="citations", data_type=DataType.TEXT, skip_vectorization=True),
+                Property(name="full_context", data_type=DataType.TEXT, skip_vectorization=True),
                 Property(name="created_at", data_type=DataType.DATE),
             ],
         )
