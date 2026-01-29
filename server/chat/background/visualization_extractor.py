@@ -14,6 +14,7 @@ class InfraNode(BaseModel):
     label: str = Field(description="Display name (8-15 chars)")
     type: str = Field(description="Infrastructure entity type (e.g., 'pod', 'deployment', 'lambda', 'load-balancer', 'database')")
     status: Literal['healthy', 'degraded', 'failed', 'investigating', 'unknown'] = 'investigating'
+    parentId: Optional[str] = Field(default=None, description="ID of parent node for hierarchical grouping (e.g., cluster, namespace, region)")
 
 
 class InfraEdge(BaseModel):
@@ -91,7 +92,10 @@ class VisualizationExtractor:
         
         return f"""You are building a visual incident graph to help SREs quickly understand WHAT caused WHAT during an incident.
 
-GOAL: Create a clear, focused graph showing the chain of causation from root cause to user impact.
+GOAL: Create a FLAT graph with maximum 2 levels of nesting. Show causation chain from root cause to impact.
+
+**CRITICAL CONSTRAINT**: parentId creates visual nesting. NEVER chain parentIds (no grandchildren). 
+If node A has parentId=B, then B MUST have parentId=null.
 
 TOOL OUTPUTS FROM INVESTIGATION:
 {messages_text}
@@ -99,48 +103,74 @@ TOOL OUTPUTS FROM INVESTIGATION:
 
 EXTRACTION RULES:
 
-1. FOCUS ON CAUSALITY:
+1. HIERARCHY RULES (STRICT - MAX 2 LEVELS):
+   - A node with parentId is a CHILD. Its parent MUST have parentId=null.
+   - NEVER create chains: if pod.parentId=deploy, then deploy.parentId MUST be null
+   - Pick ONE grouping level (deployment OR namespace OR cluster, not all):
+     * Pods failing? → Group pods under deployment (deployment.parentId=null, pod.parentId=deployment)
+     * Multiple services? → Group services under namespace (namespace.parentId=null, svc.parentId=namespace)
+   - All other nodes (alerts, events, databases) should have parentId=null
+   - CORRECT example:
+     * {{"id": "api-deploy", "parentId": null}}  // Parent has null
+     * {{"id": "pod-1", "parentId": "api-deploy"}}  // Child points to parent
+     * {{"id": "alert", "parentId": null}}  // Standalone node
+   - WRONG (grandchildren):
+     * {{"id": "cluster", "parentId": null}}
+     * {{"id": "deploy", "parentId": "cluster"}}
+     * {{"id": "pod", "parentId": "deploy"}}  // WRONG: pod is grandchild of cluster!
+
+2. FOCUS ON CAUSALITY:
    - Prioritize entities directly involved in the failure chain
    - Use 'causation' edges to show what caused what (e.g., pod restart → service downtime → alert)
    - Identify the ROOT CAUSE (first point of failure) and set rootCauseId
    - Mark all downstream affected entities in affectedIds
 
-2. ENTITY SELECTION (only include if relevant to incident):
+3. ENTITY SELECTION (only include if relevant to incident):
    - Alert/event that triggered investigation
    - Any infrastructure entities showing failures/degradation
    - Upstream dependencies that may have caused the issue
+   - Container/grouping entities (clusters, namespaces, regions) when multiple children are involved
    - Use specific entity types from your infrastructure knowledge:
-     * Kubernetes: pod, deployment, service, statefulset, daemonset, replicaset, node, namespace, ingress, pvc
-     * Cloud: lambda, cloud-function, vm, instance, load-balancer, api-gateway, bucket, queue
+     * Kubernetes: pod, deployment, service, statefulset, daemonset, replicaset, node, namespace, cluster, ingress, pvc
+     * Cloud: lambda, cloud-function, vm, instance, load-balancer, api-gateway, bucket, queue, region, vpc, subnet, availability-zone
      * Databases: database, postgres, mysql, redis, mongodb, elasticsearch
      * Monitoring: alert, event, metric
    - Keep graph focused - omit healthy unrelated infrastructure
 
-3. STATUS ASSIGNMENT (use evidence from tool outputs):
+4. STATUS ASSIGNMENT (use evidence from tool outputs):
    - 'failed': Clear errors, crashes, restarts, or unavailability (CrashLoopBackOff, 5xx errors, OOMKilled)
    - 'degraded': High latency, resource exhaustion, partial failures (CPU/memory pressure, slow responses)
    - 'investigating': Mentioned in investigation but status unclear
    - 'healthy': Explicitly confirmed working normally
    - 'unknown': No status information available
+   - For group/container nodes: use worst status of children
 
-4. RELATIONSHIPS (be specific):
-   - 'causation': A directly caused B (e.g., OOMKilled pod → service unavailable)
-   - 'dependency': A depends on B (e.g., API service → database)
-   - 'hosts': A contains/runs B (e.g., node → pod, namespace → service)
-   - 'communication': A talks to B (e.g., frontend → backend API)
+5. RELATIONSHIPS (be specific):
+   - **IMPORTANT**: Do NOT create edges for hierarchical containment (cluster→namespace, namespace→deployment, etc.)
+     * These are automatically shown via parentId
+     * Edges like "contains namespace", "contains deployment", "manages pod" should NOT exist
+   - Only create edges for functional relationships:
+     * 'causation': A directly caused B (e.g., OOMKilled pod → service unavailable)
+     * 'dependency': A depends on B (e.g., API service → database)
+     * 'communication': A talks to B (e.g., frontend → backend API)
    - Add descriptive labels explaining the relationship
+   - Example: If pod A crashes and causes service B to fail, create causation edge A→B
+   - Example: If service A calls database B, create dependency edge A→B
 
-5. LABELING:
+6. LABELING:
    - Keep labels concise: 8-15 characters
    - Use actual names from infrastructure (pod names, service names, etc.)
    - For nodes: use short identifiers (e.g., 'api-pod-3x7k', 'postgres-db')
+   - For group nodes: use descriptive names (e.g., 'Prod Cluster', 'us-east-1')
 
-6. INCREMENTAL UPDATES:
+7. INCREMENTAL UPDATES:
    - If existing graph provided, return ONLY new entities or status updates
+   - Preserve existing parentId relationships unless evidence shows they're wrong
    - Update rootCauseId only if you have stronger evidence
    - Add to affectedIds as more downstream impact is discovered
 
-OUTPUT: Structured VisualizationData showing the incident's causal chain."""
+OUTPUT: Structured VisualizationData with FLAT hierarchy (max 2 levels). 
+REMINDER: If a node has parentId, that parent MUST have parentId=null. No grandchildren allowed."""
     
     def _merge(self, existing: VisualizationData, new: VisualizationData) -> VisualizationData:
         """Merge new entities with existing ones."""

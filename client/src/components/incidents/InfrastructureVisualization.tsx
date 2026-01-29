@@ -22,6 +22,7 @@ import '@xyflow/react/dist/style.css';
 import './visualization.css';
 import { useMemo, useCallback, useState, useEffect, useRef } from 'react';
 import { Loader2, Maximize, RotateCcw } from 'lucide-react';
+import dagre from 'dagre';
 
 interface Props {
   incidentId: string;
@@ -35,6 +36,20 @@ const statusColors: Record<NodeStatus, { border: string; bg: string; glow: strin
   investigating: { border: '#f97316', bg: '#431407', glow: 'rgba(249, 115, 22, 0.3)' },
   unknown: { border: '#71717a', bg: '#18181b', glow: 'rgba(113, 113, 122, 0.3)' },
 };
+
+// Layout constants
+const GROUP_HEADER_HEIGHT = 40;
+const CHILD_NODE_HEIGHT = 100;
+const CHILD_SPACING = 20;
+const CHILD_PADDING_X = 20;
+const CHILD_PADDING_BOTTOM = 20;
+const GROUP_WIDTH = 280;
+const BASE_NODE_WIDTH = 200;
+const BASE_NODE_HEIGHT = 100;
+
+function calcGroupHeight(childCount: number) {
+  return GROUP_HEADER_HEIGHT + childCount * CHILD_NODE_HEIGHT + (childCount - 1) * CHILD_SPACING + CHILD_PADDING_BOTTOM;
+}
 
 function CustomNode({ data }: { data: InfraNode & { isRootCause?: boolean; isAffected?: boolean } }) {
   const colors = statusColors[data.status];
@@ -79,90 +94,106 @@ function CustomNode({ data }: { data: InfraNode & { isRootCause?: boolean; isAff
   );
 }
 
-function getLayoutedElements(nodes: Node[], edges: Edge[]) {
-  // Simple hierarchical layout algorithm
-  // Build adjacency map to find dependencies
-  const nodeMap = new Map(nodes.map(n => [n.id, n]));
-  const incomingEdges = new Map<string, string[]>();
-  const outgoingEdges = new Map<string, string[]>();
-  
-  nodes.forEach(node => {
-    incomingEdges.set(node.id, []);
-    outgoingEdges.set(node.id, []);
-  });
-  
-  edges.forEach(edge => {
-    outgoingEdges.get(edge.source)?.push(edge.target);
-    incomingEdges.get(edge.target)?.push(edge.source);
-  });
-  
-  // Find root nodes (nodes with no incoming edges)
-  const rootNodes = nodes.filter(node => 
-    (incomingEdges.get(node.id)?.length || 0) === 0
+// Group node: renders as a container with a header label
+// Children are positioned below the header
+function GroupNode({ data }: { data: InfraNode & { isRootCause?: boolean; isAffected?: boolean; groupHeight?: number } }) {
+  const colors = statusColors[data.status];
+  const isRootCause = data.isRootCause;
+  const isAffected = data.isAffected;
+
+  return (
+    <>
+      <Handle type="target" position={Position.Top} style={{ background: '#52525b' }} />
+      {/* Header with label */}
+      <div
+        style={{
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          right: 0,
+          height: GROUP_HEADER_HEIGHT,
+          padding: '10px 12px',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '8px',
+          color: '#fafafa',
+          borderBottom: `1px solid ${colors.border}40`,
+          overflow: 'hidden',
+        }}
+      >
+        <div style={{ 
+          fontSize: '9px', 
+          fontWeight: 700, 
+          color: '#71717a',
+          backgroundColor: '#27272a',
+          padding: '2px 6px',
+          borderRadius: '4px',
+          letterSpacing: '0.5px',
+          textTransform: 'uppercase',
+          flexShrink: 0,
+          whiteSpace: 'nowrap',
+        }}>
+          {data.type}
+        </div>
+        <div style={{ fontSize: '12px', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {data.label}
+        </div>
+      </div>
+      <Handle type="source" position={Position.Bottom} style={{ background: '#52525b' }} />
+    </>
   );
+}
+
+function getLayoutedElements(nodes: Node[], edges: Edge[]) {
+  const dagreGraph = new dagre.graphlib.Graph();
+  dagreGraph.setDefaultEdgeLabel(() => ({}));
+  dagreGraph.setGraph({ rankdir: 'TB', nodesep: 120, ranksep: 180, marginx: 50, marginy: 50 });
+
+  const nodeDimensions = new Map<string, { width: number; height: number }>();
+  const topLevelNodeIds = new Set<string>();
   
-  // Assign layers using BFS
-  const layers = new Map<string, number>();
-  const queue = rootNodes.map(n => ({ id: n.id, layer: 0 }));
-  const visited = new Set<string>();
-  
-  while (queue.length > 0) {
-    const { id, layer } = queue.shift()!;
-    if (visited.has(id)) continue;
-    
-    visited.add(id);
-    layers.set(id, layer);
-    
-    const children = outgoingEdges.get(id) || [];
-    children.forEach(childId => {
-      if (!visited.has(childId)) {
-        queue.push({ id: childId, layer: layer + 1 });
-      }
-    });
-  }
-  
-  // Assign layer 0 to any nodes not yet assigned
-  nodes.forEach(node => {
-    if (!layers.has(node.id)) {
-      layers.set(node.id, 0);
-    }
-  });
-  
-  // Group nodes by layer
-  const nodesByLayer = new Map<number, string[]>();
-  layers.forEach((layer, nodeId) => {
-    if (!nodesByLayer.has(layer)) {
-      nodesByLayer.set(layer, []);
-    }
-    nodesByLayer.get(layer)!.push(nodeId);
-  });
-  
-  // Calculate positions
-  const nodeWidth = 150;
-  const nodeHeight = 80;
-  const horizontalSpacing = 120;
-  const verticalSpacing = 100;
-  
-  const layoutedNodes = nodes.map(node => {
-    const layer = layers.get(node.id) || 0;
-    const nodesInLayer = nodesByLayer.get(layer) || [];
-    const indexInLayer = nodesInLayer.indexOf(node.id);
-    
-    const layerWidth = nodesInLayer.length * (nodeWidth + horizontalSpacing);
-    const startX = -layerWidth / 2;
-    
-    return {
-      ...node,
-      targetPosition: 'top' as const,
-      sourcePosition: 'bottom' as const,
-      position: {
-        x: startX + indexInLayer * (nodeWidth + horizontalSpacing),
-        y: layer * (nodeHeight + verticalSpacing),
-      },
-    };
+  nodes.forEach((node) => {
+    if (node.parentId) return;
+    topLevelNodeIds.add(node.id);
+    const children = nodes.filter(n => n.parentId === node.id);
+    const dims = children.length > 0
+      ? { width: GROUP_WIDTH, height: calcGroupHeight(children.length) }
+      : { width: BASE_NODE_WIDTH, height: BASE_NODE_HEIGHT };
+    nodeDimensions.set(node.id, dims);
+    dagreGraph.setNode(node.id, dims);
   });
 
-  return { nodes: layoutedNodes, edges };
+  // Only add edges between top-level nodes to Dagre
+  edges.forEach((edge) => {
+    if (topLevelNodeIds.has(edge.source) && topLevelNodeIds.has(edge.target)) {
+      dagreGraph.setEdge(edge.source, edge.target);
+    }
+  });
+  dagre.layout(dagreGraph);
+
+  return {
+    nodes: nodes.map((node) => {
+      if (node.parentId) {
+        const siblings = nodes.filter(n => n.parentId === node.parentId);
+        const index = siblings.findIndex(n => n.id === node.id);
+        return {
+          ...node,
+          targetPosition: Position.Top,
+          sourcePosition: Position.Bottom,
+          position: { x: CHILD_PADDING_X, y: GROUP_HEADER_HEIGHT + index * (CHILD_NODE_HEIGHT + CHILD_SPACING) },
+        };
+      }
+      const pos = dagreGraph.node(node.id);
+      const dims = nodeDimensions.get(node.id) || { width: BASE_NODE_WIDTH, height: BASE_NODE_HEIGHT };
+      return {
+        ...node,
+        targetPosition: Position.Top,
+        sourcePosition: Position.Bottom,
+        position: { x: pos.x - dims.width / 2, y: pos.y - dims.height / 2 },
+      };
+    }),
+    edges,
+  };
 }
 
 export default function InfrastructureVisualization({ incidentId, className }: Props) {
@@ -171,7 +202,7 @@ export default function InfrastructureVisualization({ incidentId, className }: P
   const containerRef = useRef<HTMLDivElement>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
 
-  const nodeTypes = useMemo(() => ({ custom: CustomNode }), []);
+  const nodeTypes = useMemo(() => ({ custom: CustomNode, groupNode: GroupNode }), []);
 
   const [nodes, setNodes] = useState<Node[]>([]);
   const [edges, setEdges] = useState<Edge[]>([]);
@@ -206,33 +237,71 @@ export default function InfrastructureVisualization({ incidentId, className }: P
   useEffect(() => {
     if (!data?.nodes?.length) return;
 
-    const flowNodes: Node[] = data.nodes.map((node) => ({
-      id: node.id,
-      type: 'custom',
-      position: { x: 0, y: 0 },
-      draggable: true,
-      selectable: true,
-      data: {
-        ...node,
-        isRootCause: node.id === data.rootCauseId,
-        isAffected: data.affectedIds.includes(node.id),
-      },
-    }));
+    const nodeWithChildren = new Set(data.nodes.filter(n => n.parentId).map(n => n.parentId));
+    
+    const flowNodes: Node[] = data.nodes.map((node) => {
+      const isGroup = nodeWithChildren.has(node.id);
+      const colors = statusColors[node.status];
+      const childCount = data.nodes.filter(n => n.parentId === node.id).length;
+      
+      return {
+        id: node.id,
+        type: isGroup ? 'groupNode' : 'custom',
+        position: { x: 0, y: 0 },
+        draggable: true,
+        selectable: true,
+        ...(node.parentId && { parentId: node.parentId, extent: 'parent' as const }),
+        ...(isGroup && {
+          style: {
+            width: GROUP_WIDTH,
+            height: calcGroupHeight(childCount),
+            backgroundColor: 'rgba(39, 39, 42, 0.6)',
+            border: `2px solid ${colors.border}`,
+            borderRadius: '8px',
+          },
+        }),
+        data: {
+          ...node,
+          isRootCause: node.id === data.rootCauseId,
+          isAffected: data.affectedIds.includes(node.id),
+        },
+      };
+    });
 
-    const flowEdges: Edge[] = data.edges.map((edge, idx) => ({
-      id: `e${idx}`,
-      source: edge.source,
-      target: edge.target,
-      label: edge.label,
-      type: 'smoothstep',
-      animated: edge.type === 'causation',
-      style: { stroke: '#52525b', strokeWidth: 2 },
-      labelStyle: { fill: '#71717a', fontSize: 10, fontWeight: 500 },
-      labelBgStyle: { fill: '#18181b', fillOpacity: 0.9 },
-      markerEnd: { type: 'arrowclosed', color: '#52525b' },
-    }));
+    // Sort nodes so parent nodes come before their children
+    const sortedFlowNodes = flowNodes.sort((a, b) => {
+      // If a is parent of b, a comes first
+      if (b.parentId === a.id) return -1;
+      // If b is parent of a, b comes first
+      if (a.parentId === b.id) return 1;
+      // If a has no parent but b does, a comes first
+      if (!a.parentId && b.parentId) return -1;
+      // If b has no parent but a does, b comes first
+      if (a.parentId && !b.parentId) return 1;
+      // Otherwise maintain original order
+      return 0;
+    });
 
-    const { nodes: layoutedNodes, edges: layoutedEdges } = getLayoutedElements(flowNodes, flowEdges);
+    // Filter out edges that connect to/from group nodes (they don't have handles)
+    const groupNodeIds = new Set(sortedFlowNodes.filter(n => n.type === 'groupNode').map(n => n.id));
+    const flowEdges: Edge[] = data.edges
+      .filter(edge => !groupNodeIds.has(edge.source) && !groupNodeIds.has(edge.target))
+      .map((edge, idx) => ({
+        id: `e${idx}`,
+        source: edge.source,
+        target: edge.target,
+        label: edge.label,
+        type: 'smoothstep',
+        animated: edge.type === 'causation',
+        style: { stroke: '#52525b', strokeWidth: 2 },
+        labelStyle: { fill: '#71717a', fontSize: 10, fontWeight: 500 },
+        labelBgStyle: { fill: '#18181b', fillOpacity: 0.9 },
+        markerEnd: { type: 'arrowclosed', color: '#52525b' },
+      }));
+
+    // Apply layout synchronously
+    const { nodes: layoutedNodes, edges: layoutedEdges } = getLayoutedElements(sortedFlowNodes, flowEdges);
+    
     setNodes(layoutedNodes);
     setEdges(layoutedEdges);
     setTimeout(() => fitView({ padding: 0.2, duration: 300 }), 50);

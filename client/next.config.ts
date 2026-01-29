@@ -84,6 +84,10 @@ const nextConfig: NextConfig = {
     return config;
   },
   async rewrites() {
+    // Only use rewrites if backend URL is configured
+    if (!backendUrl || backendUrl === 'undefined') {
+      return [];
+    }
     return [
       // Only rewrite /azure/ routes - all /api/ routes are handled by Next.js API routes which proxy to backend
       {
@@ -93,6 +97,10 @@ const nextConfig: NextConfig = {
     ];
   },
   async redirects() {
+    // Only use redirects if backend URL is configured
+    if (!backendUrl || backendUrl === 'undefined') {
+      return [];
+    }
     return [
       {
         source: "/auth",
