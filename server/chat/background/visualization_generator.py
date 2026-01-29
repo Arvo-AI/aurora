@@ -10,10 +10,7 @@ from celery_config import celery_app
 from chat.background.visualization_extractor import VisualizationData, VisualizationExtractor
 from utils.db.connection_pool import db_pool
 from utils.cache.redis_client import get_redis_client
-
-# Constants (avoid circular import with task.py)
-MAX_TOOL_OUTPUT_CHARS = 5000
-INFRASTRUCTURE_TOOLS = frozenset(['on_prem_kubectl', 'cloud_exec', 'terminal_exec', 'tailscale_ssh'])
+from chat.backend.constants import MAX_TOOL_OUTPUT_CHARS, INFRASTRUCTURE_TOOLS
 
 logger = logging.getLogger(__name__)
 

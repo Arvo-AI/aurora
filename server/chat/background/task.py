@@ -27,13 +27,10 @@ from utils.db.connection_pool import db_pool
 from langchain_core.messages import ToolMessage
 from chat.backend.agent.tools.cloud_tools import get_state_context
 from chat.background.visualization_generator import update_visualization
+from chat.backend.constants import MAX_TOOL_OUTPUT_CHARS, INFRASTRUCTURE_TOOLS
 
 
 logger = logging.getLogger(__name__)
-
-# Constants
-MAX_TOOL_OUTPUT_CHARS = 5000
-INFRASTRUCTURE_TOOLS = frozenset(['on_prem_kubectl', 'cloud_exec', 'terminal_exec', 'tailscale_ssh'])
 
 
 def _extract_tool_calls_for_viz() -> List[Dict]:

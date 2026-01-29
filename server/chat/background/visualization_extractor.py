@@ -3,11 +3,9 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, Field
+from chat.backend.constants import MAX_TOOL_OUTPUT_CHARS
 
 logger = logging.getLogger(__name__)
-
-# Tool output truncation limit (matches task.py constant)
-MAX_TOOL_OUTPUT_CHARS = 5000
 
 
 class InfraNode(BaseModel):
