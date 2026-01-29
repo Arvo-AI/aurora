@@ -200,26 +200,22 @@ deploy-build:
 		exit 1; \
 	fi
 	@echo "Extracting image registry and build args from values.generated.yaml..."
-	@IMAGE_REGISTRY=$$(grep -A2 '^image:' deploy/helm/aurora/values.generated.yaml | grep 'registry:' | sed 's/.*registry: *"\(.*\)"/\1/'); \
+	@set -e; \
+	IMAGE_REGISTRY=$$(grep -A2 '^image:' deploy/helm/aurora/values.generated.yaml | grep 'registry:' | sed 's/.*registry: *"\(.*\)"/\1/'); \
 	GIT_SHA=$$(git rev-parse --short HEAD); \
-	NEXT_PUBLIC_BACKEND_URL=$$(grep 'NEXT_PUBLIC_BACKEND_URL:' deploy/helm/aurora/values.generated.yaml | sed 's/.*: *"\(.*\)"/\1/'); \
-	NEXT_PUBLIC_WEBSOCKET_URL=$$(grep 'NEXT_PUBLIC_WEBSOCKET_URL:' deploy/helm/aurora/values.generated.yaml | sed 's/.*: *"\(.*\)"/\1/'); \
-	NEXT_PUBLIC_ENABLE_OVH=$$(grep 'NEXT_PUBLIC_ENABLE_OVH:' deploy/helm/aurora/values.generated.yaml | sed 's/.*: *"\(.*\)"/\1/'); \
-	NEXT_PUBLIC_ENABLE_SLACK=$$(grep 'NEXT_PUBLIC_ENABLE_SLACK:' deploy/helm/aurora/values.generated.yaml | sed 's/.*: *"\(.*\)"/\1/'); \
-	NEXT_PUBLIC_ENABLE_PAGERDUTY_OAUTH=$$(grep 'NEXT_PUBLIC_ENABLE_PAGERDUTY_OAUTH:' deploy/helm/aurora/values.generated.yaml | sed 's/.*: *"\(.*\)"/\1/'); \
-	NEXT_PUBLIC_ENABLE_CONFLUENCE=$$(grep 'NEXT_PUBLIC_ENABLE_CONFLUENCE:' deploy/helm/aurora/values.generated.yaml | sed 's/.*: *"\(.*\)"/\1/'); \
+	NEXT_PUBLIC_VARS=$$(grep -E '^NEXT_PUBLIC_[A-Z_]+=.' .env.example | cut -d'=' -f1 | tr '\n' ' '); \
+	BUILD_ARGS=""; \
+	for var in $$NEXT_PUBLIC_VARS; do \
+		value=$$(grep "$$var:" deploy/helm/aurora/values.generated.yaml | sed 's/.*: *"\(.*\)"/\1/' | head -1); \
+		BUILD_ARGS="$$BUILD_ARGS --build-arg $$var=$$value"; \
+	done; \
 	echo "Using git SHA tag: $$GIT_SHA"; \
 	echo "Building backend image: $$IMAGE_REGISTRY/aurora-server:$$GIT_SHA"; \
 	docker buildx build --platform linux/amd64 -t $$IMAGE_REGISTRY/aurora-server:$$GIT_SHA -f server/Dockerfile --target prod ./server --push; \
 	echo "Building frontend image: $$IMAGE_REGISTRY/aurora-frontend:$$GIT_SHA"; \
 	docker buildx build --platform linux/amd64 -t $$IMAGE_REGISTRY/aurora-frontend:$$GIT_SHA \
 		-f client/Dockerfile --target prod \
-		--build-arg NEXT_PUBLIC_BACKEND_URL="$$NEXT_PUBLIC_BACKEND_URL" \
-		--build-arg NEXT_PUBLIC_WEBSOCKET_URL="$$NEXT_PUBLIC_WEBSOCKET_URL" \
-		--build-arg NEXT_PUBLIC_ENABLE_OVH="$$NEXT_PUBLIC_ENABLE_OVH" \
-		--build-arg NEXT_PUBLIC_ENABLE_SLACK="$$NEXT_PUBLIC_ENABLE_SLACK" \
-		--build-arg NEXT_PUBLIC_ENABLE_PAGERDUTY_OAUTH="$$NEXT_PUBLIC_ENABLE_PAGERDUTY_OAUTH" \
-		--build-arg NEXT_PUBLIC_ENABLE_CONFLUENCE="$$NEXT_PUBLIC_ENABLE_CONFLUENCE" \
+		$$BUILD_ARGS \
 		./client --push; \
 	echo "Images built and pushed successfully with tag: $$GIT_SHA"; \
 	echo "Updating values.generated.yaml with new tag..."; \
