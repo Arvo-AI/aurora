@@ -243,16 +243,14 @@ export default function ConnectorCard({ connector }: ConnectorCardProps) {
             <div className="flex gap-2 w-full">
               <Button
                 onClick={() => router.push("/settings/ssh-keys")}
-                className="w-full"
-                variant="outline"
+                className="w-full bg-white text-black hover:bg-gray-100"
               >
                 <KeyRound className="h-4 w-4 mr-2" />
                 SSH Keys
               </Button>
               <Button
                 onClick={() => router.push("/vm-config")}
-                className="w-full"
-                variant="outline"
+                className="w-full bg-white text-black hover:bg-gray-100"
               >
                 <Settings className="h-4 w-4 mr-2" />
                 VM Config

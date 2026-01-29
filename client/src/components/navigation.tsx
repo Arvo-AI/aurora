@@ -2,7 +2,7 @@
 
 import Link from "next/link"
 import { usePathname, useRouter } from "next/navigation"
-import { ChevronLeft, List, Settings, Edit3, LogOut, User, HelpCircle, Bug, Sparkles, Plug, Zap } from "lucide-react"
+import { ChevronLeft, List, Settings, LogOut, User, HelpCircle, Bug, Sparkles, Plug, Zap } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import ChatHistory from "@/components/ChatHistory"
@@ -154,13 +154,13 @@ export default function Navigation({
                 )}
               >
                 <div className="flex items-center">
-                  <Zap size={16} className="text-orange-400" />
+                  <Zap size={16} className="text-foreground" />
                   <span className="ml-2">Incidents</span>
                 </div>
                 {/* Running indicator - shows when Aurora is investigating */}
                 <span className="relative flex h-2 w-2">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-orange-400 opacity-75"></span>
-                  <span className="relative inline-flex rounded-full h-2 w-2 bg-orange-500"></span>
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-muted-foreground opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-muted-foreground"></span>
                 </span>
               </Link>
             </li>
@@ -181,34 +181,6 @@ export default function Navigation({
                 <span className="ml-2">Connectors</span>
               </div>
             </Link>
-          </li>
-
-          {/* New Chat Button - accessible from all pages */}
-          <li>
-            <div
-              onClick={() => {
-                if (pathname === "/chat") {
-                  // If already on chat page, just add the query parameter to trigger new chat
-                  window.location.href = "/chat?newChat=true";
-                } else {
-                  // Otherwise, navigate to chat page for new chat
-                  // Add a parameter to indicate this is a new chat request
-                  router.push("/chat?newChat=true");
-                }
-              }}
-              className={cn(
-                "w-full flex items-center justify-between px-2.5 py-1.5 rounded-md hover:bg-primary/10 transition-colors text-sm border border-transparent hover:border-border/50 cursor-pointer",
-                pathname === "/chat" 
-                  ? "bg-card rounded-lg border border-border shadow-sm" 
-                  : "text-muted-foreground"
-              )}
-            >
-              <div className="flex items-center">
-                <Edit3 size={16} />
-                <span className="ml-2">New Chat</span>
-              </div>
-
-            </div>
           </li>
 
           {/* Chat History Section */}
