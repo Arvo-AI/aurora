@@ -43,8 +43,8 @@ function FeedbackButton({
   variant,
 }: FeedbackButtonProps): ReactNode {
   const colorClasses = variant === 'helpful'
-    ? { selected: 'bg-green-500/20 text-green-400', hover: 'text-zinc-500 hover:text-green-400 hover:bg-green-500/10' }
-    : { selected: 'bg-red-500/20 text-red-400', hover: 'text-zinc-500 hover:text-red-400 hover:bg-red-500/10' };
+    ? { selected: 'bg-green-500/20 text-green-400', hover: 'text-white hover:text-green-400 hover:bg-green-500/10' }
+    : { selected: 'bg-red-500/20 text-red-400', hover: 'text-white hover:text-red-400 hover:bg-red-500/10' };
 
   return (
     <TooltipProvider>
@@ -215,7 +215,7 @@ export default function IncidentFeedback({
               size="sm"
               onClick={() => handleSubmit()}
               disabled={isLoading}
-              className="bg-zinc-700 hover:bg-zinc-600"
+              className="bg-white text-black hover:bg-zinc-200"
             >
               {isLoading ? (
                 <>
