@@ -1,3 +1,7 @@
+---
+sidebar_position: 3
+---
+
 # Vault Auto-Unseal with KMS
 
 Auto-unseal eliminates manual unsealing after pod restarts by delegating key decryption to a cloud KMS.
@@ -17,10 +21,10 @@ Auto-unseal eliminates manual unsealing after pod restarts by delegating key dec
 Where does your Vault run?
 │
 ├─ GCP (GKE/Compute Engine)
-│   └─ Use GCP Cloud KMS → see KMS_GCP.md
+│   └─ Use GCP Cloud KMS → see Vault KMS GCP guide
 │
 ├─ On-premises / Other cloud (with internet)
-│   └─ Use GCP Cloud KMS with service account key → see KMS_GCP.md "Option C"
+│   └─ Use GCP Cloud KMS with service account key → see Vault KMS GCP guide
 │
 └─ Air-gapped / No internet
     └─ Use Shamir seals (manual unsealing required)
@@ -79,7 +83,7 @@ vault:
 
 ## Next Steps
 
-1. Follow the [GCP Cloud KMS Setup](KMS_GCP.md) guide (includes GKE, Compute Engine, and on-prem with service account key)
+1. Follow the [GCP Cloud KMS Setup](./vault-kms-gcp) guide (includes GKE, Compute Engine, and on-prem with service account key)
 
 2. Complete the step-by-step setup
 

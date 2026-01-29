@@ -4,508 +4,431 @@ sidebar_position: 2
 
 # Kubernetes Deployment
 
-Deploy Aurora to a Kubernetes cluster for production workloads.
-
-:::info Work in Progress
-Official Helm charts for Aurora are under development. This guide covers manual Kubernetes deployment using the existing Docker images.
-:::
-
-## Overview
-
-Aurora can be deployed to Kubernetes by:
-1. Using the Docker images from Docker Compose
-2. Creating Kubernetes manifests for each service
-3. Configuring external dependencies (PostgreSQL, Redis, etc.)
+Deploy Aurora on Kubernetes using Helm.
 
 ## Prerequisites
 
-- Kubernetes cluster 1.24+
-- kubectl configured
-- Helm 3.x (for dependencies)
-- Container registry access
-- Persistent volume provisioner
+- Kubernetes 1.25+ with a default StorageClass
+- `kubectl`, `helm`, and `docker` (with buildx)
+- Container registry accessible from your cluster
+- Nginx Ingress Controller installed in your cluster
+- TLS certificate (wildcard certificate recommended for subdomains)
+- S3-compatible object storage (AWS S3, MinIO, Cloudflare R2, etc.)
+
+**Cluster resources**: The default configuration requires approximately 4 CPU cores and 12GB memory across all pods. Adjust `resources` in `values.yaml` for smaller clusters.
 
 ## Architecture
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    Ingress Controller                        │
-│              (nginx-ingress / traefik)                       │
-└─────────────────────────────────────────────────────────────┘
-                            │
-         ┌──────────────────┼──────────────────┐
-         ▼                  ▼                  ▼
-   ┌───────────┐      ┌───────────┐      ┌───────────┐
-   │ Frontend  │      │    API    │      │  Chatbot  │
-   │ Deployment│      │Deployment │      │Deployment │
-   │  (3000)   │      │  (5080)   │      │  (5006)   │
-   └───────────┘      └───────────┘      └───────────┘
-                            │
-                            ▼
-                    ┌───────────────┐
-                    │ Celery Worker │
-                    │  Deployment   │
-                    └───────────────┘
-                            │
-    ┌───────────────────────┼───────────────────────┐
-    │           │           │           │           │
-    ▼           ▼           ▼           ▼           ▼
-┌───────┐ ┌─────────┐ ┌─────────┐ ┌───────┐ ┌───────┐
-│  PG   │ │  Redis  │ │Weaviate │ │ Vault │ │  S3   │
-│(Cloud)│ │ (Cloud) │ │  (Helm) │ │(Helm) │ │(Cloud)│
-└───────┘ └─────────┘ └─────────┘ └───────┘ └───────┘
-```
+Aurora uses subdomain-based routing:
 
-## Recommended Setup
+| Subdomain | Service | Description |
+|-----------|---------|-------------|
+| `aurora.example.com` | Frontend | Next.js web application |
+| `api.aurora.example.com` | API Server | Flask REST API |
+| `ws.aurora.example.com` | WebSocket | Real-time chatbot server |
 
-### External Dependencies
+## Configuration
 
-For production, use managed services:
+### Step 1: Create your values file
 
-| Service | Recommended Options |
-|---------|---------------------|
-| PostgreSQL | AWS RDS, GCP Cloud SQL, Azure Database |
-| Redis | AWS ElastiCache, GCP Memorystore, Azure Cache |
-| Object Storage | AWS S3, Cloudflare R2, GCP GCS |
-| Vault | HashiCorp Cloud Platform, self-managed |
-
-### Install Weaviate
+Copy `values.yaml` to `values.generated.yaml` and edit it with your deployment settings:
 
 ```bash
-helm repo add weaviate https://weaviate.github.io/weaviate-helm
-helm install weaviate weaviate/weaviate \
-  --namespace aurora \
-  --create-namespace \
-  --set replicas=1 \
-  --set storage.size=10Gi
+cp deploy/helm/aurora/values.yaml deploy/helm/aurora/values.generated.yaml
 ```
 
-### Install Vault (Optional)
+**Files**:
+- `values.yaml` — Default configuration (version controlled)
+- `values.generated.yaml` — Your deployment config with secrets (**do not commit**)
 
-```bash
-helm repo add hashicorp https://helm.releases.hashicorp.com
-helm install vault hashicorp/vault \
-  --namespace aurora \
-  --set server.dev.enabled=false \
-  --set server.ha.enabled=false
+### Step 2: Configure required values
+
+Edit `values.generated.yaml` and update these sections:
+
+**Container Registry** (top of file):
+```yaml
+image:
+  registry: "gcr.io/my-project"  # Your registry (docker.io, gcr.io, ghcr.io, etc.)
+  tag: "latest"                  # Version tag
 ```
 
-## Kubernetes Manifests
+**URLs** (in `config` section):
+```yaml
+config:
+  # Subdomain-based routing
+  NEXT_PUBLIC_BACKEND_URL: "https://api.yourdomain.com"
+  NEXT_PUBLIC_WEBSOCKET_URL: "wss://ws.yourdomain.com"
+  FRONTEND_URL: "https://yourdomain.com"
+  
+  # S3-Compatible Storage (REQUIRED)
+  STORAGE_BUCKET: "my-aurora-storage"
+  STORAGE_ENDPOINT_URL: "https://s3.amazonaws.com"
+  STORAGE_REGION: "us-east-1"
+```
 
-### Namespace
+**Secrets** (in `secrets` section):
+```yaml
+secrets:
+  # Generate random secrets with: openssl rand -base64 32
+  POSTGRES_PASSWORD: ""         # REQUIRED
+  STORAGE_ACCESS_KEY: ""        # REQUIRED - Your S3 access key
+  STORAGE_SECRET_KEY: ""        # REQUIRED - Your S3 secret key
+  FLASK_SECRET_KEY: ""          # REQUIRED
+  AUTH_SECRET: ""               # REQUIRED
+  SEARXNG_SECRET: ""            # REQUIRED
+  VAULT_TOKEN: ""               # Set after Vault initialization
+  
+  # At least one LLM API key required
+  OPENROUTER_API_KEY: ""        # Get from: https://openrouter.ai/keys
+  # OR
+  OPENAI_API_KEY: ""            # Get from: https://platform.openai.com/api-keys
+```
+
+See the comments in `values.yaml` for all available options.
+
+### Step 3: Configure ingress and TLS
+
+Update the ingress section in `values.generated.yaml`:
 
 ```yaml
-# namespace.yaml
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: aurora
-```
-
-### ConfigMap
-
-```yaml
-# configmap.yaml
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: aurora-config
-  namespace: aurora
-data:
-  AURORA_ENV: "production"
-  POSTGRES_HOST: "your-postgres-host"
-  POSTGRES_PORT: "5432"
-  POSTGRES_DB: "aurora_db"
-  REDIS_URL: "redis://your-redis-host:6379/0"
-  WEAVIATE_HOST: "weaviate"
-  WEAVIATE_PORT: "8080"
-  FRONTEND_URL: "https://aurora.yourdomain.com"
-  BACKEND_URL: "http://aurora-api:5080"
-  NEXT_PUBLIC_BACKEND_URL: "https://api.aurora.yourdomain.com"
-  NEXT_PUBLIC_WEBSOCKET_URL: "wss://ws.aurora.yourdomain.com"
-```
-
-### Secrets
-
-```yaml
-# secrets.yaml
-apiVersion: v1
-kind: Secret
-metadata:
-  name: aurora-secrets
-  namespace: aurora
-type: Opaque
-stringData:
-  POSTGRES_USER: "aurora"
-  POSTGRES_PASSWORD: "your-secure-password"
-  FLASK_SECRET_KEY: "your-64-char-secret"
-  AUTH_SECRET: "your-64-char-secret"
-  OPENROUTER_API_KEY: "sk-or-v1-your-key"
-  VAULT_TOKEN: "hvs.your-token"
-```
-
-### API Deployment
-
-```yaml
-# api-deployment.yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: aurora-api
-  namespace: aurora
-spec:
-  replicas: 2
-  selector:
-    matchLabels:
-      app: aurora-api
-  template:
-    metadata:
-      labels:
-        app: aurora-api
-    spec:
-      containers:
-      - name: api
-        image: your-registry/aurora-server:latest
-        ports:
-        - containerPort: 5080
-        envFrom:
-        - configMapRef:
-            name: aurora-config
-        - secretRef:
-            name: aurora-secrets
-        resources:
-          requests:
-            memory: "2Gi"
-            cpu: "1"
-          limits:
-            memory: "4Gi"
-            cpu: "2"
-        livenessProbe:
-          httpGet:
-            path: /health
-            port: 5080
-          initialDelaySeconds: 30
-          periodSeconds: 10
-        readinessProbe:
-          httpGet:
-            path: /health
-            port: 5080
-          initialDelaySeconds: 5
-          periodSeconds: 5
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: aurora-api
-  namespace: aurora
-spec:
-  selector:
-    app: aurora-api
-  ports:
-  - port: 5080
-    targetPort: 5080
-```
-
-### Frontend Deployment
-
-```yaml
-# frontend-deployment.yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: aurora-frontend
-  namespace: aurora
-spec:
-  replicas: 2
-  selector:
-    matchLabels:
-      app: aurora-frontend
-  template:
-    metadata:
-      labels:
-        app: aurora-frontend
-    spec:
-      containers:
-      - name: frontend
-        image: your-registry/aurora-frontend:latest
-        ports:
-        - containerPort: 3000
-        envFrom:
-        - configMapRef:
-            name: aurora-config
-        - secretRef:
-            name: aurora-secrets
-        resources:
-          requests:
-            memory: "512Mi"
-            cpu: "250m"
-          limits:
-            memory: "1Gi"
-            cpu: "500m"
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: aurora-frontend
-  namespace: aurora
-spec:
-  selector:
-    app: aurora-frontend
-  ports:
-  - port: 3000
-    targetPort: 3000
-```
-
-### Celery Worker Deployment
-
-```yaml
-# celery-deployment.yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: aurora-celery
-  namespace: aurora
-spec:
-  replicas: 2
-  selector:
-    matchLabels:
-      app: aurora-celery
-  template:
-    metadata:
-      labels:
-        app: aurora-celery
-    spec:
-      containers:
-      - name: celery
-        image: your-registry/aurora-server:latest
-        command: ["celery", "-A", "tasks", "worker", "--loglevel=info"]
-        envFrom:
-        - configMapRef:
-            name: aurora-config
-        - secretRef:
-            name: aurora-secrets
-        resources:
-          requests:
-            memory: "2Gi"
-            cpu: "1"
-          limits:
-            memory: "4Gi"
-            cpu: "2"
-```
-
-### Chatbot Deployment
-
-```yaml
-# chatbot-deployment.yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: aurora-chatbot
-  namespace: aurora
-spec:
-  replicas: 2
-  selector:
-    matchLabels:
-      app: aurora-chatbot
-  template:
-    metadata:
-      labels:
-        app: aurora-chatbot
-    spec:
-      containers:
-      - name: chatbot
-        image: your-registry/aurora-chatbot:latest
-        ports:
-        - containerPort: 5006
-        envFrom:
-        - configMapRef:
-            name: aurora-config
-        - secretRef:
-            name: aurora-secrets
-        resources:
-          requests:
-            memory: "1Gi"
-            cpu: "500m"
-          limits:
-            memory: "2Gi"
-            cpu: "1"
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: aurora-chatbot
-  namespace: aurora
-spec:
-  selector:
-    app: aurora-chatbot
-  ports:
-  - port: 5006
-    targetPort: 5006
-```
-
-### Ingress
-
-```yaml
-# ingress.yaml
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: aurora-ingress
-  namespace: aurora
-  annotations:
-    kubernetes.io/ingress.class: nginx
-    cert-manager.io/cluster-issuer: letsencrypt-prod
-    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
-    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
-spec:
+ingress:
+  enabled: true
+  className: "nginx"
+  
   tls:
-  - hosts:
-    - aurora.yourdomain.com
-    - api.aurora.yourdomain.com
-    - ws.aurora.yourdomain.com
-    secretName: aurora-tls
-  rules:
-  - host: aurora.yourdomain.com
-    http:
-      paths:
-      - path: /
-        pathType: Prefix
-        backend:
-          service:
-            name: aurora-frontend
-            port:
-              number: 3000
-  - host: api.aurora.yourdomain.com
-    http:
-      paths:
-      - path: /
-        pathType: Prefix
-        backend:
-          service:
-            name: aurora-api
-            port:
-              number: 5080
-  - host: ws.aurora.yourdomain.com
-    http:
-      paths:
-      - path: /
-        pathType: Prefix
-        backend:
-          service:
-            name: aurora-chatbot
-            port:
-              number: 5006
+    enabled: false  # See TLS options below
+    secretName: "aurora-tls"
+    certManager:
+      enabled: false
+      issuer: "letsencrypt-prod"
+      email: "admin@yourdomain.com"
+  
+  hosts:
+    frontend: "aurora.yourdomain.com"
+    api: "api.aurora.yourdomain.com"
+    ws: "ws.aurora.yourdomain.com"
 ```
 
-## Deployment Steps
+#### TLS/HTTPS Configuration (Choose one option)
 
-### 1. Build and Push Images
+**Option 1: cert-manager with Let's Encrypt (Recommended)**
+
+Automatic certificate management with free Let's Encrypt certificates:
 
 ```bash
-# Build images
-docker build -t your-registry/aurora-server:latest ./server
-docker build -t your-registry/aurora-frontend:latest ./client
-docker build -t your-registry/aurora-chatbot:latest ./server -f ./server/Dockerfile.chatbot
+# Install cert-manager
+kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.13.3/cert-manager.yaml
 
-# Push to registry
-docker push your-registry/aurora-server:latest
-docker push your-registry/aurora-frontend:latest
-docker push your-registry/aurora-chatbot:latest
+# Wait for cert-manager pods to be ready (takes ~30 seconds)
+kubectl wait --for=condition=ready pod -l app.kubernetes.io/instance=cert-manager -n cert-manager --timeout=120s
+
+# Create Let's Encrypt issuer
+cat <<EOF | kubectl apply -f -
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-prod
+spec:
+  acme:
+    server: https://acme-v02.api.letsencrypt.org/directory
+    email: admin@yourdomain.com
+    privateKeySecretRef:
+      name: letsencrypt-prod
+    solvers:
+    - http01:
+        ingress:
+          class: nginx
+EOF
+
+# Enable in values.generated.yaml
+tls:
+  enabled: true
+  certManager:
+    enabled: true
+    issuer: "letsencrypt-prod"
+    email: "admin@yourdomain.com"
 ```
 
-### 2. Apply Manifests
+**Option 2: Manual TLS Certificate**
+
+Bring your own certificate (wildcard recommended):
 
 ```bash
-kubectl apply -f namespace.yaml
-kubectl apply -f configmap.yaml
-kubectl apply -f secrets.yaml
-kubectl apply -f api-deployment.yaml
-kubectl apply -f frontend-deployment.yaml
-kubectl apply -f celery-deployment.yaml
-kubectl apply -f chatbot-deployment.yaml
-kubectl apply -f ingress.yaml
+# Create Kubernetes secret with your certificate
+kubectl create secret tls aurora-tls \
+  --cert=path/to/fullchain.crt \
+  --key=path/to/privkey.key \
+  -n aurora
+
+# Enable in values.generated.yaml
+tls:
+  enabled: true
+  secretName: "aurora-tls"
 ```
 
-### 3. Verify Deployment
+#### DNS Configuration
+
+Create DNS records pointing to your ingress controller's external IP:
 
 ```bash
-# Check pods
+# Get your ingress IP
+kubectl get svc -n ingress-nginx ingress-nginx-controller
+```
+
+Create these DNS records (A records or CNAME):
+```
+aurora.yourdomain.com      A/CNAME  <INGRESS_IP_OR_HOSTNAME>
+api.aurora.yourdomain.com  A/CNAME  <INGRESS_IP_OR_HOSTNAME>
+ws.aurora.yourdomain.com   A/CNAME  <INGRESS_IP_OR_HOSTNAME>
+```
+
+Or use a wildcard DNS record:
+```
+*.aurora.yourdomain.com    A  <INGRESS_IP>
+aurora.yourdomain.com      A  <INGRESS_IP>
+```
+
+## Deployment
+
+### Install Nginx Ingress Controller (if not already installed)
+
+```bash
+kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.8.1/deploy/static/provider/cloud/deploy.yaml
+
+# Wait for external IP
+kubectl get svc -n ingress-nginx ingress-nginx-controller --watch
+```
+
+### Build and deploy
+
+```bash
+# Build images and deploy
+make deploy
+```
+
+This reads `values.generated.yaml` and deploys with Helm.
+
+### Initialize Vault (first deployment only)
+
+Vault requires manual initialization on first deployment:
+
+```bash
+# Initialize Vault
+kubectl -n aurora exec -it statefulset/aurora-oss-vault -- \
+  vault operator init -key-shares=1 -key-threshold=1
+```
+
+**Save the output securely** — you need the Unseal Key and Root Token.
+
+```bash
+# Unseal Vault
+kubectl -n aurora exec -it statefulset/aurora-oss-vault -- \
+  vault operator unseal <UNSEAL_KEY>
+
+# Verify Vault is ready
+kubectl -n aurora exec -it statefulset/aurora-oss-vault -- \
+  vault status
+```
+
+Add the Root Token to `values.generated.yaml` as `secrets.VAULT_TOKEN`, then redeploy:
+
+```bash
+make deploy
+```
+
+### Configure Vault KV Mount and Policy (first deployment only)
+
+After Vault is unsealed, set up the KV mount and application policy:
+
+```bash
+# Login with root token
+kubectl -n aurora exec statefulset/aurora-oss-vault -- sh -c \
+  'export VAULT_ADDR=http://127.0.0.1:8200 && echo "<ROOT_TOKEN>" | vault login -'
+
+# Enable KV v2 secrets engine at path 'aurora'
+kubectl -n aurora exec statefulset/aurora-oss-vault -- sh -c \
+  'export VAULT_ADDR=http://127.0.0.1:8200 && vault secrets enable -path=aurora kv-v2'
+
+# Create Aurora application policy
+kubectl -n aurora exec statefulset/aurora-oss-vault -- sh -c \
+  'export VAULT_ADDR=http://127.0.0.1:8200 && vault policy write aurora-app - <<EOF
+# Aurora application policy
+path "aurora/data/users/*" {
+  capabilities = ["create", "read", "update", "delete", "list"]
+}
+path "aurora/metadata/users/*" {
+  capabilities = ["list", "read", "delete"]
+}
+path "aurora/metadata/" {
+  capabilities = ["list"]
+}
+path "aurora/metadata/users" {
+  capabilities = ["list"]
+}
+EOF'
+
+# Create token with aurora-app policy
+kubectl -n aurora exec statefulset/aurora-oss-vault -- sh -c \
+  'export VAULT_ADDR=http://127.0.0.1:8200 && vault token create -policy=aurora-app -ttl=0'
+```
+
+**Update `values.generated.yaml`** with the token from the last command (replace `<ROOT_TOKEN>` with the token output):
+
+```yaml
+secrets:
+  VAULT_TOKEN: "<TOKEN_FROM_ABOVE>"
+```
+
+Then redeploy:
+
+```bash
+make deploy
+```
+
+:::warning Vault Auto-Unseal
+Vault must be unsealed after every pod restart. For production, see [Vault Auto-Unseal with KMS](./vault-kms-setup).
+:::
+
+## Verify deployment
+
+```bash
+# Check all pods are running
 kubectl get pods -n aurora
 
-# Check services
-kubectl get svc -n aurora
-
-# Check ingress
+# Check Ingress has an external IP and all hosts are configured
 kubectl get ingress -n aurora
 
 # View logs
-kubectl logs -n aurora -l app=aurora-api --tail=50
+kubectl logs -n aurora deploy/aurora-oss-server --tail=50
+kubectl logs -n aurora deploy/aurora-oss-chatbot --tail=50
+kubectl logs -n aurora deploy/aurora-oss-frontend --tail=50
+
+# Test the API
+curl https://api.aurora.yourdomain.com/health
 ```
 
-## Scaling
+Open `https://aurora.yourdomain.com` in your browser.
 
-### Horizontal Pod Autoscaler
+## Upgrading
 
-```yaml
-apiVersion: autoscaling/v2
-kind: HorizontalPodAutoscaler
-metadata:
-  name: aurora-api-hpa
-  namespace: aurora
-spec:
-  scaleTargetRef:
-    apiVersion: apps/v1
-    kind: Deployment
-    name: aurora-api
-  minReplicas: 2
-  maxReplicas: 10
-  metrics:
-  - type: Resource
-    resource:
-      name: cpu
-      target:
-        type: Utilization
-        averageUtilization: 70
+### Update configuration only
+```bash
+helm upgrade aurora-oss ./deploy/helm/aurora \
+  -f deploy/helm/aurora/values.generated.yaml -n aurora
 ```
 
-## Monitoring
+**Note:** Pods automatically restart only when ConfigMap/Secret values change (env vars). For other changes (replicas, resources, ingress), pods won't restart automatically.
 
-### Prometheus ServiceMonitor
-
-```yaml
-apiVersion: monitoring.coreos.com/v1
-kind: ServiceMonitor
-metadata:
-  name: aurora-api
-  namespace: aurora
-spec:
-  selector:
-    matchLabels:
-      app: aurora-api
-  endpoints:
-  - port: http
-    path: /metrics
+### Update with new code/images
+```bash
+git pull
+make deploy
 ```
+
+### Rollback if needed
+```bash
+helm rollback aurora-oss -n aurora
+```
+
+## Uninstalling
+
+```bash
+helm uninstall aurora-oss -n aurora
+kubectl delete namespace aurora
+```
+
+## Production Security
+
+The default configuration uses a static Vault root token stored in Kubernetes Secrets. For production deployments, consider these security enhancements:
+
+### 1. Vault Kubernetes Authentication (Recommended)
+
+Use Vault's Kubernetes auth method so pods authenticate using their Service Account instead of a static token:
+
+```bash
+# Enable Kubernetes auth in Vault
+kubectl exec -it statefulset/aurora-oss-vault -- vault auth enable kubernetes
+
+# Configure Vault to talk to Kubernetes
+kubectl exec -it statefulset/aurora-oss-vault -- vault write auth/kubernetes/config \
+  kubernetes_host="https://$KUBERNETES_PORT_443_TCP_ADDR:443"
+```
+
+Then update your applications to use Vault Agent sidecars that automatically fetch secrets.
+
+### 2. External Secrets Operator
+
+Use the [External Secrets Operator](https://external-secrets.io/) to sync secrets from Vault into Kubernetes Secrets automatically, with proper RBAC controls.
+
+### 3. Vault Auto-Unseal with KMS
+
+Eliminate manual unsealing after pod restarts by using cloud KMS. **Only GCP Cloud KMS is supported at the moment.**
+
+| Provider | Guide | Cost | Setup Time |
+|----------|-------|------|------------|
+| GCP | [Vault KMS Setup](./vault-kms-gcp) | ~$0.06/mo | 25-35 min |
+
+See [Vault Auto-Unseal Overview](./vault-kms-setup) for decision framework and setup guide.
+
+### 4. Pod Security Standards
+
+Enable Kubernetes Pod Security Standards to restrict pod capabilities and enforce security policies.
 
 ## Troubleshooting
 
-### Pod Not Starting
-
+**Pods stuck in Pending**: Check StorageClass availability and resource limits.
 ```bash
 kubectl describe pod -n aurora <pod-name>
-kubectl logs -n aurora <pod-name>
 ```
 
-### Database Connection Issues
+**Vault sealed after restart**: Re-run the unseal command with your saved Unseal Key.
 
+**Image pull errors**: Verify registry credentials and that images were pushed successfully.
 ```bash
-# Test from pod
-kubectl exec -n aurora -it <api-pod> -- psql -h $POSTGRES_HOST -U $POSTGRES_USER -d $POSTGRES_DB
+kubectl get events -n aurora --sort-by='.lastTimestamp'
 ```
 
-### Ingress Not Working
-
+**Database connection errors**: Ensure PostgreSQL pod is running and the password matches.
 ```bash
-kubectl describe ingress -n aurora aurora-ingress
-kubectl logs -n ingress-nginx -l app.kubernetes.io/component=controller
+kubectl logs -n aurora statefulset/aurora-oss-postgres
 ```
+
+**API returns 404**: Verify DNS records point to the Ingress controller IP and the Ingress has an ADDRESS.
+```bash
+kubectl get ingress -n aurora
+kubectl describe ingress -n aurora
+nslookup api.aurora.yourdomain.com
+```
+
+**WebSocket connection failures**: Check that the chatbot pod is running and DNS is configured for the ws subdomain.
+```bash
+kubectl logs -n aurora deploy/aurora-oss-chatbot --tail=100
+nslookup ws.aurora.yourdomain.com
+```
+
+**TLS certificate errors**: Ensure your certificate covers all three subdomains (wildcard recommended).
+```bash
+kubectl describe secret aurora-tls -n aurora
+openssl s_client -connect api.aurora.yourdomain.com:443 -servername api.aurora.yourdomain.com
+```
+
+## Configuration reference
+
+See `values.yaml` for all available options including:
+- Replica counts per service
+- Resource requests/limits
+- Persistence sizes
+- Optional integrations (Slack, PagerDuty, GitHub OAuth, etc.)
+
+### Internal service discovery
+
+The following config values are auto-generated by Helm if left empty:
+- `POSTGRES_HOST` → `<release>-postgres`
+- `REDIS_URL` → `redis://<release>-redis:6379/0`
+- `WEAVIATE_HOST` → `<release>-weaviate`
+- `BACKEND_URL` → `http://<release>-server:5080`
+- `CHATBOT_INTERNAL_URL` → `http://<release>-chatbot:5007`
+- `VAULT_ADDR` → `http://<release>-vault:8200`
+- `SEARXNG_URL` → `http://<release>-searxng:8080`
+
+Leave these empty in `values.generated.yaml` unless you're using external services.

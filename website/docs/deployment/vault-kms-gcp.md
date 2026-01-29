@@ -1,3 +1,7 @@
+---
+sidebar_position: 4
+---
+
 # GCP Cloud KMS Auto-Unseal Setup
 
 Setup time: 25-35 minutes | Cost: ~$0.06/month
@@ -181,7 +185,9 @@ rm vault-kms-key.json
 
 ## Step 4: Configure Helm Values
 
-**Important:** You must edit the file `deploy/helm/aurora/values.generated.yaml`. This is the file that `make deploy` reads. You cannot use a different filename.
+:::warning Important File
+You must edit the file `deploy/helm/aurora/values.generated.yaml`. This is the file that `make deploy` reads. You cannot use a different filename.
+:::
 
 **If you don't have this file yet:**
 ```bash

@@ -281,7 +281,7 @@ Then redeploy:
 make deploy
 ```
 
-> **Note**: Vault must be unsealed after every pod restart. For production, see [Vault Auto-Unseal with KMS](docs/KMS_SETUP.md).
+> **Note**: Vault must be unsealed after every pod restart. For production, see the [Vault Auto-Unseal documentation](https://aurora-docs.yourdomain.com/deployment/vault-kms-setup).
 
 ## Verify deployment
 
@@ -358,11 +358,7 @@ Use the [External Secrets Operator](https://external-secrets.io/) to sync secret
 
 Eliminate manual unsealing after pod restarts by using cloud KMS. **Only GCP Cloud KMS is supported at the moment.**
 
-| Provider | Guide | Cost | Setup Time |
-|----------|-------|------|------------|
-| GCP | [KMS_GCP.md](docs/KMS_GCP.md) | ~$0.06/mo | 25-35 min |
-
-See [KMS Setup Guide](docs/KMS_SETUP.md) for overview and decision framework.
+See the [Vault Auto-Unseal documentation](https://aurora-docs.yourdomain.com/deployment/vault-kms-setup) for setup guides and decision framework.
 
 ### 4. Pod Security Standards
 
