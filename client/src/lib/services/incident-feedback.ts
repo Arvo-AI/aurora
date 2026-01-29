@@ -1,5 +1,13 @@
 // ============================================================================
-// Incident Feedback Service (Aurora Learn)
+// Aurora Learn Service
+// - Incident feedback (thumbs up/down)
+// - Aurora Learn settings (enable/disable)
+// ============================================================================
+
+import { apiGet, apiPost, apiPut } from './api-client';
+
+// ============================================================================
+// Types
 // ============================================================================
 
 export type FeedbackType = 'helpful' | 'not_helpful';
@@ -13,14 +21,28 @@ export interface IncidentFeedback {
 
 export interface SubmitFeedbackResponse {
   success: boolean;
-  feedback_id: string;
-  feedback_type: FeedbackType;
-  stored_for_learning: boolean;
+  feedbackId: string;
+  feedbackType: FeedbackType;
+  storedForLearning: boolean;
+  createdAt: string;
 }
 
-export interface GetFeedbackResponse {
+export interface AuroraLearnSetting {
+  enabled: boolean;
+}
+
+interface GetFeedbackResponse {
   feedback: IncidentFeedback | null;
 }
+
+interface SetAuroraLearnResponse {
+  success: boolean;
+  enabled: boolean;
+}
+
+// ============================================================================
+// Incident Feedback
+// ============================================================================
 
 /**
  * Submit feedback for an incident (thumbs up/down).
@@ -30,51 +52,51 @@ export async function submitFeedback(
   feedbackType: FeedbackType,
   comment?: string
 ): Promise<SubmitFeedbackResponse> {
-  const response = await fetch(`/api/incidents/${incidentId}/feedback`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    credentials: 'include',
-    body: JSON.stringify({
-      feedback_type: feedbackType,
-      comment: comment || undefined,
-    }),
-  });
-
-  if (!response.ok) {
-    const data = await response.json().catch(() => ({}));
-    throw new Error(data.error || `Failed to submit feedback: ${response.statusText}`);
-  }
-
-  return response.json();
+  return apiPost<SubmitFeedbackResponse>(
+    `/api/incidents/${incidentId}/feedback`,
+    { feedback_type: feedbackType, comment: comment || undefined }
+  );
 }
 
 /**
  * Get existing feedback for an incident.
  */
 export async function getFeedback(incidentId: string): Promise<IncidentFeedback | null> {
-  const response = await fetch(`/api/incidents/${incidentId}/feedback`, {
-    method: 'GET',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    credentials: 'include',
-  });
-
-  if (!response.ok) {
-    const data = await response.json().catch(() => ({}));
-    throw new Error(data.error || `Failed to get feedback: ${response.statusText}`);
-  }
-
-  const data: GetFeedbackResponse = await response.json();
+  const data = await apiGet<GetFeedbackResponse>(`/api/incidents/${incidentId}/feedback`);
   return data.feedback;
 }
 
+// ============================================================================
+// Aurora Learn Settings
+// ============================================================================
+
 /**
- * Convenience object for importing all feedback functions.
+ * Get the Aurora Learn setting for the current user.
+ * Defaults to true if not set.
  */
+export async function getAuroraLearnSetting(): Promise<AuroraLearnSetting> {
+  return apiGet<AuroraLearnSetting>('/api/user/preferences/aurora-learn');
+}
+
+/**
+ * Set the Aurora Learn setting for the current user.
+ */
+export async function setAuroraLearnSetting(
+  enabled: boolean
+): Promise<SetAuroraLearnResponse> {
+  return apiPut<SetAuroraLearnResponse>('/api/user/preferences/aurora-learn', { enabled });
+}
+
+// ============================================================================
+// Service Objects (for convenience imports)
+// ============================================================================
+
 export const incidentFeedbackService = {
   submitFeedback,
   getFeedback,
+};
+
+export const userPreferencesService = {
+  getAuroraLearnSetting,
+  setAuroraLearnSetting,
 };
