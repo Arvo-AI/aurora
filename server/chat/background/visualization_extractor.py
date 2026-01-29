@@ -3,7 +3,6 @@ import logging
 from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, Field
-from chat.backend.agent.llm import LLMManager
 
 logger = logging.getLogger(__name__)
 
@@ -117,7 +116,6 @@ Return structured data matching VisualizationData schema."""
                 # Update status if new info is more specific
                 if node.status != 'investigating' and merged_nodes[node.id].status == 'investigating':
                     merged_nodes[node.id].status = node.status
-                merged_nodes[node.id].metadata.update(node.metadata)
             else:
                 merged_nodes[node.id] = node
         
