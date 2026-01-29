@@ -41,12 +41,17 @@ def stream_visualization_updates(incident_id: str):
             
             yield f"data: {json.dumps({'type': 'connected', 'incident_id': incident_id})}\n\n"
             
-            for message in pubsub.listen():
-                if message['type'] == 'message':
+            # Use get_message with timeout instead of listen() to avoid blocking forever
+            while True:
+                message = pubsub.get_message(timeout=30.0)
+                if message and message['type'] == 'message':
                     data = message['data']
                     if isinstance(data, bytes):
                         data = data.decode('utf-8')
                     yield f"data: {data}\n\n"
+                elif message is None:
+                    # Timeout - send heartbeat to detect disconnects
+                    yield f": heartbeat\n\n"
         finally:
             if pubsub:
                 pubsub.unsubscribe(channel)
