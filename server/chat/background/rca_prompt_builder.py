@@ -141,6 +141,21 @@ def _get_similar_good_rcas_context(
                         context_parts.append(f"- {truncated}")
                     context_parts.append("")
 
+            # Add commands used during investigation (without outputs)
+            citations = match.get("citations", [])
+            if citations:
+                commands = [
+                    c.get("command", "")
+                    for c in citations
+                    if c.get("command")
+                ][:5]
+                if commands:
+                    context_parts.append("**Commands used in investigation:**")
+                    for cmd in commands:
+                        truncated = cmd[:150] + "..." if len(cmd) > 150 else cmd
+                        context_parts.append(f"- `{truncated}`")
+                    context_parts.append("")
+
         context_parts.extend([
             "---",
             "**Note**: Use the above context as guidance. The current incident may have different root causes.",
