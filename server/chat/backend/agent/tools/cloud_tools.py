@@ -30,7 +30,8 @@ from .github_rca_tool import github_rca, GitHubRCAArgs
 from .github_fix_tool import github_fix, GitHubFixArgs
 
 # Visualization trigger caching
-_viz_triggers: Dict[str, Any] = {}
+from cachetools import TTLCache
+_viz_triggers: TTLCache = TTLCache(maxsize=100, ttl=3600)  # 1 hour TTL
 MAX_TOOL_OUTPUT_CHARS = 5000  # Celery message size limit
 from .github_apply_fix_tool import github_apply_fix, GitHubApplyFixArgs
 from .cloud_exec_tool import cloud_exec
