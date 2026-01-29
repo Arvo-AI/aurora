@@ -21,7 +21,7 @@ import {
 import '@xyflow/react/dist/style.css';
 import './visualization.css';
 import { useMemo, useCallback, useState, useEffect, useRef } from 'react';
-import { Loader2, Maximize, RotateCcw } from 'lucide-react';
+import { Loader2, Maximize, RotateCcw, Container, Layers, Network, Database, Server, Zap, HardDrive, Archive, Grid3x3, FolderTree, MapPin, Bell, AlertTriangle, Activity, LucideIcon, Boxes } from 'lucide-react';
 import dagre from 'dagre';
 
 interface Props {
@@ -51,10 +51,24 @@ function calcGroupHeight(childCount: number) {
   return GROUP_HEADER_HEIGHT + childCount * CHILD_NODE_HEIGHT + (childCount - 1) * CHILD_SPACING + CHILD_PADDING_BOTTOM;
 }
 
+function getIconForType(type: string): LucideIcon | null {
+  const iconMap: Record<string, LucideIcon> = {
+    pod: Container, deployment: Layers, service: Network, statefulset: Database, daemonset: Grid3x3, replicaset: Layers,
+    vm: Server, instance: Server, lambda: Zap, 'cloud-function': Zap, node: HardDrive,
+    'load-balancer': Network, ingress: Network, 'api-gateway': Network,
+    database: Database, postgres: Database, mysql: Database, mongodb: Database, redis: Database, elasticsearch: Database,
+    bucket: Archive, pvc: HardDrive, queue: Activity,
+    cluster: Boxes, namespace: FolderTree, region: MapPin,
+    alert: Bell, event: Activity, metric: Activity,
+  };
+  return iconMap[type.toLowerCase()] || null;
+}
+
 function CustomNode({ data }: { data: InfraNode & { isRootCause?: boolean; isAffected?: boolean } }) {
   const colors = statusColors[data.status];
   const isRootCause = data.isRootCause;
   const isAffected = data.isAffected;
+  const Icon = getIconForType(data.type);
 
   return (
     <>
@@ -62,14 +76,17 @@ function CustomNode({ data }: { data: InfraNode & { isRootCause?: boolean; isAff
       <div
         style={{
           padding: '12px 16px',
+          paddingRight: Icon ? '32px' : '16px',
           border: `2px ${isAffected ? 'dashed' : 'solid'} ${colors.border}`,
           borderRadius: '8px',
           backgroundColor: colors.bg,
           minWidth: '120px',
           boxShadow: isRootCause ? `0 0 20px ${colors.glow}` : `0 0 8px ${colors.glow}`,
           fontWeight: isRootCause ? 600 : 400,
+          position: 'relative',
         }}
       >
+        {Icon && <Icon size={14} style={{ position: 'absolute', top: 8, right: 8, opacity: 0.6, color: colors.border }} />}
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#fafafa' }}>
           <div style={{ 
             fontSize: '9px', 
@@ -100,6 +117,7 @@ function GroupNode({ data }: { data: InfraNode & { isRootCause?: boolean; isAffe
   const colors = statusColors[data.status];
   const isRootCause = data.isRootCause;
   const isAffected = data.isAffected;
+  const Icon = getIconForType(data.type);
 
   return (
     <>
@@ -113,6 +131,7 @@ function GroupNode({ data }: { data: InfraNode & { isRootCause?: boolean; isAffe
           right: 0,
           height: GROUP_HEADER_HEIGHT,
           padding: '10px 12px',
+          paddingRight: Icon ? '36px' : '12px',
           display: 'flex',
           alignItems: 'center',
           gap: '8px',
@@ -121,6 +140,7 @@ function GroupNode({ data }: { data: InfraNode & { isRootCause?: boolean; isAffe
           overflow: 'hidden',
         }}
       >
+        {Icon && <Icon size={14} style={{ position: 'absolute', top: 10, right: 12, opacity: 0.6, color: colors.border }} />}
         <div style={{ 
           fontSize: '9px', 
           fontWeight: 700, 
