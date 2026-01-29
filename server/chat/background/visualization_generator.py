@@ -9,6 +9,7 @@ import redis
 from celery_config import celery_app
 from chat.background.visualization_extractor import VisualizationData, VisualizationExtractor
 from utils.db.connection_pool import db_pool
+from utils.cache.redis_client import get_redis_client
 
 # Constants (avoid circular import with task.py)
 MAX_TOOL_OUTPUT_CHARS = 5000
@@ -167,14 +168,14 @@ def _store_visualization(incident_id: str, json_str: str):
 
 def _notify_sse_clients(incident_id: str, version: int):
     """Notify SSE listeners via Redis pub/sub."""
-    redis_client = None
     try:
-        redis_client = redis.from_url(os.getenv('REDIS_URL', 'redis://redis:6379/0'))
+        redis_client = get_redis_client()
+        if not redis_client:
+            logger.warning("[Visualization] Redis unavailable, skipping SSE notification")
+            return
+        
         channel = f"visualization:{incident_id}"
         message = json.dumps({"type": "update", "version": version})
         redis_client.publish(channel, message)
     except Exception as e:
         logger.warning(f"[Visualization] Failed to notify SSE clients: {e}")
-    finally:
-        if redis_client:
-            redis_client.close()
