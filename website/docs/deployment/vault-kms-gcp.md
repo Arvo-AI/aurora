@@ -4,7 +4,7 @@ sidebar_position: 4
 
 # GCP Cloud KMS Auto-Unseal Setup
 
-Setup time: 25-35 minutes | Cost: ~$0.06/month
+Cost: ~$0.06/month
 
 ## Prerequisites
 
@@ -347,6 +347,10 @@ kubectl -n aurora exec statefulset/aurora-oss-vault -- sh -c \
 secrets:
   VAULT_TOKEN: "<TOKEN_FROM_ABOVE>"
 ```
+
+:::danger Secure This Token
+The `VAULT_TOKEN` grants access to all secrets stored in Vault. If this token is compromised, an attacker can read/modify all application secrets. Store `values.generated.yaml` securely and never commit it to version control.
+:::
 
 Then redeploy:
 

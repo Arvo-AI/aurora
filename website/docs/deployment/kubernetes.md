@@ -208,9 +208,21 @@ make deploy
 
 This reads `values.generated.yaml` and deploys with Helm.
 
+## Vault Setup
+
+### Choose Your Vault Unsealing Strategy
+
+:::warning Production vs Development
+**For production environments**: Use [Vault Auto-Unseal with KMS](./vault-kms-setup) to eliminate manual unsealing after pod restarts. Manual unsealing is not suitable for production as it requires operator intervention every time Vault restarts.
+
+**For development/staging**: The manual setup below is fine for non-production environments.
+:::
+
+If you're deploying to production, **skip the manual setup below** and follow the [Vault KMS setup guide](./vault-kms-setup) instead.
+
 ### Initialize Vault (first deployment only)
 
-Vault requires manual initialization on first deployment:
+For development/staging environments, initialize Vault manually:
 
 ```bash
 # Initialize Vault
@@ -279,14 +291,18 @@ secrets:
   VAULT_TOKEN: "<TOKEN_FROM_ABOVE>"
 ```
 
+:::danger Secure This Token
+The `VAULT_TOKEN` grants access to all secrets stored in Vault. If this token is compromised, an attacker can read/modify all application secrets. Store `values.generated.yaml` securely and never commit it to version control.
+:::
+
 Then redeploy:
 
 ```bash
 make deploy
 ```
 
-:::warning Vault Auto-Unseal
-Vault must be unsealed after every pod restart. For production, see [Vault Auto-Unseal with KMS](./vault-kms-setup).
+:::tip Remember
+With manual unsealing, you'll need to run `kubectl exec ... vault operator unseal <UNSEAL_KEY>` after every Vault pod restart. For production, use [KMS auto-unseal](./vault-kms-setup) instead.
 :::
 
 ## Verify deployment
