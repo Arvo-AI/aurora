@@ -85,12 +85,41 @@ def infer(user_id, graph_nodes, enrichment_data):
         List of dependency edge dicts with keys: from_service, to_service,
         dependency_type, confidence, discovered_from.
     """
-    # Group nodes by VPC
+    # Group nodes by VPC.
+    # For GCP, vpc_id may be "gcp-<project>/<vpc-name>" (resources with an
+    # explicit VPC) or "gcp-<project>" (resources without a VPC, e.g. Pub/Sub,
+    # Cloud Storage).  We group by the full vpc_id first, then merge all
+    # groups that share the same GCP project prefix so that VMs in
+    # "gcp-proj/default" can reach Pub/Sub topics in "gcp-proj".
     vpc_groups = defaultdict(list)
     for node in graph_nodes:
         vpc_id = node.get("vpc_id")
         if vpc_id:
             vpc_groups[vpc_id].append(node)
+
+    # Merge GCP VPC groups that share the same project prefix.
+    # "gcp-proj/default" and "gcp-proj" -> merged under "gcp-proj".
+    gcp_project_groups = defaultdict(list)
+    non_gcp_keys = []
+    for vpc_id in list(vpc_groups.keys()):
+        if vpc_id.startswith("gcp-"):
+            # Extract the project part: "gcp-proj/vpc-name" -> "gcp-proj"
+            project_key = vpc_id.split("/")[0]
+            gcp_project_groups[project_key].append(vpc_id)
+        else:
+            non_gcp_keys.append(vpc_id)
+
+    # Build the final merged groups
+    merged_groups = {}
+    for project_key, vpc_ids in gcp_project_groups.items():
+        merged_nodes = []
+        for vid in vpc_ids:
+            merged_nodes.extend(vpc_groups[vid])
+        merged_groups[project_key] = merged_nodes
+    for vpc_id in non_gcp_keys:
+        merged_groups[vpc_id] = vpc_groups[vpc_id]
+
+    vpc_groups = merged_groups
 
     if not vpc_groups:
         logger.debug("No VPC-grouped nodes for user %s", user_id)
