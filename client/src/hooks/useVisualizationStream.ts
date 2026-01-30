@@ -18,6 +18,7 @@ export function useVisualizationStream(incidentId: string) {
   
   const eventSourceRef = useRef<EventSource | null>(null);
   const currentVersionRef = useRef<number>(0);
+  const fetchingUpdateRef = useRef<boolean>(false);
 
   useEffect(() => {
     let mounted = true;
@@ -73,14 +74,21 @@ export function useVisualizationStream(incidentId: string) {
             return;
           }
           
-          if (message.type === 'update' && message.version > currentVersionRef.current) {
-            const response = await fetch(`/api/incidents/${incidentId}/visualization`);
-            if (response.ok) {
-              const result = await response.json();
-              if (mounted && result.data) {
-                currentVersionRef.current = result.data.version;
-                setState(prev => ({ ...prev, data: result.data }));
+          if (message.type === 'update' && message.version > currentVersionRef.current && !fetchingUpdateRef.current) {
+            fetchingUpdateRef.current = true;
+            try {
+              const response = await fetch(`/api/incidents/${incidentId}/visualization`);
+              if (response.ok) {
+                const result = await response.json();
+                if (mounted && result.data && result.data.version > currentVersionRef.current) {
+                  currentVersionRef.current = result.data.version;
+                  setState(prev => ({ ...prev, data: result.data }));
+                }
               }
+            } catch (err) {
+              console.error('[Visualization] Failed to fetch update:', err);
+            } finally {
+              fetchingUpdateRef.current = false;
             }
           }
         } catch (err) {
@@ -95,8 +103,9 @@ export function useVisualizationStream(incidentId: string) {
       };
     };
 
-    fetchInitialData();
-    connectSSE();
+    fetchInitialData().then(() => {
+      connectSSE();
+    });
 
     return () => {
       mounted = false;

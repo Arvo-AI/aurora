@@ -27,6 +27,7 @@ export async function GET(
       headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive' },
     });
   } catch (error) {
+    console.error('[api/incidents/[id]/visualization/stream] Error:', error);
     return new Response('Failed to connect to visualization stream', { status: 500 });
   }
 }

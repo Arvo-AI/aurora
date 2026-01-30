@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 class InfraNode(BaseModel):
     """Infrastructure entity node."""
     id: str = Field(description="Unique identifier (e.g., 'svc-api', 'pod-db-1')")
-    label: str = Field(description="Display name (8-15 chars)")
+    label: str = Field(description="Display name - use full entity name from infrastructure")
     type: str = Field(description="Infrastructure entity type (e.g., 'pod', 'deployment', 'lambda', 'load-balancer', 'database')")
     status: Literal['healthy', 'degraded', 'failed', 'investigating', 'unknown'] = 'investigating'
     parentId: Optional[str] = Field(default=None, description="ID of parent node for hierarchical grouping (e.g., cluster, namespace, region)")
@@ -162,10 +162,10 @@ EXTRACTION RULES:
    - Example: If service A calls database B, create dependency edge A→B
 
 6. LABELING:
-   - Keep labels concise: 8-15 characters
    - Use actual names from infrastructure (pod names, service names, etc.)
-   - For nodes: use short identifiers (e.g., 'api-pod-3x7k', 'postgres-db')
-   - For group nodes: use descriptive names (e.g., 'Prod Cluster', 'us-east-1')
+   - For nodes: use full entity names as they appear in the infrastructure (e.g., 'api-pod-3x7k2s', 'postgres-primary-0')
+   - For group nodes: use descriptive names (e.g., 'Production Cluster', 'us-east-1')
+   - Do NOT truncate or abbreviate names
 
 7. INCREMENTAL UPDATES:
    - If existing graph provided, return ONLY new entities or status updates
