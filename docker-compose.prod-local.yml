@@ -85,6 +85,13 @@ x-common-env: &common-env
   VAULT_TOKEN: ${VAULT_TOKEN}
   VAULT_KV_MOUNT: ${VAULT_KV_MOUNT}
 
+  # Memgraph (Graph Database)
+  MEMGRAPH_HOST: ${MEMGRAPH_HOST:-memgraph}
+  MEMGRAPH_PORT: ${MEMGRAPH_PORT:-7687}
+  MEMGRAPH_USER: ${MEMGRAPH_USER:-aurora}
+  MEMGRAPH_PASSWORD: ${MEMGRAPH_PASSWORD:-aurora_secure_password}
+  DISCOVERY_INTERVAL_HOURS: ${DISCOVERY_INTERVAL_HOURS:-1}
+
   # Email Notifications (SMTP) - optional for local
   SMTP_HOST: ${SMTP_HOST}
   SMTP_PORT: ${SMTP_PORT}
@@ -170,6 +177,8 @@ services:
         condition: service_healthy
       seaweedfs-filer:
         condition: service_healthy
+      memgraph:
+        condition: service_healthy
     restart: unless-stopped
 
   celery_worker:
@@ -214,6 +223,7 @@ services:
     depends_on:
       - redis
       - vault
+      - memgraph
     restart: unless-stopped
 
   celery_beat:
@@ -541,6 +551,43 @@ services:
       seaweedfs-filer:
         condition: service_healthy
 
+  # Memgraph - In-memory Graph Database
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  memgraph:
+    image: memgraph/memgraph-mage:latest
+    container_name: aurora-memgraph
+    ports:
+      - "7687:7687"
+      - "7444:7444"
+    volumes:
+      - memgraph-data:/var/lib/memgraph
+    environment:
+      - MEMGRAPH_USER=${MEMGRAPH_USER:-aurora}
+      - MEMGRAPH_PASSWORD=${MEMGRAPH_PASSWORD:-aurora_secure_password}
+    command: >
+      --memory-limit=2048
+      --log-level=WARNING
+      --also-log-to-stderr
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import socket; s=socket.socket(); s.settimeout(2); s.connect(('localhost',7687)); s.close()\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  memgraph-lab:
+    image: memgraph/lab:latest
+    container_name: aurora-memgraph-lab
+    ports:
+      - "3001:3000"
+    depends_on:
+      - memgraph
+    environment:
+      - QUICK_CONNECT_MG_HOST=memgraph
+      - QUICK_CONNECT_MG_PORT=7687
+    restart: unless-stopped
+
 volumes:
   postgres-data:
   weaviate_data:
@@ -550,3 +597,4 @@ volumes:
   seaweedfs_filer_data:
   vault-data:
   vault-init:
+  memgraph-data:
