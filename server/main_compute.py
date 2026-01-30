@@ -163,6 +163,10 @@ CORS(app, origins=FRONTEND_URL, supports_credentials=True,
                        "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
                                          "Authorization", "X-Provider-Preference"],
                        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"]},
+        r"/api/graph/*": {"origins": FRONTEND_URL, "supports_credentials": True,
+                          "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
+                                            "Authorization", "X-Provider-Preference"],
+                          "methods": ["GET", "POST", "DELETE", "OPTIONS"]},
         r"/*": {"origins": FRONTEND_URL, "supports_credentials": True,
                 "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID", 
                                 "Authorization", "X-Provider-Preference"], 
@@ -320,6 +324,10 @@ app.register_blueprint(terraform_workspace_bp)
 
 # --- Health & Monitoring Routes ---
 # health_bp already imported and registered above
+
+# --- Graph / Service Discovery Routes ---
+from routes.graph_routes import graph_bp
+app.register_blueprint(graph_bp)
 
 # ---- Debug Routes ----
 from routes.debug import bp as debug_bp
