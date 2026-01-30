@@ -91,17 +91,21 @@ To test production builds without deploying to Kubernetes:
 
 ```bash
 # Build and start production images
-make prod-build
-make prod
+make prod-local-build
+make prod-local
 
 # View logs
-make prod-logs
+make prod-local-logs
 
 # Stop
-make prod-down
+make prod-local-down
 ```
 
 This uses `docker-compose.prod-local.yml` which builds optimized production images but still runs on your local machine.
+
+:::tip Shorthand Commands
+You can also use `make prod`, `make prod-build`, etc. as shortcuts - they're aliases for the `prod-local` commands.
+:::
 
 ## Accessing Aurora
 
@@ -152,7 +156,8 @@ Data is stored in Docker volumes and persists across container restarts:
 To remove all data and start fresh:
 
 ```bash
-make clean  # or make prod-clean for prod-local
+make clean              # for dev
+make prod-local-clean   # for prod-local
 ```
 
 ## Monitoring
@@ -180,7 +185,7 @@ make logs
 docker compose logs -f aurora-server
 
 # Production build logs
-make prod-logs
+make prod-local-logs
 ```
 
 ## Troubleshooting
