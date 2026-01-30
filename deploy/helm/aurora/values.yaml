@@ -18,8 +18,7 @@ fullnameOverride: ""
 # ------------------------------------------------------------------------------
 image:
   # Container registry where images are stored
-  # Examples: docker.io/myorg, gcr.io/project-id, ghcr.io/myorg
-  registry: "your-registry"
+  registry: "your-registry"  #Examples: docker.io/myorg, gcr.io/project-id, ghcr.io/myorg
   
   # Image tag (version) to deploy
   tag: "latest"
@@ -48,8 +47,7 @@ replicaCounts:
 # Application configuration (non-sensitive)
 # ------------------------------------------------------------------------------
 config:
-  # Environment: dev, staging, production
-  AURORA_ENV: "production"
+  AURORA_ENV: "production" # Environment: dev, staging, production
   
   # --- Database ---
   POSTGRES_HOST: ""  # Auto-generated if empty: <release>-postgres
@@ -61,9 +59,9 @@ config:
   
   # --- S3-Compatible Object Storage (REQUIRED) ---
   # Supports: AWS S3, MinIO, Cloudflare R2, Backblaze B2, etc.
-  STORAGE_BUCKET: ""                           # REQUIRED - Your bucket name
-  STORAGE_ENDPOINT_URL: ""                     # REQUIRED - e.g., https://s3.amazonaws.com
-  STORAGE_REGION: "us-east-1"                  # Your storage region
+  STORAGE_BUCKET: ""             # REQUIRED - Your bucket name
+  STORAGE_ENDPOINT_URL: ""       # REQUIRED - e.g., https://s3.amazonaws.com
+  STORAGE_REGION: "us-east-1"    # Your storage region
   STORAGE_USE_SSL: "true"
   STORAGE_VERIFY_SSL: "true"
   STORAGE_CACHE_ENABLED: "true"
@@ -82,11 +80,11 @@ config:
   FRONTEND_URL: "" #Example: https://aurora.example.com
   
   # --- Internal Service URLs ---
-  BACKEND_URL: ""              # Auto-generated if empty: http://<release>-server:5080
-  CHATBOT_INTERNAL_URL: ""     # Auto-generated if empty: http://<release>-chatbot:5007
-  VAULT_ADDR: ""               # Default applied by chart when empty: http://<release>-vault:8200
-  SEARXNG_URL: ""              # Auto-generated if empty: http://<release>-searxng:8080
-  SEARXNG_BASE_URL: "" #Example: https://aurora.example.com
+  BACKEND_URL: ""             # Auto-generated if empty: http://<release>-server:5080
+  CHATBOT_INTERNAL_URL: ""    # Auto-generated if empty: http://<release>-chatbot:5007
+  VAULT_ADDR: ""              # Default applied by chart when empty: http://<release>-vault:8200
+  SEARXNG_URL: ""             # Auto-generated if empty: http://<release>-searxng:8080
+  SEARXNG_BASE_URL: ""        #Example: https://aurora.example.com
   
   # --- Flask/API Configuration ---
   FLASK_PORT: "5080"
@@ -94,8 +92,7 @@ config:
   VAULT_KV_BASE_PATH: "users"
   
   # --- LLM Configuration ---
-  # Provider: openrouter, openai, anthropic, google
-  LLM_PROVIDER_MODE: "openrouter"
+  LLM_PROVIDER_MODE: "openrouter"  #Provider: openrouter, openai, anthropic, google
   AGENT_RECURSION_LIMIT: "240" #Maximum number of steps an agent can take
   
   # --- Performance & Caching ---
