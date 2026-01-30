@@ -146,6 +146,10 @@ EXTRACTION RULES:
    - For group/container nodes: use worst status of children
 
 5. RELATIONSHIPS (be specific):
+   - **CRITICAL - NO HIERARCHY EDGES**: NEVER create edges between parent and child nodes
+     * If node A has parentId=B, do NOT create an edge A→B or B→A
+     * Hierarchy is shown visually by containment (parentId), NOT by edges
+     * Example: If pod has parentId=deployment, NO edge between pod and deployment
    - **IMPORTANT**: Do NOT create edges for hierarchical containment (cluster→namespace, namespace→deployment, etc.)
      * These are automatically shown via parentId
      * Edges like "contains namespace", "contains deployment", "manages pod" should NOT exist

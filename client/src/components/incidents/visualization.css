@@ -66,15 +66,3 @@
 .react-flow__pane.dragging {
   cursor: grabbing;
 }
-
-/* Edge label styling */
-.react-flow__edge-text {
-  fill: #71717a !important;
-  font-size: 10px !important;
-  font-weight: 500 !important;
-}
-
-.react-flow__edge-textbg {
-  fill: #18181b !important;
-  fill-opacity: 0.9 !important;
-}
