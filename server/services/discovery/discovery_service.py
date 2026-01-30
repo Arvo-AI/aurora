@@ -39,6 +39,96 @@ PROVIDER_MODULES = {
 }
 
 
+def _setup_provider_env(provider_name, user_id, credentials):
+    """Build an isolated subprocess env dict for a cloud provider.
+
+    Uses the same credential-setup functions as the chatbot's cloud_exec_tool
+    so that CLI commands inside the worker container are properly authenticated.
+
+    Args:
+        provider_name: One of gcp, aws, azure, ovh, scaleway, tailscale.
+        user_id: The user ID performing discovery.
+        credentials: Original credentials dict (may contain project_id, etc.).
+
+    Returns:
+        (env_dict_or_None, updated_credentials_dict)
+        env_dict is passed to subprocess.run(env=...).
+        updated_credentials may contain extra keys (e.g. Tailscale api_key).
+    """
+    from chat.backend.agent.tools.cloud_exec_tool import (
+        setup_gcp_environment_isolated,
+        setup_aws_environment_isolated,
+        setup_azure_environment_isolated,
+        setup_ovh_environment_isolated,
+        setup_scaleway_environment_isolated,
+        setup_tailscale_environment_isolated,
+    )
+
+    try:
+        if provider_name == "gcp":
+            project_id = credentials.get("project_id")
+            success, resolved_project, _auth_type, env = setup_gcp_environment_isolated(
+                user_id, selected_project_id=project_id, provider_preference="gcp"
+            )
+            if success and env:
+                # Pass project_id back so the provider can scope its queries
+                creds = dict(credentials)
+                if resolved_project:
+                    creds["project_id"] = resolved_project
+                return env, creds
+
+        elif provider_name == "aws":
+            success, _region, _auth_type, env = setup_aws_environment_isolated(user_id)
+            if success and env:
+                # Build credentials dict from env so aws_asset_discovery._build_env works
+                creds = {
+                    "access_key_id": env.get("AWS_ACCESS_KEY_ID", ""),
+                    "secret_access_key": env.get("AWS_SECRET_ACCESS_KEY", ""),
+                    "session_token": env.get("AWS_SESSION_TOKEN"),
+                    "region": env.get("AWS_DEFAULT_REGION", "us-east-1"),
+                }
+                return None, creds  # AWS provider builds its own env from credentials
+
+        elif provider_name == "azure":
+            subscription_id = credentials.get("subscription_id")
+            result = setup_azure_environment_isolated(user_id, subscription_id=subscription_id)
+            success, resolved_sub, _auth_type, env, auth_command = result
+            if success and env:
+                # Build credentials dict from env so azure_asset_discovery._build_env works
+                creds = {
+                    "tenant_id": env.get("AZURE_TENANT_ID", ""),
+                    "client_id": env.get("AZURE_CLIENT_ID", ""),
+                    "client_secret": env.get("AZURE_CLIENT_SECRET", ""),
+                    "subscription_id": resolved_sub or subscription_id,
+                }
+                return None, creds  # Azure provider builds its own env from credentials
+
+        elif provider_name == "ovh":
+            success, _project, _auth_type, env = setup_ovh_environment_isolated(user_id)
+            if success and env:
+                return env, credentials
+
+        elif provider_name == "scaleway":
+            success, _project, _auth_type, env = setup_scaleway_environment_isolated(user_id)
+            if success and env:
+                return env, credentials
+
+        elif provider_name == "tailscale":
+            success, tailnet, _auth_type, env = setup_tailscale_environment_isolated(user_id)
+            if success and env:
+                creds = {
+                    "api_key": env.get("TAILSCALE_ACCESS_TOKEN", ""),
+                    "tailnet": env.get("TAILSCALE_TAILNET", tailnet or "-"),
+                }
+                return None, creds  # Tailscale uses REST API, not subprocess
+
+    except Exception as e:
+        logger.error(f"[Discovery] Failed to setup {provider_name} environment for user {user_id}: {e}")
+
+    logger.warning(f"[Discovery] Could not obtain credentials for {provider_name}, user {user_id}")
+    return None, credentials
+
+
 def run_discovery_for_user(user_id, connected_providers):
     """Run the full 3-phase discovery pipeline for a single user.
 
@@ -69,6 +159,14 @@ def run_discovery_for_user(user_id, connected_providers):
     all_phase1_relationships = []
     gcp_relationships_raw = []
 
+    # Build authenticated environments for each provider (sequential — credential
+    # setup may involve token refresh, STS calls, etc.)
+    provider_envs = {}
+    for provider_name, credentials in connected_providers.items():
+        env, updated_creds = _setup_provider_env(provider_name, user_id, credentials)
+        provider_envs[provider_name] = (env, updated_creds)
+        connected_providers[provider_name] = updated_creds
+
     with ThreadPoolExecutor(max_workers=len(connected_providers)) as executor:
         futures = {}
         for provider_name, credentials in connected_providers.items():
@@ -76,7 +174,8 @@ def run_discovery_for_user(user_id, connected_providers):
             if not module:
                 logger.warning(f"[Discovery] Unknown provider: {provider_name}")
                 continue
-            futures[executor.submit(module.discover, user_id, credentials)] = provider_name
+            env, creds = provider_envs.get(provider_name, (None, credentials))
+            futures[executor.submit(module.discover, user_id, creds, env)] = provider_name
 
         for future in as_completed(futures):
             provider_name = futures[future]
