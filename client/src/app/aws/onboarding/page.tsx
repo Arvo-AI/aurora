@@ -252,6 +252,7 @@ export default function AWSOnboardingPage() {
 
       await fetchOnboardingData();
       setIsConfigured(true);
+      localStorage.setItem("aurora_graph_discovery_trigger", "1");
 
     } catch (err) {
       console.error("Failed to set role:", err);

@@ -191,7 +191,29 @@ def trigger_discovery():
         return err, code
     try:
         from services.discovery.tasks import run_user_discovery
+        from utils.cache.redis_client import get_redis_client
+
+        # Deduplicate: if a discovery task is already running for this user, return its ID
+        redis_client = get_redis_client()
+        lock_key = f"discovery:running:{user_id}"
+        if redis_client:
+            existing_task_id = redis_client.get(lock_key)
+            if existing_task_id:
+                # Verify the task is still actually running
+                existing = run_user_discovery.AsyncResult(existing_task_id)
+                if existing.state in ("PENDING", "STARTED", "PROGRESS"):
+                    return jsonify({
+                        "task_id": existing_task_id,
+                        "status": "already_running",
+                        "message": "Discovery is already in progress.",
+                    }), 200
+
         task = run_user_discovery.delay(user_id)
+
+        # Store task ID in Redis with TTL matching the hard time limit (3h)
+        if redis_client:
+            redis_client.setex(lock_key, 10800, task.id)
+
         return jsonify({
             "task_id": task.id,
             "status": "started",
@@ -200,6 +222,50 @@ def trigger_discovery():
     except Exception as e:
         logger.error(f"Error triggering discovery: {e}")
         return jsonify({"error": "Failed to trigger discovery"}), 500
+
+
+# =========================================================================
+# Discovery Status
+# =========================================================================
+
+@graph_bp.route("/discover/status/<task_id>", methods=["GET"])
+def get_discovery_status(task_id):
+    """GET /api/graph/discover/status/<task_id> - Poll Celery task progress."""
+    user_id, err, code = _get_user()
+    if err:
+        return err, code
+    try:
+        from services.discovery.tasks import run_user_discovery
+        from utils.cache.redis_client import get_redis_client
+
+        task = run_user_discovery.AsyncResult(task_id)
+        state = task.state
+
+        if state == "PENDING":
+            # Celery returns PENDING for unknown/expired task IDs.
+            # Check Redis to see if this task was ever dispatched for this user.
+            redis_client = get_redis_client()
+            lock_key = f"discovery:running:{user_id}"
+            active_task = redis_client.get(lock_key) if redis_client else None
+            if active_task != task_id:
+                # Task is not tracked — it either finished and was cleaned up, or never existed.
+                response = {"state": "GONE", "status": "Task expired or completed", "complete": True}
+            else:
+                response = {"state": state, "status": "Starting discovery", "complete": False}
+        elif state == "PROGRESS":
+            meta = task.info or {}
+            response = {"state": state, "status": meta.get("status", "Discovery in progress"), "complete": False}
+        elif state == "SUCCESS":
+            response = {"state": state, "status": "Discovery completed", "complete": True, "result": task.result or {}}
+        elif state == "FAILURE":
+            response = {"state": state, "status": str(task.info), "complete": True, "error": True}
+        else:
+            response = {"state": state, "status": "Discovery is running", "complete": False}
+
+        return jsonify(response)
+    except Exception as e:
+        logger.error(f"Error fetching discovery task status: {e}")
+        return jsonify({"error": "Failed to fetch task status"}), 500
 
 
 # =========================================================================

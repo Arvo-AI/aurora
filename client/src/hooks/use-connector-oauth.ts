@@ -96,6 +96,8 @@ export function useConnectorOAuth(connector: ConnectorConfig, userId: string | n
         const data = await response.json();
         
         if (data.login_url) {
+          // Signal graph discovery to trigger after the OAuth redirect completes
+          localStorage.setItem("aurora_graph_discovery_trigger", "1");
           window.location.href = data.login_url;
         } else {
           throw new Error("No OAuth URL received");
