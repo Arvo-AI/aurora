@@ -66,16 +66,15 @@ def _setup_provider_env(provider_name, user_id, credentials):
 
     try:
         if provider_name == "gcp":
-            project_id = credentials.get("project_id")
+            # Use the first project_id for SA token generation (any project works
+            # since the SA has cross-project access after post-auth setup).
+            project_ids = credentials.get("project_ids", [])
+            selected = project_ids[0] if project_ids else credentials.get("project_id")
             success, resolved_project, _auth_type, env = setup_gcp_environment_isolated(
-                user_id, selected_project_id=project_id, provider_preference="gcp"
+                user_id, selected_project_id=selected, provider_preference="gcp"
             )
             if success and env:
-                # Pass project_id back so the provider can scope its queries
-                creds = dict(credentials)
-                if resolved_project:
-                    creds["project_id"] = resolved_project
-                return env, creds
+                return env, credentials  # credentials already has project_ids
 
         elif provider_name == "aws":
             success, _region, _auth_type, env = setup_aws_environment_isolated(user_id)
