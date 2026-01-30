@@ -15,12 +15,13 @@ from services.discovery.resource_mapper import map_gcp_resource, GCP_RELATIONSHI
 logger = logging.getLogger(__name__)
 
 
-def _run_command(args, timeout=120):
+def _run_command(args, timeout=120, env=None):
     """Run a gcloud CLI command and return parsed JSON output.
 
     Args:
         args: List of command arguments (e.g. ["gcloud", "asset", ...]).
         timeout: Command timeout in seconds.
+        env: Optional environment dict for subprocess (for authentication).
 
     Returns:
         Parsed JSON output from the command, or None on failure.
@@ -34,6 +35,7 @@ def _run_command(args, timeout=120):
             capture_output=True,
             text=True,
             timeout=timeout,
+            env=env,
         )
 
         if result.returncode != 0:
@@ -336,13 +338,14 @@ def _build_gcloud_env(credentials):
     return args
 
 
-def discover(user_id, credentials):
+def discover(user_id, credentials, env=None):
     """Discover all GCP resources using Cloud Asset Inventory API.
 
     Args:
         user_id: The Aurora user ID performing the discovery.
         credentials: Dict with at least 'project_id', and optionally
                      'service_account_key_path' for authentication.
+        env: Optional environment dict for subprocess calls (for authentication).
 
     Returns:
         DiscoveryResult dict with keys:
@@ -375,7 +378,7 @@ def discover(user_id, credentials):
             "--format=json",
         ] + auth_args
 
-        raw_resources = _run_command(resources_cmd)
+        raw_resources = _run_command(resources_cmd, env=env)
 
         if raw_resources is None:
             errors.append("Failed to fetch resources from Cloud Asset API")
@@ -417,7 +420,7 @@ def discover(user_id, credentials):
             "--format=json",
         ] + auth_args
 
-        raw_iam = _run_command(iam_cmd)
+        raw_iam = _run_command(iam_cmd, env=env)
 
         if raw_iam is None:
             errors.append("Failed to fetch IAM policies from Cloud Asset API")
@@ -451,7 +454,7 @@ def discover(user_id, credentials):
             "--format=json",
         ] + auth_args
 
-        raw_relationships = _run_command(rel_cmd)
+        raw_relationships = _run_command(rel_cmd, env=env)
 
         if raw_relationships is None:
             errors.append("Failed to fetch relationships from Cloud Asset API")

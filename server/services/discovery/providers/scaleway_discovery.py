@@ -75,12 +75,13 @@ COMMANDS = [
 ]
 
 
-def _run_command(command, timeout=60):
+def _run_command(command, timeout=60, env=None):
     """Run a CLI command and return parsed JSON output.
 
     Args:
         command: List of command arguments.
         timeout: Timeout in seconds.
+        env: Optional environment dict for subprocess (for authentication).
 
     Returns:
         Tuple of (parsed_json_list, error_string_or_None).
@@ -91,6 +92,7 @@ def _run_command(command, timeout=60):
             capture_output=True,
             text=True,
             timeout=timeout,
+            env=env,
         )
         if result.returncode != 0:
             error_msg = result.stderr.strip() if result.stderr else f"Exit code {result.returncode}"
@@ -158,13 +160,14 @@ def _extract_node(resource, cmd_config):
     return node
 
 
-def discover(user_id, credentials):
+def discover(user_id, credentials, env=None):
     """Discover Scaleway infrastructure resources.
 
     Args:
         user_id: The user performing discovery.
         credentials: Dict with keys (used for scw CLI configuration):
             - region: Optional default region.
+        env: Optional environment dict for subprocess calls (for authentication).
 
     Returns:
         Dict with keys: nodes (list), relationships (list), errors (list).
@@ -178,7 +181,7 @@ def discover(user_id, credentials):
         label = cmd_config["label"]
 
         logger.info(f"Scaleway discovery: listing {label} for user {user_id}")
-        resources, error = _run_command(command)
+        resources, error = _run_command(command, env=env)
 
         if error:
             error_msg = f"Failed to list Scaleway {label}: {error}"

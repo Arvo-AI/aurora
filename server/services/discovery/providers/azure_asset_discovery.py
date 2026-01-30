@@ -22,13 +22,15 @@ RESOURCE_GRAPH_QUERY = (
 )
 
 
-def discover(user_id, credentials):
+def discover(user_id, credentials, env=None):
     """Discover all Azure resources using Resource Graph.
 
     Args:
         user_id: The user requesting discovery.
         credentials: Dict with optional keys: subscription_id, tenant_id,
                      client_id, client_secret.
+        env: Unused (Azure builds its own env from credentials). Accepted for
+             interface consistency with other providers.
 
     Returns:
         Dict with keys:

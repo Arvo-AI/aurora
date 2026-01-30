@@ -133,7 +133,7 @@ def _build_network_relationships(nodes):
     return relationships
 
 
-def discover(user_id, credentials):
+def discover(user_id, credentials, env=None):
     """Discover Tailscale devices and network configuration.
 
     Args:
@@ -141,6 +141,8 @@ def discover(user_id, credentials):
         credentials: Dict with keys:
             - api_key: Tailscale API key (required).
             - tailnet: Tailnet name or domain (required).
+        env: Unused (Tailscale uses REST API, not subprocess). Accepted for
+             interface consistency with other providers.
 
     Returns:
         Dict with keys: nodes (list), relationships (list), errors (list).

@@ -47,6 +47,8 @@ def _build_env(credentials):
     env = os.environ.copy()
     env["AWS_ACCESS_KEY_ID"] = credentials["access_key_id"]
     env["AWS_SECRET_ACCESS_KEY"] = credentials["secret_access_key"]
+    if credentials.get("session_token"):
+        env["AWS_SESSION_TOKEN"] = credentials["session_token"]
     if credentials.get("region"):
         env["AWS_DEFAULT_REGION"] = credentials["region"]
     return env
@@ -155,7 +157,7 @@ def _resource_to_node(resource):
     }
 
 
-def discover(user_id, credentials):
+def discover(user_id, credentials, env=None):
     """Discover all AWS resources using Resource Explorer 2.
 
     Args:
@@ -165,6 +167,8 @@ def discover(user_id, credentials):
             - secret_access_key (required): AWS secret access key
             - region (optional): AWS region for Resource Explorer queries
             - role_arn (optional): IAM role ARN for cross-account access
+        env: Unused (AWS builds its own env from credentials). Accepted for
+             interface consistency with other providers.
 
     Returns:
         Dict with keys:
