@@ -22,7 +22,6 @@ import '@xyflow/react/dist/style.css';
 import './visualization.css';
 import { useMemo, useCallback, useState, useEffect, useRef } from 'react';
 import { Loader2, Maximize, RotateCcw, Container, Layers, Network, Database, Server, Zap, HardDrive, Archive, Grid3x3, FolderTree, MapPin, Bell, Activity, LucideIcon, Boxes } from 'lucide-react';
-import dagre from 'dagre';
 
 interface Props {
   incidentId: string;
@@ -37,19 +36,11 @@ const statusColors: Record<NodeStatus, { border: string; bg: string; glow: strin
   unknown: { border: '#71717a', bg: '#18181b', glow: 'rgba(113, 113, 122, 0.3)' },
 };
 
-// Layout constants
+// Layout constants for group nodes
 const GROUP_HEADER_HEIGHT = 40;
 const CHILD_NODE_HEIGHT = 100;
-const CHILD_SPACING = 20;
-const CHILD_PADDING_X = 20;
-const CHILD_PADDING_BOTTOM = 20;
-const GROUP_WIDTH = 280;
-const BASE_NODE_WIDTH = 200;
-const BASE_NODE_HEIGHT = 100;
-
-function calcGroupHeight(childCount: number) {
-  return GROUP_HEADER_HEIGHT + childCount * CHILD_NODE_HEIGHT + (childCount - 1) * CHILD_SPACING + CHILD_PADDING_BOTTOM;
-}
+const CHILD_NODE_SPACING = 30;
+const CHILD_TOTAL_HEIGHT = CHILD_NODE_HEIGHT + CHILD_NODE_SPACING;
 
 function getIconForType(type: string): LucideIcon | null {
   const iconMap: Record<string, LucideIcon> = {
@@ -100,10 +91,7 @@ function CustomNode({ data }: { data: InfraNode & { isRootCause?: boolean; isAff
           }}>
             {data.type}
           </div>
-          <div>
-            <div style={{ fontSize: '13px', fontWeight: 500 }}>{data.label}</div>
-            <div style={{ fontSize: '10px', color: '#a1a1aa', marginTop: '2px', textTransform: 'lowercase' }}>{data.type}</div>
-          </div>
+          <div style={{ fontSize: '13px', fontWeight: 500 }}>{data.label}</div>
         </div>
       </div>
       <Handle type="source" position={Position.Bottom} style={{ background: '#52525b' }} />
@@ -166,6 +154,17 @@ function getLayoutedElements(nodes: Node[], edges: Edge[]) {
   const horizontalSpacing = 200;
   const verticalSpacing = 150;
   const groupPadding = 40;
+
+  // Helper to get actual node dimensions (accounting for groups)
+  const getNodeDimensions = (node: Node) => {
+    if (node.style && typeof node.style === 'object' && 'width' in node.style && 'height' in node.style) {
+      return { 
+        width: Number(node.style.width) || nodeWidth, 
+        height: Number(node.style.height) || nodeHeight 
+      };
+    }
+    return { width: nodeWidth, height: nodeHeight };
+  };
 
   // Build adjacency information
   const incomingEdges = new Map<string, string[]>();
@@ -242,7 +241,7 @@ function getLayoutedElements(nodes: Node[], edges: Edge[]) {
         sourcePosition: Position.Bottom,
         position: {
           x: groupPadding,
-          y: groupPadding + index * 130,
+          y: groupPadding + index * CHILD_TOTAL_HEIGHT,
         },
       };
     }
@@ -252,10 +251,32 @@ function getLayoutedElements(nodes: Node[], edges: Edge[]) {
     const nodesInLayer = nodesByLayer.get(layer) || [node.id];
     const indexInLayer = nodesInLayer.indexOf(node.id);
     
-    // Center nodes in each layer
-    const totalLayerWidth = nodesInLayer.length * nodeWidth + (nodesInLayer.length - 1) * horizontalSpacing;
+    // Build node lookup map for performance
+    const nodeMap = new Map(nodes.map(n => [n.id, n]));
+    
+    // Center nodes in each layer, accounting for actual node widths
+    let totalLayerWidth = 0;
+    nodesInLayer.forEach((nodeId, idx) => {
+      const layerNode = nodeMap.get(nodeId);
+      if (layerNode) {
+        const { width } = getNodeDimensions(layerNode);
+        totalLayerWidth += width;
+        if (idx < nodesInLayer.length - 1) totalLayerWidth += horizontalSpacing;
+      }
+    });
+    
     const startX = -totalLayerWidth / 2;
-    const x = startX + indexInLayer * (nodeWidth + horizontalSpacing) + nodeWidth / 2;
+    let xOffset = startX;
+    for (let i = 0; i < indexInLayer; i++) {
+      const prevNode = nodeMap.get(nodesInLayer[i]);
+      if (prevNode) {
+        const { width } = getNodeDimensions(prevNode);
+        xOffset += width + horizontalSpacing;
+      }
+    }
+    
+    const { width: currentNodeWidth } = getNodeDimensions(node);
+    const x = xOffset + currentNodeWidth / 2;
     const y = layer * (nodeHeight + verticalSpacing);
 
     return {
@@ -310,10 +331,32 @@ export default function InfrastructureVisualization({ incidentId, className }: P
   useEffect(() => {
     if (!data?.nodes?.length) return;
 
-    // Separate group nodes (those with children) from regular nodes
-    const nodeWithChildren = new Set(data.nodes.filter(n => n.parentId).map(n => n.parentId));
+    // Build node ID set for validation
+    const nodeIdSet = new Set(data.nodes.map(n => n.id));
     
-    const flowNodes: Node[] = data.nodes.map((node) => {
+    // Validate all parentId references exist
+    const validNodes = data.nodes.filter(node => {
+      if (node.parentId && !nodeIdSet.has(node.parentId)) {
+        console.warn(`Node ${node.id} has invalid parentId: ${node.parentId}`);
+        return false;
+      }
+      return true;
+    });
+
+    // Separate group nodes (those with children) from regular nodes
+    const nodeWithChildren = new Set(validNodes.filter(n => n.parentId).map(n => n.parentId));
+    
+    // Calculate dynamic group sizes based on child count
+    const groupSizes = new Map<string, { width: number; height: number }>();
+    nodeWithChildren.forEach(groupId => {
+      const childCount = validNodes.filter(n => n.parentId === groupId).length;
+      const paddingBottom = 40;
+      
+      const calculatedHeight = GROUP_HEADER_HEIGHT + (childCount * CHILD_NODE_HEIGHT) + (Math.max(0, childCount - 1) * CHILD_NODE_SPACING) + paddingBottom;
+      groupSizes.set(groupId, { width: 250, height: Math.max(200, calculatedHeight) });
+    });
+    
+    const flowNodes: Node[] = validNodes.map((node) => {
       const isGroupNode = nodeWithChildren.has(node.id);
       
       return {
@@ -328,8 +371,8 @@ export default function InfrastructureVisualization({ incidentId, className }: P
         }),
         ...(isGroupNode && {
           style: {
-            width: 250,
-            height: 200,
+            width: groupSizes.get(node.id)?.width || 250,
+            height: groupSizes.get(node.id)?.height || 200,
             backgroundColor: 'rgba(39, 39, 42, 0.5)',
             border: '2px solid #52525b',
             borderRadius: '8px',
@@ -369,23 +412,16 @@ export default function InfrastructureVisualization({ incidentId, className }: P
       }
     });
     
-    console.log('Parent-child edges to filter:', Array.from(parentChildEdges));
-    console.log('All edges from backend:', data.edges);
-    
     const flowEdges: Edge[] = data.edges
       .filter(edge => {
         const edgeKey = `${edge.source}-${edge.target}`;
-        const isHierarchyEdge = parentChildEdges.has(edgeKey);
-        if (isHierarchyEdge) {
-          console.log('Filtering out hierarchy edge:', edge.source, '→', edge.target);
-        }
-        return !isHierarchyEdge;
+        return !parentChildEdges.has(edgeKey);
       })
       .map((edge, idx) => ({
         id: `e${idx}`,
         source: edge.source,
         target: edge.target,
-        label: edge.label,
+        ...(edge.label && { label: edge.label }),
         type: 'smoothstep',
         animated: edge.type === 'causation',
         style: { stroke: '#52525b', strokeWidth: 2 },
@@ -393,19 +429,13 @@ export default function InfrastructureVisualization({ incidentId, className }: P
         labelBgStyle: { fill: '#18181b', fillOpacity: 0.9 },
         markerEnd: { type: 'arrowclosed', color: '#52525b' },
       }));
-    console.log('Edges after filtering:', flowEdges);
 
     const { nodes: layoutedNodes, edges: layoutedEdges } = getLayoutedElements(sortedFlowNodes, flowEdges);
-    
-    console.log('=== VISUALIZATION DEBUG ===');
-    console.log('Nodes:', layoutedNodes.map(n => ({ id: n.id, type: n.type, parentId: n.parentId })));
-    console.log('Edges:', layoutedEdges.map(e => ({ source: e.source, target: e.target, label: e.label })));
-    console.log('Edges from backend:', data.edges.map(e => ({ source: e.source, target: e.target })));
     
     setNodes(layoutedNodes);
     setEdges(layoutedEdges);
     setTimeout(() => fitView({ padding: 0.2, duration: 300 }), 50);
-  }, [data, fitView]);
+  }, [data, fitView]); // fitView is stable from useReactFlow
 
   const onNodesChange = useCallback(
     (changes: NodeChange[]) => setNodes((nds) => applyNodeChanges(changes, nds)),

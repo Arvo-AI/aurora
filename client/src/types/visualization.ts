@@ -7,6 +7,7 @@ export interface InfraNode {
   label: string;
   type: NodeType;
   status: NodeStatus;
+  parentId?: string | null;
 }
 
 export interface InfraEdge {
