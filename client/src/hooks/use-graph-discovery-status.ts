@@ -119,27 +119,43 @@ export function useGraphDiscoveryStatus(
     [startPolling]
   );
 
+  // Check trigger flag helper (used on mount and on providerStateChanged)
+  const checkTrigger = useCallback(
+    (uid: string) => {
+      // Resume polling if a task is already in-flight
+      const stored = getStoredTask();
+      if (stored && stored.userId === uid) {
+        startPolling(stored.taskId, uid);
+        return;
+      }
+
+      // Check if a connection flow just completed (set by post-auth completion,
+      // onboarding pages, etc.)
+      const trigger = localStorage.getItem(TRIGGER_KEY);
+      if (trigger) {
+        localStorage.removeItem(TRIGGER_KEY);
+        triggerDiscovery(uid);
+      }
+    },
+    [startPolling, triggerDiscovery]
+  );
+
   useEffect(() => {
     if (!supportsDiscovery || !isConnected || !userId) return;
 
-    // Resume polling if a task is already in-flight
-    const stored = getStoredTask();
-    if (stored && stored.userId === userId) {
-      startPolling(stored.taskId, userId);
-      return;
-    }
+    checkTrigger(userId);
 
-    // Check if a connection flow just completed (set by OAuth handlers
-    // and onboarding pages before redirect/page reload).
-    const trigger = localStorage.getItem(TRIGGER_KEY);
-    if (trigger) {
-      localStorage.removeItem(TRIGGER_KEY);
-      triggerDiscovery(userId);
-    }
+    // Also listen for providerStateChanged — GCP post-auth sets the trigger
+    // flag and dispatches this event AFTER isConnected is already true, so
+    // the deps-based re-run won't catch it.
+    const uid = userId;
+    const onProviderChange = () => checkTrigger(uid);
+    window.addEventListener("providerStateChanged", onProviderChange);
 
     return () => {
       stopPolling();
       if (syncedTimerRef.current) clearTimeout(syncedTimerRef.current);
+      window.removeEventListener("providerStateChanged", onProviderChange);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [supportsDiscovery, isConnected, userId]);
