@@ -162,7 +162,7 @@ class MemgraphClient:
             "zone": props.get("zone", ""),
             "cluster_name": props.get("cluster_name", ""),
             "namespace": props.get("namespace", ""),
-            "vpc_id": props.get("vpc_id", ""),
+            "vpc_id": props.get("vpc_id") or None,
             "cloud_resource_id": props.get("cloud_resource_id", ""),
             "endpoint": props.get("endpoint", ""),
             "criticality": props.get("criticality", "medium"),

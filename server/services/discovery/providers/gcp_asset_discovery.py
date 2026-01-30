@@ -121,40 +121,60 @@ def _extract_region_zone(asset):
     return region, zone
 
 
-def _extract_vpc_id(asset):
-    """Extract VPC ID from network-related properties when available.
+def _extract_vpc_id(asset, project_id=None):
+    """Extract VPC network name from a GCP Cloud Asset Inventory asset.
 
-    Looks in additionalAttributes and resource.data for network references.
+    The search-all-resources API returns a flat format (no nested
+    resource.data), so we extract network info from:
+      1. additionalAttributes (network, networkRef, subnetwork fields)
+      2. The asset name itself if it's a VPC network resource
+      3. Fall back to project ID as a grouping key — most GCP resources
+         within a project can communicate via the default VPC, so
+         project-level grouping is a reasonable proxy.
+
+    Args:
+        asset: Raw asset dict from gcloud asset search-all-resources.
+        project_id: The GCP project ID (used as fallback grouping key).
+
+    Returns:
+        VPC network name string, or project-based fallback, or None.
     """
-    # Try additionalAttributes first
+    # Helper: build the project-prefixed VPC grouping key.
+    # Always includes the project so that resources sharing a project are
+    # grouped together for network proximity inference, even if some have
+    # explicit VPC refs and others don't.
+    def _vpc_key(network_name=None):
+        if project_id and network_name:
+            return f"gcp-{project_id}/{network_name}"
+        if project_id:
+            return f"gcp-{project_id}"
+        if network_name:
+            return network_name
+        return None
+
+    # 1. Try additionalAttributes (present on many compute/networking resources)
     additional = asset.get("additionalAttributes", {})
     if isinstance(additional, dict):
-        for key in ("network", "networkRef", "networkUri", "vpcNetwork"):
+        for key in ("network", "networkRef", "networkUri", "vpcNetwork",
+                     "subnetwork", "subnetworkRef"):
             val = additional.get(key)
-            if val:
-                return _extract_name(val)
+            if val and isinstance(val, str):
+                if "/networks/" in val:
+                    parts = val.split("/networks/")
+                    if len(parts) == 2:
+                        return _vpc_key(parts[1].split("/")[0])
+                return _vpc_key(_extract_name(val))
 
-    # Try resource.data for nested resource representations
-    resource_data = asset.get("resource", {})
-    if isinstance(resource_data, dict):
-        data = resource_data.get("data", {})
-        if isinstance(data, dict):
-            # Compute instances have networkInterfaces
-            network_interfaces = data.get("networkInterfaces", [])
-            if network_interfaces and isinstance(network_interfaces, list):
-                first_iface = network_interfaces[0]
-                if isinstance(first_iface, dict):
-                    network = first_iface.get("network", "")
-                    if network:
-                        return _extract_name(network)
+    # 2. If this asset IS a VPC network, extract its name from the asset path
+    name_path = asset.get("name", "")
+    asset_type = asset.get("assetType", "")
+    if asset_type == "compute.googleapis.com/Network" and name_path:
+        return _vpc_key(_extract_name(name_path))
 
-            # Direct network field
-            for key in ("network", "networkUri"):
-                val = data.get(key)
-                if val:
-                    return _extract_name(val)
-
-    return None
+    # 3. Fall back to project ID as a VPC grouping key.
+    #    In GCP, resources within the same project typically share the default
+    #    VPC network and can communicate internally.
+    return _vpc_key()
 
 
 def _extract_endpoint(asset):
@@ -218,7 +238,7 @@ def _parse_asset_to_node(asset, project_id):
     resource_name = _extract_name(name_path)
     display_name = asset.get("displayName", "") or resource_name
     region, zone = _extract_region_zone(asset)
-    vpc_id = _extract_vpc_id(asset)
+    vpc_id = _extract_vpc_id(asset, project_id=project_id)
     endpoint = _extract_endpoint(asset)
 
     # Build metadata from useful asset fields
@@ -338,39 +358,17 @@ def _build_gcloud_env(credentials):
     return args
 
 
-def discover(user_id, credentials, env=None):
-    """Discover all GCP resources using Cloud Asset Inventory API.
-
-    Args:
-        user_id: The Aurora user ID performing the discovery.
-        credentials: Dict with at least 'project_id', and optionally
-                     'service_account_key_path' for authentication.
-        env: Optional environment dict for subprocess calls (for authentication).
+def _discover_project(project_id, auth_args, env=None):
+    """Discover resources, IAM policies, and relationships for a single GCP project.
 
     Returns:
-        DiscoveryResult dict with keys:
-            - nodes: List of normalized service node dicts.
-            - relationships: List of dependency edge dicts.
-            - errors: List of error message strings.
+        (nodes_list, relationships_list, errors_list)
     """
-    project_id = credentials.get("project_id")
-    if not project_id:
-        return {
-            "nodes": [],
-            "relationships": [],
-            "errors": ["Missing required credential: project_id"],
-        }
-
-    logger.info(f"Starting GCP Asset Inventory discovery for project '{project_id}' (user: {user_id})")
-
     nodes = []
-    relationships = []
     errors = []
-    auth_args = _build_gcloud_env(credentials)
+    raw_resources = None
 
-    # -----------------------------------------------------------------
-    # Step 1: Discover all resources
-    # -----------------------------------------------------------------
+    # Step 1: Resources
     try:
         resources_cmd = [
             "gcloud", "asset", "search-all-resources",
@@ -381,27 +379,20 @@ def discover(user_id, credentials, env=None):
         raw_resources = _run_command(resources_cmd, env=env)
 
         if raw_resources is None:
-            errors.append("Failed to fetch resources from Cloud Asset API")
+            errors.append(f"[{project_id}] Failed to fetch resources from Cloud Asset API")
         elif isinstance(raw_resources, list):
-            logger.info(f"Fetched {len(raw_resources)} raw resources from GCP Asset Inventory")
+            logger.info(f"[{project_id}] Fetched {len(raw_resources)} raw resources")
             for asset in raw_resources:
                 try:
                     node = _parse_asset_to_node(asset, project_id)
                     if node:
                         nodes.append(node)
                 except Exception as e:
-                    logger.warning(f"Failed to parse resource asset: {e}")
-                    continue
-
+                    logger.warning(f"[{project_id}] Failed to parse resource asset: {e}")
     except RuntimeError as e:
-        # Cloud Asset API not enabled
-        return {
-            "nodes": [],
-            "relationships": [],
-            "errors": [str(e)],
-        }
+        errors.append(f"[{project_id}] {e}")
 
-    logger.info(f"Parsed {len(nodes)} recognized service nodes from {len(raw_resources or [])} assets")
+    logger.info(f"[{project_id}] Parsed {len(nodes)} nodes from {len(raw_resources or [])} assets")
 
     # Build lookup for relationship resolution
     nodes_by_id = {}
@@ -410,9 +401,7 @@ def discover(user_id, credentials, env=None):
         if cloud_id:
             nodes_by_id[cloud_id] = node["name"]
 
-    # -----------------------------------------------------------------
-    # Step 2: Fetch IAM policies (for metadata enrichment)
-    # -----------------------------------------------------------------
+    # Step 2: IAM policies
     try:
         iam_cmd = [
             "gcloud", "asset", "search-all-iam-policies",
@@ -423,10 +412,8 @@ def discover(user_id, credentials, env=None):
         raw_iam = _run_command(iam_cmd, env=env)
 
         if raw_iam is None:
-            errors.append("Failed to fetch IAM policies from Cloud Asset API")
+            errors.append(f"[{project_id}] Failed to fetch IAM policies")
         elif isinstance(raw_iam, list):
-            logger.info(f"Fetched {len(raw_iam)} IAM policy bindings")
-            # Enrich nodes with IAM binding counts
             iam_counts = {}
             for policy in raw_iam:
                 resource = policy.get("resource", "")
@@ -439,13 +426,11 @@ def discover(user_id, credentials, env=None):
                 binding_count = iam_counts.get(node["name"], 0)
                 if binding_count > 0:
                     node["metadata"]["iam_binding_count"] = binding_count
-
     except RuntimeError as e:
-        errors.append(f"IAM policy fetch failed: {e}")
+        errors.append(f"[{project_id}] IAM policy fetch failed: {e}")
 
-    # -----------------------------------------------------------------
-    # Step 3: Fetch relationships via Cloud Asset relationship API
-    # -----------------------------------------------------------------
+    # Step 3: Relationships
+    relationships = []
     try:
         rel_cmd = [
             "gcloud", "asset", "list",
@@ -457,21 +442,74 @@ def discover(user_id, credentials, env=None):
         raw_relationships = _run_command(rel_cmd, env=env)
 
         if raw_relationships is None:
-            errors.append("Failed to fetch relationships from Cloud Asset API")
+            errors.append(f"[{project_id}] Failed to fetch relationships")
         elif isinstance(raw_relationships, list):
-            logger.info(f"Fetched {len(raw_relationships)} relationship assets")
+            logger.info(f"[{project_id}] Fetched {len(raw_relationships)} relationship assets")
             relationships = _parse_relationships(raw_relationships, nodes_by_id)
-
     except RuntimeError as e:
-        errors.append(f"Relationship fetch failed: {e}")
+        errors.append(f"[{project_id}] Relationship fetch failed: {e}")
+
+    return nodes, relationships, errors
+
+
+def discover(user_id, credentials, env=None):
+    """Discover all GCP resources using Cloud Asset Inventory API.
+
+    Args:
+        user_id: The Aurora user ID performing the discovery.
+        credentials: Dict with either:
+            - project_ids: List of project IDs to scan (preferred).
+            - project_id: Single project ID (legacy fallback).
+        env: Optional environment dict for subprocess calls (for authentication).
+
+    Returns:
+        DiscoveryResult dict with keys:
+            - nodes: List of normalized service node dicts.
+            - relationships: List of dependency edge dicts.
+            - errors: List of error message strings.
+    """
+    # Support both single project_id and multi-project project_ids
+    project_ids = credentials.get("project_ids") or []
+    if not project_ids:
+        single = credentials.get("project_id")
+        if single:
+            project_ids = [single]
+
+    if not project_ids:
+        return {
+            "nodes": [],
+            "relationships": [],
+            "errors": ["Missing required credential: project_id or project_ids"],
+        }
 
     logger.info(
-        f"GCP Asset discovery complete for project '{project_id}': "
-        f"{len(nodes)} nodes, {len(relationships)} relationships, {len(errors)} errors"
+        f"Starting GCP Asset Inventory discovery for {len(project_ids)} project(s) "
+        f"(user: {user_id}): {project_ids}"
+    )
+
+    all_nodes = []
+    all_relationships = []
+    all_errors = []
+    auth_args = _build_gcloud_env(credentials)
+
+    for project_id in project_ids:
+        logger.info(f"Discovering project '{project_id}'...")
+        nodes, relationships, errors = _discover_project(project_id, auth_args, env=env)
+        all_nodes.extend(nodes)
+        all_relationships.extend(relationships)
+        all_errors.extend(errors)
+        logger.info(
+            f"Project '{project_id}': {len(nodes)} nodes, "
+            f"{len(relationships)} relationships, {len(errors)} errors"
+        )
+
+    logger.info(
+        f"GCP Asset discovery complete for {len(project_ids)} project(s): "
+        f"{len(all_nodes)} nodes, {len(all_relationships)} relationships, {len(all_errors)} errors"
     )
 
     return {
-        "nodes": nodes,
-        "relationships": relationships,
-        "errors": errors,
+        "nodes": all_nodes,
+        "relationships": all_relationships,
+        "errors": all_errors,
     }
