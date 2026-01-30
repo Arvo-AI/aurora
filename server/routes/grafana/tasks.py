@@ -35,23 +35,24 @@ def _should_trigger_background_chat(user_id: str, payload: Dict[str, Any]) -> bo
     return True
 
 
-def _build_rca_prompt_from_alert(payload: Dict[str, Any]) -> str:
+def _build_rca_prompt_from_alert(payload: Dict[str, Any], user_id: Optional[str] = None) -> str:
     """Build an RCA analysis prompt from a Grafana alert payload.
-    
+
     Args:
         payload: The Grafana alert payload
-    
+        user_id: Optional user ID for Aurora Learn context injection
+
     Returns:
         A prompt string for the background chat agent
     """
     title = payload.get("title") or payload.get("ruleName") or "Unknown Alert"
     state = payload.get("state") or payload.get("status") or "unknown"
     message = payload.get("message") or payload.get("annotations", {}).get("description") or ""
-    
+
     # Extract labels for context
     labels = payload.get("commonLabels", {}) or payload.get("labels", {})
     labels_str = ", ".join(f"{k}={v}" for k, v in labels.items()) if labels else "none"
-    
+
     # Extract any values/metrics
     values = payload.get("values") or payload.get("evalMatches", [])
     values_str = ""
@@ -60,7 +61,7 @@ def _build_rca_prompt_from_alert(payload: Dict[str, Any]) -> str:
             values_str = "\n".join(f"  - {v}" for v in values[:5])  # Limit to 5
         elif isinstance(values, dict):
             values_str = "\n".join(f"  - {k}: {v}" for k, v in list(values.items())[:5])
-    
+
     # Build the prompt parts separately to avoid f-string backslash issues
     prompt_parts = [
         "A Grafana alert has been triggered and requires Root Cause Analysis.",
@@ -70,16 +71,21 @@ def _build_rca_prompt_from_alert(payload: Dict[str, Any]) -> str:
         f"- State: {state}",
         f"- Labels: {labels_str}",
     ]
-    
+
     if message:
         prompt_parts.append(f"- Message: {message}")
-    
+
     if values_str:
         prompt_parts.append("- Values/Metrics:")
         prompt_parts.append(values_str)
-    
-    # Note: RCA instructions are now in the system prompt via background_mode segment
-    # The user should only see alert details, not instructions
+
+    # Add Aurora Learn context if available
+    try:
+        from chat.background.rca_prompt_builder import inject_aurora_learn_context
+        service = labels.get("service") or labels.get("job") or ""
+        inject_aurora_learn_context(prompt_parts, user_id, title, service, "grafana")
+    except Exception as e:
+        logger.warning(f"[AURORA LEARN] Failed to get context: {e}")
 
     return "\n".join(prompt_parts)
 
@@ -323,8 +329,8 @@ def process_grafana_alert(self, payload: Dict[str, Any], metadata: Optional[Dict
                                     },
                                 )
                                 
-                                # Build simple RCA prompt (detailed instructions in system prompt)
-                                rca_prompt = _build_rca_prompt_from_alert(payload)
+                                # Build simple RCA prompt with Aurora Learn context injection
+                                rca_prompt = _build_rca_prompt_from_alert(payload, user_id=user_id)
                                 
                                 # Trigger the background chat task
                                 run_background_chat.delay(

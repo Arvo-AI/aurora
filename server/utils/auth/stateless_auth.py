@@ -278,13 +278,14 @@ def get_user_preference(user_id: str, key: str, default=None):
             logger.debug(f"Retrieved preference {key} for user {user_id}")
             try:
                 # Try to parse as JSON, but handle cases where it might already be decoded
-                value = result[0] if result[0] else default
+                # Use 'is not None' to handle boolean False values correctly
+                value = result[0] if result[0] is not None else default
                 if isinstance(value, str):
                     return json.loads(value)
                 return value
             except json.JSONDecodeError:
                 # If JSON parsing fails, return the raw value
-                return result[0] if result[0] else default
+                return result[0] if result[0] is not None else default
         
         logger.debug(f"No preference {key} found for user {user_id}, returning default")
         return default
