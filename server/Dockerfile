@@ -178,6 +178,7 @@ COPY ./chat /app/chat/
 COPY ./config /app/config/
 COPY ./connectors /app/connectors/
 COPY ./routes /app/routes/
+COPY ./services /app/services/
 COPY ./utils /app/utils/
 COPY ./celery_config.py /app/celery_config.py
 COPY ./main_chatbot.py /app/main_chatbot.py
