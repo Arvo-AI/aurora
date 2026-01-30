@@ -23,6 +23,95 @@ def _clear_discovery_lock(user_id):
         pass
 
 
+def _wait_for_gcp_post_auth(user_id, timeout=300, poll_interval=10):
+    """Wait for any active GCP post-auth setup task to complete.
+
+    The post-auth task enables APIs and propagates service accounts across all
+    projects.  If discovery starts before that finishes, gcloud commands will
+    fail with permission / API-not-enabled errors.
+    """
+    import time
+    from celery_config import celery_app as _app
+
+    inspect = _app.control.inspect(timeout=5)
+    start = time.time()
+
+    while time.time() - start < timeout:
+        try:
+            # Check active tasks across all workers
+            active = inspect.active() or {}
+            found = False
+            for _worker, tasks in active.items():
+                for t in tasks:
+                    if (t.get("name") == "connectors.gcp_connector.gcp_post_auth_tasks.gcp_post_auth_setup_task"
+                            and _task_belongs_to_user(t, user_id)):
+                        found = True
+                        break
+                if found:
+                    break
+
+            if not found:
+                logger.info(f"[Discovery] No active GCP post-auth task for user {user_id}, proceeding")
+                return
+
+            logger.info(f"[Discovery] GCP post-auth still running for user {user_id}, waiting {poll_interval}s...")
+            time.sleep(poll_interval)
+        except Exception as e:
+            logger.warning(f"[Discovery] Error checking post-auth status: {e}")
+            # If we can't inspect, wait a bit and try again
+            time.sleep(poll_interval)
+
+    logger.warning(f"[Discovery] Timed out waiting for GCP post-auth after {timeout}s, proceeding anyway")
+
+
+def _task_belongs_to_user(task_info, user_id):
+    """Check if a Celery task info dict has user_id as its first argument."""
+    args = task_info.get("args", [])
+    if args and len(args) > 0:
+        return str(args[0]) == str(user_id)
+    kwargs = task_info.get("kwargs", {})
+    return str(kwargs.get("user_id", "")) == str(user_id)
+
+
+def _get_all_gcp_project_ids(user_id):
+    """Get all GCP project IDs accessible to the user.
+
+    Uses the user's OAuth credentials to enumerate projects via the
+    Cloud Resource Manager API.
+    """
+    try:
+        from utils.auth.stateless_auth import get_credentials_from_db
+        from connectors.gcp_connector.auth_compatibility import get_credentials, get_project_list
+        from connectors.gcp_connector.billing import has_active_billing
+
+        token_data = get_credentials_from_db(user_id, 'gcp')
+        if not token_data:
+            logger.warning("[Discovery] No GCP credentials found for user %s", user_id)
+            return []
+
+        credentials = get_credentials(token_data)
+        projects = get_project_list(credentials)
+
+        # Only include projects with active billing (same filter as post-auth)
+        project_ids = []
+        for p in projects:
+            pid = p.get("projectId")
+            if not pid:
+                continue
+            try:
+                if has_active_billing(pid, credentials):
+                    project_ids.append(pid)
+            except Exception:
+                # If billing check fails, include the project anyway
+                project_ids.append(pid)
+
+        logger.info("[Discovery] Found %d GCP projects for user %s: %s", len(project_ids), user_id, project_ids)
+        return project_ids
+    except Exception as e:
+        logger.error("[Discovery] Failed to enumerate GCP projects for user %s: %s", user_id, e)
+        return []
+
+
 def _parse_credentials(raw_credentials):
     """Parse credentials from a DB row value into a dict.
 
@@ -137,14 +226,23 @@ def run_user_discovery(self, user_id):
         providers = {name: {} for name in provider_names}
 
         if "gcp" in providers:
-            cur.execute(
-                "SELECT preference_value FROM user_preferences "
-                "WHERE user_id = %s AND preference_key = 'gcp_root_project'",
-                (user_id,)
-            )
-            row = cur.fetchone()
-            if row and row[0]:
-                providers["gcp"] = {"project_id": row[0]}
+            # Wait for GCP post-auth setup to finish (API enablement, SA propagation)
+            _wait_for_gcp_post_auth(user_id)
+
+            # Fetch ALL project IDs so discovery covers every project, not just root
+            gcp_project_ids = _get_all_gcp_project_ids(user_id)
+            if gcp_project_ids:
+                providers["gcp"] = {"project_ids": gcp_project_ids}
+            else:
+                # Fallback: use root project only
+                cur.execute(
+                    "SELECT preference_value FROM user_preferences "
+                    "WHERE user_id = %s AND preference_key = 'gcp_root_project'",
+                    (user_id,)
+                )
+                row = cur.fetchone()
+                if row and row[0]:
+                    providers["gcp"] = {"project_ids": [row[0]]}
 
         cur.close()
         conn.close()
