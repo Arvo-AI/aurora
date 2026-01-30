@@ -240,20 +240,20 @@ export default function ConnectorCard({ connector }: ConnectorCardProps) {
         <CardFooter className="flex flex-col gap-2">
           {connector.id === 'onprem' ? (
             // On Prem always shows both buttons
-            <div className="flex gap-2 w-full">
+            <div className="flex gap-2 w-full flex-wrap">
               <Button
                 onClick={() => router.push("/settings/ssh-keys")}
-                className="w-full bg-white text-black hover:bg-gray-100"
+                className="flex-1 min-w-[120px] bg-white text-black hover:bg-gray-100"
               >
-                <KeyRound className="h-4 w-4 mr-2" />
-                SSH Keys
+                <KeyRound className="h-4 w-4 mr-2 shrink-0" />
+                <span className="truncate">SSH Keys</span>
               </Button>
               <Button
                 onClick={() => router.push("/vm-config")}
-                className="w-full bg-white text-black hover:bg-gray-100"
+                className="flex-1 min-w-[120px] bg-white text-black hover:bg-gray-100"
               >
-                <Settings className="h-4 w-4 mr-2" />
-                VM Config
+                <Settings className="h-4 w-4 mr-2 shrink-0" />
+                <span className="truncate">VM Config</span>
               </Button>
             </div>
           ) : (
