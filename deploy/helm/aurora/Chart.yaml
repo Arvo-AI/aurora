@@ -1,0 +1,6 @@
+apiVersion: v2
+name: aurora-oss
+description: Aurora OSS on-prem deployment
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

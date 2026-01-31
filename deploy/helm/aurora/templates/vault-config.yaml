@@ -1,0 +1,33 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "aurora.fullname" . }}-vault-config
+  labels:
+    {{- include "aurora.labels" . | nindent 4 }}
+data:
+  vault.hcl: |
+    disable_mlock = true
+
+    storage "file" {
+      path = "/vault/data"
+    }
+
+    listener "tcp" {
+      address     = "0.0.0.0:8200"
+      tls_disable = 1
+    }
+
+    api_addr = "http://{{ include "aurora.fullname" . }}-vault:8200"
+    log_level = "info"
+
+    {{- if and .Values.vault.seal (eq .Values.vault.seal.type "gcpckms") }}
+    seal "gcpckms" {
+      project    = "{{ .Values.vault.seal.gcpckms.project }}"
+      region     = "{{ .Values.vault.seal.gcpckms.region }}"
+      key_ring   = "{{ .Values.vault.seal.gcpckms.key_ring }}"
+      crypto_key = "{{ .Values.vault.seal.gcpckms.crypto_key }}"
+      {{- if .Values.vault.seal.gcpckms.credentials }}
+      credentials = "{{ .Values.vault.seal.gcpckms.credentials }}"
+      {{- end }}
+    }
+    {{- end }}

@@ -1,0 +1,40 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "aurora.fullname" . }}-celery-worker
+  labels:
+    {{- include "aurora.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCounts.celeryWorker }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "aurora.name" . }}-celery-worker
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+      labels:
+        app.kubernetes.io/name: {{ include "aurora.name" . }}-celery-worker
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/part-of: aurora
+    spec:
+      containers:
+        - name: celery-worker
+          image: "{{ .Values.image.registry }}/aurora-server:{{ .Values.image.tag }}"
+          imagePullPolicy: IfNotPresent
+          command: ["celery", "-A", "celery_config", "worker", "--loglevel=info"]
+          envFrom:
+            - configMapRef:
+                name: {{ include "aurora.fullname" . }}-config
+            - secretRef:
+                name: {{ include "aurora.fullname" . }}-secrets
+          volumeMounts:
+            - name: terraform-workdir
+              mountPath: /app/terraform_workdir
+          resources:
+            {{- toYaml .Values.resources.celeryWorker | nindent 12 }}
+      volumes:
+        - name: terraform-workdir
+          emptyDir: {}

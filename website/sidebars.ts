@@ -32,6 +32,8 @@ const sidebars: SidebarsConfig = {
       items: [
         'deployment/docker-compose',
         'deployment/kubernetes',
+        'deployment/vault-kms-setup',
+        'deployment/vault-kms-gcp',
       ],
     },
     {
