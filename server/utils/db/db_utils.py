@@ -543,6 +543,8 @@ def initialize_tables():
                         analyzed_at TIMESTAMP,
                         slack_message_ts VARCHAR(50),
                         active_tab VARCHAR(10) DEFAULT 'thoughts',
+                        visualization_code TEXT,
+                        visualization_updated_at TIMESTAMP,
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         UNIQUE(source_type, source_alert_id, user_id)
