@@ -112,14 +112,15 @@ export class GitHubIntegrationService {
       }
 
       return data.oauth_url;
-    } catch (error: any) {
-      // Re-throw with handled flag to prevent React from treating it as uncaught
-      if (error.isHandled) {
+    } catch (error) {
+      // Re-throw handled errors
+      if ((error as any)?.isHandled) {
         throw error;
       }
-      // For any unexpected errors, mark as handled
-      (error as any).isHandled = true;
-      throw error;
+      // Wrap unhandled errors
+      const wrappedError = new Error(error instanceof Error ? error.message : 'Failed to initiate GitHub OAuth');
+      (wrappedError as any).isHandled = true;
+      throw wrappedError;
     }
   }
 
@@ -544,7 +545,7 @@ export default function GitHubProviderIntegration() {
       }
       
       // Check if this is a configuration error
-      if (error.errorCode === 'GITHUB_NOT_CONFIGURED' || error.message?.includes('not configured')) {
+      if (error.errorCode === 'GITHUB_NOT_CONFIGURED') {
         const readmeAction = (
           <ToastAction
             altText="View GitHub setup guide"
