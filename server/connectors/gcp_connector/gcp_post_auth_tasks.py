@@ -246,6 +246,19 @@ def gcp_post_auth_setup_task(self, user_id, selected_project_ids=None):
         
         logging.info(f"GCP post-auth setup completed for user {user_id} (setup_success={setup_success})")
 
+        # Trigger graph discovery now that APIs and SAs are ready across all projects
+        try:
+            from services.discovery.tasks import run_user_discovery
+            from utils.cache.redis_client import get_redis_client
+            discovery_task = run_user_discovery.delay(user_id)
+            logging.info(f"Chained graph discovery task {discovery_task.id} after GCP post-auth for user {user_id}")
+            # Store task ID in Redis for dedup (same pattern as graph_routes.py)
+            redis_client = get_redis_client()
+            if redis_client:
+                redis_client.setex(f"discovery:running:{user_id}", 10800, discovery_task.id)
+        except Exception as e:
+            logging.warning(f"Failed to chain discovery task after GCP post-auth: {e}")
+
         return {
             'status': 'SUCCESS',
             'redirect_params': redirect_params,

@@ -56,6 +56,7 @@ celery_app.conf.update(
         'chat.background.summarization',
         'chat.background.visualization_generator',
         'routes.knowledge_base.tasks',
+        'services.discovery.tasks',
     ],
     # Periodic task schedule
     beat_schedule={
@@ -70,6 +71,14 @@ celery_app.conf.update(
         'cleanup-stale-kb-documents': {
             'task': 'knowledge_base.cleanup_stale_documents',
             'schedule': 180.0,  # Every 3 minutes
+        },
+        'run-full-discovery': {
+            'task': 'services.discovery.tasks.run_full_discovery',
+            'schedule': float(os.getenv('DISCOVERY_INTERVAL_HOURS', '1')) * 3600,  # Default: every hour
+        },
+        'mark-stale-services': {
+            'task': 'services.discovery.tasks.mark_stale_services',
+            'schedule': 86400.0,  # Daily (24 hours)
         },
     },
     beat_schedule_filename='celerybeat-schedule',
@@ -99,7 +108,13 @@ try:
 except ImportError as e:
     logging.warning(f"Failed to import PagerDuty tasks: {e}")
 
+try:
+    import services.discovery.tasks
+    logging.info("Discovery tasks imported successfully")
+except ImportError as e:
+    logging.warning(f"Failed to import discovery tasks: {e}")
+
 # Log the number of registered tasks for debugging
 if hasattr(celery_app, 'tasks'):
     non_celery_tasks = [t for t in celery_app.tasks.keys() if not t.startswith('celery.')]
-    print(f" Registered {len(non_celery_tasks)} custom tasks: {non_celery_tasks}") 
+    logging.info("Registered %d custom tasks: %s", len(non_celery_tasks), non_celery_tasks)

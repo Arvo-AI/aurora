@@ -83,3 +83,6 @@ Flask-Limiter>=3.5.0
 
 # SSH client for VM credential validation
 paramiko>=3.4.0
+
+# Memgraph graph database driver (Bolt protocol, pure Python)
+neo4j>=5.0

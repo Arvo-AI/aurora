@@ -80,6 +80,7 @@ export default function ScalewayOnboardingPage() {
 
       // Success - update localStorage and redirect
       localStorage.setItem("isScalewayConnected", "true");
+      localStorage.setItem("aurora_graph_discovery_trigger", "1");
       
       // Auto-select Scaleway provider when connection succeeds (legitimate connection)
       await providerPreferencesService.smartAutoSelect('scaleway', true);

@@ -14,6 +14,7 @@ import { ConnectorDialogs } from "./ConnectorDialogs";
 import { ConnectorCardContent } from "./ConnectorCardContent";
 import type { ConnectorConfig } from "./types";
 import { useGitHubStatus } from "@/hooks/use-github-status";
+import { useGraphDiscoveryStatus } from "@/hooks/use-graph-discovery-status";
 
 const slackService = isSlackEnabled() ? require("@/lib/services/slack").slackService : null;
 
@@ -42,6 +43,9 @@ export default function ConnectorCard({ connector }: ConnectorCardProps) {
     slackStatus,
     checkGitHubStatus,
   } = useConnectorStatus(connector, userId);
+
+  // Graph discovery status (only active for supported cloud providers)
+  const { syncStatus } = useGraphDiscoveryStatus(connector.id, isConnected, userId);
 
   const {
     isConnecting: isConnectingOAuthHandler,
@@ -223,17 +227,39 @@ export default function ConnectorCard({ connector }: ConnectorCardProps) {
         
         <CardContent className="flex-1">
           {connector.id === "slack" && isConnected ? (
-            <ConnectorCardContent 
+            <ConnectorCardContent
               isLoading={isLoadingDetails}
               slackStatus={slackStatus}
               description={connector.description}
             />
           ) : (
-            <ConnectorCardContent 
+            <ConnectorCardContent
               isLoading={false}
               slackStatus={null}
               description={connector.description}
             />
+          )}
+          {syncStatus !== "idle" && (
+            <div className="flex items-center gap-1.5 mt-2 text-xs">
+              {syncStatus === "building" && (
+                <>
+                  <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />
+                  <span className="text-muted-foreground">Building dependency graph...</span>
+                </>
+              )}
+              {syncStatus === "synced" && (
+                <>
+                  <Check className="h-3 w-3 text-green-600 dark:text-green-500" />
+                  <span className="text-green-600 dark:text-green-500">Graph synced</span>
+                </>
+              )}
+              {syncStatus === "error" && (
+                <>
+                  <AlertCircle className="h-3 w-3 text-red-600 dark:text-red-500" />
+                  <span className="text-red-600 dark:text-red-500">Graph sync failed</span>
+                </>
+              )}
+            </div>
           )}
         </CardContent>
         
