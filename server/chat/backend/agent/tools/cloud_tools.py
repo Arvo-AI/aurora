@@ -28,6 +28,11 @@ iac_tool = run_iac_tool
 from .github_commit_tool import github_commit, GitHubCommitArgs
 from .github_rca_tool import github_rca, GitHubRCAArgs
 from .github_fix_tool import github_fix, GitHubFixArgs
+
+# Visualization trigger caching
+from cachetools import TTLCache
+_viz_triggers: TTLCache = TTLCache(maxsize=100, ttl=3600)  # 1 hour TTL
+from chat.backend.constants import MAX_TOOL_OUTPUT_CHARS
 from .github_apply_fix_tool import github_apply_fix, GitHubApplyFixArgs
 from .cloud_exec_tool import cloud_exec
 
@@ -221,6 +226,32 @@ def send_tool_completion(tool_name: str, output: str, status: str = "completed",
         user_id = context.get('user_id') if isinstance(context, dict) else context
         state_context = get_state_context()
         session_id = state_context.session_id if state_context and hasattr(state_context, 'session_id') else None
+        
+        # Trigger visualization update every 30s for incident RCAs
+        incident_id = getattr(state_context, 'incident_id', None) if state_context else None
+        if incident_id:
+            try:
+                global _viz_triggers
+                
+                if incident_id not in _viz_triggers:
+                    from chat.background.visualization_triggers import VisualizationTrigger
+                    _viz_triggers[incident_id] = VisualizationTrigger(incident_id)
+                
+                if _viz_triggers[incident_id].should_trigger():
+                    from chat.background.visualization_generator import update_visualization
+                    update_visualization.delay(
+                        incident_id=incident_id,
+                        user_id=user_id,
+                        session_id=session_id,
+                        force_full=False,
+                        tool_calls_json=json.dumps([{
+                            'tool': tool_name,
+                            'output': str(output)[:MAX_TOOL_OUTPUT_CHARS]
+                        }])
+                    )
+                    logging.info(f"[Visualization] Triggered 30s update for incident {incident_id}")
+            except Exception as e:
+                logging.warning(f"[Visualization] Failed to trigger update: {e}")
         
         # Try to get the Agent's websocket_sender first (preferred)
         agent_websocket_sender = None
