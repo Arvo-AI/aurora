@@ -4,11 +4,16 @@
 FROM python:3.11-slim AS base
 
 ENV PYTHONPATH="/app"
+ENV DEBIAN_FRONTEND=noninteractive
 
 # Set the working directory
 WORKDIR /app 
 
-RUN apt-get update && apt-get install -y \
+# Use https and clean caches before installing
+RUN sed -i 's/http:/https:/g' /etc/apt/sources.list.d/debian.sources 2>/dev/null || true && \
+    rm -rf /var/lib/apt/lists/* && \
+    apt-get clean && \
+    apt-get update && apt-get install -y \
     libpq-dev \
     gcc \
     g++ \

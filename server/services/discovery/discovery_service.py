@@ -163,6 +163,10 @@ def run_discovery_for_user(user_id, connected_providers):
     provider_envs = {}
     for provider_name, credentials in connected_providers.items():
         env, updated_creds = _setup_provider_env(provider_name, user_id, credentials)
+        # Fix HOME directory for celery worker (setup_*_isolated assumes terminal pod paths)
+        if env and "HOME" in env:
+            import os
+            env["HOME"] = os.environ.get("HOME", "/root")
         provider_envs[provider_name] = (env, updated_creds)
         connected_providers[provider_name] = updated_creds
 
