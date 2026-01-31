@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 class InfraNode(BaseModel):
     """Infrastructure entity node."""
     id: str = Field(description="Unique identifier (e.g., 'svc-api', 'pod-db-1')")
-    label: str = Field(description="Display name - use full entity name from infrastructure")
+    label: str = Field(description="Display name (8-15 chars)")
     type: str = Field(description="Infrastructure entity type (e.g., 'pod', 'deployment', 'lambda', 'load-balancer', 'database')")
     status: Literal['healthy', 'degraded', 'failed', 'investigating', 'unknown'] = 'investigating'
     parentId: Optional[str] = Field(default=None, description="ID of parent node for hierarchical grouping (e.g., cluster, namespace, region)")
@@ -51,14 +51,15 @@ class VisualizationExtractor:
     def extract_incremental(
         self, 
         recent_messages: List[Dict[str, Any]],
-        existing_viz: Optional[VisualizationData] = None
+        existing_viz: Optional[VisualizationData] = None,
+        is_final: bool = False
     ) -> VisualizationData:
         """Extract entities from recent tool calls and merge with existing state."""
         if not recent_messages:
             logger.warning("[VizExtractor] No messages to extract from")
             return existing_viz or VisualizationData()
         
-        prompt = self._build_prompt(recent_messages, existing_viz)
+        prompt = self._build_prompt(recent_messages, existing_viz, is_final=is_final)
         
         try:
             extractor = self.llm.with_structured_output(VisualizationData)
@@ -76,7 +77,7 @@ class VisualizationExtractor:
             logger.error(f"[VizExtractor] Extraction failed: {e}")
             return existing_viz or VisualizationData()
     
-    def _build_prompt(self, messages: List[Dict[str, Any]], existing: Optional[VisualizationData]) -> str:
+    def _build_prompt(self, messages: List[Dict[str, Any]], existing: Optional[VisualizationData], is_final: bool = False) -> str:
         """Build extraction prompt with context."""
         messages_text = "\n\n".join([
             f"Tool: {m.get('tool', 'unknown')}\nOutput:\n{m.get('output', '')[:MAX_TOOL_OUTPUT_CHARS]}"
@@ -90,7 +91,16 @@ class VisualizationExtractor:
             node_summary = ", ".join([f"{n.id}({n.status})" for n in existing.nodes])
             existing_context = f"\n\nEXISTING GRAPH ({len(existing.nodes)} nodes, {len(existing.edges)} edges):\n{node_summary}"
         
-        return f"""You are building a visual incident graph to help SREs quickly understand WHAT caused WHAT during an incident.
+        final_context = ""
+        if is_final:
+            final_context = """
+
+**FINAL VISUALIZATION - INVESTIGATION COMPLETE:**
+This is the FINAL graph generation. Investigation has FINISHED. You MUST assign definitive statuses to all nodes.
+DO NOT use 'investigating' status - investigation is done. Use: 'failed', 'degraded', 'healthy', or 'unknown'.
+If you cannot determine a node's status from the evidence, use 'unknown', NOT 'investigating'."""
+        
+        return f"""You are building a visual incident graph to help SREs quickly understand WHAT caused WHAT during an incident.{final_context}
 
 GOAL: Create a FLAT graph with maximum 2 levels of nesting. Show causation chain from root cause to impact.
 
@@ -135,21 +145,26 @@ EXTRACTION RULES:
      * Cloud: lambda, cloud-function, vm, instance, load-balancer, api-gateway, bucket, queue, region, vpc, subnet, availability-zone
      * Databases: database, postgres, mysql, redis, mongodb, elasticsearch
      * Monitoring: alert, event, metric
-   - Keep graph focused - omit healthy unrelated infrastructure
+   - **CRITICAL**: Keep graph MINIMAL and focused - AGGRESSIVELY OMIT:
+     * Entities only mentioned in passing (e.g., listed but not investigated)
+     * Healthy infrastructure not directly involved in the failure chain
+     * Background/unrelated resources from tool outputs
+     * Resources listed in inventory commands but showing no issues
+   - **INCLUDE ONLY**:
+     * Entities with failures, errors, or degradation
+     * Direct upstream causes (configs, dependencies that triggered failures)
+     * Direct downstream impacts (services affected by failures)
+     * The specific cluster/namespace where failure occurred (not all clusters)
 
 4. STATUS ASSIGNMENT (use evidence from tool outputs):
    - 'failed': Clear errors, crashes, restarts, or unavailability (CrashLoopBackOff, 5xx errors, OOMKilled)
    - 'degraded': High latency, resource exhaustion, partial failures (CPU/memory pressure, slow responses)
-   - 'investigating': Mentioned in investigation but status unclear
+   - 'investigating': Mentioned in investigation but status unclear (ONLY use during active investigation, NOT in final graph)
    - 'healthy': Explicitly confirmed working normally
-   - 'unknown': No status information available
+   - 'unknown': No status information available (use this when evidence is insufficient)
    - For group/container nodes: use worst status of children
 
 5. RELATIONSHIPS (be specific):
-   - **CRITICAL - NO HIERARCHY EDGES**: NEVER create edges between parent and child nodes
-     * If node A has parentId=B, do NOT create an edge A→B or B→A
-     * Hierarchy is shown visually by containment (parentId), NOT by edges
-     * Example: If pod has parentId=deployment, NO edge between pod and deployment
    - **IMPORTANT**: Do NOT create edges for hierarchical containment (cluster→namespace, namespace→deployment, etc.)
      * These are automatically shown via parentId
      * Edges like "contains namespace", "contains deployment", "manages pod" should NOT exist
@@ -162,10 +177,10 @@ EXTRACTION RULES:
    - Example: If service A calls database B, create dependency edge A→B
 
 6. LABELING:
+   - Keep labels concise: 8-15 characters
    - Use actual names from infrastructure (pod names, service names, etc.)
-   - For nodes: use full entity names as they appear in the infrastructure (e.g., 'api-pod-3x7k2s', 'postgres-primary-0')
-   - For group nodes: use descriptive names (e.g., 'Production Cluster', 'us-east-1')
-   - Do NOT truncate or abbreviate names
+   - For nodes: use short identifiers (e.g., 'api-pod-3x7k', 'postgres-db')
+   - For group nodes: use descriptive names (e.g., 'Prod Cluster', 'us-east-1')
 
 7. INCREMENTAL UPDATES:
    - If existing graph provided, return ONLY new entities or status updates
@@ -180,10 +195,22 @@ REMINDER: If a node has parentId, that parent MUST have parentId=null. No grandc
         """Merge new entities with existing ones."""
         merged_nodes = {n.id: n for n in existing.nodes}
         
+        # Status priority: higher number = more specific/definitive
+        status_priority = {
+            'failed': 4,
+            'degraded': 3,
+            'healthy': 2,
+            'unknown': 1,
+            'investigating': 0
+        }
+        
         for node in new.nodes:
             if node.id in merged_nodes:
-                # Update status if new info is more specific
-                if node.status != 'investigating' and merged_nodes[node.id].status == 'investigating':
+                # Update status if new status is more specific or existing is investigating
+                new_priority = status_priority.get(node.status, 0)
+                existing_priority = status_priority.get(merged_nodes[node.id].status, 0)
+                
+                if new_priority >= existing_priority:
                     merged_nodes[node.id].status = node.status
             else:
                 merged_nodes[node.id] = node

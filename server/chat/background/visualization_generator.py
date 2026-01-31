@@ -60,7 +60,7 @@ def update_visualization(
             logger.info(f"[Visualization] Using {len(tool_calls)} tool calls from parameters")
         else:
             tool_calls = _fetch_recent_tool_calls(session_id, user_id, limit=10 if not force_full else 50)
-            logger.info(f"[Visualization] Fetched {len(tool_calls)} tool calls from state context")
+            logger.info(f"[Visualization] Fetched {len(tool_calls)} tool calls from llm_context_history")
         
         if not tool_calls:
             return {"status": "skipped", "reason": "no_tool_calls"}
@@ -68,11 +68,22 @@ def update_visualization(
         existing_viz = _fetch_existing_visualization(incident_id)
         
         extractor = _get_extractor()
-        updated_viz = extractor.extract_incremental(tool_calls, existing_viz)
+        updated_viz = extractor.extract_incremental(tool_calls, existing_viz, is_final=force_full)
         
         if not updated_viz.nodes:
             logger.warning(f"[Visualization] No entities extracted for incident {incident_id}")
             return {"status": "skipped", "reason": "no_entities"}
+        
+        # Post-process: Remove 'investigating' status from final visualization
+        if force_full:
+            investigating_count = 0
+            for node in updated_viz.nodes:
+                if node.status == 'investigating':
+                    node.status = 'unknown'
+                    investigating_count += 1
+            
+            if investigating_count > 0:
+                logger.info(f"[Visualization] Converted {investigating_count} 'investigating' nodes to 'unknown' in final visualization")
         
         validated_json = updated_viz.model_dump_json(indent=2)
         _store_visualization(incident_id, validated_json)
@@ -96,12 +107,12 @@ def update_visualization(
 
 
 def _fetch_recent_tool_calls(session_id: str, user_id: str, limit: int = 10) -> List[Dict]:
-    """Fetch recent tool calls from database (chat_sessions.messages)."""
+    """Fetch recent tool calls from database llm_context_history."""
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
                 cursor.execute("""
-                    SELECT messages
+                    SELECT llm_context_history
                     FROM chat_sessions
                     WHERE id = %s
                 """, (session_id,))
@@ -109,23 +120,25 @@ def _fetch_recent_tool_calls(session_id: str, user_id: str, limit: int = 10) -> 
                 row = cursor.fetchone()
         
         if not row or not row[0]:
-            logger.warning(f"[Visualization] No messages found for session {session_id}")
+            logger.warning(f"[Visualization] No llm_context_history found for session {session_id}")
             return []
         
-        messages = row[0]  # Already parsed as list by psycopg2
+        llm_context = row[0]
+        if isinstance(llm_context, str):
+            import json
+            llm_context = json.loads(llm_context)
+        
         tool_calls = []
         
-        # Extract tool messages from the messages array
-        for msg in messages:
-            if isinstance(msg, dict) and 'name' in msg:
-                tool_name = msg.get('name', 'unknown')
-                if tool_name in INFRASTRUCTURE_TOOLS:
-                    tool_calls.append({
-                        'tool': tool_name,
-                        'output': str(msg.get('content', ''))[:MAX_TOOL_OUTPUT_CHARS],
-                    })
+        # Extract tool messages from llm_context_history
+        for msg in llm_context:
+            if isinstance(msg, dict) and msg.get('name') in INFRASTRUCTURE_TOOLS:
+                tool_calls.append({
+                    'tool': msg.get('name'),
+                    'output': str(msg.get('content', ''))[:MAX_TOOL_OUTPUT_CHARS],
+                })
         
-        logger.info(f"[Visualization] Fetched {len(tool_calls)} tool calls from database for session {session_id}")
+        logger.info(f"[Visualization] Fetched {len(tool_calls)} infrastructure tool calls from database for session {session_id}")
         return tool_calls[-limit:] if tool_calls else []
     
     except Exception as e:

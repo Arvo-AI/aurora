@@ -484,14 +484,14 @@ export default function InfrastructureVisualization({ incidentId, className }: P
         elementsSelectable={true}
         panOnDrag={true}
         selectionOnDrag={false}
-        panOnScroll={true}
+        panOnScroll={false}
         panOnScrollMode="free"
-        zoomOnScroll={false}
+        zoomOnScroll={true}
         zoomOnPinch={true}
         zoomOnDoubleClick={true}
         fitView
-        minZoom={0.5}
-        maxZoom={1.5}
+        minZoom={0.1}
+        maxZoom={2}
         defaultEdgeOptions={{ 
           type: 'smoothstep',
           animated: false,
