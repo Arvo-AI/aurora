@@ -13,7 +13,7 @@
 ## Docker deployments
 - For development, use `make dev-build` to build the project, `make dev` to start it and `make down` to stop it ;
 - To test the production build, use `make prod-build` to build the project, `make prod` to start it and `make prod-down` to stop it ;
-- Always update `docker-compose.yaml` along with `prod.docker-compose.yml`, especially to keep env variables in sync.
+- Always update `docker-compose.yaml` along with `docker-compose.prod-local.yml`, especially to keep env variables in sync.
 
 ## Architecture
 - **Docker Compose stack**: aurora-server (Flask API on :5080), celery_worker (background tasks), chatbot (WebSocket on :5006), frontend (Next.js on :3000), postgres (:5432), weaviate (vector DB :8080), redis (:6379), vault (secrets :8200), seaweedfs (object storage :8333)

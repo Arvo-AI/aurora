@@ -176,8 +176,8 @@ def process_netdata_alert(
                                         },
                                     )
                                     
-                                    # Build simple RCA prompt (detailed instructions in system prompt)
-                                    rca_prompt = build_rca_prompt_from_alert(data)
+                                    # Build simple RCA prompt with Aurora Learn context injection
+                                    rca_prompt = build_rca_prompt_from_alert(data, user_id=user_id)
                                     
                                     # Trigger the background chat task
                                     run_background_chat.delay(

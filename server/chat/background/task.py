@@ -401,23 +401,25 @@ async def _execute_background_chat(
         # Create the initial message (kept simple - user sees this)
         human_message = HumanMessage(content=initial_message)
 
+        # Import centralized model config
+        from chat.backend.agent.llm import ModelConfig
+
         # Create state with is_background=True and rca_context for system prompt
-        # Use Gemini 3 Pro for background chats by default, Claude Sonnet 4.5 for cost optimization
+        # Use centralized model configuration for RCA with provider mode awareness
         state = State(
             user_id=user_id,
             session_id=session_id,
+            incident_id=incident_id,
             provider_preference=provider_preference,
             selected_project_id=None,
             messages=[human_message],
             question=initial_message,
-            model="anthropic/claude-sonnet-4.5"
-            if os.getenv("RCA_OPTIMIZE_COSTS", "").lower() == "true"
-            else "anthropic/claude-opus-4.5",
+            model=ModelConfig.RCA_MODEL,
             mode=mode,
             is_background=True,  # Key flag for background behavior
             rca_context=rca_context,  # RCA context for prompt_builder
         )
-        logger.info(f"[BackgroundChat] Created state with is_background=True, mode={mode}, rca_context={'set' if rca_context else 'None'}")
+        logger.info(f"[BackgroundChat] Created state with is_background=True, mode={mode}, model={state.model}, rca_context={'set' if rca_context else 'None'}")
         
         # Set UI state (preserve triggerMetadata so it persists when workflow saves)
         wf._ui_state = {

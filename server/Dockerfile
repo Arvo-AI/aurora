@@ -11,6 +11,7 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y \
     libpq-dev \
     gcc \
+    g++ \
     python3-dev \
     postgresql \
     postgresql-client \
@@ -181,8 +182,6 @@ COPY ./utils /app/utils/
 COPY ./celery_config.py /app/celery_config.py
 COPY ./main_chatbot.py /app/main_chatbot.py
 COPY ./main_compute.py /app/main_compute.py
-COPY ./kubectl_agent_ws_handler.py /app/kubectl_agent_ws_handler.py
-COPY ./internal_api_handler.py /app/internal_api_handler.py
 
 EXPOSE 5006
 # Entrypoint for chat container:

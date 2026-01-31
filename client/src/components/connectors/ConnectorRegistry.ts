@@ -181,6 +181,7 @@ class ConnectorRegistry {
         category: "Infrastructure",
         path: "/ovh/onboarding",
         storageKey: "isOVHConnected",
+        useCustomConnection: true,
       });
     }
 
@@ -193,6 +194,7 @@ class ConnectorRegistry {
       category: "Infrastructure",
       path: "/scaleway/onboarding",
       storageKey: "isScalewayConnected",
+      useCustomConnection: true,
     });
 
     this.register({

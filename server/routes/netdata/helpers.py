@@ -110,12 +110,13 @@ def should_trigger_background_chat(user_id: str, payload: Dict[str, Any]) -> boo
     return True
 
 
-def build_rca_prompt_from_alert(normalized: Dict[str, Any]) -> str:
+def build_rca_prompt_from_alert(normalized: Dict[str, Any], user_id: Optional[str] = None) -> str:
     """Build an RCA analysis prompt from normalized Netdata alert data.
-    
+
     Args:
         normalized: The normalized Netdata alert data (from normalize_netdata_payload)
-    
+        user_id: Optional user ID for Aurora Learn context injection
+
     Returns:
         A prompt string for the background chat agent
     """
@@ -129,7 +130,7 @@ def build_rca_prompt_from_alert(normalized: Dict[str, Any]) -> str:
     room = normalized.get("room") or "unknown"
     value = normalized.get("value")
     message = normalized.get("message") or ""
-    
+
     # Build the prompt parts
     prompt_parts = [
         "A Netdata alert has been triggered and requires Root Cause Analysis.",
@@ -144,11 +145,18 @@ def build_rca_prompt_from_alert(normalized: Dict[str, Any]) -> str:
         f"- Space: {space}",
         f"- Room: {room}",
     ]
-    
+
     if value:
         prompt_parts.append(f"- Value: {value}")
-    
+
     if message:
         prompt_parts.append(f"- Message: {message}")
+
+    # Add Aurora Learn context if available
+    try:
+        from chat.background.rca_prompt_builder import inject_aurora_learn_context
+        inject_aurora_learn_context(prompt_parts, user_id, alarm, host, "netdata")
+    except Exception as e:
+        logger.warning(f"[AURORA LEARN] Failed to get context: {e}")
 
     return "\n".join(prompt_parts)

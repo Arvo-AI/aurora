@@ -26,6 +26,8 @@ export default function ConnectorCard({ connector }: ConnectorCardProps) {
   const { toast } = useToast();
   const [showGitHubDialog, setShowGitHubDialog] = useState(false);
   const [showGcpDialog, setShowGcpDialog] = useState(false);
+  const [showOvhDialog, setShowOvhDialog] = useState(false);
+  const [showScalewayDialog, setShowScalewayDialog] = useState(false);
   const [userId, setUserId] = useState<string | null>(null);
   const [isConnectingOAuth, setIsConnectingOAuth] = useState(false);
   
@@ -117,6 +119,24 @@ export default function ConnectorCard({ connector }: ConnectorCardProps) {
         await handleGCPOAuth();
       } else {
         setShowGcpDialog(true);
+      }
+      return;
+    }
+
+    if (connector.id === "ovh") {
+      if (!isConnected) {
+        router.push("/ovh/onboarding");
+      } else {
+        setShowOvhDialog(true);
+      }
+      return;
+    }
+
+    if (connector.id === "scaleway") {
+      if (!isConnected) {
+        router.push("/scaleway/onboarding");
+      } else {
+        setShowScalewayDialog(true);
       }
       return;
     }
@@ -220,22 +240,20 @@ export default function ConnectorCard({ connector }: ConnectorCardProps) {
         <CardFooter className="flex flex-col gap-2">
           {connector.id === 'onprem' ? (
             // On Prem always shows both buttons
-            <div className="flex gap-2 w-full">
+            <div className="flex gap-2 w-full flex-wrap">
               <Button
                 onClick={() => router.push("/settings/ssh-keys")}
-                className="w-full"
-                variant="outline"
+                className="flex-1 min-w-[120px] bg-white text-black hover:bg-gray-100"
               >
-                <KeyRound className="h-4 w-4 mr-2" />
-                SSH Keys
+                <KeyRound className="h-4 w-4 mr-2 shrink-0" />
+                <span className="truncate">SSH Keys</span>
               </Button>
               <Button
                 onClick={() => router.push("/vm-config")}
-                className="w-full"
-                variant="outline"
+                className="flex-1 min-w-[120px] bg-white text-black hover:bg-gray-100"
               >
-                <Settings className="h-4 w-4 mr-2" />
-                VM Config
+                <Settings className="h-4 w-4 mr-2 shrink-0" />
+                <span className="truncate">VM Config</span>
               </Button>
             </div>
           ) : (
@@ -309,6 +327,8 @@ export default function ConnectorCard({ connector }: ConnectorCardProps) {
         connectorId={connector.id}
         showGitHubDialog={showGitHubDialog}
         showGcpDialog={showGcpDialog}
+        showOvhDialog={showOvhDialog}
+        showScalewayDialog={showScalewayDialog}
         onGitHubDialogChange={(open) => {
           setShowGitHubDialog(open);
           if (!open) {
@@ -319,6 +339,8 @@ export default function ConnectorCard({ connector }: ConnectorCardProps) {
           }
         }}
         onGcpDialogChange={setShowGcpDialog}
+        onOvhDialogChange={setShowOvhDialog}
+        onScalewayDialogChange={setShowScalewayDialog}
         onGitHubDialogClose={() => setShowGitHubDialog(false)}
       />
     </>
