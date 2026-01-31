@@ -33,21 +33,40 @@ from chat.backend.constants import MAX_TOOL_OUTPUT_CHARS, INFRASTRUCTURE_TOOLS
 logger = logging.getLogger(__name__)
 
 
-def _extract_tool_calls_for_viz() -> List[Dict]:
-    """Extract infrastructure tool calls from current state for final visualization."""
-    state = get_state_context()
-    if not state or not hasattr(state, 'messages'):
+def _extract_tool_calls_for_viz(session_id: str, user_id: str) -> List[Dict]:
+    """Extract infrastructure tool calls from database for final visualization."""
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("""
+                    SELECT llm_context_history
+                    FROM chat_sessions
+                    WHERE id = %s AND user_id = %s
+                """, (session_id, user_id))
+                
+                row = cursor.fetchone()
+        
+        if not row or not row[0]:
+            logger.warning(f"[Visualization] No llm_context_history for session {session_id}")
+            return []
+        
+        llm_context = row[0]
+        if isinstance(llm_context, str):
+            llm_context = json.loads(llm_context)
+        
+        tool_calls = []
+        for msg in llm_context:
+            if isinstance(msg, dict) and msg.get('name') in INFRASTRUCTURE_TOOLS:
+                tool_calls.append({
+                    'tool': msg.get('name'),
+                    'output': str(msg.get('content', ''))[:MAX_TOOL_OUTPUT_CHARS]
+                })
+        
+        return tool_calls
+    
+    except Exception as e:
+        logger.error(f"[Visualization] Failed to extract tool calls from database: {e}")
         return []
-    
-    tool_calls = []
-    for msg in state.messages:
-        if isinstance(msg, ToolMessage) and msg.name in INFRASTRUCTURE_TOOLS:
-            tool_calls.append({
-                'tool': msg.name,
-                'output': str(msg.content)[:MAX_TOOL_OUTPUT_CHARS]
-            })
-    
-    return tool_calls
 
 _RATE_LIMIT_WINDOW_SECONDS = 300  # 5 minute window
 _RATE_LIMIT_MAX_REQUESTS = 5  # Max 5 background chats per window
@@ -488,8 +507,8 @@ async def _execute_background_chat(
         
         logger.info(f"[BackgroundChat] Workflow execution completed - all streams and tool calls finished")
         
-        # Extract tool calls while state context is still available
-        tool_calls = _extract_tool_calls_for_viz()
+        # Extract tool calls from database llm_context_history
+        tool_calls = _extract_tool_calls_for_viz(session_id, user_id)
         logger.info(f"[BackgroundChat] Extracted {len(tool_calls)} tool calls for visualization")
         
         return {
