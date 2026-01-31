@@ -1,4 +1,4 @@
-import { NextRequest } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { getAuthenticatedUser } from '@/lib/auth-helper';
 
 const API_BASE_URL = process.env.BACKEND_URL;
@@ -8,7 +8,7 @@ export async function GET(request: NextRequest) {
     if (!API_BASE_URL) return new Response('BACKEND_URL not configured', { status: 500 });
 
     const authResult = await getAuthenticatedUser();
-    if (authResult instanceof Response) return authResult;
+    if (authResult instanceof NextResponse) return authResult;
 
     const response = await fetch(`${API_BASE_URL}/api/incidents/stream`, {
       method: 'GET',
@@ -22,6 +22,7 @@ export async function GET(request: NextRequest) {
       headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive' },
     });
   } catch (error) {
+    console.error('[api/incidents/stream] Error:', error);
     return new Response('Failed to connect to incident stream', { status: 500 });
   }
 }

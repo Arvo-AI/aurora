@@ -1,4 +1,4 @@
-import { NextRequest } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { getAuthenticatedUser } from '@/lib/auth-helper';
 
 const API_BASE_URL = process.env.BACKEND_URL;
@@ -11,7 +11,7 @@ export async function GET(
     if (!API_BASE_URL) return new Response('BACKEND_URL not configured', { status: 500 });
 
     const authResult = await getAuthenticatedUser();
-    if (authResult instanceof Response) return authResult;
+    if (authResult instanceof NextResponse) return authResult;
 
     const { id } = await params;
 
