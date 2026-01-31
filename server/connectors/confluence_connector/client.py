@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 from urllib.parse import parse_qs, urlparse
 
 import requests
@@ -107,9 +107,14 @@ class ConfluenceClient:
             "Accept": "application/json",
         }
         if auth_type not in {"oauth", "pat"}:
-            logger.warning("Unknown Confluence auth_type=%s; defaulting to Bearer token.", auth_type)
+            logger.warning(
+                "Unknown Confluence auth_type=%s; defaulting to Bearer token.",
+                auth_type,
+            )
 
-    def _request(self, method: str, path: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    def _request(
+        self, method: str, path: str, params: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
         url = f"{self.api_base}{path}"
         try:
             response = requests.request(
@@ -125,7 +130,9 @@ class ConfluenceClient:
             logger.error("Confluence API request failed: %s %s (%s)", method, url, exc)
             raise
 
-    def _request_v2(self, method: str, path: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    def _request_v2(
+        self, method: str, path: str, params: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
         """Make a request to the v2 API (for granular OAuth scopes)."""
         if not self.api_v2_base:
             raise ValueError("V2 API requires OAuth with cloud_id")
@@ -141,12 +148,14 @@ class ConfluenceClient:
             response.raise_for_status()
             return response.json()
         except requests.RequestException as exc:
-            logger.error("Confluence v2 API request failed: %s %s (%s)", method, url, exc)
+            logger.error(
+                "Confluence v2 API request failed: %s %s (%s)", method, url, exc
+            )
             raise
 
     def get_current_user(self) -> Dict[str, Any]:
         """Validate credentials by checking access to the API.
-        
+
         With granular scopes, we validate by listing spaces (read:space:confluence)
         since the Confluence /users/current endpoint requires different permissions.
         """
@@ -156,7 +165,7 @@ class ConfluenceClient:
             return {
                 "type": "oauth_validated",
                 "displayName": "Confluence User",
-                "spaces_accessible": len(spaces_result.get("results", [])) > 0
+                "spaces_accessible": len(spaces_result.get("results", [])) > 0,
             }
         # Fall back to v1 for Data Center/Server or classic scopes
         return self._request("GET", "/user/current")
@@ -165,10 +174,37 @@ class ConfluenceClient:
         """Fetch a Confluence page by ID using v2 API for OAuth."""
         if self.api_v2_base:
             # V2 API uses different expand format
-            return self._request_v2("GET", f"/pages/{page_id}", params={"body-format": "storage"})
+            return self._request_v2(
+                "GET", f"/pages/{page_id}", params={"body-format": "storage"}
+            )
         # Fall back to v1 for Data Center/Server
         params = {"expand": expand} if expand else None
         return self._request("GET", f"/content/{page_id}", params=params)
+
+    def search_content(
+        self,
+        cql: str,
+        limit: int = 25,
+        expand: str = "version,space,metadata.labels",
+        excerpt: bool = True,
+    ) -> Dict[str, Any]:
+        """Search Confluence content using CQL (v1 API only — no v2 equivalent).
+
+        Args:
+            cql: Confluence Query Language expression.
+            limit: Maximum results to return (max 25 when expanding body).
+            expand: Comma-separated v1 expand fields.
+            excerpt: If True, include ``excerpt`` in the expansion.
+
+        Returns:
+            Raw JSON response with ``results``, ``start``, ``limit``, ``size``,
+            and ``_links`` keys.
+        """
+        params: Dict[str, Any] = {"cql": cql, "limit": limit}
+        if expand:
+            full_expand = f"{expand},excerpt" if excerpt else expand
+            params["expand"] = full_expand
+        return self._request("GET", "/content/search", params=params)
 
     def list_spaces(self, limit: int = 10) -> Dict[str, Any]:
         """List Confluence spaces."""

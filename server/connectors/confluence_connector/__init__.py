@@ -1,5 +1,5 @@
 """Confluence connector package."""
 
-from . import auth, client, runbook_parser
+from . import auth, client, cql_builder, runbook_parser, search_service
 
-__all__ = ["auth", "client", "runbook_parser"]
+__all__ = ["auth", "client", "cql_builder", "runbook_parser", "search_service"]
