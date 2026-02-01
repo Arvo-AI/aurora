@@ -16,53 +16,53 @@ CLOUD_COMMANDS = [
     {
         "resource_type": "vm",
         "sub_type": "ovh_instance",
-        "command": ["ovh", "cloud", "project", "instance", "list", "--output", "json"],
+        "command": ["ovhcloud", "cloud", "instance", "list", "--json"],
         "label": "instances",
         "cloud_project": True,
     },
     {
         "resource_type": "kubernetes_cluster",
         "sub_type": "ovh_kube",
-        "command": ["ovh", "cloud", "project", "kube", "list", "--output", "json"],
+        "command": ["ovhcloud", "cloud", "kube", "list", "--json"],
         "label": "kubernetes clusters",
         "cloud_project": True,
     },
     {
         "resource_type": "database",
         "sub_type": "ovh_managed_db",
-        "command": ["ovh", "cloud", "project", "database", "list", "--output", "json"],
+        "command": ["ovhcloud", "cloud", "database-service", "list", "--json"],
         "label": "managed databases",
         "cloud_project": True,
     },
     {
         "resource_type": "load_balancer",
         "sub_type": "ovh_lb",
-        "command": ["ovh", "cloud", "project", "loadbalancer", "list", "--output", "json"],
+        "command": ["ovhcloud", "cloud", "loadbalancer", "list", "--json"],
         "label": "load balancers",
         "cloud_project": True,
     },
     {
-        "resource_type": "storage_bucket",
-        "sub_type": "ovh_object_storage",
-        "command": ["ovh", "cloud", "project", "storage", "list", "--output", "json"],
-        "label": "object storage containers",
+        "resource_type": "container_registry",
+        "sub_type": "ovh_container_registry",
+        "command": ["ovhcloud", "cloud", "container-registry", "list", "--json"],
+        "label": "container registries",
         "cloud_project": True,
     },
     {
         "resource_type": "vpc",
         "sub_type": "ovh_private_network",
-        "command": ["ovh", "cloud", "project", "network", "private", "list", "--output", "json"],
+        "command": ["ovhcloud", "cloud", "network", "private", "list", "--json"],
         "label": "private networks",
         "cloud_project": True,
     },
 ]
 
-# Commands that do NOT require --service-name (account-level)
+# Commands that do NOT require --cloud-project (account-level)
 ACCOUNT_COMMANDS = [
     {
         "resource_type": "vm",
         "sub_type": "ovh_dedicated",
-        "command": ["ovh", "dedicated", "server", "list", "--output", "json"],
+        "command": ["ovhcloud", "baremetal", "list", "--json"],
         "label": "dedicated servers",
         "cloud_project": False,
     },
@@ -96,8 +96,10 @@ def _run_command(command, timeout=60, env=None):
         if not result.stdout.strip():
             return [], None
         data = json.loads(result.stdout)
+        if data is None:
+            return [], None
         if isinstance(data, list):
-            return data, None
+            return [item for item in data if item is not None], None
         return [data], None
     except subprocess.TimeoutExpired:
         return [], f"Command timed out after {timeout}s: {' '.join(command)}"
@@ -107,11 +109,28 @@ def _run_command(command, timeout=60, env=None):
         return [], f"Error running command {' '.join(command)}: {e}"
 
 
+def _get_ovh_project_id(env=None):
+    """Auto-discover the OVH cloud project ID by listing projects."""
+    cmd = ["ovhcloud", "cloud", "project", "list", "--json"]
+    projects, error = _run_command(cmd, env=env)
+    if error:
+        logger.warning(f"OVH discovery: failed to list projects: {error}")
+        return None
+    if projects and isinstance(projects, list):
+        # Use the first project
+        first = projects[0] if projects else None
+        if isinstance(first, dict):
+            return first.get("project_id") or first.get("Project_id") or first.get("projectId")
+        if isinstance(first, str):
+            return first
+    return None
+
+
 def _build_command(cmd_config, project_id):
-    """Build the full command list, appending --service-name for cloud project commands."""
+    """Build the full command list, appending --cloud-project for cloud project commands."""
     command = list(cmd_config["command"])
     if cmd_config.get("cloud_project") and project_id:
-        command.extend(["--service-name", project_id])
+        command.extend(["--cloud-project", project_id])
     return command
 
 
@@ -167,8 +186,13 @@ def discover(user_id, credentials, env=None):
     project_id = credentials.get("project_id")
     region = credentials.get("region")
 
+    # Auto-discover project ID if not provided
     if not project_id:
-        logger.warning("OVH discovery: no project_id provided, skipping cloud project commands")
+        project_id = _get_ovh_project_id(env)
+        if project_id:
+            logger.info(f"OVH discovery: auto-discovered project_id: {project_id}")
+        else:
+            logger.warning("OVH discovery: no project_id found, skipping cloud project commands")
 
     for cmd_config in ALL_COMMANDS:
         # Skip cloud project commands if no project_id

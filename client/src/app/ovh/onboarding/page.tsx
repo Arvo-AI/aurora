@@ -99,6 +99,8 @@ export default function OvhOnboardingPage() {
       const data = await response.json();
 
       if (data.authorizationUrl) {
+        // Signal graph discovery to trigger after OAuth completes
+        localStorage.setItem("aurora_graph_discovery_trigger", "1");
         // Redirect to OVH authorization page
         window.location.href = data.authorizationUrl;
       } else {
