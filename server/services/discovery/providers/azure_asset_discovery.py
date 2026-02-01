@@ -112,6 +112,9 @@ def _query_resource_graph(credentials):
         ResourceGraphExtensionError: If the resource-graph extension is missing.
         subprocess.CalledProcessError: If the az command fails.
     """
+    # Azure CLI requires an explicit login — env vars alone are not enough.
+    _az_login(credentials)
+
     cmd = [
         "az", "graph", "query",
         "-q", RESOURCE_GRAPH_QUERY,
@@ -122,15 +125,12 @@ def _query_resource_graph(credentials):
     if subscription_id:
         cmd.extend(["--subscriptions", subscription_id])
 
-    env = _build_env(credentials)
-
     try:
         result = subprocess.run(
             cmd,
             capture_output=True,
             text=True,
             timeout=120,
-            env=env,
             check=True,
         )
     except FileNotFoundError:
@@ -160,28 +160,35 @@ def _query_resource_graph(credentials):
     return []
 
 
-def _build_env(credentials):
-    """Build environment variables for Azure CLI service principal auth.
+def _az_login(credentials):
+    """Log in to Azure CLI using service principal credentials.
 
-    If tenant_id, client_id, and client_secret are all present, sets the
-    corresponding AZURE_* environment variables so the CLI can authenticate
-    as a service principal. Otherwise returns None to inherit the current
-    environment (assumes `az login` was already done).
+    Required before running az graph query since env vars alone
+    are not sufficient for Azure CLI authentication.
     """
-    import os
-
     tenant_id = credentials.get("tenant_id")
     client_id = credentials.get("client_id")
     client_secret = credentials.get("client_secret")
 
-    if tenant_id and client_id and client_secret:
-        env = os.environ.copy()
-        env["AZURE_TENANT_ID"] = tenant_id
-        env["AZURE_CLIENT_ID"] = client_id
-        env["AZURE_CLIENT_SECRET"] = client_secret
-        return env
+    if not (tenant_id and client_id and client_secret):
+        logger.warning("Azure credentials incomplete, skipping az login")
+        return
 
-    return None
+    cmd = [
+        "az", "login",
+        "--service-principal",
+        "--username", client_id,
+        "--password", client_secret,
+        "--tenant", tenant_id,
+        "--output", "none",
+    ]
+
+    try:
+        subprocess.run(cmd, capture_output=True, text=True, timeout=30, check=True)
+        logger.info("Azure CLI login successful for tenant %s", tenant_id)
+    except subprocess.CalledProcessError as exc:
+        logger.error("Azure CLI login failed: %s", exc.stderr)
+        raise
 
 
 def _resource_to_node(resource):
@@ -220,8 +227,10 @@ def _resource_to_node(resource):
     # Try to extract an endpoint from properties
     endpoint = _extract_endpoint(azure_type, properties)
 
-    # Try to extract VNet association
+    # Try to extract VNet association; fall back to resource group grouping
     vpc_id = _extract_vnet_id(properties)
+    if not vpc_id and subscription_id and resource_group:
+        vpc_id = f"azure-{subscription_id}/{resource_group}"
 
     node = {
         "name": name,
