@@ -296,6 +296,7 @@ export default function AzureAuthPage() {
       localStorage.setItem("cloudProvider", "azure");
       localStorage.setItem("isAzureFetched", "true"); // Data already fetched during connection
       localStorage.setItem("isLoggedAurora", "true");
+      localStorage.setItem("aurora_graph_discovery_trigger", "1");
       
       // Auto-select Azure provider when connection succeeds (legitimate connection)
       const { providerPreferencesService } = await import('@/lib/services/providerPreferences');
