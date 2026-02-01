@@ -11,6 +11,8 @@ const STORAGE_KEY = "aurora_graph_discovery_task";
 const TRIGGER_KEY = "aurora_graph_discovery_trigger";
 const POLL_INTERVAL = 5_000;
 const SYNCED_DISPLAY_MS = 4_000;
+const MAX_TASK_AGE_MS = 30 * 60 * 1000; // 30 minutes
+const MAX_POLL_ERRORS = 6; // Give up after 6 consecutive failures (30s)
 
 interface StoredTask {
   taskId: string;
@@ -21,7 +23,14 @@ interface StoredTask {
 function getStoredTask(): StoredTask | null {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? JSON.parse(raw) : null;
+    if (!raw) return null;
+    const task: StoredTask = JSON.parse(raw);
+    // Expire stale tasks (e.g. worker restarted and lost the task)
+    if (Date.now() - task.startedAt > MAX_TASK_AGE_MS) {
+      localStorage.removeItem(STORAGE_KEY);
+      return null;
+    }
+    return task;
   } catch {
     return null;
   }
@@ -68,9 +77,11 @@ export function useGraphDiscoveryStatus(
       setSyncStatus("building");
       stopPolling();
 
+      let errorCount = 0;
       const poll = async () => {
         try {
           const status = await pollDiscoveryStatus(uid, taskId);
+          errorCount = 0; // Reset on success
           if (!status.complete) return;
 
           stopPolling();
@@ -85,7 +96,12 @@ export function useGraphDiscoveryStatus(
             }, SYNCED_DISPLAY_MS);
           }
         } catch {
-          // Network blip — keep polling
+          errorCount++;
+          if (errorCount >= MAX_POLL_ERRORS) {
+            stopPolling();
+            clearStoredTask();
+            setSyncStatus("idle");
+          }
         }
       };
 
