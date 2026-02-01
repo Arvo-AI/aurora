@@ -297,7 +297,15 @@ def infer(user_id, graph_nodes, enrichment_data):
         logger.info("AWS security group inference produced %d edges", len(aws_edges))
 
     # --- Azure NSG Rules ---
-    azure_nsgs = enrichment_data.get("nsg_rules", [])
+    # nsg_rules is a dict {nsg_name: [rules]} — flatten to a single list
+    azure_nsg_data = enrichment_data.get("nsg_rules", {})
+    azure_nsgs = []
+    if isinstance(azure_nsg_data, dict):
+        for rules in azure_nsg_data.values():
+            if isinstance(rules, list):
+                azure_nsgs.extend(rules)
+    elif isinstance(azure_nsg_data, list):
+        azure_nsgs = azure_nsg_data
     if azure_nsgs:
         logger.info(
             "Processing %d Azure NSG rules for user %s",
