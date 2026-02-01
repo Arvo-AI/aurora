@@ -226,6 +226,20 @@ def run_user_discovery(self, user_id):
         providers = {name: {} for name in provider_names}
 
         if "gcp" in providers:
+            # Fetch root project while we still have the cursor
+            cur.execute(
+                "SELECT preference_value FROM user_preferences "
+                "WHERE user_id = %s AND preference_key = 'gcp_root_project'",
+                (user_id,)
+            )
+            root_row = cur.fetchone()
+            root_project = root_row[0] if root_row and root_row[0] else None
+
+        # Close DB connection BEFORE calling setup functions that also use the pool
+        cur.close()
+        conn.close()
+
+        if "gcp" in providers:
             # Wait for GCP post-auth setup to finish (API enablement, SA propagation)
             _wait_for_gcp_post_auth(user_id)
 
@@ -233,19 +247,8 @@ def run_user_discovery(self, user_id):
             gcp_project_ids = _get_all_gcp_project_ids(user_id)
             if gcp_project_ids:
                 providers["gcp"] = {"project_ids": gcp_project_ids}
-            else:
-                # Fallback: use root project only
-                cur.execute(
-                    "SELECT preference_value FROM user_preferences "
-                    "WHERE user_id = %s AND preference_key = 'gcp_root_project'",
-                    (user_id,)
-                )
-                row = cur.fetchone()
-                if row and row[0]:
-                    providers["gcp"] = {"project_ids": [row[0]]}
-
-        cur.close()
-        conn.close()
+            elif root_project:
+                providers["gcp"] = {"project_ids": [root_project]}
 
         summary = run_discovery_for_user(user_id, providers)
         _clear_discovery_lock(user_id)
