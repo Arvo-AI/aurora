@@ -23,12 +23,16 @@ spec:
       automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
-        fsGroup: 1000
+        runAsUser: 977
+        runAsGroup: 977
+        fsGroup: 977
       containers:
         - name: searxng
-          image: searxng/searxng:2025.1.31-b08f9d70b
+          image: searxng/searxng:2025.2.2-ab1e895cc
           imagePullPolicy: IfNotPresent
           securityContext:
+            runAsUser: 977
+            runAsGroup: 977
             allowPrivilegeEscalation: false
             capabilities:
               drop: ["ALL"]
@@ -56,5 +60,11 @@ spec:
             periodSeconds: 30
             timeoutSeconds: 5
             failureThreshold: 3
+          volumeMounts:
+            - name: searxng-config
+              mountPath: /etc/searxng
           resources:
             {{- toYaml .Values.resources.searxng | nindent 12 }}
+      volumes:
+        - name: searxng-config
+          emptyDir: {}
