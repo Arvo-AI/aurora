@@ -147,13 +147,16 @@ def apply_rca_context_updates(state: Any) -> Optional[SystemMessage]:
             # Also append a visible tool-call style message for UI history.
             # This makes the update obvious in chat_sessions.messages after completion.
             tool_call_id = f"rca_context_update_{uuid.uuid4().hex}"
+            injected_at = updates[0].get("received_at") if updates else None
             tool_args = {
                 "update_count": len(updates),
                 "source": "pagerduty" if len(updates) == 1 else "multiple",
+                "injected_at": injected_at,
             }
             tool_call_msg = AIMessage(
                 content="Received correlated incident context update.",
                 additional_kwargs={
+                    "timestamp": injected_at,
                     "tool_calls": [
                         {
                             "id": tool_call_id,
