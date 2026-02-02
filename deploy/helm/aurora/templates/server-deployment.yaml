@@ -38,7 +38,7 @@ spec:
         - name: aurora-server
           image: "{{ .Values.image.registry }}/aurora-server:{{ .Values.image.tag }}"
           imagePullPolicy: IfNotPresent
-          command: ["uv", "run", "main_compute.py"]
+          command: ["python", "main_compute.py"]
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
