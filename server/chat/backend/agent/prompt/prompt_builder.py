@@ -1452,6 +1452,20 @@ def build_background_mode_segment(state: Optional[Any]) -> str:
             "Look for: config changes, k8s manifests, Terraform, dependency updates.",
         ])
 
+    # Confluence search tools (if connected)
+    if integrations.get('confluence'):
+        parts.extend([
+            "",
+            "CONFLUENCE INVESTIGATION:",
+            "Use Confluence search tools to find prior incidents and runbooks:",
+            "- confluence_search_similar(keywords=['error msg'], service_name='svc') - Find postmortems / past incidents",
+            "- confluence_search_runbooks(service_name='svc') - Find runbooks / SOPs / playbooks",
+            "- confluence_fetch_page(page_id='12345') - Read full page content as markdown",
+            "",
+            "Workflow: search first, then fetch promising pages for detailed procedures.",
+            "Cross-reference Confluence findings with live infrastructure state.",
+        ])
+
     # Knowledge Base search (always available for authenticated users)
     parts.extend([
         "",
