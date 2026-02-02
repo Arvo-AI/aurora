@@ -30,7 +30,7 @@ spec:
             - configMapRef:
                 name: {{ include "aurora.fullname" . }}-config
             - secretRef:
-                name: {{ include "aurora.fullname" . }}-secrets
+                name: {{ include "aurora.fullname" . }}-secrets-app
           env:
             - name: NODE_ENV
               value: "production"

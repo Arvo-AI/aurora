@@ -14,7 +14,7 @@ spec:
     metadata:
       annotations:
         checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
-        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        checksum/secret-app: {{ include (print $.Template.BasePath "/secret-app.yaml") . | sha256sum }}
       labels:
         app.kubernetes.io/name: {{ include "aurora.name" . }}-searxng
         app.kubernetes.io/instance: {{ .Release.Name }}
@@ -27,16 +27,10 @@ spec:
           ports:
             - name: http
               containerPort: 8080
-          env:
-            - name: SEARXNG_BASE_URL
-              valueFrom:
-                configMapKeyRef:
-                  name: {{ include "aurora.fullname" . }}-config
-                  key: SEARXNG_BASE_URL
-            - name: SEARXNG_SECRET
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "aurora.fullname" . }}-secrets
-                  key: SEARXNG_SECRET
+          envFrom:
+            - configMapRef:
+                name: {{ include "aurora.fullname" . }}-config
+            - secretRef:
+                name: {{ include "aurora.fullname" . }}-secrets-app
           resources:
             {{- toYaml .Values.resources.searxng | nindent 12 }}

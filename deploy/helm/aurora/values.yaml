@@ -132,71 +132,73 @@ config:
 # Secrets (REQUIRED - must be set in values.generated.yaml)
 # ------------------------------------------------------------------------------
 secrets:
-  # --- Database Credentials ---
-  POSTGRES_USER: "aurora"
-  POSTGRES_PASSWORD: ""        # REQUIRED - Generate with: openssl rand -base64 32
+  # --- Database Credentials (secret-db.yaml) ---
+  db: # Mounted by: server, celery-worker, celery-beat, chatbot, postgres
+    POSTGRES_USER: "aurora"
+    POSTGRES_PASSWORD: ""        # REQUIRED - Generate with: openssl rand -base64 32
   
-  # --- S3 Storage Credentials ---
-  STORAGE_ACCESS_KEY: ""       # REQUIRED - Your S3 access key
-  STORAGE_SECRET_KEY: ""       # REQUIRED - Your S3 secret key
+  # --- Backend Secrets (secret-backend.yaml) ---
+  backend:  # Mounted by: server, celery-worker, celery-beat, chatbot
+    VAULT_TOKEN: ""              # REQUIRED - Root token from Vault init - Set after running: kubectl exec -it statefulset/<release>-vault -- vault operator init
+    STORAGE_ACCESS_KEY: ""       # REQUIRED - Your S3 access key
+    STORAGE_SECRET_KEY: ""       # REQUIRED - Your S3 secret key
   
-  # --- Application Secrets ---
-  FLASK_SECRET_KEY: ""         # REQUIRED - Generate with: openssl rand -base64 32
-  AUTH_SECRET: ""              # REQUIRED - Generate with: openssl rand -base64 32
-  SEARXNG_SECRET: ""           # REQUIRED - Generate with: openssl rand -base64 32
+  # --- Application Secrets (secret-app.yaml) ---
+  app:   # Mounted by: server, celery-worker, celery-beat, chatbot, frontend, searxng
+    FLASK_SECRET_KEY: ""         # REQUIRED - Generate with: openssl rand -base64 32
+    AUTH_SECRET: ""              # REQUIRED - Generate with: openssl rand -base64 32
+    SEARXNG_SECRET: ""           # REQUIRED - Generate with: openssl rand -base64 32
+    
+    # --- Optional: Slack Integration ---
+    SLACK_CLIENT_ID: ""          # Get from: https://api.slack.com/apps
+    SLACK_CLIENT_SECRET: ""
+    SLACK_SIGNING_SECRET: ""
+    
+    # --- Optional: GitHub OAuth ---
+    GH_OAUTH_CLIENT_ID: ""       # Get from: https://github.com/settings/developers
+    GH_OAUTH_CLIENT_SECRET: ""
+    
+    # --- Optional: PagerDuty Integration ---
+    PAGERDUTY_CLIENT_ID: ""
+    PAGERDUTY_CLIENT_SECRET: ""
+    
+    # --- Optional: GCP OAuth (for GCP integrations) ---
+    CLIENT_ID: ""                # GCP OAuth client ID
+    CLIENT_SECRET: ""            # GCP OAuth client secret
+    
+    # --- Optional: OVH Cloud Integration ---
+    OVH_EU_CLIENT_ID: ""         # Europe region
+    OVH_EU_CLIENT_SECRET: ""
+    OVH_CA_CLIENT_ID: ""         # Canada region
+    OVH_CA_CLIENT_SECRET: ""
+    OVH_US_CLIENT_ID: ""         # US region
+    OVH_US_CLIENT_SECRET: ""
+    
+    # --- Optional: AWS Integration ---
+    AWS_ACCESS_KEY_ID: ""
+    AWS_SECRET_ACCESS_KEY: ""
+    
+    # --- Optional: Email/SMTP ---
+    SMTP_HOST: ""                # e.g., smtp.gmail.com
+    SMTP_PORT: "587"
+    SMTP_USER: ""
+    SMTP_PASSWORD: ""
+    SMTP_FROM_EMAIL: ""
+    SMTP_FROM_NAME: "Aurora"
+    
+    # --- Optional: Rate Limiting Bypass ---
+    RATE_LIMIT_BYPASS_TOKEN: ""  # Custom token to bypass rate limits
   
-  # --- Vault Token ---
-  # Set after running: kubectl exec -it statefulset/<release>-vault -- vault operator init
-  VAULT_TOKEN: ""              # REQUIRED - Root token from Vault init
-  
-  # --- LLM API Keys (at least one required) ---
-  OPENROUTER_API_KEY: ""       # Get from: https://openrouter.ai/keys
-  OPENAI_API_KEY: ""           # Get from: https://platform.openai.com/api-keys
-  ANTHROPIC_API_KEY: ""        # Get from: https://console.anthropic.com/
-  GOOGLE_AI_API_KEY: ""        # Get from: https://makersuite.google.com/app/apikey
-  
-  # --- Optional: Web Search ---
-  TAVILY_API_KEY: ""           # Get from: https://tavily.com/
-  
-  # --- Optional: Slack Integration ---
-  SLACK_CLIENT_ID: ""          # Get from: https://api.slack.com/apps
-  SLACK_CLIENT_SECRET: ""
-  SLACK_SIGNING_SECRET: ""
-  
-  # --- Optional: GitHub OAuth ---
-  GH_OAUTH_CLIENT_ID: ""       # Get from: https://github.com/settings/developers
-  GH_OAUTH_CLIENT_SECRET: ""
-  
-  # --- Optional: PagerDuty Integration ---
-  PAGERDUTY_CLIENT_ID: ""
-  PAGERDUTY_CLIENT_SECRET: ""
-  
-  # --- Optional: GCP OAuth (for GCP integrations) ---
-  CLIENT_ID: ""                # GCP OAuth client ID
-  CLIENT_SECRET: ""            # GCP OAuth client secret
-  
-  # --- Optional: OVH Cloud Integration ---
-  OVH_EU_CLIENT_ID: ""         # Europe region
-  OVH_EU_CLIENT_SECRET: ""
-  OVH_CA_CLIENT_ID: ""         # Canada region
-  OVH_CA_CLIENT_SECRET: ""
-  OVH_US_CLIENT_ID: ""         # US region
-  OVH_US_CLIENT_SECRET: ""
-  
-  # --- Optional: AWS Integration ---
-  AWS_ACCESS_KEY_ID: ""
-  AWS_SECRET_ACCESS_KEY: ""
-  
-  # --- Optional: Email/SMTP ---
-  SMTP_HOST: ""                # e.g., smtp.gmail.com
-  SMTP_PORT: "587"
-  SMTP_USER: ""
-  SMTP_PASSWORD: ""
-  SMTP_FROM_EMAIL: ""
-  SMTP_FROM_NAME: "Aurora"
-  
-  # --- Optional: Rate Limiting Bypass ---
-  RATE_LIMIT_BYPASS_TOKEN: ""  # Custom token to bypass rate limits
+  # --- LLM API Keys (secret-llm.yaml) ---
+  llm:  # Mounted by: chatbot, celery-worker, celery-beat
+    # At least one LLM API key is required
+    OPENROUTER_API_KEY: ""       # Get from: https://openrouter.ai/keys
+    OPENAI_API_KEY: ""           # Get from: https://platform.openai.com/api-keys
+    ANTHROPIC_API_KEY: ""        # Get from: https://console.anthropic.com/
+    GOOGLE_AI_API_KEY: ""        # Get from: https://makersuite.google.com/app/apikey
+    
+    # --- Optional: Web Search ---
+    TAVILY_API_KEY: ""           # Get from: https://tavily.com/
 
 # ------------------------------------------------------------------------------
 # Resource requests and limits
