@@ -54,6 +54,7 @@ celery_app.conf.update(
         'utils.terminal.terminal_pod_cleanup',
         'chat.background.task',
         'chat.background.summarization',
+        'chat.background.visualization_generator',
         'routes.knowledge_base.tasks',
         'services.discovery.tasks',
     ],
@@ -96,9 +97,10 @@ except ImportError as e:
 try:
     import chat.background.task
     import chat.background.summarization
-    logging.info("Background chat task imported successfully")
+    import chat.background.visualization_generator
+    logging.info("Background chat tasks imported successfully")
 except ImportError as e:
-    logging.warning(f"Failed to import background chat task: {e}")
+    logging.warning(f"Failed to import background chat tasks: {e}")
 
 try:
     import routes.pagerduty.tasks

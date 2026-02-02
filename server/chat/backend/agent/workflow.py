@@ -360,7 +360,7 @@ class Workflow:
                     'id': tc_id,  # Use tool call's ID, not message ID
                     'name': tc_name,
                     'args': tc_args,
-                    'type': incoming_tc.get('type', 'function')
+                    'type': incoming_tc.get('type', 'function'),
                 })
 
     def _clean_tool_calls(self, tool_calls):
@@ -395,7 +395,7 @@ class Workflow:
                     prev["args"] = self._merge_tool_call_args(prev_args, new_args)
                 
                 # Merge other simple fields
-                for key in ["confirmation_id", "status", "timestamp", "name", "type"]:
+                for key in ["confirmation_id", "status", "name", "type"]:
                     if not prev.get(key) and tc.get(key):
                         prev[key] = tc[key]
                 
@@ -1099,15 +1099,14 @@ class Workflow:
                     logger.warning(f"UI CONVERSION: Using fallback tool_calls from additional_kwargs for message ID: {run_id}")
 
                 ui_tool_calls = []
+                
                 if tool_calls:
-                    logger.info(f"UI CONVERSION: Adding {len(tool_calls)} tool calls from AIMessage (run_id={run_id})")
                     for tool_call in tool_calls:
                         tool_name = tool_call.get('name') or (tool_call.get('function', {}).get('name'))
                         args_str = tool_call.get('args') or (tool_call.get('function', {}).get('arguments', '{}'))     
                         
                         # Use the consistent tool call ID that matches our agent processing
                         tool_call_id = tool_call.get('id')
-                        logger.info(f"UI CONVERSION: Tool call {tool_name} with ID={tool_call_id} (parent AIMessage run_id={run_id})")
                         
                         try:
                             tool_args = json.loads(args_str) if isinstance(args_str, str) else args_str
@@ -1129,7 +1128,7 @@ class Workflow:
                     'run_id': run_id,
                     'text': content,
                     'sender': 'bot',
-                    'isCompleted': True
+                    'isCompleted': True,
                 }
                 if ui_tool_calls:
                     ui_message['toolCalls'] = ui_tool_calls
@@ -1141,12 +1140,84 @@ class Workflow:
                 continue
         
         # Second pass: Process Tool messages to update existing bot messages
-        logger.info(f"UI CONVERSION: Processing {len(tool_messages)} ToolMessages to associate with tool calls")
-        
         ui_messages = self._associate_tool_calls_with_output(ui_messages, tool_messages)
+        
+        # Inject any pending RCA context updates
+        ui_messages = self._inject_rca_context_updates(ui_messages)
 
-        #logger.info(f"UI CONVERSION: Converted llm_messages: {llm_messages} into ui_messages: {ui_messages}")
-        #logger.info(f"Converted {len(llm_messages)} LLM messages to {len(ui_messages)} UI messages")
+        return ui_messages
+
+    def _inject_rca_context_updates(self, ui_messages: list) -> list:
+        """Place correlated RCA context updates at the end of the investigation."""
+        try:
+            if not hasattr(self, "_last_state"):
+                return ui_messages
+            pending_updates = getattr(self, "_rca_ui_updates", None)
+            if not pending_updates:
+                if isinstance(self._last_state, dict):
+                    pending_updates = self._last_state.get("rca_ui_updates")
+                else:
+                    pending_updates = getattr(self._last_state, "rca_ui_updates", None)
+            if not pending_updates:
+                return ui_messages
+
+            for update in pending_updates:
+                tool_call_id = update.get("tool_call_id")
+                injected_at = update.get("injected_at")
+                content = update.get("content", "")
+                if not tool_call_id:
+                    continue
+
+                # Avoid duplicate injection
+                already_present = False
+                for msg in ui_messages:
+                    for tc in msg.get("toolCalls", []) or []:
+                        if tc.get("id") == tool_call_id:
+                            already_present = True
+                            break
+                    if already_present:
+                        break
+                if already_present:
+                    continue
+                
+                # Create a new bot message for the context update
+                context_update_message = {
+                    "message_number": len(ui_messages) + 1,
+                    "text": "",
+                    "sender": "bot",
+                    "isCompleted": True,
+                    "timestamp": injected_at,
+                    "toolCalls": [{
+                        "id": tool_call_id,
+                        "run_id": None,
+                        "tool_name": "rca_context_update",
+                        "input": json.dumps({
+                            "update_count": update.get("update_count", 1),
+                            "source": update.get("source", "pagerduty"),
+                            "injected_at": injected_at,
+                        }),
+                        "output": content,
+                        "status": "completed",
+                        "timestamp": injected_at or datetime.now().isoformat(),
+                    }],
+                }
+
+                # Insert after the last bot message with tool calls (most recent investigation step)
+                insert_index = len(ui_messages)
+                for idx in range(len(ui_messages) - 1, -1, -1):
+                    msg = ui_messages[idx]
+                    if msg.get("sender") == "bot" and msg.get("toolCalls"):
+                        insert_index = idx + 1
+                        break
+                
+                ui_messages.insert(insert_index, context_update_message)
+
+            # Renumber all messages after insertion
+            for idx, msg in enumerate(ui_messages):
+                msg["message_number"] = idx + 1
+
+        except Exception as exc:
+            logger.warning("Failed to inject RCA context updates: %s", exc)
         return ui_messages
     
     def _save_ui_messages(self, session_id: str, user_id: str, ui_messages: list, ui_state: Optional[dict] = None) -> bool:
@@ -1203,14 +1274,10 @@ class Workflow:
                 else:
                     command_matching = tool_content.get('final_command')  # Optional - only for cloud_exec
             except (json.JSONDecodeError, ValueError) as e:
-                logger.warning(f"UI CONVERSION: Failed to parse ToolMessage content as JSON: {e}. Using empty dict.")
                 tool_content = {}
                 command_matching = None
             
-            logger.info(f"UI CONVERSION: Processing ToolMessage with tool_call_id={tool_call_id}, command='{command_matching}'")
-            
             if not tool_call_id:
-                logger.warning(f"UI CONVERSION: Skipping ToolMessage without tool_call_id")
                 continue
                 
             updated = False
@@ -1218,7 +1285,6 @@ class Workflow:
             # Look through ALL UI messages and check if ANY tool call matches the tool_call_id
             # The tool_call_id is "call_xxx", NOT the AIMessage's run_id "run-xxx"
             for ui_msg in ui_messages:
-                logger.debug(f"UI CONVERSION: Processing ui_msg: {ui_msg}")
                 if ui_msg.get('sender') == 'bot' and ui_msg.get('toolCalls'):
                     ui_msg_tool_calls = ui_msg.get('toolCalls', [])
                     
@@ -1233,14 +1299,10 @@ class Workflow:
                                     ui_input = json.loads(tool_call.get('input', '{}'))
                                     command_from_ui = ui_input.get('command')
                                 except (json.JSONDecodeError, AttributeError):
-                                    logger.warning(f"UI CONVERSION: Could not parse command from tool message content: {getattr(msg, 'content', '')}")
                                     pass # Will still update if IDs match
-                                
-                                logger.debug(f"UI CONVERSION DEBUG: Matched tool_call_id {tool_call_id}, comparing commands ->\nCommand matching: {command_matching}\nUI command:   {command_from_ui}")
                                 
                                 # Validate command match if both are present
                                 if command_from_ui and command_matching not in command_from_ui and command_from_ui not in command_matching:
-                                    logger.warning(f"UI CONVERSION: Command mismatch for {tool_call_id}, skipping")
                                     continue
                             
                             # Update the tool call with output (ID match is sufficient)
@@ -1248,14 +1310,10 @@ class Workflow:
                             tool_call['status'] = 'completed'
                             tool_call['timestamp'] = datetime.now().isoformat()  # Update timestamp to completion time
                             updated = True
-                            logger.info(f"UI CONVERSION:Updated tool call {tool_call_id} (tool={tool_call.get('tool_name')}) in UI message {ui_msg['message_number']}")
                             break # Found and updated, stop searching this ui_msg
                     
                     if updated:
                         break
             
-            if not updated:
-                logger.warning(f"UI CONVERSION:Could not find matching tool call for ID: {tool_call_id}")
-
         return ui_messages
         

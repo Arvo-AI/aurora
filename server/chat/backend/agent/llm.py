@@ -25,11 +25,14 @@ class ModelConfig:
     VISION_MODEL = "anthropic/claude-sonnet-4.5"
     
     # Background RCA model - selected based on RCA_OPTIMIZE_COSTS env var (defaults to cost-optimized)
-    RCA_MODEL = "anthropic/claude-3-haiku" if os.getenv("RCA_OPTIMIZE_COSTS", "true").lower() == "true" else "anthropic/claude-opus-4.5"
+    RCA_MODEL = "anthropic/claude-sonnet-4.5" if os.getenv("RCA_OPTIMIZE_COSTS", "true").lower() == "true" else "anthropic/claude-opus-4.5"
     
     # Summarization models
     INCIDENT_REPORT_SUMMARIZATION_MODEL = "anthropic/claude-sonnet-4.5"  # For incident reports and chat context
     TOOL_OUTPUT_SUMMARIZATION_MODEL = "anthropic/claude-sonnet-4.5"  # For summarizing large tool outputs to reduce token usage
+    
+    # Visualization extraction model - always use Sonnet for reliable structured output
+    VISUALIZATION_MODEL = "anthropic/claude-sonnet-4.5"
     
     # Suggestion extraction
     SUGGESTION_MODEL = "anthropic/claude-sonnet-4.5"

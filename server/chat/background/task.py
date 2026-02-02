@@ -24,15 +24,55 @@ from utils.notifications.slack_notification_service import (
     send_slack_investigation_completed_notification,
 )
 from utils.db.connection_pool import db_pool
+from langchain_core.messages import ToolMessage
+from chat.backend.agent.tools.cloud_tools import get_state_context
+from chat.background.visualization_generator import update_visualization
+from chat.backend.constants import MAX_TOOL_OUTPUT_CHARS, INFRASTRUCTURE_TOOLS
 
 
 logger = logging.getLogger(__name__)
+
+
+def _extract_tool_calls_for_viz(session_id: str, user_id: str) -> List[Dict]:
+    """Extract infrastructure tool calls from database for final visualization."""
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("""
+                    SELECT llm_context_history
+                    FROM chat_sessions
+                    WHERE id = %s AND user_id = %s
+                """, (session_id, user_id))
+                
+                row = cursor.fetchone()
+        
+        if not row or not row[0]:
+            logger.warning(f"[Visualization] No llm_context_history for session {session_id}")
+            return []
+        
+        llm_context = row[0]
+        if isinstance(llm_context, str):
+            llm_context = json.loads(llm_context)
+        
+        tool_calls = []
+        for msg in llm_context:
+            if isinstance(msg, dict) and msg.get('name') in INFRASTRUCTURE_TOOLS:
+                tool_calls.append({
+                    'tool': msg.get('name'),
+                    'output': str(msg.get('content', ''))[:MAX_TOOL_OUTPUT_CHARS]
+                })
+        
+        return tool_calls
+    
+    except Exception as e:
+        logger.error(f"[Visualization] Failed to extract tool calls from database: {e}")
+        return []
 
 _RATE_LIMIT_WINDOW_SECONDS = 300  # 5 minute window
 _RATE_LIMIT_MAX_REQUESTS = 5  # Max 5 background chats per window
 
 # RCA sources that use rca_context in system prompt
-_RCA_SOURCES = {'grafana', 'datadog', 'netdata', 'splunk', 'slack'}
+_RCA_SOURCES = {'grafana', 'datadog', 'netdata', 'splunk', 'slack', 'pagerduty'}
 
 # Initialize Redis client at module load time - fails if Redis is unavailable
 _redis_client = get_redis_client()
@@ -76,6 +116,7 @@ def _get_connected_integrations(user_id: str) -> Dict[str, bool]:
     integrations = {
         'splunk': False,
         'github': False,
+        'confluence': False,
     }
 
     try:
@@ -92,6 +133,15 @@ def _get_connected_integrations(user_id: str) -> Dict[str, bool]:
         integrations['github'] = bool(github_creds and github_creds.get("access_token"))
     except Exception as e:
         logger.debug(f"[BackgroundChat] Error checking GitHub: {e}")
+
+    try:
+        from utils.auth.token_management import get_token_data
+        confluence_creds = get_token_data(user_id, "confluence")
+        integrations['confluence'] = bool(
+            confluence_creds and (confluence_creds.get("access_token") or confluence_creds.get("pat_token"))
+        )
+    except Exception as e:
+        logger.debug(f"[BackgroundChat] Error checking Confluence: {e}")
 
     return integrations
 
@@ -275,6 +325,22 @@ def run_background_chat(
                 )
             except Exception as e:
                 logger.error(f"[BackgroundChat] Failed to enqueue post-RCA summarization for incident {incident_id}: {e}")
+            
+            # Generate final complete visualization
+            try:
+                tool_calls = result.get('tool_calls', [])
+                logger.info(f"[BackgroundChat] Using {len(tool_calls)} tool calls from result for final visualization")
+                
+                update_visualization.apply_async(kwargs={
+                    'incident_id': incident_id,
+                    'user_id': user_id,
+                    'session_id': session_id,
+                    'force_full': True,
+                    'tool_calls_json': json.dumps(tool_calls) if tool_calls else None
+                })
+                logger.info(f"[BackgroundChat] Queued final visualization for incident {incident_id}")
+            except Exception as e:
+                logger.error(f"[BackgroundChat] Failed to generate final visualization: {e}")
         
         # Send response back to Slack if this was triggered from Slack
         if trigger_metadata and trigger_metadata.get('source') in ['slack', 'slack_button']:
@@ -379,16 +445,6 @@ async def _execute_background_chat(
         wf = Workflow(agent, session_id)
         logger.info(f"[BackgroundChat] Created workflow for session {session_id}")
         
-        # Set user context for tools
-        set_user_context(
-            user_id=user_id,
-            session_id=session_id,
-            provider_preference=provider_preference,
-            selected_project_id=None,
-            mode=mode,
-        )
-        logger.info(f"[BackgroundChat] Set user context with mode={mode}")
-
         # Build RCA context for system prompt (NOT added to user message)
         rca_context = _build_rca_context(
             user_id=user_id,
@@ -421,6 +477,18 @@ async def _execute_background_chat(
         )
         logger.info(f"[BackgroundChat] Created state with is_background=True, mode={mode}, model={state.model}, rca_context={'set' if rca_context else 'None'}")
         
+        # Set user context for tools (AFTER state is created so we can pass it)
+        set_user_context(
+            user_id=user_id,
+            session_id=session_id,
+            provider_preference=provider_preference,
+            selected_project_id=None,
+            mode=mode,
+            state=state,  # Pass state so incident_id is available in context
+            workflow=wf,  # Pass workflow so RCA context updates can be injected
+        )
+        logger.info(f"[BackgroundChat] Set user context with mode={mode}, incident_id={incident_id}")
+        
         # Set UI state (preserve triggerMetadata so it persists when workflow saves)
         wf._ui_state = {
             "selectedMode": mode,
@@ -450,10 +518,15 @@ async def _execute_background_chat(
         
         logger.info(f"[BackgroundChat] Workflow execution completed - all streams and tool calls finished")
         
+        # Extract tool calls from database llm_context_history
+        tool_calls = _extract_tool_calls_for_viz(session_id, user_id)
+        logger.info(f"[BackgroundChat] Extracted {len(tool_calls)} tool calls for visualization")
+        
         return {
             "session_id": session_id,
             "status": "completed",
             "trigger_metadata": trigger_metadata,
+            "tool_calls": tool_calls,
         }
         
     except Exception as e:

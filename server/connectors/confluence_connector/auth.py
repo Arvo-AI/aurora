@@ -19,9 +19,7 @@ CONFLUENCE_AUTH_URL = "https://auth.atlassian.com/authorize"
 CONFLUENCE_TOKEN_URL = "https://auth.atlassian.com/oauth/token"
 CONFLUENCE_RESOURCES_URL = "https://api.atlassian.com/oauth/token/accessible-resources"
 
-CONFLUENCE_SCOPES = (
-    "read:page:confluence read:space:confluence read:user:confluence offline_access"
-)
+CONFLUENCE_SCOPES = "read:page:confluence read:space:confluence read:user:confluence search:confluence offline_access"
 CONFLUENCE_AUDIENCE = "api.atlassian.com"
 
 FRONTEND_URL = os.getenv("FRONTEND_URL", "")

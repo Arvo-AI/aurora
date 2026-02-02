@@ -1452,6 +1452,20 @@ def build_background_mode_segment(state: Optional[Any]) -> str:
             "Look for: config changes, k8s manifests, Terraform, dependency updates.",
         ])
 
+    # Confluence search tools (if connected)
+    if integrations.get('confluence'):
+        parts.extend([
+            "",
+            "CONFLUENCE INVESTIGATION:",
+            "Use Confluence search tools to find prior incidents and runbooks:",
+            "- confluence_search_similar(keywords=['error msg'], service_name='svc') - Find postmortems / past incidents",
+            "- confluence_search_runbooks(service_name='svc') - Find runbooks / SOPs / playbooks",
+            "- confluence_fetch_page(page_id='12345') - Read full page content as markdown",
+            "",
+            "Workflow: search first, then fetch promising pages for detailed procedures.",
+            "Cross-reference Confluence findings with live infrastructure state.",
+        ])
+
     # Knowledge Base search (always available for authenticated users)
     parts.extend([
         "",
@@ -1471,7 +1485,30 @@ def build_background_mode_segment(state: Optional[Any]) -> str:
         "Users: GCP=admin | AWS=ec2-user/ubuntu | Azure=azureuser | OVH=debian/ubuntu/root | Scaleway=root",
     ])
 
-# Critical requirements - MUST complete all before stopping
+    # CONTEXT UPDATE AWARENESS - CRITICAL
+    parts.extend([
+        "",
+        "CONTEXT UPDATE AWARENESS - CRITICAL:",
+        "During RCA investigations, you may receive CORRELATED INCIDENT CONTEXT UPDATEs via SystemMessage.",
+        "These updates contain NEW incident data arriving mid-investigation (PagerDuty, monitoring, etc.).",
+        "",
+        "When you receive a context update message:",
+        "1. IMMEDIATELY pivot your investigation to incorporate the new information",
+        "2. STEER your next tool calls based on the update content",
+        "3. Correlate new data with previous findings to identify patterns",
+        "4. Adjust your investigation path - the update may reveal the root cause or new symptoms",
+        "",
+        "Examples:",
+        "- Update shows new error in different service → investigate that service immediately",
+        "- Update contains timeline data → correlate with your previous findings",
+        "- Update identifies affected resources → focus investigation on those resources",
+        "",
+        "Context updates are HIGH PRIORITY - they represent LIVE incident evolution.",
+        "=" * 40,
+        "",
+    ])
+
+    # Critical requirements - MUST complete all before stopping
     if source == 'slack':
         # Slack-specific instructions (Concise, no heavy mandatory steps)
         parts.extend([
