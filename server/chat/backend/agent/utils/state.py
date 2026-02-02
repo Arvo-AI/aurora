@@ -28,5 +28,8 @@ class State(BaseModel):
     last_tool_failure: Optional[Dict[str, Any]] = (
         None  # Most recent tool failure metadata
     )
+    rca_ui_updates: Optional[List[Dict[str, Any]]] = (
+        None  # Pending RCA context updates for UI injection
+    )
 
     model_config = ConfigDict(arbitrary_types_allowed=True)

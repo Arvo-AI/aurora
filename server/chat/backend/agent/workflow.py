@@ -320,6 +320,11 @@ class Workflow:
         for incoming_tc in tool_calls:
             tc_index = incoming_tc.get('index', 0)
             tc_id = incoming_tc.get('id')
+            if not incoming_tc.get('timestamp'):
+                fallback_ts = None
+                if isinstance(builder.get("additional_kwargs"), dict):
+                    fallback_ts = builder["additional_kwargs"].get("timestamp")
+                incoming_tc["timestamp"] = fallback_ts or datetime.now().isoformat()
             
             # Extract function info (handle both direct and function wrapper formats)
             if 'function' in incoming_tc:
@@ -352,6 +357,8 @@ class Workflow:
                     existing_name = existing_tc.get('name', '')
                     if not existing_name.endswith(tc_name):
                         existing_tc['name'] = existing_name + tc_name
+                if incoming_tc.get("timestamp") and not existing_tc.get("timestamp"):
+                    existing_tc["timestamp"] = incoming_tc.get("timestamp")
             else:
                 # Create new tool call entry
                 # Use the tool call's own ID (tc_id), NOT the message builder's ID
@@ -397,9 +404,20 @@ class Workflow:
                     prev["args"] = self._merge_tool_call_args(prev_args, new_args)
                 
                 # Merge other simple fields
-                for key in ["confirmation_id", "status", "timestamp", "name", "type"]:
+                for key in ["confirmation_id", "status", "name", "type"]:
                     if not prev.get(key) and tc.get(key):
                         prev[key] = tc[key]
+                if tc.get("timestamp"):
+                    if not prev.get("timestamp"):
+                        prev["timestamp"] = tc["timestamp"]
+                    else:
+                        try:
+                            prev_ts = datetime.fromisoformat(prev["timestamp"])
+                            tc_ts = datetime.fromisoformat(tc["timestamp"])
+                            if tc_ts < prev_ts:
+                                prev["timestamp"] = tc["timestamp"]
+                        except Exception:
+                            pass
                 
                 deduped_by_id[tc_id_key] = prev
             else:
@@ -1153,8 +1171,111 @@ class Workflow:
         
         ui_messages = self._associate_tool_calls_with_output(ui_messages, tool_messages)
 
+        # Inject any pending RCA context updates into the closest tool call message.
+        ui_messages = self._inject_rca_context_updates(ui_messages)
+
         #logger.info(f"UI CONVERSION: Converted llm_messages: {llm_messages} into ui_messages: {ui_messages}")
         #logger.info(f"Converted {len(llm_messages)} LLM messages to {len(ui_messages)} UI messages")
+        return ui_messages
+
+    def _inject_rca_context_updates(self, ui_messages: list) -> list:
+        """Place correlated RCA context updates into tool calls chronologically."""
+        try:
+            if not hasattr(self, "_last_state"):
+                return ui_messages
+            pending_updates = getattr(self, "_rca_ui_updates", None)
+            if not pending_updates:
+                if isinstance(self._last_state, dict):
+                    pending_updates = self._last_state.get("rca_ui_updates")
+                else:
+                    pending_updates = getattr(self._last_state, "rca_ui_updates", None)
+            if not pending_updates:
+                return ui_messages
+
+            def _parse_ts(ts: str) -> Optional[datetime]:
+                if not ts:
+                    return None
+                try:
+                    return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                except Exception:
+                    return None
+
+            for update in pending_updates:
+                tool_call_id = update.get("tool_call_id")
+                injected_at = update.get("injected_at")
+                content = update.get("content", "")
+                if not tool_call_id:
+                    continue
+
+                # Avoid duplicate injection
+                already_present = False
+                for msg in ui_messages:
+                    for tc in msg.get("toolCalls", []) or []:
+                        if tc.get("id") == tool_call_id:
+                            already_present = True
+                            break
+                    if already_present:
+                        break
+                if already_present:
+                    continue
+
+                update_ts = _parse_ts(injected_at)
+                target_index = None
+
+                # Find the first bot message whose earliest tool call timestamp is after the update.
+                for idx, msg in enumerate(ui_messages):
+                    if msg.get("sender") != "bot":
+                        continue
+                    tool_calls = msg.get("toolCalls") or []
+                    if not tool_calls:
+                        continue
+                    tool_ts_values = [
+                        _parse_ts(tc.get("timestamp", "")) for tc in tool_calls
+                    ]
+                    tool_ts_values = [t for t in tool_ts_values if t]
+                    if not tool_ts_values:
+                        continue
+                    earliest_tool_ts = min(tool_ts_values)
+                    if update_ts and earliest_tool_ts and earliest_tool_ts >= update_ts:
+                        target_index = idx
+                        break
+
+                # Default to the last bot message if no timestamp match found.
+                if target_index is None:
+                    for idx in range(len(ui_messages) - 1, -1, -1):
+                        if ui_messages[idx].get("sender") == "bot":
+                            target_index = idx
+                            break
+
+                # If still none, append a new bot message.
+                if target_index is None:
+                    ui_messages.append({
+                        "message_number": len(ui_messages) + 1,
+                        "text": "Received correlated incident context update.",
+                        "sender": "bot",
+                        "isCompleted": True,
+                        "toolCalls": [],
+                    })
+                    target_index = len(ui_messages) - 1
+
+                target = ui_messages[target_index]
+                tool_calls = list(target.get("toolCalls") or [])
+                tool_calls.append({
+                    "id": tool_call_id,
+                    "run_id": target.get("run_id"),
+                    "tool_name": "rca_context_update",
+                    "input": json.dumps({
+                        "update_count": update.get("update_count", 1),
+                        "source": update.get("source", "pagerduty"),
+                        "injected_at": injected_at,
+                    }),
+                    "output": content,
+                    "status": "completed",
+                    "timestamp": injected_at or datetime.now().isoformat(),
+                })
+                target["toolCalls"] = tool_calls
+        except Exception as exc:
+            logger.info("UI CONVERSION: Failed to inject RCA context updates: %s", exc)
         return ui_messages
     
     def _save_ui_messages(self, session_id: str, user_id: str, ui_messages: list, ui_state: Optional[dict] = None) -> bool:

@@ -417,6 +417,7 @@ def process_pagerduty_event(
         service = incident.get("service", {})
         service_name = _extract_service_name(incident)
         service_id = service.get("id") if isinstance(service, dict) else None
+        correlation = _extract_correlated_context_target(raw_payload, event_data)
         
         # Store the complete V3 webhook payload
         with db_pool.get_admin_connection() as conn:
@@ -480,6 +481,14 @@ def process_pagerduty_event(
                     alert_metadata["priority"] = priority.get("summary") if isinstance(priority, dict) else str(priority)
                 if body := incident.get("body", {}).get("details"):
                     alert_metadata["description"] = body
+                if correlation.get("rca_session_id") or correlation.get("incident_id"):
+                    alert_metadata["correlated"] = True
+                    if correlation.get("correlation_id"):
+                        alert_metadata["correlationId"] = correlation.get("correlation_id")
+                    if correlation.get("rca_session_id"):
+                        alert_metadata["correlatedRcaSessionId"] = correlation.get("rca_session_id")
+                    if correlation.get("incident_id"):
+                        alert_metadata["correlatedIncidentId"] = correlation.get("incident_id")
                 
                 # Preserve existing custom fields (e.g., runbook_link from custom field updates)
                 if "customFields" in existing_metadata:
@@ -536,7 +545,6 @@ def process_pagerduty_event(
                     # Only trigger summary generation and RCA for new incidents (incident.triggered)
                     # For acknowledged/resolved events, we just update the status without regenerating summaries
                     if event_type == "incident.triggered":
-                        correlation = _extract_correlated_context_target(raw_payload, event_data)
                         correlated_session_id = correlation.get("rca_session_id")
                         correlated_incident_id = correlation.get("incident_id")
 

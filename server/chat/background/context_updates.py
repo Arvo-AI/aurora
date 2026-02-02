@@ -6,7 +6,8 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from langchain_core.messages import AIMessage, SystemMessage, ToolMessage
+from langchain_core.messages import SystemMessage
+from utils.cloud.cloud_utils import get_workflow_context
 from utils.cache.redis_client import get_redis_client
 
 logger = logging.getLogger(__name__)
@@ -144,37 +145,37 @@ def apply_rca_context_updates(state: Any) -> Optional[SystemMessage]:
     try:
         if hasattr(state, "messages") and isinstance(state.messages, list):
             state.messages.append(update_message)
-            # Also append a visible tool-call style message for UI history.
-            # This makes the update obvious in chat_sessions.messages after completion.
+            # Store a UI update payload to be injected into tool calls during UI conversion.
+            # This avoids forcing a new message to appear at the top of the tool call list.
             tool_call_id = f"rca_context_update_{uuid.uuid4().hex}"
             injected_at = updates[0].get("received_at") if updates else None
-            tool_args = {
+            ui_update = {
+                "tool_call_id": tool_call_id,
+                "content": content,
+                "injected_at": injected_at,
                 "update_count": len(updates),
                 "source": "pagerduty" if len(updates) == 1 else "multiple",
-                "injected_at": injected_at,
             }
-            tool_call_msg = AIMessage(
-                content="Received correlated incident context update.",
-                additional_kwargs={
-                    "timestamp": injected_at,
-                    "tool_calls": [
-                        {
-                            "id": tool_call_id,
-                            "function": {
-                                "name": "rca_context_update",
-                                "arguments": json.dumps(tool_args),
-                            },
-                            "type": "function",
-                        }
-                    ]
-                },
-            )
-            tool_result_msg = ToolMessage(
-                content=content,
-                tool_call_id=tool_call_id,
-            )
-            state.messages.append(tool_call_msg)
-            state.messages.append(tool_result_msg)
+            if isinstance(state, dict):
+                existing_updates = state.get("rca_ui_updates")
+                if not isinstance(existing_updates, list):
+                    existing_updates = []
+                existing_updates.append(ui_update)
+                state["rca_ui_updates"] = existing_updates
+            else:
+                existing_updates = getattr(state, "rca_ui_updates", None)
+                if not isinstance(existing_updates, list):
+                    existing_updates = []
+                existing_updates.append(ui_update)
+                setattr(state, "rca_ui_updates", existing_updates)
+
+            workflow = get_workflow_context()
+            if workflow is not None:
+                wf_updates = getattr(workflow, "_rca_ui_updates", None)
+                if not isinstance(wf_updates, list):
+                    wf_updates = []
+                wf_updates.append(ui_update)
+                setattr(workflow, "_rca_ui_updates", wf_updates)
     except Exception as exc:
         logger.debug("[RCA-UPDATE] Failed to append update to state messages: %s", exc)
 
