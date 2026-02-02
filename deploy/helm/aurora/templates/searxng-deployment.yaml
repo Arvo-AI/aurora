@@ -26,7 +26,7 @@ spec:
         fsGroup: 1000
       containers:
         - name: searxng
-          image: searxng/searxng:latest
+          image: searxng/searxng:2025.1.31-b08f9d70b
           imagePullPolicy: IfNotPresent
           securityContext:
             allowPrivilegeEscalation: false
@@ -40,5 +40,21 @@ spec:
                 name: {{ include "aurora.fullname" . }}-config
             - secretRef:
                 name: {{ include "aurora.fullname" . }}-secrets-app
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
           resources:
             {{- toYaml .Values.resources.searxng | nindent 12 }}
