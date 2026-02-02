@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from langchain_core.messages import SystemMessage
+from langchain_core.messages import HumanMessage, SystemMessage
 from utils.cloud.cloud_utils import get_workflow_context
 from utils.cache.redis_client import get_redis_client
 
@@ -212,42 +212,61 @@ def drain_rca_context_updates(user_id: str, session_id: str) -> List[Dict[str, A
 
 
 def _format_updates_for_prompt(updates: List[Dict[str, Any]]) -> str:
-    parts: List[str] = [
-        "CORRELATED INCIDENT CONTEXT UPDATE",
-        "The following updates arrived while this RCA is running.",
-        "Incorporate them into the investigation immediately.",
+    """Format context updates into a concise, high-priority message."""
+    # Extract the key info - title and details
+    titles = []
+    details = []
+    for update in updates:
+        payload = update.get("payload", {})
+        if isinstance(payload, dict):
+            event_data = payload.get("event", {}).get("data", {})
+            title = event_data.get("title", "")
+            if title:
+                titles.append(title)
+            body_details = event_data.get("body", {}).get("details", "")
+            if body_details:
+                details.append(body_details)
+    
+    title_str = titles[0] if titles else "Correlated incident"
+    details_str = details[0] if details else ""
+    
+    # Frame as USER instruction - LLMs prioritize user messages
+    parts = [
+        "STOP. I have new critical information for you.",
         "",
+        f"A correlated alert just came in: {title_str}",
     ]
-
-    for idx, update in enumerate(updates, start=1):
-        payload = update.get("payload")
-        try:
-            payload_str = json.dumps(payload, ensure_ascii=False, indent=2)
-        except Exception:
-            payload_str = str(payload)
-        if len(payload_str) > _MAX_UPDATE_CHARS:
-            payload_str = payload_str[:_MAX_UPDATE_CHARS] + "\n... [truncated]"
-
+    
+    if details_str:
         parts.extend([
-            f"Update {idx}:",
-            f"- Source: {update.get('source')}",
-            f"- Incident ID: {update.get('incident_id')}",
-            f"- Event ID: {update.get('event_id')}",
-            f"- Correlation ID: {update.get('correlation_id')}",
-            f"- Received At: {update.get('received_at')}",
-            "Payload:",
-            payload_str,
             "",
+            f"The root cause has been identified: {details_str}",
         ])
+    
+    parts.extend([
+        "",
+        "Please stop your current investigation and write your final RCA report now.",
+        "Include this root cause in your conclusion.",
+    ])
 
-    return "\n".join(parts).strip()
+    return "\n".join(parts)
 
 
-def apply_rca_context_updates(state: Any) -> Optional[SystemMessage]:
-    """Inject queued updates into the in-flight RCA state (system message)."""
-    if not state or not getattr(state, "is_background", False):
+def apply_rca_context_updates(state: Any) -> Optional[HumanMessage]:
+    """Inject queued updates into the in-flight RCA state as a HumanMessage.
+    
+    This function is called on EVERY LLM call. We only inject ONCE - when we
+    first drain updates from Redis. After that, we mark it as already injected
+    and don't inject again. The message goes at the END (most recent = highest priority).
+    """
+    if not state:
+        logger.debug("[RCA-UPDATE] No state context available")
+        return None
+    if not getattr(state, "is_background", False):
+        logger.debug("[RCA-UPDATE] State is_background=%s, skipping", getattr(state, "is_background", None))
         return None
     if not getattr(state, "rca_context", None):
+        logger.warning("[RCA-UPDATE] State has is_background=True but rca_context is None, skipping context update injection")
         return None
 
     user_id = getattr(state, "user_id", None)
@@ -255,16 +274,33 @@ def apply_rca_context_updates(state: Any) -> Optional[SystemMessage]:
     if not user_id or not session_id:
         return None
 
-    updates = drain_rca_context_updates(user_id, session_id)
-    if not updates:
+    # Check if we already injected - don't repeat
+    if getattr(state, "_rca_update_injected", False):
         return None
 
+    logger.info(f"[RCA-UPDATE] Checking for context updates for session {session_id}")
+    updates = drain_rca_context_updates(user_id, session_id)
+    if not updates:
+        logger.info(f"[RCA-UPDATE] No pending updates for session {session_id}")
+        return None
+
+    logger.info(f"[RCA-UPDATE] Draining {len(updates)} update(s) for session {session_id}")
+
     content = _format_updates_for_prompt(updates)
-    update_message = SystemMessage(content=content)
+    update_message = HumanMessage(content=content)
+    logger.info(f"[RCA-UPDATE] Created HumanMessage with {len(content)} chars for session {session_id}")
+    
+    # Mark as injected so we don't repeat
+    try:
+        setattr(state, "_rca_update_injected", True)
+        logger.info(f"[RCA-UPDATE] ✅ Marked update as injected for session {session_id}")
+    except Exception as e:
+        logger.warning(f"[RCA-UPDATE] Could not mark as injected: {e}")
 
     try:
         if hasattr(state, "messages") and isinstance(state.messages, list):
             state.messages.append(update_message)
+            logger.info(f"[RCA-UPDATE] ✅ INJECTED HumanMessage into state.messages (now {len(state.messages)} messages) for session {session_id}")
             
             # Store UI update payload for injection during UI conversion
             tool_call_id = f"rca_context_update_{uuid.uuid4().hex}"
