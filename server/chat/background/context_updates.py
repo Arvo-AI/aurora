@@ -21,6 +21,131 @@ def _make_update_key(user_id: str, session_id: str) -> str:
     return f"{_RCA_UPDATE_KEY_PREFIX}:{user_id}:{session_id}"
 
 
+def _get_session_status(session_id: str) -> Optional[str]:
+    """Get the current status of a chat session."""
+    try:
+        from utils.db.connection_pool import db_pool
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT status FROM chat_sessions WHERE id = %s",
+                    (session_id,)
+                )
+                row = cursor.fetchone()
+                return row[0] if row else None
+    except Exception as exc:
+        logger.warning("[RCA-UPDATE] Failed to get session status: %s", exc)
+        return None
+
+
+def _append_context_update_to_completed_session(
+    user_id: str,
+    session_id: str,
+    update_payload: Dict[str, Any],
+) -> bool:
+    """Directly append a context update to a completed session's messages in the database."""
+    try:
+        from utils.db.connection_pool import db_pool
+        
+        content = _format_updates_for_prompt([update_payload])
+        tool_call_id = f"rca_context_update_{uuid.uuid4().hex}"
+        injected_at = update_payload.get("received_at") or datetime.now(timezone.utc).isoformat()
+        
+        # Create the context update message in UI format
+        context_update_message = {
+            "message_number": 0,  # Will be renumbered
+            "text": "",
+            "sender": "bot",
+            "isCompleted": True,
+            "timestamp": injected_at,
+            "toolCalls": [{
+                "id": tool_call_id,
+                "run_id": None,
+                "tool_name": "rca_context_update",
+                "input": json.dumps({
+                    "update_count": 1,
+                    "source": update_payload.get("source", "pagerduty"),
+                    "injected_at": injected_at,
+                }),
+                "output": content,
+                "status": "completed",
+                "timestamp": injected_at,
+            }],
+        }
+        
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                # Get current messages
+                cursor.execute(
+                    "SELECT messages FROM chat_sessions WHERE id = %s AND user_id = %s",
+                    (session_id, user_id)
+                )
+                row = cursor.fetchone()
+                if not row:
+                    logger.warning("[RCA-UPDATE] Session %s not found for user %s", session_id, user_id)
+                    return False
+                
+                messages = row[0] if row[0] else []
+                if isinstance(messages, str):
+                    messages = json.loads(messages)
+                
+                # Find the correct insertion position based on timestamp
+                insert_index = len(messages)
+                update_ts = datetime.fromisoformat(injected_at.replace("Z", "+00:00"))
+                
+                for idx, msg in enumerate(messages):
+                    msg_ts_str = None
+                    # Check toolCalls timestamps first
+                    tool_calls = msg.get("toolCalls") or []
+                    if tool_calls:
+                        ts_values = []
+                        for tc in tool_calls:
+                            tc_ts = tc.get("timestamp")
+                            if tc_ts:
+                                try:
+                                    ts_values.append(datetime.fromisoformat(tc_ts.replace("Z", "+00:00")))
+                                except Exception:
+                                    pass
+                        if ts_values:
+                            msg_ts = min(ts_values)
+                            if msg_ts > update_ts:
+                                insert_index = idx
+                                break
+                    # Fallback to message timestamp
+                    elif msg.get("timestamp"):
+                        try:
+                            msg_ts = datetime.fromisoformat(msg["timestamp"].replace("Z", "+00:00"))
+                            if msg_ts > update_ts:
+                                insert_index = idx
+                                break
+                        except Exception:
+                            pass
+                
+                # Insert at the correct position
+                messages.insert(insert_index, context_update_message)
+                
+                # Renumber all messages
+                for idx, msg in enumerate(messages):
+                    msg["message_number"] = idx + 1
+                
+                # Update the database
+                cursor.execute(
+                    "UPDATE chat_sessions SET messages = %s, updated_at = %s WHERE id = %s AND user_id = %s",
+                    (json.dumps(messages), datetime.now(), session_id, user_id)
+                )
+                conn.commit()
+                
+                logger.info(
+                    "[RCA-UPDATE] Appended context update to completed session %s at position %d",
+                    session_id, insert_index
+                )
+                return True
+                
+    except Exception as exc:
+        logger.error("[RCA-UPDATE] Failed to append context update to completed session: %s", exc)
+        return False
+
+
 def enqueue_rca_context_update(
     user_id: str,
     session_id: str,
@@ -31,13 +156,12 @@ def enqueue_rca_context_update(
     event_id: Optional[str] = None,
     correlation_id: Optional[str] = None,
 ) -> bool:
-    """Queue a correlated incident update for a background RCA session."""
+    """Queue a correlated incident update for a background RCA session.
+    
+    If the session is already completed, directly append the update to the
+    session's messages in the database instead of enqueueing to Redis.
+    """
     if not user_id or not session_id:
-        return False
-
-    redis_client = get_redis_client()
-    if redis_client is None:
-        logger.warning("[RCA-UPDATE] Redis unavailable, skipping context update enqueue")
         return False
 
     update_payload = {
@@ -48,6 +172,21 @@ def enqueue_rca_context_update(
         "received_at": datetime.now(timezone.utc).isoformat(),
         "payload": payload,
     }
+
+    # Check if session is already completed
+    session_status = _get_session_status(session_id)
+    if session_status in ("completed", "failed"):
+        logger.info(
+            "[RCA-UPDATE] Session %s is %s, appending context update directly to database",
+            session_id, session_status
+        )
+        return _append_context_update_to_completed_session(user_id, session_id, update_payload)
+
+    # Session is still in progress - enqueue to Redis for middleware to pick up
+    redis_client = get_redis_client()
+    if redis_client is None:
+        logger.warning("[RCA-UPDATE] Redis unavailable, skipping context update enqueue")
+        return False
 
     try:
         key = _make_update_key(user_id, session_id)
