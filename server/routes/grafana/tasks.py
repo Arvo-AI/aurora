@@ -322,11 +322,12 @@ def process_grafana_alert(
                                 incident_id = correlation_result.incident_id
                                 cursor.execute(
                                     """INSERT INTO incident_alerts
-                                       (incident_id, source_type, source_alert_id, alert_title, alert_service,
+                                       (user_id, incident_id, source_type, source_alert_id, alert_title, alert_service,
                                         alert_severity, correlation_strategy, correlation_score,
                                         correlation_details, alert_metadata)
-                                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
                                     (
+                                        user_id,
                                         incident_id,
                                         "grafana",
                                         alert_id,
@@ -420,10 +421,11 @@ def process_grafana_alert(
                         try:
                             cursor.execute(
                                 """INSERT INTO incident_alerts
-                                   (incident_id, source_type, source_alert_id, alert_title, alert_service,
+                                   (user_id, incident_id, source_type, source_alert_id, alert_title, alert_service,
                                     alert_severity, correlation_strategy, correlation_score, alert_metadata)
-                                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
                                 (
+                                    user_id,
                                     incident_id,
                                     "grafana",
                                     alert_id,
