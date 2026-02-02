@@ -73,15 +73,23 @@ def github_login():
                 logging.error(f"Error storing GitHub credentials: {e}")
                 return jsonify({"error": f"Failed to store credentials: {str(e)}"}), 500
         else:
-            env = os.environ.get('AURORA_ENV', '').lower()
+            # Check if GitHub OAuth environment variables are configured
             github_client_id = os.getenv("GH_OAUTH_CLIENT_ID")
+            github_client_secret = os.getenv("GH_OAUTH_CLIENT_SECRET")
+            
+            if not github_client_id or not github_client_secret:
+                logging.error("GitHub OAuth client ID or secret not configured")
+                return jsonify({
+                    "error": "GitHub OAuth is not configured",
+                    "error_code": "GITHUB_NOT_CONFIGURED",
+                    "message": "GitHub OAuth environment variables (GH_OAUTH_CLIENT_ID and GH_OAUTH_CLIENT_SECRET) are not configured. Please configure them as described in the GitHub connector README."
+                }), 400
+            
+            env = os.environ.get('AURORA_ENV', '').lower()
             if env in ['prod', 'staging']:
                 redirect_uri = f"{request.host_url}backend/github/callback"
             elif env in ['dev']:
                 redirect_uri = f"{request.host_url}github/callback"
-
-            
-            
 
                 
             # Use user_id as state parameter to identify user after OAuth

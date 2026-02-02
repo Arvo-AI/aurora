@@ -28,6 +28,11 @@ iac_tool = run_iac_tool
 from .github_commit_tool import github_commit, GitHubCommitArgs
 from .github_rca_tool import github_rca, GitHubRCAArgs
 from .github_fix_tool import github_fix, GitHubFixArgs
+
+# Visualization trigger caching
+from cachetools import TTLCache
+_viz_triggers: TTLCache = TTLCache(maxsize=100, ttl=3600)  # 1 hour TTL
+from chat.backend.constants import MAX_TOOL_OUTPUT_CHARS
 from .github_apply_fix_tool import github_apply_fix, GitHubApplyFixArgs
 from .cloud_exec_tool import cloud_exec
 
@@ -38,6 +43,14 @@ from .web_search_tool import web_search, WebSearchArgs
 from .terminal_exec_tool import terminal_exec
 from .tailscale_ssh_tool import tailscale_ssh
 from .confluence_runbook_tool import confluence_runbook_parse, ConfluenceRunbookArgs
+from .confluence_search_tool import (
+    confluence_search_similar,
+    confluence_search_runbooks,
+    confluence_fetch_page,
+    ConfluenceSearchSimilarArgs,
+    ConfluenceSearchRunbookArgs,
+    ConfluenceFetchPageArgs,
+)
 from .splunk_tool import (
     search_splunk,
     list_splunk_indexes,
@@ -221,6 +234,32 @@ def send_tool_completion(tool_name: str, output: str, status: str = "completed",
         user_id = context.get('user_id') if isinstance(context, dict) else context
         state_context = get_state_context()
         session_id = state_context.session_id if state_context and hasattr(state_context, 'session_id') else None
+        
+        # Trigger visualization update every 30s for incident RCAs
+        incident_id = getattr(state_context, 'incident_id', None) if state_context else None
+        if incident_id:
+            try:
+                global _viz_triggers
+                
+                if incident_id not in _viz_triggers:
+                    from chat.background.visualization_triggers import VisualizationTrigger
+                    _viz_triggers[incident_id] = VisualizationTrigger(incident_id)
+                
+                if _viz_triggers[incident_id].should_trigger():
+                    from chat.background.visualization_generator import update_visualization
+                    update_visualization.delay(
+                        incident_id=incident_id,
+                        user_id=user_id,
+                        session_id=session_id,
+                        force_full=False,
+                        tool_calls_json=json.dumps([{
+                            'tool': tool_name,
+                            'output': str(output)[:MAX_TOOL_OUTPUT_CHARS]
+                        }])
+                    )
+                    logging.info(f"[Visualization] Triggered 30s update for incident {incident_id}")
+            except Exception as e:
+                logging.warning(f"[Visualization] Failed to trigger update: {e}")
         
         # Try to get the Agent's websocket_sender first (preferred)
         agent_websocket_sender = None
@@ -1205,6 +1244,36 @@ def get_cloud_tools():
         logging.info(f"Added 3 Splunk tools for user {user_id}")
     else:
         logging.debug(f"Splunk tools not added - user {user_id} not connected to Splunk")
+
+    # Add Confluence search tools if enabled
+    try:
+        from utils.flags.feature_flags import is_confluence_enabled
+
+        if is_confluence_enabled() and user_id:
+            _confluence_tools = [
+                (confluence_search_similar, "confluence_search_similar", ConfluenceSearchSimilarArgs,
+                 "Search Confluence for pages related to an incident (postmortems, RCA docs). "
+                 "Pass keywords, optional service_name and error_message. Returns matching pages with excerpts."),
+                (confluence_search_runbooks, "confluence_search_runbooks", ConfluenceSearchRunbookArgs,
+                 "Search Confluence for runbooks / playbooks / SOPs for a given service. "
+                 "Pass service_name and optional operation (e.g. 'restart', 'failover')."),
+                (confluence_fetch_page, "confluence_fetch_page", ConfluenceFetchPageArgs,
+                 "Fetch a Confluence page by ID and return its content as markdown. "
+                 "Use after search to read full page details."),
+            ]
+            for _func, _name, _schema, _desc in _confluence_tools:
+                _ctx = with_user_context(_func)
+                _notif = with_completion_notification(_ctx)
+                _final = wrap_func_with_capture(_notif, _name) if tool_capture else _notif
+                tools.append(StructuredTool.from_function(
+                    func=_final,
+                    name=_name,
+                    description=_desc,
+                    args_schema=_schema,
+                ))
+            logging.info(f"Added 3 Confluence search tools for user {user_id}")
+    except Exception as e:
+        logging.warning(f"Failed to add Confluence search tools: {e}")
 
     logging.info(f"Created {len(tools)} Aurora native tools")
     

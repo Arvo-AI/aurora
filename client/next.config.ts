@@ -77,6 +77,7 @@ const nextConfig: NextConfig = {
         crypto: false,
         stream: false,
         buffer: false,
+        'web-worker': false,
       };
     }
     

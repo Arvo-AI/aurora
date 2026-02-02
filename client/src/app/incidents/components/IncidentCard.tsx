@@ -13,6 +13,7 @@ import {
   ChevronRight,
   Play,
   GitBranch,
+  GitFork,
   FileText
 } from 'lucide-react';
 import React, { useState, useMemo, useCallback } from 'react';
@@ -24,7 +25,10 @@ import CitationBadge from './CitationBadge';
 import CitationModal from './CitationModal';
 import SuggestionModal from './SuggestionModal';
 import FixSuggestionModal from './FixSuggestionModal';
+import IncidentFeedback from './IncidentFeedback';
 import { Suggestion } from '@/lib/services/incidents';
+import InfrastructureVisualization from '@/components/incidents/InfrastructureVisualization';
+import { ReactFlowProvider } from '@xyflow/react';
 
 interface IncidentCardProps {
   incident: Incident;
@@ -81,6 +85,7 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
   const [selectedCitation, setSelectedCitation] = useState<Citation | null>(null);
   const [selectedSuggestion, setSelectedSuggestion] = useState<Suggestion | null>(null);
   const [selectedFixSuggestion, setSelectedFixSuggestion] = useState<Suggestion | null>(null);
+  const [showVisualization, setShowVisualization] = useState(false);
   const alert = incident.alert;
   const router = useRouter();
   const showSeverity = (alert.severity && alert.severity !== 'unknown') || incident.status === 'analyzed';
@@ -466,33 +471,67 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
           {renderedSummary}
         </div>
         
-        {/* View RCA Button */}
+        {/* View RCA and Visualization Buttons */}
         {incident.chatSessionId && (
-          <div className="mt-6 pt-6 border-t border-zinc-800/50">
-            <button
-              onClick={() => {
-                if (incident.auroraStatus === 'complete') {
-                  router.push(`/chat?sessionId=${incident.chatSessionId}`);
-                }
-              }}
-              disabled={incident.auroraStatus !== 'complete'}
-              title={incident.auroraStatus !== 'complete' ? 'RCA report will be available only when RCA is complete' : undefined}
-              className={`inline-flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors ${
-                incident.auroraStatus === 'complete'
-                  ? 'bg-zinc-800 hover:bg-zinc-700 text-white border border-zinc-700 hover:border-zinc-600 cursor-pointer'
-                  : 'bg-zinc-900 text-zinc-500 cursor-not-allowed border border-zinc-800'
-              }`}
-            >
-              <FileText className="w-4 h-4" />
-              View Root Cause Analysis
-              {incident.auroraStatus === 'complete' && (
+          <div className="mt-6 pt-6 border-t border-zinc-800/50 flex items-center gap-3">
+            {incident.auroraStatus === 'complete' ? (
+              <Link
+                href={`/chat?sessionId=${incident.chatSessionId}`}
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors bg-zinc-800 hover:bg-zinc-700 text-white border border-zinc-700 hover:border-zinc-600"
+              >
+                <FileText className="w-4 h-4" />
+                Root Cause Analysis
                 <ExternalLink className="w-4 h-4" />
-              )}
-            </button>
+              </Link>
+            ) : (
+              <button
+                disabled
+                title="RCA report will be available only when RCA is complete"
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors bg-zinc-900 text-zinc-500 cursor-not-allowed border border-zinc-800"
+              >
+                <FileText className="w-4 h-4" />
+                Root Cause Analysis
+              </button>
+            )}
+            
+            {(incident.auroraStatus === 'complete' || incident.auroraStatus === 'running') && (
+              <button
+                onClick={() => setShowVisualization(!showVisualization)}
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors bg-zinc-800 hover:bg-zinc-700 text-white border border-zinc-700 hover:border-zinc-600"
+              >
+                <GitFork className="w-4 h-4" />
+                Visualization
+                {showVisualization ? (
+                  <ChevronUp className="w-4 h-4" />
+                ) : (
+                  <ChevronDown className="w-4 h-4" />
+                )}
+              </button>
+            )}
+          </div>
+        )}
+
+        {/* Feedback Section - only show when analysis is complete */}
+        {incident.auroraStatus === 'complete' && (
+          <div className="mt-6 pt-6 border-t border-zinc-800/50">
+            <IncidentFeedback incidentId={incident.id} />
           </div>
         )}
 
       </div>
+
+      {/* Infrastructure Visualization */}
+      {showVisualization && (incident.auroraStatus === 'complete' || incident.auroraStatus === 'running') && (
+        <>
+          <div className="border-t border-zinc-800" />
+          <div>
+            <h2 className="text-lg font-medium text-white mb-4">Infrastructure Analysis</h2>
+            <ReactFlowProvider>
+              <InfrastructureVisualization incidentId={incident.id} className="h-[500px]" />
+            </ReactFlowProvider>
+          </div>
+        </>
+      )}
 
       {/* Citation Modal */}
       <CitationModal
