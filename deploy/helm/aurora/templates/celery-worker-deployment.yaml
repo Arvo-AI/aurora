@@ -23,6 +23,12 @@ spec:
         app.kubernetes.io/instance: {{ .Release.Name }}
         app.kubernetes.io/part-of: aurora
     spec:
+      serviceAccountName: {{ include "aurora.fullname" . }}-celery-worker
+      automountServiceAccountToken: false
+      {{- if .Values.image.pullSecrets }}
+      imagePullSecrets:
+        {{- toYaml .Values.image.pullSecrets | nindent 8 }}
+      {{- end }}
       containers:
         - name: celery-worker
           image: "{{ .Values.image.registry }}/aurora-server:{{ .Values.image.tag }}"

@@ -12,13 +12,12 @@ spec:
       app.kubernetes.io/instance: {{ .Release.Name }}
   template:
     metadata:
-      annotations:
-        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
       labels:
         app.kubernetes.io/name: {{ include "aurora.name" . }}-t2v-transformers
         app.kubernetes.io/instance: {{ .Release.Name }}
         app.kubernetes.io/part-of: aurora
     spec:
+      automountServiceAccountToken: false
       containers:
         - name: transformers
           image: cr.weaviate.io/semitechnologies/transformers-inference:sentence-transformers-all-MiniLM-L6-v2

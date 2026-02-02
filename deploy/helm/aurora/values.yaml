@@ -14,6 +14,36 @@ nameOverride: ""
 fullnameOverride: ""
 
 # ------------------------------------------------------------------------------
+# Stateful Services - Enable/Disable
+# ------------------------------------------------------------------------------
+# Set to false to use external managed services (RDS, ElastiCache, etc.)
+# When disabled, configure the external host in the config section below
+
+services:
+  postgres:
+    enabled: true    # Set false to use external Postgres (RDS, Cloud SQL, etc.)
+  redis:
+    enabled: true    # Set false to use external Redis (ElastiCache, Memorystore, etc.)
+  weaviate:
+    enabled: true    # Set false to use Weaviate Cloud or external instance
+  vault:
+    enabled: true    # Set false to use external Vault or other secrets manager
+
+# ------------------------------------------------------------------------------
+# ServiceAccount configuration
+# ------------------------------------------------------------------------------
+# Each service gets its own ServiceAccount for proper RBAC
+# On-prem: annotations can be left empty
+# Cloud: add workload identity annotations as needed (GKE, EKS IRSA, AKS, etc.)
+serviceAccount:
+  # Annotations applied to backend service accounts (server, chatbot, celery)
+  annotations: {}
+  
+  # Vault-specific ServiceAccount annotations (e.g., for cloud KMS auto-unseal)
+  vault:
+    annotations: {}
+
+# ------------------------------------------------------------------------------
 # Container images
 # ------------------------------------------------------------------------------
 image:
@@ -31,17 +61,20 @@ image:
 # Replica counts per service
 # ------------------------------------------------------------------------------
 replicaCounts:
-  server: 1          # API server (Flask)
-  celeryWorker: 2    # Background task workers
-  celeryBeat: 1      # Task scheduler (only 1 needed)
-  chatbot: 1         # WebSocket chatbot server
-  frontend: 1        # Next.js frontend
-  redis: 1           # Redis cache (single instance)
-  searxng: 1         # Web search engine
-  weaviate: 1        # Vector database
-  transformers: 1    # ML model service
-  vault: 1           # Secrets manager (StatefulSet)
-  postgres: 1        # Database (StatefulSet)
+  # Scalable services (can increase for load balancing)
+  server: 1          # API server (Flask) - stateless, can scale
+  celeryWorker: 2    # Background task workers - stateless, can scale
+  chatbot: 1         # WebSocket chatbot server - stateless, can scale
+  frontend: 1        # Next.js frontend - stateless, can scale
+  searxng: 1         # Web search engine - stateless, can scale
+  transformers: 1    # ML model service - stateless, can scale
+  
+  # Single-instance services (do NOT increase without additional config)
+  celeryBeat: 1      # Task scheduler - only 1 to avoid duplicate tasks
+  redis: 1           # Redis - single instance, no clustering configured
+  weaviate: 1        # Vector database - single instance, clustering requires additional config
+  vault: 1           # Secrets manager - single instance, HA requires additional config
+  postgres: 1        # Database - single instance, replication requires additional config
 
 # ------------------------------------------------------------------------------
 # Application configuration (non-sensitive)

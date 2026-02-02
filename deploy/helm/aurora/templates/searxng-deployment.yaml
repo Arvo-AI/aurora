@@ -20,6 +20,7 @@ spec:
         app.kubernetes.io/instance: {{ .Release.Name }}
         app.kubernetes.io/part-of: aurora
     spec:
+      automountServiceAccountToken: false
       containers:
         - name: searxng
           image: searxng/searxng:latest

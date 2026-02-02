@@ -1,10 +1,12 @@
+{{- if .Values.services.weaviate.enabled }}
 apiVersion: apps/v1
-kind: Deployment
+kind: StatefulSet
 metadata:
   name: {{ include "aurora.fullname" . }}-weaviate
   labels:
     {{- include "aurora.labels" . | nindent 4 }}
 spec:
+  serviceName: {{ include "aurora.fullname" . }}-weaviate
   replicas: {{ .Values.replicaCounts.weaviate }}
   selector:
     matchLabels:
@@ -12,13 +14,12 @@ spec:
       app.kubernetes.io/instance: {{ .Release.Name }}
   template:
     metadata:
-      annotations:
-        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
       labels:
         app.kubernetes.io/name: {{ include "aurora.name" . }}-weaviate
         app.kubernetes.io/instance: {{ .Release.Name }}
         app.kubernetes.io/part-of: aurora
     spec:
+      automountServiceAccountToken: false
       containers:
         - name: weaviate
           image: cr.weaviate.io/semitechnologies/weaviate:1.27.6
@@ -36,7 +37,9 @@ spec:
             - name: ENABLE_API_BASED_MODULES
               value: "true"
             - name: CLUSTER_HOSTNAME
-              value: "node1"
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
             - name: ENABLE_MODULES
               value: "text2vec-transformers"
             - name: TRANSFORMERS_INFERENCE_API
@@ -52,13 +55,18 @@ spec:
             periodSeconds: 10
           livenessProbe:
             httpGet:
-              path: /v1/.well-known/ready
+              path: /v1/.well-known/live
               port: 8080
-            initialDelaySeconds: 20
+            initialDelaySeconds: 30
             periodSeconds: 20
           resources:
             {{- toYaml .Values.resources.weaviate | nindent 12 }}
-      volumes:
-        - name: weaviate-data
-          persistentVolumeClaim:
-            claimName: {{ include "aurora.fullname" . }}-weaviate-data
+  volumeClaimTemplates:
+    - metadata:
+        name: weaviate-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: {{ .Values.persistence.weaviate.size }}
+{{- end }}

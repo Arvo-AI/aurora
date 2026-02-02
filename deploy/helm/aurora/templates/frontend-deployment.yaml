@@ -19,6 +19,12 @@ spec:
         app.kubernetes.io/instance: {{ .Release.Name }}
         app.kubernetes.io/part-of: aurora
     spec:
+      serviceAccountName: {{ include "aurora.fullname" . }}-frontend
+      automountServiceAccountToken: false
+      {{- if .Values.image.pullSecrets }}
+      imagePullSecrets:
+        {{- toYaml .Values.image.pullSecrets | nindent 8 }}
+      {{- end }}
       containers:
         - name: aurora-frontend
           image: "{{ .Values.image.registry }}/aurora-frontend:{{ .Values.image.tag }}"

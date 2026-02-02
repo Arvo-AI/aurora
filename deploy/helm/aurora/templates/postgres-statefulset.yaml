@@ -1,3 +1,4 @@
+{{- if .Values.services.postgres.enabled }}
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
@@ -21,6 +22,7 @@ spec:
         app.kubernetes.io/instance: {{ .Release.Name }}
         app.kubernetes.io/part-of: aurora
     spec:
+      automountServiceAccountToken: false
       containers:
         - name: postgres
           image: postgres:15-alpine
@@ -59,3 +61,4 @@ spec:
         resources:
           requests:
             storage: {{ .Values.persistence.postgres.size }}
+{{- end }}

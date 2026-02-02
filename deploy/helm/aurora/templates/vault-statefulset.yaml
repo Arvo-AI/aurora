@@ -1,3 +1,4 @@
+{{- if .Values.services.vault.enabled }}
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
@@ -20,6 +21,8 @@ spec:
         app.kubernetes.io/instance: {{ .Release.Name }}
         app.kubernetes.io/part-of: aurora
     spec:
+      serviceAccountName: {{ include "aurora.fullname" . }}-vault
+      automountServiceAccountToken: false
       containers:
         - name: vault
           image: hashicorp/vault:1.15
@@ -86,3 +89,4 @@ spec:
         resources:
           requests:
             storage: {{ .Values.persistence.vault.size }}
+{{- end }}
