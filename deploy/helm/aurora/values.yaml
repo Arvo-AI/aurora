@@ -423,8 +423,31 @@ ingress:
     ws: "ws.aurora.example.com"
 
 # ------------------------------------------------------------------------------
-# Vault Auto-Unseal Configuration (Optional)
+# Vault Configuration
 # ------------------------------------------------------------------------------
+# SECURITY NOTE: Internal Traffic Encryption
+# ------------------------------------------
+# By default, Vault's TCP listener has TLS disabled (tls_disable = 1), meaning
+# all communication between pods and Vault travels as plaintext HTTP inside the
+# cluster. This includes Vault tokens and secrets.
+#
+# MITIGATIONS IN PLACE:
+#   1. NetworkPolicy (vault-networkpolicy.yaml) restricts Vault access to only
+#      trusted Aurora pods (server, chatbot, celery-worker, celery-beat).
+#      Untrusted terminal pods cannot connect to Vault.
+#   2. Terminal pods never receive Vault tokens - credentials are fetched by
+#      trusted pods and injected per-command via environment variables.
+#
+# For additional hardening, consider:
+#   - Enable TLS on Vault listener with auto-generated or provided certificates
+#   - Use a service mesh (Istio/Linkerd) that provides mTLS between pods
+#
+# NOTE: NetworkPolicies require a CNI plugin that supports them (Calico, Cilium,
+# Weave Net, etc.). If your cluster doesn't support NetworkPolicies, the policy
+# will be created but have no effect.
+#
+# Auto-Unseal Configuration (Optional)
+# ------------------------------------
 # By default, Vault uses Shamir seals (manual unsealing after pod restarts).
 # For production, configure auto-unseal with cloud KMS.
 # See docs/KMS_SETUP.md for detailed setup guides.
