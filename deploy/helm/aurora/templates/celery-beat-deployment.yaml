@@ -37,11 +37,22 @@ spec:
         - name: celery-beat
           image: "{{ .Values.image.registry }}/aurora-server:{{ .Values.image.tag }}"
           imagePullPolicy: IfNotPresent
-          command: ["celery", "-A", "celery_config", "beat", "--loglevel=info"]
+          command: ["celery", "-A", "celery_config", "beat", "--loglevel=info", "--pidfile=/tmp/celerybeat.pid"]
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
               drop: ["ALL"]
+          # Beat doesn't serve HTTP; use pidfile-based liveness check
+          livenessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - "test -f /tmp/celerybeat.pid && kill -0 $(cat /tmp/celerybeat.pid)"
+            initialDelaySeconds: 30
+            periodSeconds: 60
+            timeoutSeconds: 10
+            failureThreshold: 3
           envFrom:
             - configMapRef:
                 name: {{ include "aurora.fullname" . }}-config
