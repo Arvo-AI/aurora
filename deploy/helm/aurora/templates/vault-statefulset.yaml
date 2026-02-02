@@ -23,6 +23,11 @@ spec:
     spec:
       serviceAccountName: {{ include "aurora.fullname" . }}-vault
       automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 100
+        runAsGroup: 1000
+        fsGroup: 1000
       containers:
         - name: vault
           image: hashicorp/vault:1.15
@@ -31,6 +36,10 @@ spec:
           args: 
             - |
               vault server -config=/vault/config/vault.hcl
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
           ports:
             - name: http
               containerPort: 8200

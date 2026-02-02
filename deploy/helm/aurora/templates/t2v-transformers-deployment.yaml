@@ -18,10 +18,17 @@ spec:
         app.kubernetes.io/part-of: aurora
     spec:
       automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        fsGroup: 1000
       containers:
         - name: transformers
           image: cr.weaviate.io/semitechnologies/transformers-inference:sentence-transformers-all-MiniLM-L6-v2
           imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
           ports:
             - name: http
               containerPort: 8080

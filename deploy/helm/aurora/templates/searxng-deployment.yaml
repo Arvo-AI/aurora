@@ -21,10 +21,17 @@ spec:
         app.kubernetes.io/part-of: aurora
     spec:
       automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        fsGroup: 1000
       containers:
         - name: searxng
           image: searxng/searxng:latest
           imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
           ports:
             - name: http
               containerPort: 8080

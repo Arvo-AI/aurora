@@ -24,6 +24,11 @@ spec:
     spec:
       serviceAccountName: {{ include "aurora.fullname" . }}-server
       automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
       {{- if .Values.image.pullSecrets }}
       imagePullSecrets:
         {{- toYaml .Values.image.pullSecrets | nindent 8 }}
@@ -33,6 +38,10 @@ spec:
           image: "{{ .Values.image.registry }}/aurora-server:{{ .Values.image.tag }}"
           imagePullPolicy: IfNotPresent
           command: ["uv", "run", "main_compute.py"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
           ports:
             - name: http
               containerPort: 5080

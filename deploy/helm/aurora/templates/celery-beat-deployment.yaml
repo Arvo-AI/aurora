@@ -24,6 +24,11 @@ spec:
     spec:
       serviceAccountName: {{ include "aurora.fullname" . }}-celery-beat
       automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
       {{- if .Values.image.pullSecrets }}
       imagePullSecrets:
         {{- toYaml .Values.image.pullSecrets | nindent 8 }}
@@ -33,6 +38,10 @@ spec:
           image: "{{ .Values.image.registry }}/aurora-server:{{ .Values.image.tag }}"
           imagePullPolicy: IfNotPresent
           command: ["celery", "-A", "celery_config", "beat", "--loglevel=info"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
           envFrom:
             - configMapRef:
                 name: {{ include "aurora.fullname" . }}-config

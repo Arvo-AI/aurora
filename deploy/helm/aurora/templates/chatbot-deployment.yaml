@@ -25,6 +25,11 @@ spec:
     spec:
       serviceAccountName: {{ include "aurora.fullname" . }}-chatbot
       automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
       {{- if .Values.image.pullSecrets }}
       imagePullSecrets:
         {{- toYaml .Values.image.pullSecrets | nindent 8 }}
@@ -34,6 +39,10 @@ spec:
           image: "{{ .Values.image.registry }}/aurora-server:{{ .Values.image.tag }}"
           imagePullPolicy: IfNotPresent
           command: ["python", "main_chatbot.py"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
           ports:
             - name: ws
               containerPort: 5006

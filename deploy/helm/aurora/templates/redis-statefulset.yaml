@@ -20,11 +20,20 @@ spec:
         app.kubernetes.io/part-of: aurora
     spec:
       automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 1000
+        fsGroup: 1000
       containers:
         - name: redis
           image: redis:7-alpine
           imagePullPolicy: IfNotPresent
           command: ["redis-server", "--appendonly", "yes", "--dir", "/data"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
           ports:
             - name: redis
               containerPort: 6379
