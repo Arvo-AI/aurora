@@ -212,7 +212,7 @@ def drain_rca_context_updates(user_id: str, session_id: str) -> List[Dict[str, A
 
 
 def _format_updates_for_prompt(updates: List[Dict[str, Any]]) -> str:
-    """Format context updates into a concise, high-priority message."""
+    """Format context updates into a message that adds context without stopping investigation."""
     # Extract the key info - title and details
     titles = []
     details = []
@@ -230,23 +230,21 @@ def _format_updates_for_prompt(updates: List[Dict[str, Any]]) -> str:
     title_str = titles[0] if titles else "Correlated incident"
     details_str = details[0] if details else ""
     
-    # Frame as USER instruction - LLMs prioritize user messages
+    # Frame as new information to incorporate, NOT a stop signal
     parts = [
-        "STOP. I have new critical information for you.",
+        "New information: A correlated alert just came in that may be relevant to your investigation.",
         "",
-        f"A correlated alert just came in: {title_str}",
+        f"Alert: {title_str}",
     ]
     
     if details_str:
         parts.extend([
-            "",
-            f"The root cause has been identified: {details_str}",
+            f"Details: {details_str}",
         ])
     
     parts.extend([
         "",
-        "Please stop your current investigation and write your final RCA report now.",
-        "Include this root cause in your conclusion.",
+        "Please incorporate this information into your investigation. Continue your analysis and include this context in your final report.",
     ])
 
     return "\n".join(parts)
@@ -255,9 +253,9 @@ def _format_updates_for_prompt(updates: List[Dict[str, Any]]) -> str:
 def apply_rca_context_updates(state: Any) -> Optional[HumanMessage]:
     """Inject queued updates into the in-flight RCA state as a HumanMessage.
     
-    This function is called on EVERY LLM call. We only inject ONCE - when we
-    first drain updates from Redis. After that, we mark it as already injected
-    and don't inject again. The message goes at the END (most recent = highest priority).
+    This function is called on EVERY LLM call. We check Redis for new updates
+    each time, but track which updates we've already injected to avoid duplicates.
+    Each new correlated alert gets injected once.
     """
     if not state:
         logger.debug("[RCA-UPDATE] No state context available")
@@ -274,10 +272,7 @@ def apply_rca_context_updates(state: Any) -> Optional[HumanMessage]:
     if not user_id or not session_id:
         return None
 
-    # Check if we already injected - don't repeat
-    if getattr(state, "_rca_update_injected", False):
-        return None
-
+    # Always check for new updates
     logger.info(f"[RCA-UPDATE] Checking for context updates for session {session_id}")
     updates = drain_rca_context_updates(user_id, session_id)
     if not updates:
@@ -289,13 +284,6 @@ def apply_rca_context_updates(state: Any) -> Optional[HumanMessage]:
     content = _format_updates_for_prompt(updates)
     update_message = HumanMessage(content=content)
     logger.info(f"[RCA-UPDATE] Created HumanMessage with {len(content)} chars for session {session_id}")
-    
-    # Mark as injected so we don't repeat
-    try:
-        setattr(state, "_rca_update_injected", True)
-        logger.info(f"[RCA-UPDATE] ✅ Marked update as injected for session {session_id}")
-    except Exception as e:
-        logger.warning(f"[RCA-UPDATE] Could not mark as injected: {e}")
 
     try:
         if hasattr(state, "messages") and isinstance(state.messages, list):
