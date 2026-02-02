@@ -1181,7 +1181,12 @@ class Workflow:
         return ui_messages
 
     def _inject_rca_context_updates(self, ui_messages: list) -> list:
-        """Place correlated RCA context updates as separate messages at the correct chronological position."""
+        """Place correlated RCA context updates at the correct chronological position.
+        
+        Context updates arrive during an active RCA investigation. We track the LLM 
+        message index when the update was injected, and use that to place the UI 
+        message at the corresponding position in the conversation.
+        """
         try:
             if not hasattr(self, "_last_state"):
                 return ui_messages
@@ -1194,41 +1199,15 @@ class Workflow:
             if not pending_updates:
                 return ui_messages
 
-            def _parse_ts(ts: str) -> Optional[datetime]:
-                if not ts:
-                    return None
-                try:
-                    parsed = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-                    # Ensure timezone-aware for consistent comparisons
-                    if parsed.tzinfo is None:
-                        from datetime import timezone
-                        parsed = parsed.replace(tzinfo=timezone.utc)
-                    return parsed
-                except Exception:
-                    return None
-
-            def _get_message_timestamp(msg: dict) -> Optional[datetime]:
-                """Get the earliest timestamp from a message's tool calls or the message itself."""
-                tool_calls = msg.get("toolCalls") or []
-                if tool_calls:
-                    ts_values = [_parse_ts(tc.get("timestamp", "")) for tc in tool_calls]
-                    ts_values = [t for t in ts_values if t]
-                    if ts_values:
-                        return min(ts_values)
-                # Fallback to message timestamp if present
-                msg_ts = msg.get("timestamp")
-                if msg_ts:
-                    return _parse_ts(msg_ts)
-                return None
-
             for update in pending_updates:
                 tool_call_id = update.get("tool_call_id")
                 injected_at = update.get("injected_at")
+                injection_index = update.get("injection_index")  # LLM message index when injected
                 content = update.get("content", "")
                 if not tool_call_id:
                     continue
 
-                # Avoid duplicate injection - check both toolCalls and message text
+                # Avoid duplicate injection
                 already_present = False
                 for msg in ui_messages:
                     for tc in msg.get("toolCalls", []) or []:
@@ -1239,12 +1218,10 @@ class Workflow:
                         break
                 if already_present:
                     continue
-
-                update_ts = _parse_ts(injected_at)
                 
-                # Create a new bot message for the context update with its own tool call
+                # Create a new bot message for the context update
                 context_update_message = {
-                    "message_number": 0,  # Will be renumbered later
+                    "message_number": len(ui_messages) + 1,
                     "text": "",
                     "sender": "bot",
                     "isCompleted": True,
@@ -1264,20 +1241,37 @@ class Workflow:
                     }],
                 }
 
-                # Find the correct insertion position based on timestamp
-                insert_index = len(ui_messages)  # Default: append at end
+                # Use injection_index to find the correct position
+                # The injection_index is the LLM message count when the update was injected.
+                # We need to map this to the UI message position.
+                # UI messages roughly correspond to LLM messages, but with some differences:
+                # - User message is always first
+                # - Bot messages with tool calls come from AIMessage with tool_calls
+                # - We skip ToolMessages in UI (they become output on the tool call)
+                # 
+                # A rough heuristic: place the update after UI message at index injection_index // 2
+                # (since each tool interaction is typically AIMessage + ToolMessage = 2 LLM messages)
+                # but maps to 1 UI message.
                 
-                if update_ts:
-                    for idx, msg in enumerate(ui_messages):
-                        msg_ts = _get_message_timestamp(msg)
-                        if msg_ts and msg_ts > update_ts:
-                            # Insert before this message (first message with timestamp after update)
-                            insert_index = idx
+                if injection_index is not None:
+                    # Map LLM message index to approximate UI message index
+                    # Each tool call in UI typically corresponds to 2 LLM messages (AI + Tool)
+                    # So divide by 2 to get approximate UI position
+                    # Add 1 to account for the user message at the start
+                    approx_ui_index = max(1, (injection_index // 2) + 1)
+                    insert_index = min(approx_ui_index, len(ui_messages))
+                    logger.info(f"UI CONVERSION: Using injection_index {injection_index} -> UI index {insert_index}")
+                else:
+                    # Fallback: insert after the last bot message with tool calls
+                    insert_index = len(ui_messages)
+                    for idx in range(len(ui_messages) - 1, -1, -1):
+                        msg = ui_messages[idx]
+                        if msg.get("sender") == "bot" and msg.get("toolCalls"):
+                            insert_index = idx + 1
                             break
                 
-                # Insert the context update message at the correct position
                 ui_messages.insert(insert_index, context_update_message)
-                logger.info(f"UI CONVERSION: Inserted RCA context update at index {insert_index} (timestamp={injected_at})")
+                logger.info(f"UI CONVERSION: Inserted RCA context update at index {insert_index}")
 
             # Renumber all messages after insertion
             for idx, msg in enumerate(ui_messages):
