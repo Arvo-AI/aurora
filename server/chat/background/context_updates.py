@@ -43,7 +43,11 @@ def _append_context_update_to_completed_session(
     session_id: str,
     update_payload: Dict[str, Any],
 ) -> bool:
-    """Directly append a context update to a completed session's messages in the database."""
+    """Directly append a context update to a completed session's messages in the database.
+    
+    For completed sessions, we insert the context update after the last bot message
+    with tool calls, placing it logically at the end of the investigation.
+    """
     try:
         from utils.db.connection_pool import db_pool
         
@@ -89,37 +93,14 @@ def _append_context_update_to_completed_session(
                 if isinstance(messages, str):
                     messages = json.loads(messages)
                 
-                # Find the correct insertion position based on timestamp
+                # Find the last bot message with tool calls and insert after it
+                # This places the context update after the investigation tool calls
                 insert_index = len(messages)
-                update_ts = datetime.fromisoformat(injected_at.replace("Z", "+00:00"))
-                
-                for idx, msg in enumerate(messages):
-                    msg_ts_str = None
-                    # Check toolCalls timestamps first
-                    tool_calls = msg.get("toolCalls") or []
-                    if tool_calls:
-                        ts_values = []
-                        for tc in tool_calls:
-                            tc_ts = tc.get("timestamp")
-                            if tc_ts:
-                                try:
-                                    ts_values.append(datetime.fromisoformat(tc_ts.replace("Z", "+00:00")))
-                                except Exception:
-                                    pass
-                        if ts_values:
-                            msg_ts = min(ts_values)
-                            if msg_ts > update_ts:
-                                insert_index = idx
-                                break
-                    # Fallback to message timestamp
-                    elif msg.get("timestamp"):
-                        try:
-                            msg_ts = datetime.fromisoformat(msg["timestamp"].replace("Z", "+00:00"))
-                            if msg_ts > update_ts:
-                                insert_index = idx
-                                break
-                        except Exception:
-                            pass
+                for idx in range(len(messages) - 1, -1, -1):
+                    msg = messages[idx]
+                    if msg.get("sender") == "bot" and msg.get("toolCalls"):
+                        insert_index = idx + 1
+                        break
                 
                 # Insert at the correct position
                 messages.insert(insert_index, context_update_message)
@@ -283,6 +264,8 @@ def apply_rca_context_updates(state: Any) -> Optional[SystemMessage]:
 
     try:
         if hasattr(state, "messages") and isinstance(state.messages, list):
+            # Record the message index BEFORE appending (this is where the update logically belongs)
+            injection_index = len(state.messages)
             state.messages.append(update_message)
             # Store a UI update payload to be injected into tool calls during UI conversion.
             # This avoids forcing a new message to appear at the top of the tool call list.
@@ -292,6 +275,7 @@ def apply_rca_context_updates(state: Any) -> Optional[SystemMessage]:
                 "tool_call_id": tool_call_id,
                 "content": content,
                 "injected_at": injected_at,
+                "injection_index": injection_index,  # Track LLM message index for UI positioning
                 "update_count": len(updates),
                 "source": "pagerduty" if len(updates) == 1 else "multiple",
             }
