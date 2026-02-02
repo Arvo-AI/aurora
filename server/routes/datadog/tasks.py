@@ -9,13 +9,23 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from celery_config import celery_app
+from services.correlation.alert_correlator import AlertCorrelator
 
 logger = logging.getLogger(__name__)
 
 
 def _summarize_event(payload: Dict[str, Any]) -> str:
-    title = payload.get("title") or payload.get("event_title") or payload.get("event", {}).get("title") or "Datadog Event"
-    event_type = payload.get("event_type") or payload.get("alert_type") or payload.get("alert_transition", {}).get("new_status")
+    title = (
+        payload.get("title")
+        or payload.get("event_title")
+        or payload.get("event", {}).get("title")
+        or "Datadog Event"
+    )
+    event_type = (
+        payload.get("event_type")
+        or payload.get("alert_type")
+        or payload.get("alert_transition", {}).get("new_status")
+    )
     status = payload.get("status") or payload.get("alert_type") or payload.get("state")
     monitor_id = payload.get("monitor_id") or payload.get("alert_id")
     parts = [title]
@@ -37,27 +47,29 @@ def _safe_json_dump(data: Dict[str, Any]) -> str:
 
 def _should_trigger_background_chat(user_id: str, payload: Dict[str, Any]) -> bool:
     """Determine if a background chat should be triggered for this alert.
-    
+
     Args:
         user_id: The user ID receiving the alert
         payload: The Datadog alert payload
-    
+
     Returns:
         True if a background chat should be triggered
     """
     # Check user preference for automated RCA
     # from utils.auth.stateless_auth import get_user_preference
     # rca_enabled = get_user_preference(user_id, "automated_rca_enabled", default=False)
-    # 
+    #
     # if not rca_enabled:
     #     logger.debug("[DATADOG] Skipping background RCA - disabled in user preferences for user %s", user_id)
     #     return False
-    
+
     # Always trigger RCA for any webhook received
     return True
 
 
-def _build_rca_prompt_from_alert(payload: Dict[str, Any], user_id: Optional[str] = None) -> str:
+def _build_rca_prompt_from_alert(
+    payload: Dict[str, Any], user_id: Optional[str] = None
+) -> str:
     """Build an RCA analysis prompt from a Datadog alert payload.
 
     Args:
@@ -67,8 +79,18 @@ def _build_rca_prompt_from_alert(payload: Dict[str, Any], user_id: Optional[str]
     Returns:
         A prompt string for the background chat agent
     """
-    title = payload.get("title") or payload.get("event_title") or payload.get("event", {}).get("title") or "Unknown Alert"
-    status = payload.get("status") or payload.get("state") or payload.get("alert_type") or "unknown"
+    title = (
+        payload.get("title")
+        or payload.get("event_title")
+        or payload.get("event", {}).get("title")
+        or "Unknown Alert"
+    )
+    status = (
+        payload.get("status")
+        or payload.get("state")
+        or payload.get("alert_type")
+        or "unknown"
+    )
     event_type = payload.get("event_type") or payload.get("alert_type") or "unknown"
 
     # Extract scope/tags for context
@@ -81,7 +103,12 @@ def _build_rca_prompt_from_alert(payload: Dict[str, Any], user_id: Optional[str]
     monitor_name = payload.get("monitor_name") or title
 
     # Extract message/description
-    message = payload.get("body") or payload.get("message") or payload.get("event", {}).get("text") or ""
+    message = (
+        payload.get("body")
+        or payload.get("message")
+        or payload.get("event", {}).get("text")
+        or ""
+    )
 
     # Build the prompt parts
     prompt_parts = [
@@ -102,8 +129,11 @@ def _build_rca_prompt_from_alert(payload: Dict[str, Any], user_id: Optional[str]
     # Add Aurora Learn context if available
     try:
         from chat.background.rca_prompt_builder import inject_aurora_learn_context
+
         # Extract service from tags if available
-        service = next((tag.split(":", 1)[1] for tag in tags if tag.startswith("service:")), "")
+        service = next(
+            (tag.split(":", 1)[1] for tag in tags if tag.startswith("service:")), ""
+        )
         inject_aurora_learn_context(prompt_parts, user_id, title, service, "datadog")
     except Exception as e:
         logger.warning(f"[AURORA LEARN] Failed to get context: {e}")
@@ -113,44 +143,51 @@ def _build_rca_prompt_from_alert(payload: Dict[str, Any], user_id: Optional[str]
 
 def _extract_severity(payload: Dict[str, Any]) -> str:
     """Extract severity from Datadog event payload.
-    
+
     Datadog uses $ALERT_TYPE for severity indication:
     - error: critical severity
-    - warning: high severity  
+    - warning: high severity
     - info: low severity
     - success: low severity
     """
-    alert_type = payload.get('alert_type', '').lower()
-    if alert_type == 'error':
-        return 'critical'
-    elif alert_type == 'warning':
-        return 'high'
-    elif alert_type in ('info', 'success'):
-        return 'low'
-    
-    return 'unknown'
+    alert_type = payload.get("alert_type", "").lower()
+    if alert_type == "error":
+        return "critical"
+    elif alert_type == "warning":
+        return "high"
+    elif alert_type in ("info", "success"):
+        return "low"
+
+    return "unknown"
 
 
 def _extract_service(payload: Dict[str, Any]) -> str:
     """Extract service name from Datadog payload."""
     # Try various fields
-    tags = payload.get('tags', [])
-    
+    tags = payload.get("tags", [])
+
     # Handle tags as string (comma-separated) or list
     if isinstance(tags, str):
-        tags = [t.strip() for t in tags.split(',')]
-    
+        tags = [t.strip() for t in tags.split(",")]
+
     for tag in tags:
-        if isinstance(tag, str) and tag.startswith('service:'):
-            return tag.split(':', 1)[1][:255]
-    
+        if isinstance(tag, str) and tag.startswith("service:"):
+            return tag.split(":", 1)[1][:255]
+
     # Fallback to hostname or service field, but NOT title (to avoid duplication)
-    service = payload.get('hostname') or payload.get('host') or payload.get('service')
-    return str(service)[:255] if service else 'unknown'
+    service = payload.get("hostname") or payload.get("host") or payload.get("service")
+    return str(service)[:255] if service else "unknown"
 
 
-@celery_app.task(bind=True, max_retries=3, default_retry_delay=30, name="datadog.process_event")
-def process_datadog_event(self, payload: Dict[str, Any], metadata: Optional[Dict[str, Any]] = None, user_id: Optional[str] = None) -> None:
+@celery_app.task(
+    bind=True, max_retries=3, default_retry_delay=30, name="datadog.process_event"
+)
+def process_datadog_event(
+    self,
+    payload: Dict[str, Any],
+    metadata: Optional[Dict[str, Any]] = None,
+    user_id: Optional[str] = None,
+) -> None:
     """Background processor for Datadog webhook payloads."""
     received_at = datetime.now(timezone.utc)
     summary = _summarize_event(payload)
@@ -165,8 +202,14 @@ def process_datadog_event(self, payload: Dict[str, Any], metadata: Optional[Dict
         from utils.db.connection_pool import db_pool
 
         event_type = payload.get("event_type") or payload.get("alert_type")
-        event_title = payload.get("title") or payload.get("event_title") or payload.get("event", {}).get("title")
-        status = payload.get("status") or payload.get("state") or payload.get("alert_type")
+        event_title = (
+            payload.get("title")
+            or payload.get("event_title")
+            or payload.get("event", {}).get("title")
+        )
+        status = (
+            payload.get("status") or payload.get("state") or payload.get("alert_type")
+        )
         scope = payload.get("scope") or payload.get("event", {}).get("scope")
 
         with db_pool.get_admin_connection() as conn:
@@ -190,40 +233,126 @@ def process_datadog_event(self, payload: Dict[str, Any], metadata: Optional[Dict
                 event_result = cursor.fetchone()
                 event_id = event_result[0] if event_result else None
                 conn.commit()
-                
+
                 if not event_id:
-                    logger.error("[DATADOG][WEBHOOK] Failed to get event_id for user %s", user_id)
+                    logger.error(
+                        "[DATADOG][WEBHOOK] Failed to get event_id for user %s", user_id
+                    )
                     return
-                    
+
                 logger.info("[DATADOG][WEBHOOK] Stored event for user %s", user_id)
-                
+
                 # Create incident record
                 severity = _extract_severity(payload)
                 service = _extract_service(payload)
-                
+
                 # Build alert metadata with Datadog-specific fields
                 alert_metadata = {}
-                if payload.get('alert_id') or payload.get('id'):
-                    alert_metadata['alertId'] = str(payload.get('alert_id') or payload.get('id'))
-                if payload.get('metric'):
-                    alert_metadata['metric'] = payload.get('metric')
-                if payload.get('query'):
-                    alert_metadata['query'] = payload.get('query')
-                hostname = payload.get('hostname') or payload.get('host')
+                if payload.get("alert_id") or payload.get("id"):
+                    alert_metadata["alertId"] = str(
+                        payload.get("alert_id") or payload.get("id")
+                    )
+                if payload.get("metric"):
+                    alert_metadata["metric"] = payload.get("metric")
+                if payload.get("query"):
+                    alert_metadata["query"] = payload.get("query")
+                hostname = payload.get("hostname") or payload.get("host")
                 if hostname:
-                    alert_metadata['hostname'] = hostname
-                tags = payload.get('tags') or payload.get('scope')
+                    alert_metadata["hostname"] = hostname
+                tags = payload.get("tags") or payload.get("scope")
                 if tags:
-                    alert_metadata['tags'] = tags
-                if payload.get('body') or payload.get('message'):
-                    alert_metadata['message'] = payload.get('body') or payload.get('message')
-                if payload.get('link') or payload.get('url'):
-                    alert_metadata['alertUrl'] = payload.get('link') or payload.get('url')
-                if payload.get('priority'):
-                    alert_metadata['priority'] = payload.get('priority')
-                if payload.get('snapshot'):
-                    alert_metadata['snapshotUrl'] = payload.get('snapshot')
-                
+                    alert_metadata["tags"] = tags
+                if payload.get("body") or payload.get("message"):
+                    alert_metadata["message"] = payload.get("body") or payload.get(
+                        "message"
+                    )
+                if payload.get("link") or payload.get("url"):
+                    alert_metadata["alertUrl"] = payload.get("link") or payload.get(
+                        "url"
+                    )
+                if payload.get("priority"):
+                    alert_metadata["priority"] = payload.get("priority")
+                if payload.get("snapshot"):
+                    alert_metadata["snapshotUrl"] = payload.get("snapshot")
+
+                try:
+                    correlator = AlertCorrelator()
+                    correlation_result = correlator.correlate(
+                        cursor=cursor,
+                        user_id=user_id,
+                        source_type="datadog",
+                        source_alert_id=event_id,
+                        alert_title=event_title,
+                        alert_service=service,
+                        alert_severity=severity,
+                        alert_metadata=alert_metadata,
+                    )
+
+                    if correlation_result.is_correlated:
+                        incident_id = correlation_result.incident_id
+                        cursor.execute(
+                            """INSERT INTO incident_alerts
+                               (incident_id, source_type, source_alert_id, alert_title, alert_service,
+                                alert_severity, correlation_strategy, correlation_score,
+                                correlation_details, alert_metadata)
+                               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                            (
+                                incident_id,
+                                "datadog",
+                                event_id,
+                                event_title,
+                                service,
+                                severity,
+                                correlation_result.strategy,
+                                correlation_result.score,
+                                json.dumps(correlation_result.details),
+                                json.dumps(alert_metadata),
+                            ),
+                        )
+                        cursor.execute(
+                            """UPDATE incidents
+                               SET correlated_alert_count = correlated_alert_count + 1,
+                                   affected_services = CASE
+                                       WHEN NOT (%s = ANY(affected_services)) THEN array_append(affected_services, %s)
+                                       ELSE affected_services
+                                   END,
+                                   updated_at = CURRENT_TIMESTAMP
+                               WHERE id = %s""",
+                            (service, service, incident_id),
+                        )
+                        conn.commit()
+
+                        try:
+                            from routes.incidents_sse import (
+                                broadcast_incident_update_to_user_connections,
+                            )
+
+                            broadcast_incident_update_to_user_connections(
+                                user_id,
+                                {
+                                    "type": "alert_correlated",
+                                    "incident_id": str(incident_id),
+                                    "source": "datadog",
+                                    "alert_title": event_title,
+                                    "correlation_score": correlation_result.score,
+                                },
+                            )
+                        except Exception as e:
+                            logger.warning("[DATADOG] Failed to notify SSE: %s", e)
+
+                        logger.info(
+                            "[DATADOG] Alert correlated to incident %s (score=%.2f, strategy=%s)",
+                            incident_id,
+                            correlation_result.score,
+                            correlation_result.strategy,
+                        )
+                        return
+                except Exception as corr_exc:
+                    logger.warning(
+                        "[DATADOG] Correlation check failed, proceeding with normal flow: %s",
+                        corr_exc,
+                    )
+
                 cursor.execute(
                     """
                     INSERT INTO incidents 
@@ -240,67 +369,136 @@ def process_datadog_event(self, payload: Dict[str, Any], metadata: Optional[Dict
                     RETURNING id
                     """,
                     (
-                        user_id, 'datadog', event_id, event_title, service,
-                        severity, 'investigating', received_at, json.dumps(alert_metadata)
-                    )
+                        user_id,
+                        "datadog",
+                        event_id,
+                        event_title,
+                        service,
+                        severity,
+                        "investigating",
+                        received_at,
+                        json.dumps(alert_metadata),
+                    ),
                 )
                 incident_row = cursor.fetchone()
                 incident_id = incident_row[0] if incident_row else None
                 conn.commit()
-                
+
+                try:
+                    cursor.execute(
+                        """INSERT INTO incident_alerts
+                           (incident_id, source_type, source_alert_id, alert_title, alert_service,
+                            alert_severity, correlation_strategy, correlation_score, alert_metadata)
+                           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                        (
+                            incident_id,
+                            "datadog",
+                            event_id,
+                            event_title,
+                            service,
+                            severity,
+                            "primary",
+                            1.0,
+                            json.dumps(alert_metadata),
+                        ),
+                    )
+                    cursor.execute(
+                        "UPDATE incidents SET affected_services = ARRAY[%s] WHERE id = %s AND affected_services = '{}'",
+                        (service, incident_id),
+                    )
+                    conn.commit()
+                except Exception as e:
+                    logger.warning("[DATADOG] Failed to record primary alert: %s", e)
+
                 if incident_id:
-                    logger.info("[DATADOG][WEBHOOK] Created incident %s for event %s", incident_id, event_id)
-                    
+                    logger.info(
+                        "[DATADOG][WEBHOOK] Created incident %s for event %s",
+                        incident_id,
+                        event_id,
+                    )
+
                     # Notify SSE connections about incident update
                     try:
-                        from routes.incidents_sse import broadcast_incident_update_to_user_connections
-                        broadcast_incident_update_to_user_connections(user_id, {
-                            'type': 'incident_update',
-                            'incident_id': str(incident_id),
-                            'source': 'datadog',
-                        })
+                        from routes.incidents_sse import (
+                            broadcast_incident_update_to_user_connections,
+                        )
+
+                        broadcast_incident_update_to_user_connections(
+                            user_id,
+                            {
+                                "type": "incident_update",
+                                "incident_id": str(incident_id),
+                                "source": "datadog",
+                            },
+                        )
                     except Exception as e:
                         logger.warning(f"[DATADOG][WEBHOOK] Failed to notify SSE: {e}")
-                    
+
                     # Trigger summary generation
                     from chat.background.summarization import generate_incident_summary
+
                     generate_incident_summary.delay(
                         incident_id=str(incident_id),
                         user_id=user_id,
-                        source_type='datadog',
-                        alert_title=event_title or 'Unknown Event',
+                        source_type="datadog",
+                        alert_title=event_title or "Unknown Event",
                         severity=severity,
                         service=service,
                         raw_payload=payload,
                         alert_metadata=alert_metadata,
                     )
-                    
+
                     # Trigger background chat for RCA if enabled
                     if _should_trigger_background_chat(user_id, payload):
                         try:
-                            from chat.background.task import run_background_chat, create_background_chat_session, is_background_chat_allowed
+                            from chat.background.task import (
+                                run_background_chat,
+                                create_background_chat_session,
+                                is_background_chat_allowed,
+                            )
+
                             if not is_background_chat_allowed(user_id):
-                                logger.info("[DATADOG][WEBHOOK] Skipping background RCA - rate limited for user %s", user_id)
+                                logger.info(
+                                    "[DATADOG][WEBHOOK] Skipping background RCA - rate limited for user %s",
+                                    user_id,
+                                )
                             else:
                                 session_id = create_background_chat_session(
                                     user_id=user_id,
                                     title=f"RCA: {event_title or 'Datadog Alert'}",
-                                    trigger_metadata={"source": "datadog", "monitor_id": payload.get("monitor_id") or payload.get("alert_id"), "status": status},
+                                    trigger_metadata={
+                                        "source": "datadog",
+                                        "monitor_id": payload.get("monitor_id")
+                                        or payload.get("alert_id"),
+                                        "status": status,
+                                    },
                                 )
-                                
+
                                 # Build simple RCA prompt with Aurora Learn context injection
-                                rca_prompt = _build_rca_prompt_from_alert(payload, user_id=user_id)
-                                
+                                rca_prompt = _build_rca_prompt_from_alert(
+                                    payload, user_id=user_id
+                                )
+
                                 run_background_chat.delay(
                                     user_id=user_id,
                                     session_id=session_id,
                                     initial_message=rca_prompt,
-                                    trigger_metadata={"source": "datadog", "monitor_id": payload.get("monitor_id") or payload.get("alert_id"), "status": status},
+                                    trigger_metadata={
+                                        "source": "datadog",
+                                        "monitor_id": payload.get("monitor_id")
+                                        or payload.get("alert_id"),
+                                        "status": status,
+                                    },
                                     incident_id=str(incident_id),
                                 )
-                                logger.info("[DATADOG][WEBHOOK] Triggered background RCA for session %s", session_id)
+                                logger.info(
+                                    "[DATADOG][WEBHOOK] Triggered background RCA for session %s",
+                                    session_id,
+                                )
                         except Exception as e:
-                            logger.error("[DATADOG][WEBHOOK] Failed to trigger RCA: %s", e)
+                            logger.error(
+                                "[DATADOG][WEBHOOK] Failed to trigger RCA: %s", e
+                            )
 
     except Exception as exc:
         logger.exception("[DATADOG][WEBHOOK] Failed to process webhook payload")
