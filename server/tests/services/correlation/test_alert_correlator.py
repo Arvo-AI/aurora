@@ -14,43 +14,47 @@ from services.correlation.alert_correlator import AlertCorrelator, CorrelationRe
 
 _NOW = datetime(2026, 2, 1, 12, 0, 0, tzinfo=timezone.utc)
 
+# Matches the 7-column SELECT:
+# id, alert_title, alert_service, affected_services, correlated_alert_count,
+# started_at, updated_at
 _CANDIDATE_ROW = (
-    "inc-uuid-001",  # id
-    "High CPU on api",  # alert_title
-    "api-server",  # alert_service
-    _NOW - timedelta(seconds=60),  # updated_at
+    "inc-uuid-001",
+    "High CPU on api",
+    "api-server",
+    ["api-server"],
+    3,
+    _NOW - timedelta(hours=1),
+    _NOW - timedelta(seconds=60),
 )
 
 
-def _make_cursor(rows=None, group_count=0):
-    """Return a mock cursor that yields *rows* for the first SELECT and
-    *group_count* for the incident_alerts COUNT query."""
-    cursor = MagicMock(name="cursor")
-
-    # We need to handle multiple execute() calls:
-    #   1st: candidate incidents query
-    #   2nd (optional): incident_alerts COUNT
-    call_count = {"n": 0}
-    original_rows = rows if rows is not None else []
-
-    def _fetchall():
-        return original_rows
-
-    def _fetchone():
-        # Called for the COUNT(*) query
-        return (group_count,)
-
-    cursor.fetchall = _fetchall
-    cursor.fetchone = _fetchone
-    return cursor
+def _make_candidate_row(
+    id="inc-uuid-001",
+    title="High CPU on api",
+    service="api-server",
+    affected=None,
+    count=3,
+    started_at=None,
+    updated_at=None,
+):
+    return (
+        id,
+        title,
+        service,
+        affected if affected is not None else [service],
+        count,
+        started_at or _NOW - timedelta(hours=1),
+        updated_at or _NOW - timedelta(seconds=60),
+    )
 
 
-def _make_cursor_multi(candidate_rows, group_count=0):
-    """Cursor that returns candidate_rows on fetchall, group_count on fetchone."""
+def _make_cursor(candidate_rows):
     cursor = MagicMock(name="cursor")
     cursor.fetchall.return_value = candidate_rows
-    cursor.fetchone.return_value = (group_count,)
     return cursor
+
+
+_ALERT_META = {"received_at": _NOW}
 
 
 # ---------------------------------------------------------------------------
@@ -70,10 +74,25 @@ _CLEAN_ENV = {
 
 
 def _env(**overrides):
-    """Return env dict with overrides applied."""
     env = dict(_CLEAN_ENV)
     env.update(overrides)
     return env
+
+
+def _call_correlate(correlator, cursor, **overrides):
+    """Call correlate() with sensible defaults; override any kwarg."""
+    kwargs = dict(
+        cursor=cursor,
+        user_id="user-1",
+        source_type="grafana",
+        source_alert_id=42,
+        alert_title="High CPU on api",
+        alert_service="api-server",
+        alert_severity="critical",
+        alert_metadata=_ALERT_META,
+    )
+    kwargs.update(overrides)
+    return correlator.correlate(**kwargs)
 
 
 # ---------------------------------------------------------------------------
@@ -82,8 +101,6 @@ def _env(**overrides):
 
 
 class TestCorrelationResult:
-    """Basic sanity checks for the dataclass."""
-
     def test_defaults(self):
         r = CorrelationResult(is_correlated=False)
         assert r.is_correlated is False
@@ -105,27 +122,16 @@ class TestCorrelationResult:
 
 
 class TestAlertCorrelatorNoCandidates:
-    """When no open incidents exist, correlation should not match."""
-
     @patch.dict("os.environ", _CLEAN_ENV, clear=False)
     def test_no_candidates_returns_not_correlated(self):
         correlator = AlertCorrelator()
-        cursor = _make_cursor_multi(candidate_rows=[])
-        result = correlator.correlate(
-            cursor=cursor,
-            user_id="user-1",
-            alert_title="High CPU",
-            alert_service="api-server",
-            alert_severity="critical",
-            alert_received_at=_NOW,
-        )
+        cursor = _make_cursor(candidate_rows=[])
+        result = _call_correlate(correlator, cursor)
         assert result.is_correlated is False
         assert result.incident_id is None
 
 
 class TestAlertCorrelatorAboveThreshold:
-    """When strategies produce a combined score above the threshold."""
-
     @patch.dict("os.environ", _CLEAN_ENV, clear=False)
     @patch("services.correlation.alert_correlator.TopologyStrategy")
     @patch("services.correlation.alert_correlator.TimeWindowStrategy")
@@ -133,25 +139,14 @@ class TestAlertCorrelatorAboveThreshold:
     def test_above_threshold_returns_correlated(
         self, MockSimilarity, MockTimeWindow, MockTopology
     ):
-        # Configure strategy mocks to return high scores
         MockTopology.return_value.score.return_value = 0.9
         MockTimeWindow.return_value.score.return_value = 0.8
         MockSimilarity.return_value.score.return_value = 0.7
 
         correlator = AlertCorrelator()
-        cursor = _make_cursor_multi(
-            candidate_rows=[_CANDIDATE_ROW],
-            group_count=5,
-        )
+        cursor = _make_cursor(candidate_rows=[_CANDIDATE_ROW])
 
-        result = correlator.correlate(
-            cursor=cursor,
-            user_id="user-1",
-            alert_title="High CPU on api",
-            alert_service="api-server",
-            alert_severity="critical",
-            alert_received_at=_NOW,
-        )
+        result = _call_correlate(correlator, cursor)
 
         # weighted = 0.5*0.9 + 0.3*0.8 + 0.2*0.7 = 0.45+0.24+0.14 = 0.83
         assert result.is_correlated is True
@@ -160,8 +155,6 @@ class TestAlertCorrelatorAboveThreshold:
 
 
 class TestAlertCorrelatorBelowThreshold:
-    """When strategies produce a combined score below the threshold."""
-
     @patch.dict("os.environ", _CLEAN_ENV, clear=False)
     @patch("services.correlation.alert_correlator.TopologyStrategy")
     @patch("services.correlation.alert_correlator.TimeWindowStrategy")
@@ -169,21 +162,19 @@ class TestAlertCorrelatorBelowThreshold:
     def test_below_threshold_returns_not_correlated(
         self, MockSimilarity, MockTimeWindow, MockTopology
     ):
-        # Low scores → weighted below 0.6
         MockTopology.return_value.score.return_value = 0.1
         MockTimeWindow.return_value.score.return_value = 0.2
         MockSimilarity.return_value.score.return_value = 0.1
 
         correlator = AlertCorrelator()
-        cursor = _make_cursor_multi(candidate_rows=[_CANDIDATE_ROW])
+        cursor = _make_cursor(candidate_rows=[_CANDIDATE_ROW])
 
-        result = correlator.correlate(
-            cursor=cursor,
-            user_id="user-1",
+        result = _call_correlate(
+            correlator,
+            cursor,
             alert_title="Disk full",
             alert_service="storage",
             alert_severity="warning",
-            alert_received_at=_NOW,
         )
 
         # weighted = 0.5*0.1 + 0.3*0.2 + 0.2*0.1 = 0.05+0.06+0.02 = 0.13
@@ -191,8 +182,6 @@ class TestAlertCorrelatorBelowThreshold:
 
 
 class TestAlertCorrelatorShadowMode:
-    """Shadow mode logs but returns not-correlated."""
-
     @patch.dict("os.environ", _env(CORRELATION_SHADOW_MODE="true"), clear=False)
     @patch("services.correlation.alert_correlator.TopologyStrategy")
     @patch("services.correlation.alert_correlator.TimeWindowStrategy")
@@ -205,27 +194,14 @@ class TestAlertCorrelatorShadowMode:
         MockSimilarity.return_value.score.return_value = 0.9
 
         correlator = AlertCorrelator()
-        cursor = _make_cursor_multi(
-            candidate_rows=[_CANDIDATE_ROW],
-            group_count=5,
-        )
+        cursor = _make_cursor(candidate_rows=[_CANDIDATE_ROW])
 
-        result = correlator.correlate(
-            cursor=cursor,
-            user_id="user-1",
-            alert_title="High CPU on api",
-            alert_service="api-server",
-            alert_severity="critical",
-            alert_received_at=_NOW,
-        )
+        result = _call_correlate(correlator, cursor)
 
-        # High scores but shadow → not correlated
         assert result.is_correlated is False
 
 
 class TestAlertCorrelatorStrategyException:
-    """A strategy raising an exception should not crash the orchestrator."""
-
     @patch.dict("os.environ", _CLEAN_ENV, clear=False)
     @patch("services.correlation.alert_correlator.TopologyStrategy")
     @patch("services.correlation.alert_correlator.TimeWindowStrategy")
@@ -233,28 +209,17 @@ class TestAlertCorrelatorStrategyException:
     def test_strategy_exception_degrades_gracefully(
         self, MockSimilarity, MockTimeWindow, MockTopology
     ):
-        # Topology raises, others return decent scores
         MockTopology.return_value.score.side_effect = RuntimeError("memgraph down")
         MockTimeWindow.return_value.score.return_value = 0.9
         MockSimilarity.return_value.score.return_value = 0.9
 
         correlator = AlertCorrelator()
-        cursor = _make_cursor_multi(
-            candidate_rows=[_CANDIDATE_ROW],
-            group_count=2,
-        )
+        cursor = _make_cursor(candidate_rows=[_CANDIDATE_ROW])
 
-        result = correlator.correlate(
-            cursor=cursor,
-            user_id="user-1",
-            alert_title="High CPU on api",
-            alert_service="api-server",
-            alert_severity="critical",
-            alert_received_at=_NOW,
-        )
+        result = _call_correlate(correlator, cursor)
 
         # weighted = 0.5*0.0 + 0.3*0.9 + 0.2*0.9 = 0+0.27+0.18 = 0.45
-        # 0.45 < 0.6 threshold → not correlated
+        # 0.45 < 0.6 threshold
         assert result.is_correlated is False
 
     @patch.dict("os.environ", _CLEAN_ENV, clear=False)
@@ -264,34 +229,21 @@ class TestAlertCorrelatorStrategyException:
     def test_strategy_exception_with_high_remaining_scores(
         self, MockSimilarity, MockTimeWindow, MockTopology
     ):
-        """Even with one strategy failing, high remaining scores can pass threshold."""
         MockTopology.return_value.score.side_effect = RuntimeError("boom")
         MockTimeWindow.return_value.score.return_value = 1.0
         MockSimilarity.return_value.score.return_value = 1.0
 
         correlator = AlertCorrelator()
-        cursor = _make_cursor_multi(
-            candidate_rows=[_CANDIDATE_ROW],
-            group_count=2,
-        )
+        cursor = _make_cursor(candidate_rows=[_CANDIDATE_ROW])
 
-        result = correlator.correlate(
-            cursor=cursor,
-            user_id="user-1",
-            alert_title="High CPU on api",
-            alert_service="api-server",
-            alert_severity="critical",
-            alert_received_at=_NOW,
-        )
+        result = _call_correlate(correlator, cursor)
 
         # weighted = 0.5*0.0 + 0.3*1.0 + 0.2*1.0 = 0+0.3+0.2 = 0.5
-        # 0.5 < 0.6 → still not correlated
+        # 0.5 < 0.6
         assert result.is_correlated is False
 
 
 class TestAlertCorrelatorMaxGroupSize:
-    """When an incident already has max alerts, skip it."""
-
     @patch.dict("os.environ", _env(CORRELATION_MAX_GROUP_SIZE="5"), clear=False)
     @patch("services.correlation.alert_correlator.TopologyStrategy")
     @patch("services.correlation.alert_correlator.TimeWindowStrategy")
@@ -304,73 +256,73 @@ class TestAlertCorrelatorMaxGroupSize:
         MockSimilarity.return_value.score.return_value = 0.9
 
         correlator = AlertCorrelator()
-        # group_count >= max_group_size (5)
-        cursor = _make_cursor_multi(
-            candidate_rows=[_CANDIDATE_ROW],
-            group_count=5,
-        )
+        # correlated_alert_count=5 matches max_group_size=5 → blocked
+        row = _make_candidate_row(count=5)
+        cursor = _make_cursor(candidate_rows=[row])
 
-        result = correlator.correlate(
-            cursor=cursor,
-            user_id="user-1",
-            alert_title="High CPU on api",
-            alert_service="api-server",
-            alert_severity="critical",
-            alert_received_at=_NOW,
-        )
+        result = _call_correlate(correlator, cursor)
 
         assert result.is_correlated is False
 
 
 class TestAlertCorrelatorDisabled:
-    """When CORRELATION_ENABLED is false, always return not-correlated."""
-
     @patch.dict("os.environ", _env(CORRELATION_ENABLED="false"), clear=False)
     def test_disabled_returns_not_correlated(self):
         correlator = AlertCorrelator()
         cursor = MagicMock()
 
-        result = correlator.correlate(
-            cursor=cursor,
-            user_id="user-1",
-            alert_title="High CPU",
-            alert_service="api-server",
-            alert_severity="critical",
-            alert_received_at=_NOW,
-        )
+        result = _call_correlate(correlator, cursor)
 
         assert result.is_correlated is False
-        # Should not even query for candidates
         cursor.execute.assert_not_called()
 
 
 class TestAlertCorrelatorUnexpectedError:
-    """Any unexpected error in correlate() returns not-correlated."""
-
     @patch.dict("os.environ", _CLEAN_ENV, clear=False)
     def test_db_error_returns_not_correlated(self):
         correlator = AlertCorrelator()
         cursor = MagicMock()
         cursor.execute.side_effect = RuntimeError("DB connection lost")
 
-        result = correlator.correlate(
-            cursor=cursor,
-            user_id="user-1",
-            alert_title="High CPU",
-            alert_service="api-server",
-            alert_severity="critical",
-            alert_received_at=_NOW,
-        )
+        result = _call_correlate(correlator, cursor)
 
         assert result.is_correlated is False
 
 
-class TestGetCandidateIncidents:
-    """Tests for _get_candidate_incidents helper."""
+class TestResolveReceivedAt:
+    def test_datetime_value(self):
+        ts = datetime(2026, 1, 15, 8, 0, 0, tzinfo=timezone.utc)
+        result = AlertCorrelator._resolve_received_at({"received_at": ts})
+        assert result == ts
 
+    def test_iso_string(self):
+        result = AlertCorrelator._resolve_received_at(
+            {"received_at": "2026-01-15T08:00:00+00:00"}
+        )
+        assert result == datetime(2026, 1, 15, 8, 0, 0, tzinfo=timezone.utc)
+
+    def test_iso_string_with_z(self):
+        result = AlertCorrelator._resolve_received_at(
+            {"received_at": "2026-01-15T08:00:00Z"}
+        )
+        assert result == datetime(2026, 1, 15, 8, 0, 0, tzinfo=timezone.utc)
+
+    def test_none_metadata_defaults_to_now(self):
+        before = datetime.now(timezone.utc)
+        result = AlertCorrelator._resolve_received_at(None)
+        after = datetime.now(timezone.utc)
+        assert before <= result <= after
+
+    def test_missing_key_defaults_to_now(self):
+        before = datetime.now(timezone.utc)
+        result = AlertCorrelator._resolve_received_at({"other": "data"})
+        after = datetime.now(timezone.utc)
+        assert before <= result <= after
+
+
+class TestGetCandidateIncidents:
     @patch.dict("os.environ", _CLEAN_ENV, clear=False)
     def test_query_parameters(self):
-        """Verify the SQL query uses correct user_id and cutoff."""
         correlator = AlertCorrelator()
         cursor = MagicMock()
         cursor.fetchall.return_value = []
@@ -385,15 +337,27 @@ class TestGetCandidateIncidents:
         assert "status = 'investigating'" in sql
         assert "updated_at >=" in sql
         assert "LIMIT 20" in sql
+        assert "affected_services" in sql
+        assert "correlated_alert_count" in sql
         assert params[0] == "user-42"
-        # cutoff should be _NOW - 300s
         expected_cutoff = _NOW - timedelta(seconds=300)
         assert params[1] == expected_cutoff
 
+    @patch.dict("os.environ", _CLEAN_ENV, clear=False)
+    def test_null_affected_services_defaults_to_empty_list(self):
+        correlator = AlertCorrelator()
+        cursor = MagicMock()
+        cursor.fetchall.return_value = [
+            ("id-1", "title", "svc", None, None, _NOW, _NOW),
+        ]
+
+        results = correlator._get_candidate_incidents(cursor, "user-1", _NOW)
+
+        assert results[0]["affected_services"] == []
+        assert results[0]["correlated_alert_count"] == 0
+
 
 class TestScoreCandidate:
-    """Tests for _score_candidate helper."""
-
     @patch.dict("os.environ", _CLEAN_ENV, clear=False)
     @patch("services.correlation.alert_correlator.TopologyStrategy")
     @patch("services.correlation.alert_correlator.TimeWindowStrategy")
@@ -410,6 +374,8 @@ class TestScoreCandidate:
             "id": "inc-123",
             "alert_title": "CPU alert",
             "alert_service": "api",
+            "affected_services": ["api", "cache"],
+            "correlated_alert_count": 2,
             "updated_at": _NOW - timedelta(seconds=30),
         }
 
@@ -425,3 +391,40 @@ class TestScoreCandidate:
         assert result.score == pytest.approx(1.0)
         assert result.incident_id == "inc-123"
         assert result.is_correlated is True
+        assert result.details["correlated_alert_count"] == 2
+
+    @patch.dict("os.environ", _CLEAN_ENV, clear=False)
+    @patch("services.correlation.alert_correlator.TopologyStrategy")
+    @patch("services.correlation.alert_correlator.TimeWindowStrategy")
+    @patch("services.correlation.alert_correlator.SimilarityStrategy")
+    def test_falls_back_to_alert_service_when_no_affected(
+        self, MockSimilarity, MockTimeWindow, MockTopology
+    ):
+        MockTopology.return_value.score.return_value = 0.5
+        MockTimeWindow.return_value.score.return_value = 0.5
+        MockSimilarity.return_value.score.return_value = 0.5
+
+        correlator = AlertCorrelator()
+        candidate = {
+            "id": "inc-456",
+            "alert_title": "Disk alert",
+            "alert_service": "storage",
+            "affected_services": [],
+            "correlated_alert_count": 0,
+            "updated_at": _NOW - timedelta(seconds=30),
+        }
+
+        correlator._score_candidate(
+            candidate=candidate,
+            user_id="user-1",
+            alert_title="Disk alert",
+            alert_service="storage",
+            alert_received_at=_NOW,
+        )
+
+        # TopologyStrategy should receive ["storage"] as incident_services
+        MockTopology.return_value.score.assert_called_once_with(
+            "storage",
+            ["storage"],
+            "user-1",
+        )
