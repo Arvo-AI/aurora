@@ -1140,7 +1140,9 @@ class Workflow:
                 continue
         
         # Second pass: Process Tool messages to update existing bot messages
-        # Inject any pending RCA context updates into the closest tool call message.
+        ui_messages = self._associate_tool_calls_with_output(ui_messages, tool_messages)
+        
+        # Inject any pending RCA context updates
         ui_messages = self._inject_rca_context_updates(ui_messages)
 
         return ui_messages
