@@ -232,7 +232,6 @@ class Workflow:
             tool_name = tool_call.get('function', {}).get('name', 'unknown')
             tool_args = tool_call.get('function', {}).get('arguments', '{}')
             tool_call_id = tool_call.get('id', f"{run_id}_{i}")
-            tool_call.setdefault('timestamp', datetime.now().isoformat())
 
             if tool_call_id is None:
                 logger.debug("WORKFLOW: Skipping tool call without id (run_id=%s, index=%s)", run_id, i)
@@ -320,11 +319,6 @@ class Workflow:
         for incoming_tc in tool_calls:
             tc_index = incoming_tc.get('index', 0)
             tc_id = incoming_tc.get('id')
-            if not incoming_tc.get('timestamp'):
-                fallback_ts = None
-                if isinstance(builder.get("additional_kwargs"), dict):
-                    fallback_ts = builder["additional_kwargs"].get("timestamp")
-                incoming_tc["timestamp"] = fallback_ts or datetime.now().isoformat()
             
             # Extract function info (handle both direct and function wrapper formats)
             if 'function' in incoming_tc:
@@ -357,8 +351,6 @@ class Workflow:
                     existing_name = existing_tc.get('name', '')
                     if not existing_name.endswith(tc_name):
                         existing_tc['name'] = existing_name + tc_name
-                if incoming_tc.get("timestamp") and not existing_tc.get("timestamp"):
-                    existing_tc["timestamp"] = incoming_tc.get("timestamp")
             else:
                 # Create new tool call entry
                 # Use the tool call's own ID (tc_id), NOT the message builder's ID
@@ -369,7 +361,6 @@ class Workflow:
                     'name': tc_name,
                     'args': tc_args,
                     'type': incoming_tc.get('type', 'function'),
-                    'timestamp': incoming_tc.get('timestamp'),
                 })
 
     def _clean_tool_calls(self, tool_calls):
@@ -407,17 +398,6 @@ class Workflow:
                 for key in ["confirmation_id", "status", "name", "type"]:
                     if not prev.get(key) and tc.get(key):
                         prev[key] = tc[key]
-                if tc.get("timestamp"):
-                    if not prev.get("timestamp"):
-                        prev["timestamp"] = tc["timestamp"]
-                    else:
-                        try:
-                            prev_ts = datetime.fromisoformat(prev["timestamp"])
-                            tc_ts = datetime.fromisoformat(tc["timestamp"])
-                            if tc_ts < prev_ts:
-                                prev["timestamp"] = tc["timestamp"]
-                        except Exception:
-                            pass
                 
                 deduped_by_id[tc_id_key] = prev
             else:
@@ -1119,28 +1099,20 @@ class Workflow:
                     logger.warning(f"UI CONVERSION: Using fallback tool_calls from additional_kwargs for message ID: {run_id}")
 
                 ui_tool_calls = []
-                msg_timestamp = None
-                if hasattr(msg, "additional_kwargs") and isinstance(msg.additional_kwargs, dict):
-                    msg_timestamp = msg.additional_kwargs.get("timestamp")
                 
                 if tool_calls:
-                    logger.info(f"UI CONVERSION: Adding {len(tool_calls)} tool calls from AIMessage (run_id={run_id})")
                     for tool_call in tool_calls:
                         tool_name = tool_call.get('name') or (tool_call.get('function', {}).get('name'))
                         args_str = tool_call.get('args') or (tool_call.get('function', {}).get('arguments', '{}'))     
                         
                         # Use the consistent tool call ID that matches our agent processing
                         tool_call_id = tool_call.get('id')
-                        logger.info(f"UI CONVERSION: Tool call {tool_name} with ID={tool_call_id} (parent AIMessage run_id={run_id})")
                         
                         try:
                             tool_args = json.loads(args_str) if isinstance(args_str, str) else args_str
                         except json.JSONDecodeError:
                             tool_args = {'raw': args_str}
 
-                        tool_call_timestamp = None
-                        if isinstance(tool_call, dict):
-                            tool_call_timestamp = tool_call.get("timestamp")
                         ui_tool_calls.append({
                             'id': tool_call_id,
                             'run_id': run_id,
@@ -1148,7 +1120,7 @@ class Workflow:
                             'input': json.dumps(tool_args),
                             'output': None,
                             'status': 'running',
-                            'timestamp': tool_call_timestamp or msg_timestamp or datetime.now().isoformat()
+                            'timestamp': datetime.now().isoformat()
                         })
                 
                 ui_message = {
@@ -1157,7 +1129,6 @@ class Workflow:
                     'text': content,
                     'sender': 'bot',
                     'isCompleted': True,
-                    'timestamp': msg_timestamp or datetime.now().isoformat()
                 }
                 if ui_tool_calls:
                     ui_message['toolCalls'] = ui_tool_calls
@@ -1169,24 +1140,13 @@ class Workflow:
                 continue
         
         # Second pass: Process Tool messages to update existing bot messages
-        logger.info(f"UI CONVERSION: Processing {len(tool_messages)} ToolMessages to associate with tool calls")
-        
-        ui_messages = self._associate_tool_calls_with_output(ui_messages, tool_messages)
-
         # Inject any pending RCA context updates into the closest tool call message.
         ui_messages = self._inject_rca_context_updates(ui_messages)
 
-        #logger.info(f"UI CONVERSION: Converted llm_messages: {llm_messages} into ui_messages: {ui_messages}")
-        #logger.info(f"Converted {len(llm_messages)} LLM messages to {len(ui_messages)} UI messages")
         return ui_messages
 
     def _inject_rca_context_updates(self, ui_messages: list) -> list:
-        """Place correlated RCA context updates at the correct chronological position.
-        
-        Context updates arrive during an active RCA investigation. We track the LLM 
-        message index when the update was injected, and use that to place the UI 
-        message at the corresponding position in the conversation.
-        """
+        """Place correlated RCA context updates at the end of the investigation."""
         try:
             if not hasattr(self, "_last_state"):
                 return ui_messages
@@ -1202,7 +1162,6 @@ class Workflow:
             for update in pending_updates:
                 tool_call_id = update.get("tool_call_id")
                 injected_at = update.get("injected_at")
-                injection_index = update.get("injection_index")  # LLM message index when injected
                 content = update.get("content", "")
                 if not tool_call_id:
                     continue
@@ -1241,44 +1200,22 @@ class Workflow:
                     }],
                 }
 
-                # Use injection_index to find the correct position
-                # The injection_index is the LLM message count when the update was injected.
-                # We need to map this to the UI message position.
-                # UI messages roughly correspond to LLM messages, but with some differences:
-                # - User message is always first
-                # - Bot messages with tool calls come from AIMessage with tool_calls
-                # - We skip ToolMessages in UI (they become output on the tool call)
-                # 
-                # A rough heuristic: place the update after UI message at index injection_index // 2
-                # (since each tool interaction is typically AIMessage + ToolMessage = 2 LLM messages)
-                # but maps to 1 UI message.
-                
-                if injection_index is not None:
-                    # Map LLM message index to approximate UI message index
-                    # Each tool call in UI typically corresponds to 2 LLM messages (AI + Tool)
-                    # So divide by 2 to get approximate UI position
-                    # Add 1 to account for the user message at the start
-                    approx_ui_index = max(1, (injection_index // 2) + 1)
-                    insert_index = min(approx_ui_index, len(ui_messages))
-                    logger.info(f"UI CONVERSION: Using injection_index {injection_index} -> UI index {insert_index}")
-                else:
-                    # Fallback: insert after the last bot message with tool calls
-                    insert_index = len(ui_messages)
-                    for idx in range(len(ui_messages) - 1, -1, -1):
-                        msg = ui_messages[idx]
-                        if msg.get("sender") == "bot" and msg.get("toolCalls"):
-                            insert_index = idx + 1
-                            break
+                # Insert after the last bot message with tool calls (most recent investigation step)
+                insert_index = len(ui_messages)
+                for idx in range(len(ui_messages) - 1, -1, -1):
+                    msg = ui_messages[idx]
+                    if msg.get("sender") == "bot" and msg.get("toolCalls"):
+                        insert_index = idx + 1
+                        break
                 
                 ui_messages.insert(insert_index, context_update_message)
-                logger.info(f"UI CONVERSION: Inserted RCA context update at index {insert_index}")
 
             # Renumber all messages after insertion
             for idx, msg in enumerate(ui_messages):
                 msg["message_number"] = idx + 1
 
         except Exception as exc:
-            logger.info("UI CONVERSION: Failed to inject RCA context updates: %s", exc)
+            logger.warning("Failed to inject RCA context updates: %s", exc)
         return ui_messages
     
     def _save_ui_messages(self, session_id: str, user_id: str, ui_messages: list, ui_state: Optional[dict] = None) -> bool:
@@ -1335,14 +1272,10 @@ class Workflow:
                 else:
                     command_matching = tool_content.get('final_command')  # Optional - only for cloud_exec
             except (json.JSONDecodeError, ValueError) as e:
-                logger.warning(f"UI CONVERSION: Failed to parse ToolMessage content as JSON: {e}. Using empty dict.")
                 tool_content = {}
                 command_matching = None
             
-            logger.info(f"UI CONVERSION: Processing ToolMessage with tool_call_id={tool_call_id}, command='{command_matching}'")
-            
             if not tool_call_id:
-                logger.warning(f"UI CONVERSION: Skipping ToolMessage without tool_call_id")
                 continue
                 
             updated = False
@@ -1350,7 +1283,6 @@ class Workflow:
             # Look through ALL UI messages and check if ANY tool call matches the tool_call_id
             # The tool_call_id is "call_xxx", NOT the AIMessage's run_id "run-xxx"
             for ui_msg in ui_messages:
-                logger.debug(f"UI CONVERSION: Processing ui_msg: {ui_msg}")
                 if ui_msg.get('sender') == 'bot' and ui_msg.get('toolCalls'):
                     ui_msg_tool_calls = ui_msg.get('toolCalls', [])
                     
@@ -1365,14 +1297,10 @@ class Workflow:
                                     ui_input = json.loads(tool_call.get('input', '{}'))
                                     command_from_ui = ui_input.get('command')
                                 except (json.JSONDecodeError, AttributeError):
-                                    logger.warning(f"UI CONVERSION: Could not parse command from tool message content: {getattr(msg, 'content', '')}")
                                     pass # Will still update if IDs match
-                                
-                                logger.debug(f"UI CONVERSION DEBUG: Matched tool_call_id {tool_call_id}, comparing commands ->\nCommand matching: {command_matching}\nUI command:   {command_from_ui}")
                                 
                                 # Validate command match if both are present
                                 if command_from_ui and command_matching not in command_from_ui and command_from_ui not in command_matching:
-                                    logger.warning(f"UI CONVERSION: Command mismatch for {tool_call_id}, skipping")
                                     continue
                             
                             # Update the tool call with output (ID match is sufficient)
@@ -1380,14 +1308,10 @@ class Workflow:
                             tool_call['status'] = 'completed'
                             tool_call['timestamp'] = datetime.now().isoformat()  # Update timestamp to completion time
                             updated = True
-                            logger.info(f"UI CONVERSION:Updated tool call {tool_call_id} (tool={tool_call.get('tool_name')}) in UI message {ui_msg['message_number']}")
                             break # Found and updated, stop searching this ui_msg
                     
                     if updated:
                         break
             
-            if not updated:
-                logger.warning(f"UI CONVERSION:Could not find matching tool call for ID: {tool_call_id}")
-
         return ui_messages
         

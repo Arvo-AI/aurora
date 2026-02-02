@@ -22,6 +22,16 @@ interface MessageItemProps {
 export const MessageItem = React.memo(({ message, sendRaw, onUpdateMessage, sessionId, userId, allMessages, messageIndex }: MessageItemProps) => {
   const [copied, setCopied] = useState(false);
 
+  // Helper to sort tool calls by timestamp
+  const sortToolCalls = React.useCallback((toolCalls: any[]) => {
+    if (!toolCalls?.length) return [];
+    return [...toolCalls].sort((a, b) => {
+      const aTime = a.timestamp ? new Date(a.timestamp).getTime() : 0;
+      const bTime = b.timestamp ? new Date(b.timestamp).getTime() : 0;
+      return aTime - bTime;
+    });
+  }, []);
+
   // Simple check: is this the last bot message before a user message?
   const isLastBotMessage = React.useMemo(() => {
     if (message.sender !== "bot" || !allMessages || messageIndex === undefined) {
@@ -31,16 +41,10 @@ export const MessageItem = React.memo(({ message, sendRaw, onUpdateMessage, sess
     return !nextMessage || nextMessage.sender === "user";
   }, [message.sender, allMessages, messageIndex]);
 
-  const sortedToolCalls = React.useMemo(() => {
-    if (!message.toolCalls?.length) {
-      return [];
-    }
-    return [...message.toolCalls].sort((a, b) => {
-      const aTime = a.timestamp ? new Date(a.timestamp).getTime() : 0;
-      const bTime = b.timestamp ? new Date(b.timestamp).getTime() : 0;
-      return aTime - bTime;
-    });
-  }, [message.toolCalls]);
+  const sortedToolCalls = React.useMemo(() => 
+    sortToolCalls(message.toolCalls),
+    [message.toolCalls, sortToolCalls]
+  );
 
   const handleCopy = async () => {
     try {
@@ -72,11 +76,7 @@ export const MessageItem = React.memo(({ message, sendRaw, onUpdateMessage, sess
         
         // Add tool call information
         if (msg.toolCalls && msg.toolCalls.length > 0) {
-          const toolCallsForCopy = [...msg.toolCalls].sort((a, b) => {
-            const aTime = a.timestamp ? new Date(a.timestamp).getTime() : 0;
-            const bTime = b.timestamp ? new Date(b.timestamp).getTime() : 0;
-            return aTime - bTime;
-          });
+          const toolCallsForCopy = sortToolCalls(msg.toolCalls);
           toolCallsForCopy.forEach(tc => {
             textToCopy += `\n\n--- Tool Call: ${tc.tool_name} ---\n`;
             textToCopy += `Input: ${tc.input}\n`;

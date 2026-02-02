@@ -61,17 +61,6 @@ class OpenRouterProvider(BaseLLMProvider):
             "request_timeout": 120.0,
             "max_retries": 3,
         }
-        
-        # Disable Google BYOK fallback to avoid 404 errors when Google API key
-        # doesn't have access to the requested model
-        # This tells OpenRouter to only use the primary provider for the model
-        if "extra_body" not in kwargs:
-            kwargs["extra_body"] = {}
-        if "provider" not in kwargs.get("extra_body", {}):
-            kwargs["extra_body"]["provider"] = {
-                "order": ["Anthropic", "OpenAI"],  # Prefer these providers
-                "allow_fallbacks": False,  # Don't fall back to other providers
-            }
 
         # Add any additional kwargs
         config.update(kwargs)

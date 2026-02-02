@@ -264,39 +264,31 @@ def apply_rca_context_updates(state: Any) -> Optional[SystemMessage]:
 
     try:
         if hasattr(state, "messages") and isinstance(state.messages, list):
-            # Record the message index BEFORE appending (this is where the update logically belongs)
-            injection_index = len(state.messages)
             state.messages.append(update_message)
-            # Store a UI update payload to be injected into tool calls during UI conversion.
-            # This avoids forcing a new message to appear at the top of the tool call list.
+            
+            # Store UI update payload for injection during UI conversion
             tool_call_id = f"rca_context_update_{uuid.uuid4().hex}"
             injected_at = updates[0].get("received_at") if updates else None
             ui_update = {
                 "tool_call_id": tool_call_id,
                 "content": content,
                 "injected_at": injected_at,
-                "injection_index": injection_index,  # Track LLM message index for UI positioning
                 "update_count": len(updates),
                 "source": "pagerduty" if len(updates) == 1 else "multiple",
             }
+            
             if isinstance(state, dict):
-                existing_updates = state.get("rca_ui_updates")
-                if not isinstance(existing_updates, list):
-                    existing_updates = []
+                existing_updates = state.get("rca_ui_updates", [])
                 existing_updates.append(ui_update)
                 state["rca_ui_updates"] = existing_updates
             else:
-                existing_updates = getattr(state, "rca_ui_updates", None)
-                if not isinstance(existing_updates, list):
-                    existing_updates = []
+                existing_updates = getattr(state, "rca_ui_updates", None) or []
                 existing_updates.append(ui_update)
                 setattr(state, "rca_ui_updates", existing_updates)
 
             workflow = get_workflow_context()
             if workflow is not None:
-                wf_updates = getattr(workflow, "_rca_ui_updates", None)
-                if not isinstance(wf_updates, list):
-                    wf_updates = []
+                wf_updates = getattr(workflow, "_rca_ui_updates", None) or []
                 wf_updates.append(ui_update)
                 setattr(workflow, "_rca_ui_updates", wf_updates)
     except Exception as exc:
