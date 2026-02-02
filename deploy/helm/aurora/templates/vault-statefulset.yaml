@@ -36,6 +36,9 @@ spec:
           args: 
             - |
               vault server -config=/vault/config/vault.hcl
+          # Note: Vault typically needs IPC_LOCK capability for mlock (prevents secrets
+          # from being swapped to disk). Since disable_mlock=true in vault.hcl, we can
+          # drop all capabilities. If you enable mlock, add: capabilities.add: ["IPC_LOCK"]
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
