@@ -11,8 +11,13 @@ metadata:
     nginx.ingress.kubernetes.io/proxy-send-timeout: {{ .Values.ingress.nginx.proxySendTimeout | default "3600" | quote }}
     nginx.ingress.kubernetes.io/proxy-body-size: {{ .Values.ingress.nginx.proxyBodySize | default "50m" | quote }}
     nginx.ingress.kubernetes.io/proxy-http-version: {{ .Values.ingress.nginx.proxyHttpVersion | default "1.1" | quote }}
-    {{- with .Values.ingress.nginx.upstreamHashBy }}
-    nginx.ingress.kubernetes.io/upstream-hash-by: {{ . | quote }}
+    {{- if and .Values.ingress.nginx.sessionAffinity .Values.ingress.nginx.sessionAffinity.enabled }}
+    # Cookie-based session affinity for WebSocket sticky sessions
+    # Ensures HTTP upgrade request hits the same pod; once established, WebSocket stays connected
+    nginx.ingress.kubernetes.io/affinity: "cookie"
+    nginx.ingress.kubernetes.io/session-cookie-name: {{ .Values.ingress.nginx.sessionAffinity.cookieName | default "aurora-ws-affinity" | quote }}
+    nginx.ingress.kubernetes.io/session-cookie-max-age: {{ .Values.ingress.nginx.sessionAffinity.cookieMaxAge | default "3600" | quote }}
+    nginx.ingress.kubernetes.io/session-cookie-change-on-failure: "true"
     {{- end }}
     {{- end }}
     {{- if and .Values.ingress.tls.enabled .Values.ingress.tls.certManager.enabled }}

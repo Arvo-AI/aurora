@@ -64,7 +64,7 @@ replicaCounts:
   # Scalable services (can increase for load balancing)
   server: 1          # API server (Flask) - stateless, can scale
   celeryWorker: 2    # Background task workers - stateless, can scale
-  chatbot: 1         # WebSocket chatbot server - stateless, can scale
+  chatbot: 1         # WebSocket chatbot - stateless, can scale (session affinity enabled by default)
   frontend: 1        # Next.js frontend - stateless, can scale
   searxng: 1         # Web search engine - stateless, can scale
   transformers: 1    # ML model service - stateless, can scale
@@ -390,7 +390,12 @@ ingress:
     proxySendTimeout: "3600"
     proxyBodySize: "50m"
     proxyHttpVersion: "1.1"
-    upstreamHashBy: "$remote_addr"  # Session persistence
+    # Cookie-based session affinity for WebSocket connections
+    # Ensures the HTTP upgrade request hits the same pod when scaling chatbot replicas
+    sessionAffinity:
+      enabled: true
+      cookieName: "aurora-ws-affinity"
+      cookieMaxAge: "3600"
   
   # TLS/HTTPS Configuration
   # ------------------------
