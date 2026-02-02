@@ -485,6 +485,7 @@ async def _execute_background_chat(
             selected_project_id=None,
             mode=mode,
             state=state,  # Pass state so incident_id is available in context
+            workflow=wf,  # Pass workflow so RCA context updates can be injected
         )
         logger.info(f"[BackgroundChat] Set user context with mode={mode}, incident_id={incident_id}")
         
