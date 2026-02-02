@@ -14,6 +14,8 @@ from langchain.agents.middleware.types import ModelRequest, ModelResponse
 from langchain_core.messages.utils import trim_messages, count_tokens_approximately
 
 from ..utils.chat_context_manager import ChatContextManager
+from utils.cloud.cloud_utils import get_state_context
+from chat.background.context_updates import apply_rca_context_updates
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +55,16 @@ class ContextTrimMiddleware(AgentMiddleware):
         request: ModelRequest,
         handler: Callable[[ModelRequest], Awaitable[ModelResponse]],
     ) -> ModelResponse:
+        # Inject correlated incident updates into background RCA sessions.
+        state = get_state_context()
+        update_message = apply_rca_context_updates(state)
+        if update_message:
+            try:
+                if not any(getattr(msg, "content", None) == update_message.content for msg in request.messages):
+                    request = request.override(messages=[*request.messages, update_message])
+            except Exception:
+                request = request.override(messages=[*request.messages, update_message])
+
         original_count = len(request.messages)
         estimated_tokens = count_tokens_approximately(request.messages)
 
