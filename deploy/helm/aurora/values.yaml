@@ -153,10 +153,11 @@ config:
   # When enabled, the chart automatically creates:
   #   - Terminal namespace (TERMINAL_NAMESPACE)
   #   - RBAC Role/RoleBindings for server and chatbot to manage terminal pods
+  #   - NetworkPolicy blocking terminal pods from accessing cluster services
+  #     (Vault, Weaviate, Postgres, Redis, etc.) while allowing external internet
   #   - K8s API tokens mounted on server/chatbot pods
   # Optional additional hardening (manual):
   #   - Create RuntimeClass for gVisor/Kata sandboxing (set TERMINAL_RUNTIME_CLASS)
-  #   - Add NetworkPolicies to restrict terminal pod egress
   #   - Taint nodes for untrusted workloads (set USE_UNTRUSTED_NODES)
   TERMINAL_NAMESPACE: "untrusted"            # Namespace for isolated terminal pods
   TERMINAL_IMAGE: ""                         # Image for terminal pods (defaults to aurora-server)
@@ -432,9 +433,9 @@ ingress:
 # cluster. This includes Vault tokens and secrets.
 #
 # MITIGATIONS IN PLACE:
-#   1. NetworkPolicy (vault-networkpolicy.yaml) restricts Vault access to only
-#      trusted Aurora pods (server, chatbot, celery-worker, celery-beat).
-#      Untrusted terminal pods cannot connect to Vault.
+#   1. Terminal pods run in an isolated namespace with a default-deny NetworkPolicy
+#      that blocks all egress to cluster-internal IPs (see pod-isolation.yaml).
+#      Untrusted pods cannot reach Vault, Weaviate, Postgres, Redis, or any other internal services.
 #   2. Terminal pods never receive Vault tokens - credentials are fetched by
 #      trusted pods and injected per-command via environment variables.
 #
