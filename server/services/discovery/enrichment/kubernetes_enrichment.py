@@ -258,8 +258,11 @@ def _extract_service_node(item, cluster):
     if port:
         endpoint = f"{endpoint}:{port}"
 
+    # Prefix with svc/ to avoid ID collision with workloads of the same name
+    svc_name = f"svc/{name}"
+
     node = {
-        "name": name,
+        "name": svc_name,
         "display_name": f"svc/{name} ({namespace})",
         "resource_type": resource_type,
         "sub_type": sub_type,
@@ -274,6 +277,7 @@ def _extract_service_node(item, cluster):
             "ports": ports,
             "selector": spec.get("selector", {}),
             "labels": metadata.get("labels", {}),
+            "k8s_name": name,
         },
     }
 
@@ -367,19 +371,22 @@ def _build_relationships(ingress_backends, service_nodes, workload_nodes, cluste
     """
     relationships = []
 
-    # Index services by (namespace, name) for lookup
+    # Index services by (namespace, k8s_name) for lookup
+    # k8s_name is the original K8s name before svc/ prefixing
     svc_by_key = {}
     for svc in service_nodes:
-        key = (svc.get("namespace"), svc.get("name"))
+        k8s_name = svc.get("metadata", {}).get("k8s_name") or svc.get("name")
+        key = (svc.get("namespace"), k8s_name)
         svc_by_key[key] = svc
 
     # 1. Ingress -> Service edges
     for ingress_name, namespace, backend_svc_names in ingress_backends:
         for svc_name in backend_svc_names:
-            if (namespace, svc_name) in svc_by_key:
+            svc_node = svc_by_key.get((namespace, svc_name))
+            if svc_node:
                 relationships.append({
                     "from_service": ingress_name,
-                    "to_service": svc_name,
+                    "to_service": svc_node.get("name"),
                     "dependency_type": "load_balancer",
                     "confidence": K8S_EDGE_CONFIDENCE,
                     "discovered_from": "kubernetes_ingress",
