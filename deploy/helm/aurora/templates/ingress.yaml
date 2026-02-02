@@ -6,15 +6,20 @@ metadata:
   labels:
     {{- include "aurora.labels" . | nindent 4 }}
   annotations:
-    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
-    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
-    nginx.ingress.kubernetes.io/proxy-body-size: "50m"
-    # HTTP/1.1 for WebSocket support and session persistence
-    nginx.ingress.kubernetes.io/proxy-http-version: "1.1"
-    nginx.ingress.kubernetes.io/upstream-hash-by: "$remote_addr"
+    {{- if and (eq .Values.ingress.className "nginx") (ne .Values.ingress.nginx.enabled false) }}
+    nginx.ingress.kubernetes.io/proxy-read-timeout: {{ .Values.ingress.nginx.proxyReadTimeout | default "3600" | quote }}
+    nginx.ingress.kubernetes.io/proxy-send-timeout: {{ .Values.ingress.nginx.proxySendTimeout | default "3600" | quote }}
+    nginx.ingress.kubernetes.io/proxy-body-size: {{ .Values.ingress.nginx.proxyBodySize | default "50m" | quote }}
+    nginx.ingress.kubernetes.io/proxy-http-version: {{ .Values.ingress.nginx.proxyHttpVersion | default "1.1" | quote }}
+    {{- with .Values.ingress.nginx.upstreamHashBy }}
+    nginx.ingress.kubernetes.io/upstream-hash-by: {{ . | quote }}
+    {{- end }}
+    {{- end }}
     {{- if and .Values.ingress.tls.enabled .Values.ingress.tls.certManager.enabled }}
-    # Automatic certificate management with cert-manager
     cert-manager.io/cluster-issuer: {{ .Values.ingress.tls.certManager.issuer | quote }}
+    {{- end }}
+    {{- with .Values.ingress.annotations }}
+    {{- toYaml . | nindent 4 }}
     {{- end }}
 spec:
   ingressClassName: {{ .Values.ingress.className }}

@@ -361,7 +361,36 @@ persistence:
 #   ws.aurora.example.com  → WebSocket Server
 ingress:
   enabled: true
-  className: "nginx"   # Use your ingress controller class
+  className: "nginx"   # Use your ingress controller class (nginx, traefik, alb, gce, etc.)
+  
+  # Custom annotations - merged with controller-specific defaults below
+  # Use this to add your own annotations or override defaults
+  annotations: {}
+  #   kubernetes.io/ingress.global-static-ip-name: "my-ip"
+  #   external-dns.alpha.kubernetes.io/hostname: "example.com"
+  
+  # Controller-specific annotations (auto-applied based on className)
+  # ----------------------------------------------------------------
+  # These are critical for Aurora's functionality:
+  #   - proxy-read-timeout: 3600s - Required for long-running RCA analysis (240 agent iterations can take 30+ minutes)
+  #   - proxy-http-version: 1.1 - Required for WebSocket upgrade
+  #   - proxy-body-size: 50m - Required for file uploads
+  #
+  # WARNING: If using a non-nginx controller (Traefik, HAProxy, AWS ALB, GCE), 
+  # you MUST configure equivalent settings via ingress.annotations or your
+  # controller's configuration. Without these, you'll experience:
+  #   - WebSocket disconnects after 60s (default timeout)
+  #   - Failed WebSocket connections (HTTP/1.0 doesn't support upgrades)
+  #   - 413 errors on large file uploads
+  #
+  nginx:
+    # Auto-apply nginx annotations when className is "nginx"
+    enabled: true  # Set to false to disable nginx defaults even when className is nginx
+    proxyReadTimeout: "3600"
+    proxySendTimeout: "3600"
+    proxyBodySize: "50m"
+    proxyHttpVersion: "1.1"
+    upstreamHashBy: "$remote_addr"  # Session persistence
   
   # TLS/HTTPS Configuration
   # ------------------------
