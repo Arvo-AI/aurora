@@ -56,6 +56,33 @@ def _should_trigger_background_chat(user_id: str, event_type: str) -> bool:
     return event_type == "incident.triggered"
 
 
+def _extract_correlated_context_target(raw_payload: Dict[str, Any], event_data: Dict[str, Any]) -> Dict[str, Optional[str]]:
+    """Extract correlation hints for RCA context updates.
+    
+    Expected webhook markers (example keys, populated by an external correlator):
+      - correlation.rca_session_id
+      - correlation.aurora_session_id
+      - correlation.incident_id (Aurora incident UUID)
+      - correlated_rca_session_id / correlated_incident_id (top-level)
+    """
+    correlation = raw_payload.get("correlation") or event_data.get("correlation") or {}
+    if not isinstance(correlation, dict):
+        correlation = {}
+
+    return {
+        "rca_session_id": (
+            correlation.get("rca_session_id")
+            or correlation.get("aurora_session_id")
+            or raw_payload.get("correlated_rca_session_id")
+        ),
+        "incident_id": (
+            correlation.get("incident_id")
+            or raw_payload.get("correlated_incident_id")
+        ),
+        "correlation_id": correlation.get("id") or raw_payload.get("correlation_id"),
+    }
+
+
 def _retrieve_incident_number(user_id: str, incident_id: str) -> Optional[int]:
     """Retrieve incident number from PagerDuty API (fallback for V3 events missing number)."""
     from utils.auth.token_management import get_token_data
@@ -509,6 +536,10 @@ def process_pagerduty_event(
                     # Only trigger summary generation and RCA for new incidents (incident.triggered)
                     # For acknowledged/resolved events, we just update the status without regenerating summaries
                     if event_type == "incident.triggered":
+                        correlation = _extract_correlated_context_target(raw_payload, event_data)
+                        correlated_session_id = correlation.get("rca_session_id")
+                        correlated_incident_id = correlation.get("incident_id")
+
                         # Trigger summary generation only for new incidents
                         from chat.background.summarization import generate_incident_summary
                         generate_incident_summary.delay(
@@ -522,8 +553,49 @@ def process_pagerduty_event(
                             alert_metadata=alert_metadata,
                         )
                         
+                        # If correlated, enqueue a context update instead of starting a new RCA
+                        if correlated_session_id or correlated_incident_id:
+                            try:
+                                from chat.background.context_updates import enqueue_rca_context_update
+
+                                session_id_to_update = correlated_session_id
+                                if not session_id_to_update and correlated_incident_id:
+                                    cursor.execute(
+                                        """
+                                        SELECT aurora_chat_session_id
+                                        FROM incidents
+                                        WHERE id = %s AND user_id = %s
+                                        """,
+                                        (correlated_incident_id, user_id),
+                                    )
+                                    row = cursor.fetchone()
+                                    if row and row[0]:
+                                        session_id_to_update = str(row[0])
+
+                                if session_id_to_update:
+                                    enqueue_rca_context_update(
+                                        user_id=user_id,
+                                        session_id=session_id_to_update,
+                                        source="pagerduty",
+                                        payload=raw_payload,
+                                        incident_id=str(incident_db_id),
+                                        event_id=str(event_db_id) if event_db_id else None,
+                                        correlation_id=correlation.get("correlation_id"),
+                                    )
+                                    logger.info(
+                                        "[PAGERDUTY][RCA-UPDATE] Enqueued correlated context update for session %s (incident=%s)",
+                                        session_id_to_update,
+                                        incident_id,
+                                    )
+                                else:
+                                    logger.warning(
+                                        "[PAGERDUTY][RCA-UPDATE] Correlated event received but no target session found (incident_id=%s)",
+                                        correlated_incident_id,
+                                    )
+                            except Exception as e:
+                                logger.warning("[PAGERDUTY][RCA-UPDATE] Failed to enqueue context update: %s", e)
                         # Schedule delayed RCA trigger to wait for potential runbook custom field update
-                        if _should_trigger_background_chat(user_id, event_type):
+                        elif _should_trigger_background_chat(user_id, event_type):
                             logger.info(
                                 "[PAGERDUTY][RCA-DELAYED] Scheduling RCA for incident %s with %d second delay to wait for runbook",
                                 incident_id,
