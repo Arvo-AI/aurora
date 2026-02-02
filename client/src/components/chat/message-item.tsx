@@ -31,6 +31,17 @@ export const MessageItem = React.memo(({ message, sendRaw, onUpdateMessage, sess
     return !nextMessage || nextMessage.sender === "user";
   }, [message.sender, allMessages, messageIndex]);
 
+  const sortedToolCalls = React.useMemo(() => {
+    if (!message.toolCalls?.length) {
+      return [];
+    }
+    return [...message.toolCalls].sort((a, b) => {
+      const aTime = a.timestamp ? new Date(a.timestamp).getTime() : 0;
+      const bTime = b.timestamp ? new Date(b.timestamp).getTime() : 0;
+      return aTime - bTime;
+    });
+  }, [message.toolCalls]);
+
   const handleCopy = async () => {
     try {
       if (!allMessages || messageIndex === undefined) {
@@ -61,7 +72,12 @@ export const MessageItem = React.memo(({ message, sendRaw, onUpdateMessage, sess
         
         // Add tool call information
         if (msg.toolCalls && msg.toolCalls.length > 0) {
-          msg.toolCalls.forEach(tc => {
+          const toolCallsForCopy = [...msg.toolCalls].sort((a, b) => {
+            const aTime = a.timestamp ? new Date(a.timestamp).getTime() : 0;
+            const bTime = b.timestamp ? new Date(b.timestamp).getTime() : 0;
+            return aTime - bTime;
+          });
+          toolCallsForCopy.forEach(tc => {
             textToCopy += `\n\n--- Tool Call: ${tc.tool_name} ---\n`;
             textToCopy += `Input: ${tc.input}\n`;
             if (tc.output) {
@@ -114,9 +130,9 @@ export const MessageItem = React.memo(({ message, sendRaw, onUpdateMessage, sess
       )}
       
       {/* Tool Calls - routed through ToolCallWidget for custom widgets */}
-      {!!message.toolCalls?.length && (
+      {!!sortedToolCalls.length && (
         <div className="mt-3 space-y-2">
-          {message.toolCalls
+          {sortedToolCalls
             .filter(toolCall => toolCall.tool_name !== 'unknown' || (toolCall.input && toolCall.input !== '{}' && JSON.stringify(toolCall.input) !== '{}'))
             .map((toolCall, index) => (
             <ToolCallWidget 

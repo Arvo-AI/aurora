@@ -232,6 +232,7 @@ class Workflow:
             tool_name = tool_call.get('function', {}).get('name', 'unknown')
             tool_args = tool_call.get('function', {}).get('arguments', '{}')
             tool_call_id = tool_call.get('id', f"{run_id}_{i}")
+            tool_call.setdefault('timestamp', datetime.now().isoformat())
 
             if tool_call_id is None:
                 logger.debug("WORKFLOW: Skipping tool call without id (run_id=%s, index=%s)", run_id, i)
@@ -360,7 +361,8 @@ class Workflow:
                     'id': tc_id,  # Use tool call's ID, not message ID
                     'name': tc_name,
                     'args': tc_args,
-                    'type': incoming_tc.get('type', 'function')
+                    'type': incoming_tc.get('type', 'function'),
+                    'timestamp': incoming_tc.get('timestamp'),
                 })
 
     def _clean_tool_calls(self, tool_calls):
@@ -1101,6 +1103,9 @@ class Workflow:
                 ui_tool_calls = []
                 if tool_calls:
                     logger.info(f"UI CONVERSION: Adding {len(tool_calls)} tool calls from AIMessage (run_id={run_id})")
+                    msg_timestamp = None
+                    if hasattr(msg, "additional_kwargs") and isinstance(msg.additional_kwargs, dict):
+                        msg_timestamp = msg.additional_kwargs.get("timestamp")
                     for tool_call in tool_calls:
                         tool_name = tool_call.get('name') or (tool_call.get('function', {}).get('name'))
                         args_str = tool_call.get('args') or (tool_call.get('function', {}).get('arguments', '{}'))     
@@ -1114,6 +1119,9 @@ class Workflow:
                         except json.JSONDecodeError:
                             tool_args = {'raw': args_str}
 
+                        tool_call_timestamp = None
+                        if isinstance(tool_call, dict):
+                            tool_call_timestamp = tool_call.get("timestamp")
                         ui_tool_calls.append({
                             'id': tool_call_id,
                             'run_id': run_id,
@@ -1121,7 +1129,7 @@ class Workflow:
                             'input': json.dumps(tool_args),
                             'output': None,
                             'status': 'running',
-                            'timestamp': datetime.now().isoformat()
+                            'timestamp': tool_call_timestamp or msg_timestamp or datetime.now().isoformat()
                         })
                 
                 ui_message = {
