@@ -57,6 +57,25 @@ spec:
           volumeMounts:
             - name: terraform-workdir
               mountPath: /app/terraform_workdir
+          readinessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - "celery -A celery_config inspect ping -d celery@$HOSTNAME 2>/dev/null | grep -q pong"
+            initialDelaySeconds: 15
+            periodSeconds: 30
+            timeoutSeconds: 10
+          livenessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - "celery -A celery_config inspect ping -d celery@$HOSTNAME 2>/dev/null | grep -q pong"
+            initialDelaySeconds: 30
+            periodSeconds: 60
+            timeoutSeconds: 10
+            failureThreshold: 3
           resources:
             {{- toYaml .Values.resources.celeryWorker | nindent 12 }}
       volumes:
