@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from celery_config import celery_app
+from services.correlation.alert_correlator import AlertCorrelator
 
 logger = logging.getLogger(__name__)
 
@@ -18,12 +19,17 @@ def _should_trigger_background_chat(user_id: str, payload: Dict[str, Any]) -> bo
 
     rca_enabled = get_user_preference(user_id, "splunk_rca_enabled", default=False)
     if not rca_enabled:
-        logger.debug("[SPLUNK] Skipping background RCA - splunk_rca_enabled preference disabled for user %s", user_id)
+        logger.debug(
+            "[SPLUNK] Skipping background RCA - splunk_rca_enabled preference disabled for user %s",
+            user_id,
+        )
         return False
     return True
 
 
-def _build_rca_prompt_from_alert(payload: Dict[str, Any], user_id: Optional[str] = None) -> str:
+def _build_rca_prompt_from_alert(
+    payload: Dict[str, Any], user_id: Optional[str] = None
+) -> str:
     """Build a simple user-visible prompt from a Splunk alert payload.
 
     Note: Detailed RCA instructions are injected via system prompt (rca_context),
@@ -64,8 +70,11 @@ def _build_rca_prompt_from_alert(payload: Dict[str, Any], user_id: Optional[str]
     # Add Aurora Learn context if available
     try:
         from chat.background.rca_prompt_builder import inject_aurora_learn_context
+
         service = payload.get("app") or payload.get("source") or ""
-        inject_aurora_learn_context(prompt_parts, user_id, search_name, service, "splunk")
+        inject_aurora_learn_context(
+            prompt_parts, user_id, search_name, service, "splunk"
+        )
     except Exception as e:
         logger.warning(f"[AURORA LEARN] Failed to get context: {e}")
 
@@ -99,11 +108,11 @@ def _extract_severity(payload: Dict[str, Any]) -> str:
 def _extract_service(payload: Dict[str, Any]) -> str:
     """Extract service name from Splunk payload."""
     service = (
-        payload.get("app") or
-        payload.get("source") or
-        payload.get("sourcetype") or
-        payload.get("search_name") or
-        "unknown"
+        payload.get("app")
+        or payload.get("source")
+        or payload.get("sourcetype")
+        or payload.get("search_name")
+        or "unknown"
     )
     return str(service)[:255]
 
@@ -123,12 +132,14 @@ def _safe_json_dump(data: Dict[str, Any]) -> str:
         return str(data)
 
 
-@celery_app.task(bind=True, max_retries=3, default_retry_delay=30, name="splunk.process_alert")
+@celery_app.task(
+    bind=True, max_retries=3, default_retry_delay=30, name="splunk.process_alert"
+)
 def process_splunk_alert(
     self,
     payload: Dict[str, Any],
     metadata: Optional[Dict[str, Any]] = None,
-    user_id: Optional[str] = None
+    user_id: Optional[str] = None,
 ) -> None:
     """Background processor for Splunk alert webhooks."""
     try:
@@ -157,8 +168,12 @@ def process_splunk_alert(
                         alert_title = payload.get("search_name") or payload.get("name")
                         alert_state = "triggered"
                         search_name = payload.get("search_name") or payload.get("name")
-                        search_query = payload.get("search") or payload.get("search_query")
-                        result_count = payload.get("result_count") or payload.get("results_count")
+                        search_query = payload.get("search") or payload.get(
+                            "search_query"
+                        )
+                        result_count = payload.get("result_count") or payload.get(
+                            "results_count"
+                        )
                         severity = _extract_severity(payload)
 
                         cursor.execute(
@@ -179,8 +194,8 @@ def process_splunk_alert(
                                 result_count,
                                 severity,
                                 json.dumps(payload),
-                                received_at
-                            )
+                                received_at,
+                            ),
                         )
                         alert_result = cursor.fetchone()
                         alert_db_id = alert_result[0] if alert_result else None
@@ -188,19 +203,17 @@ def process_splunk_alert(
 
                         if not alert_db_id:
                             conn.rollback()
-                            logger.error("[SPLUNK][ALERT] Failed to get alert_id for user %s", user_id)
+                            logger.error(
+                                "[SPLUNK][ALERT] Failed to get alert_id for user %s",
+                                user_id,
+                            )
                             return
 
-                        logger.debug("[SPLUNK][ALERT] Alert record created (pending commit) for user %s", user_id)
+                        logger.debug(
+                            "[SPLUNK][ALERT] Alert record created (pending commit) for user %s",
+                            user_id,
+                        )
 
-                        # Check if RCA is enabled before creating incident
-                        if not _should_trigger_background_chat(user_id, payload):
-                            # RCA disabled - just commit the alert and return
-                            conn.commit()
-                            logger.info("[SPLUNK][ALERT] Stored alert in database for user %s (RCA disabled, no incident created)", user_id)
-                            return
-
-                        # RCA enabled - create incident record
                         service = _extract_service(payload)
 
                         # Build alert metadata
@@ -213,6 +226,100 @@ def process_splunk_alert(
                             alert_metadata["app"] = payload.get("app")
                         if payload.get("owner"):
                             alert_metadata["owner"] = payload.get("owner")
+
+                        correlation_title = alert_title or "Unknown Alert"
+
+                        try:
+                            correlator = AlertCorrelator()
+                            correlation_result = correlator.correlate(
+                                cursor=cursor,
+                                user_id=user_id,
+                                source_type="splunk",
+                                source_alert_id=alert_db_id,
+                                alert_title=correlation_title,
+                                alert_service=service,
+                                alert_severity=severity,
+                                alert_metadata=alert_metadata,
+                            )
+
+                            if correlation_result.is_correlated:
+                                incident_id = correlation_result.incident_id
+                                cursor.execute(
+                                    """INSERT INTO incident_alerts
+                                       (incident_id, source_type, source_alert_id, alert_title, alert_service,
+                                        alert_severity, correlation_strategy, correlation_score,
+                                        correlation_details, alert_metadata)
+                                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                                    (
+                                        incident_id,
+                                        "splunk",
+                                        alert_db_id,
+                                        correlation_title,
+                                        service,
+                                        severity,
+                                        correlation_result.strategy,
+                                        correlation_result.score,
+                                        json.dumps(correlation_result.details),
+                                        json.dumps(alert_metadata),
+                                    ),
+                                )
+                                cursor.execute(
+                                    """UPDATE incidents
+                                       SET correlated_alert_count = correlated_alert_count + 1,
+                                           affected_services = CASE
+                                               WHEN NOT (%s = ANY(affected_services)) THEN array_append(affected_services, %s)
+                                               ELSE affected_services
+                                           END,
+                                           updated_at = CURRENT_TIMESTAMP
+                                       WHERE id = %s""",
+                                    (service, service, incident_id),
+                                )
+                                conn.commit()
+
+                                try:
+                                    from routes.incidents_sse import (
+                                        broadcast_incident_update_to_user_connections,
+                                    )
+
+                                    broadcast_incident_update_to_user_connections(
+                                        user_id,
+                                        {
+                                            "type": "alert_correlated",
+                                            "incident_id": str(incident_id),
+                                            "source": "splunk",
+                                            "alert_title": alert_title,
+                                            "correlation_score": correlation_result.score,
+                                        },
+                                    )
+                                except Exception as e:
+                                    logger.warning(
+                                        "[SPLUNK] Failed to notify SSE: %s", e
+                                    )
+
+                                logger.info(
+                                    "[SPLUNK] Alert correlated to incident %s (score=%.2f, strategy=%s)",
+                                    incident_id,
+                                    correlation_result.score,
+                                    correlation_result.strategy,
+                                )
+                                return
+                        except Exception as corr_exc:
+                            logger.warning(
+                                "[SPLUNK] Correlation check failed, proceeding with normal flow: %s",
+                                corr_exc,
+                            )
+
+                        # Check if RCA is enabled before creating incident
+                        if not _should_trigger_background_chat(user_id, payload):
+                            # RCA disabled - just commit the alert and return
+                            conn.commit()
+                            logger.info(
+                                "[SPLUNK][ALERT] Stored alert in database for user %s (RCA disabled, no incident created)",
+                                user_id,
+                            )
+                            return
+
+                        # RCA enabled - create incident record
 
                         cursor.execute(
                             """
@@ -230,22 +337,67 @@ def process_splunk_alert(
                             RETURNING id
                             """,
                             (
-                                user_id, "splunk", alert_db_id, alert_title, service,
-                                severity, "investigating", received_at, json.dumps(alert_metadata)
-                            )
+                                user_id,
+                                "splunk",
+                                alert_db_id,
+                                alert_title,
+                                service,
+                                severity,
+                                "investigating",
+                                received_at,
+                                json.dumps(alert_metadata),
+                            ),
                         )
                         incident_row = cursor.fetchone()
                         incident_id = incident_row[0] if incident_row else None
 
                         # Commit both alert and incident atomically
                         conn.commit()
-                        logger.info("[SPLUNK][ALERT] Stored alert and incident in database for user %s", user_id)
+                        logger.info(
+                            "[SPLUNK][ALERT] Stored alert and incident in database for user %s",
+                            user_id,
+                        )
+
+                        try:
+                            cursor.execute(
+                                """INSERT INTO incident_alerts
+                                   (incident_id, source_type, source_alert_id, alert_title, alert_service,
+                                    alert_severity, correlation_strategy, correlation_score, alert_metadata)
+                                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                                (
+                                    incident_id,
+                                    "splunk",
+                                    alert_db_id,
+                                    alert_title,
+                                    service,
+                                    severity,
+                                    "primary",
+                                    1.0,
+                                    json.dumps(alert_metadata),
+                                ),
+                            )
+                            cursor.execute(
+                                "UPDATE incidents SET affected_services = ARRAY[%s] WHERE id = %s AND affected_services = '{}'",
+                                (service, incident_id),
+                            )
+                            conn.commit()
+                        except Exception as e:
+                            logger.warning(
+                                "[SPLUNK] Failed to record primary alert: %s", e
+                            )
 
                     if incident_id:
-                        logger.info("[SPLUNK][ALERT] Created incident %s for alert %s", incident_id, alert_db_id)
+                        logger.info(
+                            "[SPLUNK][ALERT] Created incident %s for alert %s",
+                            incident_id,
+                            alert_db_id,
+                        )
 
                         # Trigger summary generation
-                        from chat.background.summarization import generate_incident_summary
+                        from chat.background.summarization import (
+                            generate_incident_summary,
+                        )
+
                         generate_incident_summary.delay(
                             incident_id=str(incident_id),
                             user_id=user_id,
@@ -256,16 +408,22 @@ def process_splunk_alert(
                             raw_payload=payload,
                             alert_metadata=alert_metadata,
                         )
-                        logger.info("[SPLUNK][ALERT] Triggered summary generation for incident %s", incident_id)
+                        logger.info(
+                            "[SPLUNK][ALERT] Triggered summary generation for incident %s",
+                            incident_id,
+                        )
                         try:
                             from chat.background.task import (
                                 run_background_chat,
                                 create_background_chat_session,
-                                is_background_chat_allowed
+                                is_background_chat_allowed,
                             )
 
                             if not is_background_chat_allowed(user_id):
-                                logger.info("[SPLUNK][ALERT] Skipping background RCA - rate limited for user %s", user_id)
+                                logger.info(
+                                    "[SPLUNK][ALERT] Skipping background RCA - rate limited for user %s",
+                                    user_id,
+                                )
                             else:
                                 chat_title = f"RCA: {alert_title or 'Splunk Alert'}"
                                 session_id = create_background_chat_session(
@@ -279,7 +437,9 @@ def process_splunk_alert(
                                 )
 
                                 # Build simple RCA prompt with Aurora Learn context injection
-                                rca_prompt = _build_rca_prompt_from_alert(payload, user_id=user_id)
+                                rca_prompt = _build_rca_prompt_from_alert(
+                                    payload, user_id=user_id
+                                )
 
                                 run_background_chat.delay(
                                     user_id=user_id,
@@ -290,17 +450,29 @@ def process_splunk_alert(
                                         "alert_id": alert_id,
                                         "alert_title": alert_title,
                                     },
-                                    incident_id=str(incident_id) if incident_id else None,
+                                    incident_id=str(incident_id)
+                                    if incident_id
+                                    else None,
                                 )
-                                logger.info("[SPLUNK][ALERT] Triggered background RCA chat for session %s", session_id)
+                                logger.info(
+                                    "[SPLUNK][ALERT] Triggered background RCA chat for session %s",
+                                    session_id,
+                                )
 
                         except Exception as chat_exc:
-                            logger.exception("[SPLUNK][ALERT] Failed to trigger background chat: %s", chat_exc)
+                            logger.exception(
+                                "[SPLUNK][ALERT] Failed to trigger background chat: %s",
+                                chat_exc,
+                            )
 
             except Exception as db_exc:
-                logger.exception("[SPLUNK][ALERT] Failed to store alert in database: %s", db_exc)
+                logger.exception(
+                    "[SPLUNK][ALERT] Failed to store alert in database: %s", db_exc
+                )
         else:
-            logger.warning("[SPLUNK][ALERT] No user_id provided, alert not stored in database")
+            logger.warning(
+                "[SPLUNK][ALERT] No user_id provided, alert not stored in database"
+            )
 
     except Exception as exc:
         logger.exception("[SPLUNK][ALERT] Failed to process alert payload")
