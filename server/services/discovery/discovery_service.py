@@ -17,6 +17,7 @@ from services.discovery.providers import (
     ovh_discovery,
     scaleway_discovery,
     tailscale_discovery,
+    kubectl_discovery,
 )
 from services.discovery.enrichment import (
     kubernetes_enrichment,
@@ -36,6 +37,7 @@ PROVIDER_MODULES = {
     "ovh": ovh_discovery,
     "scaleway": scaleway_discovery,
     "tailscale": tailscale_discovery,
+    "kubectl": kubectl_discovery,
 }
 
 
@@ -63,6 +65,10 @@ def _setup_provider_env(provider_name, user_id, credentials):
         setup_scaleway_environment_isolated,
         setup_tailscale_environment_isolated,
     )
+
+    # kubectl uses the chatbot internal API, no subprocess env needed
+    if provider_name == "kubectl":
+        return None, credentials
 
     try:
         if provider_name == "gcp":
@@ -215,8 +221,9 @@ def run_discovery_for_user(user_id, connected_providers):
     logger.info(f"[Discovery] Phase 2 starting for user {user_id}")
     enrichment_data = {}
 
-    # Kubernetes enrichment (for discovered clusters)
-    k8s_clusters = [n for n in all_nodes if n.get("resource_type") == "kubernetes_cluster"]
+    # Kubernetes enrichment (for cloud-managed clusters only — kubectl clusters
+    # already have their internals discovered in Phase 1)
+    k8s_clusters = [n for n in all_nodes if n.get("resource_type") == "kubernetes_cluster" and n.get("provider") != "kubectl"]
     if k8s_clusters:
         try:
             k8s_result = kubernetes_enrichment.enrich(user_id, k8s_clusters, connected_providers)

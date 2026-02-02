@@ -8,6 +8,7 @@ export const GRAPH_DISCOVERY_PROVIDERS = [
   "ovh",
   "scaleway",
   "tailscale",
+  "kubectl",
 ] as const;
 
 /** Trigger a full graph discovery run for the user. */

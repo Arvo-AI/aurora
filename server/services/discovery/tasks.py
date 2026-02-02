@@ -9,7 +9,7 @@ from celery_config import celery_app
 
 logger = logging.getLogger(__name__)
 
-SUPPORTED_PROVIDERS = ('gcp', 'aws', 'azure', 'ovh', 'scaleway', 'tailscale')
+SUPPORTED_PROVIDERS = ('gcp', 'aws', 'azure', 'ovh', 'scaleway', 'tailscale', 'kubectl')
 
 
 def _clear_discovery_lock(user_id):
@@ -235,9 +235,27 @@ def run_user_discovery(self, user_id):
             root_row = cur.fetchone()
             root_project = root_row[0] if root_row and root_row[0] else None
 
+        # Query active kubectl clusters for this user
+        cur.execute("""
+            SELECT c.cluster_id, t.cluster_name
+            FROM active_kubectl_connections c
+            JOIN kubectl_agent_tokens t ON c.token = t.token
+            WHERE t.user_id = %s AND t.status = 'active' AND c.status = 'active'
+        """, (user_id,))
+        kubectl_rows = cur.fetchall()
+
         # Close DB connection BEFORE calling setup functions that also use the pool
         cur.close()
         conn.close()
+
+        # Add kubectl provider if there are active clusters
+        if kubectl_rows:
+            clusters = [
+                {"cluster_id": row[0], "cluster_name": row[1] or row[0]}
+                for row in kubectl_rows
+            ]
+            providers["kubectl"] = {"clusters": clusters}
+            logger.info(f"[Discovery Task] Found {len(clusters)} active kubectl clusters for user {user_id}")
 
         if "gcp" in providers:
             # Wait for GCP post-auth setup to finish (API enablement, SA propagation)

@@ -40,6 +40,10 @@ export default function ManageKubectlClustersPage() {
       const data = await res.json();
       const conns = data.connections || [];
       setConnections(conns);
+      // Trigger graph discovery if there are active clusters
+      if (conns.some((c: Connection) => c.status === 'active')) {
+        localStorage.setItem("aurora_graph_discovery_trigger", "1");
+      }
     } catch (error) {
       console.error('Error loading connections:', error);
       toast({
