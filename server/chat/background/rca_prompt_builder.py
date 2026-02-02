@@ -551,6 +551,75 @@ def build_rca_prompt(
         if similar_context:
             prompt_parts.append(similar_context)
 
+    # AIOpsLab Benchmark Mode: Add submit tool instructions
+    # Check both environment variable and incident metadata for benchmark flag
+    is_benchmark = (
+        os.getenv("AIOPSLAB_BENCHMARK_MODE") == "true" or
+        (incident_data and incident_data.get("alert_metadata", {}).get("benchmark") == True)
+    )
+    
+    if is_benchmark:
+        # Determine cluster type from environment
+        cluster_type = os.getenv("AIOPSLAB_CLUSTER_TYPE", "kind")  # "kind" or "gke"
+        
+        kubectl_instructions = ""
+        if cluster_type == "kind":
+            kubectl_instructions = """
+## KUBERNETES ACCESS (Kind Cluster):
+Use `terminal_exec` tool for kubectl commands:
+- Get pods: terminal_exec('kubectl get pods -n NAMESPACE')
+- Describe pod: terminal_exec('kubectl describe pod POD_NAME -n NAMESPACE')
+- Get logs: terminal_exec('kubectl logs POD_NAME -n NAMESPACE --tail=100')
+- Get events: terminal_exec('kubectl get events -n NAMESPACE --sort-by=.lastTimestamp')
+- Check services: terminal_exec('kubectl get svc -n NAMESPACE')
+"""
+        else:  # gke
+            kubectl_instructions = """
+## KUBERNETES ACCESS (GKE Cluster):
+Use `cloud_exec` tool with provider='gcp':
+- Get pods: cloud_exec('gcp', 'kubectl get pods -n NAMESPACE')
+- Describe pod: cloud_exec('gcp', 'kubectl describe pod POD_NAME -n NAMESPACE')
+- Get logs: cloud_exec('gcp', 'kubectl logs POD_NAME -n NAMESPACE --tail=100')
+- Get events: cloud_exec('gcp', 'kubectl get events -n NAMESPACE --sort-by=.lastTimestamp')
+- Check services: cloud_exec('gcp', 'kubectl get svc -n NAMESPACE')
+"""
+        
+        prompt_parts.extend([
+            "",
+            "## ⚡ BENCHMARK MODE - SUBMIT RCA RESULT:",
+            "",
+            kubectl_instructions,
+            "",
+            "You have access to a special tool: `submit_rca_result()`",
+            "",
+            "**When you identify the root cause, IMMEDIATELY call:**",
+            "```",
+            "submit_rca_result(",
+            "    system_level=\"<Hardware|Operating System|Virtualization|Application>\",",
+            "    fault_type=\"<Misconfiguration|Code Defect|Authentication Issue|Network/Storage Issue|Operation Error|Dependency Problem>\",",
+            "    reasoning=\"<your detailed analysis>\"",
+            ")",
+            "```",
+            "",
+            "**System Level Classification:**",
+            "- Hardware: Physical hardware issues (CPU, memory, disk failures)",
+            "- Operating System: OS-level issues (kernel, system services, patches)",
+            "- Virtualization: Container/K8s layer (pod failures, resource limits, image issues, service configs)",
+            "- Application: Application code/logic issues (bugs, exceptions, incorrect logic)",
+            "",
+            "**Fault Type Classification:**",
+            "- Misconfiguration: Wrong configuration values, incorrect settings",
+            "- Code Defect: Bugs in application code, logic errors",
+            "- Authentication Issue: Auth/permission failures, credential problems",
+            "- Network/Storage Issue: Network connectivity, DNS, storage/volume problems",
+            "- Operation Error: Deployment errors, human mistakes, incorrect commands",
+            "- Dependency Problem: External service failures, API issues, missing dependencies",
+            "",
+            "**CRITICAL**: Calling submit_rca_result() will END the investigation immediately.",
+            "Only call it when you are CONFIDENT in your root cause analysis.",
+            "",
+        ])
+
     # Critical persistence instructions
     prompt_parts.extend([
         "",
@@ -558,9 +627,15 @@ def build_rca_prompt(
         "",
     ])
     
-    # Add aggressive persistence prompts only if cost optimization is disabled
+    # Add aggressive persistence prompts only if cost optimization is disabled AND not in benchmark mode
+    # In benchmark mode, we want Aurora to submit as soon as it's confident, not keep investigating
     # The immediate action required due to the AgentExecutor which assumes agent is done when it sends a text chunk without a tool call.
-    if os.getenv("RCA_OPTIMIZE_COSTS", "").lower() != "true":
+    is_benchmark_mode = (
+        os.getenv("AIOPSLAB_BENCHMARK_MODE") == "true" or
+        (incident_data and incident_data.get("alert_metadata", {}).get("benchmark") == True)
+    )
+    
+    if os.getenv("RCA_OPTIMIZE_COSTS", "").lower() != "true" and not is_benchmark_mode:
         prompt_parts.extend([
             "### PERSISTENCE IS MANDATORY:",
             "- **MINIMUM**: Make AT LEAST 15-20 tool calls before concluding",
@@ -575,6 +650,25 @@ def build_rca_prompt(
             "- **IMMEDIATELY** call the first tool (e.g., `list_gcp_resources` or `kubectl`).",
             "- UNLESS YOU ARE DONE, your response MUST contain a tool call.",
             "- NOT PROVIDING A TOOL CALL WILL END THE INVESTIGATION AUTOMATICALLY",
+            "",
+        ])
+    elif is_benchmark_mode:
+        # Speed-optimized instructions for benchmark mode - find RCA as quickly as possible
+        prompt_parts.extend([
+            "### INVESTIGATION APPROACH (Benchmark Mode - SPEED PRIORITIZED):",
+            "- **GOAL**: Find root cause as QUICKLY as possible with minimum steps",
+            "- **TARGET**: 3-5 kubectl commands maximum before submitting",
+            "- Start with: kubectl get pods -n NAMESPACE (identify failing pods)",
+            "- Then: kubectl describe pod POD_NAME -n NAMESPACE (find errors)",
+            "- Then: kubectl logs POD_NAME -n NAMESPACE --tail=50 (check logs)",
+            "- **SUBMIT EARLY**: As soon as you see clear evidence of root cause, IMMEDIATELY call submit_rca_result()",
+            "- Do NOT over-investigate - speed is more important than exhaustive analysis",
+            "",
+            "### IMMEDIATE ACTION REQUIRED:",
+            "- **DO NOT** output a plan or text explanation first.",
+            "- **IMMEDIATELY** call the first tool to start investigation.",
+            "- UNLESS YOU ARE DONE, your response MUST contain a tool call.",
+            "- **CRITICAL**: When you see the root cause, STOP investigating and submit_rca_result() IMMEDIATELY",
             "",
         ])
     

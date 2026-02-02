@@ -804,6 +804,14 @@ class Workflow:
                 
             logger.info(f"[WORKFLOW STREAM] Completed: {_event_count} events, {_token_count} tokens streamed")
         except Exception as stream_exception:
+            # Check if this is an RCACompletedException from AIOpsLab benchmark
+            from chat.backend.agent.tools.aiopslab_submit_tool import RCACompletedException
+            if isinstance(stream_exception, RCACompletedException):
+                logger.info(f"[AIOPSLAB] RCA completed via submit_rca_result: {stream_exception.result}")
+                # Save result and exit gracefully
+                yield ("rca_completed", stream_exception.result)
+                return
+            # Not an RCA completion - re-raise original exception
             logger.error(f"[WORKFLOW STREAM ERROR] Exception in workflow stream for session {input_state.session_id}: {stream_exception}", exc_info=True)
             raise
         

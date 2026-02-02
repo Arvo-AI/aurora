@@ -83,7 +83,31 @@ def _build_rca_prompt_from_alert(payload: Dict[str, Any], user_id: Optional[str]
     # Extract message/description
     message = payload.get("body") or payload.get("message") or payload.get("event", {}).get("text") or ""
 
-    # Build the prompt parts
+    # Check if this is a benchmark incident (AIOpsLab)
+    is_benchmark = isinstance(tags, list) and 'benchmark:true' in tags
+    
+    if is_benchmark:
+        # For benchmark mode, provide a simple investigation prompt
+        # The system prompt will contain all tool instructions
+        namespace = "test-social-network"  # Default
+        for tag in tags:
+            if isinstance(tag, str) and tag.startswith('namespace:'):
+                namespace = tag.split(':', 1)[1]
+                break
+        
+        prompt_parts = [
+            f"Investigate and perform root cause analysis for the following alert in namespace `{namespace}`:",
+            "",
+            f"**Alert**: {title}",
+            f"**Status**: {status}",
+            f"**Scope**: {scope}",
+            "",
+            "Use the tools available to you to investigate the issue and identify the root cause.",
+            "Submit your findings using the submit_rca_result tool when ready.",
+        ]
+        return "\n".join(prompt_parts)
+
+    # Build the prompt parts (normal RCA mode)
     prompt_parts = [
         "A Datadog alert has been triggered and requires Root Cause Analysis.",
         "",
@@ -215,6 +239,9 @@ def process_datadog_event(self, payload: Dict[str, Any], metadata: Optional[Dict
                 tags = payload.get('tags') or payload.get('scope')
                 if tags:
                     alert_metadata['tags'] = tags
+                    # Check for benchmark tag
+                    if isinstance(tags, list) and 'benchmark:true' in tags:
+                        alert_metadata['benchmark'] = True
                 if payload.get('body') or payload.get('message'):
                     alert_metadata['message'] = payload.get('body') or payload.get('message')
                 if payload.get('link') or payload.get('url'):
@@ -291,14 +318,18 @@ def process_datadog_event(self, payload: Dict[str, Any], metadata: Optional[Dict
                                 # Build simple RCA prompt with Aurora Learn context injection
                                 rca_prompt = _build_rca_prompt_from_alert(payload, user_id=user_id)
                                 
+                                # Use agent mode for benchmark runs to enable tool calls
+                                mode = "agent" if alert_metadata.get("benchmark") else "ask"
+                                
                                 run_background_chat.delay(
                                     user_id=user_id,
                                     session_id=session_id,
                                     initial_message=rca_prompt,
                                     trigger_metadata={"source": "datadog", "monitor_id": payload.get("monitor_id") or payload.get("alert_id"), "status": status},
                                     incident_id=str(incident_id),
+                                    mode=mode,
                                 )
-                                logger.info("[DATADOG][WEBHOOK] Triggered background RCA for session %s", session_id)
+                                logger.info("[DATADOG][WEBHOOK] Triggered background RCA for session %s (mode=%s)", session_id, mode)
                         except Exception as e:
                             logger.error("[DATADOG][WEBHOOK] Failed to trigger RCA: %s", e)
 

@@ -596,16 +596,17 @@ def webhook(user_id: str):
         logger.warning("[DATADOG] Webhook received without user_id")
         return jsonify({"error": "user_id is required"}), 400
 
-    # Check if user has Datadog connected
-    creds = get_token_data(user_id, "datadog")
-    if not creds:
-        logger.warning("[DATADOG] Webhook received for user %s with no Datadog connection", user_id)
-        return jsonify({"error": "Datadog not connected for this user"}), 404
-
-    payload_text = request.get_data(as_text=True) or ""
-    # Webhook signature verification removed for OSS version
-
+    # Check if user has Datadog connected (skip for benchmark mode)
     payload = request.get_json(silent=True) or {}
+    is_benchmark = "benchmark:true" in (payload.get("tags") or [])
+    
+    if not is_benchmark:
+        creds = get_token_data(user_id, "datadog")
+        if not creds:
+            logger.warning("[DATADOG] Webhook received for user %s with no Datadog connection", user_id)
+            return jsonify({"error": "Datadog not connected for this user"}), 404
+    else:
+        logger.info("[DATADOG] Benchmark mode detected - skipping Datadog connection check")
     metadata = {
         "headers": dict(request.headers),
         "remote_addr": request.remote_addr,

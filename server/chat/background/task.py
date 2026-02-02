@@ -140,6 +140,7 @@ def _build_rca_context(
     user_id: str,
     trigger_metadata: Optional[Dict[str, Any]] = None,
     provider_preference: Optional[List[str]] = None,
+    incident_id: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """Build RCA context dict for background chats.
 
@@ -147,7 +148,7 @@ def _build_rca_context(
     RCA instructions into the system prompt (not the user message).
 
     Returns:
-        Dict with source, providers, integrations, etc. or None if not an RCA source.
+        Dict with source, providers, integrations, incident_data, etc. or None if not an RCA source.
     """
     source = (trigger_metadata or {}).get('source', '').lower()
     if source not in _RCA_SOURCES:
@@ -170,11 +171,33 @@ def _build_rca_context(
 
     logger.info(f"[BackgroundChat] User {user_id} has providers: {providers}, integrations: {integrations}")
 
+    # Fetch incident data if incident_id provided (for benchmark mode detection)
+    incident_data = None
+    if incident_id:
+        try:
+            from utils.db.connection_pool import db_pool
+            import json as json_lib
+            with db_pool.get_admin_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT alert_metadata FROM incidents WHERE id = %s",
+                    (incident_id,)
+                )
+                row = cursor.fetchone()
+                if row and row[0]:
+                    alert_metadata = json_lib.loads(row[0]) if isinstance(row[0], str) else row[0]
+                    incident_data = {'alert_metadata': alert_metadata}
+                    if alert_metadata.get('benchmark'):
+                        logger.info(f"[BackgroundChat] Detected benchmark mode for incident {incident_id}")
+        except Exception as e:
+            logger.warning(f"[BackgroundChat] Failed to fetch incident data: {e}")
+
     return {
         'source': source,
         'providers': providers or [],
         'integrations': integrations,
         'trigger_metadata': trigger_metadata,
+        'incident_data': incident_data,
     }
 
 
@@ -321,6 +344,52 @@ def run_background_chat(
                 tool_calls = result.get('tool_calls', [])
                 logger.info(f"[BackgroundChat] Using {len(tool_calls)} tool calls from result for final visualization")
                 
+                # Check for submit_rca_result in final tool calls (benchmark mode)
+                if os.getenv("AIOPSLAB_BENCHMARK_MODE") == "true":
+                    # Check session messages for submit_rca_result call
+                    try:
+                        from utils.db.connection_pool import db_pool
+                        with db_pool.get_admin_connection() as conn:
+                            cursor = conn.cursor()
+                            cursor.execute(
+                                "SELECT messages FROM chat_sessions WHERE id = %s",
+                                (session_id,)
+                            )
+                            row = cursor.fetchone()
+                            if row and row[0]:
+                                messages = row[0]
+                                # Find submit_rca_result call in messages
+                                for msg in messages:
+                                    if isinstance(msg, dict) and msg.get('sender') == 'bot':
+                                        # Check if this message has tool calls
+                                        if 'tool_calls' in str(msg):
+                                            # Parse and look for submit_rca_result
+                                            import re
+                                            match = re.search(r"'name':\s*'submit_rca_result'.*?'args':\s*({[^}]+})", str(msg), re.DOTALL)
+                                            if match:
+                                                logger.info(f"[AIOPSLAB] Found submit_rca_result call in session {session_id}, executing manually...")
+                                                # Extract args and execute
+                                                try:
+                                                    import ast
+                                                    from chat.backend.agent.tools.aiopslab_submit_tool import submit_rca_result
+                                                    # Get the full tool call data
+                                                    full_match = re.search(r"\{'name':\s*'submit_rca_result',\s*'args':\s*(\{[^}]+\})", str(msg))
+                                                    if full_match:
+                                                        args_str = full_match.group(1)
+                                                        args_dict = ast.literal_eval(args_str)
+                                                        logger.info(f"[AIOPSLAB] Executing with args: {args_dict}")
+                                                        submit_rca_result(
+                                                            system_level=args_dict.get('system_level'),
+                                                            fault_type=args_dict.get('fault_type'),
+                                                            reasoning=args_dict.get('reasoning', ''),
+                                                            user_id=user_id,
+                                                            session_id=session_id
+                                                        )
+                                                except Exception as e:
+                                                    logger.error(f"[AIOPSLAB] Failed to manually execute submit_rca_result: {e}", exc_info=True)
+                    except Exception as e:
+                        logger.error(f"[AIOPSLAB] Failed to check for submit_rca_result: {e}")
+                
                 update_visualization.apply_async(kwargs={
                     'incident_id': incident_id,
                     'user_id': user_id,
@@ -440,6 +509,7 @@ async def _execute_background_chat(
             user_id=user_id,
             trigger_metadata=trigger_metadata,
             provider_preference=provider_preference,
+            incident_id=incident_id,  # Pass incident_id for benchmark mode detection
         )
         if rca_context:
             logger.info(f"[BackgroundChat] Built RCA context: source={rca_context.get('source')}, providers={rca_context.get('providers')}")

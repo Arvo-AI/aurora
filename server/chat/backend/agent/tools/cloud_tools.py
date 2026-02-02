@@ -1298,6 +1298,18 @@ def get_cloud_tools():
         args_schema=WebSearchArgs,
     ))
     
+    # Add AIOpsLab RCA submission tool in benchmark mode
+    if os.getenv("AIOPSLAB_BENCHMARK_MODE") == "true":
+        from .aiopslab_submit_tool import submit_rca_result, SubmitRCAArgs, TOOL_DESCRIPTION
+        context_wrapped_rca = with_user_context(submit_rca_result)
+        tools.append(StructuredTool.from_function(
+            func=context_wrapped_rca,
+            name="submit_rca_result",
+            description=TOOL_DESCRIPTION,
+            args_schema=SubmitRCAArgs,
+        ))
+        logging.info("[AIOPSLAB] Registered submit_rca_result tool for benchmark mode")
+    
     tools = ModeAccessController.filter_tools(mode, tools)
     
     # Deduplicate tools by name to prevent "Tool names must be unique" errors with Claude
