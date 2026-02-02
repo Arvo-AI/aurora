@@ -2,10 +2,11 @@
 
 import json
 import logging
+import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from langchain_core.messages import SystemMessage
+from langchain_core.messages import AIMessage, SystemMessage, ToolMessage
 from utils.cache.redis_client import get_redis_client
 
 logger = logging.getLogger(__name__)
@@ -143,6 +144,34 @@ def apply_rca_context_updates(state: Any) -> Optional[SystemMessage]:
     try:
         if hasattr(state, "messages") and isinstance(state.messages, list):
             state.messages.append(update_message)
+            # Also append a visible tool-call style message for UI history.
+            # This makes the update obvious in chat_sessions.messages after completion.
+            tool_call_id = f"rca_context_update_{uuid.uuid4().hex}"
+            tool_args = {
+                "update_count": len(updates),
+                "source": "pagerduty" if len(updates) == 1 else "multiple",
+            }
+            tool_call_msg = AIMessage(
+                content="Received correlated incident context update.",
+                additional_kwargs={
+                    "tool_calls": [
+                        {
+                            "id": tool_call_id,
+                            "function": {
+                                "name": "rca_context_update",
+                                "arguments": json.dumps(tool_args),
+                            },
+                            "type": "function",
+                        }
+                    ]
+                },
+            )
+            tool_result_msg = ToolMessage(
+                content=content,
+                tool_call_id=tool_call_id,
+            )
+            state.messages.append(tool_call_msg)
+            state.messages.append(tool_result_msg)
     except Exception as exc:
         logger.debug("[RCA-UPDATE] Failed to append update to state messages: %s", exc)
 
