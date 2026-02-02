@@ -7,7 +7,6 @@ existing open incident.
 """
 
 import logging
-import os
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
@@ -43,36 +42,53 @@ class CorrelationResult:
 
 
 class AlertCorrelator:
-    """Weighted multi-strategy correlator with shadow-mode support.
-
-    Environment variables (all have sensible defaults):
-        CORRELATION_ENABLED          – master kill-switch (default ``true``)
-        CORRELATION_SHADOW_MODE      – log but never attach (default ``false``)
-        CORRELATION_TIME_WINDOW_SECONDS – lookback for candidate incidents (300)
-        CORRELATION_SCORE_THRESHOLD  – minimum weighted score to attach (0.6)
-        CORRELATION_TOPOLOGY_WEIGHT  – weight for topology strategy (0.5)
-        CORRELATION_TIME_WEIGHT      – weight for time-window strategy (0.3)
-        CORRELATION_SIMILARITY_WEIGHT – weight for similarity strategy (0.2)
-        CORRELATION_MAX_GROUP_SIZE   – max alerts per incident (50)
-    """
+    """Weighted multi-strategy correlator with shadow-mode support."""
 
     _NOT_CORRELATED = CorrelationResult(is_correlated=False)
 
-    def __init__(self) -> None:
-        self.enabled = os.getenv("CORRELATION_ENABLED", "true").lower() == "true"
-        self.shadow_mode = (
-            os.getenv("CORRELATION_SHADOW_MODE", "false").lower() == "true"
+    ENABLED: bool = True
+    SHADOW_MODE: bool = False
+    TIME_WINDOW_SECONDS: int = 300
+    SCORE_THRESHOLD: float = 0.6
+    TOPOLOGY_WEIGHT: float = 0.5
+    TIME_WEIGHT: float = 0.3
+    SIMILARITY_WEIGHT: float = 0.2
+    MAX_GROUP_SIZE: int = 50
+
+    def __init__(
+        self,
+        *,
+        enabled: Optional[bool] = None,
+        shadow_mode: Optional[bool] = None,
+        time_window_seconds: Optional[int] = None,
+        score_threshold: Optional[float] = None,
+        topology_weight: Optional[float] = None,
+        time_weight: Optional[float] = None,
+        similarity_weight: Optional[float] = None,
+        max_group_size: Optional[int] = None,
+    ) -> None:
+        self.enabled = enabled if enabled is not None else self.ENABLED
+        self.shadow_mode = shadow_mode if shadow_mode is not None else self.SHADOW_MODE
+        self.time_window_seconds = (
+            time_window_seconds
+            if time_window_seconds is not None
+            else self.TIME_WINDOW_SECONDS
         )
-        self.time_window_seconds = int(
-            os.getenv("CORRELATION_TIME_WINDOW_SECONDS", "300")
+        self.score_threshold = (
+            score_threshold if score_threshold is not None else self.SCORE_THRESHOLD
         )
-        self.score_threshold = float(os.getenv("CORRELATION_SCORE_THRESHOLD", "0.6"))
-        self.topology_weight = float(os.getenv("CORRELATION_TOPOLOGY_WEIGHT", "0.5"))
-        self.time_weight = float(os.getenv("CORRELATION_TIME_WEIGHT", "0.3"))
-        self.similarity_weight = float(
-            os.getenv("CORRELATION_SIMILARITY_WEIGHT", "0.2")
+        self.topology_weight = (
+            topology_weight if topology_weight is not None else self.TOPOLOGY_WEIGHT
         )
-        self.max_group_size = int(os.getenv("CORRELATION_MAX_GROUP_SIZE", "50"))
+        self.time_weight = time_weight if time_weight is not None else self.TIME_WEIGHT
+        self.similarity_weight = (
+            similarity_weight
+            if similarity_weight is not None
+            else self.SIMILARITY_WEIGHT
+        )
+        self.max_group_size = (
+            max_group_size if max_group_size is not None else self.MAX_GROUP_SIZE
+        )
 
         # Instantiate strategies
         self._topology = TopologyStrategy()
@@ -119,7 +135,7 @@ class AlertCorrelator:
         """
         try:
             if not self.enabled:
-                logger.debug("[CORRELATION] Disabled via CORRELATION_ENABLED")
+                logger.debug("[CORRELATION] Disabled")
                 return self._NOT_CORRELATED
 
             alert_received_at = self._resolve_received_at(alert_metadata)
