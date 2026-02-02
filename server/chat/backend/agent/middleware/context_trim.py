@@ -56,14 +56,18 @@ class ContextTrimMiddleware(AgentMiddleware):
         handler: Callable[[ModelRequest], Awaitable[ModelResponse]],
     ) -> ModelResponse:
         # Inject correlated incident updates into background RCA sessions.
+        # Strategy: Append at the END as the most recent message (highest priority).
+        # Only inject ONCE when the update first arrives.
         state = get_state_context()
         update_message = apply_rca_context_updates(state)
         if update_message:
+            logger.info(f"[ContextTrimMiddleware] Got update_message, appending to END of request")
             try:
-                if not any(getattr(msg, "content", None) == update_message.content for msg in request.messages):
-                    request = request.override(messages=[*request.messages, update_message])
-            except Exception:
+                # Append at end - most recent message has highest priority
                 request = request.override(messages=[*request.messages, update_message])
+                logger.info(f"[ContextTrimMiddleware] ✅ Appended context update to END (now {len(request.messages)} messages)")
+            except Exception as e:
+                logger.warning(f"[ContextTrimMiddleware] Error appending: {e}")
 
         original_count = len(request.messages)
         estimated_tokens = count_tokens_approximately(request.messages)
