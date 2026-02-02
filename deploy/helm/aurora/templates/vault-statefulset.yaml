@@ -15,7 +15,6 @@ spec:
     metadata:
       annotations:
         checksum/config: {{ include (print $.Template.BasePath "/vault-config.yaml") . | sha256sum }}
-        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
       labels:
         app.kubernetes.io/name: {{ include "aurora.name" . }}-vault
         app.kubernetes.io/instance: {{ .Release.Name }}
@@ -53,13 +52,17 @@ spec:
             {{- end }}
           readinessProbe:
             exec:
-              command: ["/bin/sh", "-c", "vault status || exit 0"]
+              command:
+                - /bin/sh
+                - -c
+                - vault status -format=json | grep '"sealed": false'
             initialDelaySeconds: 10
             periodSeconds: 10
           livenessProbe:
-            exec:
-              command: ["/bin/sh", "-c", "vault status || exit 0"]
-            initialDelaySeconds: 20
+            httpGet:
+              path: /v1/sys/health?standbyok=true&sealedcode=200&uninitcode=200
+              port: 8200
+            initialDelaySeconds: 30
             periodSeconds: 20
           resources:
             {{- toYaml .Values.resources.vault | nindent 12 }}
