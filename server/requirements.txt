@@ -86,3 +86,6 @@ paramiko>=3.4.0
 
 # Memgraph graph database driver (Bolt protocol, pure Python)
 neo4j>=5.0
+
+# Testing
+pytest>=7.0
