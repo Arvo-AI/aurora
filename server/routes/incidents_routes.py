@@ -141,6 +141,11 @@ def get_incidents():
                         alert_metadata
                     FROM incidents
                     WHERE user_id = %s
+                      AND (
+                        alert_metadata IS NULL
+                        OR alert_metadata->>'correlated' IS NULL
+                        OR alert_metadata->>'correlated' != 'true'
+                      )
                     ORDER BY started_at DESC
                     LIMIT 100
                     """,
