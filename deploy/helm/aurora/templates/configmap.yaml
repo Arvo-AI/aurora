@@ -5,52 +5,18 @@ metadata:
   labels:
     {{- include "aurora.labels" . | nindent 4 }}
 data:
-  AURORA_ENV: {{ .Values.config.AURORA_ENV | quote }}
+  # Auto-generated service URLs (computed from release name if empty)
   POSTGRES_HOST: {{ default (printf "%s-postgres" (include "aurora.fullname" .)) .Values.config.POSTGRES_HOST | quote }}
-  POSTGRES_PORT: {{ .Values.config.POSTGRES_PORT | quote }}
-  POSTGRES_DB: {{ .Values.config.POSTGRES_DB | quote }}
   REDIS_URL: {{ default (printf "redis://%s-redis:6379/0" (include "aurora.fullname" .)) .Values.config.REDIS_URL | quote }}
-  STORAGE_BUCKET: {{ .Values.config.STORAGE_BUCKET | quote }}
-  STORAGE_ENDPOINT_URL: {{ .Values.config.STORAGE_ENDPOINT_URL | quote }}
-  STORAGE_REGION: {{ .Values.config.STORAGE_REGION | quote }}
-  STORAGE_USE_SSL: {{ .Values.config.STORAGE_USE_SSL | quote }}
-  STORAGE_VERIFY_SSL: {{ .Values.config.STORAGE_VERIFY_SSL | quote }}
-  STORAGE_CACHE_ENABLED: {{ .Values.config.STORAGE_CACHE_ENABLED | quote }}
-  STORAGE_CACHE_TTL: {{ .Values.config.STORAGE_CACHE_TTL | quote }}
   WEAVIATE_HOST: {{ default (printf "%s-weaviate" (include "aurora.fullname" .)) .Values.config.WEAVIATE_HOST | quote }}
-  WEAVIATE_PORT: {{ .Values.config.WEAVIATE_PORT | quote }}
-  WEAVIATE_GRPC_PORT: {{ .Values.config.WEAVIATE_GRPC_PORT | quote }}
-  NEXT_PUBLIC_BACKEND_URL: {{ .Values.config.NEXT_PUBLIC_BACKEND_URL | quote }}
-  NEXT_PUBLIC_WEBSOCKET_URL: {{ .Values.config.NEXT_PUBLIC_WEBSOCKET_URL | quote }}
   BACKEND_URL: {{ default (printf "http://%s-server:5080" (include "aurora.fullname" .)) .Values.config.BACKEND_URL | quote }}
-  FRONTEND_URL: {{ .Values.config.FRONTEND_URL | quote }}
-  FLASK_PORT: {{ .Values.config.FLASK_PORT | quote }}
   CHATBOT_INTERNAL_URL: {{ default (printf "http://%s-chatbot:5007" (include "aurora.fullname" .)) .Values.config.CHATBOT_INTERNAL_URL | quote }}
   VAULT_ADDR: {{ default (printf "http://%s-vault:8200" (include "aurora.fullname" .)) .Values.config.VAULT_ADDR | quote }}
-  VAULT_KV_MOUNT: {{ .Values.config.VAULT_KV_MOUNT | quote }}
-  VAULT_KV_BASE_PATH: {{ .Values.config.VAULT_KV_BASE_PATH | quote }}
-  LLM_PROVIDER_MODE: {{ .Values.config.LLM_PROVIDER_MODE | quote }}
-  AGENT_RECURSION_LIMIT: {{ .Values.config.AGENT_RECURSION_LIMIT | quote }}
   SEARXNG_URL: {{ default (printf "http://%s-searxng:8080" (include "aurora.fullname" .)) .Values.config.SEARXNG_URL | quote }}
-  SEARXNG_BASE_URL: {{ .Values.config.SEARXNG_BASE_URL | quote }}
-  RCA_OPTIMIZE_COSTS: {{ .Values.config.RCA_OPTIMIZE_COSTS | quote }}
-  GEMINI_DISABLE_THINKING: {{ .Values.config.GEMINI_DISABLE_THINKING | quote }}
-  AURORA_SETUP_CACHE_ENABLED: {{ .Values.config.AURORA_SETUP_CACHE_ENABLED | quote }}
-  AURORA_SETUP_CACHE_TTL: {{ .Values.config.AURORA_SETUP_CACHE_TTL | quote }}
-  AURORA_VERIFY_CLI_IDENTITY: {{ .Values.config.AURORA_VERIFY_CLI_IDENTITY | quote }}
-  AURORA_CACHE_TOKEN_IN_REDIS: {{ .Values.config.AURORA_CACHE_TOKEN_IN_REDIS | quote }}
-  RATE_LIMITING_ENABLED: {{ .Values.config.RATE_LIMITING_ENABLED | quote }}
-  RATE_LIMIT_HEADERS_ENABLED: {{ .Values.config.RATE_LIMIT_HEADERS_ENABLED | quote }}
-  ENABLE_POD_ISOLATION: {{ .Values.config.ENABLE_POD_ISOLATION | quote }}
-  NEXT_PUBLIC_ENABLE_OVH: {{ .Values.config.NEXT_PUBLIC_ENABLE_OVH | quote }}
-  NEXT_PUBLIC_ENABLE_SLACK: {{ .Values.config.NEXT_PUBLIC_ENABLE_SLACK | quote }}
-  NEXT_PUBLIC_ENABLE_PAGERDUTY_OAUTH: {{ .Values.config.NEXT_PUBLIC_ENABLE_PAGERDUTY_OAUTH | quote }}
-  NEXT_PUBLIC_ENABLE_CONFLUENCE: {{ .Values.config.NEXT_PUBLIC_ENABLE_CONFLUENCE | quote }}
-  TERMINAL_NAMESPACE: {{ .Values.config.TERMINAL_NAMESPACE | quote }}
-  TERMINAL_IMAGE: {{ .Values.config.TERMINAL_IMAGE | quote }}
-  TERMINAL_POD_TTL: {{ .Values.config.TERMINAL_POD_TTL | quote }}
-  TERMINAL_RUNTIME_CLASS: {{ .Values.config.TERMINAL_RUNTIME_CLASS | quote }}
-  CHATBOT_POD_TTL: {{ .Values.config.CHATBOT_POD_TTL | quote }}
-  USE_UNTRUSTED_NODES: {{ .Values.config.USE_UNTRUSTED_NODES | quote }}
-  NEXT_PUBLIC_KUBECTL_AGENT_CHART_URL: {{ .Values.config.NEXT_PUBLIC_KUBECTL_AGENT_CHART_URL | quote }}
-  NGROK_URL: {{ .Values.config.NGROK_URL | quote }}
+  
+  # All other config values from .Values.config (excluding keys with computed defaults above and NEXT_PUBLIC_*)
+  {{- range $key, $value := .Values.config }}
+  {{- if and (not (hasPrefix "NEXT_PUBLIC_" $key)) (not (has $key (list "POSTGRES_HOST" "REDIS_URL" "WEAVIATE_HOST" "BACKEND_URL" "CHATBOT_INTERNAL_URL" "VAULT_ADDR" "SEARXNG_URL"))) }}
+  {{ $key }}: {{ $value | quote }}
+  {{- end }}
+  {{- end }}
