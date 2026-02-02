@@ -23,7 +23,8 @@ spec:
         app.kubernetes.io/part-of: aurora
     spec:
       serviceAccountName: {{ include "aurora.fullname" . }}-server
-      automountServiceAccountToken: false
+      # Pod isolation requires K8s API access to create terminal pods
+      automountServiceAccountToken: {{ eq .Values.config.ENABLE_POD_ISOLATION "true" }}
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000

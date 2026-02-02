@@ -141,19 +141,30 @@ config:
   AURORA_VERIFY_CLI_IDENTITY: "false"
   
   # --- Optional Features (enable as needed) ---
-  ENABLE_POD_ISOLATION: "false"              # Isolate conversations in separate pods should be true for production
+  ENABLE_POD_ISOLATION: "false"              # Isolate terminal commands in separate pods
   NEXT_PUBLIC_ENABLE_OVH: "false"            # OVH Cloud integration
   NEXT_PUBLIC_ENABLE_SLACK: "false"          # Slack notifications
   NEXT_PUBLIC_ENABLE_PAGERDUTY_OAUTH: "false" # PagerDuty integration
   NEXT_PUBLIC_ENABLE_CONFLUENCE: "false"     # Confluence integration
   
-  # --- Pod Isolation Settings (if enabled) ---
-  TERMINAL_NAMESPACE: "untrusted"
-  TERMINAL_IMAGE: ""
-  TERMINAL_POD_TTL: "3600"
-  TERMINAL_RUNTIME_CLASS: ""  # Kubernetes RuntimeClass for terminal pods. Leave empty for default runtime. Examples: "gvisor" (sandboxing), "kata" (VM isolation)
-  CHATBOT_POD_TTL: "600"
-  USE_UNTRUSTED_NODES: "true"
+  # --- Pod Isolation Settings ---
+  # When enabled, the chart automatically creates:
+  #   - Terminal namespace (TERMINAL_NAMESPACE)
+  #   - RBAC Role/RoleBindings for server and chatbot to manage terminal pods
+  #   - K8s API tokens mounted on server/chatbot pods
+  # Optional additional hardening (manual):
+  #   - Create RuntimeClass for gVisor/Kata sandboxing (set TERMINAL_RUNTIME_CLASS)
+  #   - Add NetworkPolicies to restrict terminal pod egress
+  #   - Taint nodes for untrusted workloads (set USE_UNTRUSTED_NODES)
+  TERMINAL_NAMESPACE: "untrusted"            # Namespace for isolated terminal pods
+  TERMINAL_IMAGE: ""                         # Image for terminal pods (defaults to aurora-server)
+  TERMINAL_POD_TTL: "3600"                   # Terminal pod lifetime in seconds
+  TERMINAL_RUNTIME_CLASS: ""                 # RuntimeClass: "" (default), "gvisor", "kata"
+  CHATBOT_POD_TTL: "600"                     # Chatbot session pod lifetime
+  # Schedule terminal pods only on dedicated nodes (requires manual node setup):
+  #   kubectl label node <node> workload=untrusted
+  #   kubectl taint node <node> workload=untrusted:NoSchedule
+  USE_UNTRUSTED_NODES: "false"
   
   # --- Kubectl Agent (optional) ---
   NEXT_PUBLIC_KUBECTL_AGENT_CHART_URL: ""
