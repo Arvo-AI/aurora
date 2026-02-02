@@ -303,6 +303,8 @@ persistence:
     size: 50Gi           # Vector embeddings storage
   vault:
     size: 10Gi           # Secrets storage
+  redis:
+    size: 5Gi            # Celery task state and cache
 
 # ------------------------------------------------------------------------------
 # Ingress configuration
