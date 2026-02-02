@@ -8,15 +8,8 @@ import pytest
 from services.correlation.alert_correlator import AlertCorrelator, CorrelationResult
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 _NOW = datetime(2026, 2, 1, 12, 0, 0, tzinfo=timezone.utc)
 
-# Matches the 7-column SELECT:
-# id, alert_title, alert_service, affected_services, correlated_alert_count,
-# started_at, updated_at
 _CANDIDATE_ROW = (
     "inc-uuid-001",
     "High CPU on api",
@@ -57,30 +50,7 @@ def _make_cursor(candidate_rows):
 _ALERT_META = {"received_at": _NOW}
 
 
-# ---------------------------------------------------------------------------
-# Environment variable defaults (clean slate)
-# ---------------------------------------------------------------------------
-
-_CLEAN_ENV = {
-    "CORRELATION_ENABLED": "true",
-    "CORRELATION_SHADOW_MODE": "false",
-    "CORRELATION_TIME_WINDOW_SECONDS": "300",
-    "CORRELATION_SCORE_THRESHOLD": "0.6",
-    "CORRELATION_TOPOLOGY_WEIGHT": "0.5",
-    "CORRELATION_TIME_WEIGHT": "0.3",
-    "CORRELATION_SIMILARITY_WEIGHT": "0.2",
-    "CORRELATION_MAX_GROUP_SIZE": "50",
-}
-
-
-def _env(**overrides):
-    env = dict(_CLEAN_ENV)
-    env.update(overrides)
-    return env
-
-
 def _call_correlate(correlator, cursor, **overrides):
-    """Call correlate() with sensible defaults; override any kwarg."""
     kwargs = dict(
         cursor=cursor,
         user_id="user-1",
@@ -93,11 +63,6 @@ def _call_correlate(correlator, cursor, **overrides):
     )
     kwargs.update(overrides)
     return correlator.correlate(**kwargs)
-
-
-# ---------------------------------------------------------------------------
-# Tests
-# ---------------------------------------------------------------------------
 
 
 class TestCorrelationResult:
@@ -122,7 +87,6 @@ class TestCorrelationResult:
 
 
 class TestAlertCorrelatorNoCandidates:
-    @patch.dict("os.environ", _CLEAN_ENV, clear=False)
     def test_no_candidates_returns_not_correlated(self):
         correlator = AlertCorrelator()
         cursor = _make_cursor(candidate_rows=[])
@@ -132,7 +96,6 @@ class TestAlertCorrelatorNoCandidates:
 
 
 class TestAlertCorrelatorAboveThreshold:
-    @patch.dict("os.environ", _CLEAN_ENV, clear=False)
     @patch("services.correlation.alert_correlator.TopologyStrategy")
     @patch("services.correlation.alert_correlator.TimeWindowStrategy")
     @patch("services.correlation.alert_correlator.SimilarityStrategy")
@@ -155,7 +118,6 @@ class TestAlertCorrelatorAboveThreshold:
 
 
 class TestAlertCorrelatorBelowThreshold:
-    @patch.dict("os.environ", _CLEAN_ENV, clear=False)
     @patch("services.correlation.alert_correlator.TopologyStrategy")
     @patch("services.correlation.alert_correlator.TimeWindowStrategy")
     @patch("services.correlation.alert_correlator.SimilarityStrategy")
@@ -182,7 +144,6 @@ class TestAlertCorrelatorBelowThreshold:
 
 
 class TestAlertCorrelatorShadowMode:
-    @patch.dict("os.environ", _env(CORRELATION_SHADOW_MODE="true"), clear=False)
     @patch("services.correlation.alert_correlator.TopologyStrategy")
     @patch("services.correlation.alert_correlator.TimeWindowStrategy")
     @patch("services.correlation.alert_correlator.SimilarityStrategy")
@@ -193,7 +154,7 @@ class TestAlertCorrelatorShadowMode:
         MockTimeWindow.return_value.score.return_value = 0.9
         MockSimilarity.return_value.score.return_value = 0.9
 
-        correlator = AlertCorrelator()
+        correlator = AlertCorrelator(shadow_mode=True)
         cursor = _make_cursor(candidate_rows=[_CANDIDATE_ROW])
 
         result = _call_correlate(correlator, cursor)
@@ -202,7 +163,6 @@ class TestAlertCorrelatorShadowMode:
 
 
 class TestAlertCorrelatorStrategyException:
-    @patch.dict("os.environ", _CLEAN_ENV, clear=False)
     @patch("services.correlation.alert_correlator.TopologyStrategy")
     @patch("services.correlation.alert_correlator.TimeWindowStrategy")
     @patch("services.correlation.alert_correlator.SimilarityStrategy")
@@ -222,7 +182,6 @@ class TestAlertCorrelatorStrategyException:
         # 0.45 < 0.6 threshold
         assert result.is_correlated is False
 
-    @patch.dict("os.environ", _CLEAN_ENV, clear=False)
     @patch("services.correlation.alert_correlator.TopologyStrategy")
     @patch("services.correlation.alert_correlator.TimeWindowStrategy")
     @patch("services.correlation.alert_correlator.SimilarityStrategy")
@@ -244,7 +203,6 @@ class TestAlertCorrelatorStrategyException:
 
 
 class TestAlertCorrelatorMaxGroupSize:
-    @patch.dict("os.environ", _env(CORRELATION_MAX_GROUP_SIZE="5"), clear=False)
     @patch("services.correlation.alert_correlator.TopologyStrategy")
     @patch("services.correlation.alert_correlator.TimeWindowStrategy")
     @patch("services.correlation.alert_correlator.SimilarityStrategy")
@@ -255,8 +213,7 @@ class TestAlertCorrelatorMaxGroupSize:
         MockTimeWindow.return_value.score.return_value = 0.9
         MockSimilarity.return_value.score.return_value = 0.9
 
-        correlator = AlertCorrelator()
-        # correlated_alert_count=5 matches max_group_size=5 → blocked
+        correlator = AlertCorrelator(max_group_size=5)
         row = _make_candidate_row(count=5)
         cursor = _make_cursor(candidate_rows=[row])
 
@@ -266,9 +223,8 @@ class TestAlertCorrelatorMaxGroupSize:
 
 
 class TestAlertCorrelatorDisabled:
-    @patch.dict("os.environ", _env(CORRELATION_ENABLED="false"), clear=False)
     def test_disabled_returns_not_correlated(self):
-        correlator = AlertCorrelator()
+        correlator = AlertCorrelator(enabled=False)
         cursor = MagicMock()
 
         result = _call_correlate(correlator, cursor)
@@ -278,7 +234,6 @@ class TestAlertCorrelatorDisabled:
 
 
 class TestAlertCorrelatorUnexpectedError:
-    @patch.dict("os.environ", _CLEAN_ENV, clear=False)
     def test_db_error_returns_not_correlated(self):
         correlator = AlertCorrelator()
         cursor = MagicMock()
@@ -321,7 +276,6 @@ class TestResolveReceivedAt:
 
 
 class TestGetCandidateIncidents:
-    @patch.dict("os.environ", _CLEAN_ENV, clear=False)
     def test_query_parameters(self):
         correlator = AlertCorrelator()
         cursor = MagicMock()
@@ -343,7 +297,6 @@ class TestGetCandidateIncidents:
         expected_cutoff = _NOW - timedelta(seconds=300)
         assert params[1] == expected_cutoff
 
-    @patch.dict("os.environ", _CLEAN_ENV, clear=False)
     def test_null_affected_services_defaults_to_empty_list(self):
         correlator = AlertCorrelator()
         cursor = MagicMock()
@@ -358,7 +311,6 @@ class TestGetCandidateIncidents:
 
 
 class TestScoreCandidate:
-    @patch.dict("os.environ", _CLEAN_ENV, clear=False)
     @patch("services.correlation.alert_correlator.TopologyStrategy")
     @patch("services.correlation.alert_correlator.TimeWindowStrategy")
     @patch("services.correlation.alert_correlator.SimilarityStrategy")
@@ -387,13 +339,12 @@ class TestScoreCandidate:
             alert_received_at=_NOW,
         )
 
-        # All scores 1.0 → weighted = 0.5+0.3+0.2 = 1.0
+        # All scores 1.0 -> weighted = 0.5+0.3+0.2 = 1.0
         assert result.score == pytest.approx(1.0)
         assert result.incident_id == "inc-123"
         assert result.is_correlated is True
         assert result.details["correlated_alert_count"] == 2
 
-    @patch.dict("os.environ", _CLEAN_ENV, clear=False)
     @patch("services.correlation.alert_correlator.TopologyStrategy")
     @patch("services.correlation.alert_correlator.TimeWindowStrategy")
     @patch("services.correlation.alert_correlator.SimilarityStrategy")
@@ -422,7 +373,6 @@ class TestScoreCandidate:
             alert_received_at=_NOW,
         )
 
-        # TopologyStrategy should receive ["storage"] as incident_services
         MockTopology.return_value.score.assert_called_once_with(
             "storage",
             ["storage"],
