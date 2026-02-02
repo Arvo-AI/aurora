@@ -6,7 +6,6 @@ scoring to decide whether an incoming alert should be attached to an
 existing open incident.
 """
 
-import json
 import logging
 import os
 from dataclasses import dataclass, field
@@ -90,10 +89,12 @@ class AlertCorrelator:
         self,
         cursor,
         user_id: str,
+        source_type: str,
+        source_alert_id: int,
         alert_title: str,
         alert_service: str,
         alert_severity: str,
-        alert_received_at: datetime,
+        alert_metadata: Optional[Dict[str, Any]] = None,
     ) -> CorrelationResult:
         """Attempt to correlate an alert with an existing open incident.
 
@@ -104,10 +105,14 @@ class AlertCorrelator:
         Args:
             cursor: An open ``psycopg2`` cursor.
             user_id: Owner / tenant identifier.
+            source_type: Alert source (e.g. ``grafana``).
+            source_alert_id: Numeric alert ID from the source system.
             alert_title: Title or summary of the incoming alert.
             alert_service: Service name from the alert.
             alert_severity: Severity label (e.g. ``critical``).
-            alert_received_at: Timestamp when the alert was received.
+            alert_metadata: Optional dict with extra alert data.  If it
+                contains a ``received_at`` key the value is used as the
+                alert timestamp (datetime or ISO-8601 string).
 
         Returns:
             CorrelationResult: describes whether (and how) the alert matched.
@@ -116,6 +121,8 @@ class AlertCorrelator:
             if not self.enabled:
                 logger.debug("[CORRELATION] Disabled via CORRELATION_ENABLED")
                 return self._NOT_CORRELATED
+
+            alert_received_at = self._resolve_received_at(alert_metadata)
 
             candidates = self._get_candidate_incidents(
                 cursor,
@@ -159,14 +166,9 @@ class AlertCorrelator:
                 )
                 return self._NOT_CORRELATED
 
-            # Max group-size guard
+            # Max group-size guard (uses denormalised count from incidents row)
             incident_id = best_result.incident_id
-            cursor.execute(
-                "SELECT COUNT(*) FROM incident_alerts WHERE incident_id = %s",
-                (incident_id,),
-            )
-            row = cursor.fetchone()
-            group_count = row[0] if row else 0
+            group_count = best_result.details.get("correlated_alert_count", 0)
             if group_count >= self.max_group_size:
                 logger.warning(
                     "[CORRELATION] Incident %s has %d alerts (max %d), skipping",
@@ -194,6 +196,19 @@ class AlertCorrelator:
     # Internal helpers
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _resolve_received_at(
+        alert_metadata: Optional[Dict[str, Any]],
+    ) -> datetime:
+        """Extract or derive the alert received-at timestamp."""
+        if alert_metadata and "received_at" in alert_metadata:
+            val = alert_metadata["received_at"]
+            if isinstance(val, datetime):
+                return val
+            if isinstance(val, str):
+                return datetime.fromisoformat(val.replace("Z", "+00:00"))
+        return datetime.now(timezone.utc)
+
     def _get_candidate_incidents(
         self,
         cursor,
@@ -208,7 +223,8 @@ class AlertCorrelator:
 
         cursor.execute(
             """
-            SELECT id, alert_title, alert_service, updated_at
+            SELECT id, alert_title, alert_service, affected_services,
+                   correlated_alert_count, started_at, updated_at
             FROM incidents
             WHERE user_id = %s
               AND status = 'investigating'
@@ -224,7 +240,10 @@ class AlertCorrelator:
                 "id": str(row[0]),
                 "alert_title": row[1] or "",
                 "alert_service": row[2] or "",
-                "updated_at": row[3],
+                "affected_services": row[3] if row[3] else [],
+                "correlated_alert_count": row[4] if row[4] else 0,
+                "started_at": row[5],
+                "updated_at": row[6],
             }
             for row in rows
         ]
@@ -241,14 +260,15 @@ class AlertCorrelator:
 
         incident_id = candidate["id"]
         incident_title = candidate["alert_title"]
-        incident_service = candidate["alert_service"]
         incident_updated_at = candidate["updated_at"]
 
-        incident_services = [incident_service] if incident_service else []
+        # Prefer affected_services; fall back to single alert_service
+        incident_services = candidate.get("affected_services") or []
+        if not incident_services and candidate.get("alert_service"):
+            incident_services = [candidate["alert_service"]]
 
         scores: Dict[str, float] = {}
 
-        # --- Topology ---
         try:
             scores["topology"] = self._topology.score(
                 alert_service,
@@ -259,7 +279,6 @@ class AlertCorrelator:
             logger.warning("[CORRELATION] TopologyStrategy error", exc_info=True)
             scores["topology"] = 0.0
 
-        # --- Time window ---
         try:
             scores["time_window"] = self._time_window.score(
                 alert_received_at,
@@ -269,7 +288,6 @@ class AlertCorrelator:
             logger.warning("[CORRELATION] TimeWindowStrategy error", exc_info=True)
             scores["time_window"] = 0.0
 
-        # --- Similarity ---
         try:
             scores["similarity"] = self._similarity.score(
                 alert_title,
@@ -287,7 +305,6 @@ class AlertCorrelator:
             + self.similarity_weight * scores["similarity"]
         )
 
-        # Identify the dominant strategy
         dominant = max(scores, key=scores.get)  # type: ignore[arg-type]
 
         return CorrelationResult(
@@ -295,5 +312,8 @@ class AlertCorrelator:
             incident_id=incident_id,
             score=weighted,
             strategy=dominant,
-            details=scores,
+            details={
+                **scores,
+                "correlated_alert_count": candidate.get("correlated_alert_count", 0),
+            },
         )
