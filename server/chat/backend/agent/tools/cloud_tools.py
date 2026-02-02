@@ -43,6 +43,14 @@ from .web_search_tool import web_search, WebSearchArgs
 from .terminal_exec_tool import terminal_exec
 from .tailscale_ssh_tool import tailscale_ssh
 from .confluence_runbook_tool import confluence_runbook_parse, ConfluenceRunbookArgs
+from .confluence_search_tool import (
+    confluence_search_similar,
+    confluence_search_runbooks,
+    confluence_fetch_page,
+    ConfluenceSearchSimilarArgs,
+    ConfluenceSearchRunbookArgs,
+    ConfluenceFetchPageArgs,
+)
 from .splunk_tool import (
     search_splunk,
     list_splunk_indexes,
@@ -1236,6 +1244,36 @@ def get_cloud_tools():
         logging.info(f"Added 3 Splunk tools for user {user_id}")
     else:
         logging.debug(f"Splunk tools not added - user {user_id} not connected to Splunk")
+
+    # Add Confluence search tools if enabled
+    try:
+        from utils.flags.feature_flags import is_confluence_enabled
+
+        if is_confluence_enabled() and user_id:
+            _confluence_tools = [
+                (confluence_search_similar, "confluence_search_similar", ConfluenceSearchSimilarArgs,
+                 "Search Confluence for pages related to an incident (postmortems, RCA docs). "
+                 "Pass keywords, optional service_name and error_message. Returns matching pages with excerpts."),
+                (confluence_search_runbooks, "confluence_search_runbooks", ConfluenceSearchRunbookArgs,
+                 "Search Confluence for runbooks / playbooks / SOPs for a given service. "
+                 "Pass service_name and optional operation (e.g. 'restart', 'failover')."),
+                (confluence_fetch_page, "confluence_fetch_page", ConfluenceFetchPageArgs,
+                 "Fetch a Confluence page by ID and return its content as markdown. "
+                 "Use after search to read full page details."),
+            ]
+            for _func, _name, _schema, _desc in _confluence_tools:
+                _ctx = with_user_context(_func)
+                _notif = with_completion_notification(_ctx)
+                _final = wrap_func_with_capture(_notif, _name) if tool_capture else _notif
+                tools.append(StructuredTool.from_function(
+                    func=_final,
+                    name=_name,
+                    description=_desc,
+                    args_schema=_schema,
+                ))
+            logging.info(f"Added 3 Confluence search tools for user {user_id}")
+    except Exception as e:
+        logging.warning(f"Failed to add Confluence search tools: {e}")
 
     logging.info(f"Created {len(tools)} Aurora native tools")
     
