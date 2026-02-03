@@ -23,6 +23,8 @@ def _build_env(credentials):
     env = os.environ.copy()
     env["AWS_ACCESS_KEY_ID"] = credentials["access_key_id"]
     env["AWS_SECRET_ACCESS_KEY"] = credentials["secret_access_key"]
+    if credentials.get("session_token"):
+        env["AWS_SESSION_TOKEN"] = credentials["session_token"]
     if credentials.get("region"):
         env["AWS_DEFAULT_REGION"] = credentials["region"]
     return env

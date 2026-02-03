@@ -15,6 +15,7 @@ from services.discovery.resource_mapper import map_aws_resource
 logger = logging.getLogger(__name__)
 
 
+
 def _extract_name_from_arn(arn):
     """Extract a human-readable name from an ARN.
 
@@ -52,6 +53,40 @@ def _build_env(credentials):
     if credentials.get("region"):
         env["AWS_DEFAULT_REGION"] = credentials["region"]
     return env
+
+
+def _find_aggregator_region(env):
+    """Find the AWS region with an AGGREGATOR Resource Explorer index.
+
+    Falls back to the current default region if no aggregator is found.
+    """
+    try:
+        result = subprocess.run(
+            ["aws", "resource-explorer-2", "list-indexes", "--output", "json"],
+            capture_output=True, text=True, env=env, timeout=30,
+        )
+        logger.info("list-indexes result: rc=%d, stdout=%s, stderr=%s",
+                     result.returncode, result.stdout[:500], result.stderr[:200])
+        if result.returncode == 0:
+            data = json.loads(result.stdout)
+            indexes = data.get("Indexes", [])
+            # Prefer AGGREGATOR, fall back to any index
+            for idx in indexes:
+                if idx.get("Type") == "AGGREGATOR":
+                    region = idx.get("Region")
+                    if region:
+                        logger.info("Found Resource Explorer AGGREGATOR index in region: %s", region)
+                        return region
+            # No aggregator — use the first available index
+            if indexes:
+                region = indexes[0].get("Region")
+                if region:
+                    logger.info("Found Resource Explorer LOCAL index in region: %s", region)
+                    return region
+    except Exception as e:
+        logger.warning("Failed to detect aggregator region: %s", e)
+    logger.info("No Resource Explorer index found, using default region")
+    return None
 
 
 def _run_resource_explorer_search(env, next_token=None):
@@ -189,6 +224,11 @@ def discover(user_id, credentials, env=None):
 
     env = _build_env(credentials)
 
+    # Detect the aggregator region so we query the correct index
+    aggregator_region = _find_aggregator_region(env)
+    if aggregator_region:
+        env["AWS_DEFAULT_REGION"] = aggregator_region
+
     logger.info("Starting AWS resource discovery for user %s", user_id)
 
     next_token = None
@@ -201,6 +241,10 @@ def discover(user_id, credentials, env=None):
 
             response = _run_resource_explorer_search(env, next_token=next_token)
             resources = response.get("Resources", [])
+
+            # Log resource types for debugging
+            resource_types = set(r.get("ResourceType", "") for r in resources)
+            logger.info("AWS Resource Explorer page %d: %d resources, types: %s", page_count, len(resources), resource_types)
 
             for resource in resources:
                 try:

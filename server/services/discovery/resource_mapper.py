@@ -86,6 +86,9 @@ AWS_RESOURCE_MAP = {
     "AWS::EMR::Cluster": ("data_pipeline", "emr"),
     "AWS::Glue::Job": ("data_pipeline", "glue"),
     "AWS::ServiceDiscovery::Namespace": ("service_discovery", "cloudmap"),
+    "AWS::ECR::Repository": ("container_registry", "ecr"),
+    "AWS::ECS::TaskDefinition": ("serverless_function", "ecs_task_def"),
+    "AWS::AppRunner::Service": ("serverless_function", "app_runner"),
 }
 
 # =========================================================================
@@ -129,9 +132,39 @@ def map_gcp_resource(asset_type):
     return GCP_RESOURCE_MAP.get(asset_type, (None, None))
 
 
+def _cfn_to_explorer_key(cfn_type):
+    """Convert CloudFormation type to Resource Explorer format.
+
+    e.g. 'AWS::Lambda::Function' -> 'lambda:function'
+         'AWS::EC2::Instance' -> 'ec2:instance'
+    """
+    parts = cfn_type.split("::")
+    if len(parts) == 3:
+        return f"{parts[1].lower()}:{parts[2].lower()}"
+    return None
+
+
+# Build a reverse lookup so we can match Resource Explorer format too
+# e.g. "lambda:function" -> ("serverless_function", "lambda")
+_AWS_EXPLORER_MAP = {}
+for _cfn_key, _value in AWS_RESOURCE_MAP.items():
+    _explorer_key = _cfn_to_explorer_key(_cfn_key)
+    if _explorer_key:
+        _AWS_EXPLORER_MAP[_explorer_key] = _value
+
+
 def map_aws_resource(resource_type_str):
-    """Map an AWS resource type to (resource_type, sub_type) tuple."""
-    return AWS_RESOURCE_MAP.get(resource_type_str, (None, None))
+    """Map an AWS resource type to (resource_type, sub_type) tuple.
+
+    Accepts both CloudFormation format (AWS::Lambda::Function) and
+    Resource Explorer format (lambda:function).
+    """
+    # Try CloudFormation format first
+    result = AWS_RESOURCE_MAP.get(resource_type_str)
+    if result:
+        return result
+    # Try Resource Explorer format (lowercase service:type)
+    return _AWS_EXPLORER_MAP.get(resource_type_str.lower(), (None, None))
 
 
 def map_azure_resource(azure_type, kind=None):
