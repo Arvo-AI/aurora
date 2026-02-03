@@ -250,95 +250,84 @@ secrets:
 # ------------------------------------------------------------------------------
 # Resource requests and limits
 # ------------------------------------------------------------------------------
-# Adjust based on your cluster capacity and workload
 resources:
   server:
     requests:
-      cpu: "200m"
+      cpu: "100m"
       memory: "512Mi"
     limits:
-      cpu: "1000m"
-      memory: "2Gi"
-  
+      cpu: "500m"
+      memory: "1Gi"
   celeryWorker:
     requests:
-      cpu: "200m"
-      memory: "512Mi"
+      cpu: "100m"
+      memory: "1Gi"
     limits:
       cpu: "1000m"
-      memory: "2Gi"
-  
+      memory: "4Gi"
   celeryBeat:
+    requests:
+      cpu: "50m"
+      memory: "128Mi"
+    limits:
+      cpu: "200m"
+      memory: "256Mi"
+  chatbot:
     requests:
       cpu: "100m"
       memory: "256Mi"
     limits:
       cpu: "500m"
       memory: "1Gi"
-  
-  chatbot:
-    requests:
-      cpu: "200m"
-      memory: "512Mi"
-    limits:
-      cpu: "1000m"
-      memory: "2Gi"
-  
   frontend:
     requests:
-      cpu: "200m"
-      memory: "512Mi"
+      cpu: "50m"
+      memory: "256Mi"
     limits:
-      cpu: "1000m"
-      memory: "1Gi"
-  
+      cpu: "300m"
+      memory: "512Mi"
   redis:
     requests:
       cpu: "50m"
       memory: "128Mi"
     limits:
-      cpu: "250m"
+      cpu: "200m"
       memory: "256Mi"
-  
   searxng:
     requests:
-      cpu: "100m"
-      memory: "256Mi"
+      cpu: "50m"
+      memory: "128Mi"
     limits:
-      cpu: "500m"
+      cpu: "300m"
       memory: "512Mi"
-  
   weaviate:
     requests:
-      cpu: "200m"
-      memory: "512Mi"
-    limits:
-      cpu: "1000m"
-      memory: "2Gi"
-  
-  transformers:
-    requests:
-      cpu: "200m"
-      memory: "1Gi"
-    limits:
-      cpu: "1500m"
-      memory: "3Gi"
-  
-  vault:
-    requests:
       cpu: "100m"
-      memory: "256Mi"
+      memory: "512Mi"
     limits:
       cpu: "500m"
       memory: "1Gi"
-  
-  postgres:
+  transformers:
     requests:
-      cpu: "200m"
+      cpu: "100m"
       memory: "512Mi"
     limits:
-      cpu: "1000m"
+      cpu: "500m"
       memory: "2Gi"
+  vault:
+    requests:
+      cpu: "50m"
+      memory: "128Mi"
+    limits:
+      cpu: "200m"
+      memory: "256Mi"
+  postgres:
+    requests:
+      cpu: "100m"
+      memory: "512Mi"
+    limits:
+      cpu: "500m"
+      memory: "1Gi"
 
 # ------------------------------------------------------------------------------
 # Persistent storage

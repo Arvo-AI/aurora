@@ -65,9 +65,9 @@ spec:
                 - /bin/sh
                 - -c
                 - "test -f /tmp/celery-worker.pid"
-            initialDelaySeconds: 10
-            periodSeconds: 5
-            failureThreshold: 12
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 18
           resources:
             {{- toYaml .Values.resources.celeryWorker | nindent 12 }}
       volumes:
