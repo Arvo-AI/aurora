@@ -2,7 +2,6 @@
 Celery tasks for scheduled infrastructure discovery.
 """
 
-import json
 import logging
 
 from celery_config import celery_app
@@ -10,6 +9,37 @@ from celery_config import celery_app
 logger = logging.getLogger(__name__)
 
 SUPPORTED_PROVIDERS = ('gcp', 'aws', 'azure', 'ovh', 'scaleway', 'tailscale', 'kubectl')
+
+
+def _query_connected_providers(cur, user_id=None):
+    """Query distinct (user_id, provider) pairs from active connections.
+
+    If user_id is given, returns just the provider names for that user.
+    Otherwise returns (user_id, provider) rows for all users.
+    """
+    if user_id is not None:
+        cur.execute("""
+            SELECT DISTINCT provider FROM (
+                SELECT provider FROM user_connections
+                WHERE user_id = %s AND status = 'active' AND provider IN %s
+                UNION
+                SELECT provider FROM user_tokens
+                WHERE user_id = %s AND is_active = true AND provider IN %s
+            ) AS connected
+        """, (user_id, SUPPORTED_PROVIDERS, user_id, SUPPORTED_PROVIDERS))
+        return [row[0] for row in cur.fetchall()]
+    else:
+        cur.execute("""
+            SELECT DISTINCT user_id, provider FROM (
+                SELECT user_id, provider FROM user_connections
+                WHERE status = 'active' AND provider IN %s
+                UNION
+                SELECT user_id, provider FROM user_tokens
+                WHERE is_active = true AND provider IN %s
+            ) AS connected
+            ORDER BY user_id
+        """, (SUPPORTED_PROVIDERS, SUPPORTED_PROVIDERS))
+        return cur.fetchall()
 
 
 def _clear_discovery_lock(user_id):
@@ -67,7 +97,7 @@ def _wait_for_gcp_post_auth(user_id, timeout=300, poll_interval=10):
 def _task_belongs_to_user(task_info, user_id):
     """Check if a Celery task info dict has user_id as its first argument."""
     args = task_info.get("args", [])
-    if args and len(args) > 0:
+    if args:
         return str(args[0]) == str(user_id)
     kwargs = task_info.get("kwargs", {})
     return str(kwargs.get("user_id", "")) == str(user_id)
@@ -112,21 +142,6 @@ def _get_all_gcp_project_ids(user_id):
         return []
 
 
-def _parse_credentials(raw_credentials):
-    """Parse credentials from a DB row value into a dict.
-
-    Handles None, empty strings, JSON strings, and dicts.
-    """
-    if not raw_credentials:
-        return {}
-    if isinstance(raw_credentials, str):
-        try:
-            return json.loads(raw_credentials)
-        except (json.JSONDecodeError, ValueError):
-            return {}
-    return raw_credentials
-
-
 @celery_app.task(name="services.discovery.tasks.run_full_discovery", bind=True, max_retries=0)
 def run_full_discovery(self):
     """Run full infrastructure discovery for all users with connected cloud providers.
@@ -142,18 +157,7 @@ def run_full_discovery(self):
     try:
         conn = connect_to_db_as_admin()
         cur = conn.cursor()
-
-        cur.execute("""
-            SELECT DISTINCT user_id, provider FROM (
-                SELECT user_id, provider FROM user_connections
-                WHERE status = 'active' AND provider IN %s
-                UNION
-                SELECT user_id, provider FROM user_tokens
-                WHERE is_active = true AND provider IN %s
-            ) AS connected
-            ORDER BY user_id
-        """, (SUPPORTED_PROVIDERS, SUPPORTED_PROVIDERS))
-        rows = cur.fetchall()
+        rows = _query_connected_providers(cur)
         cur.close()
         conn.close()
 
@@ -207,16 +211,7 @@ def run_user_discovery(self, user_id):
     try:
         conn = connect_to_db_as_admin()
         cur = conn.cursor()
-        cur.execute("""
-            SELECT DISTINCT provider FROM (
-                SELECT provider FROM user_connections
-                WHERE user_id = %s AND status = 'active' AND provider IN %s
-                UNION
-                SELECT provider FROM user_tokens
-                WHERE user_id = %s AND is_active = true AND provider IN %s
-            ) AS connected
-        """, (user_id, SUPPORTED_PROVIDERS, user_id, SUPPORTED_PROVIDERS))
-        provider_names = [row[0] for row in cur.fetchall()]
+        provider_names = _query_connected_providers(cur, user_id)
 
         if not provider_names:
             cur.close()
@@ -270,17 +265,16 @@ def run_user_discovery(self, user_id):
                 providers["gcp"] = {"project_ids": [root_project]}
 
         summary = run_discovery_for_user(user_id, providers)
-        _clear_discovery_lock(user_id)
         return summary
 
     except SoftTimeLimitExceeded:
         logger.error(f"[Discovery Task] Soft time limit exceeded for user {user_id}")
-        _clear_discovery_lock(user_id)
         return {"status": "error", "user_id": user_id, "error": "Discovery timed out"}
     except Exception as e:
         logger.error(f"[Discovery Task] Failed for user {user_id}: {e}")
-        _clear_discovery_lock(user_id)
         return {"status": "error", "user_id": user_id, "error": str(e)}
+    finally:
+        _clear_discovery_lock(user_id)
 
 
 @celery_app.task(name="services.discovery.tasks.mark_stale_services", bind=True, max_retries=0, soft_time_limit=300, time_limit=600)
@@ -294,16 +288,10 @@ def mark_stale_services(self):
     try:
         conn = connect_to_db_as_admin()
         cur = conn.cursor()
-        cur.execute("""
-            SELECT DISTINCT user_id FROM (
-                SELECT user_id FROM user_connections WHERE status = 'active' AND provider IN %s
-                UNION
-                SELECT user_id FROM user_tokens WHERE is_active = true AND provider IN %s
-            ) AS connected
-        """, (SUPPORTED_PROVIDERS, SUPPORTED_PROVIDERS))
-        user_ids = [row[0] for row in cur.fetchall()]
+        rows = _query_connected_providers(cur)
         cur.close()
         conn.close()
+        user_ids = list({row[0] for row in rows})
 
         client = get_memgraph_client()
         total_marked = 0

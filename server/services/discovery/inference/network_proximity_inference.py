@@ -33,27 +33,11 @@ _BACKEND_TYPES = {
 
 # Valid consumer -> backend dependency patterns.
 # Only these combinations generate edges.
+# Built from the product of consumer and backend types, minus excluded pairs.
 _DEPENDENCY_PATTERNS = {
-    ("vm", "database"),
-    ("vm", "cache"),
-    ("vm", "message_queue"),
-    ("vm", "search_engine"),
-    ("vm", "storage_bucket"),
-    ("vm", "filesystem"),
-    ("vm", "secret_store"),
-    ("serverless_function", "database"),
-    ("serverless_function", "cache"),
-    ("serverless_function", "message_queue"),
-    ("serverless_function", "search_engine"),
-    ("serverless_function", "storage_bucket"),
-    ("serverless_function", "secret_store"),
-    ("kubernetes_cluster", "database"),
-    ("kubernetes_cluster", "cache"),
-    ("kubernetes_cluster", "message_queue"),
-    ("kubernetes_cluster", "search_engine"),
-    ("kubernetes_cluster", "storage_bucket"),
-    ("kubernetes_cluster", "filesystem"),
-    ("kubernetes_cluster", "secret_store"),
+    (c, b) for c in _CONSUMER_TYPES for b in _BACKEND_TYPES
+} - {
+    ("serverless_function", "filesystem"),
 }
 
 # Map backend resource types to dependency type labels.

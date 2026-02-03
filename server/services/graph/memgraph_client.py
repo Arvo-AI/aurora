@@ -7,7 +7,7 @@ import os
 import json
 import logging
 import threading
-from datetime import datetime
+from collections import Counter
 
 from neo4j import GraphDatabase
 
@@ -121,7 +121,6 @@ class MemgraphClient:
 
     def upsert_service(self, user_id, name, resource_type, provider, **props):
         """Create or update a Service node."""
-        service_id = f"{user_id}:{provider}:{name}"
         query = """
         MERGE (s:Service {id: $id})
         ON CREATE SET
@@ -160,25 +159,9 @@ class MemgraphClient:
             s.updated_at = localDateTime()
         RETURN s;
         """
-        params = {
-            "id": service_id,
-            "user_id": user_id,
-            "name": name,
-            "display_name": props.get("display_name", name),
-            "resource_type": resource_type,
-            "sub_type": props.get("sub_type", ""),
-            "provider": provider,
-            "region": props.get("region", ""),
-            "zone": props.get("zone", ""),
-            "cluster_name": props.get("cluster_name", ""),
-            "namespace": props.get("namespace", ""),
-            "vpc_id": props.get("vpc_id") or None,
-            "cloud_resource_id": props.get("cloud_resource_id", ""),
-            "endpoint": props.get("endpoint", ""),
-            "criticality": props.get("criticality", "medium"),
-            "team_owner": props.get("team_owner", ""),
-            "metadata": json.dumps(props.get("metadata", {})) if isinstance(props.get("metadata"), dict) else props.get("metadata", "{}"),
-        }
+        svc_data = {**props, "resource_type": resource_type}
+        params = self._build_service_row(user_id, name, provider, svc_data)
+        params["user_id"] = user_id
         results = self._execute(query, params)
         return self._node_to_dict(results[0]["s"]) if results else None
 
@@ -190,27 +173,7 @@ class MemgraphClient:
         rows = []
         for svc in services:
             try:
-                name = svc["name"]
-                provider = svc["provider"]
-                metadata = svc.get("metadata", {})
-                rows.append({
-                    "id": f"{user_id}:{provider}:{name}",
-                    "name": name,
-                    "display_name": svc.get("display_name", name),
-                    "resource_type": svc["resource_type"],
-                    "sub_type": svc.get("sub_type", ""),
-                    "provider": provider,
-                    "region": svc.get("region", ""),
-                    "zone": svc.get("zone", ""),
-                    "cluster_name": svc.get("cluster_name", ""),
-                    "namespace": svc.get("namespace", ""),
-                    "vpc_id": svc.get("vpc_id") or "",
-                    "cloud_resource_id": svc.get("cloud_resource_id", ""),
-                    "endpoint": svc.get("endpoint", ""),
-                    "criticality": svc.get("criticality", "medium"),
-                    "team_owner": svc.get("team_owner", ""),
-                    "metadata": json.dumps(metadata) if isinstance(metadata, dict) else (metadata or "{}"),
-                })
+                rows.append(self._build_service_row(user_id, svc["name"], svc["provider"], svc))
             except (KeyError, TypeError) as e:
                 logger.warning(f"Skipping malformed service {svc.get('name', '?')}: {e}")
 
@@ -600,7 +563,7 @@ class MemgraphClient:
 
     def link_incident_to_service(self, user_id, postgres_id, service_name, relationship="AFFECTED", **props):
         """Create Incident node (if needed) and link to Service."""
-        incident_id = f"{user_id}:{postgres_id}"
+        incident_id = self._make_incident_id(user_id, postgres_id)
         service_id = self._resolve_service_id(user_id, service_name)
         if not service_id:
             return None
@@ -633,7 +596,7 @@ class MemgraphClient:
 
     def set_root_cause(self, user_id, postgres_id, service_name, confidence, identified_by="rca_agent"):
         """Set CAUSED_BY edge from Incident to Service."""
-        incident_id = f"{user_id}:{postgres_id}"
+        incident_id = self._make_incident_id(user_id, postgres_id)
         service_id = self._resolve_service_id(user_id, service_name)
         if not service_id:
             return None
@@ -662,7 +625,7 @@ class MemgraphClient:
 
     def get_incident_services(self, user_id, postgres_id):
         """Get all services affected by and causing an incident."""
-        incident_id = f"{user_id}:{postgres_id}"
+        incident_id = self._make_incident_id(user_id, postgres_id)
         query = """
         MATCH (i:Incident {id: $incident_id})
         OPTIONAL MATCH (i)-[:AFFECTED]->(affected:Service)
@@ -739,7 +702,7 @@ class MemgraphClient:
 
     def link_incident_to_change(self, user_id, postgres_id, change_id, confidence):
         """Create TRIGGERED_BY edge."""
-        incident_id = f"{user_id}:{postgres_id}"
+        incident_id = self._make_incident_id(user_id, postgres_id)
         query = """
         MATCH (i:Incident {id: $incident_id})
         MATCH (c:Change {id: $change_id})
@@ -790,20 +753,11 @@ class MemgraphClient:
         if not results:
             return {"total_services": 0, "total_dependencies": 0}
         row = results[0]
-        # Count by type
-        type_counts = {}
-        for t in row.get("types", []):
-            if t:
-                type_counts[t] = type_counts.get(t, 0) + 1
-        provider_counts = {}
-        for p in row.get("providers", []):
-            if p:
-                provider_counts[p] = provider_counts.get(p, 0) + 1
         return {
             "total_services": row.get("total_services", 0),
             "total_dependencies": row.get("total_deps", 0),
-            "services_by_type": type_counts,
-            "services_by_provider": provider_counts,
+            "services_by_type": dict(Counter(t for t in row.get("types", []) if t)),
+            "services_by_provider": dict(Counter(p for p in row.get("providers", []) if p)),
         }
 
     # =========================================================================
@@ -829,7 +783,6 @@ class MemgraphClient:
         """Resolve a service name to its full ID. If already an ID, return as-is."""
         if ":" in service_name_or_id and service_name_or_id.count(":") >= 2:
             return service_name_or_id
-        # Look up by name
         query = """
         MATCH (s:Service {user_id: $user_id, name: $name})
         RETURN s.id AS id LIMIT 1;
@@ -843,9 +796,39 @@ class MemgraphClient:
         if isinstance(node, dict):
             return node
         try:
-            # neo4j driver returns Node objects with items() method
             if hasattr(node, "items"):
                 return dict(node.items())
             return dict(node)
         except Exception:
             return {"id": str(node)}
+
+    @staticmethod
+    def _make_service_id(user_id, provider, name):
+        return f"{user_id}:{provider}:{name}"
+
+    @staticmethod
+    def _make_incident_id(user_id, postgres_id):
+        return f"{user_id}:{postgres_id}"
+
+    @staticmethod
+    def _build_service_row(user_id, name, provider, svc):
+        """Build the property dict shared by upsert_service and batch_upsert_services."""
+        metadata = svc.get("metadata", {})
+        return {
+            "id": f"{user_id}:{provider}:{name}",
+            "name": name,
+            "display_name": svc.get("display_name", name),
+            "resource_type": svc.get("resource_type", ""),
+            "sub_type": svc.get("sub_type", ""),
+            "provider": provider,
+            "region": svc.get("region", ""),
+            "zone": svc.get("zone", ""),
+            "cluster_name": svc.get("cluster_name", ""),
+            "namespace": svc.get("namespace", ""),
+            "vpc_id": svc.get("vpc_id") or "",
+            "cloud_resource_id": svc.get("cloud_resource_id", ""),
+            "endpoint": svc.get("endpoint", ""),
+            "criticality": svc.get("criticality", "medium"),
+            "team_owner": svc.get("team_owner", ""),
+            "metadata": json.dumps(metadata) if isinstance(metadata, dict) else (metadata or "{}"),
+        }

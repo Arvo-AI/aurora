@@ -9,8 +9,8 @@ maps them into normalized graph nodes and dependency edges.
 
 import json
 import logging
-import subprocess
 
+from services.discovery.enrichment.cli_utils import run_cli_command
 from services.discovery.resource_mapper import infer_type_from_image
 
 logger = logging.getLogger(__name__)
@@ -37,40 +37,13 @@ KUBECTL_COMMANDS = {
 # =========================================================================
 
 
-def _run_command(args, timeout=KUBECTL_TIMEOUT):
-    """Run a CLI command and return (stdout_string, error_string_or_None).
-
-    Args:
-        args: List of command arguments.
-        timeout: Command timeout in seconds.
-
-    Returns:
-        Tuple of (stdout_str, error_str_or_None).
-    """
-    try:
-        result = subprocess.run(
-            args,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        )
-        if result.returncode != 0:
-            stderr = result.stderr.strip()
-            return None, f"Command failed (rc={result.returncode}): {stderr}"
-        return result.stdout.strip(), None
-    except subprocess.TimeoutExpired:
-        return None, f"Command timed out after {timeout}s: {' '.join(args)}"
-    except Exception as e:
-        return None, f"Command error: {e}"
-
-
 def _run_json_command(args, timeout=KUBECTL_TIMEOUT):
     """Run a CLI command expecting JSON output.
 
     Returns:
         Tuple of (parsed_json, error_string_or_None).
     """
-    stdout, error = _run_command(args, timeout=timeout)
+    stdout, error = run_cli_command(args, timeout=timeout)
     if error:
         return None, error
     if not stdout:
@@ -114,7 +87,7 @@ def _get_cluster_credentials(cluster, provider_credentials):
             "--zone", location,
             "--project", project,
         ]
-        _, error = _run_command(args, timeout=CREDENTIALS_TIMEOUT)
+        _, error = run_cli_command(args, timeout=CREDENTIALS_TIMEOUT)
         return error
 
     elif provider == "aws":
@@ -125,7 +98,7 @@ def _get_cluster_credentials(cluster, provider_credentials):
             "--name", cluster_name,
             "--region", region,
         ]
-        _, error = _run_command(args, timeout=CREDENTIALS_TIMEOUT)
+        _, error = run_cli_command(args, timeout=CREDENTIALS_TIMEOUT)
         return error
 
     elif provider == "azure":
@@ -139,7 +112,7 @@ def _get_cluster_credentials(cluster, provider_credentials):
             "--resource-group", resource_group,
             "--overwrite-existing",
         ]
-        _, error = _run_command(args, timeout=CREDENTIALS_TIMEOUT)
+        _, error = run_cli_command(args, timeout=CREDENTIALS_TIMEOUT)
         return error
 
     else:
@@ -477,20 +450,15 @@ def _discover_cluster(cluster, provider_credentials):
     service_nodes = []
     ingress_backends = []  # (ingress_name, namespace, [backend_svc_names])
 
-    # Deployments
-    for item in raw_resources.get("deployments", []):
-        node = _extract_workload_node(item, "Deployment", cluster)
-        workload_nodes.append(node)
-
-    # StatefulSets
-    for item in raw_resources.get("statefulsets", []):
-        node = _extract_workload_node(item, "StatefulSet", cluster)
-        workload_nodes.append(node)
-
-    # DaemonSets
-    for item in raw_resources.get("daemonsets", []):
-        node = _extract_workload_node(item, "DaemonSet", cluster)
-        workload_nodes.append(node)
+    # Workloads: Deployments, StatefulSets, DaemonSets
+    workload_kinds = [
+        ("deployments", "Deployment"),
+        ("statefulsets", "StatefulSet"),
+        ("daemonsets", "DaemonSet"),
+    ]
+    for resource_key, kind in workload_kinds:
+        for item in raw_resources.get(resource_key, []):
+            workload_nodes.append(_extract_workload_node(item, kind, cluster))
 
     # Services
     for item in raw_resources.get("services", []):

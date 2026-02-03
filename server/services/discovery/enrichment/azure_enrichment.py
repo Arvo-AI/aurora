@@ -10,10 +10,10 @@ The enrichment data is consumed by Phase 3 inference to build dependency
 edges between discovered nodes.
 """
 
-import json
 import logging
 import os
-import subprocess
+
+from services.discovery.enrichment.cli_utils import run_cli_json_command
 
 logger = logging.getLogger(__name__)
 
@@ -37,45 +37,6 @@ def _build_env(credentials):
         env["AZURE_CLIENT_SECRET"] = client_secret
 
     return env
-
-
-def _run_az_command(cmd, env, timeout=120):
-    """Run an Azure CLI command and return parsed JSON output.
-
-    Args:
-        cmd: List of command arguments.
-        env: Environment dict for subprocess.
-        timeout: Command timeout in seconds.
-
-    Returns:
-        Parsed JSON output, or None on failure.
-    """
-    try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            env=env,
-            timeout=timeout,
-        )
-        if result.returncode != 0:
-            logger.warning(
-                "Azure CLI command failed (exit %d): %s — cmd: %s",
-                result.returncode,
-                result.stderr.strip(),
-                " ".join(cmd),
-            )
-            return None
-        return json.loads(result.stdout)
-    except subprocess.TimeoutExpired:
-        logger.warning("Azure CLI command timed out after %ds: %s", timeout, " ".join(cmd))
-        return None
-    except json.JSONDecodeError as e:
-        logger.warning("Failed to parse Azure CLI JSON output: %s", e)
-        return None
-    except FileNotFoundError:
-        logger.error("Azure CLI (az) not found in PATH")
-        return None
 
 
 def _extract_resource_group(node):
@@ -140,7 +101,7 @@ def _fetch_nsg_rules(nodes_by_type, env):
             "--resource-group", rg,
             "--output", "json",
         ]
-        data = _run_az_command(cmd, env)
+        data = run_cli_json_command(cmd, env)
         if data is None:
             errors.append(f"Failed to fetch rules for NSG {nsg_name} in {rg}")
         else:
@@ -179,7 +140,7 @@ def _fetch_app_settings(nodes_by_type, env):
             "--resource-group", rg,
             "--output", "json",
         ]
-        data = _run_az_command(webapp_cmd, env)
+        data = run_cli_json_command(webapp_cmd, env)
 
         if data is None:
             # Might be a function app
@@ -189,7 +150,7 @@ def _fetch_app_settings(nodes_by_type, env):
                 "--resource-group", rg,
                 "--output", "json",
             ]
-            data = _run_az_command(func_cmd, env)
+            data = run_cli_json_command(func_cmd, env)
 
         if data is None:
             errors.append(f"Failed to fetch app settings for {app_name} in {rg}")
@@ -226,7 +187,7 @@ def _fetch_dns_records(nodes_by_type, env):
             "--resource-group", rg,
             "--output", "json",
         ]
-        data = _run_az_command(cmd, env)
+        data = run_cli_json_command(cmd, env)
         if data is None:
             errors.append(f"Failed to fetch DNS records for zone {zone_name} in {rg}")
         else:

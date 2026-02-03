@@ -120,6 +120,20 @@ def infer(user_id, graph_nodes, enrichment_data):
     edges = []
     seen = set()
 
+    def _add_dns_edge(source, target):
+        """Add a deduplicated DNS edge."""
+        if target and target != source:
+            edge_key = (source, target)
+            if edge_key not in seen:
+                seen.add(edge_key)
+                edges.append({
+                    "from_service": source,
+                    "to_service": target,
+                    "dependency_type": "dns",
+                    "confidence": 0.8,
+                    "discovered_from": ["dns"],
+                })
+
     for zone in dns_records:
         zone_name = zone.get("Name") or zone.get("name", "")
         zone_node_name = _find_dns_zone_node(zone_name, graph_nodes)
@@ -148,34 +162,14 @@ def infer(user_id, graph_nodes, enrichment_data):
                 elif record_type in ("CNAME", "ALIAS"):
                     target_node = _match_cname_to_node(value, hostname_index)
 
-                if target_node and target_node != source_name:
-                    edge_key = (source_name, target_node)
-                    if edge_key not in seen:
-                        seen.add(edge_key)
-                        edges.append({
-                            "from_service": source_name,
-                            "to_service": target_node,
-                            "dependency_type": "dns",
-                            "confidence": 0.8,
-                            "discovered_from": ["dns"],
-                        })
+                _add_dns_edge(source_name, target_node)
 
             # Also handle Route 53 alias targets (AliasTarget field)
             alias_target = record.get("AliasTarget", record.get("alias_target"))
             if alias_target:
                 alias_dns = alias_target.get("DNSName") or alias_target.get("dns_name", "")
                 target_node = _match_cname_to_node(alias_dns, hostname_index)
-                if target_node and target_node != source_name:
-                    edge_key = (source_name, target_node)
-                    if edge_key not in seen:
-                        seen.add(edge_key)
-                        edges.append({
-                            "from_service": source_name,
-                            "to_service": target_node,
-                            "dependency_type": "dns",
-                            "confidence": 0.8,
-                            "discovered_from": ["dns"],
-                        })
+                _add_dns_edge(source_name, target_node)
 
     logger.info(
         "DNS inference for user %s: %d edges from %d zones",

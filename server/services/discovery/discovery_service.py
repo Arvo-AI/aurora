@@ -241,31 +241,25 @@ def run_discovery_for_user(user_id, connected_providers):
             logger.error(f"[Discovery] Phase 2 K8s enrichment failed: {e}")
             summary["errors"].append(f"K8s enrichment failed: {str(e)}")
 
-    # AWS enrichment
-    if "aws" in connected_providers:
-        aws_nodes = [n for n in all_nodes if n.get("provider") == "aws"]
+    # AWS / Azure enrichment (identical pattern: filter nodes, enrich, collect data)
+    provider_enrichments = {
+        "aws": aws_enrichment,
+        "azure": azure_enrichment,
+    }
+    for provider_name, enrichment_module in provider_enrichments.items():
+        if provider_name not in connected_providers:
+            continue
+        provider_nodes = [n for n in all_nodes if n.get("provider") == provider_name]
         try:
-            aws_result = aws_enrichment.enrich(user_id, aws_nodes, connected_providers["aws"])
-            enrichment_data.update(aws_result.get("enrichment_data", {}))
-            if aws_result.get("errors"):
-                summary["errors"].extend(aws_result["errors"])
-            logger.info(f"[Discovery] Phase 2 AWS enrichment complete")
+            result = enrichment_module.enrich(user_id, provider_nodes, connected_providers[provider_name])
+            enrichment_data.update(result.get("enrichment_data", {}))
+            if result.get("errors"):
+                summary["errors"].extend(result["errors"])
+            logger.info(f"[Discovery] Phase 2 {provider_name.upper()} enrichment complete")
         except Exception as e:
-            logger.error(f"[Discovery] Phase 2 AWS enrichment failed: {e}")
-            summary["errors"].append(f"AWS enrichment failed: {str(e)}")
-
-    # Azure enrichment
-    if "azure" in connected_providers:
-        azure_nodes = [n for n in all_nodes if n.get("provider") == "azure"]
-        try:
-            azure_result = azure_enrichment.enrich(user_id, azure_nodes, connected_providers["azure"])
-            enrichment_data.update(azure_result.get("enrichment_data", {}))
-            if azure_result.get("errors"):
-                summary["errors"].extend(azure_result["errors"])
-            logger.info(f"[Discovery] Phase 2 Azure enrichment complete")
-        except Exception as e:
-            logger.error(f"[Discovery] Phase 2 Azure enrichment failed: {e}")
-            summary["errors"].append(f"Azure enrichment failed: {str(e)}")
+            label = provider_name.upper()
+            logger.error(f"[Discovery] Phase 2 {label} enrichment failed: {e}")
+            summary["errors"].append(f"{label} enrichment failed: {str(e)}")
 
     # Serverless enrichment
     serverless_nodes = [n for n in all_nodes if n.get("resource_type") == "serverless_function"]

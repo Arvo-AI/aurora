@@ -10,12 +10,12 @@ parses them at runtime to extract hostnames and inferred dependency types,
 then discards the raw values immediately.
 """
 
-import json
 import logging
 import os
 import re
-import subprocess
 from urllib.parse import urlparse
+
+from services.discovery.enrichment.cli_utils import run_cli_json_command
 
 logger = logging.getLogger(__name__)
 
@@ -230,35 +230,6 @@ def _extract_dependencies_from_env(env_vars):
 # Provider-specific fetchers
 # ---------------------------------------------------------------------------
 
-def _run_command(cmd, env=None, timeout=120):
-    """Run a CLI command and return parsed JSON output, or None on failure."""
-    try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            env=env,
-            timeout=timeout,
-        )
-        if result.returncode != 0:
-            logger.warning(
-                "Command failed (exit %d): %s — cmd: %s",
-                result.returncode,
-                result.stderr.strip(),
-                " ".join(cmd),
-            )
-            return None
-        return json.loads(result.stdout)
-    except subprocess.TimeoutExpired:
-        logger.warning("Command timed out after %ds: %s", timeout, " ".join(cmd))
-        return None
-    except json.JSONDecodeError as e:
-        logger.warning("Failed to parse JSON output: %s", e)
-        return None
-    except FileNotFoundError:
-        logger.error("CLI tool not found for command: %s", cmd[0])
-        return None
-
 
 def _build_aws_env(credentials):
     """Build environment dict for AWS CLI calls."""
@@ -283,7 +254,7 @@ def _fetch_lambda_env_vars(function_name, aws_env):
         "--function-name", function_name,
         "--output", "json",
     ]
-    data = _run_command(cmd, env=aws_env)
+    data = run_cli_json_command(cmd, env=aws_env)
     if data is None:
         return {}
     return data.get("Environment", {}).get("Variables", {})
@@ -299,7 +270,7 @@ def _fetch_cloud_run_env_vars(service_name, region):
         f"--region={region}",
         "--format=json",
     ]
-    data = _run_command(cmd)
+    data = run_cli_json_command(cmd)
     if data is None:
         return {}
 
@@ -321,7 +292,7 @@ def _fetch_cloud_function_env_vars(function_name):
         "gcloud", "functions", "describe", function_name,
         "--format=json",
     ]
-    data = _run_command(cmd)
+    data = run_cli_json_command(cmd)
     if data is None:
         return {}
 
