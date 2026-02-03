@@ -219,7 +219,20 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
         ),
         li: ({ children }) => {
           const textContent = extractTextFromNode(children);
-          const matchingSuggestion = findMatchingSuggestion(textContent);
+          
+          // Check for explicit fix reference like [fix-387]
+          const fixMatch = textContent.match(/\[fix-(\d+)\]/);
+          let matchingSuggestion = null;
+          
+          if (fixMatch) {
+            // Direct lookup by ID (handle both string and number types)
+            const fixId = fixMatch[1];
+            matchingSuggestion = incident.suggestions?.find(s => String(s.id) === fixId);
+          } else {
+            // Fall back to word matching for diagnostic suggestions
+            matchingSuggestion = findMatchingSuggestion(textContent);
+          }
+          
           const isFixType = matchingSuggestion?.type === 'fix';
           const canExecute = Boolean(matchingSuggestion?.command);
           const canShowAction = canExecute || isFixType;

@@ -172,6 +172,7 @@ def _build_summary_prompt_with_chat(
     triggered_at: Optional[str],
     investigation_transcript: Optional[str] = None,
     citations: Optional[List[Citation]] = None,
+    existing_fixes: Optional[List[Dict]] = None,
 ) -> str:
     """Build a concise summary prompt that incorporates RCA chat context.
 
@@ -203,6 +204,16 @@ def _build_summary_prompt_with_chat(
             )
 
         evidence_text = "\n\n".join(evidence_lines)
+        
+        fixes_context = ""
+        if existing_fixes:
+            fixes_context = "\n\nPROPOSED CODE FIXES:\n"
+            for fix in existing_fixes:
+                desc = fix.get('description', '')[:100]
+                fixes_context += f"- [fix-{fix['id']}] {fix['title']}\n"
+                fixes_context += f"  File: {fix['file_path']} | Repo: {fix['repository']}\n"
+                if desc:
+                    fixes_context += f"  {desc}...\n"
 
         prompt = f"""You are writing an incident report based on alert data and forensic evidence.
 
@@ -214,7 +225,7 @@ ALERT INFORMATION:
 {triggered_line}
 
 INVESTIGATION EVIDENCE (cite using [n] markers):
-{evidence_text}
+{evidence_text}{fixes_context}
 
 Write a 2-3 paragraph incident report:
 
@@ -252,6 +263,7 @@ TONE: Professional, factual, incident-record style (not investigative process do
 
 After the summary, add a separate paragraph titled "## Suggested Next Steps" that:
 - Lists 2-4 specific areas the SRE should investigate based on the findings
+- If code fixes were proposed above, reference them using [fix-ID] format in the appropriate bullet point
 - Provides actionable guidance for further troubleshooting
 - References specific metrics, logs, or infrastructure components mentioned in the investigation
 - Keep it concise and targeted
@@ -259,6 +271,17 @@ After the summary, add a separate paragraph titled "## Suggested Next Steps" tha
     else:
         # Fallback to transcript-based prompt
         transcript = investigation_transcript or "[No transcript available]"
+        
+        fixes_context = ""
+        if existing_fixes:
+            fixes_context = "\n\nPROPOSED CODE FIXES:\n"
+            for fix in existing_fixes:
+                desc = fix.get('description', '')[:100]
+                fixes_context += f"- [fix-{fix['id']}] {fix['title']}\n"
+                fixes_context += f"  File: {fix['file_path']} | Repo: {fix['repository']}\n"
+                if desc:
+                    fixes_context += f"  {desc}...\n"
+        
         prompt = f"""
 You are rewriting an alert plus the subsequent investigation transcript into a neutral incident summary.
 
@@ -270,7 +293,7 @@ ALERT INFORMATION:
 {triggered_line}
 
 INVESTIGATION TRANSCRIPT (chat log):
-{transcript}
+{transcript}{fixes_context}
 
 Write a concise 2–3 paragraph summary that:
 - Describes what triggered the alert
@@ -286,6 +309,7 @@ SUMMARY RULES:
 
 After the summary, add a separate paragraph titled "## Suggested Next Steps" that:
 - Lists 2-4 specific areas the SRE should investigate based on the findings
+- If code fixes were proposed above, reference them using [fix-ID] format in the appropriate bullet point
 - Provides actionable guidance for further troubleshooting
 - References specific metrics, logs, or infrastructure components mentioned in the investigation
 - Keep it concise and targeted
@@ -393,6 +417,38 @@ def _fetch_chat_transcript(
             f"[IncidentSummary] Failed to fetch chat transcript for {session_id}: {e}"
         )
         return "[Transcript unavailable]"
+
+
+def _fetch_existing_fix_suggestions(incident_id: str) -> List[Dict]:
+    """Fetch fix-type suggestions already created by github_fix tool."""
+    from utils.db.connection_pool import db_pool
+    
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT id, title, description, file_path, repository
+                    FROM incident_suggestions
+                    WHERE incident_id = %s AND type = 'fix'
+                    ORDER BY created_at ASC
+                    """,
+                    (incident_id,)
+                )
+                rows = cursor.fetchall()
+                return [
+                    {
+                        'id': row[0],
+                        'title': row[1],
+                        'description': row[2],
+                        'file_path': row[3],
+                        'repository': row[4]
+                    }
+                    for row in rows
+                ]
+    except Exception as e:
+        logger.error(f"[IncidentSummary] Failed to fetch existing fix suggestions: {e}")
+        return []
 
 
 @celery_app.task(
@@ -560,6 +616,9 @@ def generate_incident_summary_from_chat(
         transcript = None
         if not all_citations:
             transcript = _fetch_chat_transcript(user_id=user_id, session_id=session_id)
+        
+        # Fetch existing fix suggestions created by github_fix tool during RCA
+        existing_fixes = _fetch_existing_fix_suggestions(incident_id)
 
         # Build prompt - uses citations if available, otherwise falls back to transcript
         prompt = _build_summary_prompt_with_chat(
@@ -570,6 +629,7 @@ def generate_incident_summary_from_chat(
             triggered_at=basics.get("triggered_at"),
             investigation_transcript=transcript,
             citations=all_citations if all_citations else None,
+            existing_fixes=existing_fixes if existing_fixes else None,
         )
 
         # Use centralized model config for email report generation
