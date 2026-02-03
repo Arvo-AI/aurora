@@ -194,8 +194,8 @@ export default function CorrelatedAlertsSection({ alerts }: CorrelatedAlertsSect
             </div>
             <p className="text-xs text-zinc-500 mt-0.5">
               {hasNewAlerts 
-                ? 'New related alerts detected from other monitoring sources'
-                : 'Related alerts from other monitoring sources'
+                ? 'New related alerts detected'
+                : 'Related alerts'
               }
             </p>
           </div>
