@@ -213,38 +213,85 @@ def drain_rca_context_updates(user_id: str, session_id: str) -> List[Dict[str, A
 
 def _format_updates_for_prompt(updates: List[Dict[str, Any]]) -> str:
     """Format context updates into a message that adds context without stopping investigation."""
-    # Extract the key info - title and details
+    # Extract the key info - title and details from various payload formats
     titles = []
     details = []
+    services = []
+    severities = []
+    sources = []
+    
     for update in updates:
+        source = update.get("source", "unknown")
+        sources.append(source)
         payload = update.get("payload", {})
+        
         if isinstance(payload, dict):
+            # Try PagerDuty format: event.data.title
             event_data = payload.get("event", {}).get("data", {})
             title = event_data.get("title", "")
+            body_details = event_data.get("body", {}).get("details", "")
+            service = event_data.get("service", {}).get("summary", "")
+            urgency = event_data.get("urgency", "")
+            
+            # Try flat format (Datadog, Grafana, etc): title at top level
+            if not title:
+                title = payload.get("title", "")
+            if not body_details:
+                body_details = payload.get("body", "") or payload.get("message", "") or payload.get("description", "")
+            if not service:
+                # Datadog: extract from tags or scope
+                tags = payload.get("tags", [])
+                for tag in tags:
+                    if isinstance(tag, str) and tag.startswith("service:"):
+                        service = tag.split(":", 1)[1]
+                        break
+                if not service:
+                    service = payload.get("scope", "").replace("service:", "") if payload.get("scope", "").startswith("service:") else ""
+            if not urgency:
+                urgency = payload.get("alert_type", "") or payload.get("severity", "") or payload.get("status", "")
+            
             if title:
                 titles.append(title)
-            body_details = event_data.get("body", {}).get("details", "")
             if body_details:
                 details.append(body_details)
+            if service:
+                services.append(service)
+            if urgency:
+                severities.append(urgency)
     
     title_str = titles[0] if titles else "Correlated incident"
     details_str = details[0] if details else ""
+    service_str = services[0] if services else ""
+    severity_str = severities[0] if severities else ""
+    source_str = sources[0] if sources else "unknown"
     
     # Frame as new information to incorporate, NOT a stop signal
     parts = [
-        "New information: A correlated alert just came in that may be relevant to your investigation.",
+        f"**🔗 New Correlated Alert from {source_str.title()}**",
         "",
-        f"Alert: {title_str}",
+        f"**Alert:** {title_str}",
     ]
+    
+    if service_str:
+        parts.append(f"**Service:** {service_str}")
+    
+    if severity_str:
+        parts.append(f"**Severity:** {severity_str}")
     
     if details_str:
         parts.extend([
-            f"Details: {details_str}",
+            "",
+            f"**Details:** {details_str}",
         ])
     
     parts.extend([
         "",
-        "Please incorporate this information into your investigation. Continue your analysis and include this context in your final report.",
+        "This correlated alert suggests the issue may be affecting multiple services or has been detected by multiple monitoring systems. Please incorporate this information into your investigation and consider:",
+        "- Whether this indicates a broader system issue",
+        "- If there's a common root cause affecting multiple services",
+        "- Any correlation between the timing of these alerts",
+        "",
+        "Continue your analysis and include this context in your final report.",
     ])
 
     return "\n".join(parts)
