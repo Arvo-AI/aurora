@@ -330,10 +330,10 @@ Open `https://aurora.yourdomain.com` in your browser.
 ### Update configuration only
 ```bash
 helm upgrade aurora-oss ./deploy/helm/aurora \
-  -f deploy/helm/aurora/values.generated.yaml -n aurora
+  --reset-values -f deploy/helm/aurora/values.generated.yaml -n aurora
 ```
 
-**Note:** Pods automatically restart only when ConfigMap/Secret values change (env vars). For other changes (replicas, resources, ingress), pods won't restart automatically.
+**Note:** The `--reset-values` flag ensures Helm uses only the values from your file, ignoring any previously cached values. Pods automatically restart only when ConfigMap/Secret values change (env vars). For other changes (replicas, resources, ingress), pods won't restart automatically.
 
 ### Update with new code/images
 ```bash

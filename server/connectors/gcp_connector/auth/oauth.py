@@ -21,7 +21,9 @@ logger = logging.getLogger(__name__)
 CLIENT_ID = os.getenv("CLIENT_ID")
 CLIENT_SECRET = os.getenv("CLIENT_SECRET")
 
-backend_url = os.getenv("NEXT_PUBLIC_BACKEND_URL").rstrip("/")
+backend_url = os.getenv("NEXT_PUBLIC_BACKEND_URL", "").rstrip("/")
+if not backend_url:
+    logger.warning("NEXT_PUBLIC_BACKEND_URL not set - GCP OAuth callbacks will not work")
 REDIRECT_URI = f"{backend_url}/callback"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
 AUTH_URL = "https://accounts.google.com/o/oauth2/auth"

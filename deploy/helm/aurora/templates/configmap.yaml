@@ -13,6 +13,9 @@ data:
   CHATBOT_INTERNAL_URL: {{ default (printf "http://%s-chatbot:5007" (include "aurora.fullname" .)) .Values.config.CHATBOT_INTERNAL_URL | quote }}
   VAULT_ADDR: {{ default (printf "http://%s-vault:8200" (include "aurora.fullname" .)) .Values.config.VAULT_ADDR | quote }}
   SEARXNG_URL: {{ default (printf "http://%s-searxng:8080" (include "aurora.fullname" .)) .Values.config.SEARXNG_URL | quote }}
+
+  # Backend needs this for OAuth callbacks (derived from ingress if not set)
+  NEXT_PUBLIC_BACKEND_URL: {{ default (printf "https://%s" .Values.ingress.hosts.api) .Values.config.NEXT_PUBLIC_BACKEND_URL | quote }}
   
   # All other config values from .Values.config (excluding keys with computed defaults above and NEXT_PUBLIC_*)
   {{- range $key, $value := .Values.config }}
