@@ -448,9 +448,9 @@ def get_incident(incident_id: str):
                     """SELECT id, source_type, alert_title, alert_service, alert_severity,
                               correlation_strategy, correlation_score, correlation_details, received_at
                        FROM incident_alerts
-                       WHERE incident_id = %s
+                       WHERE incident_id = %s AND user_id = %s
                        ORDER BY received_at ASC""",
-                    (incident_id,),
+                    (incident_id, user_id),
                 )
                 alert_rows = cursor.fetchall()
                 correlated_alerts = []
@@ -653,9 +653,9 @@ def get_incident_alerts(incident_id: str):
                     """SELECT id, source_type, alert_title, alert_service, alert_severity,
                               correlation_strategy, correlation_score, correlation_details, received_at
                        FROM incident_alerts
-                       WHERE incident_id = %s
+                       WHERE incident_id = %s AND user_id = %s
                        ORDER BY received_at ASC""",
-                    (incident_id,),
+                    (incident_id, user_id),
                 )
                 alert_rows = cursor.fetchall()
 
