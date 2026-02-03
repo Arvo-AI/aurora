@@ -127,38 +127,7 @@ rm vault-kms-key.json
    - On **GKE, EKS, AKS**: encryption at rest is enabled by default; no action needed.
    - On **self-managed clusters**: see [Encrypting secret data at rest](https://kubernetes.io/docs/tasks/administer-cluster/encrypt-data/).
 
-2. **Restrict secret access with RBAC** (only Vault pod can read the key):
-   ```bash
-   # Create a Role that only allows reading the specific secret
-   cat <<EOF | kubectl apply -f -
-   apiVersion: rbac.authorization.k8s.io/v1
-   kind: Role
-   metadata:
-     name: vault-kms-secret-reader
-     namespace: aurora
-   rules:
-   - apiGroups: [""]
-     resources: ["secrets"]
-     resourceNames: ["vault-gcp-kms"]
-     verbs: ["get"]
-   ---
-   apiVersion: rbac.authorization.k8s.io/v1
-   kind: RoleBinding
-   metadata:
-     name: vault-kms-secret-reader
-     namespace: aurora
-   subjects:
-   - kind: ServiceAccount
-     name: aurora-oss-vault
-     namespace: aurora
-   roleRef:
-     kind: Role
-     name: vault-kms-secret-reader
-     apiGroup: rbac.authorization.k8s.io
-   EOF
-   ```
-
-3. **Rotate service account keys** (recommended quarterly):
+2. **Rotate service account keys** (recommended quarterly):
    ```bash
    # Create new key
    gcloud iam service-accounts keys create new-vault-kms-key.json \
