@@ -568,6 +568,9 @@ export class ProviderPolling {
       localStorage.setItem("isGCPFetched", "false");
       localStorage.setItem("isLoggedAurora", "true");
 
+      // Trigger graph discovery now that post-auth (API enablement, SA propagation) is done
+      localStorage.setItem("aurora_graph_discovery_trigger", "1");
+
       // Update provider state first and clear setup status
       this.config.onProvidersUpdate(prev => prev.map(p =>
         p.id === 'gcp' ? {

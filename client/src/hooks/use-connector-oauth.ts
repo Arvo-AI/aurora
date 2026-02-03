@@ -152,6 +152,10 @@ export function useConnectorOAuth(connector: ConnectorConfig, userId: string | n
         const data = await response.json();
         
         if (data.login_url) {
+          // Signal the frontend discovery hook to start showing status.
+          // For GCP, the actual discovery task is chained from the backend
+          // after post-auth completes (gcp_post_auth_tasks.py).
+          localStorage.setItem("aurora_graph_discovery_trigger", "1");
           window.location.href = data.login_url;
         } else {
           throw new Error("No OAuth URL received");
