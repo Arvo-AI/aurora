@@ -199,7 +199,6 @@ def process_splunk_alert(
                         )
                         alert_result = cursor.fetchone()
                         alert_db_id = alert_result[0] if alert_result else None
-                        # Note: Don't commit yet - wait until incident is also inserted for atomicity
 
                         if not alert_db_id:
                             conn.rollback()
@@ -209,8 +208,9 @@ def process_splunk_alert(
                             )
                             return
 
+                        conn.commit()
                         logger.debug(
-                            "[SPLUNK][ALERT] Alert record created (pending commit) for user %s",
+                            "[SPLUNK][ALERT] Alert record created for user %s",
                             user_id,
                         )
 
@@ -231,18 +231,28 @@ def process_splunk_alert(
 
                         try:
                             correlator = AlertCorrelator()
-                            correlation_result = correlator.correlate(
-                                cursor=cursor,
-                                user_id=user_id,
-                                source_type="splunk",
-                                source_alert_id=alert_db_id,
-                                alert_title=correlation_title,
-                                alert_service=service,
-                                alert_severity=severity,
-                                alert_metadata=alert_metadata,
-                            )
+                            correlation_result = None
+                            with db_pool.get_admin_connection() as correlation_conn:
+                                previous_autocommit = correlation_conn.autocommit
+                                correlation_conn.autocommit = True
+                                try:
+                                    with (
+                                        correlation_conn.cursor() as correlation_cursor
+                                    ):
+                                        correlation_result = correlator.correlate(
+                                            cursor=correlation_cursor,
+                                            user_id=user_id,
+                                            source_type="splunk",
+                                            source_alert_id=alert_db_id,
+                                            alert_title=correlation_title,
+                                            alert_service=service,
+                                            alert_severity=severity,
+                                            alert_metadata=alert_metadata,
+                                        )
+                                finally:
+                                    correlation_conn.autocommit = previous_autocommit
 
-                            if correlation_result.is_correlated:
+                            if correlation_result and correlation_result.is_correlated:
                                 incident_id = correlation_result.incident_id
                                 cursor.execute(
                                     """INSERT INTO incident_alerts
