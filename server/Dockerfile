@@ -1,19 +1,14 @@
 # ============================================
 # Base Stage - Common dependencies
 # ============================================
-FROM python:3.11-slim-bookworm AS base
+FROM python:3.11-slim AS base
 
 ENV PYTHONPATH="/app"
 
 # Set the working directory
 WORKDIR /app 
 
-# Use HTTPS mirror with retries to handle transient mirror issues
-RUN echo 'Acquire::Retries "3";' > /etc/apt/apt.conf.d/80-retries && \
-    echo 'deb https://deb.debian.org/debian bookworm main' > /etc/apt/sources.list && \
-    echo 'deb https://deb.debian.org/debian-security bookworm-security main' >> /etc/apt/sources.list && \
-    apt-get update && \
-    apt-get install -y --no-install-recommends \
+RUN apt-get update && apt-get install -y \
     libpq-dev \
     gcc \
     g++ \
@@ -27,8 +22,8 @@ RUN echo 'Acquire::Retries "3";' > /etc/apt/apt.conf.d/80-retries && \
     gnupg \
     lsb-release \
     openssh-client \
-    dnsutils && \
-    rm -rf /var/lib/apt/lists/*
+    dnsutils \
+    --no-install-recommends
 
 # Download the latest installer
 ADD https://astral.sh/uv/0.8.22/install.sh /uv-installer.sh
