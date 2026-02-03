@@ -132,6 +132,23 @@ export interface ChatSession {
   updatedAt?: string;
 }
 
+export interface CorrelatedAlert {
+  id: string;
+  sourceType: AlertSource;
+  alertTitle: string;
+  alertService: string;
+  alertSeverity: string;
+  correlationStrategy: string;
+  correlationScore: number;
+  correlationDetails: {
+    topology?: number;
+    time_window?: number;
+    similarity?: number;
+    correlated_alert_count?: number;
+  };
+  receivedAt: string;
+}
+
 export interface Incident {
   id: string;
   alert: Alert;
@@ -142,6 +159,7 @@ export interface Incident {
   suggestions: Suggestion[];
   citations?: Citation[]; // Evidence citations for the summary
   chatSessions?: ChatSession[]; // All chat sessions linked to this incident
+  correlatedAlerts?: CorrelatedAlert[]; // Alerts correlated to this incident
   postMortem: PostMortem;
   startedAt: string;
   analyzedAt?: string;
@@ -280,6 +298,17 @@ export const incidentsService = {
           status: cs.status || 'active',
           createdAt: cs.createdAt,
           updatedAt: cs.updatedAt,
+        })),
+        correlatedAlerts: (inc.correlatedAlerts || []).map((ca: any) => ({
+          id: ca.id,
+          sourceType: ca.sourceType as AlertSource,
+          alertTitle: ca.alertTitle,
+          alertService: ca.alertService,
+          alertSeverity: ca.alertSeverity,
+          correlationStrategy: ca.correlationStrategy,
+          correlationScore: ca.correlationScore,
+          correlationDetails: ca.correlationDetails || {},
+          receivedAt: ca.receivedAt,
         })),
         postMortem: {} as PostMortem, // Not implemented yet
         startedAt: inc.startedAt,

@@ -313,3 +313,20 @@ pre[class*="language-"] > code[class*="language-"] {
     transform: translateX(200%) skewX(-12deg);
   }
 }
+
+/* Pulse once animation for new correlated alerts */
+@keyframes pulse-once {
+  0% {
+    box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.4);
+  }
+  50% {
+    box-shadow: 0 0 0 8px rgba(245, 158, 11, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(245, 158, 11, 0);
+  }
+}
+
+.animate-pulse-once {
+  animation: pulse-once 2s ease-out;
+}

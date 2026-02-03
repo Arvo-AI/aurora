@@ -26,6 +26,7 @@ import CitationModal from './CitationModal';
 import SuggestionModal from './SuggestionModal';
 import FixSuggestionModal from './FixSuggestionModal';
 import IncidentFeedback from './IncidentFeedback';
+import CorrelatedAlertsSection from './CorrelatedAlertsSection';
 import { Suggestion } from '@/lib/services/incidents';
 import InfrastructureVisualization from '@/components/incidents/InfrastructureVisualization';
 import { ReactFlowProvider } from '@xyflow/react';
@@ -470,6 +471,11 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
         <div className="prose prose-invert prose-sm max-w-none">
           {renderedSummary}
         </div>
+
+        {/* Correlated Alerts Section */}
+        {incident.correlatedAlerts && incident.correlatedAlerts.length > 0 && (
+          <CorrelatedAlertsSection alerts={incident.correlatedAlerts} />
+        )}
         
         {/* View RCA and Visualization Buttons */}
         {incident.chatSessionId && (
