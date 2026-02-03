@@ -101,6 +101,7 @@ The summary should be detailed enough that the AI assistant can continue helping
 Conversation to summarize:
 {conversation_text}
 
+
 Provide a detailed summary that preserves essential context:"""
 
             # Create isolated LLM instance for summarization
