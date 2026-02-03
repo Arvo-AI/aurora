@@ -7,7 +7,7 @@
 // ============================================================================
 
 export type AlertSource = 'netdata' | 'datadog' | 'grafana' | 'prometheus' | 'pagerduty';
-export type IncidentStatus = 'investigating' | 'analyzed';
+export type IncidentStatus = 'investigating' | 'analyzed' | 'merged';
 export type AuroraStatus = 'running' | 'complete' | 'error';
 export type SuggestionRisk = 'safe' | 'low' | 'medium' | 'high';
 export type SuggestionType = 'diagnostic' | 'mitigation' | 'communication' | 'fix';
@@ -172,6 +172,8 @@ export interface Incident {
   chatSessions?: ChatSession[]; // All chat sessions linked to this incident
   correlatedAlerts?: CorrelatedAlert[]; // Alerts correlated to this incident
   correlatedAlertCount?: number; // Count of correlated alerts (for list view)
+  mergedIntoIncidentId?: string; // ID of incident this was merged into
+  mergedIntoTitle?: string; // Title of incident this was merged into
   postMortem: PostMortem;
   startedAt: string;
   analyzedAt?: string;
@@ -222,6 +224,8 @@ export const incidentsService = {
         streamingThoughts: inc.streamingThoughts || [],
         suggestions: inc.suggestions || [],
         correlatedAlertCount: inc.correlatedAlertCount || 0,
+        mergedIntoIncidentId: inc.mergedIntoIncidentId,
+        mergedIntoTitle: inc.mergedIntoTitle,
         postMortem: {} as PostMortem, // Not implemented yet
         startedAt: inc.startedAt,
         analyzedAt: inc.analyzedAt,
@@ -415,6 +419,7 @@ export const incidentsService = {
     switch (status) {
       case 'investigating': return 'text-orange-500';
       case 'analyzed': return 'text-blue-500';
+      case 'merged': return 'text-zinc-500';
     }
   },
 

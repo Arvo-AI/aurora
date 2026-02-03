@@ -79,10 +79,35 @@ def _build_source_url(source_type: str, user_id: str) -> str:
 
 
 def _format_incident_response(
-    row: tuple, include_metadata: bool = False, include_correlation: bool = False
+    row: tuple, include_metadata: bool = False, include_correlation: bool = False, include_merge_target: bool = False
 ) -> Dict[str, Any]:
     """Format database row into incident response object."""
-    if include_correlation:
+    if include_merge_target:
+        (
+            incident_id,
+            user_id,
+            source_type,
+            source_alert_id,
+            status,
+            severity,
+            alert_title,
+            alert_service,
+            alert_environment,
+            aurora_status,
+            aurora_summary,
+            aurora_chat_session_id,
+            started_at,
+            analyzed_at,
+            active_tab,
+            created_at,
+            updated_at,
+            alert_metadata,
+            correlated_alert_count,
+            affected_services,
+            merged_into_incident_id,
+            merged_into_title,
+        ) = row
+    elif include_correlation:
         (
             incident_id,
             user_id,
@@ -105,6 +130,8 @@ def _format_incident_response(
             correlated_alert_count,
             affected_services,
         ) = row
+        merged_into_incident_id = None
+        merged_into_title = None
     elif include_metadata:
         (
             incident_id,
@@ -128,6 +155,8 @@ def _format_incident_response(
         ) = row
         correlated_alert_count = None
         affected_services = None
+        merged_into_incident_id = None
+        merged_into_title = None
     else:
         (
             incident_id,
@@ -151,6 +180,8 @@ def _format_incident_response(
         alert_metadata = None
         correlated_alert_count = None
         affected_services = None
+        merged_into_incident_id = None
+        merged_into_title = None
 
     result = {
         "id": str(incident_id),
@@ -187,6 +218,11 @@ def _format_incident_response(
         result["affectedServices"] = (
             affected_services if isinstance(affected_services, list) else []
         )
+    
+    # Add merge target info if available
+    if merged_into_incident_id is not None:
+        result["mergedIntoIncidentId"] = str(merged_into_incident_id)
+        result["mergedIntoTitle"] = merged_into_title
 
     return result
 
@@ -207,18 +243,20 @@ def get_incidents():
                 cursor.execute(
                     """
                     SELECT 
-                        id, user_id, source_type, source_alert_id, status, severity,
-                        alert_title, alert_service, alert_environment, aurora_status, aurora_summary,
-                        aurora_chat_session_id, started_at, analyzed_at, active_tab, created_at, updated_at,
-                        alert_metadata, correlated_alert_count, affected_services
-                    FROM incidents
-                    WHERE user_id = %s
+                        i.id, i.user_id, i.source_type, i.source_alert_id, i.status, i.severity,
+                        i.alert_title, i.alert_service, i.alert_environment, i.aurora_status, i.aurora_summary,
+                        i.aurora_chat_session_id, i.started_at, i.analyzed_at, i.active_tab, i.created_at, i.updated_at,
+                        i.alert_metadata, i.correlated_alert_count, i.affected_services,
+                        i.merged_into_incident_id, target.alert_title as merged_into_title
+                    FROM incidents i
+                    LEFT JOIN incidents target ON i.merged_into_incident_id = target.id
+                    WHERE i.user_id = %s
                       AND (
-                        alert_metadata IS NULL
-                        OR alert_metadata->>'correlated' IS NULL
-                        OR alert_metadata->>'correlated' != 'true'
+                        i.alert_metadata IS NULL
+                        OR i.alert_metadata->>'correlated' IS NULL
+                        OR i.alert_metadata->>'correlated' != 'true'
                       )
-                    ORDER BY started_at DESC
+                    ORDER BY i.started_at DESC
                     LIMIT 100
                     """,
                     (user_id,),
@@ -227,7 +265,7 @@ def get_incidents():
 
                 incidents = [
                     _format_incident_response(
-                        row, include_metadata=True, include_correlation=True
+                        row, include_metadata=True, include_correlation=True, include_merge_target=True
                     )
                     for row in rows
                 ]

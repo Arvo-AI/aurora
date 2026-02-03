@@ -108,15 +108,17 @@ export default function RecentAlertsSection({
   const [mergingId, setMergingId] = useState<string | null>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const [contentHeight, setContentHeight] = useState(0);
-  const hasFetched = useRef(false);
 
   // Fetch recent incidents when expanded
   useEffect(() => {
-    if (isExpanded && !hasFetched.current) {
-      hasFetched.current = true;
+    if (isExpanded) {
       setLoading(true);
       incidentsService.getRecentUnlinkedIncidents(currentIncidentId)
         .then(setRecentIncidents)
+        .catch(err => {
+          console.error('Failed to fetch recent incidents:', err);
+          setRecentIncidents([]);
+        })
         .finally(() => setLoading(false));
     }
   }, [isExpanded, currentIncidentId]);
@@ -140,10 +142,8 @@ export default function RecentAlertsSection({
     }
   };
 
-  // Don't render if no incidents after loading
-  if (hasFetched.current && !loading && recentIncidents.length === 0) {
-    return null;
-  }
+  // Always render the button - it will show "No other recent alerts" if empty
+  // Only skip rendering if we've already fetched and there's nothing, AND the user hasn't expanded it
 
   return (
     <div className="mt-4">
@@ -158,9 +158,6 @@ export default function RecentAlertsSection({
           <span className="text-xs text-zinc-500">
             Other recent alerts
           </span>
-          {!hasFetched.current && (
-            <span className="text-[10px] text-zinc-600">(click to load)</span>
-          )}
         </div>
         
         <ChevronDown 

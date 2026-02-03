@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Zap, Clock, ChevronRight, Loader2, CheckCircle2, AlertTriangle, Link2 } from 'lucide-react';
+import { Zap, Clock, ChevronRight, Loader2, CheckCircle2, AlertTriangle, Link2, GitMerge } from 'lucide-react';
 import { 
   Incident, 
   incidentsService 
@@ -141,6 +141,7 @@ export default function IncidentsPage() {
 
   const activeIncidents = incidents.filter(i => i.status === 'investigating');
   const analyzedIncidents = incidents.filter(i => i.status === 'analyzed');
+  const mergedIncidents = incidents.filter(i => i.status === 'merged');
 
   return (
     <div className="max-w-4xl mx-auto py-8 px-4">
@@ -190,6 +191,21 @@ export default function IncidentsPage() {
             </div>
           )}
 
+          {/* Merged */}
+          {mergedIncidents.length > 0 && (
+            <div>
+              <h2 className="text-sm font-medium text-zinc-600 uppercase tracking-wide mb-3 flex items-center gap-2">
+                <GitMerge className="h-4 w-4 text-zinc-600" />
+                Merged
+              </h2>
+              <div className="space-y-2">
+                {mergedIncidents.map(incident => (
+                  <IncidentRow key={incident.id} incident={incident} />
+                ))}
+              </div>
+            </div>
+          )}
+
           {incidents.length === 0 && (
             <Card>
               <CardContent className="py-12 text-center">
@@ -225,12 +241,13 @@ export default function IncidentsPage() {
 
 function IncidentRow({ incident }: { incident: Incident }) {
   const isActive = incident.status === 'investigating';
+  const isMerged = incident.status === 'merged';
   const showSeverity = (incident.alert.severity && incident.alert.severity !== 'unknown') || incident.status === 'analyzed';
   const correlatedCount = incident.correlatedAlertCount || 0;
 
   return (
     <Link href={`/incidents/${incident.id}`} aria-label={`View incident: ${incident.alert.title}`}>
-      <Card className={`hover:border-primary/50 transition-colors cursor-pointer ${isActive ? 'border-l-4 border-l-muted-foreground' : ''}`}>
+      <Card className={`hover:border-primary/50 transition-colors cursor-pointer ${isActive ? 'border-l-4 border-l-muted-foreground' : ''} ${isMerged ? 'opacity-60' : ''}`}>
         <CardContent className="py-3 px-4">
           <div className="flex items-center gap-4">
             {/* Severity - hide if unknown during investigation */}
@@ -242,7 +259,7 @@ function IncidentRow({ incident }: { incident: Incident }) {
 
             {/* Title & Service */}
             <div className="flex-1 min-w-0">
-              <p className="font-medium truncate">{incident.alert.title}</p>
+              <p className={`font-medium truncate ${isMerged ? 'text-zinc-500' : ''}`}>{incident.alert.title}</p>
               <div className="flex items-center gap-3 text-sm text-muted-foreground mt-0.5">
                 {incident.alert.service !== 'unknown' && <span>{incident.alert.service}</span>}
                 <span className="flex items-center gap-1">
@@ -259,6 +276,15 @@ function IncidentRow({ incident }: { incident: Incident }) {
                   <span className="flex items-center gap-1 text-muted-foreground">
                     <Loader2 className="h-3 w-3 animate-spin" />
                     Aurora investigating
+                  </span>
+                )}
+                {isMerged && (
+                  <span className="flex items-center gap-1 text-zinc-500">
+                    <GitMerge className="h-3 w-3" />
+                    {incident.mergedIntoTitle 
+                      ? `Merged into "${incident.mergedIntoTitle}"`
+                      : 'Merged into another incident'
+                    }
                   </span>
                 )}
               </div>
