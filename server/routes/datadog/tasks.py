@@ -10,6 +10,7 @@ from typing import Any, Dict, Optional
 
 from celery_config import celery_app
 from services.correlation.alert_correlator import AlertCorrelator
+from services.correlation import handle_correlated_alert
 
 logger = logging.getLogger(__name__)
 
@@ -289,64 +290,20 @@ def process_datadog_event(
                     )
 
                     if correlation_result.is_correlated:
-                        incident_id = correlation_result.incident_id
-                        cursor.execute(
-                            """INSERT INTO incident_alerts
-                               (user_id, incident_id, source_type, source_alert_id, alert_title, alert_service,
-                                alert_severity, correlation_strategy, correlation_score,
-                                correlation_details, alert_metadata)
-                               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
-                            (
-                                user_id,
-                                incident_id,
-                                "datadog",
-                                event_id,
-                                event_title,
-                                service,
-                                severity,
-                                correlation_result.strategy,
-                                correlation_result.score,
-                                json.dumps(correlation_result.details),
-                                json.dumps(alert_metadata),
-                            ),
-                        )
-                        cursor.execute(
-                            """UPDATE incidents
-                               SET correlated_alert_count = correlated_alert_count + 1,
-                                   affected_services = CASE
-                                       WHEN NOT (%s = ANY(affected_services)) THEN array_append(affected_services, %s)
-                                       ELSE affected_services
-                                   END,
-                                   updated_at = CURRENT_TIMESTAMP
-                               WHERE id = %s""",
-                            (service, service, incident_id),
+                        handle_correlated_alert(
+                            cursor=cursor,
+                            user_id=user_id,
+                            incident_id=correlation_result.incident_id,
+                            source_type="datadog",
+                            source_alert_id=event_id,
+                            alert_title=event_title,
+                            alert_service=service,
+                            alert_severity=severity,
+                            correlation_result=correlation_result,
+                            alert_metadata=alert_metadata,
+                            raw_payload=payload,
                         )
                         conn.commit()
-
-                        try:
-                            from routes.incidents_sse import (
-                                broadcast_incident_update_to_user_connections,
-                            )
-
-                            broadcast_incident_update_to_user_connections(
-                                user_id,
-                                {
-                                    "type": "alert_correlated",
-                                    "incident_id": str(incident_id),
-                                    "source": "datadog",
-                                    "alert_title": event_title,
-                                    "correlation_score": correlation_result.score,
-                                },
-                            )
-                        except Exception as e:
-                            logger.warning("[DATADOG] Failed to notify SSE: %s", e)
-
-                        logger.info(
-                            "[DATADOG] Alert correlated to incident %s (score=%.2f, strategy=%s)",
-                            incident_id,
-                            correlation_result.score,
-                            correlation_result.strategy,
-                        )
                         return
                 except Exception as corr_exc:
                     logger.warning(
