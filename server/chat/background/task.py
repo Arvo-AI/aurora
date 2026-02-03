@@ -33,6 +33,51 @@ from chat.backend.constants import MAX_TOOL_OUTPUT_CHARS, INFRASTRUCTURE_TOOLS
 logger = logging.getLogger(__name__)
 
 
+def cancel_rca_for_incident(incident_id: str) -> bool:
+    """Cancel a running RCA for an incident by revoking its Celery task.
+    
+    This is the proper way to stop an RCA when an incident is merged.
+    It uses Celery's task revocation with SIGTERM to gracefully stop the task.
+    
+    Args:
+        incident_id: The incident ID whose RCA should be cancelled
+        
+    Returns:
+        True if a task was found and revoked, False otherwise
+    """
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT rca_celery_task_id FROM incidents WHERE id = %s",
+                    (incident_id,)
+                )
+                row = cursor.fetchone()
+                
+                if not row or not row[0]:
+                    logger.info(f"[RCA-CANCEL] No Celery task ID found for incident {incident_id}")
+                    return False
+                
+                task_id = row[0]
+                
+                # Revoke the task with SIGTERM for graceful shutdown
+                celery_app.control.revoke(task_id, terminate=True, signal='SIGTERM')
+                logger.info(f"[RCA-CANCEL] Revoked Celery task {task_id} for incident {incident_id}")
+                
+                # Clear the task ID from the database
+                cursor.execute(
+                    "UPDATE incidents SET rca_celery_task_id = NULL WHERE id = %s",
+                    (incident_id,)
+                )
+                conn.commit()
+                
+                return True
+                
+    except Exception as e:
+        logger.error(f"[RCA-CANCEL] Failed to cancel RCA for incident {incident_id}: {e}")
+        return False
+
+
 def _extract_tool_calls_for_viz(session_id: str, user_id: str) -> List[Dict]:
     """Extract infrastructure tool calls from database for final visualization."""
     try:
@@ -234,17 +279,18 @@ def run_background_chat(
     completed_successfully = False
     
     try:
-        # Link session to incident if provided
+        # Link session and Celery task ID to incident if provided
         if incident_id:
             try:
                 with db_pool.get_admin_connection() as conn:
+                    # Store session ID AND Celery task ID for cancellation support
                     with conn.cursor() as cursor:
                         cursor.execute(
-                            "UPDATE incidents SET aurora_chat_session_id = %s WHERE id = %s",
-                            (session_id, incident_id)
+                            "UPDATE incidents SET aurora_chat_session_id = %s, rca_celery_task_id = %s WHERE id = %s",
+                            (session_id, self.request.id, incident_id)
                         )
                         conn.commit()
-                        logger.info(f"[BackgroundChat] Linked session {session_id} to incident {incident_id}")
+                        logger.info(f"[BackgroundChat] Linked session {session_id} and task {self.request.id} to incident {incident_id}")
                     
                     # Set incident aurora_status to running
                     with conn.cursor() as cursor:
@@ -297,6 +343,18 @@ def run_background_chat(
         
         # Update incident status to analyzed if incident_id provided
         if incident_id:
+            # Clear the Celery task ID since we're done
+            try:
+                with db_pool.get_admin_connection() as conn:
+                    with conn.cursor() as cursor:
+                        cursor.execute(
+                            "UPDATE incidents SET rca_celery_task_id = NULL WHERE id = %s",
+                            (incident_id,)
+                        )
+                        conn.commit()
+            except Exception as e:
+                logger.warning(f"[BackgroundChat] Failed to clear task ID for incident {incident_id}: {e}")
+            
             _update_incident_status(incident_id, "analyzed")
             _update_incident_aurora_status(incident_id, "complete")
             

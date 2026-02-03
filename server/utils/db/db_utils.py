@@ -539,6 +539,7 @@ def initialize_tables():
                         aurora_status VARCHAR(20) DEFAULT 'idle',
                         aurora_summary TEXT,
                         aurora_chat_session_id UUID,
+                        rca_celery_task_id VARCHAR(255),
                         started_at TIMESTAMP NOT NULL,
                         analyzed_at TIMESTAMP,
                         slack_message_ts VARCHAR(50),
@@ -1064,6 +1065,22 @@ def initialize_tables():
                 conn.commit()
             except Exception as e:
                 logging.warning(f"Error adding correlation columns to incidents: {e}")
+                conn.rollback()
+
+            # Add rca_celery_task_id column to incidents for RCA cancellation support
+            try:
+                cursor.execute(
+                    """
+                    ALTER TABLE incidents
+                    ADD COLUMN IF NOT EXISTS rca_celery_task_id VARCHAR(255);
+                    """
+                )
+                logging.info(
+                    "Added rca_celery_task_id column to incidents table (if not exists)."
+                )
+                conn.commit()
+            except Exception as e:
+                logging.warning(f"Error adding rca_celery_task_id column to incidents: {e}")
                 conn.rollback()
 
             # Add fix-type columns to incident_suggestions for code fix suggestions

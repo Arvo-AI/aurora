@@ -1190,7 +1190,7 @@ def merge_alert_to_incident(target_incident_id: str):
     This allows engineers to manually correlate alerts that the automatic
     correlation didn't catch. It will:
     1. Copy the alert to the target incident's incident_alerts table
-    2. Stop the source incident's RCA if running
+    2. Stop the source incident's RCA if running (via Celery task revocation)
     3. Transfer context from source RCA to target RCA
     4. Mark the source incident as merged
     """
@@ -1214,6 +1214,13 @@ def merge_alert_to_incident(target_incident_id: str):
 
     try:
         from chat.background.context_updates import enqueue_rca_context_update
+        from chat.background.task import cancel_rca_for_incident
+        
+        # Cancel the source incident's RCA FIRST (before any DB changes)
+        # This uses Celery task revocation to immediately stop the running task
+        rca_cancelled = cancel_rca_for_incident(source_incident_id)
+        if rca_cancelled:
+            logger.info(f"[INCIDENTS] Cancelled RCA for source incident {source_incident_id}")
 
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
@@ -1304,11 +1311,12 @@ def merge_alert_to_incident(target_incident_id: str):
                     (source_service, source_service, target_incident_id),
                 )
 
-                # Mark source incident as merged
+                # Mark source incident as merged and clear its summary
                 cursor.execute(
                     """UPDATE incidents
                        SET status = 'merged',
                            aurora_status = 'complete',
+                           aurora_summary = NULL,
                            merged_into_incident_id = %s,
                            updated_at = CURRENT_TIMESTAMP
                        WHERE id = %s""",
