@@ -4,6 +4,8 @@
 FROM python:3.11-slim AS base
 
 ENV PYTHONPATH="/app"
+# Set uv cache directory to a writable location for non-root users
+ENV UV_CACHE_DIR="/tmp/.cache/uv"
 
 # Set the working directory
 WORKDIR /app 
@@ -25,14 +27,11 @@ RUN apt-get update && apt-get install -y \
     dnsutils \
     --no-install-recommends
 
-# Download the latest installer
+# Download and install uv to a system-wide location (accessible by non-root users)
 ADD https://astral.sh/uv/0.8.22/install.sh /uv-installer.sh
-
-# Run the installer then remove it
-RUN sh /uv-installer.sh && rm /uv-installer.sh
-
-# Ensure the installed binary is on the `PATH`
-ENV PATH="/root/.local/bin/:$PATH"
+RUN sh /uv-installer.sh && rm /uv-installer.sh && \
+    mv /root/.local/bin/uv /usr/local/bin/uv && \
+    mv /root/.local/bin/uvx /usr/local/bin/uvx 2>/dev/null || true
 
 # Add Docker GPG key and repository
 RUN install -m 0755 -d /etc/apt/keyrings && \
@@ -166,7 +165,7 @@ FROM base AS dev
 # In development, code is mounted as volume
 # No need to copy source code here
 EXPOSE 5006
-CMD ["uv", "run", "main_chatbot.py"]
+CMD ["python", "main_chatbot.py"]
 
 # ============================================
 # Production Stage
@@ -185,4 +184,4 @@ COPY ./main_compute.py /app/main_compute.py
 
 EXPOSE 5006
 # Entrypoint for chat container:
-CMD ["uv", "run", "main_chatbot.py"]
+CMD ["python", "main_chatbot.py"]
