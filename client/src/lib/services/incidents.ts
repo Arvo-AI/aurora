@@ -149,6 +149,17 @@ export interface CorrelatedAlert {
   receivedAt: string;
 }
 
+export interface RecentIncident {
+  id: string;
+  alertTitle: string;
+  alertService: string;
+  severity: string;
+  sourceType: AlertSource;
+  status: IncidentStatus;
+  auroraStatus: AuroraStatus;
+  createdAt: string;
+}
+
 export interface Incident {
   id: string;
   alert: Alert;
@@ -462,6 +473,54 @@ export const incidentsService = {
       return data;
     } catch (error) {
       console.error('Error applying fix suggestion:', error);
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      return { success: false, error: message };
+    }
+  },
+
+  async getRecentUnlinkedIncidents(excludeId?: string): Promise<RecentIncident[]> {
+    try {
+      const url = excludeId 
+        ? `/api/incidents/recent-unlinked?exclude=${excludeId}`
+        : '/api/incidents/recent-unlinked';
+      
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to fetch recent incidents: ${response.statusText}`);
+      }
+
+      const data = await response.json();
+      return data.incidents || [];
+    } catch (error) {
+      console.error('Error fetching recent unlinked incidents:', error);
+      return [];
+    }
+  },
+
+  async mergeAlertToIncident(
+    targetIncidentId: string,
+    sourceIncidentId: string
+  ): Promise<{ success: boolean; error?: string }> {
+    try {
+      const response = await fetch(`/api/incidents/${targetIncidentId}/merge-alert`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ sourceIncidentId }),
+      });
+
+      const data = await response.json();
+      if (!response.ok) {
+        return { success: false, error: data.error || 'Failed to merge alert' };
+      }
+      return { success: true };
+    } catch (error) {
+      console.error('Error merging alert:', error);
       const message = error instanceof Error ? error.message : 'Unknown error';
       return { success: false, error: message };
     }

@@ -27,6 +27,7 @@ import SuggestionModal from './SuggestionModal';
 import FixSuggestionModal from './FixSuggestionModal';
 import IncidentFeedback from './IncidentFeedback';
 import CorrelatedAlertsSection from './CorrelatedAlertsSection';
+import RecentAlertsSection from './RecentAlertsSection';
 import { Suggestion } from '@/lib/services/incidents';
 import InfrastructureVisualization from '@/components/incidents/InfrastructureVisualization';
 import { ReactFlowProvider } from '@xyflow/react';
@@ -38,6 +39,7 @@ interface IncidentCardProps {
   onToggleThoughts: () => void;
   citations?: Citation[];
   onExecutionStarted?: () => void;
+  onRefresh?: () => void;
 }
 
 function StatusPill({ status }: { status: AuroraStatus }) {
@@ -81,7 +83,7 @@ function isSafeUrl(url: string | undefined): boolean {
   }
 }
 
-export default function IncidentCard({ incident, duration, showThoughts, onToggleThoughts, citations = [], onExecutionStarted }: IncidentCardProps) {
+export default function IncidentCard({ incident, duration, showThoughts, onToggleThoughts, citations = [], onExecutionStarted, onRefresh }: IncidentCardProps) {
   const [showRawPayload, setShowRawPayload] = useState(false);
   const [selectedCitation, setSelectedCitation] = useState<Citation | null>(null);
   const [selectedSuggestion, setSelectedSuggestion] = useState<Suggestion | null>(null);
@@ -476,6 +478,12 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
         {incident.correlatedAlerts && incident.correlatedAlerts.length > 0 && (
           <CorrelatedAlertsSection alerts={incident.correlatedAlerts} />
         )}
+
+        {/* Other Recent Alerts - for manual correlation */}
+        <RecentAlertsSection 
+          currentIncidentId={incident.id} 
+          onAlertMerged={onRefresh}
+        />
         
         {/* View RCA and Visualization Buttons */}
         {incident.chatSessionId && (
