@@ -63,7 +63,7 @@ image:
 replicaCounts:
   # Scalable services (can increase for load balancing)
   server: 1          # API server (Flask) - stateless, can scale
-  celeryWorker: 2    # Background task workers - stateless, can scale
+  celeryWorker: 1    # Background task workers - stateless, can scale
   chatbot: 1         # WebSocket chatbot - stateless, can scale (session affinity enabled by default)
   frontend: 1        # Next.js frontend - stateless, can scale
   searxng: 1         # Web search engine - stateless, can scale

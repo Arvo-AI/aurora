@@ -242,6 +242,7 @@ deploy: deploy-build
 	@echo "Deploying to Kubernetes with Helm..."
 	@helm upgrade --install aurora-oss ./deploy/helm/aurora \
 		--namespace aurora --create-namespace \
+		--reset-values \
 		-f deploy/helm/aurora/values.generated.yaml
 	@echo ""
 	@echo "✓ Deployment complete!"

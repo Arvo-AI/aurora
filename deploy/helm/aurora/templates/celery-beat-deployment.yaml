@@ -37,7 +37,7 @@ spec:
         - name: celery-beat
           image: "{{ .Values.image.registry }}/aurora-server:{{ .Values.image.tag }}"
           imagePullPolicy: IfNotPresent
-          command: ["celery", "-A", "celery_config", "beat", "--loglevel=info", "--pidfile=/tmp/celerybeat.pid"]
+          command: ["celery", "-A", "celery_config", "beat", "--loglevel=info", "--pidfile=/tmp/celerybeat.pid", "--schedule=/tmp/celerybeat-schedule"]
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
