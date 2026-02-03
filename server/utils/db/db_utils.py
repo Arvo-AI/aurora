@@ -1049,6 +1049,23 @@ def initialize_tables():
                 logging.warning(f"Error adding active_tab column to incidents: {e}")
                 conn.rollback()
 
+            # Migration: Add correlation columns to incidents table for alert correlation feature
+            try:
+                cursor.execute(
+                    """
+                    ALTER TABLE incidents
+                    ADD COLUMN IF NOT EXISTS correlated_alert_count INTEGER DEFAULT 0,
+                    ADD COLUMN IF NOT EXISTS affected_services TEXT[];
+                    """
+                )
+                logging.info(
+                    "Added correlated_alert_count and affected_services columns to incidents table (if not exists)."
+                )
+                conn.commit()
+            except Exception as e:
+                logging.warning(f"Error adding correlation columns to incidents: {e}")
+                conn.rollback()
+
             # Add fix-type columns to incident_suggestions for code fix suggestions
             try:
                 cursor.execute(
