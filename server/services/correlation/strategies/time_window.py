@@ -5,7 +5,7 @@ Scores an alert against an incident based on temporal proximity.
 Uses linear decay within a configurable time window.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from services.correlation.strategies.base import CorrelationStrategy
 
@@ -35,6 +35,13 @@ class TimeWindowStrategy(CorrelationStrategy):
             window boundary. Returns 0.0 if the alert precedes the incident
             update (negative gap) or exceeds the window.
         """
+        # Normalize both datetimes to UTC for comparison
+        # Handle timezone-naive datetimes (assume UTC)
+        if alert_received_at.tzinfo is None:
+            alert_received_at = alert_received_at.replace(tzinfo=timezone.utc)
+        if incident_updated_at.tzinfo is None:
+            incident_updated_at = incident_updated_at.replace(tzinfo=timezone.utc)
+
         gap_seconds = (alert_received_at - incident_updated_at).total_seconds()
 
         # Alert before incident update → no correlation
