@@ -235,7 +235,7 @@ services:
       - "6379:6379"
 
   searxng:
-    image: searxng/searxng:2025.1.31-b08f9d70b
+    image: searxng/searxng:2025.5.8-7ca24eee4
     container_name: aurora-searxng
     ports:
       - "8082:8080"

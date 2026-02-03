@@ -28,7 +28,7 @@ spec:
         fsGroup: 977
       containers:
         - name: searxng
-          image: searxng/searxng:2025.2.2-ab1e895cc
+          image: searxng/searxng:2025.5.8-7ca24eee4
           imagePullPolicy: IfNotPresent
           securityContext:
             runAsUser: 977
