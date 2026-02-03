@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Zap, Clock, ChevronRight, Loader2, CheckCircle2, AlertTriangle } from 'lucide-react';
+import { Zap, Clock, ChevronRight, Loader2, CheckCircle2, AlertTriangle, Link2 } from 'lucide-react';
 import { 
   Incident, 
   incidentsService 
@@ -226,6 +226,7 @@ export default function IncidentsPage() {
 function IncidentRow({ incident }: { incident: Incident }) {
   const isActive = incident.status === 'investigating';
   const showSeverity = (incident.alert.severity && incident.alert.severity !== 'unknown') || incident.status === 'analyzed';
+  const correlatedCount = incident.correlatedAlertCount || 0;
 
   return (
     <Link href={`/incidents/${incident.id}`} aria-label={`View incident: ${incident.alert.title}`}>
@@ -248,6 +249,12 @@ function IncidentRow({ incident }: { incident: Incident }) {
                   <Clock className="h-3 w-3" />
                   {incidentsService.formatDuration(incident.startedAt)}
                 </span>
+                {correlatedCount > 0 && (
+                  <span className="flex items-center gap-1 text-muted-foreground">
+                    <Link2 className="h-3 w-3" />
+                    {correlatedCount} related
+                  </span>
+                )}
                 {isActive && (
                   <span className="flex items-center gap-1 text-muted-foreground">
                     <Loader2 className="h-3 w-3 animate-spin" />

@@ -160,6 +160,7 @@ export interface Incident {
   citations?: Citation[]; // Evidence citations for the summary
   chatSessions?: ChatSession[]; // All chat sessions linked to this incident
   correlatedAlerts?: CorrelatedAlert[]; // Alerts correlated to this incident
+  correlatedAlertCount?: number; // Count of correlated alerts (for list view)
   postMortem: PostMortem;
   startedAt: string;
   analyzedAt?: string;
@@ -209,6 +210,7 @@ export const incidentsService = {
         summary: inc.summary || '',
         streamingThoughts: inc.streamingThoughts || [],
         suggestions: inc.suggestions || [],
+        correlatedAlertCount: inc.correlatedAlertCount || 0,
         postMortem: {} as PostMortem, // Not implemented yet
         startedAt: inc.startedAt,
         analyzedAt: inc.analyzedAt,

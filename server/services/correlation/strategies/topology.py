@@ -43,6 +43,10 @@ class TopologyStrategy(CorrelationStrategy):
         if not alert_service or not incident_services:
             return 0.0
 
+        # Direct service match = perfect score
+        if alert_service in incident_services:
+            return 1.0
+
         try:
             from services.graph.memgraph_client import get_memgraph_client
 
