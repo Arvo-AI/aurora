@@ -481,7 +481,8 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
 
         {/* Other Recent Alerts - for manual correlation */}
         <RecentAlertsSection 
-          currentIncidentId={incident.id} 
+          currentIncidentId={incident.id}
+          auroraStatus={incident.auroraStatus}
           onAlertMerged={onRefresh}
         />
         

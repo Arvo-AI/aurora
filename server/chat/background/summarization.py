@@ -172,6 +172,7 @@ def _build_summary_prompt_with_chat(
     triggered_at: Optional[str],
     investigation_transcript: Optional[str] = None,
     citations: Optional[List[Citation]] = None,
+    correlated_alert_count: int = 0,
 ) -> str:
     """Build a concise summary prompt that incorporates RCA chat context.
 
@@ -204,6 +205,15 @@ def _build_summary_prompt_with_chat(
 
         evidence_text = "\n\n".join(evidence_lines)
 
+        correlated_note = ""
+        if correlated_alert_count > 0:
+            correlated_note = f"""
+CORRELATED ALERTS:
+This incident has {correlated_alert_count} correlated alert(s) that were linked during the investigation. 
+When writing your report, consider whether these correlated alerts contributed to or are symptoms of the same root cause.
+If the correlated alerts are relevant, clearly indicate their relationship to the primary incident in your analysis.
+"""
+
         prompt = f"""You are writing an incident report based on alert data and forensic evidence.
 
 ALERT INFORMATION:
@@ -212,7 +222,7 @@ ALERT INFORMATION:
 - Severity: {severity}
 - Service: {service}
 {triggered_line}
-
+{correlated_note}
 INVESTIGATION EVIDENCE (cite using [n] markers):
 {evidence_text}
 
@@ -302,7 +312,7 @@ def _fetch_incident_basics(incident_id: str) -> Optional[Dict[str, Any]]:
             with conn.cursor() as cursor:
                 cursor.execute(
                     """
-                    SELECT source_type, alert_title, severity, alert_service, started_at
+                    SELECT source_type, alert_title, severity, alert_service, started_at, correlated_alert_count
                     FROM incidents
                     WHERE id = %s
                     """,
@@ -312,7 +322,7 @@ def _fetch_incident_basics(incident_id: str) -> Optional[Dict[str, Any]]:
                 if not row:
                     return None
 
-                source_type, alert_title, severity, alert_service, started_at = row
+                source_type, alert_title, severity, alert_service, started_at, correlated_alert_count = row
                 triggered_at = None
                 try:
                     triggered_at = started_at.isoformat() if started_at else None
@@ -325,6 +335,7 @@ def _fetch_incident_basics(incident_id: str) -> Optional[Dict[str, Any]]:
                     "severity": severity or "unknown",
                     "service": alert_service or "unknown",
                     "triggered_at": triggered_at,
+                    "correlated_alert_count": correlated_alert_count or 0,
                 }
     except Exception as e:
         logger.error(
@@ -570,6 +581,7 @@ def generate_incident_summary_from_chat(
             triggered_at=basics.get("triggered_at"),
             investigation_transcript=transcript,
             citations=all_citations if all_citations else None,
+            correlated_alert_count=basics.get("correlated_alert_count", 0),
         )
 
         # Use centralized model config for email report generation

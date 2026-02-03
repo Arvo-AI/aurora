@@ -1,12 +1,13 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import { RecentIncident, incidentsService } from '@/lib/services/incidents';
+import { RecentIncident, incidentsService, AuroraStatus } from '@/lib/services/incidents';
 import { ChevronDown, Clock, Server, ArrowRight, Loader2, Check, X } from 'lucide-react';
 import Image from 'next/image';
 
 interface RecentAlertsSectionProps {
   currentIncidentId: string;
+  auroraStatus: AuroraStatus;
   onAlertMerged?: () => void;
 }
 
@@ -100,8 +101,14 @@ function RecentAlertCard({
 
 export default function RecentAlertsSection({ 
   currentIncidentId,
+  auroraStatus,
   onAlertMerged,
 }: RecentAlertsSectionProps) {
+  // Don't show if RCA has completed
+  if (auroraStatus === 'complete' || auroraStatus === 'error') {
+    return null;
+  }
+
   const [isExpanded, setIsExpanded] = useState(false);
   const [recentIncidents, setRecentIncidents] = useState<RecentIncident[]>([]);
   const [loading, setLoading] = useState(false);

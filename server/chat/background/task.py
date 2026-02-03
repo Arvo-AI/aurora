@@ -706,24 +706,30 @@ def _update_incident_status(incident_id: str, status: str) -> None:
     Args:
         incident_id: The incident ID
         status: New status ('investigating', 'analyzed')
+    
+    Note: Will NOT update if current status is 'merged' to preserve merge state.
     """
     
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                # Don't overwrite 'merged' status - preserve merge state
                 cursor.execute(
                     """
                     UPDATE incidents 
                     SET status = %s, 
                         analyzed_at = CASE WHEN %s = 'analyzed' THEN %s ELSE analyzed_at END,
                         updated_at = %s
-                    WHERE id = %s
+                    WHERE id = %s AND status != 'merged'
                     """,
                     (status, status, datetime.now(), datetime.now(), incident_id)
                 )
                 rows_updated = cursor.rowcount
             conn.commit()
-            logger.info(f"[BackgroundChat] Updated incident {incident_id} status to '{status}' (rows={rows_updated})")
+            if rows_updated > 0:
+                logger.info(f"[BackgroundChat] Updated incident {incident_id} status to '{status}' (rows={rows_updated})")
+            else:
+                logger.info(f"[BackgroundChat] Skipped status update for incident {incident_id} (likely merged)")
     except Exception as e:
         logger.error(f"[BackgroundChat] Failed to update incident {incident_id} status to '{status}': {e}")
 

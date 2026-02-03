@@ -180,13 +180,13 @@ def get_chat_session(session_id):
         cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
         conn.commit()
         
-        # Fetch specific chat session
+        # Fetch specific chat session (allow completed, but not cancelled)
         cursor.execute("""
             SELECT id, title, messages, created_at, updated_at,
                    CASE WHEN ui_state IS NULL THEN '{}'::jsonb ELSE ui_state END as ui_state,
                    COALESCE(status, 'active') as status
             FROM chat_sessions 
-            WHERE id = %s AND user_id = %s AND is_active = true AND status NOT IN ('cancelled', 'completed')
+            WHERE id = %s AND user_id = %s AND is_active = true AND status != 'cancelled'
         """, (session_id, user_id))
         
         session_data = cursor.fetchone()
