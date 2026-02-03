@@ -38,7 +38,9 @@ spec:
         - name: aurora-server
           image: "{{ .Values.image.registry }}/aurora-server:{{ .Values.image.tag }}"
           imagePullPolicy: IfNotPresent
-          command: ["python", "main_compute.py"]
+          command: ["sh", "-c"]
+          args:
+            - gunicorn main_compute:app --bind 0.0.0.0:5080 -k gthread --threads 4 --workers 2 --timeout 120 --preload
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
