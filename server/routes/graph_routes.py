@@ -161,8 +161,18 @@ def trigger_discovery(user_id):
     from services.discovery.tasks import run_user_discovery
     from utils.cache.redis_client import get_redis_client
 
-    # Deduplicate: if a discovery task is already running for this user, return its ID
     redis_client = get_redis_client()
+
+    # Rate limit: 1 request per 30 seconds per user
+    rate_key = f"discovery:rate:{user_id}"
+    if redis_client and redis_client.get(rate_key):
+        return jsonify({
+            "error": "Rate limited. Please wait 30 seconds between discovery requests.",
+        }), 429
+    if redis_client:
+        redis_client.setex(rate_key, 30, "1")
+
+    # Deduplicate: if a discovery task is already running for this user, return its ID
     lock_key = f"discovery:running:{user_id}"
     if redis_client:
         existing_task_id = redis_client.get(lock_key)
