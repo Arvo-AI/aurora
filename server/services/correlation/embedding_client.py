@@ -6,7 +6,6 @@ dense vector embeddings for text.
 """
 
 import logging
-import os
 from functools import lru_cache
 from typing import List, Optional
 
@@ -14,8 +13,8 @@ import requests
 
 logger = logging.getLogger(__name__)
 
-T2V_URL = os.getenv("T2V_TRANSFORMERS_URL", "http://t2v-transformers:8080")
-T2V_TIMEOUT = float(os.getenv("T2V_TIMEOUT", "5.0"))
+T2V_URL = "http://t2v-transformers:8080"
+T2V_TIMEOUT = 5.0
 
 
 class EmbeddingClient:
@@ -31,6 +30,11 @@ class EmbeddingClient:
         if self._session is None:
             self._session = requests.Session()
         return self._session
+
+    def close(self) -> None:
+        if self._session is not None:
+            self._session.close()
+            self._session = None
 
     def embed(self, text: str) -> Optional[List[float]]:
         """Get embedding vector for a single text string.

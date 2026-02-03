@@ -48,6 +48,11 @@ class SimilarityStrategy(CorrelationStrategy):
             float: Weighted combination of title and service similarity in [0.0, 1.0].
         """
         if not alert_title or not incident_title:
+            logger.warning(
+                "[SimilarityStrategy] Empty title input - alert_title=%r, incident_title=%r",
+                bool(alert_title),
+                bool(incident_title),
+            )
             return 0.0
 
         title_sim = self._vector_similarity(alert_title, incident_title)
@@ -120,18 +125,25 @@ class SimilarityStrategy(CorrelationStrategy):
         Exact match gives 1.0; otherwise fall back to Jaccard on service name tokens.
         """
         if not alert_service or not incident_services:
+            logger.warning(
+                "[SimilarityStrategy] Empty service input - alert_service=%r, incident_services=%r",
+                bool(alert_service),
+                bool(incident_services),
+            )
             return 0.0
 
         if alert_service in incident_services:
             return 1.0
 
         alert_tokens = set(_TOKEN_RE.findall(alert_service.lower()))
-        alert_tokens = {t for t in alert_tokens if len(t) >= 2}
+        alert_tokens = {t for t in alert_tokens if len(t) >= 2 and t not in _STOPWORDS}
 
         incident_tokens: Set[str] = set()
         for svc in incident_services:
             tokens = _TOKEN_RE.findall(svc.lower())
-            incident_tokens.update(t for t in tokens if len(t) >= 2)
+            incident_tokens.update(
+                t for t in tokens if len(t) >= 2 and t not in _STOPWORDS
+            )
 
         if not alert_tokens or not incident_tokens:
             return 0.0
