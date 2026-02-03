@@ -333,13 +333,13 @@ def process_grafana_alert(
                                     """UPDATE incidents
                                        SET correlated_alert_count = correlated_alert_count + 1,
                                            affected_services = CASE
-                                               WHEN affected_services IS NULL THEN ARRAY[%s]
-                                               WHEN NOT (%s = ANY(affected_services)) THEN array_append(affected_services, %s)
+                                               WHEN affected_services IS NULL THEN ARRAY[%(service)s]
+                                               WHEN NOT (%(service)s = ANY(affected_services)) THEN array_append(affected_services, %(service)s)
                                                ELSE affected_services
                                            END,
                                            updated_at = CURRENT_TIMESTAMP
-                                       WHERE id = %s""",
-                                    (service, service, service, incident_id),
+                                       WHERE id = %(incident_id)s""",
+                                    {"service": service, "incident_id": incident_id},
                                 )
                                 conn.commit()
 

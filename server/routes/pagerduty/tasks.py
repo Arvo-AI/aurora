@@ -579,13 +579,16 @@ def process_pagerduty_event(
                                 """UPDATE incidents
                                    SET correlated_alert_count = correlated_alert_count + 1,
                                        affected_services = CASE
-                                           WHEN affected_services IS NULL THEN ARRAY[%s]
-                                           WHEN NOT (%s = ANY(affected_services)) THEN array_append(affected_services, %s)
+                                           WHEN affected_services IS NULL THEN ARRAY[%(service_name)s]
+                                           WHEN NOT (%(service_name)s = ANY(affected_services)) THEN array_append(affected_services, %(service_name)s)
                                            ELSE affected_services
                                        END,
                                        updated_at = CURRENT_TIMESTAMP
-                                   WHERE id = %s""",
-                                (service_name, service_name, service_name, incident_id),
+                                   WHERE id = %(incident_id)s""",
+                                {
+                                    "service_name": service_name,
+                                    "incident_id": incident_id,
+                                },
                             )
                             conn.commit()
 
