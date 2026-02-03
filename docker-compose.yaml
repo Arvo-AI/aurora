@@ -87,11 +87,11 @@ x-common-env: &common-env
   VAULT_KV_MOUNT: ${VAULT_KV_MOUNT}
 
   # Memgraph (Graph Database)
-  MEMGRAPH_HOST: ${MEMGRAPH_HOST:-memgraph}
-  MEMGRAPH_PORT: ${MEMGRAPH_PORT:-7687}
-  MEMGRAPH_USER: ${MEMGRAPH_USER:-aurora}
-  MEMGRAPH_PASSWORD: ${MEMGRAPH_PASSWORD:-aurora_secure_password}
-  DISCOVERY_INTERVAL_HOURS: ${DISCOVERY_INTERVAL_HOURS:-1}
+  MEMGRAPH_HOST: ${MEMGRAPH_HOST}
+  MEMGRAPH_PORT: ${MEMGRAPH_PORT}
+  MEMGRAPH_USER: ${MEMGRAPH_USER}
+  MEMGRAPH_PASSWORD: ${MEMGRAPH_PASSWORD}
+  DISCOVERY_INTERVAL_HOURS: ${DISCOVERY_INTERVAL_HOURS}
 
   # Email Notifications (SMTP)
   SMTP_HOST: ${SMTP_HOST}
@@ -543,8 +543,8 @@ services:
     volumes:
       - memgraph-data:/var/lib/memgraph
     environment:
-      - MEMGRAPH_USER=${MEMGRAPH_USER:-aurora}
-      - MEMGRAPH_PASSWORD=${MEMGRAPH_PASSWORD:-aurora_secure_password}
+      - MEMGRAPH_USER=${MEMGRAPH_USER}
+      - MEMGRAPH_PASSWORD=${MEMGRAPH_PASSWORD}
     command: >
       --memory-limit=2048
       --log-level=WARNING

@@ -19,8 +19,8 @@ def _clear_discovery_lock(user_id):
         redis_client = get_redis_client()
         if redis_client:
             redis_client.delete(f"discovery:running:{user_id}")
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"[Discovery] Failed to clear lock for user {user_id}: {e}")
 
 
 def _wait_for_gcp_post_auth(user_id, timeout=300, poll_interval=10):
@@ -198,6 +198,7 @@ def run_full_discovery(self):
 )
 def run_user_discovery(self, user_id):
     """Run discovery for a single user. Called on-demand via API."""
+    from celery.exceptions import SoftTimeLimitExceeded
     from utils.db.db_utils import connect_to_db_as_admin
     from services.discovery.discovery_service import run_discovery_for_user
 
@@ -272,13 +273,17 @@ def run_user_discovery(self, user_id):
         _clear_discovery_lock(user_id)
         return summary
 
+    except SoftTimeLimitExceeded:
+        logger.error(f"[Discovery Task] Soft time limit exceeded for user {user_id}")
+        _clear_discovery_lock(user_id)
+        return {"status": "error", "user_id": user_id, "error": "Discovery timed out"}
     except Exception as e:
         logger.error(f"[Discovery Task] Failed for user {user_id}: {e}")
         _clear_discovery_lock(user_id)
         return {"status": "error", "user_id": user_id, "error": str(e)}
 
 
-@celery_app.task(name="services.discovery.tasks.mark_stale_services", bind=True, max_retries=0)
+@celery_app.task(name="services.discovery.tasks.mark_stale_services", bind=True, max_retries=0, soft_time_limit=300, time_limit=600)
 def mark_stale_services(self):
     """Mark services not updated in 7 days as stale. Runs daily at 3 AM."""
     from utils.db.db_utils import connect_to_db_as_admin

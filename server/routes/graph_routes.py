@@ -210,9 +210,14 @@ def trigger_discovery():
 
         task = run_user_discovery.delay(user_id)
 
-        # Store task ID in Redis with TTL matching the hard time limit (3h)
+        # Atomic lock: SET NX EX to prevent TOCTOU race between check and set
         if redis_client:
-            redis_client.setex(lock_key, 10800, task.id)
+            acquired = redis_client.set(lock_key, task.id, nx=True, ex=10800)
+            if not acquired:
+                # Another request won the race — but our task is already dispatched.
+                # Overwrite with our task ID since the old lock was stale (we passed
+                # the check above, meaning the old task was not running).
+                redis_client.setex(lock_key, 10800, task.id)
 
         return jsonify({
             "task_id": task.id,

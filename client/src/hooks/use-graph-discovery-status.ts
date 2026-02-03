@@ -173,6 +173,8 @@ export function useGraphDiscoveryStatus(
       if (syncedTimerRef.current) clearTimeout(syncedTimerRef.current);
       window.removeEventListener("providerStateChanged", onProviderChange);
     };
+    // checkTrigger and stopPolling are stable (useCallback with stable deps) so
+    // omitting them is safe — they never change identity after mount.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [supportsDiscovery, isConnected, userId]);
 

@@ -1,6 +1,6 @@
 """
 Memgraph Client - Sole interface between Aurora and Memgraph graph database.
-All Cypher queries are encapsulated here. Uses gqlalchemy driver.
+All Cypher queries are encapsulated here. Uses the neo4j Bolt driver.
 """
 
 import os
@@ -24,10 +24,10 @@ def get_memgraph_client():
         with _client_lock:
             if _client_instance is None:
                 _client_instance = MemgraphClient(
-                    host=os.getenv("MEMGRAPH_HOST", "memgraph"),
-                    port=int(os.getenv("MEMGRAPH_PORT", "7687")),
-                    username=os.getenv("MEMGRAPH_USER", "aurora"),
-                    password=os.getenv("MEMGRAPH_PASSWORD", "aurora_secure_password"),
+                    host=os.environ["MEMGRAPH_HOST"],
+                    port=int(os.environ["MEMGRAPH_PORT"]),
+                    username=os.environ["MEMGRAPH_USER"],
+                    password=os.environ["MEMGRAPH_PASSWORD"],
                 )
     return _client_instance
 
@@ -49,12 +49,21 @@ class MemgraphClient:
             self._driver = GraphDatabase.driver(
                 uri,
                 auth=(self._username, self._password),
+                max_connection_pool_size=50,
             )
             logger.info(f"Connected to Memgraph at {uri}")
         if not self._schema_initialized:
             self._schema_initialized = True  # Set BEFORE calling to prevent recursion
             self.ensure_schema()
         return self._driver
+
+    def close(self):
+        """Close the driver and release all connections."""
+        if self._driver is not None:
+            self._driver.close()
+            self._driver = None
+            self._schema_initialized = False
+            logger.info("Memgraph driver closed")
 
     def _execute(self, query, params=None):
         """Execute a Cypher query and return results as list of dicts."""
@@ -89,6 +98,7 @@ class MemgraphClient:
             "CREATE CONSTRAINT ON (c:Change) ASSERT c.id IS UNIQUE;",
             "CREATE INDEX ON :Service(user_id);",
             "CREATE INDEX ON :Service(name);",
+            "CREATE INDEX ON :Service(user_id, name);",
             "CREATE INDEX ON :Service(resource_type);",
             "CREATE INDEX ON :Service(provider);",
             "CREATE INDEX ON :Service(cloud_resource_id);",
@@ -173,21 +183,98 @@ class MemgraphClient:
         return self._node_to_dict(results[0]["s"]) if results else None
 
     def batch_upsert_services(self, user_id, services):
-        """Upsert multiple services in a single transaction. Returns count."""
-        count = 0
+        """Upsert multiple services in a single UNWIND query. Returns count."""
+        if not services:
+            return 0
+
+        rows = []
         for svc in services:
             try:
-                self.upsert_service(
-                    user_id=user_id,
-                    name=svc["name"],
-                    resource_type=svc["resource_type"],
-                    provider=svc["provider"],
-                    **{k: v for k, v in svc.items() if k not in ("name", "resource_type", "provider")},
-                )
-                count += 1
-            except Exception as e:
-                logger.warning(f"Failed to upsert service {svc.get('name')}: {e}")
-        return count
+                name = svc["name"]
+                provider = svc["provider"]
+                metadata = svc.get("metadata", {})
+                rows.append({
+                    "id": f"{user_id}:{provider}:{name}",
+                    "name": name,
+                    "display_name": svc.get("display_name", name),
+                    "resource_type": svc["resource_type"],
+                    "sub_type": svc.get("sub_type", ""),
+                    "provider": provider,
+                    "region": svc.get("region", ""),
+                    "zone": svc.get("zone", ""),
+                    "cluster_name": svc.get("cluster_name", ""),
+                    "namespace": svc.get("namespace", ""),
+                    "vpc_id": svc.get("vpc_id") or "",
+                    "cloud_resource_id": svc.get("cloud_resource_id", ""),
+                    "endpoint": svc.get("endpoint", ""),
+                    "criticality": svc.get("criticality", "medium"),
+                    "team_owner": svc.get("team_owner", ""),
+                    "metadata": json.dumps(metadata) if isinstance(metadata, dict) else (metadata or "{}"),
+                })
+            except (KeyError, TypeError) as e:
+                logger.warning(f"Skipping malformed service {svc.get('name', '?')}: {e}")
+
+        if not rows:
+            return 0
+
+        query = """
+        UNWIND $services AS svc
+        MERGE (s:Service {id: svc.id})
+        ON CREATE SET
+            s.user_id = $user_id,
+            s.name = svc.name,
+            s.display_name = svc.display_name,
+            s.resource_type = svc.resource_type,
+            s.sub_type = svc.sub_type,
+            s.provider = svc.provider,
+            s.region = svc.region,
+            s.zone = svc.zone,
+            s.cluster_name = svc.cluster_name,
+            s.namespace = svc.namespace,
+            s.vpc_id = svc.vpc_id,
+            s.cloud_resource_id = svc.cloud_resource_id,
+            s.endpoint = svc.endpoint,
+            s.criticality = svc.criticality,
+            s.team_owner = svc.team_owner,
+            s.metadata = svc.metadata,
+            s.created_at = localDateTime(),
+            s.updated_at = localDateTime()
+        ON MATCH SET
+            s.display_name = svc.display_name,
+            s.resource_type = svc.resource_type,
+            s.sub_type = svc.sub_type,
+            s.region = svc.region,
+            s.zone = svc.zone,
+            s.cluster_name = svc.cluster_name,
+            s.namespace = svc.namespace,
+            s.vpc_id = svc.vpc_id,
+            s.cloud_resource_id = svc.cloud_resource_id,
+            s.endpoint = svc.endpoint,
+            s.criticality = svc.criticality,
+            s.team_owner = svc.team_owner,
+            s.metadata = svc.metadata,
+            s.updated_at = localDateTime()
+        RETURN count(s) AS total;
+        """
+        try:
+            results = self._execute(query, {"user_id": user_id, "services": rows})
+            return results[0]["total"] if results else 0
+        except Exception as e:
+            logger.error(f"Batch upsert services failed: {e}, falling back to individual inserts")
+            count = 0
+            for svc in services:
+                try:
+                    self.upsert_service(
+                        user_id=user_id,
+                        name=svc["name"],
+                        resource_type=svc["resource_type"],
+                        provider=svc["provider"],
+                        **{k: v for k, v in svc.items() if k not in ("name", "resource_type", "provider")},
+                    )
+                    count += 1
+                except Exception as e2:
+                    logger.warning(f"Failed to upsert service {svc.get('name')}: {e2}")
+            return count
 
     def get_service(self, user_id, name):
         """Get a single service by name with its direct dependencies."""
@@ -294,23 +381,70 @@ class MemgraphClient:
         return results[0] if results else None
 
     def batch_upsert_dependencies(self, user_id, deps):
-        """Upsert multiple edges. Returns count."""
-        count = 0
+        """Upsert multiple edges in a single UNWIND query. Returns count."""
+        if not deps:
+            return 0
+
+        rows = []
         for dep in deps:
             try:
-                result = self.upsert_dependency(
-                    user_id=user_id,
-                    from_service=dep["from_service"],
-                    to_service=dep["to_service"],
-                    dep_type=dep.get("dependency_type", "http"),
-                    confidence=dep.get("confidence", 0.5),
-                    discovered_from=dep.get("discovered_from", ["unknown"]),
-                )
-                if result:
-                    count += 1
-            except Exception as e:
-                logger.warning(f"Failed to upsert dependency {dep}: {e}")
-        return count
+                discovered = dep.get("discovered_from", ["unknown"])
+                if not isinstance(discovered, list):
+                    discovered = [discovered]
+                rows.append({
+                    "from_service": dep["from_service"],
+                    "to_service": dep["to_service"],
+                    "dep_type": dep.get("dependency_type", "http"),
+                    "confidence": dep.get("confidence", 0.5),
+                    "discovered_from": discovered,
+                })
+            except (KeyError, TypeError) as e:
+                logger.warning(f"Skipping malformed dependency {dep}: {e}")
+
+        if not rows:
+            return 0
+
+        query = """
+        UNWIND $deps AS dep
+        MATCH (a:Service {user_id: $user_id, name: dep.from_service})
+        MATCH (b:Service {user_id: $user_id, name: dep.to_service})
+        MERGE (a)-[r:DEPENDS_ON]->(b)
+        ON CREATE SET
+            r.dependency_type = dep.dep_type,
+            r.discovered_from = dep.discovered_from,
+            r.confidence = dep.confidence,
+            r.first_seen = localDateTime(),
+            r.last_seen = localDateTime()
+        ON MATCH SET
+            r.dependency_type = dep.dep_type,
+            r.confidence = CASE
+                WHEN dep.confidence > r.confidence THEN dep.confidence
+                ELSE r.confidence
+            END,
+            r.last_seen = localDateTime()
+        RETURN count(r) AS total;
+        """
+        try:
+            results = self._execute(query, {"user_id": user_id, "deps": rows})
+            return results[0]["total"] if results else 0
+        except Exception as e:
+            logger.error(f"Batch upsert dependencies failed: {e}, falling back to individual inserts")
+            count = 0
+            for dep in deps:
+                try:
+                    result = self.upsert_dependency(
+                        user_id=user_id,
+                        from_service=dep["from_service"],
+                        to_service=dep["to_service"],
+                        dep_type=dep.get("dependency_type", "http"),
+                        confidence=dep.get("confidence", 0.5),
+                        discovered_from=dep.get("discovered_from", ["unknown"]),
+                    )
+                    if result:
+                        count += 1
+                except Exception as e2:
+                    logger.warning(f"Failed to upsert dependency {dep}: {e2}")
+            return count
 
     def get_dependencies(self, user_id, service_name, direction="both"):
         """Get upstream and/or downstream dependencies."""
