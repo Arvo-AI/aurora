@@ -186,7 +186,7 @@ def get_chat_session(session_id):
                    CASE WHEN ui_state IS NULL THEN '{}'::jsonb ELSE ui_state END as ui_state,
                    COALESCE(status, 'active') as status
             FROM chat_sessions 
-            WHERE id = %s AND user_id = %s AND is_active = true
+            WHERE id = %s AND user_id = %s AND is_active = true AND status NOT IN ('cancelled', 'completed')
         """, (session_id, user_id))
         
         session_data = cursor.fetchone()
@@ -293,14 +293,20 @@ def update_chat_session(session_id):
         cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
         conn.commit()
         
-        # Check if session exists
+        # Check if session exists and is not cancelled
         cursor.execute("""
-            SELECT id FROM chat_sessions 
+            SELECT id, status FROM chat_sessions 
             WHERE id = %s AND user_id = %s AND is_active = true
         """, (session_id, user_id))
         
-        if not cursor.fetchone():
+        session_row = cursor.fetchone()
+        if not session_row:
             return jsonify({'error': 'Chat session not found'}), 404
+        
+        # Prevent updates to cancelled or completed sessions
+        session_status = session_row[1] if len(session_row) > 1 else 'active'
+        if session_status in ('cancelled', 'completed'):
+            return jsonify({'error': 'Cannot update a cancelled or completed session'}), 403
         
         # Prepare update fields
         update_fields = []

@@ -304,12 +304,14 @@ def get_incident(incident_id: str):
                 cursor.execute(
                     """
                     SELECT 
-                        id, user_id, source_type, source_alert_id, status, severity,
-                        alert_title, alert_service, alert_environment, aurora_status, aurora_summary,
-                        aurora_chat_session_id, started_at, analyzed_at, active_tab, created_at, updated_at,
-                        alert_metadata, correlated_alert_count, affected_services
-                    FROM incidents
-                    WHERE id = %s AND user_id = %s
+                        i.id, i.user_id, i.source_type, i.source_alert_id, i.status, i.severity,
+                        i.alert_title, i.alert_service, i.alert_environment, i.aurora_status, i.aurora_summary,
+                        i.aurora_chat_session_id, i.started_at, i.analyzed_at, i.active_tab, i.created_at, i.updated_at,
+                        i.alert_metadata, i.correlated_alert_count, i.affected_services,
+                        i.merged_into_incident_id, target.alert_title as merged_into_title
+                    FROM incidents i
+                    LEFT JOIN incidents target ON i.merged_into_incident_id = target.id
+                    WHERE i.id = %s AND i.user_id = %s
                     """,
                     (incident_id, user_id),
                 )
@@ -319,7 +321,7 @@ def get_incident(incident_id: str):
                     return jsonify({"error": "Incident not found"}), 404
 
                 incident = _format_incident_response(
-                    row, include_metadata=True, include_correlation=True
+                    row, include_metadata=True, include_correlation=True, include_merge_target=True
                 )
 
                 # Fetch raw alert data from source table
@@ -1318,7 +1320,7 @@ def merge_alert_to_incident(target_incident_id: str):
                     cursor.execute(
                         """UPDATE chat_sessions
                            SET status = 'cancelled'
-                           WHERE id = %s AND user_id = %s AND status = 'in_progress'""",
+                           WHERE id = %s AND user_id = %s AND status IN ('in_progress', 'completed')""",
                         (str(source_session_id), user_id),
                     )
 

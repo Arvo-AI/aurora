@@ -327,6 +327,8 @@ export const incidentsService = {
           correlationDetails: ca.correlationDetails || {},
           receivedAt: ca.receivedAt,
         })),
+        mergedIntoIncidentId: inc.mergedIntoIncidentId,
+        mergedIntoTitle: inc.mergedIntoTitle,
         postMortem: {} as PostMortem, // Not implemented yet
         startedAt: inc.startedAt,
         analyzedAt: inc.analyzedAt,
