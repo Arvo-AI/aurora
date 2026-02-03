@@ -1,8 +1,8 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { CorrelatedAlert, incidentsService } from '@/lib/services/incidents';
-import { ChevronDown, ChevronUp, Link2, Clock, Server, Zap, Target, Type } from 'lucide-react';
+import { ChevronDown, Link2, Clock, Server, Zap, Target, Type } from 'lucide-react';
 import Image from 'next/image';
 
 interface CorrelatedAlertsSectionProps {
@@ -137,9 +137,18 @@ function CorrelatedAlertCard({ alert, isNew }: { alert: CorrelatedAlert; isNew: 
 
 export default function CorrelatedAlertsSection({ alerts }: CorrelatedAlertsSectionProps) {
   const [isExpanded, setIsExpanded] = useState(false);
+  const contentRef = useRef<HTMLDivElement>(null);
+  const [contentHeight, setContentHeight] = useState(0);
   
   // Filter out primary alerts (those with strategy 'primary' or score of 1)
   const correlatedAlerts = alerts.filter(a => a.correlationStrategy !== 'primary');
+  
+  // Measure content height when alerts change or expansion state changes
+  useEffect(() => {
+    if (contentRef.current) {
+      setContentHeight(contentRef.current.scrollHeight);
+    }
+  }, [correlatedAlerts, isExpanded]);
   
   if (correlatedAlerts.length === 0) {
     return null;
@@ -167,18 +176,18 @@ export default function CorrelatedAlertsSection({ alerts }: CorrelatedAlertsSect
           hasNewAlerts 
             ? 'bg-amber-500/5 border-amber-500/30 hover:bg-amber-500/10' 
             : 'bg-zinc-900/50 border-zinc-800 hover:bg-zinc-800/50 hover:border-zinc-700'
-        }`}
+        } ${isExpanded ? 'rounded-b-none border-b-0' : ''}`}
       >
         <div className="flex items-center gap-3">
-          <div className={`p-1.5 rounded-md ${hasNewAlerts ? 'bg-amber-500/20' : 'bg-zinc-800'}`}>
-            <Link2 className={`w-4 h-4 ${hasNewAlerts ? 'text-amber-400' : 'text-zinc-400'}`} />
+          <div className={`p-1.5 rounded-md transition-colors duration-200 ${hasNewAlerts ? 'bg-amber-500/20' : 'bg-zinc-800'}`}>
+            <Link2 className={`w-4 h-4 transition-colors duration-200 ${hasNewAlerts ? 'text-amber-400' : 'text-zinc-400'}`} />
           </div>
           <div className="text-left">
             <div className="flex items-center gap-2">
-              <span className={`text-sm font-medium ${hasNewAlerts ? 'text-amber-300' : 'text-zinc-300'}`}>
+              <span className={`text-sm font-medium transition-colors duration-200 ${hasNewAlerts ? 'text-amber-300' : 'text-zinc-300'}`}>
                 Correlated Alerts
               </span>
-              <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${
+              <span className={`px-1.5 py-0.5 rounded text-xs font-medium transition-colors duration-200 ${
                 hasNewAlerts 
                   ? 'bg-amber-500/20 text-amber-400' 
                   : 'bg-zinc-800 text-zinc-400'
@@ -201,27 +210,53 @@ export default function CorrelatedAlertsSection({ alerts }: CorrelatedAlertsSect
           </div>
         </div>
         
-        <div className={`p-1 rounded transition-colors ${isExpanded ? 'bg-zinc-700' : 'hover:bg-zinc-800'}`}>
-          {isExpanded ? (
-            <ChevronUp className="w-4 h-4 text-zinc-400" />
-          ) : (
-            <ChevronDown className="w-4 h-4 text-zinc-400" />
-          )}
+        <div className={`p-1 rounded transition-all duration-200 ${isExpanded ? 'bg-zinc-700' : 'hover:bg-zinc-800'}`}>
+          <ChevronDown 
+            className={`w-4 h-4 text-zinc-400 transition-transform duration-300 ease-out ${
+              isExpanded ? 'rotate-180' : ''
+            }`} 
+          />
         </div>
       </button>
       
-      {/* Expandable content */}
-      {isExpanded && (
-        <div className="mt-3 space-y-2 animate-in slide-in-from-top-2 duration-200">
-          {sortedAlerts.map((alert) => (
-            <CorrelatedAlertCard 
-              key={alert.id} 
-              alert={alert} 
-              isNew={isRecent(alert.receivedAt)}
-            />
+      {/* Expandable content with smooth height animation */}
+      <div 
+        className={`overflow-hidden transition-all duration-300 ease-out ${
+          hasNewAlerts 
+            ? 'border-amber-500/30' 
+            : 'border-zinc-800'
+        } ${isExpanded ? 'border border-t-0 rounded-b-lg' : ''}`}
+        style={{ 
+          maxHeight: isExpanded ? `${contentHeight + 24}px` : '0px',
+          opacity: isExpanded ? 1 : 0,
+        }}
+      >
+        <div 
+          ref={contentRef}
+          className={`p-3 space-y-2 ${
+            hasNewAlerts ? 'bg-amber-500/[0.02]' : 'bg-zinc-900/30'
+          }`}
+        >
+          {sortedAlerts.map((alert, index) => (
+            <div
+              key={alert.id}
+              style={{
+                transitionDelay: isExpanded ? `${index * 50}ms` : '0ms',
+              }}
+              className={`transition-all duration-300 ease-out ${
+                isExpanded 
+                  ? 'opacity-100 translate-y-0' 
+                  : 'opacity-0 -translate-y-2'
+              }`}
+            >
+              <CorrelatedAlertCard 
+                alert={alert} 
+                isNew={isRecent(alert.receivedAt)}
+              />
+            </div>
           ))}
         </div>
-      )}
+      </div>
     </div>
   );
 }
