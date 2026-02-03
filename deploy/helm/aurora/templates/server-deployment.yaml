@@ -64,18 +64,18 @@ spec:
             httpGet:
               path: /health/readiness
               port: 5080
-            initialDelaySeconds: 10
+            initialDelaySeconds: 20
             periodSeconds: 10
             timeoutSeconds: 5
-            failureThreshold: 6
+            failureThreshold: 3
           livenessProbe:
             httpGet:
               path: /health/liveness
               port: 5080
-            initialDelaySeconds: 20
+            initialDelaySeconds: 60
             periodSeconds: 20
             timeoutSeconds: 5
-            failureThreshold: 6
+            failureThreshold: 3
           resources:
             {{- toYaml .Values.resources.server | nindent 12 }}
       volumes:
