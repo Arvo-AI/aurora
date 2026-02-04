@@ -1268,6 +1268,34 @@ def merge_alert_to_incident(target_incident_id: str):
 
                 target_session_id = target_row[1]
 
+                # Fetch investigation thoughts from source incident BEFORE commit
+                thought_rows = []
+                source_summary = None
+                if target_session_id:
+                    cursor.execute(
+                        """
+                        SELECT content, thought_type, timestamp
+                        FROM incident_thoughts
+                        WHERE incident_id = %s
+                        ORDER BY timestamp ASC
+                        LIMIT 30
+                        """,
+                        (source_incident_id,),
+                    )
+                    thought_rows = cursor.fetchall()
+
+                    # Fetch source incident's summary if available
+                    cursor.execute(
+                        """
+                        SELECT aurora_summary
+                        FROM incidents
+                        WHERE id = %s
+                        """,
+                        (source_incident_id,),
+                    )
+                    summary_row = cursor.fetchone()
+                    source_summary = summary_row[0] if summary_row and summary_row[0] else None
+
                 # Get the source incident's primary alert from incident_alerts
                 cursor.execute(
                     """SELECT id, source_type, source_alert_id, alert_title, alert_service,
@@ -1342,21 +1370,7 @@ def merge_alert_to_incident(target_incident_id: str):
 
                 # Enqueue context update to target RCA if it has an active session
                 if target_session_id:
-                    # Build rich context payload from source incident
-                    # Fetch investigation thoughts from source incident
-                    cursor.execute(
-                        """
-                        SELECT content, thought_type, timestamp
-                        FROM incident_thoughts
-                        WHERE incident_id = %s
-                        ORDER BY timestamp ASC
-                        LIMIT 30
-                        """,
-                        (source_incident_id,),
-                    )
-                    thought_rows = cursor.fetchall()
-                    
-                    # Format thoughts into readable context
+                    # Format thoughts into readable context (already fetched before commit)
                     thoughts_context = []
                     for row in thought_rows:
                         timestamp_str = row[2].strftime("%H:%M:%S") if row[2] else ""
@@ -1365,18 +1379,6 @@ def merge_alert_to_incident(target_incident_id: str):
                             thoughts_context.append(f"[{timestamp_str}] {thought_content}")
                         else:
                             thoughts_context.append(thought_content)
-                    
-                    # Fetch source incident's summary if available
-                    cursor.execute(
-                        """
-                        SELECT aurora_summary
-                        FROM incidents
-                        WHERE id = %s
-                        """,
-                        (source_incident_id,),
-                    )
-                    summary_row = cursor.fetchone()
-                    source_summary = summary_row[0] if summary_row and summary_row[0] else None
                     
                     # Build comprehensive context body
                     context_parts = [
