@@ -49,16 +49,27 @@ def cancel_rca_for_incident(incident_id: str) -> bool:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
                 cursor.execute(
-                    "SELECT rca_celery_task_id FROM incidents WHERE id = %s",
+                    "SELECT rca_celery_task_id, aurora_status FROM incidents WHERE id = %s",
                     (incident_id,)
                 )
                 row = cursor.fetchone()
                 
-                if not row or not row[0]:
+                if not row:
+                    logger.info(f"[RCA-CANCEL] Incident {incident_id} not found")
+                    return False
+                
+                task_id, aurora_status = row[0], row[1]
+                
+                if not task_id:
                     logger.info(f"[RCA-CANCEL] No Celery task ID found for incident {incident_id}")
                     return False
                 
-                task_id = row[0]
+                # Only revoke if RCA is actually running
+                if aurora_status != 'running':
+                    logger.info(
+                        f"[RCA-CANCEL] RCA for incident {incident_id} is not running (status={aurora_status}), skipping revocation"
+                    )
+                    return False
                 
                 # Revoke the task with SIGTERM for graceful shutdown
                 celery_app.control.revoke(task_id, terminate=True, signal='SIGTERM')
