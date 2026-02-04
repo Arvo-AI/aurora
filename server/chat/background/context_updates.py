@@ -21,15 +21,22 @@ def _make_update_key(user_id: str, session_id: str) -> str:
     return f"{_RCA_UPDATE_KEY_PREFIX}:{user_id}:{session_id}"
 
 
-def _get_session_status(session_id: str) -> Optional[str]:
-    """Get the current status of a chat session."""
+def _get_session_status(user_id: str, session_id: str) -> Optional[str]:
+    """Get the current status of a chat session.
+    
+    Uses RLS to ensure users can only check status of their own sessions.
+    """
     try:
         from utils.db.connection_pool import db_pool
-        with db_pool.get_admin_connection() as conn:
+        with db_pool.get_user_connection() as conn:
             with conn.cursor() as cursor:
+                # Set user context for RLS
+                cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
+                conn.commit()
+                
                 cursor.execute(
-                    "SELECT status FROM chat_sessions WHERE id = %s",
-                    (session_id,)
+                    "SELECT status FROM chat_sessions WHERE id = %s AND user_id = %s",
+                    (session_id, user_id)
                 )
                 row = cursor.fetchone()
                 return row[0] if row else None
@@ -77,8 +84,12 @@ def _append_context_update_to_completed_session(
             }],
         }
         
-        with db_pool.get_admin_connection() as conn:
+        with db_pool.get_user_connection() as conn:
             with conn.cursor() as cursor:
+                # Set user context for RLS
+                cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
+                conn.commit()
+                
                 # Lock the row and get current messages to prevent race conditions
                 cursor.execute(
                     "SELECT messages FROM chat_sessions WHERE id = %s AND user_id = %s FOR UPDATE",
@@ -155,7 +166,7 @@ def enqueue_rca_context_update(
     }
 
     # Check if session is already completed
-    session_status = _get_session_status(session_id)
+    session_status = _get_session_status(user_id, session_id)
     if session_status in ("completed", "failed"):
         logger.info(
             "[RCA-UPDATE] Session %s is %s, appending context update directly to database",
@@ -279,7 +290,7 @@ def apply_rca_context_updates(state: Any) -> Optional[HumanMessage]:
         return None
 
     # Check if session is completed - if so, write directly to database instead of injecting into state
-    session_status = _get_session_status(session_id)
+    session_status = _get_session_status(user_id, session_id)
     if session_status in ("completed", "failed"):
         logger.info(
             "[RCA-UPDATE] Session %s is %s, writing %d drained update(s) directly to database",
