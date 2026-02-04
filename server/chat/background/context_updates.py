@@ -273,22 +273,29 @@ def apply_rca_context_updates(state: Any) -> Optional[HumanMessage]:
         return None
 
     # Always check for new updates
-    logger.info(f"[RCA-UPDATE] Checking for context updates for session {session_id}")
     updates = drain_rca_context_updates(user_id, session_id)
     if not updates:
-        logger.info(f"[RCA-UPDATE] No pending updates for session {session_id}")
+        logger.debug("[RCA-UPDATE] No pending updates for session %s", session_id)
         return None
 
-    logger.info(f"[RCA-UPDATE] Draining {len(updates)} update(s) for session {session_id}")
+    logger.info(
+        "[RCA-UPDATE] Applying %d context update(s) for session %s",
+        len(updates),
+        session_id
+    )
 
     content = _format_updates_for_prompt(updates)
     update_message = HumanMessage(content=content)
-    logger.info(f"[RCA-UPDATE] Created HumanMessage with {len(content)} chars for session {session_id}")
 
     try:
         if hasattr(state, "messages") and isinstance(state.messages, list):
             state.messages.append(update_message)
-            logger.info(f"[RCA-UPDATE] ✅ INJECTED HumanMessage into state.messages (now {len(state.messages)} messages) for session {session_id}")
+            logger.info(
+                "[RCA-UPDATE] Injected context update into state.messages "
+                "(session=%s, messages=%d)",
+                session_id,
+                len(state.messages)
+            )
             
             # Store UI update payload for injection during UI conversion
             tool_call_id = f"rca_context_update_{uuid.uuid4().hex}"
