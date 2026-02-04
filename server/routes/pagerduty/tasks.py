@@ -265,24 +265,30 @@ def trigger_delayed_rca(
     )
 
     try:
-        # Check if RCA was already triggered (shouldn't happen, but safety check)
+        # Check if RCA was already triggered by checking the incident's aurora_chat_session_id
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
                 cursor.execute(
                     """
-                    SELECT COUNT(*) FROM chat_sessions
-                    WHERE user_id = %s 
-                      AND ui_state->'triggerMetadata'->>'incident_id' = %s
-                      AND ui_state->'triggerMetadata'->>'source' = 'pagerduty'
+                    SELECT aurora_chat_session_id FROM incidents
+                    WHERE id = %s AND user_id = %s
                     """,
-                    (user_id, incident_id),
+                    (incident_db_id, user_id),
                 )
-                existing_session_count = cursor.fetchone()[0]
-
-                if existing_session_count > 0:
+                row = cursor.fetchone()
+                
+                if not row:
+                    logger.warning(
+                        "[PAGERDUTY][RCA-DELAYED] Incident %s not found, skipping",
+                        incident_db_id,
+                    )
+                    return
+                
+                if row[0]:  # aurora_chat_session_id exists
                     logger.info(
-                        "[PAGERDUTY][RCA-DELAYED] RCA already exists for incident %s, skipping",
+                        "[PAGERDUTY][RCA-DELAYED] RCA already exists for incident %s (session=%s), skipping",
                         incident_id,
+                        row[0],
                     )
                     return
 
