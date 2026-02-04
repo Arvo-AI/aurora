@@ -79,9 +79,9 @@ def _append_context_update_to_completed_session(
         
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
-                # Get current messages
+                # Lock the row and get current messages to prevent race conditions
                 cursor.execute(
-                    "SELECT messages FROM chat_sessions WHERE id = %s AND user_id = %s",
+                    "SELECT messages FROM chat_sessions WHERE id = %s AND user_id = %s FOR UPDATE",
                     (session_id, user_id)
                 )
                 row = cursor.fetchone()
@@ -276,6 +276,20 @@ def apply_rca_context_updates(state: Any) -> Optional[HumanMessage]:
     updates = drain_rca_context_updates(user_id, session_id)
     if not updates:
         logger.debug("[RCA-UPDATE] No pending updates for session %s", session_id)
+        return None
+
+    # Check if session is completed - if so, write directly to database instead of injecting into state
+    session_status = _get_session_status(session_id)
+    if session_status in ("completed", "failed"):
+        logger.info(
+            "[RCA-UPDATE] Session %s is %s, writing %d drained update(s) directly to database",
+            session_id,
+            session_status,
+            len(updates)
+        )
+        # Format updates and write to database
+        for update_payload in updates:
+            _append_context_update_to_completed_session(user_id, session_id, update_payload)
         return None
 
     logger.info(
