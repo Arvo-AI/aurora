@@ -165,7 +165,7 @@ export default function IncidentDetailPage() {
   return (
     <div className="min-h-screen bg-background">
       {/* Merged incident banner */}
-      {incident.status === 'merged' && (
+      {incident.status === 'merged' && incident.mergedIntoIncidentId && (
         <div className="bg-zinc-900/50 border-b border-zinc-800 px-6 py-4">
           <div className="max-w-5xl mx-auto flex items-center gap-3 text-zinc-400">
             <GitMerge className="w-5 h-5 text-zinc-500" />
@@ -176,7 +176,7 @@ export default function IncidentDetailPage() {
                   href={`/incidents/${incident.mergedIntoIncidentId}`}
                   className="text-blue-400 hover:text-blue-300 font-medium"
                 >
-                  "{incident.mergedIntoTitle}"
+                  "{incident.mergedIntoTitle || 'another incident'}"
                 </Link>
               </p>
               <p className="text-xs text-zinc-600 mt-1">

@@ -36,7 +36,7 @@ function getStrategyLabel(strategy: string) {
 }
 
 function getStrategyExplanation(alert: CorrelatedAlert): string {
-  const details = alert.correlationDetails;
+  const details = alert.correlationDetails || {};
   const parts: string[] = [];
   
   if (details.topology && details.topology > 0) {

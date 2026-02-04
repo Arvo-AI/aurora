@@ -20,10 +20,9 @@ export async function GET(request: NextRequest) {
 
     const { headers: authHeaders } = authResult;
 
-    // Forward query params
+    // Forward all query params with proper encoding
     const searchParams = request.nextUrl.searchParams;
-    const exclude = searchParams.get('exclude');
-    const queryString = exclude ? `?exclude=${exclude}` : '';
+    const queryString = searchParams.toString() ? `?${searchParams.toString()}` : '';
 
     const response = await fetch(`${API_BASE_URL}/api/incidents/recent-unlinked${queryString}`, {
       method: 'GET',
