@@ -1446,7 +1446,7 @@ def get_recent_unlinked_incidents():
     
     Returns incidents from the last 30 minutes that:
     - Are not already merged
-    - Have status 'investigating' or 'analyzed'
+    - Have status 'investigating' (exclude 'analyzed' - those are done)
     """
     user_id = _get_user_id()
     if not user_id:
@@ -1465,7 +1465,7 @@ def get_recent_unlinked_incidents():
                            status, aurora_status, created_at
                     FROM incidents
                     WHERE user_id = %s
-                      AND status IN ('investigating', 'analyzed')
+                      AND status = 'investigating'
                       AND created_at >= NOW() - INTERVAL '30 minutes'
                 """
                 params = [user_id]
