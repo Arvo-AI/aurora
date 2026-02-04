@@ -15,13 +15,14 @@ from services.discovery.resource_mapper import map_gcp_resource, GCP_RELATIONSHI
 logger = logging.getLogger(__name__)
 
 
-def _run_command(args, timeout=120, env=None):
+def _run_command(args, timeout=120, env=None, progress_timeout=30):
     """Run a gcloud CLI command and return parsed JSON output.
 
     Args:
         args: List of command arguments (e.g. ["gcloud", "asset", ...]).
         timeout: Command timeout in seconds.
         env: Optional environment dict for subprocess (for authentication).
+        progress_timeout: Kill process if no output for this many seconds (detects frozen processes).
 
     Returns:
         Parsed JSON output from the command, or None on failure.
@@ -29,35 +30,67 @@ def _run_command(args, timeout=120, env=None):
     Raises:
         RuntimeError: If the command fails with a recognizable error.
     """
+    import threading
+    import time
+    import queue
+    
     try:
-        result = subprocess.run(
-            args,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            env=env,
-        )
+        process = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+        output_queue = queue.Queue()
+        last_output = {'time': time.time()}
+        
+        def read_pipe(pipe, name):
+            for line in iter(pipe.readline, ''):
+                if line:
+                    last_output['time'] = time.time()
+                    output_queue.put((name, line))
+            pipe.close()
+        
+        stdout_thread = threading.Thread(target=read_pipe, args=(process.stdout, 'out'), daemon=True)
+        stderr_thread = threading.Thread(target=read_pipe, args=(process.stderr, 'err'), daemon=True)
+        stdout_thread.start()
+        stderr_thread.start()
+        
+        stdout_lines, stderr_lines = [], []
+        start_time = time.time()
+        
+        while process.poll() is None:
+            if time.time() - last_output['time'] > progress_timeout:
+                process.kill()
+                logger.error(f"gcloud command frozen (no output for {progress_timeout}s): {' '.join(args)}")
+                return None
+            if time.time() - start_time > timeout:
+                process.kill()
+                logger.error(f"gcloud command timed out after {timeout}s: {' '.join(args)}")
+                return None
+            try:
+                name, line = output_queue.get(timeout=1)
+                (stdout_lines if name == 'out' else stderr_lines).append(line)
+            except queue.Empty:
+                continue
+        
+        while not output_queue.empty():
+            name, line = output_queue.get_nowait()
+            (stdout_lines if name == 'out' else stderr_lines).append(line)
+        
+        stdout = ''.join(stdout_lines).strip()
+        stderr = ''.join(stderr_lines).strip()
 
-        if result.returncode != 0:
-            stderr = result.stderr.strip()
+        if process.returncode != 0:
             if "Cloud Asset API has not been used" in stderr or \
                ("cloudasset.googleapis.com" in stderr and "is not enabled" in stderr):
                 raise RuntimeError(
                     "Cloud Asset API is not enabled for this project. "
                     "Enable it with: gcloud services enable cloudasset.googleapis.com"
                 )
-            logger.error(f"gcloud command failed (rc={result.returncode}): {stderr}")
+            logger.error(f"gcloud command failed (rc={process.returncode}): {stderr}")
             return None
 
-        output = result.stdout.strip()
-        if not output:
+        if not stdout:
             return []
 
-        return json.loads(output)
+        return json.loads(stdout)
 
-    except subprocess.TimeoutExpired:
-        logger.error(f"gcloud command timed out after {timeout}s: {' '.join(args)}")
-        return None
     except json.JSONDecodeError as e:
         logger.error(f"Failed to parse gcloud JSON output: {e}")
         return None
