@@ -29,6 +29,7 @@ export default function ConnectorCard({ connector }: ConnectorCardProps) {
   const [showGcpDialog, setShowGcpDialog] = useState(false);
   const [showOvhDialog, setShowOvhDialog] = useState(false);
   const [showScalewayDialog, setShowScalewayDialog] = useState(false);
+  const [showAzureDialog, setShowAzureDialog] = useState(false);
   const [userId, setUserId] = useState<string | null>(null);
   const [isConnectingOAuth, setIsConnectingOAuth] = useState(false);
   
@@ -123,6 +124,15 @@ export default function ConnectorCard({ connector }: ConnectorCardProps) {
         await handleGCPOAuth();
       } else {
         setShowGcpDialog(true);
+      }
+      return;
+    }
+
+    if (connector.id === "azure") {
+      if (!isConnected) {
+        router.push("/azure/auth");
+      } else {
+        setShowAzureDialog(true);
       }
       return;
     }
@@ -353,6 +363,7 @@ export default function ConnectorCard({ connector }: ConnectorCardProps) {
         connectorId={connector.id}
         showGitHubDialog={showGitHubDialog}
         showGcpDialog={showGcpDialog}
+        showAzureDialog={showAzureDialog}
         showOvhDialog={showOvhDialog}
         showScalewayDialog={showScalewayDialog}
         onGitHubDialogChange={(open) => {
@@ -365,6 +376,7 @@ export default function ConnectorCard({ connector }: ConnectorCardProps) {
           }
         }}
         onGcpDialogChange={setShowGcpDialog}
+        onAzureDialogChange={setShowAzureDialog}
         onOvhDialogChange={setShowOvhDialog}
         onScalewayDialogChange={setShowScalewayDialog}
         onGitHubDialogClose={() => setShowGitHubDialog(false)}

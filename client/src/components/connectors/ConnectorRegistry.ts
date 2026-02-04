@@ -157,6 +157,7 @@ class ConnectorRegistry {
       category: "Infrastructure",
       path: "/azure/auth",
       storageKey: "isAzureConnected",
+      useCustomConnection: true,
     });
 
     this.register({
