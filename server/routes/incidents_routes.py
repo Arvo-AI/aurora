@@ -741,7 +741,6 @@ ALLOWED_INCIDENT_STATUS = {"investigating", "analyzed", "merged"}
 ALLOWED_AURORA_STATUS = {"idle", "running", "complete", "error"}
 ALLOWED_ACTIVE_TAB = {"thoughts", "chat"}
 
-
 @incidents_bp.route("/api/incidents/<incident_id>", methods=["PATCH"])
 def update_incident(incident_id: str):
     """Update incident status or other fields."""

@@ -475,7 +475,7 @@ def process_pagerduty_event(
         service = incident.get("service", {})
         service_name = _extract_service_name(incident)
         service_id = service.get("id") if isinstance(service, dict) else None
-        
+
         # Store the complete V3 webhook payload
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
@@ -546,7 +546,7 @@ def process_pagerduty_event(
                     )
                 if body := incident.get("body", {}).get("details"):
                     alert_metadata["description"] = body
-                
+
                 # Preserve existing custom fields (e.g., runbook_link from custom field updates)
                 if "customFields" in existing_metadata:
                     alert_metadata["customFields"] = existing_metadata["customFields"]
@@ -704,7 +704,7 @@ def process_pagerduty_event(
                             raw_payload=raw_payload,
                             alert_metadata=alert_metadata,
                         )
-                        
+
                         # Schedule delayed RCA trigger to wait for potential runbook custom field update
                         if _should_trigger_background_chat(user_id, event_type):
                             logger.info(

@@ -1,5 +1,6 @@
 """Tests for TimeWindowStrategy."""
 
+import pytest
 from datetime import datetime, timedelta
 
 from services.correlation.strategies.time_window import TimeWindowStrategy
@@ -59,7 +60,3 @@ class TestTimeWindowStrategy:
         score = self.strategy.score(alert, base)
         assert score > 0.99
         assert score <= 1.0
-
-
-# Allow ``pytest`` to import approx at module level
-import pytest  # noqa: E402

@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-@dataclass
+@dataclass(frozen=True)
 class CorrelationResult:
     """Outcome of an alert-to-incident correlation attempt."""
 

@@ -526,13 +526,38 @@ def initialize_tables():
                     CREATE INDEX IF NOT EXISTS idx_pagerduty_events_received_at ON pagerduty_events(received_at DESC);
                 """,
                 "incidents": """
-                    CREATE TABLE IF NOT EXISTS incidents (
+                     CREATE TABLE IF NOT EXISTS incidents (
+                         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                         user_id VARCHAR(255) NOT NULL,
+                         source_type VARCHAR(20) NOT NULL,
+                         source_alert_id INTEGER NOT NULL,
+                         status VARCHAR(20) NOT NULL DEFAULT 'investigating',
+                         severity VARCHAR(20),
+                         alert_title TEXT,
+                         alert_service TEXT,
+                         alert_environment TEXT,
+                         aurora_status VARCHAR(20) DEFAULT 'idle',
+                         aurora_summary TEXT,
+                         aurora_chat_session_id UUID,
+                         started_at TIMESTAMP NOT NULL,
+                         analyzed_at TIMESTAMP,
+                         slack_message_ts VARCHAR(50),
+                         active_tab VARCHAR(10) DEFAULT 'thoughts',
+                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                         UNIQUE(source_type, source_alert_id, user_id)
+                     );
+                     
+                     CREATE INDEX IF NOT EXISTS idx_incidents_user_id ON incidents(user_id, started_at DESC);
+                     CREATE INDEX IF NOT EXISTS idx_incidents_status ON incidents(status);
+                     CREATE INDEX IF NOT EXISTS idx_incidents_source ON incidents(source_type, source_alert_id);
+                 """,
+                "incident_alerts": """
+                    CREATE TABLE IF NOT EXISTS incident_alerts (
                         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                        user_id VARCHAR(255) NOT NULL,
+                        incident_id UUID NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
                         source_type VARCHAR(20) NOT NULL,
                         source_alert_id INTEGER NOT NULL,
-                        status VARCHAR(20) NOT NULL DEFAULT 'investigating',
-                        severity VARCHAR(20),
                         alert_title TEXT,
                         alert_service TEXT,
                         alert_environment TEXT,
@@ -549,11 +574,37 @@ def initialize_tables():
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         UNIQUE(source_type, source_alert_id, user_id)
+                        alert_severity VARCHAR(20),
+                        correlation_strategy TEXT,
+                        correlation_score FLOAT,
+                        correlation_details JSONB,
+                        alert_metadata JSONB,
+                        received_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                     );
-                    
-                    CREATE INDEX IF NOT EXISTS idx_incidents_user_id ON incidents(user_id, started_at DESC);
-                    CREATE INDEX IF NOT EXISTS idx_incidents_status ON incidents(status);
-                    CREATE INDEX IF NOT EXISTS idx_incidents_source ON incidents(source_type, source_alert_id);
+
+                    CREATE INDEX IF NOT EXISTS idx_incident_alerts_incident_id ON incident_alerts(incident_id);
+                    CREATE INDEX IF NOT EXISTS idx_incident_alerts_source ON incident_alerts(source_type, source_alert_id);
+                """,
+                "incident_alerts": """
+                    CREATE TABLE IF NOT EXISTS incident_alerts (
+                        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                        user_id VARCHAR(1000) NOT NULL,
+                        incident_id UUID NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
+                        source_type VARCHAR(20) NOT NULL,
+                        source_alert_id INTEGER NOT NULL,
+                        alert_title TEXT,
+                        alert_service TEXT,
+                        alert_severity VARCHAR(20),
+                        correlation_strategy TEXT,
+                        correlation_score FLOAT,
+                        correlation_details JSONB,
+                        alert_metadata JSONB,
+                        received_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+
+                    CREATE INDEX IF NOT EXISTS idx_incident_alerts_incident_id ON incident_alerts(incident_id);
+                    CREATE INDEX IF NOT EXISTS idx_incident_alerts_source ON incident_alerts(source_type, source_alert_id);
+                    CREATE INDEX IF NOT EXISTS idx_incident_alerts_incident_received ON incident_alerts(incident_id, received_at);
                 """,
                 "incident_suggestions": """
                     CREATE TABLE IF NOT EXISTS incident_suggestions (
@@ -771,14 +822,43 @@ def initialize_tables():
 
             # Add incidents table
             # Note: incident_suggestions and incident_thoughts are child tables with CASCADE DELETE
-            # so they don't need RLS - they're protected by the parent incidents table
+            # so they don't need RLS - incident_alerts is protected separately for safety
             rls_tables.append("incidents")
+            rls_tables.append("incident_alerts")
             rls_tables.append("incident_feedback")
 
             # Execute table creation scripts
             for table_name, create_script in create_tables.items():
                 cursor.execute(create_script)
                 logging.info(f"Table '{table_name}' initialized successfully.")
+
+            # Migration: ensure incident_alerts.user_id exists and is backfilled
+            try:
+                cursor.execute(
+                    "ALTER TABLE incident_alerts ADD COLUMN IF NOT EXISTS user_id VARCHAR(1000);"
+                )
+                cursor.execute(
+                    "ALTER TABLE incident_alerts ADD COLUMN IF NOT EXISTS received_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;"
+                )
+                cursor.execute(
+                    """
+                    UPDATE incident_alerts ia
+                    SET user_id = i.user_id
+                    FROM incidents i
+                    WHERE ia.incident_id = i.id
+                      AND ia.user_id IS NULL;
+                    """
+                )
+                cursor.execute(
+                    "ALTER TABLE incident_alerts ALTER COLUMN user_id SET NOT NULL;"
+                )
+                conn.commit()
+                logging.info(
+                    "Ensured user_id column exists and is populated on incident_alerts table."
+                )
+            except Exception as e:
+                logging.warning(f"Error ensuring user_id on incident_alerts table: {e}")
+                conn.rollback()
 
             # Add read_only_role_arn to user_connections table for single source of truth
             try:
@@ -1050,37 +1130,36 @@ def initialize_tables():
                 logging.warning(f"Error adding active_tab column to incidents: {e}")
                 conn.rollback()
 
-            # Migration: Add correlation columns to incidents table for alert correlation feature
+            # Add correlated_alert_count column to incidents table
             try:
-                cursor.execute(
-                    """
+                cursor.execute("""
                     ALTER TABLE incidents
-                    ADD COLUMN IF NOT EXISTS correlated_alert_count INTEGER DEFAULT 0,
-                    ADD COLUMN IF NOT EXISTS affected_services TEXT[];
-                    """
-                )
+                    ADD COLUMN IF NOT EXISTS correlated_alert_count INTEGER DEFAULT 1;
+                """)
                 logging.info(
-                    "Added correlated_alert_count and affected_services columns to incidents table (if not exists)."
+                    "Added correlated_alert_count column to incidents table (if not exists)."
                 )
                 conn.commit()
             except Exception as e:
-                logging.warning(f"Error adding correlation columns to incidents: {e}")
+                logging.warning(
+                    f"Error adding correlated_alert_count column to incidents: {e}"
+                )
                 conn.rollback()
 
-            # Add rca_celery_task_id column to incidents for RCA cancellation support
+            # Add affected_services column to incidents table
             try:
-                cursor.execute(
-                    """
+                cursor.execute("""
                     ALTER TABLE incidents
-                    ADD COLUMN IF NOT EXISTS rca_celery_task_id VARCHAR(255);
-                    """
-                )
+                    ADD COLUMN IF NOT EXISTS affected_services TEXT[] DEFAULT '{}';
+                """)
                 logging.info(
-                    "Added rca_celery_task_id column to incidents table (if not exists)."
+                    "Added affected_services column to incidents table (if not exists)."
                 )
                 conn.commit()
             except Exception as e:
-                logging.warning(f"Error adding rca_celery_task_id column to incidents: {e}")
+                logging.warning(
+                    f"Error adding affected_services column to incidents: {e}"
+                )
                 conn.rollback()
 
             # Add fix-type columns to incident_suggestions for code fix suggestions
@@ -1187,6 +1266,7 @@ def initialize_tables():
                     "llm_usage_tracking",
                     "kubectl_agent_tokens",
                     "user_manual_vms",
+                    "incident_alerts",
                     "incident_feedback",
                 ]:
                     # INSERT policy

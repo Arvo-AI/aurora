@@ -12,8 +12,16 @@ from services.correlation.strategies.base import CorrelationStrategy
 
 logger = logging.getLogger(__name__)
 
-# Scoring tables keyed by hop depth
+# Upstream scores (alert depends on incident service):
+#   1-hop: direct dependency -> high correlation (1.0)
+#   2-hop: indirect dependency -> moderate correlation (0.7)
+#   3-hop: distant dependency -> low correlation (0.4)
 _UPSTREAM_SCORES = {1: 1.0, 2: 0.7, 3: 0.4}
+
+# Downstream scores (incident service depends on alert service):
+#   1-hop: direct dependent -> moderate correlation (0.8)
+#   2-hop: indirect dependent -> low correlation (0.5)
+#   3-hop: distant dependent -> very low correlation (0.2)
 _DOWNSTREAM_SCORES = {1: 0.8, 2: 0.5, 3: 0.2}
 
 
@@ -41,11 +49,12 @@ class TopologyStrategy(CorrelationStrategy):
             or when services are disconnected.
         """
         if not alert_service or not incident_services:
+            logger.warning(
+                "[TopologyStrategy] Empty input - alert_service=%r, incident_services=%r",
+                bool(alert_service),
+                bool(incident_services),
+            )
             return 0.0
-
-        # Direct service match = perfect score
-        if alert_service in incident_services:
-            return 1.0
 
         try:
             from services.graph.memgraph_client import get_memgraph_client

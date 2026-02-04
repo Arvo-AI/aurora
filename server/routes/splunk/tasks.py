@@ -200,7 +200,6 @@ def process_splunk_alert(
                         )
                         alert_result = cursor.fetchone()
                         alert_db_id = alert_result[0] if alert_result else None
-                        # Note: Don't commit yet - wait until incident is also inserted for atomicity
 
                         if not alert_db_id:
                             conn.rollback()
