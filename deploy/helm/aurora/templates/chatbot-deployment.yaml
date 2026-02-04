@@ -1,0 +1,86 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "aurora.fullname" . }}-chatbot
+  labels:
+    {{- include "aurora.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCounts.chatbot }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "aurora.name" . }}-chatbot
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/secret-db: {{ include (print $.Template.BasePath "/secret-db.yaml") . | sha256sum }}
+        checksum/secret-backend: {{ include (print $.Template.BasePath "/secret-backend.yaml") . | sha256sum }}
+        checksum/secret-app: {{ include (print $.Template.BasePath "/secret-app.yaml") . | sha256sum }}
+        checksum/secret-llm: {{ include (print $.Template.BasePath "/secret-llm.yaml") . | sha256sum }}
+      labels:
+        app.kubernetes.io/name: {{ include "aurora.name" . }}-chatbot
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/part-of: aurora
+    spec:
+      serviceAccountName: {{ include "aurora.fullname" . }}-chatbot
+      # Pod isolation requires K8s API access to create terminal pods
+      automountServiceAccountToken: {{ eq .Values.config.ENABLE_POD_ISOLATION "true" }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      {{- if .Values.image.pullSecrets }}
+      imagePullSecrets:
+        {{- toYaml .Values.image.pullSecrets | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: aurora-chatbot
+          image: "{{ .Values.image.registry }}/aurora-server:{{ .Values.image.tag }}"
+          imagePullPolicy: IfNotPresent
+          command: ["python", "main_chatbot.py"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          ports:
+            - name: ws
+              containerPort: 5006
+            - name: health
+              containerPort: 5007
+          envFrom:
+            - configMapRef:
+                name: {{ include "aurora.fullname" . }}-config
+            - secretRef:
+                name: {{ include "aurora.fullname" . }}-secrets-db
+            - secretRef:
+                name: {{ include "aurora.fullname" . }}-secrets-backend
+            - secretRef:
+                name: {{ include "aurora.fullname" . }}-secrets-app
+            - secretRef:
+                name: {{ include "aurora.fullname" . }}-secrets-llm
+          volumeMounts:
+            - name: terraform-workdir
+              mountPath: /app/terraform_workdir
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 5007
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 5007
+            initialDelaySeconds: 20
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 6
+          resources:
+            {{- toYaml .Values.resources.chatbot | nindent 12 }}
+      volumes:
+        - name: terraform-workdir
+          emptyDir: {}

@@ -93,9 +93,24 @@ def initialize_tables():
         with db_pool.get_admin_connection() as conn:
             cursor = conn.cursor()
 
-            # Acquire advisory lock to prevent concurrent initialization (deadlock prevention)
-            # Key 1234567890 is an arbitrary 64-bit integer for this specific task
-            cursor.execute("SELECT pg_advisory_lock(1234567890);")
+            # Try to acquire advisory lock (non-blocking)
+            cursor.execute("SELECT pg_try_advisory_lock(1234567890);")
+            lock_acquired = cursor.fetchone()[0]
+            
+            if not lock_acquired:
+                # Lock is held - likely by a dead process. Force release stale locks.
+                logging.warning("Advisory lock held by another process, clearing stale locks...")
+                cursor.execute("""
+                    SELECT pg_terminate_backend(pid) 
+                    FROM pg_locks 
+                    WHERE locktype = 'advisory' AND objid = 1234567890 AND pid != pg_backend_pid();
+                """)
+                conn.commit()
+                
+                # Now acquire the lock properly
+                cursor.execute("SELECT pg_advisory_lock(1234567890);")
+                lock_acquired = True
+                logging.info("Advisory lock acquired after clearing stale locks")
 
             # Define table creation scripts.
             create_tables = {

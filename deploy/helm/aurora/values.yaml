@@ -1,0 +1,458 @@
+# ==============================================================================
+# Aurora Helm Chart - Default Configuration
+# ==============================================================================
+# This file contains all available configuration options with sensible defaults.
+# Copy this file to `values.generated.yaml` and customize for your deployment.
+#
+# DO NOT commit values.generated.yaml - it contains secrets!
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# Chart metadata (optional overrides)
+# ------------------------------------------------------------------------------
+nameOverride: ""
+fullnameOverride: ""
+
+# ------------------------------------------------------------------------------
+# Stateful Services - Enable/Disable
+# ------------------------------------------------------------------------------
+# Set to false to use external managed services (RDS, ElastiCache, etc.)
+# When disabled, configure the external host in the config section below
+
+services:
+  postgres:
+    enabled: true    # Set false to use external Postgres (RDS, Cloud SQL, etc.)
+  redis:
+    enabled: true    # Set false to use external Redis (ElastiCache, Memorystore, etc.)
+  weaviate:
+    enabled: true    # Set false to use Weaviate Cloud or external instance
+  vault:
+    enabled: true    # Set false to use external Vault or other secrets manager
+
+# ------------------------------------------------------------------------------
+# ServiceAccount configuration
+# ------------------------------------------------------------------------------
+# Each service gets its own ServiceAccount for proper RBAC
+# On-prem: annotations can be left empty
+# Cloud: add workload identity annotations as needed (GKE, EKS IRSA, AKS, etc.)
+serviceAccount:
+  # Annotations applied to backend service accounts (server, chatbot, celery)
+  annotations: {}
+  
+  # Vault-specific ServiceAccount annotations (e.g., for cloud KMS auto-unseal)
+  vault:
+    annotations: {}
+
+# ------------------------------------------------------------------------------
+# Container images
+# ------------------------------------------------------------------------------
+image:
+  # Container registry where images are stored
+  registry: "your-registry"  #Examples: docker.io/myorg, gcr.io/project-id, ghcr.io/myorg
+  
+  # Image tag (version) to deploy
+  tag: "latest"
+  
+  # Optional: Pull secrets for private registries
+  # pullSecrets:
+  #   - name: regcred
+
+# ------------------------------------------------------------------------------
+# Replica counts per service
+# ------------------------------------------------------------------------------
+replicaCounts:
+  # Scalable services (can increase for load balancing)
+  server: 1          # API server (Flask) - stateless, can scale
+  celeryWorker: 1    # Background task workers - stateless, can scale
+  chatbot: 1         # WebSocket chatbot - stateless, can scale (session affinity enabled by default)
+  frontend: 1        # Next.js frontend - stateless, can scale
+  searxng: 1         # Web search engine - stateless, can scale
+  transformers: 1    # ML model service - stateless, can scale
+  
+  # Single-instance services (do NOT increase without additional config)
+  celeryBeat: 1      # Task scheduler - only 1 to avoid duplicate tasks
+  redis: 1           # Redis - single instance, no clustering configured
+  weaviate: 1        # Vector database - single instance, clustering requires additional config
+  vault: 1           # Secrets manager - single instance, HA requires additional config
+  postgres: 1        # Database - single instance, replication requires additional config
+
+# ------------------------------------------------------------------------------
+# Application configuration (non-sensitive)
+# ------------------------------------------------------------------------------
+config:
+  AURORA_ENV: "production" # Environment: dev, staging, production
+  
+  # --- Database ---
+  POSTGRES_HOST: ""  # Auto-generated if empty: <release>-postgres
+  POSTGRES_PORT: "5432"
+  POSTGRES_DB: "aurora_db"
+  
+  # --- Redis Cache ---
+  REDIS_URL: ""  # Auto-generated if empty: redis://<release>-redis:6379/0
+  
+  # --- S3-Compatible Object Storage (REQUIRED) ---
+  # Supports: AWS S3, MinIO, Cloudflare R2, Backblaze B2, etc.
+  STORAGE_BUCKET: ""             # REQUIRED - Your bucket name
+  STORAGE_ENDPOINT_URL: ""       # REQUIRED - e.g., https://s3.amazonaws.com
+  STORAGE_REGION: "us-east-1"    # Your storage region
+  STORAGE_USE_SSL: "true"
+  STORAGE_VERIFY_SSL: "true"
+  STORAGE_CACHE_ENABLED: "true"
+  STORAGE_CACHE_TTL: "60"
+  
+  # --- Vector Database (Weaviate) ---
+  WEAVIATE_HOST: ""  # Auto-generated if empty: <release>-weaviate
+  WEAVIATE_PORT: "8080"
+  WEAVIATE_GRPC_PORT: "50051"
+  
+  # --- Public URLs (REQUIRED) ---
+  # IMPORTANT: NEXT_PUBLIC_* vars are baked into the frontend at BUILD time.
+  # Changing them requires rebuilding the image (make deploy-build), not just redeploying.
+  # Uses subdomain-based routing (industry standard for APIs)
+  NEXT_PUBLIC_BACKEND_URL: ""    # Example: https://api.aurora.example.com
+  NEXT_PUBLIC_WEBSOCKET_URL: ""  # Example: wss://ws.aurora.example.com
+  FRONTEND_URL: ""               # Example: https://aurora.example.com
+  
+  # --- Internal Service URLs ---
+  BACKEND_URL: ""             # Auto-generated if empty: http://<release>-server:5080
+  CHATBOT_INTERNAL_URL: ""    # Auto-generated if empty: http://<release>-chatbot:5007
+  VAULT_ADDR: ""              # Default applied by chart when empty: http://<release>-vault:8200
+  SEARXNG_URL: ""             # Auto-generated if empty: http://<release>-searxng:8080
+  SEARXNG_BASE_URL: ""        #Example: https://aurora.example.com
+  
+  # --- Flask/API Configuration ---
+  FLASK_PORT: "5080"
+  VAULT_KV_MOUNT: "aurora"
+  VAULT_KV_BASE_PATH: "users"
+  
+  # --- LLM Configuration ---
+  LLM_PROVIDER_MODE: "openrouter"  #Provider: openrouter, openai, anthropic, google
+  AGENT_RECURSION_LIMIT: "240" #Maximum number of steps an agent can take
+  
+  # --- Performance & Caching ---
+  AURORA_SETUP_CACHE_ENABLED: "true"
+  AURORA_SETUP_CACHE_TTL: "3600"
+  AURORA_CACHE_TOKEN_IN_REDIS: "false"
+  RCA_OPTIMIZE_COSTS: "false"
+  GEMINI_DISABLE_THINKING: "false"
+  
+  # --- Security ---
+  RATE_LIMITING_ENABLED: "false"
+  RATE_LIMIT_HEADERS_ENABLED: "true"
+  AURORA_VERIFY_CLI_IDENTITY: "false"
+  
+  # --- Optional Features (enable as needed) ---
+  ENABLE_POD_ISOLATION: "false"              # Isolate terminal commands in separate pods
+  # NEXT_PUBLIC_* feature flags (build-time only - requires image rebuild to change)
+  NEXT_PUBLIC_ENABLE_OVH: "false"            # OVH Cloud integration
+  NEXT_PUBLIC_ENABLE_SLACK: "false"          # Slack notifications
+  NEXT_PUBLIC_ENABLE_PAGERDUTY_OAUTH: "false" # PagerDuty integration
+  NEXT_PUBLIC_ENABLE_CONFLUENCE: "false"     # Confluence integration
+  
+  # --- Pod Isolation Settings ---
+  # When enabled, the chart automatically creates:
+  #   - Terminal namespace (TERMINAL_NAMESPACE)
+  #   - RBAC Role/RoleBindings for server and chatbot to manage terminal pods
+  #   - NetworkPolicy blocking terminal pods from accessing cluster services
+  #     (Vault, Weaviate, Postgres, Redis, etc.) while allowing external internet
+  #   - K8s API tokens mounted on server/chatbot pods
+  # Optional additional hardening (manual):
+  #   - Create RuntimeClass for gVisor/Kata sandboxing (set TERMINAL_RUNTIME_CLASS)
+  #   - Taint nodes for untrusted workloads (set USE_UNTRUSTED_NODES)
+  TERMINAL_NAMESPACE: "untrusted"            # Namespace for isolated terminal pods
+  TERMINAL_IMAGE: ""                         # Image for terminal pods (defaults to aurora-server)
+  TERMINAL_POD_TTL: "3600"                   # Terminal pod lifetime in seconds
+  TERMINAL_RUNTIME_CLASS: ""                 # RuntimeClass: "" (default), "gvisor", "kata"
+  CHATBOT_POD_TTL: "600"                     # Chatbot session pod lifetime
+  # Schedule terminal pods only on dedicated nodes (requires manual node setup):
+  #   kubectl label node <node> workload=untrusted
+  #   kubectl taint node <node> workload=untrusted:NoSchedule
+  USE_UNTRUSTED_NODES: "false"
+  
+  # --- Kubectl Agent (optional, build-time) ---
+  NEXT_PUBLIC_KUBECTL_AGENT_CHART_URL: ""    # Requires image rebuild to change
+  
+  # --- Development (optional) ---
+  NGROK_URL: ""
+
+# ------------------------------------------------------------------------------
+# Secrets (REQUIRED - must be set in values.generated.yaml)
+# ------------------------------------------------------------------------------
+secrets:
+  # --- Database Credentials (secret-db.yaml) ---
+  db: # Mounted by: server, celery-worker, celery-beat, chatbot, postgres
+    POSTGRES_USER: "aurora"
+    POSTGRES_PASSWORD: ""        # REQUIRED - Generate with: openssl rand -base64 32
+  
+  # --- Backend Secrets (secret-backend.yaml) ---
+  backend:  # Mounted by: server, celery-worker, celery-beat, chatbot
+    VAULT_TOKEN: ""              # REQUIRED - Root token from Vault init - Set after running: kubectl exec -it statefulset/<release>-vault -- vault operator init
+    STORAGE_ACCESS_KEY: ""       # REQUIRED - Your S3 access key
+    STORAGE_SECRET_KEY: ""       # REQUIRED - Your S3 secret key
+  
+  # --- Application Secrets (secret-app.yaml) ---
+  app:   # Mounted by: server, celery-worker, celery-beat, chatbot, frontend, searxng
+    FLASK_SECRET_KEY: ""         # REQUIRED - Generate with: openssl rand -base64 32
+    AUTH_SECRET: ""              # REQUIRED - Generate with: openssl rand -base64 32
+    SEARXNG_SECRET: ""           # REQUIRED - Generate with: openssl rand -base64 32
+    
+    # --- Optional: Slack Integration ---
+    SLACK_CLIENT_ID: ""          # Get from: https://api.slack.com/apps
+    SLACK_CLIENT_SECRET: ""
+    SLACK_SIGNING_SECRET: ""
+    
+    # --- Optional: GitHub OAuth ---
+    GH_OAUTH_CLIENT_ID: ""       # Get from: https://github.com/settings/developers
+    GH_OAUTH_CLIENT_SECRET: ""
+    
+    # --- Optional: PagerDuty Integration ---
+    PAGERDUTY_CLIENT_ID: ""
+    PAGERDUTY_CLIENT_SECRET: ""
+    
+    # --- Optional: GCP OAuth (for GCP integrations) ---
+    CLIENT_ID: ""                # GCP OAuth client ID
+    CLIENT_SECRET: ""            # GCP OAuth client secret
+    
+    # --- Optional: OVH Cloud Integration ---
+    OVH_EU_CLIENT_ID: ""         # Europe region
+    OVH_EU_CLIENT_SECRET: ""
+    OVH_CA_CLIENT_ID: ""         # Canada region
+    OVH_CA_CLIENT_SECRET: ""
+    OVH_US_CLIENT_ID: ""         # US region
+    OVH_US_CLIENT_SECRET: ""
+    
+    # --- Optional: AWS Integration ---
+    AWS_ACCESS_KEY_ID: ""
+    AWS_SECRET_ACCESS_KEY: ""
+    
+    # --- Optional: Email/SMTP ---
+    SMTP_HOST: ""                # e.g., smtp.gmail.com
+    SMTP_PORT: "587"
+    SMTP_USER: ""
+    SMTP_PASSWORD: ""
+    SMTP_FROM_EMAIL: ""
+    SMTP_FROM_NAME: "Aurora"
+    
+    # --- Optional: Rate Limiting Bypass ---
+    RATE_LIMIT_BYPASS_TOKEN: ""  # Custom token to bypass rate limits
+  
+  # --- LLM API Keys (secret-llm.yaml) ---
+  llm:  # Mounted by: chatbot, celery-worker, celery-beat
+    # At least one LLM API key is required
+    OPENROUTER_API_KEY: ""       # Get from: https://openrouter.ai/keys
+    OPENAI_API_KEY: ""           # Get from: https://platform.openai.com/api-keys
+    ANTHROPIC_API_KEY: ""        # Get from: https://console.anthropic.com/
+    GOOGLE_AI_API_KEY: ""        # Get from: https://makersuite.google.com/app/apikey
+    
+    # --- Optional: Web Search ---
+    TAVILY_API_KEY: ""           # Get from: https://tavily.com/
+
+# ------------------------------------------------------------------------------
+# Resource requests and limits
+# ------------------------------------------------------------------------------
+resources:
+  server:
+    requests:
+      cpu: "200m"
+      memory: "512Mi"
+    limits:
+      cpu: "2000m"
+      memory: "2Gi"
+  celeryWorker:
+    requests:
+      cpu: "100m"
+      memory: "1Gi"
+    limits:
+      cpu: "1000m"
+      memory: "4Gi"
+  celeryBeat:
+    requests:
+      cpu: "50m"
+      memory: "128Mi"
+    limits:
+      cpu: "200m"
+      memory: "256Mi"
+  chatbot:
+    requests:
+      cpu: "100m"
+      memory: "256Mi"
+    limits:
+      cpu: "500m"
+      memory: "1Gi"
+  frontend:
+    requests:
+      cpu: "50m"
+      memory: "256Mi"
+    limits:
+      cpu: "300m"
+      memory: "512Mi"
+  redis:
+    requests:
+      cpu: "50m"
+      memory: "128Mi"
+    limits:
+      cpu: "200m"
+      memory: "256Mi"
+  searxng:
+    requests:
+      cpu: "50m"
+      memory: "128Mi"
+    limits:
+      cpu: "300m"
+      memory: "512Mi"
+  weaviate:
+    requests:
+      cpu: "100m"
+      memory: "512Mi"
+    limits:
+      cpu: "500m"
+      memory: "1Gi"
+  transformers:
+    requests:
+      cpu: "100m"
+      memory: "512Mi"
+    limits:
+      cpu: "500m"
+      memory: "2Gi"
+  vault:
+    requests:
+      cpu: "50m"
+      memory: "128Mi"
+    limits:
+      cpu: "200m"
+      memory: "256Mi"
+  postgres:
+    requests:
+      cpu: "100m"
+      memory: "512Mi"
+    limits:
+      cpu: "500m"
+      memory: "1Gi"
+
+# ------------------------------------------------------------------------------
+# Persistent storage
+# ------------------------------------------------------------------------------
+persistence:
+  postgres:
+    size: 50Gi           # Database storage
+  weaviate:
+    size: 50Gi           # Vector embeddings storage
+  vault:
+    size: 10Gi           # Secrets storage
+  redis:
+    size: 5Gi            # Celery task state and cache
+
+# ------------------------------------------------------------------------------
+# Ingress configuration
+# ------------------------------------------------------------------------------
+# Uses subdomain-based routing (industry standard):
+#   aurora.example.com     → Frontend
+#   api.aurora.example.com → API Server
+#   ws.aurora.example.com  → WebSocket Server
+ingress:
+  enabled: true
+  className: "nginx"   # Use your ingress controller class (nginx, traefik, alb, gce, etc.)
+  
+  # Custom annotations - merged with controller-specific defaults below
+  # Use this to add your own annotations or override defaults
+  annotations: {}
+  #   kubernetes.io/ingress.global-static-ip-name: "my-ip"
+  #   external-dns.alpha.kubernetes.io/hostname: "example.com"
+  
+  # Controller-specific annotations (auto-applied based on className)
+  # ----------------------------------------------------------------
+  # These are critical for Aurora's functionality:
+  #   - proxy-read-timeout: 3600s - Required for long-running RCA analysis (240 agent iterations can take 30+ minutes)
+  #   - proxy-http-version: 1.1 - Required for WebSocket upgrade
+  #   - proxy-body-size: 50m - Required for file uploads
+  #
+  # WARNING: If using a non-nginx controller (Traefik, HAProxy, AWS ALB, GCE), 
+  # you MUST configure equivalent settings via ingress.annotations or your
+  # controller's configuration. Without these, you'll experience:
+  #   - WebSocket disconnects after 60s (default timeout)
+  #   - Failed WebSocket connections (HTTP/1.0 doesn't support upgrades)
+  #   - 413 errors on large file uploads
+  #
+  nginx:
+    # Auto-apply nginx annotations when className is "nginx"
+    enabled: true  # Set to false to disable nginx defaults even when className is nginx
+    proxyReadTimeout: "3600"
+    proxySendTimeout: "3600"
+    proxyBodySize: "50m"
+    proxyHttpVersion: "1.1"
+    # Cookie-based session affinity for WebSocket connections
+    # Ensures the HTTP upgrade request hits the same pod when scaling chatbot replicas
+    sessionAffinity:
+      enabled: true
+      cookieName: "aurora-ws-affinity"
+      cookieMaxAge: "3600"
+  
+  # TLS/HTTPS Configuration
+  # ------------------------
+  # Option 1: Kubernetes TLS with cert-manager (Recommended for production)
+  #   - Automatic Let's Encrypt certificates
+  #   - Requires cert-manager installed in cluster
+  #   - Set tls.enabled: true and tls.certManager.enabled: true
+  #
+  # Option 2: Manual TLS certificate
+  #   - Create your own kubernetes secret with certificate
+  #   - Set tls.enabled: true and provide tls.secretName
+  tls:
+    enabled: false  # Set to true if using Option 1 or 2
+    secretName: "aurora-tls"  # Secret name for manual certificates (Option 2)
+    
+    # Automatic certificate management with cert-manager (Option 1)
+    certManager:
+      enabled: false  # Set to true to use cert-manager with Let's Encrypt
+      issuer: "letsencrypt-prod"  # ClusterIssuer name (must be created separately)
+      email: ""  # Email for Let's Encrypt notifications
+  
+  hosts:
+    frontend: "aurora.example.com"
+    api: "api.aurora.example.com"
+    ws: "ws.aurora.example.com"
+
+# ------------------------------------------------------------------------------
+# Vault Configuration
+# ------------------------------------------------------------------------------
+# SECURITY NOTE: Internal Traffic Encryption
+# ------------------------------------------
+# By default, Vault's TCP listener has TLS disabled (tls_disable = 1), meaning
+# all communication between pods and Vault travels as plaintext HTTP inside the
+# cluster. This includes Vault tokens and secrets.
+#
+# MITIGATIONS IN PLACE:
+#   1. Terminal pods run in an isolated namespace with a default-deny NetworkPolicy
+#      that blocks all egress to cluster-internal IPs (see pod-isolation.yaml).
+#      Untrusted pods cannot reach Vault, Weaviate, Postgres, Redis, or any other internal services.
+#   2. Terminal pods never receive Vault tokens - credentials are fetched by
+#      trusted pods and injected per-command via environment variables.
+#
+# For additional hardening, consider:
+#   - Enable TLS on Vault listener with auto-generated or provided certificates
+#   - Use a service mesh (Istio/Linkerd) that provides mTLS between pods
+#
+# NOTE: NetworkPolicies require a CNI plugin that supports them (Calico, Cilium,
+# Weave Net, etc.). If your cluster doesn't support NetworkPolicies, the policy
+# will be created but have no effect.
+#
+# Auto-Unseal Configuration (Optional)
+# ------------------------------------
+# By default, Vault uses Shamir seals (manual unsealing after pod restarts).
+# For production, configure auto-unseal with cloud KMS.
+# See docs/KMS_SETUP.md for detailed setup guides.
+#
+# WARNING: If KMS key is deleted, Vault data is permanently unrecoverable.
+vault:
+  seal:
+    # Options: "shamir" (default), "gcpckms"
+    type: "shamir"
+    
+    # GCP Cloud KMS Configuration
+    # See docs/KMS_GCP.md for setup instructions
+    # gcpckms:
+    #   project: "your-project-id"
+    #   region: "us-central1"
+    #   key_ring: "vault-keyring"
+    #   crypto_key: "vault-unseal-key"
+    #   # For on-prem: credentials: "/vault/gcp/credentials.json"

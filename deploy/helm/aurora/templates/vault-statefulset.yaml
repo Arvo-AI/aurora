@@ -1,0 +1,104 @@
+{{- if .Values.services.vault.enabled }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "aurora.fullname" . }}-vault
+  labels:
+    {{- include "aurora.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ include "aurora.fullname" . }}-vault
+  replicas: {{ .Values.replicaCounts.vault }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "aurora.name" . }}-vault
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/vault-config.yaml") . | sha256sum }}
+      labels:
+        app.kubernetes.io/name: {{ include "aurora.name" . }}-vault
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/part-of: aurora
+    spec:
+      serviceAccountName: {{ include "aurora.fullname" . }}-vault
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 100
+        runAsGroup: 1000
+        fsGroup: 1000
+      containers:
+        - name: vault
+          image: hashicorp/vault:1.15
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-c"]
+          args: 
+            - |
+              vault server -config=/vault/config/vault.hcl
+          # Note: Vault typically needs IPC_LOCK capability for mlock (prevents secrets
+          # from being swapped to disk). Since disable_mlock=true in vault.hcl, we can
+          # drop all capabilities. If you enable mlock, add: capabilities.add: ["IPC_LOCK"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          ports:
+            - name: http
+              containerPort: 8200
+          env:
+            - name: VAULT_ADDR
+              value: "http://127.0.0.1:8200"
+            - name: VAULT_LOG_LEVEL
+              value: "info"
+            - name: SKIP_SETCAP
+              value: "true"
+            - name: SKIP_CHOWN
+              value: "true"
+          volumeMounts:
+            - name: vault-config
+              mountPath: /vault/config
+            - name: vault-data
+              mountPath: /vault/data
+            {{- if and .Values.vault.seal (eq .Values.vault.seal.type "gcpckms") .Values.vault.seal.gcpckms.credentials }}
+            - name: gcp-kms-credentials
+              mountPath: /vault/gcp
+              readOnly: true
+            {{- end }}
+          readinessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - 'vault status -format=json | grep ''"sealed": false'''
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /v1/sys/health?standbyok=true&sealedcode=200&uninitcode=200
+              port: 8200
+            initialDelaySeconds: 30
+            periodSeconds: 20
+          resources:
+            {{- toYaml .Values.resources.vault | nindent 12 }}
+      volumes:
+        - name: vault-config
+          configMap:
+            name: {{ include "aurora.fullname" . }}-vault-config
+            items:
+              - key: vault.hcl
+                path: vault.hcl
+        {{- if and .Values.vault.seal (eq .Values.vault.seal.type "gcpckms") .Values.vault.seal.gcpckms.credentials }}
+        - name: gcp-kms-credentials
+          secret:
+            secretName: vault-gcp-kms
+        {{- end }}
+  volumeClaimTemplates:
+    - metadata:
+        name: vault-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: {{ .Values.persistence.vault.size }}
+{{- end }}

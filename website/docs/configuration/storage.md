@@ -92,6 +92,8 @@ STORAGE_SECRET_KEY=...
 
 ### Google Cloud Storage (S3 Interop)
 
+Create HMAC keys in GCP Console: Cloud Storage → Settings → Interoperability → Create a key.
+
 ```bash
 STORAGE_TYPE=s3
 STORAGE_BUCKET=your-bucket-name

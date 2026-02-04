@@ -1,0 +1,25 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "aurora.fullname" . }}-config
+  labels:
+    {{- include "aurora.labels" . | nindent 4 }}
+data:
+  # Auto-generated service URLs (computed from release name if empty)
+  POSTGRES_HOST: {{ default (printf "%s-postgres" (include "aurora.fullname" .)) .Values.config.POSTGRES_HOST | quote }}
+  REDIS_URL: {{ default (printf "redis://%s-redis:6379/0" (include "aurora.fullname" .)) .Values.config.REDIS_URL | quote }}
+  WEAVIATE_HOST: {{ default (printf "%s-weaviate" (include "aurora.fullname" .)) .Values.config.WEAVIATE_HOST | quote }}
+  BACKEND_URL: {{ default (printf "http://%s-server:5080" (include "aurora.fullname" .)) .Values.config.BACKEND_URL | quote }}
+  CHATBOT_INTERNAL_URL: {{ default (printf "http://%s-chatbot:5007" (include "aurora.fullname" .)) .Values.config.CHATBOT_INTERNAL_URL | quote }}
+  VAULT_ADDR: {{ default (printf "http://%s-vault:8200" (include "aurora.fullname" .)) .Values.config.VAULT_ADDR | quote }}
+  SEARXNG_URL: {{ default (printf "http://%s-searxng:8080" (include "aurora.fullname" .)) .Values.config.SEARXNG_URL | quote }}
+
+  # Backend needs this for OAuth callbacks (derived from ingress if not set)
+  NEXT_PUBLIC_BACKEND_URL: {{ default (printf "https://%s" .Values.ingress.hosts.api) .Values.config.NEXT_PUBLIC_BACKEND_URL | quote }}
+  
+  # All other config values from .Values.config (excluding keys with computed defaults above and NEXT_PUBLIC_*)
+  {{- range $key, $value := .Values.config }}
+  {{- if and (not (hasPrefix "NEXT_PUBLIC_" $key)) (not (has $key (list "POSTGRES_HOST" "REDIS_URL" "WEAVIATE_HOST" "BACKEND_URL" "CHATBOT_INTERNAL_URL" "VAULT_ADDR" "SEARXNG_URL"))) }}
+  {{ $key }}: {{ $value | quote }}
+  {{- end }}
+  {{- end }}

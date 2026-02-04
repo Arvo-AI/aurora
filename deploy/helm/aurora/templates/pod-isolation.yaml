@@ -1,0 +1,114 @@
+# ------------------------------------------------------------------------------
+# Pod Isolation Resources
+# ------------------------------------------------------------------------------
+# Created when ENABLE_POD_ISOLATION is true
+# Provides namespace, RBAC, and network isolation for terminal pods
+# ------------------------------------------------------------------------------
+{{- if eq .Values.config.ENABLE_POD_ISOLATION "true" }}
+
+# Terminal namespace for isolated pods
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ .Values.config.TERMINAL_NAMESPACE }}
+  labels:
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/part-of: aurora
+    aurora.io/isolation: "true"
+---
+# ------------------------------------------------------------------------------
+# Network Isolation - Default Deny for Terminal Pods
+# ------------------------------------------------------------------------------
+# Blocks terminal pods from accessing cluster-internal services (Vault, Weaviate,
+# Postgres, Redis, etc.) while allowing external internet access for cloud CLI
+# operations (AWS, GCP, Azure, etc.).
+#
+# Security model:
+#   - DENY: All traffic to private IP ranges (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16)
+#   - ALLOW: DNS resolution (UDP 53) for external hostnames
+#   - ALLOW: External internet (public IPs) for cloud API calls
+#
+# Note: Requires a CNI plugin that supports NetworkPolicies (Calico, Cilium, etc.)
+# ------------------------------------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "aurora.fullname" . }}-terminal-default-deny
+  namespace: {{ .Values.config.TERMINAL_NAMESPACE }}
+  labels:
+    {{- include "aurora.labels" . | nindent 4 }}
+spec:
+  podSelector: {}  # Applies to all pods in the terminal namespace
+  policyTypes:
+    - Egress
+  egress:
+    # Allow DNS resolution (required for external hostnames)
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    # Allow external internet access, but block all private/cluster IPs
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8       # Private class A (includes most cluster networks)
+              - 172.16.0.0/12    # Private class B (includes Docker default)
+              - 192.168.0.0/16   # Private class C
+---
+# Role granting terminal pod management permissions
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "aurora.fullname" . }}-terminal-manager
+  namespace: {{ .Values.config.TERMINAL_NAMESPACE }}
+  labels:
+    {{- include "aurora.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["create", "get", "list", "watch", "delete"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+---
+# Bind the role to server ServiceAccount
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "aurora.fullname" . }}-server-terminal
+  namespace: {{ .Values.config.TERMINAL_NAMESPACE }}
+  labels:
+    {{- include "aurora.labels" . | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "aurora.fullname" . }}-server
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "aurora.fullname" . }}-terminal-manager
+---
+# Bind the role to chatbot ServiceAccount
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "aurora.fullname" . }}-chatbot-terminal
+  namespace: {{ .Values.config.TERMINAL_NAMESPACE }}
+  labels:
+    {{- include "aurora.labels" . | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "aurora.fullname" . }}-chatbot
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "aurora.fullname" . }}-terminal-manager
+
+{{- end }}

@@ -1,0 +1,17 @@
+{{- if .Values.services.redis.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "aurora.fullname" . }}-redis
+  labels:
+    {{- include "aurora.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: {{ include "aurora.name" . }}-redis
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  ports:
+    - name: redis
+      port: 6379
+      targetPort: 6379
+{{- end }}

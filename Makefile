@@ -1,4 +1,4 @@
-.PHONY: help dev down logs rebuild-server restart prod prod-build prod-logs prod-down clean nuke build-no-cache dev-fresh prod-clean prod-nuke prod-build-no-cache prod-fresh prod-local init prod-local-build prod-local-logs prod-local-down prod-local-clean prod-local-nuke
+.PHONY: help dev down logs rebuild-server restart prod prod-build prod-logs prod-down clean nuke build-no-cache dev-fresh prod-clean prod-nuke prod-build-no-cache prod-fresh prod-local init prod-local-build prod-local-logs prod-local-down prod-local-clean prod-local-nuke deploy-build deploy
 
 help:
 	@echo "Available commands:"
@@ -32,6 +32,10 @@ help:
 	@echo "  make prod-local-down    - Stop production-local containers"
 	@echo "  make prod-local-clean   - Stop and remove production-local volumes"
 	@echo "  make prod-local-nuke    - Full cleanup: containers, volumes, images"
+	@echo ""
+	@echo "Kubernetes Deployment:"
+	@echo "  make deploy-build      - Build and push images for K8s deployment (reads values.generated.yaml)"
+	@echo "  make deploy            - Run deploy-build then deploy with Helm"
 
 rebuild-server:
 	@echo "Stopping aurora-server container..."
@@ -187,5 +191,63 @@ prod-local-nuke:
 	@docker image prune -f
 	@echo "Production-local cleanup complete!"
 	@echo "Note: .env file preserved. To remove it, delete manually."
+
+# Kubernetes deployment commands
+deploy-build:
+	@echo "Building and pushing images for Kubernetes deployment..."
+	@if [ ! -f deploy/helm/aurora/values.generated.yaml ]; then \
+		echo "Error: values.generated.yaml not found. Copy values.yaml to values.generated.yaml and configure it."; \
+		exit 1; \
+	fi
+	@echo "Extracting image registry and build args from values.generated.yaml..."
+	@set -e; \
+	IMAGE_REGISTRY=$$(yq '.image.registry' deploy/helm/aurora/values.generated.yaml); \
+	if [ -z "$$IMAGE_REGISTRY" ] || [ "$$IMAGE_REGISTRY" = "null" ] || [ "$$IMAGE_REGISTRY" = "your-registry" ]; then \
+		echo "Error: image.registry not configured in values.generated.yaml"; \
+		exit 1; \
+	fi; \
+	GIT_SHA=$$(git rev-parse --short HEAD); \
+	NEXT_PUBLIC_VARS=$$(yq '.config | keys | .[] | select(test("^NEXT_PUBLIC_"))' deploy/helm/aurora/values.generated.yaml); \
+	BUILD_ARGS=""; \
+	for var in $$NEXT_PUBLIC_VARS; do \
+		value=$$(yq ".config.$$var" deploy/helm/aurora/values.generated.yaml); \
+		if [ -n "$$value" ] && [ "$$value" != "null" ]; then \
+			BUILD_ARGS="$$BUILD_ARGS --build-arg $$var=$$value"; \
+		fi; \
+	done; \
+	echo "Using git SHA tag: $$GIT_SHA"; \
+	echo "Building backend image: $$IMAGE_REGISTRY/aurora-server:$$GIT_SHA"; \
+	docker buildx build --platform linux/amd64 -t $$IMAGE_REGISTRY/aurora-server:$$GIT_SHA -f server/Dockerfile --target prod ./server --push; \
+	echo "Building frontend image: $$IMAGE_REGISTRY/aurora-frontend:$$GIT_SHA"; \
+	docker buildx build --platform linux/amd64 -t $$IMAGE_REGISTRY/aurora-frontend:$$GIT_SHA \
+		-f client/Dockerfile --target prod \
+		$$BUILD_ARGS \
+		./client --push; \
+	ENABLE_POD_ISOLATION=$$(yq '.config.ENABLE_POD_ISOLATION' deploy/helm/aurora/values.generated.yaml); \
+	if [ "$$ENABLE_POD_ISOLATION" = "true" ]; then \
+		echo "Pod isolation enabled, building terminal image: $$IMAGE_REGISTRY/aurora-terminal:$$GIT_SHA"; \
+		docker buildx build --platform linux/amd64 -t $$IMAGE_REGISTRY/aurora-terminal:$$GIT_SHA \
+			-f server/Dockerfile-user-terminal \
+			./server --push; \
+		echo "Updating TERMINAL_IMAGE in values.generated.yaml..."; \
+		yq -i ".config.TERMINAL_IMAGE = \"$$IMAGE_REGISTRY/aurora-terminal:$$GIT_SHA\"" deploy/helm/aurora/values.generated.yaml; \
+	else \
+		echo "Pod isolation disabled, skipping terminal image build"; \
+	fi; \
+	echo "Images built and pushed successfully with tag: $$GIT_SHA"; \
+	echo "Updating values.generated.yaml with new tag..."; \
+	yq -i ".image.tag = \"$$GIT_SHA\"" deploy/helm/aurora/values.generated.yaml
+
+deploy: deploy-build
+	@echo "Deploying to Kubernetes with Helm..."
+	@helm upgrade --install aurora-oss ./deploy/helm/aurora \
+		--namespace aurora --create-namespace \
+		--reset-values \
+		-f deploy/helm/aurora/values.generated.yaml
+	@echo ""
+	@echo "✓ Deployment complete!"
+	@echo "Next: Initialize Vault (first time only) and verify deployment."
+	@echo "  kubectl get pods -n aurora"
+
 %:
 	@:
