@@ -296,6 +296,20 @@ def run_background_chat(
                 with db_pool.get_admin_connection() as conn:
                     # Store session ID and Celery task ID (if not already set by webhook handler)
                     with conn.cursor() as cursor:
+                        # First check if there's already a task ID set
+                        cursor.execute(
+                            "SELECT rca_celery_task_id FROM incidents WHERE id = %s",
+                            (incident_id,)
+                        )
+                        row = cursor.fetchone()
+                        existing_task_id = row[0] if row and row[0] else None
+                        
+                        if existing_task_id and existing_task_id != self.request.id:
+                            logger.warning(
+                                f"[BackgroundChat] Incident {incident_id} already has task ID {existing_task_id}, "
+                                f"but this task is {self.request.id}. This may indicate a race condition or duplicate RCA start."
+                            )
+                        
                         cursor.execute(
                             """UPDATE incidents 
                                SET aurora_chat_session_id = %s, 
@@ -304,7 +318,16 @@ def run_background_chat(
                             (session_id, self.request.id, incident_id)
                         )
                         conn.commit()
-                        logger.info(f"[BackgroundChat] Linked session {session_id} and task {self.request.id} to incident {incident_id}")
+                        
+                        if existing_task_id:
+                            logger.info(
+                                f"[BackgroundChat] Linked session {session_id} to incident {incident_id} "
+                                f"(task ID already set to {existing_task_id})"
+                            )
+                        else:
+                            logger.info(
+                                f"[BackgroundChat] Linked session {session_id} and task {self.request.id} to incident {incident_id}"
+                            )
                     
                     # Set incident aurora_status to running
                     with conn.cursor() as cursor:
