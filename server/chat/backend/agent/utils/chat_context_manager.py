@@ -29,7 +29,6 @@ class ChatContextManager:
         "anthropic/claude-sonnet-4.5": 950000,  # 1M - 50K buffer
         "anthropic/claude-opus-4.5": 180000,  # 200K - 20K buffer
         "anthropic/claude-3-haiku": 180000,  # 200K - 20K buffer
-        "anthropic/claude-3.5-sonnet": 180000,  # 200K - 20K buffer
         "google/gemini-3-pro-preview": 1000000,  # 1M context
         # Default fallback
         "default": 7000,  # Conservative 8K - 1K buffer
