@@ -283,6 +283,7 @@ Provide a detailed summary that preserves essential context:"""
             with db_pool.get_user_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
+                conn.commit()
 
                 # Add compression metadata to chat session
                 cursor.execute(

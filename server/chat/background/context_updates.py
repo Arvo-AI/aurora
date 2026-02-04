@@ -31,6 +31,7 @@ def _get_session_status(user_id: str, session_id: str) -> Optional[str]:
             with conn.cursor() as cursor:
                 # Set user context for RLS
                 cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
+                conn.commit()
                 
                 cursor.execute(
                     "SELECT status FROM chat_sessions WHERE id = %s AND user_id = %s",
@@ -86,6 +87,7 @@ def _append_context_update_to_completed_session(
             with conn.cursor() as cursor:
                 # Set user context for RLS
                 cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
+                conn.commit()
                 
                 # Lock the row and get current messages to prevent race conditions
                 cursor.execute(

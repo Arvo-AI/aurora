@@ -193,6 +193,7 @@ class Workflow:
             with db_pool.get_user_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute("SET myapp.current_user_id = %s;", (input_state.user_id,))
+                conn.commit()
                 cursor.execute("""
                     SELECT messages FROM chat_sessions 
                     WHERE id = %s AND user_id = %s AND is_active = true
@@ -1229,6 +1230,7 @@ class Workflow:
             with db_pool.get_user_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
+                conn.commit()
                 
                 # Update the messages field (UI format) and ui_state in the existing session
                 if ui_state is not None:
