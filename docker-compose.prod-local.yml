@@ -452,7 +452,7 @@ services:
   # ═══════════════════════════════════════════════════════════════════════════
 
   seaweedfs-master:
-    image: chrislusf/seaweedfs:latest
+    image: chrislusf/seaweedfs:4.07
     container_name: aurora-seaweedfs-master
     command: >
       master
@@ -475,7 +475,7 @@ services:
       start_period: 10s
 
   seaweedfs-volume:
-    image: chrislusf/seaweedfs:latest
+    image: chrislusf/seaweedfs:4.07
     container_name: aurora-seaweedfs-volume
     command: >
       volume
@@ -500,7 +500,7 @@ services:
       start_period: 10s
 
   seaweedfs-filer:
-    image: chrislusf/seaweedfs:latest
+    image: chrislusf/seaweedfs:4.07
     container_name: aurora-seaweedfs-filer
     command: >
       filer
