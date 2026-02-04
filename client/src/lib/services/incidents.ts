@@ -488,7 +488,7 @@ export const incidentsService = {
   async getRecentUnlinkedIncidents(excludeId?: string): Promise<RecentIncident[]> {
     try {
       const url = excludeId 
-        ? `/api/incidents/recent-unlinked?exclude=${excludeId}`
+        ? `/api/incidents/recent-unlinked?exclude=${encodeURIComponent(excludeId)}`
         : '/api/incidents/recent-unlinked';
       
       const response = await fetch(url, {
