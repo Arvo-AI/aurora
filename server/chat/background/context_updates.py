@@ -101,7 +101,14 @@ def _append_context_update_to_completed_session(
                 
                 messages = row[0] if row[0] else []
                 if isinstance(messages, str):
-                    messages = json.loads(messages)
+                    try:
+                        messages = json.loads(messages)
+                    except json.JSONDecodeError as e:
+                        logger.error(
+                            "[RCA-UPDATE] Failed to parse messages JSON for session %s: %s. Using empty list.",
+                            session_id, e
+                        )
+                        messages = []
                 
                 # Find the last bot message with tool calls and insert after it
                 # This places the context update after the investigation tool calls
