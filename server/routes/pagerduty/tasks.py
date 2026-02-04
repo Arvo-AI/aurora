@@ -380,6 +380,7 @@ def trigger_delayed_rca(
                         "incident_number": incident_number,
                         "urgency": incident_urgency,
                     },
+                    incident_id=incident_db_id,  # Link session to incident
                 )
                 # Start RCA task and immediately store task ID for cancellation support
                 task = run_background_chat.delay(
