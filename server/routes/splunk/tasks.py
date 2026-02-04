@@ -256,11 +256,12 @@ def process_splunk_alert(
                                 incident_id = correlation_result.incident_id
                                 cursor.execute(
                                     """INSERT INTO incident_alerts
-                                       (incident_id, source_type, source_alert_id, alert_title, alert_service,
+                                       (user_id, incident_id, source_type, source_alert_id, alert_title, alert_service,
                                         alert_severity, correlation_strategy, correlation_score,
-                                        correlation_details, alert_metadata)
-                                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                                        correlation_details, alert_metadata, received_at)
+                                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
                                     (
+                                        user_id,
                                         incident_id,
                                         "splunk",
                                         alert_db_id,
@@ -271,6 +272,7 @@ def process_splunk_alert(
                                         correlation_result.score,
                                         json.dumps(correlation_result.details),
                                         json.dumps(alert_metadata),
+                                        received_at,
                                     ),
                                 )
                                 cursor.execute(
@@ -372,10 +374,11 @@ def process_splunk_alert(
                         try:
                             cursor.execute(
                                 """INSERT INTO incident_alerts
-                                   (incident_id, source_type, source_alert_id, alert_title, alert_service,
-                                    alert_severity, correlation_strategy, correlation_score, alert_metadata)
-                                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                                   (user_id, incident_id, source_type, source_alert_id, alert_title, alert_service,
+                                    alert_severity, correlation_strategy, correlation_score, alert_metadata, received_at)
+                                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
                                 (
+                                    user_id,
                                     incident_id,
                                     "splunk",
                                     alert_db_id,
@@ -385,6 +388,7 @@ def process_splunk_alert(
                                     "primary",
                                     1.0,
                                     json.dumps(alert_metadata),
+                                    received_at,
                                 ),
                             )
                             cursor.execute(
