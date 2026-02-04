@@ -252,11 +252,7 @@ def get_incidents():
                     FROM incidents i
                     LEFT JOIN incidents target ON i.merged_into_incident_id = target.id
                     WHERE i.user_id = %s
-                      AND (
-                        i.alert_metadata IS NULL
-                        OR i.alert_metadata->>'correlated' IS NULL
-                        OR i.alert_metadata->>'correlated' != 'true'
-                      )
+                      AND i.status != 'merged'
                     ORDER BY i.started_at DESC
                     LIMIT 100
                     """,
@@ -1255,6 +1251,10 @@ def merge_alert_to_incident(target_incident_id: str):
                     source_status,
                 ) = source_row
 
+                # Validate source incident is not already merged
+                if source_status == 'merged':
+                    return jsonify({"error": "Source incident is already merged into another incident"}), 400
+
                 # Get target incident details
                 cursor.execute(
                     """SELECT id, aurora_chat_session_id, status
@@ -1267,6 +1267,11 @@ def merge_alert_to_incident(target_incident_id: str):
                     return jsonify({"error": "Target incident not found"}), 404
 
                 target_session_id = target_row[1]
+                target_status = target_row[2]
+
+                # Validate target incident is not already merged (prevent chains)
+                if target_status == 'merged':
+                    return jsonify({"error": "Cannot merge into an incident that is already merged"}), 400
 
                 # Fetch investigation thoughts from source incident BEFORE commit
                 thought_rows = []
@@ -1345,7 +1350,7 @@ def merge_alert_to_incident(target_incident_id: str):
                     (source_service, source_service, target_incident_id),
                 )
 
-                # Mark source incident as merged and clear its summary
+                # Mark source incident as merged and clear summary (it's now part of target)
                 cursor.execute(
                     """UPDATE incidents
                        SET status = 'merged',
