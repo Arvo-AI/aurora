@@ -239,6 +239,7 @@ def get_incidents():
             with conn.cursor() as cursor:
                 # Set RLS context
                 cursor.execute("SET myapp.current_user_id = %s", (user_id,))
+                conn.commit()
 
                 cursor.execute(
                     """
@@ -300,6 +301,7 @@ def get_incident(incident_id: str):
             with conn.cursor() as cursor:
                 # Set RLS context
                 cursor.execute("SET myapp.current_user_id = %s", (user_id,))
+                conn.commit()
                 # Get incident details
                 cursor.execute(
                     """
@@ -686,6 +688,7 @@ def get_incident_alerts(incident_id: str):
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
                 cursor.execute("SET myapp.current_user_id = %s", (user_id,))
+                conn.commit()
 
                 cursor.execute(
                     "SELECT 1 FROM incidents WHERE id = %s AND user_id = %s",
@@ -786,6 +789,7 @@ def update_incident(incident_id: str):
             with conn.cursor() as cursor:
                 # Set RLS context
                 cursor.execute("SET myapp.current_user_id = %s", (user_id,))
+                conn.commit()
                 # Build update query dynamically based on provided fields
                 update_fields = []
                 values = []
@@ -892,6 +896,7 @@ def incident_chat(incident_id: str):
             with db_pool.get_admin_connection() as conn:
                 with conn.cursor() as cursor:
                     cursor.execute("SET myapp.current_user_id = %s", (user_id,))
+                    conn.commit()
                     cursor.execute(
                         """
                         SELECT cs.id
@@ -939,6 +944,7 @@ def incident_chat(incident_id: str):
             with db_pool.get_admin_connection() as conn:
                 with conn.cursor() as cursor:
                     cursor.execute("SET myapp.current_user_id = %s", (user_id,))
+                    conn.commit()
 
                     # Get incident
                     cursor.execute(
@@ -1224,6 +1230,7 @@ def merge_alert_to_incident(target_incident_id: str):
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
                 cursor.execute("SET myapp.current_user_id = %s", (user_id,))
+                conn.commit()
 
                 # Get source incident details
                 cursor.execute(
@@ -1458,6 +1465,7 @@ def get_recent_unlinked_incidents():
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
                 cursor.execute("SET myapp.current_user_id = %s", (user_id,))
+                conn.commit()
 
                 query = """
                     SELECT id, alert_title, alert_service, severity, source_type,

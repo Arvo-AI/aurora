@@ -229,7 +229,13 @@ class AlertCorrelator:
             if isinstance(val, datetime):
                 return val
             if isinstance(val, str):
-                return datetime.fromisoformat(val.replace("Z", "+00:00"))
+                try:
+                    return datetime.fromisoformat(val.replace("Z", "+00:00"))
+                except ValueError:
+                    logger.warning(
+                        "[CORRELATION] Invalid received_at timestamp: %r, using now()",
+                        val,
+                    )
         return datetime.now(timezone.utc)
 
     def _get_candidate_incidents(
