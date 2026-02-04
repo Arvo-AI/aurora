@@ -495,31 +495,29 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
       )}
 
       {/* View RCA and Visualization Buttons */}
-      {incident.chatSessionId && (
+      {incident.status !== 'merged' && (
         <div className="mt-6 pt-6 border-t border-zinc-800/50 flex items-center gap-3">
-          {incident.auroraStatus === 'complete' && incident.status !== 'merged' ? (
-            <Link
-              href={`/chat?sessionId=${incident.chatSessionId}`}
-              className="inline-flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors bg-zinc-800 hover:bg-zinc-700 text-white border border-zinc-700 hover:border-zinc-600"
-            >
-              <FileText className="w-4 h-4" />
-              Root Cause Analysis
-              <ExternalLink className="w-4 h-4" />
-            </Link>
-          ) : (
-            <button
-              disabled
-              title={
-                incident.status === 'merged' 
-                  ? "This incident was merged into another investigation"
-                  : "RCA report will be available only when RCA is complete"
-              }
-              className="inline-flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors bg-zinc-900 text-zinc-500 cursor-not-allowed border border-zinc-800"
-            >
-              <FileText className="w-4 h-4" />
-              Root Cause Analysis
-            </button>
-          )}
+          {incident.chatSessionId ? (
+            incident.auroraStatus === 'complete' ? (
+              <Link
+                href={`/chat?sessionId=${incident.chatSessionId}`}
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors bg-zinc-800 hover:bg-zinc-700 text-white border border-zinc-700 hover:border-zinc-600"
+              >
+                <FileText className="w-4 h-4" />
+                Root Cause Analysis
+                <ExternalLink className="w-4 h-4" />
+              </Link>
+            ) : (
+              <button
+                disabled
+                title="RCA report will be available only when RCA is complete"
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors bg-zinc-900 text-zinc-500 cursor-not-allowed border border-zinc-800"
+              >
+                <FileText className="w-4 h-4" />
+                Root Cause Analysis
+              </button>
+            )
+          ) : null}
           
           {incident.auroraStatus !== 'error' && (
             <button
