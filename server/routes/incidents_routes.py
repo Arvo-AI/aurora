@@ -1336,14 +1336,70 @@ def merge_alert_to_incident(target_incident_id: str):
 
                 # Enqueue context update to target RCA if it has an active session
                 if target_session_id:
-                    # Build context payload from source incident
+                    # Build rich context payload from source incident
+                    # Fetch investigation thoughts from source incident
+                    cursor.execute(
+                        """
+                        SELECT content, thought_type, timestamp
+                        FROM incident_thoughts
+                        WHERE incident_id = %s
+                        ORDER BY timestamp ASC
+                        LIMIT 30
+                        """,
+                        (source_incident_id,),
+                    )
+                    thought_rows = cursor.fetchall()
+                    
+                    # Format thoughts into readable context
+                    thoughts_context = []
+                    for row in thought_rows:
+                        timestamp_str = row[2].strftime("%H:%M:%S") if row[2] else ""
+                        thought_content = row[0] or ""
+                        if timestamp_str:
+                            thoughts_context.append(f"[{timestamp_str}] {thought_content}")
+                        else:
+                            thoughts_context.append(thought_content)
+                    
+                    # Fetch source incident's summary if available
+                    cursor.execute(
+                        """
+                        SELECT aurora_summary
+                        FROM incidents
+                        WHERE id = %s
+                        """,
+                        (source_incident_id,),
+                    )
+                    summary_row = cursor.fetchone()
+                    source_summary = summary_row[0] if summary_row and summary_row[0] else None
+                    
+                    # Build comprehensive context body
+                    context_parts = [
+                        f"Manually merged alert from {source_type}: {source_title}",
+                        f"Service: {source_service}",
+                        f"Severity: {source_severity}",
+                    ]
+                    
+                    if source_summary:
+                        context_parts.extend([
+                            "",
+                            "## Summary from merged incident's investigation:",
+                            source_summary,
+                        ])
+                    
+                    if thoughts_context:
+                        context_parts.extend([
+                            "",
+                            "## Investigation progress from merged incident:",
+                            *thoughts_context[-20:],  # Last 20 thoughts to keep it focused
+                        ])
+                    
                     context_payload = {
                         "title": source_title,
                         "service": source_service,
                         "severity": source_severity,
                         "source_type": source_type,
                         "merged_from_incident": source_incident_id,
-                        "body": f"Manually merged alert from {source_type}: {source_title}",
+                        "body": "\n".join(context_parts),
                     }
                     
                     enqueue_rca_context_update(
@@ -1354,8 +1410,10 @@ def merge_alert_to_incident(target_incident_id: str):
                         incident_id=target_incident_id,
                     )
                     logger.info(
-                        "[INCIDENTS] Enqueued context update for merged alert to session %s",
+                        "[INCIDENTS] Enqueued rich context update for merged alert to session %s (thoughts=%d, has_summary=%s)",
                         target_session_id,
+                        len(thoughts_context),
+                        source_summary is not None,
                     )
 
                 logger.info(

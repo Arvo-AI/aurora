@@ -219,6 +219,7 @@ def _format_updates_for_prompt(updates: List[Dict[str, Any]]) -> str:
     services = []
     severities = []
     sources = []
+    is_manual_merge = False
     
     for update in updates:
         source = update.get("source", "unknown")
@@ -226,6 +227,10 @@ def _format_updates_for_prompt(updates: List[Dict[str, Any]]) -> str:
         payload = update.get("payload", {})
         
         if isinstance(payload, dict):
+            # Check if this is a manual merge with rich context
+            if payload.get("merged_from_incident"):
+                is_manual_merge = True
+            
             # Try PagerDuty format: event.data.title
             event_data = payload.get("event", {}).get("data", {})
             title = event_data.get("title", "")
@@ -233,20 +238,23 @@ def _format_updates_for_prompt(updates: List[Dict[str, Any]]) -> str:
             service = event_data.get("service", {}).get("summary", "")
             urgency = event_data.get("urgency", "")
             
-            # Try flat format (Datadog, Grafana, etc): title at top level
+            # Try flat format (Datadog, Grafana, manual merge, etc): title at top level
             if not title:
                 title = payload.get("title", "")
             if not body_details:
                 body_details = payload.get("body", "") or payload.get("message", "") or payload.get("description", "")
             if not service:
-                # Datadog: extract from tags or scope
-                tags = payload.get("tags", [])
-                for tag in tags:
-                    if isinstance(tag, str) and tag.startswith("service:"):
-                        service = tag.split(":", 1)[1]
-                        break
+                # Try direct service field first (manual merge)
+                service = payload.get("service", "")
                 if not service:
-                    service = payload.get("scope", "").replace("service:", "") if payload.get("scope", "").startswith("service:") else ""
+                    # Datadog: extract from tags or scope
+                    tags = payload.get("tags", [])
+                    for tag in tags:
+                        if isinstance(tag, str) and tag.startswith("service:"):
+                            service = tag.split(":", 1)[1]
+                            break
+                    if not service:
+                        service = payload.get("scope", "").replace("service:", "") if payload.get("scope", "").startswith("service:") else ""
             if not urgency:
                 urgency = payload.get("alert_type", "") or payload.get("severity", "") or payload.get("status", "")
             
@@ -278,11 +286,22 @@ def _format_updates_for_prompt(updates: List[Dict[str, Any]]) -> str:
     if severity_str:
         parts.append(f"**Severity:** {severity_str}")
     
+    # For manual merges with rich context (investigation progress, summary), include it all
     if details_str:
-        parts.extend([
-            "",
-            f"**Details:** {details_str}",
-        ])
+        if is_manual_merge and ("## " in details_str or "Investigation progress" in details_str or "Summary" in details_str):
+            # This is rich context from a manual merge - include it fully
+            parts.extend([
+                "",
+                "**Context from merged incident:**",
+                "",
+                details_str,
+            ])
+        else:
+            # Simple details
+            parts.extend([
+                "",
+                f"**Details:** {details_str}",
+            ])
     
     parts.extend([
         "",
