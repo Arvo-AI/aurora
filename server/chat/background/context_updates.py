@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import HumanMessage
 from utils.cloud.cloud_utils import get_workflow_context
 from utils.cache.redis_client import get_redis_client
 
