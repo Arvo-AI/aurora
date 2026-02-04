@@ -15,12 +15,12 @@ from services.discovery.resource_mapper import map_gcp_resource, GCP_RELATIONSHI
 logger = logging.getLogger(__name__)
 
 
-def _run_command(args, timeout=120, env=None):
+def _run_command(args, timeout=600, env=None):
     """Run a gcloud CLI command and return parsed JSON output.
 
     Args:
         args: List of command arguments (e.g. ["gcloud", "asset", ...]).
-        timeout: Command timeout in seconds.
+        timeout: Command timeout in seconds (default 600s = 10 minutes).
         env: Optional environment dict for subprocess (for authentication).
 
     Returns:
