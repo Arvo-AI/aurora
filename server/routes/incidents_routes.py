@@ -1311,6 +1311,13 @@ def merge_alert_to_incident(target_incident_id: str):
                     (source_incident_id,),
                 )
                 source_alert_row = cursor.fetchone()
+                
+                # If no primary alert found, the incident is malformed
+                if not source_alert_row:
+                    logger.error(
+                        f"[INCIDENTS] No primary alert found for source incident {source_incident_id}"
+                    )
+                    return jsonify({"error": "Source incident has no primary alert"}), 404
 
                 # Insert the source alert into target incident's alerts
                 cursor.execute(
@@ -1324,7 +1331,7 @@ def merge_alert_to_incident(target_incident_id: str):
                         user_id,
                         target_incident_id,
                         source_type,
-                        source_alert_row[2] if source_alert_row else None,
+                        source_alert_row[2],  # source_alert_id - no longer nullable
                         source_title,
                         source_service,
                         source_severity,
@@ -1341,13 +1348,13 @@ def merge_alert_to_incident(target_incident_id: str):
                     """UPDATE incidents
                        SET correlated_alert_count = correlated_alert_count + 1,
                            affected_services = CASE
-                               WHEN NOT (%s = ANY(affected_services)) 
-                               THEN array_append(affected_services, %s)
+                               WHEN affected_services IS NULL THEN ARRAY[%s]
+                               WHEN NOT (%s = ANY(affected_services)) THEN array_append(affected_services, %s)
                                ELSE affected_services
                            END,
                            updated_at = CURRENT_TIMESTAMP
                        WHERE id = %s""",
-                    (source_service, source_service, target_incident_id),
+                    (source_service, source_service, source_service, target_incident_id),
                 )
 
                 # Mark source incident as merged and clear summary (it's now part of target)
