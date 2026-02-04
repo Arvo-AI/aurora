@@ -26,6 +26,8 @@ import CitationModal from './CitationModal';
 import SuggestionModal from './SuggestionModal';
 import FixSuggestionModal from './FixSuggestionModal';
 import IncidentFeedback from './IncidentFeedback';
+import CorrelatedAlertsSection from './CorrelatedAlertsSection';
+import RecentAlertsSection from './RecentAlertsSection';
 import { Suggestion } from '@/lib/services/incidents';
 import InfrastructureVisualization from '@/components/incidents/InfrastructureVisualization';
 import { ReactFlowProvider } from '@xyflow/react';
@@ -37,6 +39,7 @@ interface IncidentCardProps {
   onToggleThoughts: () => void;
   citations?: Citation[];
   onExecutionStarted?: () => void;
+  onRefresh?: () => void;
 }
 
 function StatusPill({ status }: { status: AuroraStatus }) {
@@ -80,7 +83,7 @@ function isSafeUrl(url: string | undefined): boolean {
   }
 }
 
-export default function IncidentCard({ incident, duration, showThoughts, onToggleThoughts, citations = [], onExecutionStarted }: IncidentCardProps) {
+export default function IncidentCard({ incident, duration, showThoughts, onToggleThoughts, citations = [], onExecutionStarted, onRefresh }: IncidentCardProps) {
   const [showRawPayload, setShowRawPayload] = useState(false);
   const [selectedCitation, setSelectedCitation] = useState<Citation | null>(null);
   const [selectedSuggestion, setSelectedSuggestion] = useState<Suggestion | null>(null);
@@ -442,83 +445,105 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
       {/* Separator */}
       <div className="border-t border-zinc-800" />
 
-      {/* Summary Section */}
-      <div>
-        <div className="flex items-center gap-3 mb-4">
-          <h2 className="text-lg font-medium text-white">Current Summary</h2>
-          
-          {/* Thinking/View Thoughts toggle - ChatGPT style */}
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onToggleThoughts();
-            }}
-            className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-md text-xs transition-colors ${
-              showThoughts 
-                ? 'text-orange-300 bg-orange-500/10' 
-                : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800'
-            }`}
-            aria-label={showThoughts ? "Hide thoughts panel" : "Show thoughts panel"}
-            aria-expanded={showThoughts}
-          >
-            <span>{incident.auroraStatus === 'running' ? 'Thinking' : 'View Thoughts'}</span>
-            <ChevronRight className={`w-3 h-3 transition-transform ${showThoughts ? 'rotate-90' : ''}`} />
-          </button>
-        </div>
-
-        {/* The most valuable content */}
-        <div className="prose prose-invert prose-sm max-w-none">
-          {renderedSummary}
-        </div>
-        
-        {/* View RCA and Visualization Buttons */}
-        {incident.chatSessionId && (
-          <div className="mt-6 pt-6 border-t border-zinc-800/50 flex items-center gap-3">
-            {incident.auroraStatus === 'complete' ? (
-              <Link
-                href={`/chat?sessionId=${incident.chatSessionId}`}
-                className="inline-flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors bg-zinc-800 hover:bg-zinc-700 text-white border border-zinc-700 hover:border-zinc-600"
-              >
-                <FileText className="w-4 h-4" />
-                Root Cause Analysis
-                <ExternalLink className="w-4 h-4" />
-              </Link>
-            ) : (
-              <button
-                disabled
-                title="RCA report will be available only when RCA is complete"
-                className="inline-flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors bg-zinc-900 text-zinc-500 cursor-not-allowed border border-zinc-800"
-              >
-                <FileText className="w-4 h-4" />
-                Root Cause Analysis
-              </button>
-            )}
+      {/* Summary Section - hide for merged incidents */}
+      {incident.status !== 'merged' ? (
+        <div>
+          <div className="flex items-center gap-3 mb-4">
+            <h2 className="text-lg font-medium text-white">Current Summary</h2>
             
-            {(incident.auroraStatus === 'complete' || incident.auroraStatus === 'running') && (
-              <button
-                onClick={() => setShowVisualization(!showVisualization)}
-                className="inline-flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors bg-zinc-800 hover:bg-zinc-700 text-white border border-zinc-700 hover:border-zinc-600"
-              >
-                <GitFork className="w-4 h-4" />
-                Visualization
-                {showVisualization ? (
-                  <ChevronUp className="w-4 h-4" />
-                ) : (
-                  <ChevronDown className="w-4 h-4" />
-                )}
-              </button>
-            )}
+            {/* Thinking/View Thoughts toggle - ChatGPT style */}
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onToggleThoughts();
+              }}
+              className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-md text-xs transition-colors ${
+                showThoughts 
+                  ? 'text-orange-300 bg-orange-500/10' 
+                  : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800'
+              }`}
+              aria-label={showThoughts ? "Hide thoughts panel" : "Show thoughts panel"}
+              aria-expanded={showThoughts}
+            >
+              <span>{incident.auroraStatus === 'running' ? 'Thinking' : 'View Thoughts'}</span>
+              <ChevronRight className={`w-3 h-3 transition-transform ${showThoughts ? 'rotate-90' : ''}`} />
+            </button>
           </div>
-        )}
 
-        {/* Feedback Section - only show when analysis is complete */}
-        {incident.auroraStatus === 'complete' && (
-          <div className="mt-6 pt-6 border-t border-zinc-800/50">
-            <IncidentFeedback incidentId={incident.id} />
+          {/* The most valuable content */}
+          <div className="prose prose-invert prose-sm max-w-none">
+            {renderedSummary}
           </div>
-        )}
 
-      </div>
+          {/* Correlated Alerts Section */}
+          {incident.correlatedAlerts && incident.correlatedAlerts.length > 0 && (
+            <CorrelatedAlertsSection alerts={incident.correlatedAlerts} />
+          )}
+
+          {/* Other Recent Alerts - for manual correlation */}
+          <RecentAlertsSection 
+            currentIncidentId={incident.id}
+            auroraStatus={incident.auroraStatus}
+            onAlertMerged={onRefresh}
+          />
+        </div>
+      ) : (
+        <div className="text-center py-8 text-zinc-500">
+          <p className="text-sm">This incident&apos;s investigation was merged into another incident.</p>
+          <p className="text-xs mt-2">View the main incident for the combined analysis.</p>
+        </div>
+      )}
+
+      {/* View RCA and Visualization Buttons */}
+      {incident.chatSessionId && (
+        <div className="mt-6 pt-6 border-t border-zinc-800/50 flex items-center gap-3">
+          {incident.auroraStatus === 'complete' && incident.status !== 'merged' ? (
+            <Link
+              href={`/chat?sessionId=${incident.chatSessionId}`}
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors bg-zinc-800 hover:bg-zinc-700 text-white border border-zinc-700 hover:border-zinc-600"
+            >
+              <FileText className="w-4 h-4" />
+              Root Cause Analysis
+              <ExternalLink className="w-4 h-4" />
+            </Link>
+          ) : (
+            <button
+              disabled
+              title={
+                incident.status === 'merged' 
+                  ? "This incident was merged into another investigation"
+                  : "RCA report will be available only when RCA is complete"
+              }
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors bg-zinc-900 text-zinc-500 cursor-not-allowed border border-zinc-800"
+            >
+              <FileText className="w-4 h-4" />
+              Root Cause Analysis
+            </button>
+          )}
+          
+          {(incident.auroraStatus === 'complete' || incident.auroraStatus === 'running') && (
+            <button
+              onClick={() => setShowVisualization(!showVisualization)}
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors bg-zinc-800 hover:bg-zinc-700 text-white border border-zinc-700 hover:border-zinc-600"
+            >
+              <GitFork className="w-4 h-4" />
+              Visualization
+              {showVisualization ? (
+                <ChevronUp className="w-4 h-4" />
+              ) : (
+                <ChevronDown className="w-4 h-4" />
+              )}
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Feedback Section - only show when analysis is complete */}
+      {incident.auroraStatus === 'complete' && (
+        <div className="mt-6 pt-6 border-t border-zinc-800/50">
+          <IncidentFeedback incidentId={incident.id} />
+        </div>
+      )}
 
       {/* Infrastructure Visualization */}
       {showVisualization && (incident.auroraStatus === 'complete' || incident.auroraStatus === 'running') && (

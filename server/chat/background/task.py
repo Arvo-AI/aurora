@@ -33,6 +33,62 @@ from chat.backend.constants import MAX_TOOL_OUTPUT_CHARS, INFRASTRUCTURE_TOOLS
 logger = logging.getLogger(__name__)
 
 
+def cancel_rca_for_incident(incident_id: str) -> bool:
+    """Cancel a running RCA for an incident by revoking its Celery task.
+    
+    This is the proper way to stop an RCA when an incident is merged.
+    It uses Celery's task revocation with SIGTERM to gracefully stop the task.
+    
+    Args:
+        incident_id: The incident ID whose RCA should be cancelled
+        
+    Returns:
+        True if a task was found and revoked, False otherwise
+    """
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT rca_celery_task_id, aurora_status FROM incidents WHERE id = %s",
+                    (incident_id,)
+                )
+                row = cursor.fetchone()
+                
+                if not row:
+                    logger.info(f"[RCA-CANCEL] Incident {incident_id} not found")
+                    return False
+                
+                task_id, aurora_status = row[0], row[1]
+                
+                if not task_id:
+                    logger.info(f"[RCA-CANCEL] No Celery task ID found for incident {incident_id}")
+                    return False
+                
+                # Only revoke if RCA is actually running
+                if aurora_status != 'running':
+                    logger.info(
+                        f"[RCA-CANCEL] RCA for incident {incident_id} is not running (status={aurora_status}), skipping revocation"
+                    )
+                    return False
+                
+                # Revoke the task with SIGTERM for graceful shutdown
+                celery_app.control.revoke(task_id, terminate=True, signal='SIGTERM')
+                logger.info(f"[RCA-CANCEL] Revoked Celery task {task_id} for incident {incident_id}")
+                
+                # Clear the task ID from the database
+                cursor.execute(
+                    "UPDATE incidents SET rca_celery_task_id = NULL WHERE id = %s",
+                    (incident_id,)
+                )
+                conn.commit()
+                
+                return True
+                
+    except Exception as e:
+        logger.error(f"[RCA-CANCEL] Failed to cancel RCA for incident {incident_id}: {e}")
+        return False
+
+
 def _extract_tool_calls_for_viz(session_id: str, user_id: str) -> List[Dict]:
     """Extract infrastructure tool calls from database for final visualization."""
     try:
@@ -72,7 +128,7 @@ _RATE_LIMIT_WINDOW_SECONDS = 300  # 5 minute window
 _RATE_LIMIT_MAX_REQUESTS = 5  # Max 5 background chats per window
 
 # RCA sources that use rca_context in system prompt
-_RCA_SOURCES = {'grafana', 'datadog', 'netdata', 'splunk', 'slack'}
+_RCA_SOURCES = {'grafana', 'datadog', 'netdata', 'splunk', 'slack', 'pagerduty'}
 
 # Initialize Redis client at module load time - fails if Redis is unavailable
 _redis_client = get_redis_client()
@@ -234,17 +290,44 @@ def run_background_chat(
     completed_successfully = False
     
     try:
-        # Link session to incident if provided
+        # Link session and Celery task ID to incident if provided
         if incident_id:
             try:
                 with db_pool.get_admin_connection() as conn:
+                    # Store session ID and Celery task ID (if not already set by webhook handler)
                     with conn.cursor() as cursor:
+                        # First check if there's already a task ID set
                         cursor.execute(
-                            "UPDATE incidents SET aurora_chat_session_id = %s WHERE id = %s",
-                            (session_id, incident_id)
+                            "SELECT rca_celery_task_id FROM incidents WHERE id = %s",
+                            (incident_id,)
+                        )
+                        row = cursor.fetchone()
+                        existing_task_id = row[0] if row and row[0] else None
+                        
+                        if existing_task_id and existing_task_id != self.request.id:
+                            logger.warning(
+                                f"[BackgroundChat] Incident {incident_id} already has task ID {existing_task_id}, "
+                                f"but this task is {self.request.id}. This may indicate a race condition or duplicate RCA start."
+                            )
+                        
+                        cursor.execute(
+                            """UPDATE incidents 
+                               SET aurora_chat_session_id = %s, 
+                                   rca_celery_task_id = COALESCE(rca_celery_task_id, %s)
+                               WHERE id = %s""",
+                            (session_id, self.request.id, incident_id)
                         )
                         conn.commit()
-                        logger.info(f"[BackgroundChat] Linked session {session_id} to incident {incident_id}")
+                        
+                        if existing_task_id:
+                            logger.info(
+                                f"[BackgroundChat] Linked session {session_id} to incident {incident_id} "
+                                f"(task ID already set to {existing_task_id})"
+                            )
+                        else:
+                            logger.info(
+                                f"[BackgroundChat] Linked session {session_id} and task {self.request.id} to incident {incident_id}"
+                            )
                     
                     # Set incident aurora_status to running
                     with conn.cursor() as cursor:
@@ -297,6 +380,18 @@ def run_background_chat(
         
         # Update incident status to analyzed if incident_id provided
         if incident_id:
+            # Clear the Celery task ID since we're done
+            try:
+                with db_pool.get_admin_connection() as conn:
+                    with conn.cursor() as cursor:
+                        cursor.execute(
+                            "UPDATE incidents SET rca_celery_task_id = NULL WHERE id = %s",
+                            (incident_id,)
+                        )
+                        conn.commit()
+            except Exception as e:
+                logger.warning(f"[BackgroundChat] Failed to clear task ID for incident {incident_id}: {e}")
+            
             _update_incident_status(incident_id, "analyzed")
             _update_incident_aurora_status(incident_id, "complete")
             
@@ -485,6 +580,7 @@ async def _execute_background_chat(
             selected_project_id=None,
             mode=mode,
             state=state,  # Pass state so incident_id is available in context
+            workflow=wf,  # Pass workflow so RCA context updates can be injected
         )
         logger.info(f"[BackgroundChat] Set user context with mode={mode}, incident_id={incident_id}")
         
@@ -705,24 +801,30 @@ def _update_incident_status(incident_id: str, status: str) -> None:
     Args:
         incident_id: The incident ID
         status: New status ('investigating', 'analyzed')
+    
+    Note: Will NOT update if current status is 'merged' to preserve merge state.
     """
     
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                # Don't overwrite 'merged' status - preserve merge state
                 cursor.execute(
                     """
                     UPDATE incidents 
                     SET status = %s, 
                         analyzed_at = CASE WHEN %s = 'analyzed' THEN %s ELSE analyzed_at END,
                         updated_at = %s
-                    WHERE id = %s
+                    WHERE id = %s AND status != 'merged'
                     """,
                     (status, status, datetime.now(), datetime.now(), incident_id)
                 )
                 rows_updated = cursor.rowcount
             conn.commit()
-            logger.info(f"[BackgroundChat] Updated incident {incident_id} status to '{status}' (rows={rows_updated})")
+            if rows_updated > 0:
+                logger.info(f"[BackgroundChat] Updated incident {incident_id} status to '{status}' (rows={rows_updated})")
+            else:
+                logger.info(f"[BackgroundChat] Skipped status update for incident {incident_id} (likely merged)")
     except Exception as e:
         logger.error(f"[BackgroundChat] Failed to update incident {incident_id} status to '{status}': {e}")
 

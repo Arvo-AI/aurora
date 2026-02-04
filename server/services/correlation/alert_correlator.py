@@ -6,6 +6,7 @@ scoring to decide whether an incoming alert should be attached to an
 existing open incident.
 """
 
+import json
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -145,8 +146,14 @@ class AlertCorrelator:
                 user_id,
                 alert_received_at,
             )
+            logger.info(
+                "[CORRELATION] Found %d candidate incidents for user %s (alert_received_at=%s)",
+                len(candidates),
+                user_id,
+                alert_received_at,
+            )
             if not candidates:
-                logger.debug("[CORRELATION] No candidate incidents found")
+                logger.info("[CORRELATION] No candidate incidents found")
                 return self._NOT_CORRELATED
 
             best_result: Optional[CorrelationResult] = None
@@ -163,7 +170,7 @@ class AlertCorrelator:
                     best_result = result
 
             if best_result is None or best_result.score < self.score_threshold:
-                logger.debug(
+                logger.info(
                     "[CORRELATION] Best score %.3f below threshold %.3f",
                     best_result.score if best_result else 0.0,
                     self.score_threshold,
@@ -339,3 +346,132 @@ class AlertCorrelator:
                 "correlated_alert_count": candidate.get("correlated_alert_count", 0),
             },
         )
+
+
+# ---------------------------------------------------------------------------
+# Unified correlated alert handler
+# ---------------------------------------------------------------------------
+
+
+def handle_correlated_alert(
+    cursor,
+    user_id: str,
+    incident_id: str,
+    source_type: str,
+    source_alert_id: int,
+    alert_title: str,
+    alert_service: str,
+    alert_severity: str,
+    correlation_result: CorrelationResult,
+    alert_metadata: Dict[str, Any],
+    raw_payload: Dict[str, Any],
+) -> None:
+    """Handle a correlated alert: record it, update incident, notify SSE, and enqueue RCA context update.
+
+    This is the unified function that all integrations should call when AlertCorrelator
+    determines an alert is correlated to an existing incident.
+
+    Args:
+        cursor: An open psycopg2 cursor (inside a transaction).
+        user_id: Owner / tenant identifier.
+        incident_id: The ID of the incident this alert correlates to.
+        source_type: Alert source (e.g. 'grafana', 'pagerduty', 'datadog').
+        source_alert_id: Numeric alert ID from the source-specific table.
+        alert_title: Title or summary of the incoming alert.
+        alert_service: Service name from the alert.
+        alert_severity: Severity label (e.g. 'critical').
+        correlation_result: The CorrelationResult from AlertCorrelator.correlate().
+        alert_metadata: Dict with source-specific metadata.
+        raw_payload: The complete raw webhook payload for context injection.
+    """
+    # 1. Insert into incident_alerts
+    cursor.execute(
+        """INSERT INTO incident_alerts
+           (user_id, incident_id, source_type, source_alert_id, alert_title, alert_service,
+            alert_severity, correlation_strategy, correlation_score,
+            correlation_details, alert_metadata)
+           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+        (
+            user_id,
+            incident_id,
+            source_type,
+            source_alert_id,
+            alert_title,
+            alert_service,
+            alert_severity,
+            correlation_result.strategy,
+            correlation_result.score,
+            json.dumps(correlation_result.details),
+            json.dumps(alert_metadata),
+        ),
+    )
+
+    # 2. Update incident (increment count, add service to affected_services)
+    cursor.execute(
+        """UPDATE incidents
+           SET correlated_alert_count = correlated_alert_count + 1,
+               affected_services = CASE
+                   WHEN NOT (%s = ANY(affected_services)) THEN array_append(affected_services, %s)
+                   ELSE affected_services
+               END,
+               updated_at = CURRENT_TIMESTAMP
+           WHERE id = %s""",
+        (alert_service, alert_service, incident_id),
+    )
+
+    # 3. Broadcast SSE notification
+    try:
+        from routes.incidents_sse import broadcast_incident_update_to_user_connections
+
+        broadcast_incident_update_to_user_connections(
+            user_id,
+            {
+                "type": "alert_correlated",
+                "incident_id": str(incident_id),
+                "source": source_type,
+                "alert_title": alert_title,
+                "correlation_score": correlation_result.score,
+            },
+        )
+    except Exception as e:
+        logger.warning("[CORRELATION] Failed to notify SSE: %s", e)
+
+    # 4. Enqueue RCA context update if there's an active RCA session
+    try:
+        from chat.background.context_updates import enqueue_rca_context_update
+
+        cursor.execute(
+            """
+            SELECT aurora_chat_session_id
+            FROM incidents
+            WHERE id = %s AND user_id = %s
+            """,
+            (incident_id, user_id),
+        )
+        row = cursor.fetchone()
+        if row and row[0]:
+            session_id = str(row[0])
+            enqueue_rca_context_update(
+                user_id=user_id,
+                session_id=session_id,
+                source=source_type,
+                payload=raw_payload,
+                incident_id=str(incident_id),
+                event_id=str(source_alert_id) if source_alert_id else None,
+            )
+            logger.info(
+                "[CORRELATION][RCA-UPDATE] Enqueued context update for correlated %s alert to session %s (incident=%s)",
+                source_type,
+                session_id,
+                incident_id,
+            )
+    except Exception as e:
+        logger.warning("[CORRELATION][RCA-UPDATE] Failed to enqueue context update: %s", e)
+
+    logger.info(
+        "[CORRELATION] Alert correlated to incident %s (source=%s, score=%.2f, strategy=%s)",
+        incident_id,
+        source_type,
+        correlation_result.score,
+        correlation_result.strategy,
+    )

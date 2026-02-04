@@ -146,6 +146,19 @@ const logos = {
       <path strokeLinecap="round" strokeLinejoin="round" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
     </svg>
   ),
+  rcaUpdate: (
+    <svg
+      className="w-4 h-4 min-w-4 min-h-4 text-red-600 dark:text-red-400"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      viewBox="0 0 24 24"
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <path strokeLinecap="round" strokeLinejoin="round" d="M3 12a9 9 0 0 1 15.3-6.3M21 12a9 9 0 0 1-15.3 6.3" />
+      <path strokeLinecap="round" strokeLinejoin="round" d="M3 6v6h6M21 18v-6h-6" />
+    </svg>
+  ),
   github: <GitHubLogo />,
   default: (
     <span className="text-green-600 dark:text-green-400 select-none font-bold">$</span>
@@ -170,6 +183,11 @@ const getLogoForCommand = (command: string | any, toolName: string, provider?: s
   // Knowledge base tool
   if (tool === 'knowledge_base_search') {
     return 'knowledgeBase'
+  }
+
+  // RCA context updates
+  if (tool === 'rca_context_update') {
+    return 'rcaUpdate'
   }
 
   // Splunk tools

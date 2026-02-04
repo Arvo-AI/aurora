@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from celery_config import celery_app
 from chat.background.rca_prompt_builder import build_pagerduty_rca_prompt
 from services.correlation.alert_correlator import AlertCorrelator
+from services.correlation import handle_correlated_alert
 
 logger = logging.getLogger(__name__)
 
@@ -264,24 +264,30 @@ def trigger_delayed_rca(
     )
 
     try:
-        # Check if RCA was already triggered (shouldn't happen, but safety check)
+        # Check if RCA was already triggered by checking the incident's aurora_chat_session_id
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
                 cursor.execute(
                     """
-                    SELECT COUNT(*) FROM chat_sessions
-                    WHERE user_id = %s 
-                      AND ui_state->'triggerMetadata'->>'incident_id' = %s
-                      AND ui_state->'triggerMetadata'->>'source' = 'pagerduty'
+                    SELECT aurora_chat_session_id FROM incidents
+                    WHERE id = %s AND user_id = %s
                     """,
-                    (user_id, incident_id),
+                    (incident_db_id, user_id),
                 )
-                existing_session_count = cursor.fetchone()[0]
-
-                if existing_session_count > 0:
+                row = cursor.fetchone()
+                
+                if not row:
+                    logger.warning(
+                        "[PAGERDUTY][RCA-DELAYED] Incident %s not found, skipping",
+                        incident_db_id,
+                    )
+                    return
+                
+                if row[0]:  # aurora_chat_session_id exists
                     logger.info(
-                        "[PAGERDUTY][RCA-DELAYED] RCA already exists for incident %s, skipping",
+                        "[PAGERDUTY][RCA-DELAYED] RCA already exists for incident %s (session=%s), skipping",
                         incident_id,
+                        row[0],
                     )
                     return
 
@@ -375,7 +381,8 @@ def trigger_delayed_rca(
                         "urgency": incident_urgency,
                     },
                 )
-                run_background_chat.delay(
+                # Start RCA task and immediately store task ID for cancellation support
+                task = run_background_chat.delay(
                     user_id=user_id,
                     session_id=session_id,
                     initial_message=rca_prompt,
@@ -386,9 +393,18 @@ def trigger_delayed_rca(
                     },
                     incident_id=incident_db_id,
                 )
+                
+                # Store Celery task ID immediately for cancellation support
+                cursor.execute(
+                    "UPDATE incidents SET rca_celery_task_id = %s WHERE id = %s",
+                    (task.id, incident_db_id)
+                )
+                conn.commit()
+                
                 logger.info(
-                    "[PAGERDUTY][RCA-DELAYED] Successfully triggered RCA for incident %s",
+                    "[PAGERDUTY][RCA-DELAYED] Successfully triggered RCA for incident %s (task_id=%s)",
                     incident_id,
+                    task.id,
                 )
 
     except Exception as exc:
@@ -518,7 +534,6 @@ def process_pagerduty_event(
                         )
                     except (json.JSONDecodeError, TypeError):
                         existing_metadata = {}
-                conn.commit()
 
                 # Build new metadata, preserving existing custom fields
                 alert_metadata = {
@@ -544,91 +559,32 @@ def process_pagerduty_event(
                 if event_type == "incident.triggered":
                     try:
                         correlator = AlertCorrelator()
-                        correlation_result = None
-                        with db_pool.get_admin_connection() as correlation_conn:
-                            previous_autocommit = correlation_conn.autocommit
-                            correlation_conn.autocommit = True
-                            try:
-                                with correlation_conn.cursor() as correlation_cursor:
-                                    correlation_result = correlator.correlate(
-                                        cursor=correlation_cursor,
-                                        user_id=user_id,
-                                        source_type="pagerduty",
-                                        source_alert_id=event_db_id,
-                                        alert_title=incident_title,
-                                        alert_service=service_name,
-                                        alert_severity=severity,
-                                        alert_metadata=alert_metadata,
-                                    )
-                            finally:
-                                correlation_conn.autocommit = previous_autocommit
+                        correlation_result = correlator.correlate(
+                            cursor=cursor,
+                            user_id=user_id,
+                            source_type="pagerduty",
+                            source_alert_id=event_db_id,
+                            alert_title=incident_title,
+                            alert_service=service_name,
+                            alert_severity=severity,
+                            alert_metadata=alert_metadata,
+                        )
 
-                        if correlation_result and correlation_result.is_correlated:
-                            incident_id = correlation_result.incident_id
-                            cursor.execute(
-                                """INSERT INTO incident_alerts
-                                   (user_id, incident_id, source_type, source_alert_id, alert_title, alert_service,
-                                    alert_severity, correlation_strategy, correlation_score,
-                                    correlation_details, alert_metadata, received_at)
-                                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
-                                (
-                                    user_id,
-                                    incident_id,
-                                    "pagerduty",
-                                    event_db_id,
-                                    incident_title,
-                                    service_name,
-                                    severity,
-                                    correlation_result.strategy,
-                                    correlation_result.score,
-                                    json.dumps(correlation_result.details),
-                                    json.dumps(alert_metadata),
-                                    received_at,
-                                ),
-                            )
-                            cursor.execute(
-                                """UPDATE incidents
-                                   SET correlated_alert_count = correlated_alert_count + 1,
-                                       affected_services = CASE
-                                           WHEN affected_services IS NULL THEN ARRAY[%(service_name)s]
-                                           WHEN NOT (%(service_name)s = ANY(affected_services)) THEN array_append(affected_services, %(service_name)s)
-                                           ELSE affected_services
-                                       END,
-                                       updated_at = CURRENT_TIMESTAMP
-                                   WHERE id = %(incident_id)s""",
-                                {
-                                    "service_name": service_name,
-                                    "incident_id": incident_id,
-                                },
+                        if correlation_result.is_correlated:
+                            handle_correlated_alert(
+                                cursor=cursor,
+                                user_id=user_id,
+                                incident_id=correlation_result.incident_id,
+                                source_type="pagerduty",
+                                source_alert_id=event_db_id,
+                                alert_title=incident_title,
+                                alert_service=service_name,
+                                alert_severity=severity,
+                                correlation_result=correlation_result,
+                                alert_metadata=alert_metadata,
+                                raw_payload=raw_payload,
                             )
                             conn.commit()
-
-                            try:
-                                from routes.incidents_sse import (
-                                    broadcast_incident_update_to_user_connections,
-                                )
-
-                                broadcast_incident_update_to_user_connections(
-                                    user_id,
-                                    {
-                                        "type": "alert_correlated",
-                                        "incident_id": str(incident_id),
-                                        "source": "pagerduty",
-                                        "alert_title": incident_title,
-                                        "correlation_score": correlation_result.score,
-                                    },
-                                )
-                            except Exception as e:
-                                logger.warning(
-                                    "[PAGERDUTY] Failed to notify SSE: %s", e
-                                )
-
-                            logger.info(
-                                "[PAGERDUTY] Alert correlated to incident %s (score=%.2f, strategy=%s)",
-                                incident_id,
-                                correlation_result.score,
-                                correlation_result.strategy,
-                            )
                             return
                     except Exception as corr_exc:
                         logger.warning(
@@ -676,8 +632,8 @@ def process_pagerduty_event(
                         cursor.execute(
                             """INSERT INTO incident_alerts
                                (user_id, incident_id, source_type, source_alert_id, alert_title, alert_service,
-                                alert_severity, correlation_strategy, correlation_score, alert_metadata, received_at)
-                               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                                alert_severity, correlation_strategy, correlation_score, alert_metadata)
+                               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
                             (
                                 user_id,
                                 incident_db_id,
@@ -689,11 +645,10 @@ def process_pagerduty_event(
                                 "primary",
                                 1.0,
                                 json.dumps(alert_metadata),
-                                received_at,
                             ),
                         )
                         cursor.execute(
-                            "UPDATE incidents SET affected_services = ARRAY[%s] WHERE id = %s AND (affected_services IS NULL OR affected_services = '{}')",
+                            "UPDATE incidents SET affected_services = ARRAY[%s] WHERE id = %s",
                             (service_name, incident_db_id),
                         )
                         conn.commit()

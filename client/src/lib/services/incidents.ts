@@ -7,7 +7,7 @@
 // ============================================================================
 
 export type AlertSource = 'netdata' | 'datadog' | 'grafana' | 'prometheus' | 'pagerduty';
-export type IncidentStatus = 'investigating' | 'analyzed';
+export type IncidentStatus = 'investigating' | 'analyzed' | 'merged';
 export type AuroraStatus = 'running' | 'complete' | 'error';
 export type SuggestionRisk = 'safe' | 'low' | 'medium' | 'high';
 export type SuggestionType = 'diagnostic' | 'mitigation' | 'communication' | 'fix';
@@ -132,6 +132,34 @@ export interface ChatSession {
   updatedAt?: string;
 }
 
+export interface CorrelatedAlert {
+  id: string;
+  sourceType: AlertSource;
+  alertTitle: string;
+  alertService: string;
+  alertSeverity: string;
+  correlationStrategy: string;
+  correlationScore: number;
+  correlationDetails: {
+    topology?: number;
+    time_window?: number;
+    similarity?: number;
+    correlated_alert_count?: number;
+  };
+  receivedAt: string;
+}
+
+export interface RecentIncident {
+  id: string;
+  alertTitle: string;
+  alertService: string;
+  severity: string;
+  sourceType: AlertSource;
+  status: IncidentStatus;
+  auroraStatus: AuroraStatus;
+  createdAt: string;
+}
+
 export interface Incident {
   id: string;
   alert: Alert;
@@ -142,6 +170,10 @@ export interface Incident {
   suggestions: Suggestion[];
   citations?: Citation[]; // Evidence citations for the summary
   chatSessions?: ChatSession[]; // All chat sessions linked to this incident
+  correlatedAlerts?: CorrelatedAlert[]; // Alerts correlated to this incident
+  correlatedAlertCount?: number; // Count of correlated alerts (for list view)
+  mergedIntoIncidentId?: string; // ID of incident this was merged into
+  mergedIntoTitle?: string; // Title of incident this was merged into
   postMortem: PostMortem;
   startedAt: string;
   analyzedAt?: string;
@@ -191,6 +223,9 @@ export const incidentsService = {
         summary: inc.summary || '',
         streamingThoughts: inc.streamingThoughts || [],
         suggestions: inc.suggestions || [],
+        correlatedAlertCount: inc.correlatedAlertCount || 0,
+        mergedIntoIncidentId: inc.mergedIntoIncidentId,
+        mergedIntoTitle: inc.mergedIntoTitle,
         postMortem: {} as PostMortem, // Not implemented yet
         startedAt: inc.startedAt,
         analyzedAt: inc.analyzedAt,
@@ -281,6 +316,19 @@ export const incidentsService = {
           createdAt: cs.createdAt,
           updatedAt: cs.updatedAt,
         })),
+        correlatedAlerts: (inc.correlatedAlerts || []).map((ca: any) => ({
+          id: ca.id,
+          sourceType: ca.sourceType as AlertSource,
+          alertTitle: ca.alertTitle,
+          alertService: ca.alertService,
+          alertSeverity: ca.alertSeverity,
+          correlationStrategy: ca.correlationStrategy,
+          correlationScore: ca.correlationScore,
+          correlationDetails: ca.correlationDetails || {},
+          receivedAt: ca.receivedAt,
+        })),
+        mergedIntoIncidentId: inc.mergedIntoIncidentId,
+        mergedIntoTitle: inc.mergedIntoTitle,
         postMortem: {} as PostMortem, // Not implemented yet
         startedAt: inc.startedAt,
         analyzedAt: inc.analyzedAt,
@@ -373,6 +421,7 @@ export const incidentsService = {
     switch (status) {
       case 'investigating': return 'text-orange-500';
       case 'analyzed': return 'text-blue-500';
+      case 'merged': return 'text-zinc-500';
     }
   },
 
@@ -431,6 +480,54 @@ export const incidentsService = {
       return data;
     } catch (error) {
       console.error('Error applying fix suggestion:', error);
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      return { success: false, error: message };
+    }
+  },
+
+  async getRecentUnlinkedIncidents(excludeId?: string): Promise<RecentIncident[]> {
+    try {
+      const url = excludeId 
+        ? `/api/incidents/recent-unlinked?exclude=${encodeURIComponent(excludeId)}`
+        : '/api/incidents/recent-unlinked';
+      
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to fetch recent incidents: ${response.statusText}`);
+      }
+
+      const data = await response.json();
+      return data.incidents || [];
+    } catch (error) {
+      console.error('Error fetching recent unlinked incidents:', error);
+      return [];
+    }
+  },
+
+  async mergeAlertToIncident(
+    targetIncidentId: string,
+    sourceIncidentId: string
+  ): Promise<{ success: boolean; error?: string }> {
+    try {
+      const response = await fetch(`/api/incidents/${targetIncidentId}/merge-alert`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ sourceIncidentId }),
+      });
+
+      const data = await response.json();
+      if (!response.ok) {
+        return { success: false, error: data.error || 'Failed to merge alert' };
+      }
+      return { success: true };
+    } catch (error) {
+      console.error('Error merging alert:', error);
       const message = error instanceof Error ? error.message : 'Unknown error';
       return { success: false, error: message };
     }

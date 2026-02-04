@@ -6,7 +6,7 @@ import Link from 'next/link';
 import { incidentsService, Incident, StreamingThought } from '@/lib/services/incidents';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
-import { ArrowLeft, AlertTriangle } from 'lucide-react';
+import { ArrowLeft, AlertTriangle, GitMerge } from 'lucide-react';
 
 import IncidentCard from '../components/IncidentCard';
 import ThoughtsPanel from '../components/ThoughtsPanel';
@@ -151,8 +151,42 @@ export default function IncidentDetailPage() {
     incident.startedAt
   );
 
+  const refreshIncident = async () => {
+    try {
+      const data = await incidentsService.getIncident(params.id as string);
+      if (data) {
+        setIncident(data);
+      }
+    } catch (e) {
+      console.error('Failed to refresh incident:', e);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-background">
+      {/* Merged incident banner */}
+      {incident.status === 'merged' && incident.mergedIntoIncidentId && (
+        <div className="bg-zinc-900/50 border-b border-zinc-800 px-6 py-4">
+          <div className="max-w-5xl mx-auto flex items-center gap-3 text-zinc-400">
+            <GitMerge className="w-5 h-5 text-zinc-500" />
+            <div>
+              <p className="text-sm">
+                This incident was merged into{' '}
+                <Link 
+                  href={`/incidents/${incident.mergedIntoIncidentId}`}
+                  className="text-blue-400 hover:text-blue-300 font-medium"
+                >
+                  "{incident.mergedIntoTitle || 'another incident'}"
+                </Link>
+              </p>
+              <p className="text-xs text-zinc-600 mt-1">
+                Its RCA investigation has been stopped. View the main incident to see the combined analysis.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Sticky header with back button - full width, always on top */}
       <div className="border-b border-zinc-800/50 bg-background/95 backdrop-blur-sm sticky top-0 z-30">
         <div className="px-6 py-3">
@@ -196,6 +230,7 @@ export default function IncidentDetailPage() {
                 setShowThoughts(true);
                 userClosedThoughtsRef.current = false;
               }}
+              onRefresh={refreshIncident}
             />
           </div>
         </div>

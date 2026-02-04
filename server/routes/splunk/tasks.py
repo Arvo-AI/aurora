@@ -9,6 +9,7 @@ from typing import Any, Dict, Optional
 
 from celery_config import celery_app
 from services.correlation.alert_correlator import AlertCorrelator
+from services.correlation import handle_correlated_alert
 
 logger = logging.getLogger(__name__)
 
@@ -143,12 +144,10 @@ def process_splunk_alert(
 ) -> None:
     """Background processor for Splunk alert webhooks."""
     try:
-        received_at = datetime.now(timezone.utc)
         summary = _format_alert_summary(payload)
         logger.info("[SPLUNK][ALERT][USER:%s] %s", user_id or "unknown", summary)
 
         details = {
-            "received_at": received_at.isoformat(),
             "summary": summary,
             "payload": payload,
             "metadata": metadata or {},
@@ -164,6 +163,7 @@ def process_splunk_alert(
                 with db_pool.get_admin_connection() as conn:
                     with conn.cursor() as cursor:
                         # Extract fields from Splunk webhook payload
+                        received_at = datetime.now(timezone.utc)
                         alert_id = payload.get("sid") or payload.get("search_id")
                         alert_title = payload.get("search_name") or payload.get("name")
                         alert_state = "triggered"
@@ -208,12 +208,6 @@ def process_splunk_alert(
                             )
                             return
 
-                        conn.commit()
-                        logger.debug(
-                            "[SPLUNK][ALERT] Alert record created for user %s",
-                            user_id,
-                        )
-
                         service = _extract_service(payload)
 
                         # Build alert metadata
@@ -231,90 +225,32 @@ def process_splunk_alert(
 
                         try:
                             correlator = AlertCorrelator()
-                            correlation_result = None
-                            with db_pool.get_admin_connection() as correlation_conn:
-                                previous_autocommit = correlation_conn.autocommit
-                                correlation_conn.autocommit = True
-                                try:
-                                    with (
-                                        correlation_conn.cursor() as correlation_cursor
-                                    ):
-                                        correlation_result = correlator.correlate(
-                                            cursor=correlation_cursor,
-                                            user_id=user_id,
-                                            source_type="splunk",
-                                            source_alert_id=alert_db_id,
-                                            alert_title=correlation_title,
-                                            alert_service=service,
-                                            alert_severity=severity,
-                                            alert_metadata=alert_metadata,
-                                        )
-                                finally:
-                                    correlation_conn.autocommit = previous_autocommit
+                            correlation_result = correlator.correlate(
+                                cursor=cursor,
+                                user_id=user_id,
+                                source_type="splunk",
+                                source_alert_id=alert_db_id,
+                                alert_title=correlation_title,
+                                alert_service=service,
+                                alert_severity=severity,
+                                alert_metadata=alert_metadata,
+                            )
 
-                            if correlation_result and correlation_result.is_correlated:
-                                incident_id = correlation_result.incident_id
-                                cursor.execute(
-                                    """INSERT INTO incident_alerts
-                                       (user_id, incident_id, source_type, source_alert_id, alert_title, alert_service,
-                                        alert_severity, correlation_strategy, correlation_score,
-                                        correlation_details, alert_metadata, received_at)
-                                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
-                                    (
-                                        user_id,
-                                        incident_id,
-                                        "splunk",
-                                        alert_db_id,
-                                        correlation_title,
-                                        service,
-                                        severity,
-                                        correlation_result.strategy,
-                                        correlation_result.score,
-                                        json.dumps(correlation_result.details),
-                                        json.dumps(alert_metadata),
-                                        received_at,
-                                    ),
-                                )
-                                cursor.execute(
-                                    """UPDATE incidents
-                                       SET correlated_alert_count = correlated_alert_count + 1,
-                                           affected_services = CASE
-                                               WHEN affected_services IS NULL THEN ARRAY[%(service)s]
-                                               WHEN NOT (%(service)s = ANY(affected_services)) THEN array_append(affected_services, %(service)s)
-                                               ELSE affected_services
-                                           END,
-                                           updated_at = CURRENT_TIMESTAMP
-                                       WHERE id = %(incident_id)s""",
-                                    {"service": service, "incident_id": incident_id},
+                            if correlation_result.is_correlated:
+                                handle_correlated_alert(
+                                    cursor=cursor,
+                                    user_id=user_id,
+                                    incident_id=correlation_result.incident_id,
+                                    source_type="splunk",
+                                    source_alert_id=alert_db_id,
+                                    alert_title=correlation_title,
+                                    alert_service=service,
+                                    alert_severity=severity,
+                                    correlation_result=correlation_result,
+                                    alert_metadata=alert_metadata,
+                                    raw_payload=payload,
                                 )
                                 conn.commit()
-
-                                try:
-                                    from routes.incidents_sse import (
-                                        broadcast_incident_update_to_user_connections,
-                                    )
-
-                                    broadcast_incident_update_to_user_connections(
-                                        user_id,
-                                        {
-                                            "type": "alert_correlated",
-                                            "incident_id": str(incident_id),
-                                            "source": "splunk",
-                                            "alert_title": alert_title,
-                                            "correlation_score": correlation_result.score,
-                                        },
-                                    )
-                                except Exception as e:
-                                    logger.warning(
-                                        "[SPLUNK] Failed to notify SSE: %s", e
-                                    )
-
-                                logger.info(
-                                    "[SPLUNK] Alert correlated to incident %s (score=%.2f, strategy=%s)",
-                                    incident_id,
-                                    correlation_result.score,
-                                    correlation_result.strategy,
-                                )
                                 return
                         except Exception as corr_exc:
                             logger.warning(
@@ -375,8 +311,8 @@ def process_splunk_alert(
                             cursor.execute(
                                 """INSERT INTO incident_alerts
                                    (user_id, incident_id, source_type, source_alert_id, alert_title, alert_service,
-                                    alert_severity, correlation_strategy, correlation_score, alert_metadata, received_at)
-                                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                                    alert_severity, correlation_strategy, correlation_score, alert_metadata)
+                                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
                                 (
                                     user_id,
                                     incident_id,
@@ -388,11 +324,10 @@ def process_splunk_alert(
                                     "primary",
                                     1.0,
                                     json.dumps(alert_metadata),
-                                    received_at,
                                 ),
                             )
                             cursor.execute(
-                                "UPDATE incidents SET affected_services = ARRAY[%s] WHERE id = %s AND (affected_services IS NULL OR affected_services = '{}')",
+                                "UPDATE incidents SET affected_services = ARRAY[%s] WHERE id = %s",
                                 (service, incident_id),
                             )
                             conn.commit()
@@ -456,7 +391,8 @@ def process_splunk_alert(
                                     payload, user_id=user_id
                                 )
 
-                                run_background_chat.delay(
+                                # Start RCA task and immediately store task ID
+                                task = run_background_chat.delay(
                                     user_id=user_id,
                                     session_id=session_id,
                                     initial_message=rca_prompt,
@@ -469,9 +405,19 @@ def process_splunk_alert(
                                     if incident_id
                                     else None,
                                 )
+                                
+                                # Store Celery task ID immediately for cancellation support
+                                if incident_id:
+                                    cursor.execute(
+                                        "UPDATE incidents SET rca_celery_task_id = %s WHERE id = %s",
+                                        (task.id, str(incident_id))
+                                    )
+                                    conn.commit()
+                                
                                 logger.info(
-                                    "[SPLUNK][ALERT] Triggered background RCA chat for session %s",
+                                    "[SPLUNK][ALERT] Triggered background RCA chat for session %s (task_id=%s)",
                                     session_id,
+                                    task.id,
                                 )
 
                         except Exception as chat_exc:

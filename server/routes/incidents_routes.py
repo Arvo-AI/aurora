@@ -79,10 +79,35 @@ def _build_source_url(source_type: str, user_id: str) -> str:
 
 
 def _format_incident_response(
-    row: tuple, include_metadata: bool = False, include_correlation: bool = False
+    row: tuple, include_metadata: bool = False, include_correlation: bool = False, include_merge_target: bool = False
 ) -> Dict[str, Any]:
     """Format database row into incident response object."""
-    if include_correlation:
+    if include_merge_target:
+        (
+            incident_id,
+            user_id,
+            source_type,
+            source_alert_id,
+            status,
+            severity,
+            alert_title,
+            alert_service,
+            alert_environment,
+            aurora_status,
+            aurora_summary,
+            aurora_chat_session_id,
+            started_at,
+            analyzed_at,
+            active_tab,
+            created_at,
+            updated_at,
+            alert_metadata,
+            correlated_alert_count,
+            affected_services,
+            merged_into_incident_id,
+            merged_into_title,
+        ) = row
+    elif include_correlation:
         (
             incident_id,
             user_id,
@@ -105,6 +130,8 @@ def _format_incident_response(
             correlated_alert_count,
             affected_services,
         ) = row
+        merged_into_incident_id = None
+        merged_into_title = None
     elif include_metadata:
         (
             incident_id,
@@ -128,6 +155,8 @@ def _format_incident_response(
         ) = row
         correlated_alert_count = None
         affected_services = None
+        merged_into_incident_id = None
+        merged_into_title = None
     else:
         (
             incident_id,
@@ -151,6 +180,8 @@ def _format_incident_response(
         alert_metadata = None
         correlated_alert_count = None
         affected_services = None
+        merged_into_incident_id = None
+        merged_into_title = None
 
     result = {
         "id": str(incident_id),
@@ -187,6 +218,11 @@ def _format_incident_response(
         result["affectedServices"] = (
             affected_services if isinstance(affected_services, list) else []
         )
+    
+    # Add merge target info if available
+    if merged_into_incident_id is not None:
+        result["mergedIntoIncidentId"] = str(merged_into_incident_id)
+        result["mergedIntoTitle"] = merged_into_title
 
     return result
 
@@ -203,17 +239,21 @@ def get_incidents():
             with conn.cursor() as cursor:
                 # Set RLS context
                 cursor.execute("SET myapp.current_user_id = %s", (user_id,))
+                conn.commit()
 
                 cursor.execute(
                     """
                     SELECT 
-                        id, user_id, source_type, source_alert_id, status, severity,
-                        alert_title, alert_service, alert_environment, aurora_status, aurora_summary,
-                        aurora_chat_session_id, started_at, analyzed_at, active_tab, created_at, updated_at,
-                        alert_metadata, correlated_alert_count, affected_services
-                    FROM incidents
-                    WHERE user_id = %s
-                    ORDER BY started_at DESC
+                        i.id, i.user_id, i.source_type, i.source_alert_id, i.status, i.severity,
+                        i.alert_title, i.alert_service, i.alert_environment, i.aurora_status, i.aurora_summary,
+                        i.aurora_chat_session_id, i.started_at, i.analyzed_at, i.active_tab, i.created_at, i.updated_at,
+                        i.alert_metadata, i.correlated_alert_count, i.affected_services,
+                        i.merged_into_incident_id, target.alert_title as merged_into_title
+                    FROM incidents i
+                    LEFT JOIN incidents target ON i.merged_into_incident_id = target.id
+                    WHERE i.user_id = %s
+                      AND i.status != 'merged'
+                    ORDER BY i.started_at DESC
                     LIMIT 100
                     """,
                     (user_id,),
@@ -222,7 +262,7 @@ def get_incidents():
 
                 incidents = [
                     _format_incident_response(
-                        row, include_metadata=True, include_correlation=True
+                        row, include_metadata=True, include_correlation=True, include_merge_target=True
                     )
                     for row in rows
                 ]
@@ -257,16 +297,19 @@ def get_incident(incident_id: str):
             with conn.cursor() as cursor:
                 # Set RLS context
                 cursor.execute("SET myapp.current_user_id = %s", (user_id,))
+                conn.commit()
                 # Get incident details
                 cursor.execute(
                     """
                     SELECT 
-                        id, user_id, source_type, source_alert_id, status, severity,
-                        alert_title, alert_service, alert_environment, aurora_status, aurora_summary,
-                        aurora_chat_session_id, started_at, analyzed_at, active_tab, created_at, updated_at,
-                        alert_metadata, correlated_alert_count, affected_services
-                    FROM incidents
-                    WHERE id = %s AND user_id = %s
+                        i.id, i.user_id, i.source_type, i.source_alert_id, i.status, i.severity,
+                        i.alert_title, i.alert_service, i.alert_environment, i.aurora_status, i.aurora_summary,
+                        i.aurora_chat_session_id, i.started_at, i.analyzed_at, i.active_tab, i.created_at, i.updated_at,
+                        i.alert_metadata, i.correlated_alert_count, i.affected_services,
+                        i.merged_into_incident_id, target.alert_title as merged_into_title
+                    FROM incidents i
+                    LEFT JOIN incidents target ON i.merged_into_incident_id = target.id
+                    WHERE i.id = %s AND i.user_id = %s
                     """,
                     (incident_id, user_id),
                 )
@@ -276,7 +319,7 @@ def get_incident(incident_id: str):
                     return jsonify({"error": "Incident not found"}), 404
 
                 incident = _format_incident_response(
-                    row, include_metadata=True, include_correlation=True
+                    row, include_metadata=True, include_correlation=True, include_merge_target=True
                 )
 
                 # Fetch raw alert data from source table
@@ -448,9 +491,9 @@ def get_incident(incident_id: str):
                     """SELECT id, source_type, alert_title, alert_service, alert_severity,
                               correlation_strategy, correlation_score, correlation_details, received_at
                        FROM incident_alerts
-                       WHERE incident_id = %s AND user_id = %s
+                       WHERE incident_id = %s
                        ORDER BY received_at ASC""",
-                    (incident_id, user_id),
+                    (incident_id,),
                 )
                 alert_rows = cursor.fetchall()
                 correlated_alerts = []
@@ -641,6 +684,7 @@ def get_incident_alerts(incident_id: str):
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
                 cursor.execute("SET myapp.current_user_id = %s", (user_id,))
+                conn.commit()
 
                 cursor.execute(
                     "SELECT 1 FROM incidents WHERE id = %s AND user_id = %s",
@@ -653,9 +697,9 @@ def get_incident_alerts(incident_id: str):
                     """SELECT id, source_type, alert_title, alert_service, alert_severity,
                               correlation_strategy, correlation_score, correlation_details, received_at
                        FROM incident_alerts
-                       WHERE incident_id = %s AND user_id = %s
+                       WHERE incident_id = %s
                        ORDER BY received_at ASC""",
-                    (incident_id, user_id),
+                    (incident_id,),
                 )
                 alert_rows = cursor.fetchall()
 
@@ -692,10 +736,9 @@ def get_incident_alerts(incident_id: str):
 
 
 # Allowed values for validation
-ALLOWED_INCIDENT_STATUS = {"investigating", "analyzed"}
+ALLOWED_INCIDENT_STATUS = {"investigating", "analyzed", "merged"}
 ALLOWED_AURORA_STATUS = {"idle", "running", "complete", "error"}
 ALLOWED_ACTIVE_TAB = {"thoughts", "chat"}
-
 
 @incidents_bp.route("/api/incidents/<incident_id>", methods=["PATCH"])
 def update_incident(incident_id: str):
@@ -742,6 +785,7 @@ def update_incident(incident_id: str):
             with conn.cursor() as cursor:
                 # Set RLS context
                 cursor.execute("SET myapp.current_user_id = %s", (user_id,))
+                conn.commit()
                 # Build update query dynamically based on provided fields
                 update_fields = []
                 values = []
@@ -848,6 +892,7 @@ def incident_chat(incident_id: str):
             with db_pool.get_admin_connection() as conn:
                 with conn.cursor() as cursor:
                     cursor.execute("SET myapp.current_user_id = %s", (user_id,))
+                    conn.commit()
                     cursor.execute(
                         """
                         SELECT cs.id
@@ -895,6 +940,7 @@ def incident_chat(incident_id: str):
             with db_pool.get_admin_connection() as conn:
                 with conn.cursor() as cursor:
                     cursor.execute("SET myapp.current_user_id = %s", (user_id,))
+                    conn.commit()
 
                     # Get incident
                     cursor.execute(
@@ -1134,3 +1180,341 @@ def apply_fix_suggestion(suggestion_id: str):
     except Exception as exc:
         logger.exception("[INCIDENTS] Failed to apply fix suggestion %s", suggestion_id)
         return jsonify({"error": "Failed to apply fix suggestion"}), 500
+
+
+@incidents_bp.route(
+    "/api/incidents/<target_incident_id>/merge-alert", methods=["POST"]
+)
+def merge_alert_to_incident(target_incident_id: str):
+    """Manually merge an alert from another incident into this one.
+    
+    This allows engineers to manually correlate alerts that the automatic
+    correlation didn't catch. It will:
+    1. Copy the alert to the target incident's incident_alerts table
+    2. Stop the source incident's RCA if running (via Celery task revocation)
+    3. Transfer context from source RCA to target RCA
+    4. Mark the source incident as merged
+    """
+    user_id = _get_user_id()
+    if not user_id:
+        return jsonify({"error": "Missing user_id"}), 400
+
+    if not _validate_uuid(target_incident_id):
+        return jsonify({"error": "Invalid target incident ID format"}), 400
+
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "Missing request body"}), 400
+
+    source_incident_id = data.get("sourceIncidentId")
+    if not source_incident_id or not _validate_uuid(source_incident_id):
+        return jsonify({"error": "Invalid or missing sourceIncidentId"}), 400
+
+    if source_incident_id == target_incident_id:
+        return jsonify({"error": "Cannot merge incident into itself"}), 400
+
+    try:
+        from chat.background.context_updates import enqueue_rca_context_update
+        from chat.background.task import cancel_rca_for_incident
+        
+        # Cancel the source incident's RCA FIRST (before any DB changes)
+        # This uses Celery task revocation to immediately stop the running task
+        rca_cancelled = cancel_rca_for_incident(source_incident_id)
+        if rca_cancelled:
+            logger.info(f"[INCIDENTS] Cancelled RCA for source incident {source_incident_id}")
+
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("SET myapp.current_user_id = %s", (user_id,))
+                conn.commit()
+
+                # Get source incident details
+                cursor.execute(
+                    """SELECT id, alert_title, alert_service, severity, source_type,
+                              aurora_chat_session_id, alert_metadata, status
+                       FROM incidents
+                       WHERE id = %s AND user_id = %s""",
+                    (source_incident_id, user_id),
+                )
+                source_row = cursor.fetchone()
+                if not source_row:
+                    return jsonify({"error": "Source incident not found"}), 404
+
+                (
+                    _,
+                    source_title,
+                    source_service,
+                    source_severity,
+                    source_type,
+                    source_session_id,
+                    source_metadata,
+                    source_status,
+                ) = source_row
+
+                # Validate source incident is not already merged
+                if source_status == 'merged':
+                    return jsonify({"error": "Source incident is already merged into another incident"}), 400
+
+                # Get target incident details
+                cursor.execute(
+                    """SELECT id, aurora_chat_session_id, status
+                       FROM incidents
+                       WHERE id = %s AND user_id = %s""",
+                    (target_incident_id, user_id),
+                )
+                target_row = cursor.fetchone()
+                if not target_row:
+                    return jsonify({"error": "Target incident not found"}), 404
+
+                target_session_id = target_row[1]
+                target_status = target_row[2]
+
+                # Validate target incident is not already merged (prevent chains)
+                if target_status == 'merged':
+                    return jsonify({"error": "Cannot merge into an incident that is already merged"}), 400
+
+                # Fetch investigation thoughts from source incident BEFORE commit
+                thought_rows = []
+                source_summary = None
+                if target_session_id:
+                    cursor.execute(
+                        """
+                        SELECT content, thought_type, timestamp
+                        FROM incident_thoughts
+                        WHERE incident_id = %s
+                        ORDER BY timestamp ASC
+                        LIMIT 30
+                        """,
+                        (source_incident_id,),
+                    )
+                    thought_rows = cursor.fetchall()
+
+                    # Fetch source incident's summary if available
+                    cursor.execute(
+                        """
+                        SELECT aurora_summary
+                        FROM incidents
+                        WHERE id = %s
+                        """,
+                        (source_incident_id,),
+                    )
+                    summary_row = cursor.fetchone()
+                    source_summary = summary_row[0] if summary_row and summary_row[0] else None
+
+                # Get the source incident's primary alert from incident_alerts
+                cursor.execute(
+                    """SELECT id, source_type, source_alert_id, alert_title, alert_service,
+                              alert_severity, alert_metadata
+                       FROM incident_alerts
+                       WHERE incident_id = %s AND correlation_strategy = 'primary'
+                       LIMIT 1""",
+                    (source_incident_id,),
+                )
+                source_alert_row = cursor.fetchone()
+                
+                # If no primary alert found, the incident is malformed
+                if not source_alert_row:
+                    logger.error(
+                        f"[INCIDENTS] No primary alert found for source incident {source_incident_id}"
+                    )
+                    return jsonify({"error": "Source incident has no primary alert"}), 404
+
+                # Insert the source alert into target incident's alerts
+                cursor.execute(
+                    """INSERT INTO incident_alerts
+                       (user_id, incident_id, source_type, source_alert_id, alert_title,
+                        alert_service, alert_severity, correlation_strategy, correlation_score,
+                        correlation_details, alert_metadata)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                       RETURNING id""",
+                    (
+                        user_id,
+                        target_incident_id,
+                        source_type,
+                        source_alert_row[2],  # source_alert_id - no longer nullable
+                        source_title,
+                        source_service,
+                        source_severity,
+                        "manual",  # Mark as manually correlated
+                        1.0,  # Full confidence since user explicitly merged
+                        json.dumps({"merged_from_incident": source_incident_id}),
+                        json.dumps(source_metadata) if source_metadata else "{}",
+                    ),
+                )
+                new_alert_id = cursor.fetchone()[0]
+
+                # Update target incident's correlated_alert_count and affected_services
+                cursor.execute(
+                    """UPDATE incidents
+                       SET correlated_alert_count = correlated_alert_count + 1,
+                           affected_services = CASE
+                               WHEN affected_services IS NULL THEN ARRAY[%s]
+                               WHEN NOT (%s = ANY(affected_services)) THEN array_append(affected_services, %s)
+                               ELSE affected_services
+                           END,
+                           updated_at = CURRENT_TIMESTAMP
+                       WHERE id = %s""",
+                    (source_service, source_service, source_service, target_incident_id),
+                )
+
+                # Mark source incident as merged and clear summary (it's now part of target)
+                cursor.execute(
+                    """UPDATE incidents
+                       SET status = 'merged',
+                           aurora_status = 'complete',
+                           aurora_summary = NULL,
+                           merged_into_incident_id = %s,
+                           updated_at = CURRENT_TIMESTAMP
+                       WHERE id = %s""",
+                    (target_incident_id, source_incident_id),
+                )
+
+                # Stop source RCA session if running
+                if source_session_id:
+                    cursor.execute(
+                        """UPDATE chat_sessions
+                           SET status = 'cancelled'
+                           WHERE id = %s AND user_id = %s AND status IN ('in_progress', 'completed')""",
+                        (str(source_session_id), user_id),
+                    )
+
+                conn.commit()
+
+                # Enqueue context update to target RCA if it has an active session
+                if target_session_id:
+                    # Format thoughts into readable context (already fetched before commit)
+                    thoughts_context = []
+                    for row in thought_rows:
+                        timestamp_str = row[2].strftime("%H:%M:%S") if row[2] else ""
+                        thought_content = row[0] or ""
+                        if timestamp_str:
+                            thoughts_context.append(f"[{timestamp_str}] {thought_content}")
+                        else:
+                            thoughts_context.append(thought_content)
+                    
+                    # Build comprehensive context body
+                    context_parts = [
+                        f"Manually merged alert from {source_type}: {source_title}",
+                        f"Service: {source_service}",
+                        f"Severity: {source_severity}",
+                    ]
+                    
+                    if source_summary:
+                        context_parts.extend([
+                            "",
+                            "## Summary from merged incident's investigation:",
+                            source_summary,
+                        ])
+                    
+                    if thoughts_context:
+                        context_parts.extend([
+                            "",
+                            "## Investigation progress from merged incident:",
+                            *thoughts_context[-20:],  # Last 20 thoughts to keep it focused
+                        ])
+                    
+                    context_payload = {
+                        "title": source_title,
+                        "service": source_service,
+                        "severity": source_severity,
+                        "source_type": source_type,
+                        "merged_from_incident": source_incident_id,
+                        "body": "\n".join(context_parts),
+                    }
+                    
+                    enqueue_rca_context_update(
+                        user_id=user_id,
+                        session_id=str(target_session_id),
+                        source=source_type,
+                        payload=context_payload,
+                        incident_id=target_incident_id,
+                    )
+                    logger.info(
+                        "[INCIDENTS] Enqueued rich context update for merged alert to session %s (thoughts=%d, has_summary=%s)",
+                        target_session_id,
+                        len(thoughts_context),
+                        source_summary is not None,
+                    )
+
+                logger.info(
+                    "[INCIDENTS] Merged incident %s into %s for user %s",
+                    source_incident_id,
+                    target_incident_id,
+                    user_id,
+                )
+
+                return jsonify({
+                    "success": True,
+                    "message": "Alert merged successfully",
+                    "newAlertId": new_alert_id,
+                    "sourceIncidentId": source_incident_id,
+                    "targetIncidentId": target_incident_id,
+                }), 200
+
+    except Exception as exc:
+        logger.exception(
+            "[INCIDENTS] Failed to merge alert from %s to %s",
+            source_incident_id,
+            target_incident_id,
+        )
+        return jsonify({"error": "Failed to merge alert"}), 500
+
+
+@incidents_bp.route("/api/incidents/recent-unlinked", methods=["GET"])
+def get_recent_unlinked_incidents():
+    """Get recent incidents that could potentially be linked to other incidents.
+    
+    Returns incidents from the last 30 minutes that:
+    - Are not already merged
+    - Have status 'investigating' (exclude 'analyzed' - those are done)
+    """
+    user_id = _get_user_id()
+    if not user_id:
+        return jsonify({"error": "Missing user_id"}), 400
+
+    # Optional: exclude a specific incident
+    exclude_id = request.args.get("exclude")
+
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("SET myapp.current_user_id = %s", (user_id,))
+                conn.commit()
+
+                query = """
+                    SELECT id, alert_title, alert_service, severity, source_type,
+                           status, aurora_status, created_at
+                    FROM incidents
+                    WHERE user_id = %s
+                      AND status = 'investigating'
+                      AND created_at >= NOW() - INTERVAL '30 minutes'
+                """
+                params = [user_id]
+
+                if exclude_id and _validate_uuid(exclude_id):
+                    query += " AND id != %s"
+                    params.append(exclude_id)
+
+                query += " ORDER BY created_at DESC LIMIT 10"
+
+                cursor.execute(query, params)
+                rows = cursor.fetchall()
+
+                incidents = []
+                for row in rows:
+                    incidents.append({
+                        "id": str(row[0]),
+                        "alertTitle": row[1],
+                        "alertService": row[2],
+                        "severity": row[3],
+                        "sourceType": row[4],
+                        "status": row[5],
+                        "auroraStatus": row[6],
+                        "createdAt": _format_timestamp(row[7]),
+                    })
+
+                return jsonify({"incidents": incidents}), 200
+
+    except Exception as exc:
+        logger.exception("[INCIDENTS] Failed to get recent unlinked incidents")
+        return jsonify({"error": "Failed to get recent incidents"}), 500
