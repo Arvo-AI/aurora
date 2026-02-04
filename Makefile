@@ -61,7 +61,8 @@ build:
 	docker compose build
 
 down:
-	docker compose down
+	@for ep in $$(docker network inspect aurora_default -f '{{range .Containers}}{{.Name}} {{end}}' 2>/dev/null); do docker network disconnect -f aurora_default $$ep 2>/dev/null; done; true
+	docker compose down --remove-orphans
 
 logs:
 	@if [ -z "$(filter-out $@,$(MAKECMDGOALS))" ]; then \
