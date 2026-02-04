@@ -81,6 +81,10 @@ class TopologyStrategy(CorrelationStrategy):
 
             best_score = 0.0
             for svc in incident_services:
+                # Exact match: same service -> perfect correlation
+                if svc == alert_service:
+                    return 1.0
+                
                 # Upstream check (alert depends on incident service)
                 if svc in upstream_map:
                     depth = upstream_map[svc]
