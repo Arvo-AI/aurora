@@ -56,14 +56,14 @@ function getStrategyExplanation(alert: CorrelatedAlert): string {
   }
   
   if (parts.length === 0) {
-    return `Correlated with ${Math.round(alert.correlationScore * 100)}% confidence`;
+    return `Correlated with ${Math.round((alert.correlationScore || 0) * 100)}% confidence`;
   }
   
   return parts.join(', ');
 }
 
 function CorrelatedAlertCard({ alert, isNew }: { alert: CorrelatedAlert; isNew: boolean }) {
-  const scorePercent = Math.round(alert.correlationScore * 100);
+  const scorePercent = Math.round((alert.correlationScore || 0) * 100);
   
   return (
     <div className={`group relative p-4 rounded-lg border transition-all duration-300 ${
@@ -154,15 +154,23 @@ export default function CorrelatedAlertsSection({ alerts }: CorrelatedAlertsSect
     return null;
   }
   
+  // Helper to safely parse date, fallback to 0 for invalid dates
+  const safeParseDate = (dateString: string | null | undefined): number => {
+    if (!dateString) return 0;
+    const timestamp = new Date(dateString).getTime();
+    return isNaN(timestamp) ? 0 : timestamp;
+  };
+  
   // Sort by receivedAt descending (newest first)
   const sortedAlerts = [...correlatedAlerts].sort(
-    (a, b) => new Date(b.receivedAt).getTime() - new Date(a.receivedAt).getTime()
+    (a, b) => safeParseDate(b.receivedAt) - safeParseDate(a.receivedAt)
   );
   
   // Check if any alert arrived in the last 30 seconds (for "new" badge)
   const now = Date.now();
-  const isRecent = (receivedAt: string) => {
-    return now - new Date(receivedAt).getTime() < 30000;
+  const isRecent = (receivedAt: string | null | undefined) => {
+    const timestamp = safeParseDate(receivedAt);
+    return timestamp > 0 && now - timestamp < 30000;
   };
   
   const hasNewAlerts = sortedAlerts.some(a => isRecent(a.receivedAt));

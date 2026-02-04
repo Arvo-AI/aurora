@@ -115,10 +115,19 @@ export default function RecentAlertsSection({
   const [mergingId, setMergingId] = useState<string | null>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const [contentHeight, setContentHeight] = useState(0);
+  const hasFetchedRef = useRef<string | null>(null);
+
+  // Reset hasFetched when currentIncidentId changes
+  useEffect(() => {
+    if (hasFetchedRef.current !== currentIncidentId) {
+      hasFetchedRef.current = null;
+      setRecentIncidents([]);
+    }
+  }, [currentIncidentId]);
 
   // Fetch recent incidents when expanded
   useEffect(() => {
-    if (isExpanded) {
+    if (isExpanded && hasFetchedRef.current !== currentIncidentId) {
       setLoading(true);
       incidentsService.getRecentUnlinkedIncidents(currentIncidentId)
         .then(setRecentIncidents)
@@ -126,7 +135,10 @@ export default function RecentAlertsSection({
           console.error('Failed to fetch recent incidents:', err);
           setRecentIncidents([]);
         })
-        .finally(() => setLoading(false));
+        .finally(() => {
+          setLoading(false);
+          hasFetchedRef.current = currentIncidentId;
+        });
     }
   }, [isExpanded, currentIncidentId]);
 
