@@ -1151,7 +1151,7 @@ def initialize_tables():
             try:
                 cursor.execute("""
                     ALTER TABLE incidents
-                    ADD COLUMN IF NOT EXISTS correlated_alert_count INTEGER DEFAULT 1;
+                    ADD COLUMN IF NOT EXISTS correlated_alert_count INTEGER DEFAULT 0;
                 """)
                 logging.info(
                     "Added correlated_alert_count column to incidents table (if not exists)."
