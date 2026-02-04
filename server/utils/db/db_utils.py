@@ -545,12 +545,14 @@ def initialize_tables():
                          active_tab VARCHAR(10) DEFAULT 'thoughts',
                          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                         merged_into_incident_id UUID REFERENCES incidents(id) ON DELETE SET NULL,
                          UNIQUE(source_type, source_alert_id, user_id)
                      );
                      
                      CREATE INDEX IF NOT EXISTS idx_incidents_user_id ON incidents(user_id, started_at DESC);
                      CREATE INDEX IF NOT EXISTS idx_incidents_status ON incidents(status);
                      CREATE INDEX IF NOT EXISTS idx_incidents_source ON incidents(source_type, source_alert_id);
+                     CREATE INDEX IF NOT EXISTS idx_incidents_merged ON incidents(merged_into_incident_id) WHERE merged_into_incident_id IS NOT NULL;
                  """,
                 "incident_alerts": """
                     CREATE TABLE IF NOT EXISTS incident_alerts (
