@@ -296,8 +296,8 @@ def process_netdata_alert(
                                         data, user_id=user_id
                                     )
 
-                                    # Trigger the background chat task
-                                    run_background_chat.delay(
+                                    # Start RCA task and immediately store task ID
+                                    task = run_background_chat.delay(
                                         user_id=user_id,
                                         session_id=session_id,
                                         initial_message=rca_prompt,
@@ -312,9 +312,19 @@ def process_netdata_alert(
                                         if incident_id
                                         else None,
                                     )
+                                    
+                                    # Store Celery task ID immediately for cancellation support
+                                    if incident_id:
+                                        cursor.execute(
+                                            "UPDATE incidents SET rca_celery_task_id = %s WHERE id = %s",
+                                            (task.id, str(incident_id))
+                                        )
+                                        conn.commit()
+                                    
                                     logger.info(
-                                        "[NETDATA][ALERT] Triggered background RCA chat for session %s",
+                                        "[NETDATA][ALERT] Triggered background RCA chat for session %s (task_id=%s)",
                                         session_id,
+                                        task.id,
                                     )
 
                             except Exception as chat_exc:

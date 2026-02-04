@@ -283,10 +283,13 @@ def run_background_chat(
         if incident_id:
             try:
                 with db_pool.get_admin_connection() as conn:
-                    # Store session ID AND Celery task ID for cancellation support
+                    # Store session ID and Celery task ID (if not already set by webhook handler)
                     with conn.cursor() as cursor:
                         cursor.execute(
-                            "UPDATE incidents SET aurora_chat_session_id = %s, rca_celery_task_id = %s WHERE id = %s",
+                            """UPDATE incidents 
+                               SET aurora_chat_session_id = %s, 
+                                   rca_celery_task_id = COALESCE(rca_celery_task_id, %s)
+                               WHERE id = %s""",
                             (session_id, self.request.id, incident_id)
                         )
                         conn.commit()

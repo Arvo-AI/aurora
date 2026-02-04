@@ -376,7 +376,8 @@ def trigger_delayed_rca(
                         "urgency": incident_urgency,
                     },
                 )
-                run_background_chat.delay(
+                # Start RCA task and immediately store task ID for cancellation support
+                task = run_background_chat.delay(
                     user_id=user_id,
                     session_id=session_id,
                     initial_message=rca_prompt,
@@ -387,9 +388,18 @@ def trigger_delayed_rca(
                     },
                     incident_id=incident_db_id,
                 )
+                
+                # Store Celery task ID immediately for cancellation support
+                cursor.execute(
+                    "UPDATE incidents SET rca_celery_task_id = %s WHERE id = %s",
+                    (task.id, incident_db_id)
+                )
+                conn.commit()
+                
                 logger.info(
-                    "[PAGERDUTY][RCA-DELAYED] Successfully triggered RCA for incident %s",
+                    "[PAGERDUTY][RCA-DELAYED] Successfully triggered RCA for incident %s (task_id=%s)",
                     incident_id,
+                    task.id,
                 )
 
     except Exception as exc:
