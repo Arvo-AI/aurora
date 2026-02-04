@@ -14,7 +14,6 @@ logger = logging.getLogger(__name__)
 
 _RCA_UPDATE_KEY_PREFIX = "rca_context_updates"
 _RCA_UPDATE_TTL_SECONDS = 6 * 60 * 60  # 6 hours
-_MAX_UPDATE_CHARS = 8000
 
 
 def _make_update_key(user_id: str, session_id: str) -> str:
