@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
@@ -649,7 +648,7 @@ def process_pagerduty_event(
                             ),
                         )
                         cursor.execute(
-                            "UPDATE incidents SET affected_services = ARRAY[%s] WHERE id = %s AND affected_services = '{}'",
+                            "UPDATE incidents SET affected_services = ARRAY[%s] WHERE id = %s",
                             (service_name, incident_db_id),
                         )
                         conn.commit()

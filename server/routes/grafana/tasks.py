@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
@@ -171,19 +170,10 @@ def process_grafana_alert(
         user_id: Aurora user ID this alert belongs to.
     """
     try:
-        received_at = datetime.now(timezone.utc)
         summary = _format_alert_summary(payload)
         logger.info("[GRAFANA][ALERT][USER:%s] %s", user_id or "unknown", summary)
 
-        details = {
-            "received_at": received_at.isoformat(),
-            "summary": summary,
-            "payload": payload,
-            "metadata": metadata or {},
-            "user_id": user_id,
-        }
-
-        logger.debug("[GRAFANA][ALERT] full payload=%s", _safe_json_dump(details))
+        logger.debug("[GRAFANA][ALERT] full payload=%s", _safe_json_dump(payload))
 
         # Persist alert to database if user_id is provided
         if user_id:
@@ -192,6 +182,7 @@ def process_grafana_alert(
             try:
                 with db_pool.get_admin_connection() as conn:
                     with conn.cursor() as cursor:
+                        received_at = datetime.now(timezone.utc)
                         # Extract relevant fields from Grafana payload
                         alert_uid = payload.get("ruleUID") or payload.get("ruleUid")
                         alert_title = payload.get("title") or payload.get(
@@ -382,7 +373,7 @@ def process_grafana_alert(
                                 ),
                             )
                             cursor.execute(
-                                "UPDATE incidents SET affected_services = ARRAY[%s] WHERE id = %s AND affected_services = '{}'",
+                                "UPDATE incidents SET affected_services = ARRAY[%s] WHERE id = %s",
                                 (service, incident_id),
                             )
                             conn.commit()

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
@@ -190,7 +189,6 @@ def process_datadog_event(
     user_id: Optional[str] = None,
 ) -> None:
     """Background processor for Datadog webhook payloads."""
-    received_at = datetime.now(timezone.utc)
     summary = _summarize_event(payload)
     logger.info("[DATADOG][WEBHOOK][USER:%s] %s", user_id or "unknown", summary)
     logger.debug("[DATADOG][WEBHOOK] payload=%s", _safe_json_dump(payload))
@@ -215,6 +213,7 @@ def process_datadog_event(
 
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                received_at = datetime.now(timezone.utc)
                 cursor.execute(
                     """
                     INSERT INTO datadog_events (user_id, event_type, event_title, status, scope, payload, received_at)
@@ -362,7 +361,7 @@ def process_datadog_event(
                         ),
                     )
                     cursor.execute(
-                        "UPDATE incidents SET affected_services = ARRAY[%s] WHERE id = %s AND affected_services = '{}'",
+                        "UPDATE incidents SET affected_services = ARRAY[%s] WHERE id = %s",
                         (service, incident_id),
                     )
                     conn.commit()

@@ -3,7 +3,6 @@
 import json
 import logging
 import hashlib
-import os
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
@@ -224,7 +223,7 @@ def process_netdata_alert(
                                 ),
                             )
                             cursor.execute(
-                                "UPDATE incidents SET affected_services = ARRAY[%s] WHERE id = %s AND affected_services = '{}'",
+                                "UPDATE incidents SET affected_services = ARRAY[%s] WHERE id = %s",
                                 (service, incident_id),
                             )
                             conn.commit()

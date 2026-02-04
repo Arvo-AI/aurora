@@ -144,12 +144,10 @@ def process_splunk_alert(
 ) -> None:
     """Background processor for Splunk alert webhooks."""
     try:
-        received_at = datetime.now(timezone.utc)
         summary = _format_alert_summary(payload)
         logger.info("[SPLUNK][ALERT][USER:%s] %s", user_id or "unknown", summary)
 
         details = {
-            "received_at": received_at.isoformat(),
             "summary": summary,
             "payload": payload,
             "metadata": metadata or {},
@@ -165,6 +163,7 @@ def process_splunk_alert(
                 with db_pool.get_admin_connection() as conn:
                     with conn.cursor() as cursor:
                         # Extract fields from Splunk webhook payload
+                        received_at = datetime.now(timezone.utc)
                         alert_id = payload.get("sid") or payload.get("search_id")
                         alert_title = payload.get("search_name") or payload.get("name")
                         alert_state = "triggered"
@@ -208,11 +207,6 @@ def process_splunk_alert(
                                 user_id,
                             )
                             return
-
-                        logger.debug(
-                            "[SPLUNK][ALERT] Alert record created (pending commit) for user %s",
-                            user_id,
-                        )
 
                         service = _extract_service(payload)
 
@@ -333,7 +327,7 @@ def process_splunk_alert(
                                 ),
                             )
                             cursor.execute(
-                                "UPDATE incidents SET affected_services = ARRAY[%s] WHERE id = %s AND affected_services = '{}'",
+                                "UPDATE incidents SET affected_services = ARRAY[%s] WHERE id = %s",
                                 (service, incident_id),
                             )
                             conn.commit()
