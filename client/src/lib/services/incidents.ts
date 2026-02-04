@@ -8,7 +8,7 @@
 
 export type AlertSource = 'netdata' | 'datadog' | 'grafana' | 'prometheus' | 'pagerduty';
 export type IncidentStatus = 'investigating' | 'analyzed' | 'merged';
-export type AuroraStatus = 'running' | 'complete' | 'error';
+export type AuroraStatus = 'idle' | 'running' | 'complete' | 'error';
 export type SuggestionRisk = 'safe' | 'low' | 'medium' | 'high';
 export type SuggestionType = 'diagnostic' | 'mitigation' | 'communication' | 'fix';
 

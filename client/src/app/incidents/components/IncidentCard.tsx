@@ -521,7 +521,7 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
             </button>
           )}
           
-          {(incident.auroraStatus === 'complete' || incident.auroraStatus === 'running') && (
+          {incident.auroraStatus !== 'error' && (
             <button
               onClick={() => setShowVisualization(!showVisualization)}
               className="inline-flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors bg-zinc-800 hover:bg-zinc-700 text-white border border-zinc-700 hover:border-zinc-600"
@@ -546,7 +546,7 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
       )}
 
       {/* Infrastructure Visualization */}
-      {showVisualization && (incident.auroraStatus === 'complete' || incident.auroraStatus === 'running') && (
+      {showVisualization && incident.auroraStatus !== 'error' && (
         <>
           <div className="border-t border-zinc-800" />
           <div>
