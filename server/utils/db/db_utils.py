@@ -1190,6 +1190,23 @@ def initialize_tables():
                 )
                 conn.rollback()
 
+            # Add visualization columns to incidents table
+            try:
+                cursor.execute("""
+                    ALTER TABLE incidents
+                    ADD COLUMN IF NOT EXISTS visualization_code TEXT,
+                    ADD COLUMN IF NOT EXISTS visualization_updated_at TIMESTAMPTZ;
+                """)
+                logging.info(
+                    "Added visualization_code and visualization_updated_at columns to incidents table (if not exists)."
+                )
+                conn.commit()
+            except Exception as e:
+                logging.warning(
+                    f"Error adding visualization columns to incidents: {e}"
+                )
+                conn.rollback()
+
             # Add fix-type columns to incident_suggestions for code fix suggestions
             try:
                 cursor.execute(
