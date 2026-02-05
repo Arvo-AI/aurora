@@ -554,6 +554,7 @@ def initialize_tables():
                          aurora_status VARCHAR(20) DEFAULT 'idle',
                          aurora_summary TEXT,
                          aurora_chat_session_id UUID,
+                         rca_celery_task_id VARCHAR(255),
                          started_at TIMESTAMP NOT NULL,
                          analyzed_at TIMESTAMP,
                          slack_message_ts VARCHAR(50),
@@ -843,6 +844,16 @@ def initialize_tables():
             rls_tables.append("incidents")
             rls_tables.append("incident_alerts")
             rls_tables.append("incident_feedback")
+
+
+            try:
+                cursor.execute("""
+                    ALTER TABLE incidents
+                    ADD COLUMN IF NOT EXISTS rca_celery_task_id VARCHAR(255);
+                """)
+                conn.commit()
+            except Exception as e:
+                conn.rollback()
 
             # Execute table creation scripts
             for table_name, create_script in create_tables.items():
