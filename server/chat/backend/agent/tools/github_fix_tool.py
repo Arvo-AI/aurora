@@ -64,7 +64,8 @@ def _get_file_content(owner: str, repo: str, path: str, branch: Optional[str], u
     """Fetch current file content from GitHub using MCP."""
     args = {"owner": owner, "repo": repo, "path": path}
     if branch:
-        args["branch"] = branch
+        # GitHub MCP uses 'ref' parameter, not 'branch'
+        args["ref"] = f"refs/heads/{branch}"
 
     result = call_github_mcp_sync("get_file_contents", args, user_id)
     return parse_file_content_response(result)
