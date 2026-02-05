@@ -554,7 +554,6 @@ def initialize_tables():
                          aurora_status VARCHAR(20) DEFAULT 'idle',
                          aurora_summary TEXT,
                          aurora_chat_session_id UUID,
-                         rca_celery_task_id VARCHAR(255),
                          started_at TIMESTAMP NOT NULL,
                          analyzed_at TIMESTAMP,
                          slack_message_ts VARCHAR(50),
@@ -846,13 +845,37 @@ def initialize_tables():
             rls_tables.append("incident_feedback")
 
 
+            # Migration: Add rca_celery_task_id column to incidents table if it doesn't exist
             try:
                 cursor.execute("""
                     ALTER TABLE incidents
                     ADD COLUMN IF NOT EXISTS rca_celery_task_id VARCHAR(255);
                 """)
                 conn.commit()
+                logging.info(
+                    "Added rca_celery_task_id column to incidents table (if not exists)."
+                )
             except Exception as e:
+                logging.warning(f"Error adding rca_celery_task_id column to incidents: {e}")
+                conn.rollback()
+
+            # Migration: Add merged_into_incident_id column to incidents table if it exists
+            # This must run BEFORE table creation scripts because the incidents creation
+            # script includes a CREATE INDEX on this column, which fails if the table
+            # exists but the column doesn't.
+            try:
+                cursor.execute("""
+                    ALTER TABLE incidents
+                    ADD COLUMN IF NOT EXISTS merged_into_incident_id UUID REFERENCES incidents(id) ON DELETE SET NULL;
+                """)
+                conn.commit()
+                logging.info(
+                    "Ensured merged_into_incident_id column exists on incidents table."
+                )
+            except Exception as e:
+                # Table may not exist yet (new install) - that's fine,
+                # CREATE TABLE will include the column.
+                logging.warning(f"Error adding merged_into_incident_id column to incidents: {e}")
                 conn.rollback()
 
             # Execute table creation scripts
