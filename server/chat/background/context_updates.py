@@ -292,7 +292,7 @@ def _format_updates_for_prompt(updates: List[Dict[str, Any]]) -> str:
     
     # Frame as new information to incorporate, NOT a stop signal
     parts = [
-        f"**🔗 New Correlated Alert from {source_str.title()}**",
+        f"**New Correlated Alert from {source_str.title()}**",
         "",
         f"**Alert:** {title_str}",
     ]

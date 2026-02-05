@@ -140,7 +140,7 @@ export default function IncidentsPage() {
   }, []);
 
   const activeIncidents = incidents.filter(i => i.status === 'investigating');
-  const analyzedIncidents = incidents.filter(i => i.status === 'analyzed');
+  const analyzedIncidents = incidents.filter(i => i.status === 'analyzed' || i.status === 'resolved');
   const mergedIncidents = incidents.filter(i => i.status === 'merged');
 
   return (
