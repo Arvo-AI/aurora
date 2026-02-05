@@ -19,14 +19,14 @@ import {
   useReactFlow,
   addEdge,
   Connection,
-  NodeToolbar,
   NodeResizer
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import './visualization.css';
 import { useMemo, useCallback, useState, useEffect, useRef } from 'react';
-import { Loader2, Maximize, RotateCcw, Container, Layers, Network, Database, Server, Zap, HardDrive, Archive, Grid3x3, FolderTree, MapPin, Bell, Activity, LucideIcon, Boxes, Trash2, Edit3, Plus, Download } from 'lucide-react';
+import { Loader2, Maximize, RotateCcw, Container, Layers, Network, Database, Server, Zap, HardDrive, Archive, Grid3x3, FolderTree, MapPin, Bell, Activity, LucideIcon, Boxes, Trash2, Plus, Download } from 'lucide-react';
 import { toPng } from 'html-to-image';
+import { toast } from '@/hooks/use-toast';
 
 interface Props {
   incidentId: string;
@@ -596,11 +596,23 @@ export default function InfrastructureVisualization({ incidentId, className }: P
       const link = document.createElement('a');
       link.download = `visualization-${incidentId}-${Date.now()}.png`;
       link.href = dataUrl;
+      document.body.appendChild(link);
       link.click();
+      document.body.removeChild(link);
+      
+      toast({
+        title: 'Export successful',
+        description: 'Visualization exported as PNG',
+      });
       
       console.log('[Visualization] Exported as PNG');
     } catch (err) {
       console.error('[Visualization] Export error:', err);
+      toast({
+        title: 'Export failed',
+        description: 'Failed to export visualization',
+        variant: 'destructive',
+      });
     } finally {
       setIsExporting(false);
     }
