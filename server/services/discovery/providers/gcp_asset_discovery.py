@@ -15,7 +15,7 @@ from services.discovery.resource_mapper import map_gcp_resource, GCP_RELATIONSHI
 logger = logging.getLogger(__name__)
 
 
-def _run_command(args, timeout=120, env=None):
+def _run_command(args, timeout=600, env=None):
     """Run a gcloud CLI command and return parsed JSON output.
 
     Args:
