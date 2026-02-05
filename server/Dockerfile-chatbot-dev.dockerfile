@@ -13,7 +13,7 @@ ENV PYTHONPATH="/app"
 # Set the working directory
 WORKDIR /app
 
-# Disable HTTP pipelining to prevent CDN hash mismatches on arm64
+# Disable HTTP pipelining to prevent CDN hash mismatches
 RUN echo 'Acquire::http::Pipeline-Depth "0";' > /etc/apt/apt.conf.d/99fixhash && \
     apt-get update && apt-get install -y \
     libpq-dev \
