@@ -48,7 +48,7 @@ def incident_stream():
             # Continuously read messages and yield as SSE events
             while True:
                 try:
-                    message = message_queue.get(timeout=15)
+                    message = message_queue.get(timeout=10)
                     yield f"data: {json.dumps(message)}\n\n"
                 except queue.Empty:
                     # Send keepalive comment to prevent proxy/client timeouts
