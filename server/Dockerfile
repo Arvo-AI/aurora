@@ -10,7 +10,9 @@ ENV UV_CACHE_DIR="/tmp/.cache/uv"
 # Set the working directory
 WORKDIR /app 
 
-RUN apt-get update && apt-get install -y \
+# Disable HTTP pipelining to prevent CDN hash mismatches
+RUN echo 'Acquire::http::Pipeline-Depth "0";' > /etc/apt/apt.conf.d/99fixhash && \
+    apt-get update && apt-get install -y \
     libpq-dev \
     gcc \
     g++ \
@@ -25,7 +27,8 @@ RUN apt-get update && apt-get install -y \
     lsb-release \
     openssh-client \
     dnsutils \
-    --no-install-recommends
+    --no-install-recommends && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Download and install uv to a system-wide location (accessible by non-root users)
 ADD https://astral.sh/uv/0.8.22/install.sh /uv-installer.sh
