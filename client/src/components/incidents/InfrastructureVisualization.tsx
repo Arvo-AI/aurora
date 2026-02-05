@@ -16,12 +16,16 @@ import {
   applyEdgeChanges,
   NodeChange,
   EdgeChange,
-  useReactFlow
+  useReactFlow,
+  addEdge,
+  Connection,
+  NodeToolbar,
+  NodeResizer
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import './visualization.css';
 import { useMemo, useCallback, useState, useEffect, useRef } from 'react';
-import { Loader2, Maximize, RotateCcw, Container, Layers, Network, Database, Server, Zap, HardDrive, Archive, Grid3x3, FolderTree, MapPin, Bell, Activity, LucideIcon, Boxes } from 'lucide-react';
+import { Loader2, Maximize, RotateCcw, Container, Layers, Network, Database, Server, Zap, HardDrive, Archive, Grid3x3, FolderTree, MapPin, Bell, Activity, LucideIcon, Boxes, Trash2, Edit3, Plus } from 'lucide-react';
 
 interface Props {
   incidentId: string;
@@ -55,11 +59,65 @@ function getIconForType(type: string): LucideIcon | null {
   return iconMap[type.toLowerCase()] || null;
 }
 
-function CustomNode({ data }: { data: InfraNode & { isRootCause?: boolean; isAffected?: boolean } }) {
+function CustomNode({ data, id, selected }: { data: InfraNode & { isRootCause?: boolean; isAffected?: boolean; onDelete?: (id: string) => void; onLabelChange?: (id: string, label: string) => void; onTypeChange?: (id: string, type: string) => void; onStatusChange?: (id: string, status: NodeStatus) => void; onIsRootCauseChange?: (id: string, isRootCause: boolean) => void; onIsAffectedChange?: (id: string, isAffected: boolean) => void }; id: string; selected?: boolean }) {
   const colors = statusColors[data.status];
   const isRootCause = data.isRootCause;
   const isAffected = data.isAffected;
   const Icon = getIconForType(data.type);
+  const [isEditingLabel, setIsEditingLabel] = useState(false);
+  const [isEditingType, setIsEditingType] = useState(false);
+  const [label, setLabel] = useState(data.label);
+  const [type, setType] = useState(data.type);
+
+  const handleLabelDoubleClick = useCallback(() => {
+    if (selected) {
+      setIsEditingLabel(true);
+    }
+  }, [selected]);
+
+  const handleTypeDoubleClick = useCallback(() => {
+    if (selected) {
+      setIsEditingType(true);
+    }
+  }, [selected]);
+
+  const handleLabelBlur = useCallback(() => {
+    setIsEditingLabel(false);
+    if (label !== data.label && data.onLabelChange) {
+      data.onLabelChange(id, label);
+    }
+  }, [label, data, id]);
+
+  const handleTypeBlur = useCallback(() => {
+    setIsEditingType(false);
+    if (type !== data.type && data.onTypeChange) {
+      data.onTypeChange(id, type);
+    }
+  }, [type, data, id]);
+
+  const handleLabelKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      setIsEditingLabel(false);
+      if (label !== data.label && data.onLabelChange) {
+        data.onLabelChange(id, label);
+      }
+    } else if (e.key === 'Escape') {
+      setLabel(data.label);
+      setIsEditingLabel(false);
+    }
+  }, [label, data, id]);
+
+  const handleTypeKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      setIsEditingType(false);
+      if (type !== data.type && data.onTypeChange) {
+        data.onTypeChange(id, type);
+      }
+    } else if (e.key === 'Escape') {
+      setType(data.type);
+      setIsEditingType(false);
+    }
+  }, [type, data, id]);
 
   return (
     <>
@@ -79,19 +137,76 @@ function CustomNode({ data }: { data: InfraNode & { isRootCause?: boolean; isAff
       >
         {Icon && <Icon size={14} style={{ position: 'absolute', top: 8, right: 8, opacity: 0.6, color: colors.border }} />}
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#fafafa' }}>
-          <div style={{ 
-            fontSize: '9px', 
-            fontWeight: 700, 
-            color: '#71717a',
-            backgroundColor: '#27272a',
-            padding: '2px 6px',
-            borderRadius: '4px',
-            letterSpacing: '0.5px',
-            textTransform: 'uppercase'
-          }}>
-            {data.type}
-          </div>
-          <div style={{ fontSize: '13px', fontWeight: 500 }}>{data.label}</div>
+          {isEditingType ? (
+            <input
+              autoFocus
+              value={type}
+              onChange={(e) => setType(e.target.value)}
+              onBlur={handleTypeBlur}
+              onKeyDown={handleTypeKeyDown}
+              className="nodrag"
+              style={{ 
+                fontSize: '9px', 
+                fontWeight: 700, 
+                color: '#71717a',
+                backgroundColor: '#27272a',
+                padding: '2px 6px',
+                borderRadius: '4px',
+                letterSpacing: '0.5px',
+                textTransform: 'uppercase',
+                border: '1px solid #52525b',
+                outline: 'none',
+                minWidth: '40px'
+              }}
+            />
+          ) : (
+            <div 
+              style={{ 
+                fontSize: '9px', 
+                fontWeight: 700, 
+                color: '#71717a',
+                backgroundColor: '#27272a',
+                padding: '2px 6px',
+                borderRadius: '4px',
+                letterSpacing: '0.5px',
+                textTransform: 'uppercase',
+                cursor: selected ? 'text' : 'default'
+              }}
+              onDoubleClick={handleTypeDoubleClick}
+              title={selected ? 'Double-click to edit type' : ''}
+            >
+              {data.type}
+            </div>
+          )}
+          {isEditingLabel ? (
+            <input
+              autoFocus
+              value={label}
+              onChange={(e) => setLabel(e.target.value)}
+              onBlur={handleLabelBlur}
+              onKeyDown={handleLabelKeyDown}
+              className="nodrag"
+              style={{ 
+                fontSize: '13px', 
+                fontWeight: 500, 
+                background: '#27272a',
+                border: '1px solid #52525b',
+                borderRadius: '4px',
+                padding: '2px 4px',
+                color: '#fafafa',
+                outline: 'none',
+                minWidth: '80px'
+              }}
+            />
+          ) : (
+            <div 
+              style={{ fontSize: '13px', fontWeight: 500, cursor: selected ? 'text' : 'default' }}
+              onDoubleClick={handleLabelDoubleClick}
+              title={selected ? 'Double-click to edit label' : ''}
+            >
+              {data.label}
+            </div>
+          )}
         </div>
       </div>
       <Handle type="source" position={Position.Bottom} style={{ background: '#52525b' }} />
@@ -100,12 +215,76 @@ function CustomNode({ data }: { data: InfraNode & { isRootCause?: boolean; isAff
 }
 
 // Group node component for containers (deployments, clusters, etc.)
-function GroupNode({ data }: { data: InfraNode & { isRootCause?: boolean; isAffected?: boolean } }) {
+function GroupNode({ data, id, selected }: { data: InfraNode & { isRootCause?: boolean; isAffected?: boolean; onDelete?: (id: string) => void; onLabelChange?: (id: string, label: string) => void; onTypeChange?: (id: string, type: string) => void; onStatusChange?: (id: string, status: NodeStatus) => void; onIsRootCauseChange?: (id: string, isRootCause: boolean) => void; onIsAffectedChange?: (id: string, isAffected: boolean) => void }; id: string; selected?: boolean }) {
   const colors = statusColors[data.status];
+  const isRootCause = data.isRootCause;
+  const isAffected = data.isAffected;
   const Icon = getIconForType(data.type);
+  const [isEditingLabel, setIsEditingLabel] = useState(false);
+  const [isEditingType, setIsEditingType] = useState(false);
+  const [label, setLabel] = useState(data.label);
+  const [type, setType] = useState(data.type);
+
+  const handleLabelDoubleClick = useCallback(() => {
+    if (selected) {
+      setIsEditingLabel(true);
+    }
+  }, [selected]);
+
+  const handleTypeDoubleClick = useCallback(() => {
+    if (selected) {
+      setIsEditingType(true);
+    }
+  }, [selected]);
+
+  const handleLabelBlur = useCallback(() => {
+    setIsEditingLabel(false);
+    if (label !== data.label && data.onLabelChange) {
+      data.onLabelChange(id, label);
+    }
+  }, [label, data, id]);
+
+  const handleTypeBlur = useCallback(() => {
+    setIsEditingType(false);
+    if (type !== data.type && data.onTypeChange) {
+      data.onTypeChange(id, type);
+    }
+  }, [type, data, id]);
+
+  const handleLabelKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      setIsEditingLabel(false);
+      if (label !== data.label && data.onLabelChange) {
+        data.onLabelChange(id, label);
+      }
+    } else if (e.key === 'Escape') {
+      setLabel(data.label);
+      setIsEditingLabel(false);
+    }
+  }, [label, data, id]);
+
+  const handleTypeKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      setIsEditingType(false);
+      if (type !== data.type && data.onTypeChange) {
+        data.onTypeChange(id, type);
+      }
+    } else if (e.key === 'Escape') {
+      setType(data.type);
+      setIsEditingType(false);
+    }
+  }, [type, data, id]);
 
   return (
     <>
+      {selected && (
+        <NodeResizer 
+          minWidth={200} 
+          minHeight={150}
+          color="#52525b"
+          handleStyle={{ width: '8px', height: '8px', borderRadius: '2px' }}
+        />
+      )}
       <Handle type="target" position={Position.Top} style={{ background: '#52525b' }} />
       <div
         style={{
@@ -125,23 +304,86 @@ function GroupNode({ data }: { data: InfraNode & { isRootCause?: boolean; isAffe
         }}
       >
         {Icon && <Icon size={14} style={{ position: 'absolute', top: 10, right: 12, opacity: 0.6, color: colors.border }} />}
-        <div style={{ 
-          fontSize: '9px', 
-          fontWeight: 700, 
-          color: '#71717a',
-          backgroundColor: '#27272a',
-          padding: '2px 6px',
-          borderRadius: '4px',
-          letterSpacing: '0.5px',
-          textTransform: 'uppercase',
-          flexShrink: 0,
-          whiteSpace: 'nowrap',
-        }}>
-          {data.type}
-        </div>
-        <div style={{ fontSize: '12px', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {data.label}
-        </div>
+        {isEditingType ? (
+          <input
+            autoFocus
+            value={type}
+            onChange={(e) => setType(e.target.value)}
+            onBlur={handleTypeBlur}
+            onKeyDown={handleTypeKeyDown}
+            className="nodrag"
+            style={{ 
+              fontSize: '9px', 
+              fontWeight: 700, 
+              color: '#71717a',
+              backgroundColor: '#27272a',
+              padding: '2px 6px',
+              borderRadius: '4px',
+              letterSpacing: '0.5px',
+              textTransform: 'uppercase',
+              border: '1px solid #52525b',
+              outline: 'none',
+              flexShrink: 0,
+              minWidth: '40px'
+            }}
+          />
+        ) : (
+          <div 
+            style={{ 
+              fontSize: '9px', 
+              fontWeight: 700, 
+              color: '#71717a',
+              backgroundColor: '#27272a',
+              padding: '2px 6px',
+              borderRadius: '4px',
+              letterSpacing: '0.5px',
+              textTransform: 'uppercase',
+              flexShrink: 0,
+              whiteSpace: 'nowrap',
+              cursor: selected ? 'text' : 'default'
+            }}
+            onDoubleClick={handleTypeDoubleClick}
+            title={selected ? 'Double-click to edit type' : ''}
+          >
+            {data.type}
+          </div>
+        )}
+        {isEditingLabel ? (
+          <input
+            autoFocus
+            value={label}
+            onChange={(e) => setLabel(e.target.value)}
+            onBlur={handleLabelBlur}
+            onKeyDown={handleLabelKeyDown}
+            className="nodrag"
+            style={{ 
+              fontSize: '12px', 
+              fontWeight: 500, 
+              background: '#27272a',
+              border: '1px solid #52525b',
+              borderRadius: '4px',
+              padding: '2px 4px',
+              color: '#fafafa',
+              outline: 'none',
+              flex: 1
+            }}
+          />
+        ) : (
+          <div 
+            style={{ 
+              fontSize: '12px', 
+              fontWeight: 500, 
+              overflow: 'hidden', 
+              textOverflow: 'ellipsis', 
+              whiteSpace: 'nowrap',
+              cursor: selected ? 'text' : 'default'
+            }}
+            onDoubleClick={handleLabelDoubleClick}
+            title={selected ? 'Double-click to edit label' : ''}
+          >
+            {data.label}
+          </div>
+        )}
       </div>
       <Handle type="source" position={Position.Bottom} style={{ background: '#52525b' }} />
     </>
@@ -292,14 +534,53 @@ function getLayoutedElements(nodes: Node[], edges: Edge[]) {
 
 export default function InfrastructureVisualization({ incidentId, className }: Props) {
   const { data, isLoading, error } = useVisualizationStream(incidentId);
-  const { fitView } = useReactFlow();
+  const { fitView, screenToFlowPosition } = useReactFlow();
   const containerRef = useRef<HTMLDivElement>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
-
-  const nodeTypes = useMemo(() => ({ custom: CustomNode, groupNode: GroupNode }), []);
+  const [selectedNode, setSelectedNode] = useState<string | null>(null);
 
   const [nodes, setNodes] = useState<Node[]>([]);
   const [edges, setEdges] = useState<Edge[]>([]);
+
+  const onDeleteNode = useCallback((nodeId: string) => {
+    setNodes((nds) => nds.filter((n) => n.id !== nodeId));
+    setEdges((eds) => eds.filter((e) => e.source !== nodeId && e.target !== nodeId));
+  }, []);
+
+  const onLabelChange = useCallback((nodeId: string, newLabel: string) => {
+    setNodes((nds) => nds.map((n) => 
+      n.id === nodeId ? { ...n, data: { ...n.data, label: newLabel } } : n
+    ));
+  }, []);
+
+  const onTypeChange = useCallback((nodeId: string, newType: string) => {
+    setNodes((nds) => nds.map((n) => 
+      n.id === nodeId ? { ...n, data: { ...n.data, type: newType } } : n
+    ));
+  }, []);
+
+  const onStatusChange = useCallback((nodeId: string, newStatus: NodeStatus) => {
+    setNodes((nds) => nds.map((n) => 
+      n.id === nodeId ? { ...n, data: { ...n.data, status: newStatus } } : n
+    ));
+  }, []);
+
+  const onIsRootCauseChange = useCallback((nodeId: string, isRootCause: boolean) => {
+    setNodes((nds) => nds.map((n) => 
+      n.id === nodeId ? { ...n, data: { ...n.data, isRootCause } } : n
+    ));
+  }, []);
+
+  const onIsAffectedChange = useCallback((nodeId: string, isAffected: boolean) => {
+    setNodes((nds) => nds.map((n) => 
+      n.id === nodeId ? { ...n, data: { ...n.data, isAffected } } : n
+    ));
+  }, []);
+
+  const nodeTypes = useMemo(() => ({ 
+    custom: CustomNode, 
+    groupNode: GroupNode 
+  }), []);
 
   const handleFullscreen = useCallback(() => {
     if (!containerRef.current) return;
@@ -344,7 +625,11 @@ export default function InfrastructureVisualization({ incidentId, className }: P
     });
 
     // Separate group nodes (those with children) from regular nodes
-    const nodeWithChildren = new Set(validNodes.filter(n => n.parentId).map(n => n.parentId));
+    const nodeWithChildren = new Set(
+      validNodes
+        .filter(n => n.parentId)
+        .map(n => n.parentId!)
+    );
     
     // Calculate dynamic group sizes based on child count
     const groupSizes = new Map<string, { width: number; height: number }>();
@@ -383,6 +668,12 @@ export default function InfrastructureVisualization({ incidentId, className }: P
           ...node,
           isRootCause: node.id === data.rootCauseId,
           isAffected: data.affectedIds.includes(node.id),
+          onDelete: onDeleteNode,
+          onLabelChange: onLabelChange,
+          onTypeChange: onTypeChange,
+          onStatusChange: onStatusChange,
+          onIsRootCauseChange: onIsRootCauseChange,
+          onIsAffectedChange: onIsAffectedChange
         },
       };
     });
@@ -435,7 +726,7 @@ export default function InfrastructureVisualization({ incidentId, className }: P
     setNodes(layoutedNodes);
     setEdges(layoutedEdges);
     setTimeout(() => fitView({ padding: 0.2, duration: 300 }), 50);
-  }, [data, fitView]); // fitView is stable from useReactFlow
+  }, [data, fitView, onDeleteNode, onLabelChange, onTypeChange]);
 
   const onNodesChange = useCallback(
     (changes: NodeChange[]) => setNodes((nds) => applyNodeChanges(changes, nds)),
@@ -446,6 +737,81 @@ export default function InfrastructureVisualization({ incidentId, className }: P
     (changes: EdgeChange[]) => setEdges((eds) => applyEdgeChanges(changes, eds)),
     []
   );
+
+  const onConnect = useCallback(
+    (connection: Connection) => {
+      setEdges((eds) => addEdge({
+        ...connection,
+        type: 'smoothstep',
+        animated: false,
+        style: { stroke: '#52525b', strokeWidth: 2 },
+        markerEnd: { type: 'arrowclosed', color: '#52525b' }
+      }, eds));
+    },
+    []
+  );
+
+  const onNodeClick = useCallback((_event: React.MouseEvent, node: Node) => {
+    setSelectedNode(node.id);
+  }, []);
+
+  const onPaneClick = useCallback(() => {
+    setSelectedNode(null);
+  }, []);
+
+  const addConnectedNode = useCallback((nodeType: string) => {
+    if (!selectedNode) return;
+    
+    const sourceNode = nodes.find(n => n.id === selectedNode);
+    if (!sourceNode) return;
+    
+    const newNodeId = `node-${Date.now()}`;
+    const isGroup = nodeType === 'group';
+    
+    const newNode: Node = {
+      id: newNodeId,
+      type: isGroup ? 'groupNode' : 'custom',
+      position: { 
+        x: sourceNode.position.x + 250, 
+        y: sourceNode.position.y 
+      },
+      data: {
+        label: isGroup ? 'Group' : 'Node',
+        type: 'unknown',
+        status: 'unknown',
+        onDelete: onDeleteNode,
+        onLabelChange: onLabelChange,
+        onTypeChange: onTypeChange,
+        onStatusChange: onStatusChange,
+        onIsRootCauseChange: onIsRootCauseChange,
+        onIsAffectedChange: onIsAffectedChange
+      },
+      draggable: true,
+      selectable: true,
+      ...(isGroup && {
+        style: {
+          width: 250,
+          height: 200,
+          backgroundColor: 'rgba(39, 39, 42, 0.5)',
+          border: '2px solid #52525b',
+          borderRadius: '8px',
+          padding: '20px',
+        }
+      })
+    };
+    
+    setNodes((nds) => [...nds, newNode]);
+    setEdges((eds) => addEdge({
+      id: `e-${selectedNode}-${newNodeId}`,
+      source: selectedNode,
+      target: newNodeId,
+      type: 'smoothstep',
+      animated: false,
+      style: { stroke: '#52525b', strokeWidth: 2 },
+      markerEnd: { type: 'arrowclosed', color: '#52525b' }
+    }, eds));
+    setSelectedNode(newNodeId);
+  }, [selectedNode, nodes, onDeleteNode, onLabelChange, onTypeChange, onStatusChange, onIsRootCauseChange, onIsAffectedChange]);
 
   if (isLoading) {
     return (
@@ -478,14 +844,16 @@ export default function InfrastructureVisualization({ incidentId, className }: P
         edges={edges}
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
+        onConnect={onConnect}
+        onNodeClick={onNodeClick}
+        onPaneClick={onPaneClick}
         nodeTypes={nodeTypes}
         nodesDraggable={true}
-        nodesConnectable={false}
+        nodesConnectable={true}
         elementsSelectable={true}
         panOnDrag={true}
         selectionOnDrag={false}
         panOnScroll={false}
-        panOnScrollMode="free"
         zoomOnScroll={true}
         zoomOnPinch={true}
         zoomOnDoubleClick={true}
@@ -508,6 +876,170 @@ export default function InfrastructureVisualization({ incidentId, className }: P
             <Maximize size={16} strokeWidth={2} style={{ stroke: '#fafafa', fill: 'none' }} />
           </ControlButton>
         </Controls>
+        
+        {/* Side Panel for Node Controls */}
+        {selectedNode && (() => {
+          const node = nodes.find(n => n.id === selectedNode);
+          if (!node) return null;
+          const nodeData = node.data as unknown as InfraNode & { isRootCause?: boolean; isAffected?: boolean };
+          const scale = isFullscreen ? 1 : 0.85;
+          
+          return (
+            <Panel position="top-left" className="bg-zinc-900/95 border border-zinc-700 rounded-md" style={{ 
+              padding: isFullscreen ? '12px' : '10px', 
+              minWidth: isFullscreen ? '200px' : '170px',
+              transform: `scale(${scale})`,
+              transformOrigin: 'top left'
+            }}>
+              <div style={{ marginBottom: isFullscreen ? '12px' : '10px' }}>
+                <div style={{ fontSize: isFullscreen ? '12px' : '11px', fontWeight: 600, color: '#fafafa', marginBottom: isFullscreen ? '8px' : '6px' }}>Node Controls</div>
+                
+                {/* Delete Button */}
+                <button
+                  onClick={() => onDeleteNode(selectedNode)}
+                  className="nodrag"
+                  style={{ 
+                    width: '100%',
+                    padding: isFullscreen ? '6px 10px' : '5px 8px', 
+                    background: '#ef4444', 
+                    color: 'white', 
+                    border: 'none', 
+                    borderRadius: '4px', 
+                    cursor: 'pointer', 
+                    fontSize: isFullscreen ? '12px' : '11px', 
+                    display: 'flex', 
+                    alignItems: 'center', 
+                    gap: '6px',
+                    justifyContent: 'center',
+                    fontWeight: 500
+                  }}
+                >
+                  <Trash2 size={isFullscreen ? 14 : 12} />
+                  Delete Node
+                </button>
+              </div>
+
+              {/* Color Section */}
+              <div style={{ marginBottom: isFullscreen ? '12px' : '10px' }}>
+                <div style={{ fontSize: isFullscreen ? '10px' : '9px', color: '#71717a', fontWeight: 600, marginBottom: isFullscreen ? '6px' : '5px' }}>COLOR</div>
+                <div style={{ display: 'flex', gap: isFullscreen ? '6px' : '4px', flexWrap: 'wrap' }}>
+                  {(['healthy', 'degraded', 'failed', 'investigating', 'unknown'] as NodeStatus[]).map((status) => (
+                    <button
+                      key={status}
+                      onClick={() => onStatusChange(selectedNode, status)}
+                      className="nodrag"
+                      style={{
+                        width: isFullscreen ? '32px' : '26px',
+                        height: isFullscreen ? '32px' : '26px',
+                        border: `2px solid ${statusColors[status].border}`,
+                        backgroundColor: statusColors[status].bg,
+                        borderRadius: '4px',
+                        cursor: 'pointer',
+                        opacity: nodeData.status === status ? 1 : 0.5,
+                        transition: 'opacity 0.15s'
+                      }}
+                      title={status}
+                    />
+                  ))}
+                </div>
+              </div>
+
+              {/* Contour Section */}
+              <div style={{ marginBottom: isFullscreen ? '12px' : '10px' }}>
+                <div style={{ fontSize: isFullscreen ? '10px' : '9px', color: '#71717a', fontWeight: 600, marginBottom: isFullscreen ? '6px' : '5px' }}>CONTOUR</div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                  <button
+                    onClick={() => onIsAffectedChange(selectedNode, !nodeData.isAffected)}
+                    className="nodrag"
+                    style={{
+                      padding: isFullscreen ? '6px 10px' : '5px 8px',
+                      background: nodeData.isAffected ? '#3f3f46' : '#27272a',
+                      color: '#fafafa',
+                      border: '1px solid #52525b',
+                      borderStyle: 'dashed',
+                      borderRadius: '4px',
+                      cursor: 'pointer',
+                      fontSize: isFullscreen ? '11px' : '10px',
+                      fontWeight: 500
+                    }}
+                  >
+                    {nodeData.isAffected ? '✓' : ''} Affected
+                  </button>
+                  <button
+                    onClick={() => onIsRootCauseChange(selectedNode, !nodeData.isRootCause)}
+                    className="nodrag"
+                    style={{
+                      padding: isFullscreen ? '6px 10px' : '5px 8px',
+                      background: nodeData.isRootCause ? '#3f3f46' : '#27272a',
+                      color: '#fafafa',
+                      border: '1px solid #52525b',
+                      borderRadius: '4px',
+                      cursor: 'pointer',
+                      fontSize: isFullscreen ? '11px' : '10px',
+                      fontWeight: 500,
+                      boxShadow: nodeData.isRootCause ? '0 0 8px rgba(239, 68, 68, 0.5)' : 'none'
+                    }}
+                  >
+                    {nodeData.isRootCause ? '✓' : ''} Root Cause
+                  </button>
+                </div>
+              </div>
+
+              {/* Add Node Section */}
+              <div>
+                <div style={{ fontSize: isFullscreen ? '10px' : '9px', color: '#71717a', fontWeight: 600, marginBottom: isFullscreen ? '6px' : '5px' }}>ADD CONNECTED NODE</div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                  <button
+                    onClick={() => addConnectedNode('node')}
+                    className="nodrag"
+                    style={{
+                      padding: isFullscreen ? '6px 10px' : '5px 8px',
+                      background: '#27272a',
+                      color: '#fafafa',
+                      border: '1px solid #3f3f46',
+                      borderRadius: '4px',
+                      cursor: 'pointer',
+                      fontSize: isFullscreen ? '12px' : '11px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      fontWeight: 500,
+                      transition: 'background 0.15s'
+                    }}
+                    onMouseEnter={(e) => e.currentTarget.style.background = '#3f3f46'}
+                    onMouseLeave={(e) => e.currentTarget.style.background = '#27272a'}
+                  >
+                    <Plus size={isFullscreen ? 14 : 12} />
+                    Node
+                  </button>
+                  <button
+                    onClick={() => addConnectedNode('group')}
+                    className="nodrag"
+                    style={{
+                      padding: isFullscreen ? '6px 10px' : '5px 8px',
+                      background: '#27272a',
+                      color: '#fafafa',
+                      border: '1px solid #3f3f46',
+                      borderRadius: '4px',
+                      cursor: 'pointer',
+                      fontSize: isFullscreen ? '12px' : '11px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      fontWeight: 500,
+                      transition: 'background 0.15s'
+                    }}
+                    onMouseEnter={(e) => e.currentTarget.style.background = '#3f3f46'}
+                    onMouseLeave={(e) => e.currentTarget.style.background = '#27272a'}
+                  >
+                    <Plus size={isFullscreen ? 14 : 12} />
+                    Group
+                  </button>
+                </div>
+              </div>
+            </Panel>
+          );
+        })()}
         
         {/* Legend */}
         <Panel position="bottom-right" className="bg-zinc-900/95 px-4 py-3 rounded-md border border-zinc-700">
@@ -543,7 +1075,7 @@ export default function InfrastructureVisualization({ incidentId, className }: P
         {data && (
           <Panel position="top-right" className="bg-zinc-900/90 px-3 py-2 rounded-md border border-zinc-700">
             <div className="text-xs text-zinc-400">
-              v{data.version} · {data.nodes.length} nodes · {data.edges.length} edges
+              v{data.version} · {nodes.length} nodes · {edges.length} edges
             </div>
           </Panel>
         )}
