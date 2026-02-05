@@ -300,11 +300,11 @@ function GroupNode({ data, id, selected }: { data: InfraNode & { isRootCause?: b
           alignItems: 'center',
           gap: '8px',
           color: '#fafafa',
-          borderBottom: `1px solid ${colors.border}40`,
+          borderBottom: '1px solid #52525b',
           overflow: 'hidden',
         }}
       >
-        {Icon && <Icon size={14} style={{ position: 'absolute', top: 10, right: 12, opacity: 0.6, color: colors.border }} />}
+        {Icon && <Icon size={14} style={{ position: 'absolute', top: 10, right: 12, opacity: 0.6, color: '#71717a' }} />}
         {isEditingType ? (
           <input
             autoFocus
@@ -700,7 +700,7 @@ export default function InfrastructureVisualization({ incidentId, className }: P
             width: groupSizes.get(node.id)?.width || 250,
             height: groupSizes.get(node.id)?.height || 200,
             backgroundColor: 'rgba(39, 39, 42, 0.5)',
-            border: '2px solid #52525b',
+            border: 'none',
             borderRadius: '8px',
             padding: '20px',
           },
