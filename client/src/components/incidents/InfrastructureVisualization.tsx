@@ -25,7 +25,8 @@ import {
 import '@xyflow/react/dist/style.css';
 import './visualization.css';
 import { useMemo, useCallback, useState, useEffect, useRef } from 'react';
-import { Loader2, Maximize, RotateCcw, Container, Layers, Network, Database, Server, Zap, HardDrive, Archive, Grid3x3, FolderTree, MapPin, Bell, Activity, LucideIcon, Boxes, Trash2, Edit3, Plus } from 'lucide-react';
+import { Loader2, Maximize, RotateCcw, Container, Layers, Network, Database, Server, Zap, HardDrive, Archive, Grid3x3, FolderTree, MapPin, Bell, Activity, LucideIcon, Boxes, Trash2, Edit3, Plus, Download } from 'lucide-react';
+import { toPng } from 'html-to-image';
 
 interface Props {
   incidentId: string;
@@ -538,6 +539,7 @@ export default function InfrastructureVisualization({ incidentId, className }: P
   const containerRef = useRef<HTMLDivElement>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [selectedNode, setSelectedNode] = useState<string | null>(null);
+  const [isExporting, setIsExporting] = useState(false);
 
   const [nodes, setNodes] = useState<Node[]>([]);
   const [edges, setEdges] = useState<Edge[]>([]);
@@ -576,6 +578,33 @@ export default function InfrastructureVisualization({ incidentId, className }: P
       n.id === nodeId ? { ...n, data: { ...n.data, isAffected } } : n
     ));
   }, []);
+
+  const exportAsPng = useCallback(async () => {
+    if (isExporting || !containerRef.current) return;
+    
+    setIsExporting(true);
+    try {
+      const flowElement = containerRef.current.querySelector('.react-flow') as HTMLElement;
+      if (!flowElement) throw new Error('Flow element not found');
+      
+      const dataUrl = await toPng(flowElement, {
+        cacheBust: true,
+        backgroundColor: '#18181b',
+        pixelRatio: 2
+      });
+      
+      const link = document.createElement('a');
+      link.download = `visualization-${incidentId}-${Date.now()}.png`;
+      link.href = dataUrl;
+      link.click();
+      
+      console.log('[Visualization] Exported as PNG');
+    } catch (err) {
+      console.error('[Visualization] Export error:', err);
+    } finally {
+      setIsExporting(false);
+    }
+  }, [incidentId, isExporting]);
 
   const nodeTypes = useMemo(() => ({ 
     custom: CustomNode, 
@@ -869,6 +898,9 @@ export default function InfrastructureVisualization({ incidentId, className }: P
       >
         <Background color="#27272a" gap={16} />
         <Controls showInteractive={false} showFitView={false}>
+          <ControlButton onClick={exportAsPng} title={isExporting ? 'Exporting...' : 'Export as PNG'} disabled={isExporting}>
+            <Download size={16} strokeWidth={2} style={{ stroke: isExporting ? '#71717a' : '#fafafa', fill: 'none' }} />
+          </ControlButton>
           <ControlButton onClick={handleCenter} title="Center view">
             <RotateCcw size={16} strokeWidth={2} style={{ stroke: '#fafafa', fill: 'none' }} />
           </ControlButton>
