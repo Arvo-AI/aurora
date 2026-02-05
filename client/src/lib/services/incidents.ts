@@ -7,7 +7,7 @@
 // ============================================================================
 
 export type AlertSource = 'netdata' | 'datadog' | 'grafana' | 'prometheus' | 'pagerduty';
-export type IncidentStatus = 'investigating' | 'analyzed' | 'merged';
+export type IncidentStatus = 'investigating' | 'analyzed' | 'merged' | 'resolved';
 export type AuroraStatus = 'running' | 'complete' | 'error';
 export type SuggestionRisk = 'safe' | 'low' | 'medium' | 'high';
 export type SuggestionType = 'diagnostic' | 'mitigation' | 'communication' | 'fix';
@@ -421,6 +421,7 @@ export const incidentsService = {
     switch (status) {
       case 'investigating': return 'text-orange-500';
       case 'analyzed': return 'text-blue-500';
+      case 'resolved': return 'text-green-500';
       case 'merged': return 'text-zinc-500';
     }
   },
