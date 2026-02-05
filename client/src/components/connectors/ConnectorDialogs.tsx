@@ -9,15 +9,18 @@ import GitHubProviderIntegration from "@/components/github-provider-integration"
 import GcpProviderIntegration from "@/components/gcp-provider-integration";
 import OvhProviderIntegration from "@/components/ovh-provider-integration";
 import ScalewayProviderIntegration from "@/components/scaleway-provider-integration";
+import AzureProviderIntegration from "@/components/azure-provider-integration";
 
 interface ConnectorDialogsProps {
   connectorId: string;
   showGitHubDialog: boolean;
   showGcpDialog: boolean;
+  showAzureDialog: boolean;
   showOvhDialog: boolean;
   showScalewayDialog: boolean;
   onGitHubDialogChange: (open: boolean) => void;
   onGcpDialogChange: (open: boolean) => void;
+  onAzureDialogChange: (open: boolean) => void;
   onOvhDialogChange: (open: boolean) => void;
   onScalewayDialogChange: (open: boolean) => void;
   onGitHubDialogClose: () => void;
@@ -27,10 +30,12 @@ export function ConnectorDialogs({
   connectorId,
   showGitHubDialog,
   showGcpDialog,
+  showAzureDialog,
   showOvhDialog,
   showScalewayDialog,
   onGitHubDialogChange,
   onGcpDialogChange,
+  onAzureDialogChange,
   onOvhDialogChange,
   onScalewayDialogChange,
   onGitHubDialogClose,
@@ -55,6 +60,17 @@ export function ConnectorDialogs({
               <DialogTitle>GCP Project Management</DialogTitle>
             </DialogHeader>
             <GcpProviderIntegration onDisconnect={() => onGcpDialogChange(false)} />
+          </DialogContent>
+        </Dialog>
+      )}
+
+      {connectorId === "azure" && (
+        <Dialog open={showAzureDialog} onOpenChange={onAzureDialogChange}>
+          <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle>Azure Subscription Management</DialogTitle>
+            </DialogHeader>
+            <AzureProviderIntegration onDisconnect={() => onAzureDialogChange(false)} />
           </DialogContent>
         </Dialog>
       )}
