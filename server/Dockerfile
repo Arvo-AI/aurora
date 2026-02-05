@@ -1,7 +1,7 @@
 # ============================================
 # Base Stage - Common dependencies
 # ============================================
-FROM python:3.11-slim AS base
+FROM python:3.11-slim-bookworm AS base
 
 ENV PYTHONPATH="/app"
 # Set uv cache directory to a writable location for non-root users
@@ -10,7 +10,12 @@ ENV UV_CACHE_DIR="/tmp/.cache/uv"
 # Set the working directory
 WORKDIR /app 
 
-RUN apt-get update && apt-get install -y \
+# Use HTTPS mirror with retries to handle transient mirror issues
+RUN echo 'Acquire::Retries "3";' > /etc/apt/apt.conf.d/80-retries && \
+    echo 'deb https://deb.debian.org/debian bookworm main' > /etc/apt/sources.list && \
+    echo 'deb https://deb.debian.org/debian-security bookworm-security main' >> /etc/apt/sources.list && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends \
     libpq-dev \
     gcc \
     g++ \
@@ -24,8 +29,8 @@ RUN apt-get update && apt-get install -y \
     gnupg \
     lsb-release \
     openssh-client \
-    dnsutils \
-    --no-install-recommends
+    dnsutils && \
+    rm -rf /var/lib/apt/lists/*
 
 # Download and install uv to a system-wide location (accessible by non-root users)
 ADD https://astral.sh/uv/0.8.22/install.sh /uv-installer.sh

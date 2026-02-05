@@ -1,5 +1,5 @@
 # Use the official Python image as the base
-FROM python:3.11-slim
+FROM python:3.11-slim-bookworm
 
 # Development Dockerfile for Chatbot
 # This includes cloud CLI tools (gcloud, aws, az, terraform, helm) for local development
@@ -13,7 +13,12 @@ ENV PYTHONPATH="/app"
 # Set the working directory
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y \
+# Use HTTPS mirror with retries to handle transient mirror issues
+RUN echo 'Acquire::Retries "3";' > /etc/apt/apt.conf.d/80-retries && \
+    echo 'deb https://deb.debian.org/debian bookworm main' > /etc/apt/sources.list && \
+    echo 'deb https://deb.debian.org/debian-security bookworm-security main' >> /etc/apt/sources.list && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends \
     libpq-dev \
     gcc \
     python3-dev \
@@ -32,8 +37,8 @@ RUN apt-get update && apt-get install -y \
     nano \
     bash-completion \
     python3-venv \
-    dnsutils \
-    --no-install-recommends
+    dnsutils && \
+    rm -rf /var/lib/apt/lists/*
 
 # Download the latest installer
 ADD https://astral.sh/uv/0.8.22/install.sh /uv-installer.sh
