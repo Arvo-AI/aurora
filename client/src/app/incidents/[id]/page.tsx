@@ -65,8 +65,11 @@ export default function IncidentDetailPage() {
     };
   }, [params.id]);
 
-  // Poll for incident updates
+  // Poll for incident updates (only while investigating)
   useEffect(() => {
+    // Only poll while the incident is still being investigated
+    if (incident && incident.status !== 'investigating') return;
+
     let isMounted = true;
 
     const pollIncident = async () => {
@@ -86,12 +89,12 @@ export default function IncidentDetailPage() {
               seenThoughtIdsRef.current.add(thought.id);
               return true;
             });
-            
+
             // If we've seen all thoughts before, just return previous state
             if (unseenThoughts.length === 0) {
               return prevThoughts;
             }
-            
+
             // Append new thoughts progressively
             return [...prevThoughts, ...unseenThoughts];
           });
@@ -114,7 +117,7 @@ export default function IncidentDetailPage() {
       isMounted = false;
       clearInterval(interval);
     };
-  }, [params.id]);
+  }, [params.id, incident?.status]);
 
   if (loading) {
     return (
