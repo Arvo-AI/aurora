@@ -16,6 +16,7 @@ interface RunAllSuggestionsModalProps {
   isOpen: boolean;
   onClose: () => void;
   onExecutionStarted?: () => void;
+  onSuggestionExecuted?: (id: string) => void;
 }
 
 type StepStatus = 'pending' | 'running' | 'completed' | 'failed' | 'skipped';
@@ -45,6 +46,7 @@ export default function RunAllSuggestionsModal({
   isOpen,
   onClose,
   onExecutionStarted,
+  onSuggestionExecuted,
 }: RunAllSuggestionsModalProps) {
   const [stepStatuses, setStepStatuses] = useState<StepStatus[]>([]);
   const [isExecuting, setIsExecuting] = useState(false);
@@ -135,6 +137,9 @@ export default function RunAllSuggestionsModal({
           return next;
         });
 
+        // Notify parent that this suggestion was executed
+        onSuggestionExecuted?.(suggestion.id);
+
         // Small delay between dispatches to avoid overwhelming the backend
         if (i < suggestions.length - 1) {
           await new Promise(resolve => setTimeout(resolve, 500));
@@ -168,7 +173,7 @@ export default function RunAllSuggestionsModal({
                 onClick={handleExecuteAll}
                 disabled={isExecuting || activeCount === 0}
                 size="sm"
-                className="h-7 px-3 text-xs bg-orange-600 hover:bg-orange-700 text-white"
+                className="h-7 px-3 text-xs bg-zinc-700 hover:bg-zinc-600 text-white"
               >
                 {isExecuting ? (
                   <>
@@ -213,7 +218,7 @@ export default function RunAllSuggestionsModal({
                       isExcluded
                         ? 'opacity-30'
                         : status === 'running'
-                        ? 'bg-orange-500/5'
+                        ? 'bg-zinc-800/50'
                         : status === 'completed'
                         ? 'bg-green-500/5'
                         : status === 'failed'
@@ -227,7 +232,7 @@ export default function RunAllSuggestionsModal({
                         {isExcluded ? (
                           <X className="w-4 h-4 text-zinc-600" />
                         ) : status === 'running' ? (
-                          <Loader2 className="w-4 h-4 text-orange-400 animate-spin" />
+                          <Loader2 className="w-4 h-4 text-white animate-spin" />
                         ) : status === 'completed' ? (
                           <CheckCircle2 className="w-4 h-4 text-green-400" />
                         ) : status === 'failed' ? (

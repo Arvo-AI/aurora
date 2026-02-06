@@ -91,14 +91,31 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
   const [selectedFixSuggestion, setSelectedFixSuggestion] = useState<Suggestion | null>(null);
   const [showRunAllModal, setShowRunAllModal] = useState(false);
   const [showVisualization, setShowVisualization] = useState(false);
+  const [executedSuggestionIds, setExecutedSuggestionIds] = useState<Set<string>>(new Set());
+  const [showCompletedSteps, setShowCompletedSteps] = useState(false);
   const alert = incident.alert;
   const router = useRouter();
   const showSeverity = (alert.severity && alert.severity !== 'unknown') || incident.status === 'analyzed';
 
-  // Executable suggestions for "Run All" (non-fix, with command)
+  // Executable suggestions for "Run All" (non-fix, with command, not yet executed)
   const executableSuggestions = useMemo(() =>
-    (incident.suggestions || []).filter(s => s.command && s.type !== 'fix'),
-    [incident.suggestions]
+    (incident.suggestions || []).filter(s => s.command && s.type !== 'fix' && !executedSuggestionIds.has(s.id)),
+    [incident.suggestions, executedSuggestionIds]
+  );
+
+  // Callback when a suggestion is successfully executed
+  const handleSuggestionExecuted = useCallback((id: string) => {
+    setExecutedSuggestionIds(prev => {
+      const next = new Set(prev);
+      next.add(id);
+      return next;
+    });
+  }, []);
+
+  // Executed suggestions for the "Completed Steps" section
+  const executedSuggestions = useMemo(() =>
+    (incident.suggestions || []).filter(s => executedSuggestionIds.has(s.id)),
+    [incident.suggestions, executedSuggestionIds]
   );
 
   // Extract significant words (length > 3) from text for matching
@@ -219,13 +236,19 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
         h2: ({ children }) => {
           const text = extractTextFromNode(children);
           const isNextSteps = text.toLowerCase().includes('suggested next steps');
+
+          // Hide heading when all suggestions have been executed
+          if (isNextSteps && executableSuggestions.length === 0 && executedSuggestions.length > 0) {
+            return null;
+          }
+
           return (
             <h2 className="text-sm font-semibold text-white mt-3 mb-1 flex items-center gap-2">
               {processChildren(children)}
               {isNextSteps && executableSuggestions.length > 1 && (
                 <button
                   onClick={(e) => { e.preventDefault(); e.stopPropagation(); setShowRunAllModal(true); }}
-                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-orange-500/20 hover:bg-orange-500/30 text-orange-400 transition-colors"
+                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-zinc-700/50 hover:bg-zinc-600/50 text-zinc-300 transition-colors"
                 >
                   <Play className="w-3 h-3" /> Run All
                 </button>
@@ -234,13 +257,13 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
           );
         },
         strong: ({ children }) => (
-          <strong className="text-orange-300 font-semibold">{processChildren(children)}</strong>
+          <strong className="text-white font-semibold">{processChildren(children)}</strong>
         ),
         p: ({ children }) => (
           <p className="mb-2 text-zinc-300 text-sm leading-normal">{processChildren(children)}</p>
         ),
         ul: ({ children }) => (
-          <ul className="list-disc list-outside ml-4 mb-2 space-y-1">{children}</ul>
+          <ul className="list-disc list-outside ml-4 mb-2 space-y-1 empty:hidden">{children}</ul>
         ),
         li: ({ children }) => {
           const textContent = extractTextFromNode(children);
@@ -248,6 +271,11 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
           const isFixType = matchingSuggestion?.type === 'fix';
           const canExecute = Boolean(matchingSuggestion?.command);
           const canShowAction = canExecute || isFixType;
+
+          // Hide executed suggestions from the list
+          if (matchingSuggestion && executedSuggestionIds.has(matchingSuggestion.id)) {
+            return null;
+          }
 
           return (
             <li className="text-zinc-300 text-sm">
@@ -266,7 +294,7 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
                   className={`inline-flex items-center justify-center w-5 h-5 rounded transition-colors align-middle ml-1.5 ${
                     isFixType
                       ? 'bg-green-500/20 hover:bg-green-500/40 text-green-400'
-                      : 'bg-orange-500/20 hover:bg-orange-500/40 text-orange-400'
+                      : 'bg-zinc-700/50 hover:bg-zinc-600/50 text-zinc-300'
                   }`}
                   title={isFixType
                     ? `Create PR: ${matchingSuggestion.filePath || 'Fix suggestion'}`
@@ -288,7 +316,7 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
     >
       {preprocessedSummary}
     </ReactMarkdown>
-  ), [preprocessedSummary, processChildren, findMatchingSuggestion, extractTextFromNode, executableSuggestions]);
+  ), [preprocessedSummary, processChildren, findMatchingSuggestion, extractTextFromNode, executableSuggestions, executedSuggestionIds, executedSuggestions]);
 
   return (
     <div className="space-y-8">
@@ -497,6 +525,43 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
             {renderedSummary}
           </div>
 
+          {/* Completed Steps - collapsed section for executed suggestions */}
+          {executedSuggestions.length > 0 && (
+            <div className="mt-3">
+              <button
+                onClick={() => setShowCompletedSteps(prev => !prev)}
+                className="flex items-center gap-1.5 text-xs text-zinc-500 hover:text-zinc-300 transition-colors"
+                aria-label={showCompletedSteps ? "Hide completed steps" : "Show completed steps"}
+                aria-expanded={showCompletedSteps}
+              >
+                <ChevronRight className={`w-3.5 h-3.5 transition-transform ${showCompletedSteps ? 'rotate-90' : ''}`} />
+                Completed Steps ({executedSuggestions.length})
+              </button>
+              {showCompletedSteps && (
+                <div className="mt-2 ml-5 space-y-1.5">
+                  {executedSuggestions.map(suggestion => {
+                    const suggestionType = suggestion.type as 'diagnostic' | 'mitigation' | 'communication';
+                    const typeLabel = suggestionType === 'diagnostic' ? 'Diagnostic' : suggestionType === 'mitigation' ? 'Mitigation' : suggestionType === 'communication' ? 'Communication' : suggestion.type;
+                    const badgeStyles = suggestionType === 'diagnostic'
+                      ? 'bg-cyan-500/20 text-cyan-400 border-cyan-500/30'
+                      : suggestionType === 'mitigation'
+                      ? 'bg-purple-500/20 text-purple-400 border-purple-500/30'
+                      : 'bg-pink-500/20 text-pink-400 border-pink-500/30';
+                    return (
+                      <div key={suggestion.id} className="flex items-center gap-2 text-sm text-zinc-400">
+                        <CheckCircle2 className="w-3.5 h-3.5 text-green-400 flex-shrink-0" />
+                        <span className="truncate">{suggestion.title}</span>
+                        <span className={`flex-shrink-0 px-1.5 py-0.5 text-[10px] rounded border ${badgeStyles}`}>
+                          {typeLabel}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Correlated Alerts Section */}
           {incident.correlatedAlerts && incident.correlatedAlerts.length > 0 && (
             <CorrelatedAlertsSection alerts={incident.correlatedAlerts} />
@@ -595,6 +660,7 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
         isOpen={selectedSuggestion !== null}
         onClose={() => setSelectedSuggestion(null)}
         onExecutionStarted={onExecutionStarted}
+        onSuggestionExecuted={handleSuggestionExecuted}
       />
 
       {/* Run All Suggestions Modal */}
@@ -605,6 +671,7 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
         isOpen={showRunAllModal}
         onClose={() => setShowRunAllModal(false)}
         onExecutionStarted={onExecutionStarted}
+        onSuggestionExecuted={handleSuggestionExecuted}
       />
 
       {/* Fix Suggestion Modal */}

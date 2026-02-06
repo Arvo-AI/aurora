@@ -19,6 +19,7 @@ interface SuggestionModalProps {
   isOpen: boolean;
   onClose: () => void;
   onExecutionStarted?: () => void;  // Callback when execution starts
+  onSuggestionExecuted?: (id: string) => void;  // Callback when suggestion is dispatched
 }
 
 const typeIcons = {
@@ -46,6 +47,7 @@ export default function SuggestionModal({
   isOpen,
   onClose,
   onExecutionStarted,
+  onSuggestionExecuted,
 }: SuggestionModalProps) {
   const [copied, setCopied] = useState(false);
   const [isExecuting, setIsExecuting] = useState(false);
@@ -114,6 +116,7 @@ export default function SuggestionModal({
       }
 
       onExecutionStarted?.();
+      onSuggestionExecuted?.(suggestion.id);
       onClose();
     } catch (err) {
       console.error('Failed to execute command:', err);
