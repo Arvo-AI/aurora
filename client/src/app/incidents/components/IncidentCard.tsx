@@ -24,6 +24,7 @@ import Image from 'next/image';
 import CitationBadge from './CitationBadge';
 import CitationModal from './CitationModal';
 import SuggestionModal from './SuggestionModal';
+import RunAllSuggestionsModal from './RunAllSuggestionsModal';
 import FixSuggestionModal from './FixSuggestionModal';
 import IncidentFeedback from './IncidentFeedback';
 import CorrelatedAlertsSection from './CorrelatedAlertsSection';
@@ -88,10 +89,17 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
   const [selectedCitation, setSelectedCitation] = useState<Citation | null>(null);
   const [selectedSuggestion, setSelectedSuggestion] = useState<Suggestion | null>(null);
   const [selectedFixSuggestion, setSelectedFixSuggestion] = useState<Suggestion | null>(null);
+  const [showRunAllModal, setShowRunAllModal] = useState(false);
   const [showVisualization, setShowVisualization] = useState(false);
   const alert = incident.alert;
   const router = useRouter();
   const showSeverity = (alert.severity && alert.severity !== 'unknown') || incident.status === 'analyzed';
+
+  // Executable suggestions for "Run All" (non-fix, with command)
+  const executableSuggestions = useMemo(() =>
+    (incident.suggestions || []).filter(s => s.command && s.type !== 'fix'),
+    [incident.suggestions]
+  );
 
   // Extract significant words (length > 3) from text for matching
   const extractSignificantWords = useCallback((text: string): string[] => {
@@ -208,9 +216,23 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
         h1: ({ children }) => (
           <h1 className="text-base font-semibold text-white mb-1">{processChildren(children)}</h1>
         ),
-        h2: ({ children }) => (
-          <h2 className="text-sm font-semibold text-white mt-3 mb-1">{processChildren(children)}</h2>
-        ),
+        h2: ({ children }) => {
+          const text = extractTextFromNode(children);
+          const isNextSteps = text.toLowerCase().includes('suggested next steps');
+          return (
+            <h2 className="text-sm font-semibold text-white mt-3 mb-1 flex items-center gap-2">
+              {processChildren(children)}
+              {isNextSteps && executableSuggestions.length > 1 && (
+                <button
+                  onClick={(e) => { e.preventDefault(); e.stopPropagation(); setShowRunAllModal(true); }}
+                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-orange-500/20 hover:bg-orange-500/30 text-orange-400 transition-colors"
+                >
+                  <Play className="w-3 h-3" /> Run All
+                </button>
+              )}
+            </h2>
+          );
+        },
         strong: ({ children }) => (
           <strong className="text-orange-300 font-semibold">{processChildren(children)}</strong>
         ),
@@ -266,7 +288,7 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
     >
       {preprocessedSummary}
     </ReactMarkdown>
-  ), [preprocessedSummary, processChildren, findMatchingSuggestion, extractTextFromNode]);
+  ), [preprocessedSummary, processChildren, findMatchingSuggestion, extractTextFromNode, executableSuggestions]);
 
   return (
     <div className="space-y-8">
@@ -572,6 +594,16 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
         chatSessionId={incident.chatSessionId}
         isOpen={selectedSuggestion !== null}
         onClose={() => setSelectedSuggestion(null)}
+        onExecutionStarted={onExecutionStarted}
+      />
+
+      {/* Run All Suggestions Modal */}
+      <RunAllSuggestionsModal
+        suggestions={executableSuggestions}
+        incidentId={incident.id}
+        chatSessionId={incident.chatSessionId}
+        isOpen={showRunAllModal}
+        onClose={() => setShowRunAllModal(false)}
         onExecutionStarted={onExecutionStarted}
       />
 
