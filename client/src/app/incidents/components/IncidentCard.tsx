@@ -552,7 +552,7 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
           <div>
             <h2 className="text-lg font-medium text-white mb-4">Infrastructure Analysis</h2>
             <ReactFlowProvider>
-              <InfrastructureVisualization incidentId={incident.id} className="h-[500px]" />
+              <InfrastructureVisualization incidentId={incident.id} incident={incident} citations={citations} className="h-[500px]" />
             </ReactFlowProvider>
           </div>
         </>
