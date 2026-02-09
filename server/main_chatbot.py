@@ -58,7 +58,7 @@ class RateLimiter:
         self.tokens = defaultdict(lambda: rate)
         self.rate = rate
         self.per = per
-        self.last_checked = defaultdict(lambda: time.time())
+        self.last_checked = defaultdict(time.time)
 
     def is_allowed(self, client_id):
         now = time.time()
