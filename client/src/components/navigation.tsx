@@ -2,7 +2,7 @@
 
 import Link from "next/link"
 import { usePathname, useRouter } from "next/navigation"
-import { ChevronLeft, List, Settings, LogOut, User, HelpCircle, Bug, Sparkles, Plug, Zap } from "lucide-react"
+import { ChevronLeft, List, Settings, LogOut, User, HelpCircle, Bug, Sparkles } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import ChatHistory from "@/components/ChatHistory"
@@ -154,8 +154,7 @@ export default function Navigation({
                 )}
               >
                 <div className="flex items-center">
-                  <Zap size={16} className="text-foreground" />
-                  <span className="ml-2">Incidents</span>
+                  <span>Incidents</span>
                 </div>
                 {/* Running indicator - shows when Aurora is investigating */}
                 <span className="relative flex h-2 w-2">
@@ -177,8 +176,7 @@ export default function Navigation({
               )}
             >
               <div className="flex items-center">
-                <Plug size={16} />
-                <span className="ml-2">Connectors</span>
+                <span>Connectors</span>
               </div>
             </Link>
           </li>
