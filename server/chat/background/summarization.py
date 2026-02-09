@@ -155,6 +155,7 @@ STRICT RULES:
 - Do NOT explain what someone should do or be aware of
 - Do NOT add conclusions such as “no action is required”
 - Do NOT speculate beyond the alert content
+- Do NOT include a title or heading like "Incident Summary"
 
 Tone: neutral, factual, incident-record style
 Style: descriptive, not advisory

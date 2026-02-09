@@ -13,8 +13,6 @@ import {
   ChevronRight,
   Play,
   GitBranch,
-  GitFork,
-  FileText
 } from 'lucide-react';
 import React, { useState, useMemo, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
@@ -449,7 +447,9 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
       {incident.status !== 'merged' ? (
         <div>
           <div className="flex items-center gap-3 mb-4">
-            <h2 className="text-lg font-medium text-white">Current Summary</h2>
+            {incident.auroraStatus === 'running' && (
+              <h2 className="text-lg font-medium text-white">Current Summary</h2>
+            )}
             
             {/* Thinking/View Thoughts toggle - ChatGPT style */}
             <button
@@ -500,11 +500,10 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
           {incident.auroraStatus === 'complete' && incident.status !== 'merged' ? (
             <Link
               href={`/chat?sessionId=${incident.chatSessionId}`}
-              className="inline-flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors bg-zinc-800 hover:bg-zinc-700 text-white border border-zinc-700 hover:border-zinc-600"
+              className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md text-xs transition-colors text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800"
             >
-              <FileText className="w-4 h-4" />
-              Root Cause Analysis
-              <ExternalLink className="w-4 h-4" />
+              <span>Root Cause Analysis</span>
+              <ExternalLink className="w-3 h-3" />
             </Link>
           ) : (
             <button
@@ -514,25 +513,23 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
                   ? "This incident was merged into another investigation"
                   : "RCA report will be available only when RCA is complete"
               }
-              className="inline-flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors bg-zinc-900 text-zinc-500 cursor-not-allowed border border-zinc-800"
+              className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md text-xs transition-colors text-zinc-600 cursor-not-allowed"
             >
-              <FileText className="w-4 h-4" />
-              Root Cause Analysis
+              <span>Root Cause Analysis</span>
             </button>
           )}
           
           {(incident.auroraStatus === 'complete' || incident.auroraStatus === 'running') && (
             <button
               onClick={() => setShowVisualization(!showVisualization)}
-              className="inline-flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors bg-zinc-800 hover:bg-zinc-700 text-white border border-zinc-700 hover:border-zinc-600"
+              className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-md text-xs transition-colors ${
+                showVisualization
+                  ? 'text-orange-300 bg-orange-500/10'
+                  : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800'
+              }`}
             >
-              <GitFork className="w-4 h-4" />
-              Visualization
-              {showVisualization ? (
-                <ChevronUp className="w-4 h-4" />
-              ) : (
-                <ChevronDown className="w-4 h-4" />
-              )}
+              <span>Visualization</span>
+              <ChevronRight className={`w-3 h-3 transition-transform ${showVisualization ? 'rotate-90' : ''}`} />
             </button>
           )}
         </div>
