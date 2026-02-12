@@ -12,8 +12,8 @@
 
 ## Docker deployments
 - For development, use `make dev-build` to build the project, `make dev` to start it and `make down` to stop it ;
-- For production with prebuilt images, use `make prod-local` (pulls from GHCR, retags, runs) and `make prod-down` to stop it ;
-- To build from source (e.g. feature branch demos), use `make prod-build` or `make prod-local-build` ;
+- For production with prebuilt images, use `make prod-prebuilt` (pulls from GHCR, retags, runs), or `make prod-local` to build from source; use `make down` to stop it ;
+- To build from source (e.g. feature branch demos), use `make prod-local` or `make prod-build` ;
 - Always update `docker-compose.yaml` along with `docker-compose.prod-local.yml`, especially to keep env variables in sync.
 
 ## Architecture

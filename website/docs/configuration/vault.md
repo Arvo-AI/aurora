@@ -17,7 +17,7 @@ Aurora uses HashiCorp Vault for secrets management. User credentials (cloud prov
 ### 1. Start Aurora
 
 ```bash
-make prod-local
+make prod-prebuilt   # or: make prod-local to build from source
 ```
 
 ### 2. Get the Root Token
@@ -46,7 +46,7 @@ VAULT_TOKEN=hvs.xxxxxxxxxxxxxxxxxxxxxxxxxxxx
 
 ```bash
 make down
-make prod-local
+make prod-prebuilt   # or: make prod-local to build from source
 ```
 
 ## Configuration Variables
@@ -98,7 +98,7 @@ Data is stored in Docker volumes:
 | `vault-data` | Encrypted secret storage |
 | `vault-init` | Initialization keys and tokens |
 
-These persist across container restarts. Use `make prod-local-clean` to remove them.
+These persist across container restarts. Use `make prod-clean` to remove them.
 
 ## Production Considerations
 

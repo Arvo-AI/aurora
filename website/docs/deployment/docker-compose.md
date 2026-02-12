@@ -90,21 +90,23 @@ make down && make dev
 To test production builds without deploying to Kubernetes:
 
 ```bash
-# Build and start production images
-make prod-local-build
+# Option A: Pull prebuilt images from GHCR (fastest)
+make prod-prebuilt   # or: make prod-local to build from source
+
+# Option B: Build from source and start
 make prod-local
 
 # View logs
-make prod-local-logs
+make prod-logs
 
 # Stop
-make prod-local-down
+make down
 ```
 
-This uses `docker-compose.prod-local.yml` which builds optimized production images but still runs on your local machine.
+This uses `docker-compose.prod-local.yml` which runs optimized production images on your local machine.
 
 :::tip Shorthand Commands
-You can also use `make prod`, `make prod-build`, etc. as shortcuts - they're aliases for the `prod-local` commands.
+`make prod` is an alias for `make prod-prebuilt`. `make prod-build` is an alias for `make prod-local`.
 :::
 
 ## Accessing Aurora
@@ -157,7 +159,7 @@ To remove all data and start fresh:
 
 ```bash
 make clean              # for dev
-make prod-local-clean   # for prod-local
+make prod-clean
 ```
 
 ## Monitoring
@@ -185,7 +187,7 @@ make logs
 docker compose logs -f aurora-server
 
 # Production build logs
-make prod-local-logs
+make prod-logs
 ```
 
 ## Troubleshooting

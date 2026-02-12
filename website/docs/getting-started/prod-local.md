@@ -8,11 +8,15 @@ Run a production-like Aurora stack locally for testing and evaluation.
 
 ## Overview
 
-`prod-local` mode uses production Docker images but runs entirely on your machine. This is ideal for:
+Production-local mode uses production Docker images but runs entirely on your machine. This is ideal for:
 
 - Testing before deploying to production
 - Evaluating Aurora without cloud infrastructure
 - Demo environments
+
+**Commands:**
+- **`make prod-prebuilt`** — Pull prebuilt images from GHCR and start (no build, fastest).
+- **`make prod-local`** — Build from source and start (for feature branches or custom builds).
 
 ## Commands
 
@@ -20,20 +24,23 @@ Run a production-like Aurora stack locally for testing and evaluation.
 # First-time setup
 make init
 
-# Start production-local
+# Start (prebuilt images from GHCR)
+make prod-prebuilt
+
+# Or build from source and start
 make prod-local
 
 # View logs
-make prod-local-logs
+make prod-logs
 
 # Stop
-make prod-local-down
+make down
 
 # Clean (removes volumes, preserves .env)
-make prod-local-clean
+make prod-clean
 
 # Full cleanup
-make prod-local-nuke
+make prod-nuke
 ```
 
 ## Vault Setup
@@ -67,7 +74,7 @@ nano .env
 
 ```bash
 make down
-make prod-local
+make prod-prebuilt   # or: make prod-local to build from source
 ```
 
 ## Service Endpoints
@@ -94,8 +101,8 @@ docker exec -it vault vault kv get aurora/users/test-secret
 
 ## Differences from Development
 
-| Aspect | `make dev` | `make prod-local` |
-|--------|------------|-------------------|
+| Aspect | `make dev` | `make prod-prebuilt` / `make prod-local` |
+|--------|------------|------------------------------------------|
 | Docker images | Development | Production |
 | Hot reload | Enabled | Disabled |
 | Optimizations | Off | On |
@@ -107,14 +114,14 @@ docker exec -it vault vault kv get aurora/users/test-secret
 
 ```bash
 make init
-make prod-local
+make prod-prebuilt   # or: make prod-local to build from source
 ```
 
 ### Vault Connection Issues
 
 1. Check Vault is running: `docker ps | grep vault`
 2. Check token is in `.env`: `grep VAULT_TOKEN .env`
-3. Restart: `make down && make prod-local`
+3. Restart: `make down && make prod-prebuilt` (or `make prod-local`)
 
 ### Port Conflicts
 

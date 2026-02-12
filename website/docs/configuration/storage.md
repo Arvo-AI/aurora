@@ -133,8 +133,8 @@ Storage data is persisted in Docker volumes. Use cleanup commands carefully:
 
 ```bash
 # Removes storage data
-make prod-local-clean
+make prod-clean
 
 # Preserves storage data
-make prod-local-down
+make down
 ```

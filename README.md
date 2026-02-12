@@ -18,8 +18,8 @@ make init
 #    Get one from: https://openrouter.ai/keys or https://platform.openai.com/api-keys
 nano .env  # Add OPENROUTER_API_KEY=sk-or-v1-...
 
-# 4. Start Aurora
-make prod-local
+# 4. Start Aurora (prebuilt from GHCR, or build from source)
+make prod-prebuilt   # or: make prod-local to build images locally
 
 # 5. Get Vault root token and add to .env
 #    Check the vault-init container logs for the root token:
@@ -36,7 +36,7 @@ nano .env  # Add VAULT_TOKEN=hvs.xxxxxxxxxxxxxxxxxxxxxxxxxxxx
 
 # 6. Restart Aurora to load the Vault token
 make down
-make prod-local
+make prod-prebuilt   # or: make prod-local to build from source
 ```
 
 **That's it!** Open http://localhost:3000 in your browser.
@@ -50,11 +50,9 @@ git clone https://github.com/Arvo-AI/aurora.git
 cd aurora
 make init
 # Add OPENROUTER_API_KEY (or another LLM key) to .env
-make prod-local
+make prod-prebuilt   # or: make prod-local to build from source
 # Then add VAULT_TOKEN from vault-init logs to .env and restart (see step 5 in Quick Start)
 ```
-
-See [docs/INSTALL_PREBUILT.md](docs/INSTALL_PREBUILT.md) for full details.
 
 > **Note**: Aurora works **without any cloud provider accounts**! The LLM API key is the only external requirement. Connectors are optional and can be enabled later if needed via the env file.
 

@@ -95,14 +95,14 @@ GOOGLE_AI_API_KEY=your-key-here
 ## Step 4: Start Aurora
 
 ```bash
-make prod-local
+make prod-prebuilt   # or: make prod-local to build from source
 ```
 
-This builds and starts all containers. First run takes 3-5 minutes to pull/build images.
+This pulls prebuilt images from GHCR and starts all containers (or use `make prod-local` to build images locally). First run takes a few minutes to pull images.
 
 You'll see output like:
 ```
-Starting Aurora in production-local mode...
+Starting Aurora in production mode (prebuilt images)...
 ✓ Aurora is starting! Services will be available at:
   - Frontend: http://localhost:3000
   - Backend API: http://localhost:5080
@@ -143,8 +143,8 @@ VAULT_TOKEN=hvs.xxxxxxxxxxxxxxxxxxxxxxxxxxxx
 ### Restart to Apply
 
 ```bash
-make prod-local-down
-make prod-local
+make down
+make prod-prebuilt   # or: make prod-local to build from source
 ```
 
 ## Step 6: Access Aurora
@@ -190,11 +190,12 @@ curl http://localhost:8200/v1/sys/health
 
 | Command | Description |
 |---------|-------------|
-| `make prod-local` | Start Aurora |
-| `make prod-local-down` | Stop Aurora |
-| `make prod-local-logs` | View all logs |
-| `make prod-local-logs aurora-server` | View specific service logs |
-| `make prod-local-clean` | Stop and remove data volumes |
+| `make prod-prebuilt` | Start Aurora (pull images from GHCR) |
+| `make prod-local` | Build from source and start Aurora |
+| `make down` | Stop Aurora |
+| `make prod-logs` | View all logs |
+| `make prod-logs aurora-server` | View specific service logs |
+| `make prod-clean` | Stop and remove data volumes |
 
 ## What's Running
 
@@ -241,7 +242,7 @@ lsof -i :3000
 
 If services can't connect to Vault:
 1. Verify token is in `.env`: `grep VAULT_TOKEN .env`
-2. Restart services: `make prod-local-down && make prod-local`
+2. Restart services: `make down && make prod-prebuilt` (or `make prod-local`)
 
 ### Container Crashes
 

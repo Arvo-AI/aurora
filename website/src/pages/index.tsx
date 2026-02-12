@@ -126,7 +126,7 @@ function QuickstartSection() {
             <div className={styles.stepContent}>
               <div className={styles.stepTitle}>Start Aurora</div>
               <div className={styles.stepDescription}>
-                <code className={styles.stepCode}>make prod-local</code>
+                <code className={styles.stepCode}>make prod-prebuilt</code> or <code className={styles.stepCode}>make prod-local</code>
               </div>
             </div>
           </div>
