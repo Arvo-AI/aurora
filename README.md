@@ -41,6 +41,20 @@ make prod-local
 
 **That's it!** Open http://localhost:3000 in your browser.
 
+### Run with prebuilt images (no build)
+
+If you prefer not to build the app images locally, use the public images from GitHub Container Registry:
+
+```bash
+git clone https://github.com/Arvo-AI/aurora.git
+cd aurora
+make init
+# Add OPENROUTER_API_KEY (or another LLM key) to .env
+make prod-local
+# Then add VAULT_TOKEN from vault-init logs to .env and restart (see step 5 in Quick Start)
+```
+
+See [docs/INSTALL_PREBUILT.md](docs/INSTALL_PREBUILT.md) for full details.
 
 > **Note**: Aurora works **without any cloud provider accounts**! The LLM API key is the only external requirement. Connectors are optional and can be enabled later if needed via the env file.
 

@@ -15,8 +15,8 @@ help:
 	@echo "  make restart            - Restart the Docker Compose stack"
 	@echo ""
 	@echo "Production (local testing with prod builds):"
-	@echo "  make prod               - Alias for prod-local"
-	@echo "  make prod-build         - Alias for prod-local-build"
+	@echo "  make prod               - Alias for prod-local (pulls prebuilt images)"
+	@echo "  make prod-build         - Alias for prod-local-build (build from source)"
 	@echo "  make prod-build-no-cache - Build all production containers without using cache"
 	@echo "  make prod-logs          - Alias for prod-local-logs"
 	@echo "  make prod-down          - Alias for prod-local-down"
@@ -26,8 +26,8 @@ help:
 	@echo ""
 	@echo "Local Production (for testing/evaluation):"
 	@echo "  make init              - First-time setup (generates secrets, initializes Vault)"
-	@echo "  make prod-local         - Build and start production-like stack locally"
-	@echo "  make prod-local-build   - Build production-local containers without starting"
+	@echo "  make prod-local         - Pull prebuilt images and start (no build needed)"
+	@echo "  make prod-local-build   - Build from source and start"
 	@echo "  make prod-local-logs    - Show logs for production-local containers"
 	@echo "  make prod-local-down    - Stop production-local containers"
 	@echo "  make prod-local-clean   - Stop and remove production-local volumes"
@@ -154,20 +154,39 @@ prod-local:
 		echo "Error: Secrets not generated. Run 'make init' first."; \
 		exit 1; \
 	fi
+	@echo "Pulling prebuilt images from GHCR..."
+	@docker pull ghcr.io/arvo-ai/aurora-server:latest
+	@docker pull ghcr.io/arvo-ai/aurora-frontend:latest
+	@echo "Tagging images for docker compose..."
+	@docker tag ghcr.io/arvo-ai/aurora-server:latest aurora_server:latest
+	@docker tag ghcr.io/arvo-ai/aurora-server:latest aurora_celery-worker:latest
+	@docker tag ghcr.io/arvo-ai/aurora-server:latest aurora_celery-beat:latest
+	@docker tag ghcr.io/arvo-ai/aurora-server:latest aurora_chatbot:latest
+	@docker tag ghcr.io/arvo-ai/aurora-frontend:latest aurora_frontend:latest
 	@echo "Starting Aurora in production-local mode..."
-	@docker compose -f docker-compose.prod-local.yml up --build -d
+	@docker compose -f docker-compose.prod-local.yml up -d
 	@echo ""
 	@echo "✓ Aurora is starting! Services will be available at:"
 	@echo "  - Frontend: http://localhost:3000"
-	@echo "  - Backend API: http://localhost:5000"
+	@echo "  - Backend API: http://localhost:5080"
 	@echo "  - Chatbot WebSocket: ws://localhost:5006"
 	@echo "  - Vault UI: http://localhost:8200"
 	@echo ""
 	@echo "View logs with: make prod-local-logs"
 
 prod-local-build:
-	@echo "Building production-local containers..."
-	@docker compose -f docker-compose.prod-local.yml build $(ARGS)
+	@if [ ! -f .env ]; then \
+		echo "Error: .env file not found."; \
+		echo "Please run 'make init' first to set up your environment."; \
+		exit 1; \
+	fi
+	@echo "Building from source and starting Aurora in production mode..."
+	@docker compose -f docker-compose.prod-local.yml up --build -d
+	@echo ""
+	@echo "✓ Aurora is starting (built from source)!"
+	@echo "  - Frontend: http://localhost:3000"
+	@echo "  - Backend API: http://localhost:5080"
+	@echo "  - Chatbot WebSocket: ws://localhost:5006"
 
 prod-local-logs:
 	@if [ -z "$(filter-out $@,$(MAKECMDGOALS))" ]; then \
