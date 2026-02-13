@@ -59,8 +59,8 @@ After adding these credentials, **rebuild and restart Aurora**:
 
 ```bash
 make down
-make dev-build  # or make prod-build for production
-make dev        # or make prod for production
+make dev-build  # or make prod-local for production (build from source)
+make dev        # or make prod-prebuilt / make prod for production (prebuilt images)
 ```
 
 ### Step 4: Create IAM Role in Your AWS Account

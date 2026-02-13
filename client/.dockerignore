@@ -15,6 +15,13 @@ Thumbs.db
 .vscode
 .idea
 
+# --- Environment and secrets (never ship in image) ---
+.env
+.env.*
+.env.local
+.env.production
+.env.development
+
 # --- Git folder ---
 .git
 

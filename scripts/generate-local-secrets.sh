@@ -3,7 +3,7 @@
 # Generate Local Secrets for Aurora
 # ============================================================================
 # This script generates secure random secrets for local Aurora deployment.
-# Run this before your first 'make prod-local' to populate required secrets.
+# Run this before your first 'make prod-prebuilt' (or make prod-local) to populate required secrets.
 #
 # Usage:
 #   ./scripts/generate-local-secrets.sh
@@ -80,5 +80,5 @@ echo -e "${GREEN}✓ Secrets generated and saved to .env${NC}"
 echo ""
 echo "Next steps:"
 echo "  1. Edit .env and add your LLM API key (OPENROUTER_API_KEY, OPENAI_API_KEY, or ANTHROPIC_API_KEY)"
-echo "  2. Run: make prod-local"
+echo "  2. Run: make prod-prebuilt (or make prod-local to build from source)"
 echo ""

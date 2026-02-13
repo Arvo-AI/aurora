@@ -34,7 +34,7 @@ About 5 minutes for basic setup. The quickstart guide walks you through:
 1. Clone repository
 2. Run `make init`
 3. Add LLM API key
-4. Run `make prod-local`
+4. Run `make prod-prebuilt` (or `make prod-local` to build from source)
 
 ### Which LLM provider should I use?
 

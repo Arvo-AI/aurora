@@ -1,4 +1,4 @@
-.PHONY: help dev down logs rebuild-server restart prod prod-build prod-logs prod-down clean nuke build-no-cache dev-fresh prod-clean prod-nuke prod-build-no-cache prod-fresh prod-local init prod-local-build prod-local-logs prod-local-down prod-local-clean prod-local-nuke deploy-build deploy
+.PHONY: help dev down logs rebuild-server restart prod prod-build prod-logs prod-down clean nuke build-no-cache dev-fresh prod-clean prod-nuke prod-build-no-cache prod-fresh prod-prebuilt prod-local init prod-local-logs prod-local-down prod-local-clean prod-local-nuke deploy-build deploy
 
 help:
 	@echo "Available commands:"
@@ -15,22 +15,22 @@ help:
 	@echo "  make restart            - Restart the Docker Compose stack"
 	@echo ""
 	@echo "Production (local testing with prod builds):"
-	@echo "  make prod               - Alias for prod-local"
-	@echo "  make prod-build         - Alias for prod-local-build"
+	@echo "  make prod               - Alias for prod-prebuilt (pull images from GHCR)"
+	@echo "  make prod-build         - Alias for prod-local (build from source)"
 	@echo "  make prod-build-no-cache - Build all production containers without using cache"
-	@echo "  make prod-logs          - Alias for prod-local-logs"
-	@echo "  make prod-down          - Alias for prod-local-down"
-	@echo "  make prod-clean         - Alias for prod-local-clean"
-	@echo "  make prod-nuke          - Alias for prod-local-nuke"
+	@echo "  make prod-logs          - Show logs for production containers"
+	@echo "  make down               - Stop all containers (dev or prod)"
+	@echo "  make prod-clean         - Stop and remove production volumes"
+	@echo "  make prod-nuke          - Full cleanup: containers, volumes, images"
 	@echo "  make prod-fresh         - Full production cleanup + rebuild without cache + start"
 	@echo ""
 	@echo "Local Production (for testing/evaluation):"
 	@echo "  make init              - First-time setup (generates secrets, initializes Vault)"
-	@echo "  make prod-local         - Build and start production-like stack locally"
-	@echo "  make prod-local-build   - Build production-local containers without starting"
-	@echo "  make prod-local-logs    - Show logs for production-local containers"
-	@echo "  make prod-local-down    - Stop production-local containers"
-	@echo "  make prod-local-clean   - Stop and remove production-local volumes"
+	@echo "  make prod-prebuilt      - Pull prebuilt images from GHCR and start (no build)"
+	@echo "  make prod-local         - Build from source and start"
+	@echo "  make prod-local-logs    - Show logs for production containers"
+	@echo "  make down               - Stop production containers (same as dev)"
+	@echo "  make prod-local-clean   - Stop and remove production volumes"
 	@echo "  make prod-local-nuke    - Full cleanup: containers, volumes, images"
 	@echo ""
 	@echo "Kubernetes Deployment:"
@@ -62,7 +62,8 @@ build:
 
 down:
 	@for ep in $$(docker network inspect aurora_default -f '{{range .Containers}}{{.Name}} {{end}}' 2>/dev/null); do docker network disconnect -f aurora_default $$ep 2>/dev/null; done; true
-	docker compose down --remove-orphans
+	@docker compose down --remove-orphans
+	@docker compose -f docker-compose.prod-local.yml down --remove-orphans 2>/dev/null || true
 
 logs:
 	@if [ -z "$(filter-out $@,$(MAKECMDGOALS))" ]; then \
@@ -103,14 +104,14 @@ dev-fresh:
 	docker compose up -d
 	@echo "Fresh rebuild complete!"
 
-# Production commands (alias to prod-local for consistency)
-prod: prod-local
+# Production commands
+prod: prod-prebuilt
 
-prod-build: prod-local-build
+prod-build: prod-local
 
 prod-logs: prod-local-logs
 
-prod-down: prod-local-down
+prod-down: down
 
 prod-build-no-cache:
 	@echo "Building all production containers without cache..."
@@ -142,9 +143,9 @@ init:
 	@echo ""
 	@echo "✓ Setup complete! Next steps:"
 	@echo "  1. Edit .env and add your LLM API key (OPENROUTER_API_KEY, OPENAI_API_KEY, or ANTHROPIC_API_KEY)"
-	@echo "  2. Run: make dev (for development) or make prod-local (for production-like testing)"
+	@echo "  2. Run: make dev (for development), make prod-prebuilt (pull images), or make prod-local (build from source)"
 
-prod-local:
+prod-prebuilt:
 	@if [ ! -f .env ]; then \
 		echo "Error: .env file not found."; \
 		echo "Please run 'make init' first to set up your environment."; \
@@ -154,20 +155,39 @@ prod-local:
 		echo "Error: Secrets not generated. Run 'make init' first."; \
 		exit 1; \
 	fi
-	@echo "Starting Aurora in production-local mode..."
-	@docker compose -f docker-compose.prod-local.yml up --build -d
+	@echo "Pulling prebuilt images from GHCR..."
+	@docker pull ghcr.io/arvo-ai/aurora-server:latest
+	@docker pull ghcr.io/arvo-ai/aurora-frontend:latest
+	@echo "Tagging images for docker compose..."
+	@docker tag ghcr.io/arvo-ai/aurora-server:latest aurora_server:latest
+	@docker tag ghcr.io/arvo-ai/aurora-server:latest aurora_celery-worker:latest
+	@docker tag ghcr.io/arvo-ai/aurora-server:latest aurora_celery-beat:latest
+	@docker tag ghcr.io/arvo-ai/aurora-server:latest aurora_chatbot:latest
+	@docker tag ghcr.io/arvo-ai/aurora-frontend:latest aurora_frontend:latest
+	@echo "Starting Aurora in production mode (prebuilt images)..."
+	@docker compose -f docker-compose.prod-local.yml up -d
 	@echo ""
 	@echo "✓ Aurora is starting! Services will be available at:"
 	@echo "  - Frontend: http://localhost:3000"
-	@echo "  - Backend API: http://localhost:5000"
+	@echo "  - Backend API: http://localhost:5080"
 	@echo "  - Chatbot WebSocket: ws://localhost:5006"
 	@echo "  - Vault UI: http://localhost:8200"
 	@echo ""
-	@echo "View logs with: make prod-local-logs"
+	@echo "View logs with: make prod-logs"
 
-prod-local-build:
-	@echo "Building production-local containers..."
-	@docker compose -f docker-compose.prod-local.yml build $(ARGS)
+prod-local:
+	@if [ ! -f .env ]; then \
+		echo "Error: .env file not found."; \
+		echo "Please run 'make init' first to set up your environment."; \
+		exit 1; \
+	fi
+	@echo "Building from source and starting Aurora in production mode..."
+	@docker compose -f docker-compose.prod-local.yml up --build -d
+	@echo ""
+	@echo "✓ Aurora is starting (built from source)!"
+	@echo "  - Frontend: http://localhost:3000"
+	@echo "  - Backend API: http://localhost:5080"
+	@echo "  - Chatbot WebSocket: ws://localhost:5006"
 
 prod-local-logs:
 	@if [ -z "$(filter-out $@,$(MAKECMDGOALS))" ]; then \

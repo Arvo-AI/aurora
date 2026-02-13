@@ -63,7 +63,7 @@ VAULT_TOKEN=hvs.xxxxxxxxxxxx
 
 3. Restart:
 ```bash
-make down && make prod-local
+make down && make prod-prebuilt   # or: make prod-local
 ```
 
 ### "Vault is sealed"
