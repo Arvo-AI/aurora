@@ -79,6 +79,9 @@ demo-snapshots/
 demo-snapshots-backup/
 demo-snapshots-backup-*.tar.gz
 
+# Demo Weaviate data (binary, large, regenerate from SQL)
+demo-data/weaviate_data.tar.gz
+
 # local k8s values
 values-local.yaml
 values.generated.yaml

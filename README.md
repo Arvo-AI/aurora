@@ -2,6 +2,47 @@
 
 Aurora is an automated root cause analysis investigation tool that uses agents to help Site Reliability Engineers resolve incidents.
 
+---
+
+## Try the Demo
+
+Want to see Aurora in action without connecting cloud providers or alert sources? Check out the **demo branch** with a pre-loaded, fully analyzed incident.
+
+```bash
+# Clone and checkout the demo branch
+git clone https://github.com/arvo-ai/aurora.git
+cd aurora
+git checkout demo
+
+# Initialize (generates secrets)
+make init
+
+# Optional: Add an LLM API key to .env for chat functionality
+# Get a key from: https://openrouter.ai/keys or https://platform.openai.com/api-keys
+nano .env  # Add OPENROUTER_API_KEY=sk-or-v1-...
+
+# Start Aurora
+make dev  # or: make prod-prebuilt for production images
+
+# Get Vault root token and add to .env (see Quick Start below for details)
+docker logs vault-init 2>&1 | grep "Root Token:"
+nano .env  # Add VAULT_TOKEN=hvs.xxxx
+
+# Restart to load Vault token
+make down && make dev
+```
+
+**What you'll see:**
+- Pre-analyzed incident: "Database connection pool exhausted - payment-service"
+- Complete RCA with root cause identified (connection leak in commit 7d6f976c)
+- Investigation thoughts showing Aurora's reasoning process
+- Actionable suggestions with code fixes
+- Interactive chat to ask questions about the incident (requires LLM API key)
+
+Open http://localhost:3000, sign up with any email, and explore!
+
+---
+
 ## Quick Start
 
 Get Aurora running locally for testing and evaluation:

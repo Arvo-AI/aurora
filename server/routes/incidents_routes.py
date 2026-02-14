@@ -106,6 +106,8 @@ def _format_incident_response(
             affected_services,
             merged_into_incident_id,
             merged_into_title,
+            visualization_code,
+            visualization_updated_at,
         ) = row
     elif include_correlation:
         (
@@ -132,6 +134,8 @@ def _format_incident_response(
         ) = row
         merged_into_incident_id = None
         merged_into_title = None
+        visualization_code = None
+        visualization_updated_at = None
     elif include_metadata:
         (
             incident_id,
@@ -223,6 +227,15 @@ def _format_incident_response(
     if merged_into_incident_id is not None:
         result["mergedIntoIncidentId"] = str(merged_into_incident_id)
         result["mergedIntoTitle"] = merged_into_title
+    
+    # Add visualization if available
+    if visualization_code:
+        try:
+            import json
+            result["visualization"] = json.loads(visualization_code)
+            result["visualizationUpdatedAt"] = _format_timestamp(visualization_updated_at)
+        except (json.JSONDecodeError, TypeError):
+            result["visualization"] = None
 
     return result
 
@@ -251,12 +264,10 @@ def get_incidents():
                         i.merged_into_incident_id, target.alert_title as merged_into_title
                     FROM incidents i
                     LEFT JOIN incidents target ON i.merged_into_incident_id = target.id
-                    WHERE i.user_id = %s
-                      AND i.status != 'merged'
+                    WHERE i.status != 'merged'
                     ORDER BY i.started_at DESC
                     LIMIT 100
                     """,
-                    (user_id,),
                 )
                 rows = cursor.fetchall()
 
@@ -306,12 +317,13 @@ def get_incident(incident_id: str):
                         i.alert_title, i.alert_service, i.alert_environment, i.aurora_status, i.aurora_summary,
                         i.aurora_chat_session_id, i.started_at, i.analyzed_at, i.active_tab, i.created_at, i.updated_at,
                         i.alert_metadata, i.correlated_alert_count, i.affected_services,
-                        i.merged_into_incident_id, target.alert_title as merged_into_title
+                        i.merged_into_incident_id, target.alert_title as merged_into_title,
+                        i.visualization_code, i.visualization_updated_at
                     FROM incidents i
                     LEFT JOIN incidents target ON i.merged_into_incident_id = target.id
-                    WHERE i.id = %s AND i.user_id = %s
+                    WHERE i.id = %s
                     """,
-                    (incident_id, user_id),
+                    (incident_id,),
                 )
                 row = cursor.fetchone()
 
@@ -687,8 +699,8 @@ def get_incident_alerts(incident_id: str):
                 conn.commit()
 
                 cursor.execute(
-                    "SELECT 1 FROM incidents WHERE id = %s AND user_id = %s",
-                    (incident_id, user_id),
+                    "SELECT 1 FROM incidents WHERE id = %s",
+                    (incident_id,),
                 )
                 if not cursor.fetchone():
                     return jsonify({"error": "Incident not found"}), 404

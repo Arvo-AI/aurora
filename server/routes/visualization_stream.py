@@ -19,11 +19,15 @@ def stream_visualization_updates(incident_id: str):
     if not user_id:
         return Response("Unauthorized", status=401)
     
-    # Verify incident ownership
+    # Verify incident ownership or demo access
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
-                cursor.execute("SELECT 1 FROM incidents WHERE id = %s AND user_id = %s", (incident_id, user_id))
+                cursor.execute(
+                    "SET LOCAL myapp.current_user_id = %s",
+                    (user_id,)
+                )
+                cursor.execute("SELECT 1 FROM incidents WHERE id = %s", (incident_id,))
                 if not cursor.fetchone():
                     return Response("Forbidden", status=403)
     except Exception as e:
@@ -79,16 +83,21 @@ def get_current_visualization(incident_id: str):
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                cursor.execute(
+                    "SET LOCAL myapp.current_user_id = %s",
+                    (user_id,)
+                )
                 cursor.execute("""
                     SELECT visualization_code, visualization_updated_at
                     FROM incidents
-                    WHERE id = %s AND user_id = %s
-                """, (incident_id, user_id))
+                    WHERE id = %s
+                """, (incident_id,))
                 
                 row = cursor.fetchone()
-        
-        if not row or not row[0]:
-            return jsonify({"error": "No visualization found"}), 404
+                
+                if not row or not row[0]:
+                    logger.warning(f"[Visualization] No viz found for incident {incident_id}, user {user_id}, row={row}")
+                    return jsonify({"error": "No visualization found"}), 404
         
         viz_data = json.loads(row[0]) if isinstance(row[0], str) else row[0]
         

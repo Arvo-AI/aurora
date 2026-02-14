@@ -1315,8 +1315,18 @@ def initialize_tables():
                             WHERE tablename = '{table_name}'
                             AND policyname = 'select_by_user'
                         ) THEN
-                            CREATE POLICY select_by_user ON {table_name}
-                            FOR SELECT USING (user_id = current_setting('myapp.current_user_id')::text);
+                            IF '{table_name}' = 'incidents' THEN
+                                -- For incidents table, allow selecting own incidents OR demo incidents
+                                CREATE POLICY select_by_user ON {table_name}
+                                FOR SELECT USING (
+                                    user_id = current_setting('myapp.current_user_id')::text
+                                    OR (alert_metadata::jsonb->>'is_demo')::boolean = true
+                                );
+                            ELSE
+                                -- For other tables, standard user-based filtering
+                                CREATE POLICY select_by_user ON {table_name}
+                                FOR SELECT USING (user_id = current_setting('myapp.current_user_id')::text);
+                            END IF;
                         END IF;
                     END $$;
                     """

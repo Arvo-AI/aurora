@@ -314,6 +314,19 @@ services:
       vault:
         condition: service_healthy
 
+  demo-init:
+    image: postgres:15-alpine
+    container_name: aurora-demo-init
+    restart: "no"
+    volumes:
+      - ./demo-data:/demo-data:ro
+      - weaviate_data:/var/lib/weaviate
+    environment:
+      <<: *common-env
+    entrypoint: ["/bin/sh", "/demo-data/restore-demo-data.sh"]
+    depends_on:
+      aurora-server:
+        condition: service_started
 
   chatbot:
     build:
