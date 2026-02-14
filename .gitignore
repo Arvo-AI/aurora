@@ -74,6 +74,11 @@ key.json
 # others
 *.sql
 
+# Demo snapshots and backups (large data files, not for git)
+demo-snapshots/
+demo-snapshots-backup/
+demo-snapshots-backup-*.tar.gz
+
 # local k8s values
 values-local.yaml
 values.generated.yaml
