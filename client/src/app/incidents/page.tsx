@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Zap, Clock, ChevronRight, Loader2, CheckCircle2, AlertTriangle, Link2, GitMerge } from 'lucide-react';
+import { Clock, ChevronRight, Loader2, CheckCircle2, AlertTriangle, Link2, GitMerge } from 'lucide-react';
 import { 
   Incident, 
   incidentsService 
@@ -146,8 +146,7 @@ export default function IncidentsPage() {
   return (
     <div className="max-w-4xl mx-auto py-8 px-4">
       <div className="mb-8">
-        <h1 className="text-3xl font-bold flex items-center gap-2">
-          <Zap className="h-6 w-6 text-foreground" />
+        <h1 className="text-3xl font-bold">
           Incidents
         </h1>
       </div>
