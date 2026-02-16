@@ -61,9 +61,10 @@ build:
 	docker compose build
 
 down:
-	@for ep in $$(docker network inspect aurora_default -f '{{range .Containers}}{{.Name}} {{end}}' 2>/dev/null); do docker network disconnect -f aurora_default $$ep 2>/dev/null; done; true
-	@docker compose down --remove-orphans
+	@docker compose down --remove-orphans 2>/dev/null || true
 	@docker compose -f docker-compose.prod-local.yml down --remove-orphans 2>/dev/null || true
+	@for ep in $$(docker network inspect aurora_default -f '{{range .Containers}}{{.Name}} {{end}}' 2>/dev/null); do docker network disconnect -f aurora_default $$ep 2>/dev/null; done; true
+	@docker network rm aurora_default 2>/dev/null || true
 
 logs:
 	@if [ -z "$(filter-out $@,$(MAKECMDGOALS))" ]; then \
@@ -165,6 +166,8 @@ prod-prebuilt:
 	@docker tag ghcr.io/arvo-ai/aurora-server:latest aurora_chatbot:latest
 	@docker tag ghcr.io/arvo-ai/aurora-frontend:latest aurora_frontend:latest
 	@echo "Starting Aurora in production mode (prebuilt images)..."
+	@docker compose -f docker-compose.prod-local.yml down --remove-orphans 2>/dev/null || true
+	@docker network rm aurora_default 2>/dev/null || true
 	@docker compose -f docker-compose.prod-local.yml up -d
 	@echo ""
 	@echo "✓ Aurora is starting! Services will be available at:"
