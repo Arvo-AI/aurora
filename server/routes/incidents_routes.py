@@ -339,6 +339,9 @@ def get_incident(incident_id: str):
                 source_type = incident["sourceType"]
                 source_alert_id = incident["sourceAlertId"]
                 raw_payload = None
+                
+                # Note: For demo incidents, queries below check alert_metadata->>'is_demo'
+                # to allow any user to see the source payload
 
                 logger.debug(
                     "[INCIDENTS] Fetching raw payload for incident %s: source_type=%s, source_alert_id=%s",
@@ -353,8 +356,12 @@ def get_incident(incident_id: str):
                     try:
                         alert_id_int = int(source_alert_id)
                         cursor.execute(
-                            "SELECT payload FROM netdata_alerts WHERE id = %s AND user_id = %s",
-                            (alert_id_int, user_id),
+                            """SELECT payload FROM netdata_alerts WHERE id = %s
+                               AND (user_id = %s OR EXISTS (
+                                   SELECT 1 FROM incidents WHERE id = %s
+                                   AND (alert_metadata->>'is_demo')::boolean = true
+                               ))""",
+                            (alert_id_int, user_id, incident_id),
                         )
                         alert_row = cursor.fetchone()
                         if alert_row and alert_row[0] is not None:
@@ -374,8 +381,12 @@ def get_incident(incident_id: str):
                     try:
                         alert_id_int = int(source_alert_id)
                         cursor.execute(
-                            "SELECT payload FROM grafana_alerts WHERE id = %s AND user_id = %s",
-                            (alert_id_int, user_id),
+                            """SELECT payload FROM grafana_alerts WHERE id = %s
+                               AND (user_id = %s OR EXISTS (
+                                   SELECT 1 FROM incidents WHERE id = %s
+                                   AND (alert_metadata->>'is_demo')::boolean = true
+                               ))""",
+                            (alert_id_int, user_id, incident_id),
                         )
                         alert_row = cursor.fetchone()
                         if alert_row:

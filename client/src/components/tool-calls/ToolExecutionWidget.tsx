@@ -192,7 +192,7 @@ const ToolExecutionWidget = ({ tool, className, sendMessage, sendRaw, onToolUpda
   }
 
   // terminal_exec parsing - extract command from input or output
-  if (tool.tool_name === "terminal_exec") {
+  if (tool.tool_name === "terminal_exec" && !tool.command) {
     try {
       const str = tool.output || normalizedInput
       if (str) {
@@ -204,7 +204,7 @@ const ToolExecutionWidget = ({ tool, className, sendMessage, sendRaw, onToolUpda
     }
   }
   // on_prem_kubectl parsing
-  else if (tool.tool_name === "on_prem_kubectl") {
+  else if (tool.tool_name === "on_prem_kubectl" && !tool.command) {
     try {
       const str = tool.output || normalizedInput
       if (str) {
@@ -215,8 +215,8 @@ const ToolExecutionWidget = ({ tool, className, sendMessage, sendRaw, onToolUpda
       // Keep default
     }
   }
-  // cloud_exec parsing
-  else if (tool.tool_name === "cloud_exec") {
+  // cloud_exec parsing (skip if tool.command already provides a clean command)
+  else if (tool.tool_name === "cloud_exec" && !tool.command) {
     const parsed = parseCloudExecCommand(normalizedInput, tool.output, defaultCliCommand)
     command = parsed.command
   }
