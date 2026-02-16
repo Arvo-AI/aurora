@@ -397,8 +397,12 @@ def get_incident(incident_id: str):
                     try:
                         alert_id_int = int(source_alert_id)
                         cursor.execute(
-                            "SELECT payload FROM datadog_events WHERE id = %s AND user_id = %s",
-                            (alert_id_int, user_id),
+                            """SELECT payload FROM datadog_events WHERE id = %s
+                               AND (user_id = %s OR EXISTS (
+                                   SELECT 1 FROM incidents WHERE id = %s
+                                   AND (alert_metadata->>'is_demo')::boolean = true
+                               ))""",
+                            (alert_id_int, user_id, incident_id),
                         )
                         alert_row = cursor.fetchone()
                         if alert_row and alert_row[0] is not None:

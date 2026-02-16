@@ -54,6 +54,16 @@ else
     echo "       WARNING: SQL import had errors (may be harmless)"
 fi
 
+# Import additional demo incidents
+if [ -f "$SCRIPT_DIR/demo-incident-2.sql" ]; then
+    echo "       Importing demo incident 2..."
+    if psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" < "$SCRIPT_DIR/demo-incident-2.sql" >/dev/null 2>&1; then
+        echo "       Done"
+    else
+        echo "       WARNING: Demo incident 2 import had errors"
+    fi
+fi
+
 # Extract Weaviate data
 echo "[2/3] Restoring Weaviate vector data..."
 if [ -d "/var/lib/weaviate" ]; then
@@ -82,8 +92,9 @@ echo "       Done"
 
 echo ""
 echo "Demo data restore complete!"
-echo "  - Demo incident: 'Database connection pool exhausted - payment-service'"
-echo "  - Source: PagerDuty"
-echo "  - Status: Fully analyzed with RCA, thoughts, suggestions"
-echo "  - Access: Sign up at http://localhost:3000 to view the incident"
+echo "  - Demo incident 1: 'Database connection pool exhausted - payment-service'"
+echo "    Source: PagerDuty | Cloud: GCP/GKE | Tools: Splunk, GitHub, Terminal"
+echo "  - Demo incident 2: 'Memory leak causing OOMKilled pods - checkout-service'"
+echo "    Source: Datadog | Cloud: AWS/EKS | Tools: kubectl, AWS CLI, GitHub, Web Search"
+echo "  - Access: Sign up at http://localhost:3000 to view the incidents"
 echo ""
