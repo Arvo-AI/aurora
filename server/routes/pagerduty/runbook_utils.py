@@ -137,10 +137,15 @@ def fetch_and_consolidate_pagerduty_events(
     cursor.execute(
         """
         SELECT event_type, payload FROM pagerduty_events 
-        WHERE user_id = %s AND incident_id = %s
+        WHERE incident_id = %s
+        AND (user_id = %s OR EXISTS (
+            SELECT 1 FROM incidents 
+            WHERE incidents.alert_metadata->>'incidentId' = pagerduty_events.incident_id
+            AND (incidents.alert_metadata->>'is_demo')::boolean = true
+        ))
         ORDER BY received_at ASC
         """,
-        (user_id, incident_id),
+        (incident_id, user_id),
     )
     events = cursor.fetchall()
 

@@ -261,7 +261,8 @@ def get_incidents():
                         i.alert_title, i.alert_service, i.alert_environment, i.aurora_status, i.aurora_summary,
                         i.aurora_chat_session_id, i.started_at, i.analyzed_at, i.active_tab, i.created_at, i.updated_at,
                         i.alert_metadata, i.correlated_alert_count, i.affected_services,
-                        i.merged_into_incident_id, target.alert_title as merged_into_title
+                        i.merged_into_incident_id, target.alert_title as merged_into_title,
+                        i.visualization_code, i.visualization_updated_at
                     FROM incidents i
                     LEFT JOIN incidents target ON i.merged_into_incident_id = target.id
                     WHERE i.status != 'merged'
@@ -632,10 +633,15 @@ def get_incident(incident_id: str):
                 try:
                     cursor.execute(
                         """
-                        SELECT id, title, messages, status, created_at, updated_at
-                        FROM chat_sessions
-                        WHERE incident_id = %s AND user_id = %s AND is_active = true
-                        ORDER BY created_at ASC
+                        SELECT cs.id, cs.title, cs.messages, cs.status, cs.created_at, cs.updated_at
+                        FROM chat_sessions cs
+                        WHERE cs.incident_id = %s AND cs.is_active = true
+                        AND (cs.user_id = %s OR EXISTS (
+                            SELECT 1 FROM incidents i 
+                            WHERE i.id = cs.incident_id 
+                            AND (i.alert_metadata->>'is_demo')::boolean = true
+                        ))
+                        ORDER BY cs.created_at ASC
                         """,
                         (incident_id, user_id),
                     )

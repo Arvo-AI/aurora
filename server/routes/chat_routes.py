@@ -62,13 +62,17 @@ def get_chat_sessions():
         conn.commit()
         
         # Fetch chat sessions ordered by updated_at descending
+        # Include both user's own sessions and demo incident sessions
         cursor.execute("""
             SELECT id, title, created_at, updated_at, 
                    CASE WHEN messages IS NULL THEN '[]'::jsonb ELSE messages END as messages,
                    CASE WHEN ui_state IS NULL THEN '{}'::jsonb ELSE ui_state END as ui_state,
                    COALESCE(status, 'active') as status
             FROM chat_sessions 
-            WHERE user_id = %s AND is_active = true
+            WHERE (user_id = %s OR incident_id IN (
+                      SELECT id FROM incidents WHERE (alert_metadata->>'is_demo')::boolean = true
+                  ))
+              AND is_active = true
             ORDER BY updated_at DESC
         """, (user_id,))
         
@@ -181,12 +185,18 @@ def get_chat_session(session_id):
         conn.commit()
         
         # Fetch specific chat session (allow completed, but not cancelled)
+        # Allow demo incident chat sessions to be visible to all users
         cursor.execute("""
             SELECT id, title, messages, created_at, updated_at,
                    CASE WHEN ui_state IS NULL THEN '{}'::jsonb ELSE ui_state END as ui_state,
                    COALESCE(status, 'active') as status
             FROM chat_sessions 
-            WHERE id = %s AND user_id = %s AND is_active = true AND status != 'cancelled'
+            WHERE id = %s 
+              AND (user_id = %s OR incident_id IN (
+                  SELECT id FROM incidents WHERE (alert_metadata->>'is_demo')::boolean = true
+              ))
+              AND is_active = true 
+              AND status != 'cancelled'
         """, (session_id, user_id))
         
         session_data = cursor.fetchone()
