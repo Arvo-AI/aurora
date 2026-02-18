@@ -243,20 +243,18 @@ def ovh_oauth2_callback():
         )
 
         if not token_response.ok:
-            # Log the actual error response from OVH for debugging
+            # Log only status code and error type, not full response body (may contain secrets)
             error_message = f"Token exchange failed: {token_response.status_code}"
             error_code = None
             try:
                 error_details = token_response.json()
-                logger.error(f"OVH token exchange error: {error_details}")
-                if 'error' in error_details:
-                    error_code = error_details['error']
+                error_code = error_details.get('error')
+                error_description = error_details.get('error_description', '')
+                logger.error(f"OVH token exchange error: status={token_response.status_code}, error={error_code}, description={error_description}")
+                if error_code:
                     error_message = error_code
-            except:
-                error_details = token_response.text
-                logger.error(f"OVH token exchange error (text): {error_details}")
-
-            logger.error(f"Token exchange failed: {token_response.status_code}")
+            except Exception:
+                logger.error(f"OVH token exchange error: status={token_response.status_code} (non-JSON response)")
 
             if is_get_request:
                 return redirect(f"{frontend_url}/ovh/onboarding?error={error_code or 'token_exchange_failed'}")
