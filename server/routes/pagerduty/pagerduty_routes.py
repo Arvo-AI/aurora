@@ -164,7 +164,7 @@ def oauth_callback():
     callback_url = f"{FRONTEND_URL}/pagerduty/auth/callback"
     
     if error or not code or not state:
-        return redirect(f"{callback_url}?oauth=failed&error={error or 'invalid'}")
+        return redirect(f"{callback_url}?oauth=failed&error={urllib.parse.quote(error or 'invalid')}")
     
     try:
         user_id = urllib.parse.unquote(state)
