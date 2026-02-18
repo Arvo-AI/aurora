@@ -583,7 +583,7 @@ class WebSearchService:
             logger.warning(f"BeautifulSoup extraction failed, falling back to simple parsing: {e}")
         
         # Fallback to simple extraction
-        html = re.sub(r'<script[^>]*>.*?</script>', '', html, flags=re.DOTALL | re.IGNORECASE)
+        html = re.sub(r'<script[^>]*>.*?</script\s*>', '', html, flags=re.DOTALL | re.IGNORECASE)
         html = re.sub(r'<style[^>]*>.*?</style>', '', html, flags=re.DOTALL | re.IGNORECASE)
         text = re.sub(r'<[^>]+>', ' ', html)
         text = ' '.join(text.split())

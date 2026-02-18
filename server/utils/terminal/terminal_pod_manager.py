@@ -58,13 +58,32 @@ class TerminalPodManager:
     
     def generate_pod_name(self, user_id: str, session_id: str) -> str:
         """Generate pod name from user_id and session_id.
-        
+
         Each chat session gets a unique pod for complete isolation.
         """
         combined = f"{user_id}-{session_id}"
-        name_hash = hashlib.md5(combined.encode()).hexdigest()[:8]
+        name_hash = hashlib.sha256(combined.encode()).hexdigest()[:8]
         return f"terminal-conv-{name_hash}"
-    
+
+    def _generate_legacy_pod_name(self, user_id: str, session_id: str) -> str:
+        """Generate legacy pod name using md5 (for migration from md5 to sha256)."""
+        combined = f"{user_id}-{session_id}"
+        name_hash = hashlib.md5(combined.encode(), usedforsecurity=False).hexdigest()[:8]
+        return f"terminal-conv-{name_hash}"
+
+    def _find_running_pod(self, user_id: str, session_id: str) -> Optional[str]:
+        """Find a running/pending pod, checking both sha256 (current) and md5 (legacy) names."""
+        for pod_name in [self.generate_pod_name(user_id, session_id),
+                         self._generate_legacy_pod_name(user_id, session_id)]:
+            try:
+                pod = self.core_v1.read_namespaced_pod(pod_name, self.namespace)
+                if pod.status.phase in ["Running", "Pending"]:
+                    return pod_name
+            except ApiException as e:
+                if e.status != 404:
+                    logger.warning(f"Error checking pod {pod_name}: {e}")
+        return None
+
     def create_terminal_pod(
         self,
         user_id: str,
@@ -83,25 +102,28 @@ class TerminalPodManager:
         Returns:
             Tuple of (success, pod_info_dict)
         """
+        # Check for existing running pod (sha256 first, then legacy md5)
+        existing_name = self._find_running_pod(user_id, session_id)
+        if existing_name:
+            logger.info(f"Terminal pod {existing_name} already exists and is running")
+            return True, {
+                "pod_name": existing_name,
+                "status": "Running",
+                "namespace": self.namespace,
+                "already_exists": True
+            }
+
+        # New pods always use sha256
         pod_name = self.generate_pod_name(user_id, session_id)
-        
-        # Check if pod already exists
+
+        # Check if a non-running pod exists under the new name and clean it up
         try:
             existing_pod = self.core_v1.read_namespaced_pod(pod_name, self.namespace)
-            if existing_pod.status.phase in ["Running", "Pending"]:
-                logger.info(f"Terminal pod {pod_name} already exists with status {existing_pod.status.phase}")
-                return True, {
-                    "pod_name": pod_name,
-                    "status": existing_pod.status.phase,
-                    "namespace": self.namespace,
-                    "already_exists": True
-                }
-            
             # Delete failed/completed pod and create new one
             logger.info(f"Deleting old terminal pod {pod_name} with status {existing_pod.status.phase}")
             self.core_v1.delete_namespaced_pod(pod_name, self.namespace)
             time.sleep(2)
-        
+
         except ApiException as e:
             if e.status != 404:
                 logger.error(f"Error checking existing pod: {e}")
@@ -246,8 +268,8 @@ class TerminalPodManager:
             name=pod_name,
             labels={
                 "app": "user-terminal",
-                "user-id": hashlib.md5(user_id.encode()).hexdigest()[:16],
-                "session-id": hashlib.md5(session_id.encode()).hexdigest()[:16],
+                "user-id": hashlib.sha256(user_id.encode()).hexdigest()[:16],
+                "session-id": hashlib.sha256(session_id.encode()).hexdigest()[:16],
                 "managed-by": "terminal-pod-manager",
                 "created-at": current_timestamp
             },

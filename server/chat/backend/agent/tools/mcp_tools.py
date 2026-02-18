@@ -280,7 +280,9 @@ region = {aws_creds.get("region", "us-east-1")}
                         credentials_content += f"aws_session_token = {aws_creds.get('session_token', '')}\n"
                     
                     credentials_file = os.path.join(aws_dir, "credentials")
-                    with open(credentials_file, "w") as f:
+                    # Write credentials with restricted permissions (0600 = owner read/write only)
+                    fd = os.open(credentials_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+                    with os.fdopen(fd, "w") as f:
                         f.write(credentials_content)
                     
                     # Create config file
