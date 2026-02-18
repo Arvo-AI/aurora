@@ -249,8 +249,7 @@ def ovh_oauth2_callback():
             try:
                 error_details = token_response.json()
                 error_code = error_details.get('error')
-                error_description = error_details.get('error_description', '')
-                logger.error(f"OVH token exchange error: status={token_response.status_code}, error={error_code}, description={error_description}")
+                logger.error(f"OVH token exchange error: status={token_response.status_code}, error={error_code}")
                 if error_code:
                     error_message = error_code
             except Exception:
