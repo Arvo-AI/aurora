@@ -66,7 +66,7 @@ def check_aws_environment():
         })
         
     except Exception as e:
-        logger.error(f"Failed to check AWS environment: {e}")
+        logger.error(f"Failed to check AWS environment: {e}", exc_info=True)
         return jsonify({"error": "Internal server error"}), 500
 
 

@@ -33,7 +33,7 @@ def aws_setup_role_script():
         return jsonify({"error": "Role setup script not found"}), 404
     except Exception as e:
         logging.error("Error serving AWS role setup script", exc_info=e)
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": "Failed to serve setup script"}), 500
 
 
 @aws_bp.route("/setup-script-ps1", methods=["GET", "OPTIONS"])
@@ -60,4 +60,4 @@ def aws_setup_role_script_ps1():
         return jsonify({"error": "PowerShell role setup script not found"}), 404
     except Exception as e:
         logging.error("Error serving AWS PS1 role setup script", exc_info=e)
-        return jsonify({"error": str(e)}), 500 
+        return jsonify({"error": "Failed to serve PowerShell setup script"}), 500

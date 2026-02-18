@@ -25,7 +25,7 @@ def billing():
         try:
             refresh_token_if_needed(user_id, provider)
         except Exception as e:
-            return jsonify({"error": "Token refresh failed", "details": str(e)}), 401
+            return jsonify({"error": "Token refresh failed"}), 401
 
         logging.info(f"Received user id:'{user_id}' successfully.")
         token_data = get_token_data(user_id, provider)
@@ -70,5 +70,5 @@ def billing():
             return jsonify({"message": "No projects with BigQuery API enabled were processed."}), 404
 
     except Exception as e:
-        logging.info(f"Error in billing: {e}")
-        return jsonify({"billing_error": str(e)}), 500
+        logging.error(f"Error in billing: {e}", exc_info=True)
+        return jsonify({"billing_error": "Failed to process billing"}), 500
