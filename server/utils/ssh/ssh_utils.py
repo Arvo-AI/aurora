@@ -273,7 +273,8 @@ def validate_and_test_ssh(
         # Parse the private key
         pkey = parse_private_key(private_key)
     except ValueError as e:
-        return False, str(e), None
+        logger.error(f"SSH key validation error: {e}")
+        return False, "Invalid private key format", None
 
     bastion_client = None
     ssh = None

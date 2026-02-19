@@ -221,7 +221,7 @@ def set_aws_role(workspace_id):
                 )
                 return jsonify({
                     "error": "Read-only role assumption failed",
-                    "message": str(read_only_error),
+                    "message": "Could not assume the specified read-only role. Please verify the role ARN and trust policy.",
                     "details": {
                         "role_arn": read_only_role_arn,
                         "external_id": workspace['aws_external_id'],
