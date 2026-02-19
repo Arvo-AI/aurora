@@ -51,8 +51,8 @@ def check_database_health():
 
         return {"status": "healthy", "message": "Database connection successful"}
     except Exception as e:
-        logger.warning(f"Database health check failed: {e}")
-        return {"status": "unhealthy", "error": str(e)}
+        logger.warning(f"Database health check failed: {e}", exc_info=True)
+        return {"status": "unhealthy", "error": "Database connection failed"}
 
 def check_redis_health():
     """Check Redis connectivity."""
@@ -64,8 +64,8 @@ def check_redis_health():
         r.ping()
         return {"status": "healthy", "message": "Redis connection successful"}
     except Exception as e:
-        logger.warning(f"Redis health check failed: {e}")
-        return {"status": "unhealthy", "error": str(e)}
+        logger.warning(f"Redis health check failed: {e}", exc_info=True)
+        return {"status": "unhealthy", "error": "Redis connection failed"}
 
 def check_weaviate_health():
     """Check Weaviate vector database connectivity."""
@@ -77,10 +77,10 @@ def check_weaviate_health():
         return {"status": "healthy", "message": "Weaviate connection successful"}
     except requests.RequestException as e:
         logger.warning(f"Weaviate health check failed: {e}")
-        return {"status": "unhealthy", "error": f"HTTP error: {e}"}
+        return {"status": "unhealthy", "error": "Weaviate HTTP connection failed"}
     except Exception as e:
         logger.warning(f"Weaviate health check failed: {e}")
-        return {"status": "unhealthy", "error": str(e)}
+        return {"status": "unhealthy", "error": "Weaviate health check failed"}
 
 def check_celery_health():
     """Check Celery worker health."""
@@ -96,7 +96,7 @@ def check_celery_health():
             return {"status": "degraded", "warning": "No active Celery workers found"}
     except Exception as e:
         logger.warning(f"Celery health check failed: {e}")
-        return {"status": "unhealthy", "error": str(e)}
+        return {"status": "unhealthy", "error": "Celery health check failed"}
 
 async def send_chatbot_test_message():
     """Send a test message to the chatbot and verify the response."""
@@ -135,9 +135,9 @@ async def send_chatbot_test_message():
     except asyncio.TimeoutError:
         return {"status": "unhealthy", "error": "Timeout waiting for chatbot response"}
     except websockets.exceptions.ConnectionClosed as e:
-        return {"status": "unhealthy", "error": f"Chatbot connection closed unexpectedly: {e}"}
+        return {"status": "unhealthy", "error": "Chatbot connection closed unexpectedly"}
     except Exception as e:
-        return {"status": "unhealthy", "error": f"An error occurred during chatbot health check: {e}"}
+        return {"status": "unhealthy", "error": "Chatbot health check failed"}
 
 def check_chatbot_websocket():
     """Check chatbot WebSocket service by sending a test message."""
@@ -145,7 +145,7 @@ def check_chatbot_websocket():
         return asyncio.run(send_chatbot_test_message())
     except Exception as e:
         logger.warning(f"Chatbot health check failed: {e}")
-        return {"status": "unhealthy", "error": str(e)}
+        return {"status": "unhealthy", "error": "Chatbot WebSocket health check failed"}
 
 
 @health_bp.route('/', methods=['GET'])

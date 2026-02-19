@@ -291,7 +291,7 @@ def scaleway_status():
         })
         
     except Exception as e:
-        logger.error(f"Error checking Scaleway status: {e}")
+        logger.error(f"Error checking Scaleway status: {e}", exc_info=True)
         # On exception, assume connected if has creds (don't delete on errors)
         has_creds = has_user_credentials(user_id, "scaleway") if user_id else False
         return jsonify({"connected": has_creds, "provider": "scaleway"}), 200
@@ -562,7 +562,7 @@ def save_scaleway_ssh_keys(server_id):
                 if not is_valid:
                     return jsonify({"error": error_msg}), 400
             except ValueError as e:
-                return jsonify({"error": str(e)}), 400
+                return jsonify({"error": "Invalid private key format"}), 400
         
         logger.info(f"Received private key for server {server_id}, length: {len(private_key)} chars")
         

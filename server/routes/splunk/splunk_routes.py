@@ -49,8 +49,9 @@ class SplunkClient:
             url = "https://" + url
 
         # Remove any trailing paths (like /en-US/ from web UI URLs)
-        url = re.sub(r"(/en-[A-Z]{2})?(/app/.*)?(/services/.*)?$", "", url, flags=re.IGNORECASE)
-        url = url.rstrip("/")
+        from urllib.parse import urlparse, urlunparse
+        parsed = urlparse(url)
+        url = urlunparse((parsed.scheme, parsed.netloc, "", "", "", ""))
 
         # Validate URL format (allow various ports for Enterprise/Cloud)
         if not re.match(r"^https?://[A-Za-z0-9._-]+(:[0-9]{2,5})?$", url):
@@ -154,7 +155,8 @@ def connect():
         server_info = client.get_server_info()
         user_context = client.get_current_user()
     except SplunkAPIError as exc:
-        return jsonify({"error": str(exc)}), 502
+        logger.error(f"[SPLUNK] Connection validation failed for user {user_id}: {exc}")
+        return jsonify({"error": "Failed to validate Splunk credentials"}), 502
 
     # Extract server details
     entry = server_info.get("entry", [{}])[0] if server_info.get("entry") else {}
@@ -224,7 +226,7 @@ def status():
         user_context = client.get_current_user()
     except SplunkAPIError as exc:
         logger.warning(f"[SPLUNK] Status check failed for user {user_id}: {exc}")
-        return jsonify({"connected": False, "error": str(exc)})
+        return jsonify({"connected": False, "error": "Failed to validate stored Splunk credentials"})
 
     entry = server_info.get("entry", [{}])[0] if server_info.get("entry") else {}
     content = entry.get("content", {})

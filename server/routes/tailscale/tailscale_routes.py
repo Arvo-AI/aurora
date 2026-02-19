@@ -277,7 +277,7 @@ def tailscale_status():
         return jsonify(response)
 
     except Exception as e:
-        logger.error(f"Error checking Tailscale status: {e}")
+        logger.error(f"Error checking Tailscale status: {e}", exc_info=True)
         return jsonify({"connected": False}), 200
 
 
