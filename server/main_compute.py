@@ -365,4 +365,4 @@ if __name__ == "__main__":
     # Port configurable via FLASK_PORT env var (set in .env file)
     # Note: Default is 5080 to avoid conflict with macOS AirPlay Receiver (port 5000)
     port = int(os.getenv("FLASK_PORT"))
-    app.run(host="0.0.0.0", port=port, debug=os.getenv("FLASK_DEBUG", "false").lower() == "true")
+    app.run(host="0.0.0.0", port=port, debug=False)
