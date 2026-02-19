@@ -290,7 +290,7 @@ def github_callback():
                               frontend_url=FRONTEND_URL)
     
     except Exception as e:
-        logging.error(f"Error during GitHub callback: {e}")
+        logging.error(f"Error during GitHub callback: {e}", exc_info=True)
         return flask.render_template("github_callback_error.html",
                                     error="An unexpected error occurred during GitHub authentication",
                                     frontend_url=FRONTEND_URL)

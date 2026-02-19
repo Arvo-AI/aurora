@@ -25,6 +25,7 @@ def billing():
         try:
             refresh_token_if_needed(user_id, provider)
         except Exception as e:
+            logging.error(f"Token refresh failed: {e}", exc_info=True)
             return jsonify({"error": "Token refresh failed"}), 401
 
         logging.info(f"Received user id:'{user_id}' successfully.")
