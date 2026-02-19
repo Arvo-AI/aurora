@@ -227,6 +227,10 @@ import routes.splunk.tasks  # noqa: F401
 app.register_blueprint(splunk_bp, url_prefix="/splunk")
 app.register_blueprint(splunk_search_bp, url_prefix="/splunk")
 
+# --- Coroot Integration Routes ---
+from routes.coroot import bp as coroot_bp  # noqa: F401
+app.register_blueprint(coroot_bp, url_prefix="/coroot")
+
 # --- PagerDuty Integration Routes ---
 from routes.pagerduty.pagerduty_routes import pagerduty_bp  # noqa: F401
 app.register_blueprint(pagerduty_bp, url_prefix="/pagerduty")

@@ -5,37 +5,7 @@ import { useToast } from "@/hooks/use-toast";
 import { grafanaService, GrafanaStatus } from "@/lib/services/grafana";
 import { GrafanaConnectionStep } from "@/components/grafana/GrafanaConnectionStep";
 import { GrafanaWebhookStep } from "@/components/grafana/GrafanaWebhookStep";
-
-// Helper function to extract user-friendly error message (removes technical codes)
-const getUserFriendlyError = (err: any): string => {
-  if (!err) return "An unexpected error occurred. Please try again.";
-  
-  let errorText = "";
-  
-  // Extract error from JSON wrapper if present
-  if (typeof err.message === "string") {
-    try {
-      const parsed = JSON.parse(err.message);
-      errorText = parsed.error || err.message;
-    } catch {
-      errorText = err.message;
-    }
-  } else if (err.error) {
-    errorText = typeof err.error === "string" ? err.error : JSON.stringify(err.error);
-  } else {
-    errorText = err.message || err.toString() || "An unexpected error occurred";
-  }
-  
-  // Remove HTTP status codes (e.g., "401 Client Error:", "503 Server Error:")
-  errorText = errorText.replace(/^\d{3}\s+(Client|Server)\s+Error:\s*/i, "");
-  
-  // Capitalize first letter if it's lowercase
-  if (errorText.length > 0) {
-    errorText = errorText.charAt(0).toUpperCase() + errorText.slice(1);
-  }
-  
-  return errorText || "An unexpected error occurred. Please try again.";
-};
+import { getUserFriendlyError } from "@/lib/utils";
 
 // Cache keys for localStorage
 const CACHE_KEYS = {
