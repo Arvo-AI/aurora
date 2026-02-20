@@ -1,10 +1,6 @@
 // Kubectl Agent Configuration Constants
 // These values should match the Helm chart defaults in kubectl-agent/chart/values.yaml
 
-import { getEnv } from '@/lib/env';
-
-const DEFAULT_CHART_OCI_URL = "oci://gcr.io/sublime-flux-414616/helm/aurora-kubectl-agent";
-
 export const KUBECTL_AGENT = {
   // Default namespace (users can override with --namespace flag)
   DEFAULT_NAMESPACE: "default",
@@ -12,7 +8,7 @@ export const KUBECTL_AGENT = {
   // Pod labels from kubectl-agent/chart/values.yaml podLabels
   POD_LABEL_SELECTOR: "app=aurora-kubectl-agent",
   
-  CHART_OCI_URL: getEnv('NEXT_PUBLIC_KUBECTL_AGENT_CHART_URL') || DEFAULT_CHART_OCI_URL,
+  CHART_OCI_URL: "oci://gcr.io/sublime-flux-414616/helm/aurora-kubectl-agent",
   CHART_VERSION: "1.0.3",
   RELEASE_NAME: "aurora-kubectl-agent",
   
@@ -23,4 +19,3 @@ export const KUBECTL_AGENT = {
   STORAGE_KEY: "isKubectlConnected",
   COPY_FEEDBACK_DURATION: 1200,
 } as const;
-
