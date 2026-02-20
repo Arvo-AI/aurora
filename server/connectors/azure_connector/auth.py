@@ -150,12 +150,12 @@ def azure_login(data=None):
             })
 
         except Exception as e:
-            logging.error(f"Error validating Azure credentials: {str(e)}")
+            logging.error(f"Error validating Azure credentials: {e}", exc_info=True)
             return jsonify({"error": "Invalid Azure credentials"}), 401
 
     except Exception as e:
-        logging.error(f"Error in Azure login: {e}")
-        return jsonify({"error": str(e)}), 500
+        logging.error(f"Error in Azure login: {e}", exc_info=True)
+        return jsonify({"error": "Failed to process Azure login"}), 500
 
 
 

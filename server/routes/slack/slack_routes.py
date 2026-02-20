@@ -5,7 +5,6 @@ Handles OAuth flow, connection status, and disconnection.
 
 import logging
 import os
-import traceback
 import time
 from flask import Blueprint, request, jsonify, redirect
 import requests
@@ -70,7 +69,7 @@ def slack_connection():
         
         except Exception as e:
             logging.error(f"Error checking Slack status: {e}", exc_info=True)
-            return jsonify({"connected": False, "error": str(e)}), 500
+            return jsonify({"connected": False, "error": "Failed to check Slack status"}), 500
     
     elif method == "POST":
         # POST /slack - Initiate OAuth connection
@@ -83,7 +82,7 @@ def slack_connection():
             })
         except Exception as e:
             logging.error(f"Error initiating Slack OAuth: {e}", exc_info=True)
-            return jsonify({"error": str(e)}), 500
+            return jsonify({"error": "Failed to initiate Slack OAuth"}), 500
     
     elif method == "DELETE":
         # DELETE /slack - Disconnect
@@ -99,7 +98,7 @@ def slack_connection():
         
         except Exception as e:
             logging.error(f"Error disconnecting Slack: {e}", exc_info=True)
-            return jsonify({"error": str(e)}), 500
+            return jsonify({"error": "Failed to disconnect Slack"}), 500
     
     else:
         return jsonify({"error": "Method not allowed"}), 405
@@ -201,5 +200,5 @@ def list_channels():
         
     except Exception as e:
         logging.error(f"Error listing Slack channels: {e}", exc_info=True)
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": "Failed to list Slack channels"}), 500
 

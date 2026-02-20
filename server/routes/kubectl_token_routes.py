@@ -65,8 +65,8 @@ def create_token(user_id):
             'message': 'Token created successfully. Save this token - it will only be shown once!'
         }), 201
     except Exception as e:
-        logger.error(f"Error creating kubectl token: {e}")
-        return jsonify({'error': 'Failed to create token', 'details': str(e)}), 500
+        logger.error(f"Error creating kubectl token: {e}", exc_info=True)
+        return jsonify({'error': 'Failed to create token'}), 500
 
 @kubectl_token_bp.route('/api/kubectl/tokens', methods=['GET'])
 @require_auth
@@ -91,8 +91,8 @@ def list_tokens(user_id):
             token['expires_at'] = _to_iso(token['expires_at'])
         return jsonify({'tokens': tokens}), 200
     except Exception as e:
-        logger.error(f"Error listing kubectl tokens: {e}")
-        return jsonify({'error': 'Failed to list tokens', 'details': str(e)}), 500
+        logger.error(f"Error listing kubectl tokens: {e}", exc_info=True)
+        return jsonify({'error': 'Failed to list tokens'}), 500
 
 @kubectl_token_bp.route('/api/kubectl/connections', methods=['GET'])
 @require_auth
@@ -119,8 +119,8 @@ def list_connections(user_id):
             conn_data['last_heartbeat'] = _to_iso(conn_data['last_heartbeat'])
         return jsonify({'connections': connections}), 200
     except Exception as e:
-        logger.error(f"Error listing kubectl connections: {e}")
-        return jsonify({'error': 'Failed to list connections', 'details': str(e)}), 500
+        logger.error(f"Error listing kubectl connections: {e}", exc_info=True)
+        return jsonify({'error': 'Failed to list connections'}), 500
 
 @kubectl_token_bp.route('/api/kubectl/connections/<cluster_id>', methods=['DELETE'])
 @require_auth
@@ -164,5 +164,5 @@ def disconnect_cluster(user_id, cluster_id):
             'message': 'Token revoked successfully'
         }), 200
     except Exception as e:
-        logger.error(f"Error disconnecting kubectl cluster: {e}")
-        return jsonify({'error': 'Failed to disconnect cluster', 'details': str(e)}), 500
+        logger.error(f"Error disconnecting kubectl cluster: {e}", exc_info=True)
+        return jsonify({'error': 'Failed to disconnect cluster'}), 500

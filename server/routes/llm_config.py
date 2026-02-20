@@ -54,8 +54,8 @@ def get_llm_providers():
         ), 200
 
     except Exception as e:
-        logger.error(f"Error getting provider info: {e}")
-        return jsonify({"success": False, "error": str(e)}), 500
+        logger.error(f"Error getting provider info: {e}", exc_info=True)
+        return jsonify({"success": False, "error": "Failed to get provider information"}), 500
 
 
 @llm_config_bp.route("/provider-details", methods=["GET"])
@@ -89,8 +89,8 @@ def get_provider_details():
         ), 200
 
     except Exception as e:
-        logger.error(f"Error getting provider details: {e}")
-        return jsonify({"success": False, "error": str(e)}), 500
+        logger.error(f"Error getting provider details: {e}", exc_info=True)
+        return jsonify({"success": False, "error": "Failed to get provider details"}), 500
 
 
 @llm_config_bp.route("/test-provider", methods=["POST"])
@@ -151,7 +151,7 @@ def test_provider():
             except Exception as e:
                 logger.error(f"Failed to create {provider_name} model: {e}")
                 return jsonify(
-                    {"success": False, "error": f"Failed to initialize model: {str(e)}"}
+                    {"success": False, "error": "Failed to initialize model"}
                 ), 500
 
         return jsonify(
@@ -164,8 +164,8 @@ def test_provider():
         ), 200
 
     except Exception as e:
-        logger.error(f"Error testing provider: {e}")
-        return jsonify({"success": False, "error": str(e)}), 500
+        logger.error(f"Error testing provider: {e}", exc_info=True)
+        return jsonify({"success": False, "error": "Failed to test provider"}), 500
 
 
 @llm_config_bp.route("/model-info", methods=["GET"])
@@ -216,8 +216,8 @@ def get_model_info():
         ), 200
 
     except Exception as e:
-        logger.error(f"Error getting model info: {e}")
-        return jsonify({"success": False, "error": str(e)}), 500
+        logger.error(f"Error getting model info: {e}", exc_info=True)
+        return jsonify({"success": False, "error": "Failed to get model info"}), 500
 
 
 @llm_config_bp.route("/supported-models", methods=["GET"])
@@ -254,5 +254,5 @@ def get_supported_models():
             ), 200
 
     except Exception as e:
-        logger.error(f"Error getting supported models: {e}")
-        return jsonify({"success": False, "error": str(e)}), 500
+        logger.error(f"Error getting supported models: {e}", exc_info=True)
+        return jsonify({"success": False, "error": "Failed to get supported models"}), 500

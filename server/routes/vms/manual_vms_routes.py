@@ -116,7 +116,7 @@ def create_manual_vm():
             if error_msg:
                 return jsonify({"error": error_msg}), 400
     except ValueError as exc:
-        return jsonify({"error": str(exc)}), 400
+        return jsonify({"error": "Invalid input parameters"}), 400
 
     with db_pool.get_user_connection() as conn:
         with conn.cursor() as cur:
@@ -185,7 +185,7 @@ def update_manual_vm(vm_id: int):
             if error_msg:
                 return jsonify({"error": error_msg}), 400
     except ValueError as exc:
-        return jsonify({"error": str(exc)}), 400
+        return jsonify({"error": "Invalid input parameters"}), 400
 
     updates = []
     params = []
@@ -332,7 +332,7 @@ def check_manual_vm_connection():
         if error_msg:
             return jsonify({"error": error_msg}), 400
     except ValueError as exc:
-        return jsonify({"error": str(exc)}), 400
+        return jsonify({"error": "Invalid input parameters"}), 400
 
     try:
         success, error_msg, connected_as = validate_and_test_ssh(

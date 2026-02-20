@@ -121,7 +121,7 @@ def get_connected_accounts(user_id):
         return jsonify({"accounts": accounts})
     
     except Exception as e:
-        logging.error(f"Error getting connected accounts: {e}")
+        logging.error(f"Error getting connected accounts: {e}", exc_info=True)
         return jsonify({"error": "Failed to get connected accounts"}), 500
 
 
@@ -281,7 +281,7 @@ def delete_connected_account(user_id, provider):
         return jsonify({"success": True, "message": f"Removed {provider} credentials"}), 200
 
     except Exception as e:
-        logging.error(f"Error deleting connected account for {user_id}/{provider}: {e}")
+        logging.error(f"Error deleting connected account for {user_id}/{provider}: {e}", exc_info=True)
         return jsonify({"error": "Failed to delete connected account"}), 500
 
 
@@ -303,7 +303,7 @@ def get_user_id():
         return jsonify({"userId": user_id}), 200
         
     except Exception as e:
-        logging.error(f"Error getting user ID: {e}")
+        logging.error(f"Error getting user ID: {e}", exc_info=True)
         return jsonify({"error": "Failed to get user ID"}), 500
 
 
@@ -387,10 +387,8 @@ def get_user_tokens():
         return jsonify(formatted_tokens), 200
 
     except Exception as e:
-        logging.error(f"Error fetching user tokens: {e}")
-        import traceback
-        logging.error(f"Traceback: {traceback.format_exc()}")
-        return jsonify({"error": str(e)}), 500
+        logging.error(f"Error fetching user tokens: {e}", exc_info=True)
+        return jsonify({"error": "Failed to fetch user tokens"}), 500
     finally:
         if cursor:
             cursor.close()
