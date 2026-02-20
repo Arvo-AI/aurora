@@ -10,9 +10,10 @@ import { Label } from "@/components/ui/label";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { useToast } from "@/hooks/use-toast";
 import { KUBECTL_AGENT } from "@/lib/kubectl-constants";
+import { getEnv } from '@/lib/env';
 
-const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || '';
-const wsUrl = process.env.NEXT_PUBLIC_WEBSOCKET_URL || '';
+const backendUrl = getEnv('NEXT_PUBLIC_BACKEND_URL') || '';
+const wsUrl = getEnv('NEXT_PUBLIC_WEBSOCKET_URL') || '';
 const wsEndpoint = wsUrl || backendUrl.replace(/^https?:\/\//, 'wss://').replace(/^http:\/\//, 'ws://');
 
 const getHelmInstallCommand = (token: string) => `helm install ${KUBECTL_AGENT.RELEASE_NAME} ${KUBECTL_AGENT.CHART_OCI_URL} \\

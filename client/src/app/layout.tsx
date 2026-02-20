@@ -15,7 +15,7 @@ export default function RootLayout({
   return (
     <html lang="en" className="h-full" suppressHydrationWarning>
       <head>
-        {/* reCAPTCHA temporarily disabled */}
+        <script src="/env-config.js" />
       </head>
       <body className={`${inter.className} antialiased h-full`}>
         <SessionProvider>

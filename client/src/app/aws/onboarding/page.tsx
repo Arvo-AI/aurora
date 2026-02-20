@@ -14,8 +14,9 @@ import {
   Info
 } from 'lucide-react';
 import { Alert, AlertDescription } from '@/components/ui/alert';
+import { getEnv } from '@/lib/env';
 
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5080';
+const BACKEND_URL = getEnv('NEXT_PUBLIC_BACKEND_URL');
 
 interface OnboardingData {
   workspaceId: string;
