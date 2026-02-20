@@ -27,6 +27,7 @@ help:
 	@echo "Local Production (for testing/evaluation):"
 	@echo "  make init              - First-time setup (generates secrets, initializes Vault)"
 	@echo "  make prod-prebuilt      - Pull prebuilt images from GHCR and start (no build)"
+	@echo "                            Use VERSION=v1.2.3 to pin a specific release"
 	@echo "  make prod-local         - Build from source and start"
 	@echo "  make prod-local-logs    - Show logs for production containers"
 	@echo "  make down               - Stop production containers (same as dev)"
@@ -61,9 +62,10 @@ build:
 	docker compose build
 
 down:
-	@for ep in $$(docker network inspect aurora_default -f '{{range .Containers}}{{.Name}} {{end}}' 2>/dev/null); do docker network disconnect -f aurora_default $$ep 2>/dev/null; done; true
-	@docker compose down --remove-orphans
+	@docker compose down --remove-orphans 2>/dev/null || true
 	@docker compose -f docker-compose.prod-local.yml down --remove-orphans 2>/dev/null || true
+	@for ep in $$(docker network inspect aurora_default -f '{{range .Containers}}{{.Name}} {{end}}' 2>/dev/null); do docker network disconnect -f aurora_default $$ep 2>/dev/null; done; true
+	@docker network rm aurora_default 2>/dev/null || true
 
 logs:
 	@if [ -z "$(filter-out $@,$(MAKECMDGOALS))" ]; then \
@@ -155,16 +157,19 @@ prod-prebuilt:
 		echo "Error: Secrets not generated. Run 'make init' first."; \
 		exit 1; \
 	fi
-	@echo "Pulling prebuilt images from GHCR..."
-	@docker pull ghcr.io/arvo-ai/aurora-server:latest
-	@docker pull ghcr.io/arvo-ai/aurora-frontend:latest
-	@echo "Tagging images for docker compose..."
-	@docker tag ghcr.io/arvo-ai/aurora-server:latest aurora_server:latest
-	@docker tag ghcr.io/arvo-ai/aurora-server:latest aurora_celery-worker:latest
-	@docker tag ghcr.io/arvo-ai/aurora-server:latest aurora_celery-beat:latest
-	@docker tag ghcr.io/arvo-ai/aurora-server:latest aurora_chatbot:latest
-	@docker tag ghcr.io/arvo-ai/aurora-frontend:latest aurora_frontend:latest
+	@TAG=$${VERSION:-latest}; \
+	echo "Pulling prebuilt images from GHCR (tag: $$TAG)..."; \
+	docker pull ghcr.io/arvo-ai/aurora-server:$$TAG; \
+	docker pull ghcr.io/arvo-ai/aurora-frontend:$$TAG; \
+	echo "Tagging images for docker compose..."; \
+	docker tag ghcr.io/arvo-ai/aurora-server:$$TAG aurora_server:latest; \
+	docker tag ghcr.io/arvo-ai/aurora-server:$$TAG aurora_celery-worker:latest; \
+	docker tag ghcr.io/arvo-ai/aurora-server:$$TAG aurora_celery-beat:latest; \
+	docker tag ghcr.io/arvo-ai/aurora-server:$$TAG aurora_chatbot:latest; \
+	docker tag ghcr.io/arvo-ai/aurora-frontend:$$TAG aurora_frontend:latest
 	@echo "Starting Aurora in production mode (prebuilt images)..."
+	@docker compose -f docker-compose.prod-local.yml down --remove-orphans 2>/dev/null || true
+	@docker network rm aurora_default 2>/dev/null || true
 	@docker compose -f docker-compose.prod-local.yml up -d
 	@echo ""
 	@echo "✓ Aurora is starting! Services will be available at:"

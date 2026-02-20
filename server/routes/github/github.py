@@ -84,11 +84,12 @@ def github_login():
                     "message": "GitHub OAuth environment variables (GH_OAUTH_CLIENT_ID and GH_OAUTH_CLIENT_SECRET) are not configured. Please configure them as described in the GitHub connector README."
                 }), 400
             
-            env = os.environ.get('AURORA_ENV', '').lower()
-            if env in ['prod', 'staging']:
-                redirect_uri = f"{request.host_url}backend/github/callback"
-            elif env in ['dev']:
-                redirect_uri = f"{request.host_url}github/callback"
+            # Build redirect URI from NEXT_PUBLIC_BACKEND_URL (same pattern as GCP/Slack)
+            backend_url = os.environ.get('NEXT_PUBLIC_BACKEND_URL').rstrip('/')
+            if backend_url:
+                redirect_uri = f"{backend_url}/github/callback"
+            else:
+                redirect_uri = f"{request.host_url.rstrip('/')}/github/callback"
 
                 
             # Use user_id as state parameter to identify user after OAuth
