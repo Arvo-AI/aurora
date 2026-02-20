@@ -9,8 +9,9 @@ import { Loader2, ExternalLink, AlertCircle } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useToast } from "@/hooks/use-toast";
 import { providerPreferencesService } from '@/lib/services/providerPreferences';
+import { getEnv } from '@/lib/env';
 
-const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL;
+const backendUrl = getEnv('NEXT_PUBLIC_BACKEND_URL');
 
 export default function ScalewayOnboardingPage() {
   const [isLoading, setIsLoading] = useState(false);

@@ -1,0 +1,20 @@
+#!/bin/sh
+set -e
+
+# Generate /app/public/env-config.js from runtime environment variables.
+# This lets a single prebuilt image work on any host without rebuilding.
+
+cat <<EOF > /app/public/env-config.js
+window.__ENV = {
+  NEXT_PUBLIC_BACKEND_URL: "${NEXT_PUBLIC_BACKEND_URL:-}",
+  NEXT_PUBLIC_WEBSOCKET_URL: "${NEXT_PUBLIC_WEBSOCKET_URL:-}",
+  NEXT_PUBLIC_ENABLE_OVH: "${NEXT_PUBLIC_ENABLE_OVH:-}",
+  NEXT_PUBLIC_ENABLE_SLACK: "${NEXT_PUBLIC_ENABLE_SLACK:-}",
+  NEXT_PUBLIC_ENABLE_PAGERDUTY_OAUTH: "${NEXT_PUBLIC_ENABLE_PAGERDUTY_OAUTH:-}",
+  NEXT_PUBLIC_ENABLE_CONFLUENCE: "${NEXT_PUBLIC_ENABLE_CONFLUENCE:-}",
+  NEXT_PUBLIC_ENABLE_SCALEWAY: "${NEXT_PUBLIC_ENABLE_SCALEWAY:-}",
+  NEXT_PUBLIC_KUBECTL_AGENT_CHART_URL: "${NEXT_PUBLIC_KUBECTL_AGENT_CHART_URL:-}",
+};
+EOF
+
+exec "$@"

@@ -6,6 +6,7 @@ import ConnectorHeader from "@/components/connectors/ConnectorHeader";
 import { connectorRegistry } from "@/components/connectors/ConnectorRegistry";
 import type { ConnectorConfig } from "@/components/connectors/types";
 import { isOvhEnabled } from "@/lib/feature-flags";
+import { getEnv } from '@/lib/env';
 
 // Helper function to fetch API statuses for custom connection connectors
 async function fetchApiStatuses(customConnectionConnectors: ConnectorConfig[]): Promise<Record<string, boolean>> {
@@ -50,7 +51,7 @@ async function checkVmConfigStatus(): Promise<boolean> {
     }
     
     // Check for auto VMs (OVH and Scaleway)
-    const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL;
+      const backendUrl = getEnv('NEXT_PUBLIC_BACKEND_URL');
     if (!backendUrl) return false;
     
     // Get user ID for auto VM checks
