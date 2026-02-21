@@ -135,10 +135,10 @@ def validate_scaleway_credentials(
         return False, None, "Connection timeout. Please try again."
     except requests.exceptions.RequestException as e:
         logger.error(f"Scaleway API request failed: {e}")
-        return False, None, f"Connection error: {str(e)}"
+        return False, None, "Connection error. Please check your network and try again."
     except Exception as e:
         logger.error(f"Unexpected error validating Scaleway credentials: {e}")
-        return False, None, f"Unexpected error: {str(e)}"
+        return False, None, "An unexpected error occurred. Please try again."
 
 
 def get_scaleway_projects(secret_key: str, organization_id: Optional[str] = None, access_key: Optional[str] = None) -> Tuple[bool, list, Optional[str]]:
@@ -213,7 +213,7 @@ def get_scaleway_projects(secret_key: str, organization_id: Optional[str] = None
         
     except Exception as e:
         logger.error(f"Failed to fetch Scaleway projects: {e}")
-        return False, [], str(e)
+        return False, [], "Failed to fetch projects"
 
 
 def get_account_info(secret_key: str) -> Tuple[bool, Optional[Dict], Optional[str]]:
@@ -262,4 +262,4 @@ def get_account_info(secret_key: str) -> Tuple[bool, Optional[Dict], Optional[st
         
     except Exception as e:
         logger.error(f"Failed to get Scaleway account info: {e}")
-        return False, None, str(e)
+        return False, None, "Failed to get account info"
