@@ -8,9 +8,7 @@ export const KUBECTL_AGENT = {
   // Pod labels from kubectl-agent/chart/values.yaml podLabels
   POD_LABEL_SELECTOR: "app=aurora-kubectl-agent",
   
-  // Chart configuration (OCI registry)
-  // Override via environment variable for custom deployments
-  CHART_OCI_URL: process.env.NEXT_PUBLIC_KUBECTL_AGENT_CHART_URL || "oci://gcr.io/sublime-flux-414616/helm/aurora-kubectl-agent",
+  CHART_OCI_URL: "oci://gcr.io/sublime-flux-414616/helm/aurora-kubectl-agent",
   CHART_VERSION: "1.0.3",
   RELEASE_NAME: "aurora-kubectl-agent",
   
@@ -21,4 +19,3 @@ export const KUBECTL_AGENT = {
   STORAGE_KEY: "isKubectlConnected",
   COPY_FEEDBACK_DURATION: 1200,
 } as const;
-

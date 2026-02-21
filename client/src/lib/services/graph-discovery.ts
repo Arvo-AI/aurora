@@ -1,4 +1,6 @@
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL;
+import { getEnv } from '@/lib/env';
+
+const BACKEND_URL = getEnv('NEXT_PUBLIC_BACKEND_URL');
 
 /** Provider IDs that support graph discovery. */
 export const GRAPH_DISCOVERY_PROVIDERS = [

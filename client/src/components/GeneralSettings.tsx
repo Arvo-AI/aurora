@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { getEnv } from '@/lib/env';
 import { useToast } from "@/hooks/use-toast";
 import { Trash2, FileText } from "lucide-react";
 import { clearTerraformState } from "@/lib/services/userSettings";
@@ -55,7 +56,7 @@ export function GeneralSettings() {
 
     setIsSyncing(true);
     try {
-      const response = await fetch(`${process.env.NEXT_PUBLIC_BACKEND_URL}/api/gcp/cloud-graph/sync`, {
+      const response = await fetch(`${getEnv('NEXT_PUBLIC_BACKEND_URL')}/api/gcp/cloud-graph/sync`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -112,7 +113,7 @@ export function GeneralSettings() {
       // Delete graph and feeds via backend API
       // Note: Cloud graph data can also be deleted from:
       // - AWS onboarding page (client/src/app/aws/onboarding/page.tsx:463) via cleanup endpoint
-      const graphRes = await fetch(`${process.env.NEXT_PUBLIC_BACKEND_URL}/api/gcp/cloud-graph/delete`, {
+      const graphRes = await fetch(`${getEnv('NEXT_PUBLIC_BACKEND_URL')}/api/gcp/cloud-graph/delete`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ user_id: userId, provider: 'gcp' }),
