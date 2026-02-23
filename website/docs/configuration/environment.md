@@ -126,6 +126,22 @@ NEXT_PUBLIC_WEBSOCKET_URL=ws://localhost:5006
 CHATBOT_INTERNAL_URL=http://chatbot:5007
 ```
 
+:::tip Remote / VM Deployment
+When deploying on a remote server or VM, set the `NEXT_PUBLIC_*` and `FRONTEND_URL` variables to the machine's IP or hostname:
+
+```bash
+FRONTEND_URL=http://YOUR_IP:3000
+NEXT_PUBLIC_BACKEND_URL=http://YOUR_IP:5080
+NEXT_PUBLIC_WEBSOCKET_URL=ws://YOUR_IP:5006
+```
+
+These values are injected at container startup (not baked at build time), so you **do not** need to rebuild images after changing them. Just recreate the frontend container:
+
+```bash
+docker compose -f docker-compose.prod-local.yml up -d frontend
+```
+:::
+
 ## Authentication & Security
 
 | Variable | Default | Description |

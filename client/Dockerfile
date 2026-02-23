@@ -10,11 +10,14 @@ COPY package.json bun.lock ./
 RUN --mount=type=cache,target=/root/.bun/install/cache \
     bun install
 
+COPY docker-entrypoint.sh /docker-entrypoint.sh
+RUN chmod +x /docker-entrypoint.sh
+
 # Expose port for Next.js
 EXPOSE 3000
 
-# Use bun dev with polling for file watching in Docker
-# The --turbo flag enables Turbopack for faster reloads
+# Use the same entrypoint as prod to generate env-config.js at startup
+ENTRYPOINT ["/docker-entrypoint.sh"]
 CMD ["bun", "run", "dev"]
 
 # ============================================
@@ -69,7 +72,10 @@ COPY --from=builder /app/.next ./.next
 COPY --from=builder /app/public ./public
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/package.json ./package.json
+COPY docker-entrypoint.sh /docker-entrypoint.sh
+RUN chmod +x /docker-entrypoint.sh
 
 # Expose port and run Next.js
 EXPOSE 3000
+ENTRYPOINT ["/docker-entrypoint.sh"]
 CMD ["bun", "run", "start"]

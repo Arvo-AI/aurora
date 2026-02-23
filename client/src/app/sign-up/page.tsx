@@ -4,6 +4,7 @@ import { useState } from "react"
 import { signIn } from "next-auth/react"
 import { useRouter } from "next/navigation"
 import Link from "next/link"
+import { getEnv } from '@/lib/env'
 
 export default function SignUpPage() {
   const router = useRouter()
@@ -33,7 +34,7 @@ export default function SignUpPage() {
 
     try {
       // Call backend API to register user
-      const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL
+      const backendUrl = getEnv('NEXT_PUBLIC_BACKEND_URL')
       const response = await fetch(`${backendUrl}/api/auth/register`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },

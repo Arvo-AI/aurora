@@ -6,8 +6,10 @@ import type { ConnectorConfig } from "@/components/connectors/types";
 import { ToastAction } from "@/components/ui/toast";
 import { ExternalLink } from "lucide-react";
 
+import { getEnv } from '@/lib/env';
+
 const slackService = isSlackEnabled() ? require("@/lib/services/slack").slackService : null;
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL;
+const BACKEND_URL = getEnv('NEXT_PUBLIC_BACKEND_URL');
 
 export function useConnectorOAuth(connector: ConnectorConfig, userId: string | null) {
   const { toast } = useToast();

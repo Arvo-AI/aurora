@@ -54,7 +54,7 @@ def aws_get_credentials():
                     aws_credentials = session['aws_credentials']
                     logging.info(f"Retrieved AWS role credentials from user_connections for user {user_id}")
             except Exception as e:
-                logging.error(f"Error retrieving AWS creds: {e}")
+                logging.error(f"Error retrieving AWS creds: {e}", exc_info=True)
 
         if aws_credentials:
             session['user_id'] = user_id
@@ -71,8 +71,8 @@ def aws_get_credentials():
                 "error": "No AWS credentials found. Please authenticate with AWS."
             }), 401
     except Exception as e:
-        logging.error(f"Error retrieving AWS credentials: {e}")
-        return jsonify({"error": str(e)}), 500
+        logging.error(f"Error retrieving AWS credentials: {e}", exc_info=True)
+        return jsonify({"error": "Failed to retrieve AWS credentials"}), 500
 
 
 @auth_bp.route('/auth', methods=['POST', 'OPTIONS'])
@@ -197,7 +197,7 @@ def auth():
                 }), 401
             else:
                 logging.error(f"AssumeRole failed for user {user_id}: {e}")
-                return jsonify({"status": "error", "message": str(e)}), 401
+                return jsonify({"status": "error", "message": "AWS role assumption failed"}), 401
 
     except Exception as e:
         logging.error("Unexpected error in AWS auth", exc_info=e)

@@ -332,6 +332,21 @@ from routes.debug import bp as debug_bp
 app.register_blueprint(debug_bp)
 
 # ============================================================================
+# Global Error Handlers
+# ============================================================================
+
+logger = logging.getLogger(__name__)
+
+@app.errorhandler(404)
+def handle_not_found(error):
+    return jsonify({"error": "Not found"}), 404
+
+@app.errorhandler(500)
+def handle_internal_error(error):
+    logger.error(f"Unhandled server error: {error}", exc_info=True)
+    return jsonify({"error": "Internal server error"}), 500
+
+# ============================================================================
 # Main Application Runner
 # ============================================================================
 
@@ -348,4 +363,4 @@ if __name__ == "__main__":
     # Port configurable via FLASK_PORT env var (set in .env file)
     # Note: Default is 5080 to avoid conflict with macOS AirPlay Receiver (port 5000)
     port = int(os.getenv("FLASK_PORT"))
-    app.run(host="0.0.0.0", port=port, debug=True)
+    app.run(host="0.0.0.0", port=port, debug=False)

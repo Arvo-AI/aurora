@@ -27,8 +27,9 @@ import {
   RefreshCw,
 } from "lucide-react";
 import { userPreferencesService } from "@/lib/services/incident-feedback";
+import { getEnv } from '@/lib/env';
 
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL;
+const BACKEND_URL = getEnv('NEXT_PUBLIC_BACKEND_URL');
 const MEMORY_MAX_LENGTH = 5000;
 
 interface Document {

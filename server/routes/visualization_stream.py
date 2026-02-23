@@ -98,5 +98,5 @@ def get_current_visualization(incident_id: str):
         })
     
     except Exception as e:
-        logger.error(f"[Visualization] Failed to fetch viz: {e}")
-        return jsonify({"error": str(e)}), 500
+        logger.error(f"[Visualization] Failed to fetch viz: {e}", exc_info=True)
+        return jsonify({"error": "Failed to fetch visualization"}), 500

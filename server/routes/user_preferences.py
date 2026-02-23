@@ -78,7 +78,7 @@ def clear_session():
         return jsonify({"status": "success"})
         
     except Exception as e:
-        logger.error(f"Error clearing session for user {user_id}: {e}")
+        logger.error(f"Error clearing session for user {user_id}: {e}", exc_info=True)
         return jsonify({"error": "Failed to clear session"}), 500
     finally:
         if 'cursor' in locals() and cursor:
@@ -290,18 +290,15 @@ def clear_terraform_state():
             }), 200
             
         except Exception as clear_error:
-            logger.error(f"Error clearing Terraform state files for user {user_id}: {clear_error}")
+            logger.error(f"Error clearing Terraform state files for user {user_id}: {clear_error}", exc_info=True)
             return jsonify({
                 "success": False,
-                "error": f"Failed to clear some Terraform state files: {str(clear_error)}"
+                "error": "Failed to clear some Terraform state files"
             }), 500
         
     except Exception as e:
-        logger.error(f"Error in clear_terraform_state endpoint: {str(e)}")
-        import traceback
-        error_traceback = traceback.format_exc()
-        logger.error(f"Traceback:\n{error_traceback}")
+        logger.error(f"Error in clear_terraform_state endpoint: {e}", exc_info=True)
         return jsonify({
             "success": False,
-            "error": f"An unexpected error occurred: {str(e)}"
-        }), 500 
+            "error": "An unexpected error occurred while clearing Terraform state"
+        }), 500
