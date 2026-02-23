@@ -94,7 +94,7 @@ class CorootClient:
         try:
             resp = self._session.request(method, url, **kwargs)
         except requests.RequestException as exc:
-            logger.error("[COROOT] %s %s network error: %s", method, url, exc)
+            logger.error("[COROOT] %s %s network error: %s", method, path, exc)
             raise CorootAPIError("Unable to reach Coroot server") from exc
 
         if resp.status_code == 401:
@@ -111,7 +111,7 @@ class CorootClient:
         if not resp.ok:
             logger.error(
                 "[COROOT] %s %s failed (%s): %s",
-                method, url, resp.status_code, resp.text[:500],
+                method, path, resp.status_code, resp.text[:500],
             )
             raise CorootAPIError(
                 resp.text[:200] or f"Request failed (HTTP {resp.status_code})"

@@ -75,7 +75,8 @@ def connect():
     try:
         client.login()
     except CorootAPIError as exc:
-        return jsonify({"error": str(exc)}), 400
+        logger.warning("[COROOT] Login failed for user %s: %s", user_id, exc)
+        return jsonify({"error": "Failed to connect to Coroot with the provided credentials"}), 400
 
     try:
         projects = client.discover_projects()
@@ -127,7 +128,10 @@ def status():
         client.login()
     except CorootAPIError as exc:
         logger.warning("[COROOT] Status validation failed for user %s: %s", user_id, exc)
-        return jsonify({"connected": False, "error": str(exc)})
+        return jsonify({
+            "connected": False,
+            "error": "Failed to validate Coroot connection",
+        })
 
     try:
         projects = client.discover_projects()
@@ -158,7 +162,7 @@ def disconnect():
         if not vault_ok:
             logger.warning("[COROOT] Disconnected user %s but Vault delete failed", user_id)
 
-        logger.info("[COROOT] Disconnected user %s (rows=%s)", user_id, rows)
+        logger.info("[COROOT] Disconnected user %s", user_id)
         return jsonify({
             "success": True,
             "message": "Coroot disconnected successfully",
