@@ -1,10 +1,25 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { dynatraceService, DynatraceAlert } from "@/lib/services/dynatrace";
+
+const getSeverityColor = (severity?: string) => {
+  const s = severity?.toLowerCase();
+  if (s === "critical" || s === "availability") return "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200";
+  if (s === "high" || s === "error") return "bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200";
+  if (s === "medium" || s === "performance" || s === "resource_contention") return "bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200";
+  if (s === "low" || s === "custom_alert") return "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200";
+  return "bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-200";
+};
+
+const getStateColor = (state?: string) => {
+  if (state?.toUpperCase() === "OPEN") return "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200";
+  if (state?.toUpperCase() === "RESOLVED") return "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200";
+  return "bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-200";
+};
 
 export default function DynatraceAlertsPage() {
   const router = useRouter();
@@ -13,9 +28,9 @@ export default function DynatraceAlertsPage() {
   const [error, setError] = useState<string | null>(null);
   const [total, setTotal] = useState(0);
   const [offset, setOffset] = useState(0);
-  const [limit] = useState(20);
+  const limit = 20;
 
-  const loadAlerts = async (newOffset = 0) => {
+  const loadAlerts = useCallback(async (newOffset = 0) => {
     try {
       setLoading(true);
       setError(null);
@@ -28,22 +43,13 @@ export default function DynatraceAlertsPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [limit]);
 
-  useEffect(() => { loadAlerts(); }, []);
+  useEffect(() => { loadAlerts(); }, [loadAlerts]);
 
   const formatDate = (dateStr?: string) => {
     if (!dateStr) return "N/A";
     try { return new Date(dateStr).toLocaleString(); } catch { return dateStr; }
-  };
-
-  const getSeverityColor = (severity?: string) => {
-    const s = severity?.toLowerCase();
-    if (s === "critical" || s === "availability") return "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200";
-    if (s === "high" || s === "error") return "bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200";
-    if (s === "medium" || s === "performance" || s === "resource_contention") return "bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200";
-    if (s === "low" || s === "custom_alert") return "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200";
-    return "bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-200";
   };
 
   return (
@@ -73,8 +79,8 @@ export default function DynatraceAlertsPage() {
         <Card>
           <CardContent className="pt-6 text-center py-12">
             <p className="text-muted-foreground font-medium">No problems received yet</p>
-            <p className="text-sm text-muted-foreground mt-2">Configure a webhook problem notification in Dynatrace to start receiving alerts</p>
-            <Button variant="outline" className="mt-4" onClick={() => router.push("/dynatrace/auth")}>Configure Webhook</Button>
+            <p className="text-sm text-muted-foreground mt-2">Problems detected by Dynatrace will appear here once the webhook is configured</p>
+            <Button variant="outline" className="mt-4" onClick={() => router.push("/dynatrace/auth")}>Go to Settings</Button>
           </CardContent>
         </Card>
       ) : (
@@ -87,9 +93,16 @@ export default function DynatraceAlertsPage() {
                     <div className="flex-1">
                       <div className="flex items-center gap-2 mb-2">
                         <CardTitle className="text-lg">{alert.title || "Untitled Problem"}</CardTitle>
-                        <span className={`px-2 py-1 rounded text-xs font-medium ${getSeverityColor(alert.severity)}`}>
-                          {alert.severity || "unknown"}
-                        </span>
+                        {alert.state && (
+                          <span className={`px-2 py-1 rounded text-xs font-medium ${getStateColor(alert.state)}`}>
+                            {alert.state}
+                          </span>
+                        )}
+                        {alert.severity && (
+                          <span className={`px-2 py-1 rounded text-xs font-medium ${getSeverityColor(alert.severity)}`}>
+                            {alert.severity}
+                          </span>
+                        )}
                       </div>
                       {alert.impactedEntity && <CardDescription>Entity: {alert.impactedEntity}</CardDescription>}
                     </div>

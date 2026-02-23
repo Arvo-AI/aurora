@@ -306,9 +306,9 @@ def get_webhook_url():
             "Tags": "{Tags}",
         }, indent=2),
         "instructions": [
-            "1. In Dynatrace, go to Settings > Integration > Problem notifications",
+            "1. In Dynatrace, open the classic UI: https://<your-env-id>.live.dynatrace.com/ui/settings/integration/notifications",
             "2. Click 'Add notification' and select 'Custom Integration'",
-            "3. Set the webhook URL above",
+            "3. Paste the webhook URL above into the 'Webhook URL' field",
             "4. Paste the suggested payload into the 'Custom payload' field",
             "5. Optionally assign an Alerting Profile to filter problems",
             "6. Click 'Send test notification' to verify, then save",
