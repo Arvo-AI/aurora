@@ -6,6 +6,7 @@ from datetime import timezone
 from flask import Blueprint, jsonify, request
 from utils.db.connection_pool import db_pool
 from utils.auth.stateless_auth import get_user_id_from_request
+from utils.auth.token_management import get_token_data
 from chat.background.task import run_background_chat
 from typing import List, Dict, Any, Optional
 from uuid import UUID
@@ -73,6 +74,10 @@ def _build_source_url(source_type: str, user_id: str) -> str:
             )
         elif source_type == "grafana":
             return client_id if client_id else "https://grafana.com"
+        elif source_type == "dynatrace":
+            creds = get_token_data(user_id, "dynatrace") if not client_id else None
+            env_url = (creds or {}).get("environment_url", "") if not client_id else client_id
+            return env_url or ""
     except Exception as e:
         logger.error(f"[INCIDENTS] Failed to build source URL for {source_type}: {e}")
     return ""

@@ -420,6 +420,10 @@ def build_rca_prompt(
         labels_str = ", ".join(f"{k}={v}" for k, v in labels.items()) if labels else "none"
     elif source == 'splunk':
         labels_str = ", ".join(f"{k}={v}" for k, v in labels.items()) if labels else "none"
+    elif source == 'dynatrace':
+        entity = alert_details.get('impacted_entity', 'unknown')
+        impact = alert_details.get('impact', 'unknown')
+        labels_str = f"entity={entity}, impact={impact}"
     else:
         labels_str = str(labels)
 
@@ -684,6 +688,35 @@ def build_datadog_rca_prompt(
     }
 
     return build_rca_prompt('datadog', alert_details, providers, user_id)
+
+
+def build_dynatrace_rca_prompt(
+    payload: Dict[str, Any],
+    providers: Optional[List[str]] = None,
+    user_id: Optional[str] = None,
+) -> str:
+    """Build RCA prompt from Dynatrace problem notification payload."""
+    title = payload.get("ProblemTitle") or "Unknown Problem"
+    severity = payload.get("ProblemSeverity") or "unknown"
+    impact = payload.get("ProblemImpact") or "unknown"
+    entity = payload.get("ImpactedEntity") or "unknown"
+    problem_url = payload.get("ProblemURL") or ""
+    tags = payload.get("Tags") or ""
+
+    alert_details = {
+        'title': title,
+        'status': payload.get("State", "OPEN"),
+        'message': f"Impact: {impact}. Entity: {entity}",
+        'labels': {},
+        'impacted_entity': entity,
+        'impact': impact,
+    }
+    if problem_url:
+        alert_details['problemUrl'] = problem_url
+    if tags:
+        alert_details['tags'] = tags
+
+    return build_rca_prompt('dynatrace', alert_details, providers, user_id)
 
 
 def build_netdata_rca_prompt(

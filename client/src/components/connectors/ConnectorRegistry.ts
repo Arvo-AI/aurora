@@ -78,6 +78,19 @@ class ConnectorRegistry {
     });
 
     this.register({
+      id: "dynatrace",
+      name: "Dynatrace",
+      description: "Connect to Dynatrace for full-stack observability. Receive problem notifications and query metrics, logs, and entities for root cause analysis.",
+      iconPath: "/dynatrace.svg",
+      iconBgColor: "bg-white dark:bg-white",
+      category: "Monitoring",
+      path: "/dynatrace/auth",
+      storageKey: "isDynatraceConnected",
+      alertsPath: "/dynatrace/alerts",
+      alertsLabel: "View Problems",
+    });
+
+    this.register({
       id: "pagerduty",
       name: "PagerDuty",
       description: "Connect PagerDuty to receive incident alerts and manage on-call schedules. Integrate with your PagerDuty account for real-time incident management.",
