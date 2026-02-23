@@ -117,7 +117,10 @@ class CorootClient:
                 resp.text[:200] or f"Request failed (HTTP {resp.status_code})"
             )
 
-        return resp.json()
+        try:
+            return resp.json()
+        except (ValueError, requests.exceptions.JSONDecodeError):
+            raise CorootAPIError(f"Non-JSON response from {path}")
 
     def _get(self, path: str, **kwargs: Any) -> Any:
         return self._request("GET", path, **kwargs)
@@ -147,8 +150,6 @@ class CorootClient:
     def discover_projects(self) -> List[Dict[str, Any]]:
         """Return the list of Coroot projects."""
         data = self._get("/api/project/")
-        if isinstance(data, list):
-            return data
         return data if isinstance(data, list) else []
 
     # ------------------------------------------------------------------
