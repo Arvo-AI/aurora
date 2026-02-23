@@ -44,7 +44,7 @@ export interface DynatraceRcaSettings {
 
 const API_BASE = '/api/dynatrace';
 
-async function jsonFetch<T>(input: RequestInfo, init?: RequestInit): Promise<T | null> {
+async function jsonFetch<T>(input: RequestInfo, init?: RequestInit): Promise<T> {
   const response = await fetch(input, {
     ...init,
     headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
@@ -57,69 +57,61 @@ async function jsonFetch<T>(input: RequestInfo, init?: RequestInit): Promise<T |
   }
 
   const text = await response.text();
-  return text ? (JSON.parse(text) as T) : null;
+  return text ? (JSON.parse(text) as T) : (null as T);
 }
 
 export const dynatraceService = {
   async getStatus(): Promise<DynatraceStatus | null> {
     try {
-      const raw = await jsonFetch<Record<string, unknown>>(`${API_BASE}/status`);
-      if (!raw) return null;
-      return {
-        connected: Boolean(raw.connected),
-        environmentUrl: raw.environmentUrl as string | undefined,
-        version: raw.version as string | undefined,
-        error: raw.error as string | undefined,
-      };
-    } catch (error) {
-      console.error('[dynatraceService] Failed to fetch status:', error);
+      return await jsonFetch<DynatraceStatus>(`${API_BASE}/status`);
+    } catch (err) {
+      console.error('[dynatraceService] Failed to fetch status:', err);
       return null;
     }
   },
 
   async connect(payload: DynatraceConnectPayload): Promise<DynatraceStatus> {
-    const raw = await jsonFetch<Record<string, unknown>>(`${API_BASE}/connect`, {
-      method: 'POST',
-      body: JSON.stringify(payload),
-    });
+    const raw = await jsonFetch<{ success: boolean; environmentUrl: string; version?: string }>(
+      `${API_BASE}/connect`,
+      { method: 'POST', body: JSON.stringify(payload) },
+    );
     return {
-      connected: Boolean(raw?.success),
-      environmentUrl: (raw?.environmentUrl ?? payload.environmentUrl) as string,
-      version: raw?.version as string | undefined,
+      connected: raw.success,
+      environmentUrl: raw.environmentUrl ?? payload.environmentUrl,
+      version: raw.version,
     };
   },
 
   async getAlerts(limit = 50, offset = 0, state?: string): Promise<DynatraceAlertsResponse> {
     const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
     if (state) params.append('state', state);
-    const raw = await jsonFetch<DynatraceAlertsResponse>(`${API_BASE}/alerts?${params}`);
-    return raw ?? { alerts: [], total: 0, limit, offset };
+    return await jsonFetch<DynatraceAlertsResponse>(`${API_BASE}/alerts?${params}`)
+      ?? { alerts: [], total: 0, limit, offset };
   },
 
   async getWebhookUrl(): Promise<DynatraceWebhookUrlResponse | null> {
     try {
       return await jsonFetch<DynatraceWebhookUrlResponse>(`${API_BASE}/alerts/webhook-url`);
-    } catch (error) {
-      console.error('[dynatraceService] Failed to fetch webhook URL:', error);
+    } catch (err) {
+      console.error('[dynatraceService] Failed to fetch webhook URL:', err);
       return null;
     }
   },
 
   async getRcaSettings(): Promise<DynatraceRcaSettings> {
     try {
-      const raw = await jsonFetch<DynatraceRcaSettings>(`${API_BASE}/rca-settings`);
-      return raw ?? { rcaEnabled: false };
-    } catch (error) {
-      console.error('[dynatraceService] Failed to fetch RCA settings:', error);
+      return await jsonFetch<DynatraceRcaSettings>(`${API_BASE}/rca-settings`)
+        ?? { rcaEnabled: false };
+    } catch (err) {
+      console.error('[dynatraceService] Failed to fetch RCA settings:', err);
       return { rcaEnabled: false };
     }
   },
 
   async updateRcaSettings(rcaEnabled: boolean): Promise<DynatraceRcaSettings> {
-    const raw = await jsonFetch<DynatraceRcaSettings>(`${API_BASE}/rca-settings`, {
+    return await jsonFetch<DynatraceRcaSettings>(`${API_BASE}/rca-settings`, {
       method: 'PUT',
       body: JSON.stringify({ rcaEnabled }),
-    });
-    return raw ?? { rcaEnabled };
+    }) ?? { rcaEnabled };
   },
 };

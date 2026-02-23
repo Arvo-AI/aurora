@@ -13,6 +13,17 @@ import { DynatraceWebhookStep } from "@/components/dynatrace/DynatraceWebhookSte
 
 const CACHE_KEY = "dynatrace_connection_status";
 
+function persistStatus(result: DynatraceStatus | null) {
+  if (result?.connected) {
+    localStorage.setItem(CACHE_KEY, JSON.stringify(result));
+    localStorage.setItem("isDynatraceConnected", "true");
+  } else {
+    localStorage.removeItem(CACHE_KEY);
+    localStorage.removeItem("isDynatraceConnected");
+  }
+  window.dispatchEvent(new CustomEvent("providerStateChanged"));
+}
+
 export default function DynatraceAuthPage() {
   const { toast } = useToast();
   const [environmentUrl, setEnvironmentUrl] = useState("");
@@ -22,37 +33,23 @@ export default function DynatraceAuthPage() {
   const [isCheckingStatus, setIsCheckingStatus] = useState(true);
 
   useEffect(() => {
-    (async () => {
-      try {
-        if (typeof window !== "undefined") {
-          const cached = localStorage.getItem(CACHE_KEY);
-          if (cached) {
-            const parsed = JSON.parse(cached);
-            setStatus(parsed);
-            setIsCheckingStatus(false);
-            if (parsed?.connected) setEnvironmentUrl(parsed.environmentUrl ?? "");
-          }
-        }
-        const result = await dynatraceService.getStatus();
-        if (result) {
-          setStatus(result);
-          if (typeof window !== "undefined") {
-            localStorage.setItem(CACHE_KEY, JSON.stringify(result));
-            if (result.connected) {
-              localStorage.setItem("isDynatraceConnected", "true");
-            } else {
-              localStorage.removeItem("isDynatraceConnected");
-            }
-            window.dispatchEvent(new CustomEvent("providerStateChanged"));
-          }
-          if (result.connected) setEnvironmentUrl(result.environmentUrl ?? "");
-        }
-      } catch (err) {
-        console.error("Failed to load Dynatrace status", err);
-      } finally {
-        setIsCheckingStatus(false);
-      }
-    })();
+    const cached = localStorage.getItem(CACHE_KEY);
+    if (cached) {
+      const parsed: DynatraceStatus = JSON.parse(cached);
+      setStatus(parsed);
+      setIsCheckingStatus(false);
+      if (parsed.connected) setEnvironmentUrl(parsed.environmentUrl ?? "");
+    }
+
+    dynatraceService.getStatus()
+      .then((result) => {
+        if (!result) return;
+        setStatus(result);
+        persistStatus(result);
+        if (result.connected) setEnvironmentUrl(result.environmentUrl ?? "");
+      })
+      .catch((err) => console.error("Failed to load Dynatrace status", err))
+      .finally(() => setIsCheckingStatus(false));
   }, []);
 
   const handleConnect = async (e: React.FormEvent<HTMLFormElement>) => {
@@ -61,14 +58,10 @@ export default function DynatraceAuthPage() {
     try {
       const result = await dynatraceService.connect({ environmentUrl, apiToken });
       setStatus(result);
-      if (typeof window !== "undefined") {
-        localStorage.setItem(CACHE_KEY, JSON.stringify(result));
-        localStorage.setItem("isDynatraceConnected", "true");
-        window.dispatchEvent(new CustomEvent("providerStateChanged"));
-      }
-      toast({ title: "Success", description: "Dynatrace connected successfully!" });
+      persistStatus(result);
+      toast({ title: "Connected", description: "Dynatrace connected successfully." });
     } catch (err: unknown) {
-      toast({ title: "Failed to connect to Dynatrace", description: getUserFriendlyError(err), variant: "destructive" });
+      toast({ title: "Connection failed", description: getUserFriendlyError(err), variant: "destructive" });
     } finally {
       setLoading(false);
       setApiToken("");
@@ -79,32 +72,31 @@ export default function DynatraceAuthPage() {
     setLoading(true);
     try {
       const response = await fetch("/api/connected-accounts/dynatrace", { method: "DELETE", credentials: "include" });
-      if (response.ok || response.status === 204) {
-        setStatus({ connected: false });
-        setEnvironmentUrl("");
-        if (typeof window !== "undefined") {
-          localStorage.removeItem(CACHE_KEY);
-          localStorage.removeItem("isDynatraceConnected");
-          window.dispatchEvent(new CustomEvent("providerStateChanged"));
-        }
-        toast({ title: "Success", description: "Dynatrace disconnected successfully" });
-      } else {
-        throw new Error(await response.text() || "Failed to disconnect Dynatrace");
+      if (!response.ok && response.status !== 204) {
+        throw new Error(await response.text() || "Failed to disconnect");
       }
+      setStatus({ connected: false });
+      setEnvironmentUrl("");
+      persistStatus(null);
+      toast({ title: "Disconnected", description: "Dynatrace disconnected successfully." });
     } catch (err: unknown) {
-      toast({ title: "Failed to disconnect Dynatrace", description: getUserFriendlyError(err), variant: "destructive" });
+      toast({ title: "Disconnect failed", description: getUserFriendlyError(err), variant: "destructive" });
     } finally {
       setLoading(false);
     }
   };
 
+  const pageHeader = (
+    <div className="mb-6">
+      <h1 className="text-3xl font-bold">Dynatrace Integration</h1>
+      <p className="text-muted-foreground mt-1">Connect your Dynatrace environment</p>
+    </div>
+  );
+
   if (isCheckingStatus) {
     return (
       <div className="container mx-auto py-8 px-4 max-w-2xl">
-        <div className="mb-6">
-          <h1 className="text-3xl font-bold">Dynatrace Integration</h1>
-          <p className="text-muted-foreground mt-1">Connect your Dynatrace environment</p>
-        </div>
+        {pageHeader}
         <Card>
           <CardContent className="flex items-center justify-center py-12">
             <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
@@ -116,10 +108,7 @@ export default function DynatraceAuthPage() {
 
   return (
     <div className="container mx-auto py-8 px-4 max-w-2xl">
-      <div className="mb-6">
-        <h1 className="text-3xl font-bold">Dynatrace Integration</h1>
-        <p className="text-muted-foreground mt-1">Connect your Dynatrace environment</p>
-      </div>
+      {pageHeader}
 
       {!status?.connected ? (
         <Card>
@@ -169,8 +158,13 @@ export default function DynatraceAuthPage() {
                 <ol className="list-decimal list-inside space-y-1 text-muted-foreground">
                   <li>Go to Settings &gt; Access tokens in Dynatrace</li>
                   <li>Click &quot;Generate new token&quot;</li>
-                  <li>Add scopes: <code className="bg-muted px-1 rounded">problems.read</code>, <code className="bg-muted px-1 rounded">entities.read</code></li>
-                  <li>Add if available in your environment: <code className="bg-muted px-1 rounded">metrics.read</code>, <code className="bg-muted px-1 rounded">logs.read</code>, <code className="bg-muted px-1 rounded">events.read</code> (only shown if the feature is active in your Dynatrace plan)</li>
+                  <li>
+                    Add scopes:{" "}
+                    {["problems.read", "entities.read", "metrics.read", "logs.read", "events.read"].map((s) => (
+                      <code key={s} className="bg-muted px-1 rounded mx-0.5">{s}</code>
+                    ))}
+                    <span className="block mt-1 text-xs">(some scopes only appear if the feature is active in your plan)</span>
+                  </li>
                   <li>Copy the generated token</li>
                 </ol>
                 <a

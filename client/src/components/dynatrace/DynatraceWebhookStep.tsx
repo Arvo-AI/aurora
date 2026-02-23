@@ -20,32 +20,20 @@ export function DynatraceWebhookStep({ status, onDisconnect, loading }: Dynatrac
   const router = useRouter();
   const { toast } = useToast();
   const [webhookData, setWebhookData] = useState<DynatraceWebhookUrlResponse | null>(null);
-  const [loadingWebhook, setLoadingWebhook] = useState(true);
+  const [settingsLoading, setSettingsLoading] = useState(true);
   const [rcaEnabled, setRcaEnabled] = useState(false);
-  const [loadingRcaSettings, setLoadingRcaSettings] = useState(true);
   const [updatingRca, setUpdatingRca] = useState(false);
 
   useEffect(() => {
     let mounted = true;
-    (async () => {
-      try {
-        const [wh, rca] = await Promise.all([
-          dynatraceService.getWebhookUrl(),
-          dynatraceService.getRcaSettings(),
-        ]);
-        if (mounted) {
-          setWebhookData(wh);
-          setRcaEnabled(rca.rcaEnabled);
-        }
-      } catch (error) {
-        console.error("Failed to load Dynatrace settings:", error);
-      } finally {
-        if (mounted) {
-          setLoadingWebhook(false);
-          setLoadingRcaSettings(false);
-        }
-      }
-    })();
+    Promise.all([dynatraceService.getWebhookUrl(), dynatraceService.getRcaSettings()])
+      .then(([wh, rca]) => {
+        if (!mounted) return;
+        setWebhookData(wh);
+        setRcaEnabled(rca.rcaEnabled);
+      })
+      .catch((err) => console.error("Failed to load Dynatrace settings:", err))
+      .finally(() => { if (mounted) setSettingsLoading(false); });
     return () => { mounted = false; };
   }, []);
 
@@ -55,7 +43,7 @@ export function DynatraceWebhookStep({ status, onDisconnect, loading }: Dynatrac
       const result = await dynatraceService.updateRcaSettings(enabled);
       setRcaEnabled(result.rcaEnabled);
       toast({
-        title: enabled ? "Alert RCA Enabled" : "Alert RCA Disabled",
+        title: enabled ? "Alert RCA enabled" : "Alert RCA disabled",
         description: enabled
           ? "Aurora will automatically investigate Dynatrace problems"
           : "Dynatrace problems will not trigger automatic investigation",
@@ -67,21 +55,10 @@ export function DynatraceWebhookStep({ status, onDisconnect, loading }: Dynatrac
     }
   };
 
-  const copyWebhookUrl = async () => {
-    if (!webhookData?.webhookUrl) return;
+  const copyToClipboard = async (text: string, label: string) => {
     try {
-      await navigator.clipboard.writeText(webhookData.webhookUrl);
-      toast({ title: "Copied", description: "Webhook URL copied to clipboard" });
-    } catch {
-      toast({ title: "Copy failed", variant: "destructive" });
-    }
-  };
-
-  const copyPayload = async () => {
-    if (!webhookData?.suggestedPayload) return;
-    try {
-      await navigator.clipboard.writeText(webhookData.suggestedPayload);
-      toast({ title: "Copied", description: "Payload template copied to clipboard" });
+      await navigator.clipboard.writeText(text);
+      toast({ title: "Copied", description: `${label} copied to clipboard` });
     } catch {
       toast({ title: "Copy failed", variant: "destructive" });
     }
@@ -122,7 +99,7 @@ export function DynatraceWebhookStep({ status, onDisconnect, loading }: Dynatrac
               <Label htmlFor="rca-toggle" className="text-base font-medium">Enable Alert RCA</Label>
               <p className="text-sm text-muted-foreground">Automatically investigate Dynatrace problems with Aurora</p>
             </div>
-            {loadingRcaSettings ? (
+            {settingsLoading ? (
               <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
             ) : (
               <Switch id="rca-toggle" checked={rcaEnabled} onCheckedChange={handleRcaToggle} disabled={updatingRca} />
@@ -133,24 +110,26 @@ export function DynatraceWebhookStep({ status, onDisconnect, loading }: Dynatrac
         {rcaEnabled && (
           <div className="border-t pt-6">
             <h3 className="font-medium mb-4">Configure Problem Notification Webhook</h3>
-            {loadingWebhook ? (
+            {settingsLoading ? (
               <div className="flex items-center gap-2 text-muted-foreground">
                 <Loader2 className="h-4 w-4 animate-spin" /> Loading webhook URL...
               </div>
             ) : webhookData ? (
               <div className="space-y-4">
                 <div>
-                  <label className="text-sm font-medium">Webhook URL</label>
+                  <Label className="text-sm font-medium">Webhook URL</Label>
                   <div className="flex gap-2 mt-1">
                     <code className="flex-1 p-2 bg-muted rounded text-xs break-all">{webhookData.webhookUrl}</code>
-                    <Button variant="outline" size="icon" onClick={copyWebhookUrl}><Copy className="h-4 w-4" /></Button>
+                    <Button variant="outline" size="icon" onClick={() => copyToClipboard(webhookData.webhookUrl, "Webhook URL")}>
+                      <Copy className="h-4 w-4" />
+                    </Button>
                   </div>
                 </div>
 
                 <div>
                   <div className="flex items-center justify-between">
-                    <label className="text-sm font-medium">Custom Payload Template</label>
-                    <Button variant="ghost" size="sm" onClick={copyPayload} className="h-7 text-xs">
+                    <Label className="text-sm font-medium">Custom Payload Template</Label>
+                    <Button variant="ghost" size="sm" onClick={() => copyToClipboard(webhookData.suggestedPayload, "Payload template")} className="h-7 text-xs">
                       <Copy className="h-3 w-3 mr-1" /> Copy
                     </Button>
                   </div>
@@ -161,7 +140,7 @@ export function DynatraceWebhookStep({ status, onDisconnect, loading }: Dynatrac
                   <p className="font-medium text-sm mb-3">Setup Instructions:</p>
                   <ol className="list-decimal list-inside space-y-2 text-sm text-muted-foreground">
                     {webhookData.instructions.map((instruction, idx) => (
-                      <li key={idx}>{instruction.replace(/^\d+\.\s*/, '')}</li>
+                      <li key={idx}>{instruction.replace(/^\d+\.\s*/, "")}</li>
                     ))}
                   </ol>
                 </div>

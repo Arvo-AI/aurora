@@ -2,7 +2,7 @@ import json
 import logging
 import os
 import re
-from typing import Any, Dict, Optional
+from typing import Any
 from urllib.parse import urlparse, urlunparse
 
 import requests
@@ -35,33 +35,27 @@ class DynatraceClient:
 
     def __init__(self, environment_url: str, api_token: str):
         self.environment_url = environment_url
-        self.api_token = api_token
+        self.headers = {
+            "Authorization": f"Api-Token {api_token}",
+            "Accept": "*/*",
+        }
 
     @staticmethod
-    def normalize_environment_url(raw_url: str) -> Optional[str]:
+    def normalize_environment_url(raw_url: str) -> str | None:
         if not raw_url or not raw_url.strip():
             return None
         url = raw_url.strip()
         if not re.match(r"^https?://", url, re.IGNORECASE):
             url = "https://" + url
         parsed = urlparse(url)
-        
-        # Auto-convert .apps. to .live. for API calls (Dynatrace uses different domains for UI and API)
-        netloc = parsed.netloc
-        if '.apps.dynatrace.com' in netloc:
-            netloc = netloc.replace('.apps.dynatrace.com', '.live.dynatrace.com')
-        
+
+        # Auto-convert .apps. to .live. — Dynatrace uses different domains for UI vs API
+        netloc = parsed.netloc.replace(".apps.dynatrace.com", ".live.dynatrace.com")
+
         url = urlunparse((parsed.scheme, netloc, parsed.path.rstrip("/"), "", "", ""))
         if not re.match(r"^https?://[A-Za-z0-9._-]+(:[0-9]{2,5})?(/e/[A-Za-z0-9_-]+)?$", url):
             return None
         return url
-
-    @property
-    def headers(self) -> Dict[str, str]:
-        return {
-            "Authorization": f"Api-Token {self.api_token}",
-            "Accept": "*/*",
-        }
 
     def _request(self, method: str, path: str, **kwargs) -> requests.Response:
         url = f"{self.environment_url}{path}"
@@ -70,10 +64,10 @@ class DynatraceClient:
             resp.raise_for_status()
             return resp
         except requests.exceptions.Timeout as exc:
-            logger.error("[DYNATRACE] %s %s timeout: %s", method, url, exc)
+            logger.error("[DYNATRACE] %s %s timeout", method, url)
             raise DynatraceAPIError("Connection timed out. Check if Dynatrace is reachable.") from exc
         except requests.exceptions.ConnectionError as exc:
-            logger.error("[DYNATRACE] %s %s connection error: %s", method, url, exc)
+            logger.error("[DYNATRACE] %s %s connection error", method, url)
             raise DynatraceAPIError("Unable to connect. Verify the environment URL.") from exc
         except requests.HTTPError as exc:
             logger.error("[DYNATRACE] %s %s failed (%s): %s", method, url, resp.status_code, resp.text[:200])
@@ -82,19 +76,18 @@ class DynatraceClient:
             logger.error("[DYNATRACE] %s %s error: %s", method, url, exc)
             raise DynatraceAPIError("Unable to reach Dynatrace") from exc
 
-    def validate_connection(self) -> Dict[str, Any]:
-        # Use /api/v1/time - works across all Dynatrace domains (apps, live, managed)
+    def validate_connection(self) -> dict[str, Any]:
+        # /api/v1/time works across all Dynatrace domains (apps, live, managed)
         return self._request("GET", "/api/v1/time").json()
 
-    def get_cluster_version(self) -> Optional[str]:
+    def get_cluster_version(self) -> str | None:
         try:
-            data = self._request("GET", "/api/v1/config/clusterversion").json()
-            return data.get("version")
+            return self._request("GET", "/api/v1/config/clusterversion").json().get("version")
         except DynatraceAPIError:
             return None
 
 
-def _get_stored_credentials(user_id: str) -> Optional[Dict[str, Any]]:
+def _get_stored_credentials(user_id: str) -> dict[str, Any] | None:
     try:
         return get_token_data(user_id, "dynatrace")
     except Exception as exc:
@@ -133,23 +126,13 @@ def connect():
 
     version = client.get_cluster_version()
 
-    token_payload = {
-        "api_token": api_token,
-        "environment_url": environment_url,
-        "version": version,
-    }
-
     try:
-        store_tokens_in_db(user_id, token_payload, "dynatrace")
+        store_tokens_in_db(user_id, {"api_token": api_token, "environment_url": environment_url, "version": version}, "dynatrace")
     except Exception as exc:
         logger.exception("[DYNATRACE] Failed to store credentials for user %s: %s", user_id, exc)
         return jsonify({"error": "Failed to store Dynatrace credentials"}), 500
 
-    return jsonify({
-        "success": True,
-        "environmentUrl": environment_url,
-        "version": version,
-    })
+    return jsonify({"success": True, "environmentUrl": environment_url, "version": version})
 
 
 @dynatrace_bp.route("/status", methods=["GET", "OPTIONS"])
@@ -164,13 +147,6 @@ def status():
     creds = _get_stored_credentials(user_id)
     if not creds or not creds.get("api_token") or not creds.get("environment_url"):
         return jsonify({"connected": False})
-
-    client = DynatraceClient(creds["environment_url"], creds["api_token"])
-    try:
-        client.validate_connection()
-    except DynatraceAPIError as exc:
-        logger.warning("[DYNATRACE] Status check failed for user %s: %s", user_id, exc)
-        return jsonify({"connected": False, "error": "Failed to validate stored credentials"})
 
     return jsonify({
         "connected": True,
@@ -204,9 +180,6 @@ def webhook(user_id: str):
     if request.method == "OPTIONS":
         return create_cors_response()
 
-    if not user_id:
-        return jsonify({"error": "user_id is required"}), 400
-
     creds = get_token_data(user_id, "dynatrace")
     if not creds:
         logger.warning("[DYNATRACE] Webhook received for user %s with no connection", user_id)
@@ -215,14 +188,13 @@ def webhook(user_id: str):
     payload = request.get_json(silent=True) or {}
     logger.info("[DYNATRACE] Received webhook for user %s: %s", user_id, payload.get("ProblemTitle", "unknown"))
 
-    sensitive_headers = {"authorization", "cookie", "set-cookie", "proxy-authorization", "x-api-key"}
+    _REDACTED_HEADERS = {"authorization", "cookie", "set-cookie", "proxy-authorization", "x-api-key"}
     sanitized_headers = {
-        k: ("<REDACTED>" if k.lower() in sensitive_headers or "token" in k.lower() or "secret" in k.lower() else v)
+        k: ("<REDACTED>" if k.lower() in _REDACTED_HEADERS or "token" in k.lower() or "secret" in k.lower() else v)
         for k, v in request.headers
     }
 
-    metadata = {"headers": sanitized_headers, "remote_addr": request.remote_addr}
-    process_dynatrace_problem.delay(payload, metadata, user_id)
+    process_dynatrace_problem.delay(payload, {"headers": sanitized_headers, "remote_addr": request.remote_addr}, user_id)
     return jsonify({"received": True})
 
 
@@ -243,24 +215,24 @@ def get_alerts():
         with db_pool.get_admin_connection() as conn:
             cursor = conn.cursor()
 
-            where = "WHERE user_id = %s"
+            conditions = ["user_id = %s"]
             params: list = [user_id]
             if state_filter:
-                where += " AND problem_state = %s"
+                conditions.append("problem_state = %s")
                 params.append(state_filter)
+            where = "WHERE " + " AND ".join(conditions)
 
             cursor.execute(
                 f"""SELECT id, problem_id, problem_title, problem_state, severity,
-                           impact, impacted_entity, problem_url, tags, payload, received_at, created_at
+                           impact, impacted_entity, problem_url, tags, payload,
+                           received_at, created_at, COUNT(*) OVER() AS total
                     FROM dynatrace_problems {where}
                     ORDER BY received_at DESC LIMIT %s OFFSET %s""",
                 (*params, limit, offset),
             )
             rows = cursor.fetchall()
 
-            cursor.execute(f"SELECT COUNT(*) FROM dynatrace_problems {where}", params)
-            total = cursor.fetchone()[0]
-
+        total = rows[0][12] if rows else 0
         return jsonify({
             "alerts": [
                 {
