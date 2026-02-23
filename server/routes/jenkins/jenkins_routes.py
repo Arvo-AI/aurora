@@ -120,7 +120,49 @@ def status():
         logger.warning("[JENKINS] Status check failed for user %s: %s", user_id, error)
         return jsonify({"connected": False, "error": "Failed to validate stored Jenkins credentials"})
 
-    version = data.get("mode", "unknown") if data else "unknown"
+    jobs = data.get("jobs", []) if data else []
+    job_count = len(jobs)
+
+    job_health = {"healthy": 0, "unstable": 0, "failing": 0, "disabled": 0, "other": 0}
+    for job in jobs:
+        color = (job.get("color") or "").lower().replace("_anime", "")
+        if color == "blue":
+            job_health["healthy"] += 1
+        elif color == "yellow":
+            job_health["unstable"] += 1
+        elif color == "red":
+            job_health["failing"] += 1
+        elif color in ("disabled", "notbuilt"):
+            job_health["disabled"] += 1
+        else:
+            job_health["other"] += 1
+
+    queue_size = 0
+    try:
+        q_ok, q_data, _ = client.get_queue()
+        if q_ok and q_data:
+            queue_size = len(q_data.get("items", []))
+    except Exception:
+        pass
+
+    nodes_online = 0
+    nodes_offline = 0
+    total_executors = 0
+    busy_executors = 0
+    try:
+        n_ok, n_data, _ = client.list_nodes()
+        if n_ok:
+            for node in n_data:
+                if node.get("offline"):
+                    nodes_offline += 1
+                else:
+                    nodes_online += 1
+                    total_executors += node.get("numExecutors", 0)
+                    if not node.get("idle", True):
+                        busy_executors += node.get("numExecutors", 0)
+    except Exception:
+        pass
+
     return jsonify({
         "connected": True,
         "baseUrl": creds.get("base_url"),
@@ -129,6 +171,15 @@ def status():
             "version": creds.get("version"),
             "mode": data.get("mode") if data else None,
             "numExecutors": data.get("numExecutors") if data else None,
+        },
+        "summary": {
+            "jobCount": job_count,
+            "jobHealth": job_health,
+            "queueSize": queue_size,
+            "nodesOnline": nodes_online,
+            "nodesOffline": nodes_offline,
+            "totalExecutors": total_executors,
+            "busyExecutors": busy_executors,
         },
     })
 

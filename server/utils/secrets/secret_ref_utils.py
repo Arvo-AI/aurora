@@ -49,6 +49,7 @@ SUPPORTED_SECRET_PROVIDERS: Set[str] = {
     "slack",    # Slack connector tokens
     "confluence", # Confluence connector tokens
     "aurora",   # Aurora-managed SSH keys
+    "jenkins",  # Jenkins CI/CD connector tokens
 }
 
 

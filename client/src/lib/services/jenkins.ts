@@ -6,11 +6,30 @@ interface JenkinsServer {
   numExecutors?: number;
 }
 
+interface JenkinsJobHealth {
+  healthy: number;
+  unstable: number;
+  failing: number;
+  disabled: number;
+  other: number;
+}
+
+interface JenkinsSummary {
+  jobCount: number;
+  jobHealth: JenkinsJobHealth;
+  queueSize: number;
+  nodesOnline: number;
+  nodesOffline: number;
+  totalExecutors: number;
+  busyExecutors: number;
+}
+
 export interface JenkinsStatus {
   connected: boolean;
   baseUrl?: string;
   username?: string;
   server?: JenkinsServer | null;
+  summary?: JenkinsSummary | null;
   error?: string;
 }
 
@@ -60,6 +79,7 @@ export const jenkinsService = {
         baseUrl: raw?.baseUrl ?? raw?.base_url,
         username: raw?.username,
         server: raw?.server ?? null,
+        summary: raw?.summary ?? null,
         error: raw?.error,
       };
     } catch (error) {
