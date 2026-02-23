@@ -45,7 +45,13 @@ class DynatraceClient:
         if not re.match(r"^https?://", url, re.IGNORECASE):
             url = "https://" + url
         parsed = urlparse(url)
-        url = urlunparse((parsed.scheme, parsed.netloc, parsed.path.rstrip("/"), "", "", ""))
+        
+        # Auto-convert .apps. to .live. for API calls (Dynatrace uses different domains for UI and API)
+        netloc = parsed.netloc
+        if '.apps.dynatrace.com' in netloc:
+            netloc = netloc.replace('.apps.dynatrace.com', '.live.dynatrace.com')
+        
+        url = urlunparse((parsed.scheme, netloc, parsed.path.rstrip("/"), "", "", ""))
         if not re.match(r"^https?://[A-Za-z0-9._-]+(:[0-9]{2,5})?(/e/[A-Za-z0-9_-]+)?$", url):
             return None
         return url
@@ -54,7 +60,7 @@ class DynatraceClient:
     def headers(self) -> Dict[str, str]:
         return {
             "Authorization": f"Api-Token {self.api_token}",
-            "Accept": "application/json",
+            "Accept": "*/*",
         }
 
     def _request(self, method: str, path: str, **kwargs) -> requests.Response:
@@ -77,7 +83,8 @@ class DynatraceClient:
             raise DynatraceAPIError("Unable to reach Dynatrace") from exc
 
     def validate_connection(self) -> Dict[str, Any]:
-        return self._request("GET", "/api/v2/time").json()
+        # Use /api/v1/time - works across all Dynatrace domains (apps, live, managed)
+        return self._request("GET", "/api/v1/time").json()
 
     def get_cluster_version(self) -> Optional[str]:
         try:
