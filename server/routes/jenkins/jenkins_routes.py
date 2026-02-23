@@ -63,8 +63,16 @@ def connect():
     client = JenkinsClient(base_url=base_url, username=username, api_token=api_token)
     success, server_data, error = client.get_server_info()
     if not success:
-        logger.warning("[JENKINS] Credential validation failed for user %s", user_id)
-        return jsonify({"error": error or "Failed to validate Jenkins credentials"}), 400
+        logger.warning("[JENKINS] Credential validation failed for user %s: %s", user_id, error)
+        safe_errors = {
+            "Invalid credentials. Check your username and API token.",
+            "Forbidden. Insufficient permissions.",
+            "Resource not found.",
+            "Connection timeout. Verify the Jenkins URL is reachable.",
+            "Cannot connect to Jenkins. Verify the URL and network access.",
+        }
+        msg = error if error in safe_errors else "Failed to validate Jenkins credentials"
+        return jsonify({"error": msg}), 400
 
     version = server_data.get("version", "unknown") if server_data else "unknown"
     mode = server_data.get("mode", "unknown") if server_data else "unknown"
