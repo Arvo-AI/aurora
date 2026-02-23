@@ -208,6 +208,17 @@ class ConnectorRegistry {
       path: "/tailscale/onboarding",
       storageKey: "isTailscaleConnected",
     });
+
+    this.register({
+      id: "jenkins",
+      name: "Jenkins",
+      description: "Connect to Jenkins to view jobs, builds, pipeline status, and build agents. Read-only access to your CI/CD server.",
+      iconPath: "/jenkins.svg",
+      iconBgColor: "bg-white dark:bg-white",
+      category: "CI/CD",
+      path: "/jenkins/auth",
+      storageKey: "isJenkinsConnected",
+    });
   }
 
   register(connector: ConnectorConfig): void {

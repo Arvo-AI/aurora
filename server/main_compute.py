@@ -205,6 +205,10 @@ if is_slack_enabled():
     app.register_blueprint(slack_bp, url_prefix="/slack")
     app.register_blueprint(slack_events_bp, url_prefix="/slack")
 
+# --- Jenkins Integration Routes ---
+from routes.jenkins import bp as jenkins_bp  # noqa: F401
+app.register_blueprint(jenkins_bp, url_prefix="/jenkins")
+
 # --- Grafana Integration Routes ---
 from routes.grafana import bp as grafana_bp  # noqa: F401
 # Import Grafana tasks for Celery registration

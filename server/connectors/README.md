@@ -27,6 +27,12 @@ Backend configuration guides for Aurora connectors.
 | **Datadog** | API Key + App Key | [Setup](./datadog_connector/README.md) |
 | **Netdata** | API Token | [Setup](./netdata_connector/README.md) |
 
+## CI/CD
+
+| Connector | Auth Type | Guide |
+|-----------|-----------|-------|
+| **Jenkins** | Username + API Token | [Setup](./jenkins_connector/README.md) |
+
 ## Quick Start
 
 1. Create credentials in the provider's console (OAuth app, API keys, etc.)

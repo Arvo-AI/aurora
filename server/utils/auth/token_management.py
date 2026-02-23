@@ -236,6 +236,22 @@ def store_tokens_in_db(user_id: str, token_data: Dict, provider: str,
                     "is_active = TRUE",
                     (user_id, secret_ref, provider, team_id)
                 )
+            elif provider == "jenkins":
+                base_url = token_data.get("base_url") if isinstance(token_data, dict) else None
+                username = token_data.get("username") if isinstance(token_data, dict) else None
+                version = token_data.get("version") if isinstance(token_data, dict) else None
+
+                cursor.execute(
+                    "INSERT INTO user_tokens (user_id, secret_ref, provider, client_id, email, subscription_name) "
+                    "VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT (user_id, provider) DO UPDATE "
+                    "SET secret_ref = EXCLUDED.secret_ref, "
+                    "client_id = EXCLUDED.client_id, "
+                    "email = EXCLUDED.email, "
+                    "subscription_name = EXCLUDED.subscription_name, "
+                    "timestamp = CURRENT_TIMESTAMP, "
+                    "is_active = TRUE",
+                    (user_id, secret_ref, provider, base_url, username, version)
+                )
             elif subscription_name is not None and subscription_id is not None:
                 cursor.execute(
                     "INSERT INTO user_tokens (user_id, secret_ref, provider, subscription_name, subscription_id) "
