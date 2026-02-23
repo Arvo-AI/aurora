@@ -54,7 +54,7 @@ def connect():
     except Exception:
         payload = {}
 
-    user_id = payload.get("userId") or get_user_id_from_request()
+    user_id = get_user_id_from_request()
     url = payload.get("url", "").strip()
     email = payload.get("email", "").strip()
     password = payload.get("password", "")
@@ -133,18 +133,13 @@ def status():
         return jsonify({"connected": False})
 
     try:
-        client.login()
+        projects = client.discover_projects()
     except CorootAPIError as exc:
         logger.warning("[COROOT] Status validation failed for user %s: %s", user_id, exc)
         return jsonify({
             "connected": False,
             "error": "Failed to validate Coroot connection",
         })
-
-    try:
-        projects = client.discover_projects()
-    except CorootAPIError:
-        projects = creds.get("projects", [])
 
     return jsonify({
         "connected": True,

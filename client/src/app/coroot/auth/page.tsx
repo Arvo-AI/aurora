@@ -90,7 +90,6 @@ export default function CorootAuthPage() {
 
       if (typeof window !== "undefined") {
         localStorage.setItem(CACHE_KEY, JSON.stringify(newStatus));
-        localStorage.setItem("isCorootConnected", "true");
       }
 
       toast({
@@ -146,7 +145,6 @@ export default function CorootAuthPage() {
 
       if (typeof window !== "undefined") {
         localStorage.removeItem(CACHE_KEY);
-        localStorage.removeItem("isCorootConnected");
       }
 
       updateLocalStorageConnection(false);
