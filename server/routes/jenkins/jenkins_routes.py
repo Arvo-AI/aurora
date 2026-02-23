@@ -88,8 +88,8 @@ def connect():
     try:
         store_tokens_in_db(user_id, token_payload, JENKINS_PROVIDER)
         logger.info("[JENKINS] Stored credentials for user %s (url=%s)", user_id, base_url)
-    except Exception as exc:
-        logger.exception("[JENKINS] Failed to store credentials for user %s: %s", user_id, exc)
+    except Exception:
+        logger.exception("[JENKINS] Failed to store credentials for user %s", user_id)
         return jsonify({"error": "Failed to store Jenkins credentials"}), 500
 
     return jsonify({
@@ -113,6 +113,11 @@ def status():
     creds = _get_stored_jenkins_credentials(user_id)
     if not creds:
         return jsonify({"connected": False})
+
+    # Extract display-safe fields before passing creds to the client builder
+    stored_base_url = creds.get("base_url", "")
+    stored_username = creds.get("username", "")
+    stored_version = creds.get("version")
 
     client = _build_client(creds)
     if not client:
@@ -168,10 +173,10 @@ def status():
 
     return jsonify({
         "connected": True,
-        "baseUrl": creds.get("base_url"),
-        "username": creds.get("username"),
+        "baseUrl": stored_base_url,
+        "username": stored_username,
         "server": {
-            "version": creds.get("version"),
+            "version": stored_version,
             "mode": data.get("mode") if data else None,
             "numExecutors": data.get("numExecutors") if data else None,
         },
