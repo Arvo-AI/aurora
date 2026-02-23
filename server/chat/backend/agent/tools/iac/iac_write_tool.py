@@ -72,22 +72,33 @@ def detect_provider_from_terraform_content(content: str) -> Optional[str]:
     return None
 
 
+def _validate_path_component(value: str, name: str) -> None:
+    """Validate that a path component contains only safe characters."""
+    if not re.match(r'^[a-zA-Z0-9_-]+$', value):
+        raise ValueError(f"Invalid {name}: must contain only alphanumeric characters, hyphens, and underscores")
+
+
 def get_terraform_directory(user_id: Optional[str] = None, session_id: Optional[str] = None):
     """Get the directory for Terraform files, optionally user-specific and session-specific."""
     # Base terraform directory (use /home/appuser for terminal pods with read-only root filesystem)
     base_terraform_dir = Path("/home/appuser/terraform_workdir")
-    
+
     # Build user-scoped path for isolation
     if user_id:
+        _validate_path_component(user_id, "user_id")
         # User IDs are now plain UUIDs without prefixes (Auth.js migration)
         # Always add user_ prefix to the directory name for consistency
         user_dir_name = f"user_{user_id}"
         user_terraform_dir = base_terraform_dir / user_dir_name
-        
+
         # Add session subdirectory if provided
         if session_id:
+            _validate_path_component(session_id, "session_id")
             session_dir_name = f"session_{session_id}"
             session_terraform_dir = user_terraform_dir / session_dir_name
+            # Verify resolved path stays under base directory
+            if not session_terraform_dir.resolve().is_relative_to(base_terraform_dir.resolve()):
+                raise ValueError("Invalid path: directory traversal detected")
             return session_terraform_dir
         else:
             return user_terraform_dir

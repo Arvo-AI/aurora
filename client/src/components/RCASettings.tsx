@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { getEnv } from '@/lib/env';
 import { Switch } from "@/components/ui/switch";
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
@@ -69,7 +70,7 @@ export function RCASettings() {
 
         await Promise.all(keys.map(async (key) => {
           const response = await fetch(
-            `${process.env.NEXT_PUBLIC_BACKEND_URL}/api/user-preferences?key=${key}`,
+            `${getEnv('NEXT_PUBLIC_BACKEND_URL')}/api/user-preferences?key=${key}`,
             {
               headers: {
                 'Content-Type': 'application/json',
@@ -148,7 +149,7 @@ export function RCASettings() {
 
     try {
       const response = await fetch(
-        `${process.env.NEXT_PUBLIC_BACKEND_URL}/api/user-preferences`,
+        `${getEnv('NEXT_PUBLIC_BACKEND_URL')}/api/user-preferences`,
         {
           method: 'POST',
           headers: {

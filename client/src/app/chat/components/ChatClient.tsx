@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useUser } from '@/hooks/useAuthHooks';
+import { getEnv } from '@/lib/env';
 import { useRouter } from "next/navigation";
 import { Loader2 } from "lucide-react";
 import dynamic from "next/dynamic";
@@ -176,7 +177,7 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
 
   // WebSocket integration
   const chatWebSocket = useWebSocket({
-    url: process.env.NEXT_PUBLIC_WEBSOCKET_URL || '',
+    url: getEnv('NEXT_PUBLIC_WEBSOCKET_URL') || '',
     userId: userId,
     onMessage: handleWebSocketMessage,
     onConnect: () => {

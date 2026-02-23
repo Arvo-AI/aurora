@@ -66,7 +66,7 @@ def check_aws_environment():
         })
         
     except Exception as e:
-        logger.error(f"Failed to check AWS environment: {e}")
+        logger.error(f"Failed to check AWS environment: {e}", exc_info=True)
         return jsonify({"error": "Internal server error"}), 500
 
 
@@ -221,7 +221,7 @@ def set_aws_role(workspace_id):
                 )
                 return jsonify({
                     "error": "Read-only role assumption failed",
-                    "message": str(read_only_error),
+                    "message": "Could not assume the specified read-only role. Please verify the role ARN and trust policy.",
                     "details": {
                         "role_arn": read_only_role_arn,
                         "external_id": workspace['aws_external_id'],

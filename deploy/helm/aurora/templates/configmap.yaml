@@ -17,9 +17,11 @@ data:
   # Backend needs this for OAuth callbacks (derived from ingress if not set)
   NEXT_PUBLIC_BACKEND_URL: {{ default (printf "https://%s" .Values.ingress.hosts.api) .Values.config.NEXT_PUBLIC_BACKEND_URL | quote }}
   
-  # All other config values from .Values.config (excluding keys with computed defaults above and NEXT_PUBLIC_*)
+  # All other config values from .Values.config (excluding keys with computed defaults above)
+  # NOTE: NEXT_PUBLIC_* vars are included because the backend reads feature flags like
+  # NEXT_PUBLIC_ENABLE_SLACK, NEXT_PUBLIC_ENABLE_OVH, etc. to conditionally register routes.
   {{- range $key, $value := .Values.config }}
-  {{- if and (not (hasPrefix "NEXT_PUBLIC_" $key)) (not (has $key (list "POSTGRES_HOST" "REDIS_URL" "WEAVIATE_HOST" "BACKEND_URL" "CHATBOT_INTERNAL_URL" "VAULT_ADDR" "SEARXNG_URL"))) }}
+  {{- if not (has $key (list "POSTGRES_HOST" "REDIS_URL" "WEAVIATE_HOST" "BACKEND_URL" "CHATBOT_INTERNAL_URL" "VAULT_ADDR" "SEARXNG_URL" "NEXT_PUBLIC_BACKEND_URL")) }}
   {{ $key }}: {{ $value | quote }}
   {{- end }}
   {{- end }}

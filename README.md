@@ -41,17 +41,22 @@ make prod-prebuilt   # or: make prod-local to build from source
 
 **That's it!** Open http://localhost:3000 in your browser.
 
-### Run with prebuilt images (no build)
+### Pin a specific version
 
-If you prefer not to build the app images locally, use the public images from GitHub Container Registry:
+By default, `make prod-prebuilt` pulls the latest images. To pin a release:
 
 ```bash
-git clone https://github.com/Arvo-AI/aurora.git
-cd aurora
-make init
-# Add OPENROUTER_API_KEY (or another LLM key) to .env
-make prod-prebuilt   # or: make prod-local to build from source
-# Then add VAULT_TOKEN from vault-init logs to .env and restart (see step 5 in Quick Start)
+make prod-prebuilt VERSION=v1.2.3
+```
+
+Available versions are listed at https://github.com/orgs/Arvo-AI/packages.
+
+### Build from source instead
+
+To build images locally (e.g. testing a feature branch):
+
+```bash
+make prod-local
 ```
 
 > **Note**: Aurora works **without any cloud provider accounts**! The LLM API key is the only external requirement. Connectors are optional and can be enabled later if needed via the env file.

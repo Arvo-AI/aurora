@@ -107,8 +107,8 @@ def get_user_repos():
         return create_cors_response({"repos": simplified_repos})
         
     except Exception as e:
-        logger.error(f"Error fetching user repositories: {e}")
-        return create_cors_response({"error": str(e), "repos": []}, 500)
+        logger.error(f"Error fetching user repositories: {e}", exc_info=True)
+        return create_cors_response({"error": "Failed to fetch repositories", "repos": []}, 500)
 
 @github_user_repos_bp.route("/user-branches/<path:repo_full_name>", methods=["GET", "OPTIONS"])
 def get_user_branches(repo_full_name):
@@ -173,5 +173,5 @@ def get_user_branches(repo_full_name):
         return create_cors_response({"branches": all_branches})
         
     except Exception as e:
-        logger.error(f"Error fetching branches: {e}")
-        return create_cors_response({"error": str(e), "branches": []}, 500)
+        logger.error(f"Error fetching branches: {e}", exc_info=True)
+        return create_cors_response({"error": "Failed to fetch branches", "branches": []}, 500)

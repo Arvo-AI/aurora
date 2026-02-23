@@ -58,13 +58,13 @@ class TerminalPodManager:
     
     def generate_pod_name(self, user_id: str, session_id: str) -> str:
         """Generate pod name from user_id and session_id.
-        
+
         Each chat session gets a unique pod for complete isolation.
         """
         combined = f"{user_id}-{session_id}"
-        name_hash = hashlib.md5(combined.encode()).hexdigest()[:8]
+        name_hash = hashlib.sha256(combined.encode()).hexdigest()[:8]
         return f"terminal-conv-{name_hash}"
-    
+
     def create_terminal_pod(
         self,
         user_id: str,
@@ -84,7 +84,7 @@ class TerminalPodManager:
             Tuple of (success, pod_info_dict)
         """
         pod_name = self.generate_pod_name(user_id, session_id)
-        
+
         # Check if pod already exists
         try:
             existing_pod = self.core_v1.read_namespaced_pod(pod_name, self.namespace)
@@ -96,12 +96,12 @@ class TerminalPodManager:
                     "namespace": self.namespace,
                     "already_exists": True
                 }
-            
+
             # Delete failed/completed pod and create new one
             logger.info(f"Deleting old terminal pod {pod_name} with status {existing_pod.status.phase}")
             self.core_v1.delete_namespaced_pod(pod_name, self.namespace)
             time.sleep(2)
-        
+
         except ApiException as e:
             if e.status != 404:
                 logger.error(f"Error checking existing pod: {e}")
@@ -246,8 +246,8 @@ class TerminalPodManager:
             name=pod_name,
             labels={
                 "app": "user-terminal",
-                "user-id": hashlib.md5(user_id.encode()).hexdigest()[:16],
-                "session-id": hashlib.md5(session_id.encode()).hexdigest()[:16],
+                "user-id": hashlib.sha256(user_id.encode()).hexdigest()[:16],
+                "session-id": hashlib.sha256(session_id.encode()).hexdigest()[:16],
                 "managed-by": "terminal-pod-manager",
                 "created-at": current_timestamp
             },

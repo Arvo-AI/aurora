@@ -95,7 +95,7 @@ def callback():
         redirect_url = f"{FRONTEND_URL}?login=gcp_setup_pending&task_id={task.id}"
         return redirect(redirect_url)
     except Exception as e:
-        logging.error(f"Error during OAuth callback: {e}")
+        logging.error(f"Error during OAuth callback: {e}", exc_info=True)
         return redirect(f"{FRONTEND_URL}?login=gcp_failed")
 
 
@@ -141,7 +141,7 @@ def get_gcp_setup_status(task_id):
             response = {"state": task.state, "status": "Unknown state", "complete": False}
         return jsonify(response)
     except Exception as e:
-        logging.error(f"Error fetching task status: {e}")
+        logging.error(f"Error fetching task status: {e}", exc_info=True)
         return jsonify({"error": "Failed to fetch task status"}), 500
 
 
@@ -258,6 +258,6 @@ def post_auth_retry():
         
         return jsonify({"status": "started", "task_id": task.id})
     except Exception as e:
-        logging.error(f"Error in post-auth retry: {e}")
-        return jsonify({"error": str(e)}), 500
+        logging.error(f"Error in post-auth retry: {e}", exc_info=True)
+        return jsonify({"error": "Failed to retry post-auth setup"}), 500
 

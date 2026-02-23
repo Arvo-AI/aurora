@@ -273,7 +273,8 @@ def validate_and_test_ssh(
         # Parse the private key
         pkey = parse_private_key(private_key)
     except ValueError as e:
-        return False, str(e), None
+        logger.error(f"SSH key validation error: {e}")
+        return False, "Invalid private key format", None
 
     bastion_client = None
     ssh = None
@@ -305,7 +306,7 @@ def validate_and_test_ssh(
             )
 
             bastion_client = paramiko.SSHClient()
-            bastion_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            bastion_client.set_missing_host_key_policy(paramiko.WarningPolicy())
             bastion_client.connect(
                 hostname=jump_cfg.bastion_host,
                 port=jump_cfg.bastion_port,
@@ -331,7 +332,7 @@ def validate_and_test_ssh(
             )
 
             ssh = paramiko.SSHClient()
-            ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            ssh.set_missing_host_key_policy(paramiko.WarningPolicy())
             ssh.connect(
                 hostname=target_host,
                 username=target_user,
@@ -345,7 +346,7 @@ def validate_and_test_ssh(
             )
         else:
             ssh = paramiko.SSHClient()
-            ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            ssh.set_missing_host_key_policy(paramiko.WarningPolicy())
             logger.info(
                 f"Attempting SSH connection to {target_host}:{target_port} as {target_user}..."
             )

@@ -3,6 +3,7 @@
 import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
+from urllib.parse import urlparse
 
 import requests
 from flask import jsonify
@@ -68,8 +69,11 @@ class PagerDutyClient:
     def get_subdomain(self) -> Optional[str]:
         try:
             services = self._request("GET", "/services?limit=1").json().get("services", [])
-            if services and ".pagerduty.com" in (url := services[0].get("html_url", "")):
-                return url.split("://")[1].split(".pagerduty.com")[0]
+            if services:
+                url = services[0].get("html_url", "")
+                parsed = urlparse(url)
+                if parsed.hostname and parsed.hostname.endswith(".pagerduty.com"):
+                    return parsed.hostname.replace(".pagerduty.com", "")
         except Exception:
             return None
     
@@ -92,8 +96,9 @@ def validate_token(client: PagerDutyClient) -> Dict[str, Any]:
         if name := (user.get("name") or user.get("summary")):
             result["external_user_name"] = name
         if url := user.get("html_url"):
-            if ".pagerduty.com" in url:
-                result["account_subdomain"] = url.split("://")[1].split(".pagerduty.com")[0]
+            parsed_url = urlparse(url)
+            if parsed_url.hostname and parsed_url.hostname.endswith(".pagerduty.com"):
+                result["account_subdomain"] = parsed_url.hostname.replace(".pagerduty.com", "")
     except PagerDutyAPIError as e:
         error_msg = str(e).lower()
         if "account-level" in error_msg or "user's identity" in error_msg:
@@ -118,5 +123,6 @@ def error_response(exc: PagerDutyAPIError):
     if "rate limit" in msg:
         return jsonify({"error": "Rate limited by PagerDuty"}), 429
     
-    return jsonify({"error": str(exc)}), 502
+    logger.error(f"PagerDuty API error: {exc}")
+    return jsonify({"error": "PagerDuty API request failed"}), 502
 
