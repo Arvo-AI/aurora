@@ -210,7 +210,7 @@ def github_callback():
         }
         headers = {"Accept": "application/json"}
         
-        logging.info(f"Requesting token with payload: {payload}")
+        logging.info("Requesting GitHub OAuth token exchange")
         response = requests.post(token_url, json=payload, headers=headers)
         logging.info(f"Token response status: {response.status_code}")
         

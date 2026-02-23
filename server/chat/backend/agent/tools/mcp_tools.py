@@ -244,7 +244,7 @@ class RealMCPServerManager:
                 ]
                 
                 logging.info(f" GitHub MCP server command prepared (Docker with all toolsets)")
-                logging.info(f" GitHub token configured (length: {len(github_token)}, starts with: {github_token[:10]}...)")
+                logging.info(f" GitHub token configured (length: {len(github_token)})")
             elif server_type == "context7":
                 # Context7 MCP server via npx - provides up-to-date docs for OVH CLI/Terraform
                 npx_cmd = shutil.which("npx") or "/usr/bin/npx"
@@ -291,7 +291,8 @@ region = {aws_creds.get("region", "us-east-1")}
 output = json
 """
                     config_file = os.path.join(aws_dir, "config")
-                    with open(config_file, "w") as f:
+                    fd = os.open(config_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+                    with os.fdopen(fd, "w") as f:
                         f.write(config_content)
                     
                     # Set environment variables to point to our custom AWS config location
