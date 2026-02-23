@@ -60,6 +60,29 @@ from .splunk_tool import (
     SplunkListIndexesArgs,
     SplunkListSourcetypesArgs,
 )
+from .coroot_tool import (
+    coroot_get_incidents,
+    coroot_get_incident_detail,
+    coroot_get_applications,
+    coroot_get_app_detail,
+    coroot_get_app_logs,
+    coroot_get_traces,
+    coroot_get_service_map,
+    coroot_query_metrics,
+    coroot_get_deployments,
+    coroot_get_nodes,
+    is_coroot_connected,
+    CorootGetIncidentsArgs,
+    CorootGetIncidentDetailArgs,
+    CorootGetApplicationsArgs,
+    CorootGetAppDetailArgs,
+    CorootGetAppLogsArgs,
+    CorootGetTracesArgs,
+    CorootGetServiceMapArgs,
+    CorootQueryMetricsArgs,
+    CorootGetDeploymentsArgs,
+    CorootGetNodesArgs,
+)
 
 # Import all context management functions from utils
 from utils.cloud.cloud_utils import (
@@ -1274,6 +1297,54 @@ def get_cloud_tools():
             logging.info(f"Added 3 Confluence search tools for user {user_id}")
     except Exception as e:
         logging.warning(f"Failed to add Confluence search tools: {e}")
+
+    # Add Coroot observability tools if connected
+    if user_id and is_coroot_connected(user_id):
+        _coroot_tools = [
+            (coroot_get_incidents, "coroot_get_incidents", CorootGetIncidentsArgs,
+             "List recent incidents from Coroot (eBPF-powered observability) with RCA summaries, severity, "
+             "root cause, and fix suggestions. Use this first when investigating production issues."),
+            (coroot_get_incident_detail, "coroot_get_incident_detail", CorootGetIncidentDetailArgs,
+             "Get full detail for a specific Coroot incident including SLO data, RCA analysis, and propagation map."),
+            (coroot_get_applications, "coroot_get_applications", CorootGetApplicationsArgs,
+             "List all applications with health status from eBPF kernel-level instrumentation: SLO, CPU throttling, "
+             "memory OOM kills, TCP connection failures, network retransmissions, HTTP errors, latency, DNS issues."),
+            (coroot_get_app_detail, "coroot_get_app_detail", CorootGetAppDetailArgs,
+             "Get full audit reports for one application (22 report types, 35+ health checks from eBPF). "
+             "Detects kernel-level issues invisible to app logs: OOM kills, TCP failures, disk I/O saturation, "
+             "CPU throttling, DNS errors, network packet loss, DB connection pool exhaustion."),
+            (coroot_get_app_logs, "coroot_get_app_logs", CorootGetAppLogsArgs,
+             "Fetch application logs from Coroot. Filter by severity (Error/Warning/Info) and message content. "
+             "Returns timestamps, messages, attributes, and trace IDs for correlation."),
+            (coroot_get_traces, "coroot_get_traces", CorootGetTracesArgs,
+             "Search distributed traces across all applications or look up a specific trace by ID. "
+             "Filter by service name and error status. Shows full span trees with timing."),
+            (coroot_get_service_map, "coroot_get_service_map", CorootGetServiceMapArgs,
+             "Get the service dependency map auto-discovered via eBPF TCP connection tracking. Shows all "
+             "applications, upstream/downstream connections, request rates, latency, and connection health."),
+            (coroot_query_metrics, "coroot_query_metrics", CorootQueryMetricsArgs,
+             "Execute PromQL queries against Coroot's eBPF-collected metrics. All metrics are gathered at the "
+             "kernel level without exporters: CPU, memory, TCP connections, retransmissions, network RTT, "
+             "HTTP requests, DNS, disk I/O, DB query latency. "
+             "Example: rate(container_net_tcp_failed_connects_total[5m])"),
+            (coroot_get_deployments, "coroot_get_deployments", CorootGetDeploymentsArgs,
+             "List recent deployments to correlate with incidents. Shows deployment status and age."),
+            (coroot_get_nodes, "coroot_get_nodes", CorootGetNodesArgs,
+             "List all infrastructure nodes with kernel-level CPU, memory, disk I/O, and network health."),
+        ]
+        for _func, _name, _schema, _desc in _coroot_tools:
+            _ctx = with_user_context(_func)
+            _notif = with_completion_notification(_ctx)
+            _final = wrap_func_with_capture(_notif, _name) if tool_capture else _notif
+            tools.append(StructuredTool.from_function(
+                func=_final,
+                name=_name,
+                description=_desc,
+                args_schema=_schema,
+            ))
+        logging.info(f"Added {len(_coroot_tools)} Coroot observability tools for user {user_id}")
+    else:
+        logging.debug(f"Coroot tools not added - user {user_id} not connected to Coroot")
 
     logging.info(f"Created {len(tools)} Aurora native tools")
     
