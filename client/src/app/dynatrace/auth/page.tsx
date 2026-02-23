@@ -169,7 +169,8 @@ export default function DynatraceAuthPage() {
                 <ol className="list-decimal list-inside space-y-1 text-muted-foreground">
                   <li>Go to Settings &gt; Access tokens in Dynatrace</li>
                   <li>Click &quot;Generate new token&quot;</li>
-                  <li>Add scopes: <code className="bg-muted px-1 rounded">problems.read</code>, <code className="bg-muted px-1 rounded">events.ingest</code>, <code className="bg-muted px-1 rounded">logs.ingest</code>, <code className="bg-muted px-1 rounded">metrics.read</code>, <code className="bg-muted px-1 rounded">entities.read</code></li>
+                  <li>Add scopes: <code className="bg-muted px-1 rounded">problems.read</code>, <code className="bg-muted px-1 rounded">entities.read</code></li>
+                  <li>Add if available in your environment: <code className="bg-muted px-1 rounded">metrics.read</code>, <code className="bg-muted px-1 rounded">logs.read</code>, <code className="bg-muted px-1 rounded">events.read</code> (only shown if the feature is active in your Dynatrace plan)</li>
                   <li>Copy the generated token</li>
                 </ol>
                 <a

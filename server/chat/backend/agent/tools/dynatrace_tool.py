@@ -132,8 +132,8 @@ def _query_metrics(creds: Dict, query: str, time_from: str, time_to: str, limit:
 
 def _query_entities(creds: Dict, query: str, time_from: str, time_to: str, limit: int) -> Dict:
     params: Dict[str, Any] = {"from": time_from, "to": time_to, "pageSize": min(limit, 500)}
-    if query:
-        params["entitySelector"] = query
+    # entitySelector is required by Dynatrace API - use a broad selector if none provided
+    params["entitySelector"] = query if query else "type(HOST),type(SERVICE),type(APPLICATION),type(PROCESS_GROUP)"
 
     resp = requests.get(
         f"{creds['environment_url']}/api/v2/entities",
@@ -215,6 +215,11 @@ def query_dynatrace(
         status = exc.response.status_code if exc.response is not None else "unknown"
         if status == 401:
             return json.dumps({"error": "Dynatrace authentication failed. Token may be expired."})
+        elif status == 403:
+            scope_needed = {"logs": "logs.read", "metrics": "metrics.read", "events": "events.read"}.get(resource_type)
+            if scope_needed:
+                return json.dumps({"error": f"Token missing '{scope_needed}' scope, or this feature is not active in your Dynatrace environment."})
+            return json.dumps({"error": "Token lacks required scope for this resource type."})
         elif status == 400:
             msg = exc.response.text[:200] if exc.response is not None else "Bad request"
             return json.dumps({"error": f"Invalid query: {msg}"})
