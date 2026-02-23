@@ -12,24 +12,11 @@ import { Badge } from "@/components/ui/badge";
 import {
   Check,
   ChevronLeft,
-  CircleDot,
   ExternalLink,
   Eye,
   EyeOff,
   Loader2,
-  Monitor,
   ShieldCheck,
-  Cpu,
-  Globe,
-  User,
-  Hash,
-  Briefcase,
-  Server,
-  Clock,
-  CheckCircle2,
-  AlertTriangle,
-  XCircle,
-  MinusCircle,
 } from "lucide-react";
 
 const getUserFriendlyError = (err: unknown): string => {
@@ -252,230 +239,141 @@ export default function JenkinsAuthPage() {
       </div>
 
       {isConnected ? (
-        <div className="space-y-6">
-          {/* Summary stats row */}
-          {status?.summary && (
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-              <Card className="p-4">
-                <div className="flex items-center gap-3">
-                  <div className="p-2 rounded-lg bg-blue-100 dark:bg-blue-900/30">
-                    <Briefcase className="h-4 w-4 text-blue-600 dark:text-blue-400" />
-                  </div>
-                  <div>
-                    <p className="text-2xl font-bold leading-none">{status.summary.jobCount}</p>
-                    <p className="text-xs text-muted-foreground mt-1">Jobs</p>
-                  </div>
-                </div>
-              </Card>
-              <Card className="p-4">
-                <div className="flex items-center gap-3">
-                  <div className="p-2 rounded-lg bg-green-100 dark:bg-green-900/30">
-                    <Server className="h-4 w-4 text-green-600 dark:text-green-400" />
-                  </div>
-                  <div>
-                    <p className="text-2xl font-bold leading-none">
-                      {status.summary.nodesOnline}
-                      <span className="text-sm font-normal text-muted-foreground">/{status.summary.nodesOnline + status.summary.nodesOffline}</span>
-                    </p>
-                    <p className="text-xs text-muted-foreground mt-1">Nodes Online</p>
-                  </div>
-                </div>
-              </Card>
-              <Card className="p-4">
-                <div className="flex items-center gap-3">
-                  <div className="p-2 rounded-lg bg-purple-100 dark:bg-purple-900/30">
-                    <Cpu className="h-4 w-4 text-purple-600 dark:text-purple-400" />
-                  </div>
-                  <div>
-                    <p className="text-2xl font-bold leading-none">
-                      {status.summary.busyExecutors}
-                      <span className="text-sm font-normal text-muted-foreground">/{status.summary.totalExecutors}</span>
-                    </p>
-                    <p className="text-xs text-muted-foreground mt-1">Executors Busy</p>
-                  </div>
-                </div>
-              </Card>
-              <Card className="p-4">
-                <div className="flex items-center gap-3">
-                  <div className="p-2 rounded-lg bg-orange-100 dark:bg-orange-900/30">
-                    <Clock className="h-4 w-4 text-orange-600 dark:text-orange-400" />
-                  </div>
-                  <div>
-                    <p className="text-2xl font-bold leading-none">{status.summary.queueSize}</p>
-                    <p className="text-xs text-muted-foreground mt-1">In Queue</p>
-                  </div>
-                </div>
-              </Card>
-            </div>
-          )}
-
-          {/* Job health breakdown */}
-          {status?.summary && status.summary.jobCount > 0 && (
-            <Card>
-              <CardHeader className="pb-3">
-                <CardTitle className="text-lg">Job Health</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="space-y-3">
-                  {/* Health bar */}
-                  <div className="flex h-3 rounded-full overflow-hidden bg-muted">
-                    {status.summary.jobHealth.healthy > 0 && (
-                      <div
-                        className="bg-green-500 transition-all duration-500"
-                        style={{ width: `${(status.summary.jobHealth.healthy / status.summary.jobCount) * 100}%` }}
-                      />
-                    )}
-                    {status.summary.jobHealth.unstable > 0 && (
-                      <div
-                        className="bg-yellow-500 transition-all duration-500"
-                        style={{ width: `${(status.summary.jobHealth.unstable / status.summary.jobCount) * 100}%` }}
-                      />
-                    )}
-                    {status.summary.jobHealth.failing > 0 && (
-                      <div
-                        className="bg-red-500 transition-all duration-500"
-                        style={{ width: `${(status.summary.jobHealth.failing / status.summary.jobCount) * 100}%` }}
-                      />
-                    )}
-                    {status.summary.jobHealth.disabled > 0 && (
-                      <div
-                        className="bg-gray-400 transition-all duration-500"
-                        style={{ width: `${(status.summary.jobHealth.disabled / status.summary.jobCount) * 100}%` }}
-                      />
-                    )}
-                    {status.summary.jobHealth.other > 0 && (
-                      <div
-                        className="bg-gray-300 transition-all duration-500"
-                        style={{ width: `${(status.summary.jobHealth.other / status.summary.jobCount) * 100}%` }}
-                      />
-                    )}
-                  </div>
-
-                  {/* Legend */}
-                  <div className="flex flex-wrap gap-x-5 gap-y-2 text-sm">
-                    {status.summary.jobHealth.healthy > 0 && (
-                      <div className="flex items-center gap-1.5">
-                        <CheckCircle2 className="h-3.5 w-3.5 text-green-500" />
-                        <span className="text-muted-foreground">Passing</span>
-                        <span className="font-semibold">{status.summary.jobHealth.healthy}</span>
-                      </div>
-                    )}
-                    {status.summary.jobHealth.unstable > 0 && (
-                      <div className="flex items-center gap-1.5">
-                        <AlertTriangle className="h-3.5 w-3.5 text-yellow-500" />
-                        <span className="text-muted-foreground">Unstable</span>
-                        <span className="font-semibold">{status.summary.jobHealth.unstable}</span>
-                      </div>
-                    )}
-                    {status.summary.jobHealth.failing > 0 && (
-                      <div className="flex items-center gap-1.5">
-                        <XCircle className="h-3.5 w-3.5 text-red-500" />
-                        <span className="text-muted-foreground">Failing</span>
-                        <span className="font-semibold">{status.summary.jobHealth.failing}</span>
-                      </div>
-                    )}
-                    {status.summary.jobHealth.disabled > 0 && (
-                      <div className="flex items-center gap-1.5">
-                        <MinusCircle className="h-3.5 w-3.5 text-gray-400" />
-                        <span className="text-muted-foreground">Disabled</span>
-                        <span className="font-semibold">{status.summary.jobHealth.disabled}</span>
-                      </div>
-                    )}
-                    {status.summary.jobHealth.other > 0 && (
-                      <div className="flex items-center gap-1.5">
-                        <CircleDot className="h-3.5 w-3.5 text-gray-300" />
-                        <span className="text-muted-foreground">Other</span>
-                        <span className="font-semibold">{status.summary.jobHealth.other}</span>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          )}
-
-          {/* Connection details */}
+        <div className="space-y-4">
+          {/* Single overview card */}
           <Card>
-            <CardHeader className="pb-4">
-              <CardTitle className="text-lg">Connection Details</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="grid gap-4">
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <div className="flex items-start gap-3 p-3 rounded-lg bg-muted/50">
-                    <Globe className="h-4 w-4 mt-0.5 text-muted-foreground shrink-0" />
-                    <div className="min-w-0">
-                      <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">URL</p>
-                      <p className="text-sm font-medium truncate mt-0.5">{status?.baseUrl}</p>
-                    </div>
-                  </div>
-                  <div className="flex items-start gap-3 p-3 rounded-lg bg-muted/50">
-                    <User className="h-4 w-4 mt-0.5 text-muted-foreground shrink-0" />
-                    <div className="min-w-0">
-                      <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Username</p>
-                      <p className="text-sm font-medium mt-0.5">{status?.username}</p>
-                    </div>
-                  </div>
-                  {status?.server?.version && (
-                    <div className="flex items-start gap-3 p-3 rounded-lg bg-muted/50">
-                      <Hash className="h-4 w-4 mt-0.5 text-muted-foreground shrink-0" />
-                      <div className="min-w-0">
-                        <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Version</p>
-                        <p className="text-sm font-medium mt-0.5">{status.server.version}</p>
-                      </div>
-                    </div>
-                  )}
-                  {status?.server?.mode && (
-                    <div className="flex items-start gap-3 p-3 rounded-lg bg-muted/50">
-                      <Monitor className="h-4 w-4 mt-0.5 text-muted-foreground shrink-0" />
-                      <div className="min-w-0">
-                        <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Mode</p>
-                        <p className="text-sm font-medium capitalize mt-0.5">{status.server.mode}</p>
-                      </div>
-                    </div>
-                  )}
+            <CardContent className="pt-6 space-y-6">
+              {/* Connection info row */}
+              <div className="flex items-center justify-between gap-4">
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-medium truncate">{status?.baseUrl}</p>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    {status?.username}{status?.server?.version ? ` \u00b7 v${status.server.version}` : ""}{status?.server?.mode ? ` \u00b7 ${status.server.mode.charAt(0).toUpperCase()}${status.server.mode.slice(1).toLowerCase()}` : ""}
+                  </p>
                 </div>
-
                 {status?.baseUrl && (
                   <a
                     href={status.baseUrl}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="inline-flex items-center gap-1.5 text-sm text-blue-600 dark:text-blue-400 hover:underline"
+                    className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors shrink-0"
                   >
-                    Open Jenkins Dashboard
-                    <ExternalLink className="h-3.5 w-3.5" />
+                    Open Dashboard
+                    <ExternalLink className="h-3 w-3" />
                   </a>
                 )}
               </div>
+
+              {/* Stats row */}
+              {status?.summary && (
+                <>
+                  <div className="border-t" />
+                  <div className="grid grid-cols-4 gap-2 text-center">
+                    <div>
+                      <p className="text-2xl font-semibold tabular-nums">{status.summary.jobCount}</p>
+                      <p className="text-[11px] text-muted-foreground mt-0.5">Jobs</p>
+                    </div>
+                    <div>
+                      <p className="text-2xl font-semibold tabular-nums">
+                        {status.summary.nodesOnline}
+                        <span className="text-sm font-normal text-muted-foreground">/{status.summary.nodesOnline + status.summary.nodesOffline}</span>
+                      </p>
+                      <p className="text-[11px] text-muted-foreground mt-0.5">Nodes</p>
+                    </div>
+                    <div>
+                      <p className="text-2xl font-semibold tabular-nums">
+                        {status.summary.busyExecutors}
+                        <span className="text-sm font-normal text-muted-foreground">/{status.summary.totalExecutors}</span>
+                      </p>
+                      <p className="text-[11px] text-muted-foreground mt-0.5">Executors</p>
+                    </div>
+                    <div>
+                      <p className="text-2xl font-semibold tabular-nums">{status.summary.queueSize}</p>
+                      <p className="text-[11px] text-muted-foreground mt-0.5">Queued</p>
+                    </div>
+                  </div>
+                </>
+              )}
+
+              {/* Job health */}
+              {status?.summary && status.summary.jobCount > 0 && (
+                <>
+                  <div className="border-t" />
+                  <div className="space-y-2.5">
+                    <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Job Health</p>
+                    <div className="flex h-2 rounded-full overflow-hidden bg-muted">
+                      {status.summary.jobHealth.healthy > 0 && (
+                        <div className="bg-green-500" style={{ width: `${(status.summary.jobHealth.healthy / status.summary.jobCount) * 100}%` }} />
+                      )}
+                      {status.summary.jobHealth.unstable > 0 && (
+                        <div className="bg-yellow-500" style={{ width: `${(status.summary.jobHealth.unstable / status.summary.jobCount) * 100}%` }} />
+                      )}
+                      {status.summary.jobHealth.failing > 0 && (
+                        <div className="bg-red-500" style={{ width: `${(status.summary.jobHealth.failing / status.summary.jobCount) * 100}%` }} />
+                      )}
+                      {status.summary.jobHealth.disabled > 0 && (
+                        <div className="bg-muted-foreground/30" style={{ width: `${(status.summary.jobHealth.disabled / status.summary.jobCount) * 100}%` }} />
+                      )}
+                      {status.summary.jobHealth.other > 0 && (
+                        <div className="bg-muted-foreground/15" style={{ width: `${(status.summary.jobHealth.other / status.summary.jobCount) * 100}%` }} />
+                      )}
+                    </div>
+                    <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                      {status.summary.jobHealth.healthy > 0 && (
+                        <span className="flex items-center gap-1.5">
+                          <span className="h-2 w-2 rounded-full bg-green-500" />
+                          {status.summary.jobHealth.healthy} Passing
+                        </span>
+                      )}
+                      {status.summary.jobHealth.unstable > 0 && (
+                        <span className="flex items-center gap-1.5">
+                          <span className="h-2 w-2 rounded-full bg-yellow-500" />
+                          {status.summary.jobHealth.unstable} Unstable
+                        </span>
+                      )}
+                      {status.summary.jobHealth.failing > 0 && (
+                        <span className="flex items-center gap-1.5">
+                          <span className="h-2 w-2 rounded-full bg-red-500" />
+                          {status.summary.jobHealth.failing} Failing
+                        </span>
+                      )}
+                      {status.summary.jobHealth.disabled > 0 && (
+                        <span className="flex items-center gap-1.5">
+                          <span className="h-2 w-2 rounded-full bg-muted-foreground/30" />
+                          {status.summary.jobHealth.disabled} Disabled
+                        </span>
+                      )}
+                      {status.summary.jobHealth.other > 0 && (
+                        <span className="flex items-center gap-1.5">
+                          <span className="h-2 w-2 rounded-full bg-muted-foreground/15" />
+                          {status.summary.jobHealth.other} Other
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                </>
+              )}
             </CardContent>
           </Card>
 
-          {/* Danger zone */}
-          <Card className="border-red-200 dark:border-red-900/50">
-            <CardContent className="pt-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="font-medium text-sm">Disconnect Jenkins</p>
-                  <p className="text-xs text-muted-foreground mt-0.5">
-                    Remove stored credentials and disconnect this Jenkins instance
-                  </p>
-                </div>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={handleDisconnect}
-                  disabled={loading}
-                  className="text-red-600 border-red-200 hover:bg-red-50 hover:text-red-700 dark:text-red-400 dark:border-red-800 dark:hover:bg-red-950/30"
-                >
-                  {loading ? (
-                    <Loader2 className="h-4 w-4 animate-spin mr-1.5" />
-                  ) : null}
-                  {loading ? "Disconnecting..." : "Disconnect"}
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
+          {/* Disconnect */}
+          <div className="flex items-center justify-between px-1">
+            <p className="text-xs text-muted-foreground">
+              Remove stored credentials and disconnect
+            </p>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleDisconnect}
+              disabled={loading}
+              className="text-red-500 hover:text-red-600 hover:bg-red-500/10 dark:text-red-400 dark:hover:text-red-300 h-8 text-xs"
+            >
+              {loading ? (
+                <Loader2 className="h-3 w-3 animate-spin mr-1.5" />
+              ) : null}
+              {loading ? "Disconnecting..." : "Disconnect"}
+            </Button>
+          </div>
         </div>
       ) : (
         <div className="space-y-6">
