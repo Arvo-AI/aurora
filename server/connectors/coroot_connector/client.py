@@ -232,24 +232,6 @@ class CorootClient:
         )
         return self._unwrap(resp)
 
-    def get_app_traces(
-        self,
-        project: str,
-        app_id: str,
-        from_ts: int,
-        to_ts: int,
-        query: Optional[Dict[str, Any]] = None,
-    ) -> Any:
-        encoded = self._encode_app_id(app_id)
-        params: Dict[str, str] = self._time_params(from_ts, to_ts)
-        if query:
-            params["query"] = json.dumps(query)
-        resp = self._get(
-            f"/api/project/{project}/app/{encoded}/tracing",
-            params=params,
-        )
-        return self._unwrap(resp)
-
     # ------------------------------------------------------------------
     # Incidents & RCA
     # ------------------------------------------------------------------
@@ -281,20 +263,6 @@ class CorootClient:
     ) -> Any:
         resp = self._get(
             f"/api/project/{project}/overview/map",
-            params=self._time_params(from_ts, to_ts),
-        )
-        return self._unwrap(resp)
-
-    # ------------------------------------------------------------------
-    # Profiling
-    # ------------------------------------------------------------------
-
-    def get_profiling(
-        self, project: str, app_id: str, from_ts: int, to_ts: int
-    ) -> Any:
-        encoded = self._encode_app_id(app_id)
-        resp = self._get(
-            f"/api/project/{project}/app/{encoded}/profiling",
             params=self._time_params(from_ts, to_ts),
         )
         return self._unwrap(resp)
@@ -344,21 +312,6 @@ class CorootClient:
             },
         )
 
-    def query_prom_series(
-        self, project: str, match: str
-    ) -> Any:
-        return self._get(
-            f"/api/project/{project}/prom/api/v1/series",
-            params={"match[]": match},
-        )
-
-    def query_prom_label_values(
-        self, project: str, label_name: str
-    ) -> Any:
-        return self._get(
-            f"/api/project/{project}/prom/api/v1/label/{label_name}/values",
-        )
-
     # ------------------------------------------------------------------
     # Deployments, costs, risks
     # ------------------------------------------------------------------
@@ -389,3 +342,16 @@ class CorootClient:
             params=self._time_params(from_ts, to_ts),
         )
         return self._unwrap(resp)
+
+    # ------------------------------------------------------------------
+    # Future improvements (Coroot API capabilities not yet wired to tools):
+    # - Profiling: GET /app/{app}/profiling returns flamegraph call trees.
+    #   A summarizer extracting top-N CPU hotspots (highest `self` time)
+    #   and the hot path from root to leaf would make this actionable.
+    # - Per-app traces: GET /app/{app}/tracing scopes traces to one app.
+    #   Redundant today (cross-app endpoint + ServiceName filter), but
+    #   could improve performance on large clusters.
+    # - Metric discovery: GET /prom/api/v1/series and /label/{name}/values
+    #   help the agent explore unknown environments where metric names
+    #   and label values aren't known upfront.
+    # ------------------------------------------------------------------

@@ -71,6 +71,10 @@ from .coroot_tool import (
     coroot_query_metrics,
     coroot_get_deployments,
     coroot_get_nodes,
+    coroot_get_overview_logs,
+    coroot_get_node_detail,
+    coroot_get_costs,
+    coroot_get_risks,
     is_coroot_connected,
     CorootGetIncidentsArgs,
     CorootGetIncidentDetailArgs,
@@ -82,6 +86,10 @@ from .coroot_tool import (
     CorootQueryMetricsArgs,
     CorootGetDeploymentsArgs,
     CorootGetNodesArgs,
+    CorootGetOverviewLogsArgs,
+    CorootGetNodeDetailArgs,
+    CorootGetCostsArgs,
+    CorootGetRisksArgs,
 )
 
 # Import all context management functions from utils
@@ -1331,6 +1339,20 @@ def get_cloud_tools():
              "List recent deployments to correlate with incidents. Shows deployment status and age."),
             (coroot_get_nodes, "coroot_get_nodes", CorootGetNodesArgs,
              "List all infrastructure nodes with kernel-level CPU, memory, disk I/O, and network health."),
+            (coroot_get_overview_logs, "coroot_get_overview_logs", CorootGetOverviewLogsArgs,
+             "Search logs across ALL applications (cross-app grep). Finds errors cluster-wide without knowing "
+             "which app is failing. Supports Kubernetes Events filter to surface OOMKilled, Evicted, "
+             "CrashLoopBackOff, FailedScheduling. Use this before drilling into per-app logs."),
+            (coroot_get_node_detail, "coroot_get_node_detail", CorootGetNodeDetailArgs,
+             "Get full audit report for a specific node (CPU breakdown, memory breakdown, disk per-mount, "
+             "network per-interface, GPU). Use after coroot_get_nodes shows a WARNING/CRITICAL node."),
+            (coroot_get_costs, "coroot_get_costs", CorootGetCostsArgs,
+             "Get cost breakdown per node and per application, plus right-sizing recommendations. "
+             "Cost spikes correlate with autoscaling issues, memory leaks (OOMing pods), retry storms. "
+             "Shows current vs recommended CPU/memory allocations."),
+            (coroot_get_risks, "coroot_get_risks", CorootGetRisksArgs,
+             "Get security and availability risks: single-instance apps, single-AZ deployments, spot-only "
+             "workloads, exposed database ports. Explains why services are vulnerable to outages."),
         ]
         for _func, _name, _schema, _desc in _coroot_tools:
             _ctx = with_user_context(_func)
