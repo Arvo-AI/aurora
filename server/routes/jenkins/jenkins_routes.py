@@ -6,7 +6,6 @@ from flask import Blueprint, jsonify, request
 from connectors.jenkins_connector.api_client import JenkinsClient
 from utils.db.connection_pool import db_pool
 from utils.web.cors_utils import create_cors_response
-from utils.logging.secure_logging import mask_credential_value
 from utils.auth.stateless_auth import get_user_id_from_request
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 
@@ -59,13 +58,12 @@ def connect():
     if not api_token or not isinstance(api_token, str):
         return jsonify({"error": "Jenkins API token is required"}), 400
 
-    masked_token = mask_credential_value(api_token)
-    logger.info("[JENKINS] Connecting user %s to %s (user=%s, token=%s)", user_id, base_url, username, masked_token)
+    logger.info("[JENKINS] Connecting user %s to %s", user_id, base_url)
 
     client = JenkinsClient(base_url=base_url, username=username, api_token=api_token)
     success, server_data, error = client.get_server_info()
     if not success:
-        logger.warning("[JENKINS] Credential validation failed for user %s: %s", user_id, error)
+        logger.warning("[JENKINS] Credential validation failed for user %s", user_id)
         return jsonify({"error": error or "Failed to validate Jenkins credentials"}), 400
 
     version = server_data.get("version", "unknown") if server_data else "unknown"
