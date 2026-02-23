@@ -3,7 +3,6 @@ from typing import Any, Dict, Optional
 
 from flask import Blueprint, jsonify, request
 
-from connectors.jenkins_connector.auth import validate_jenkins_credentials
 from connectors.jenkins_connector.api_client import JenkinsClient
 from utils.db.connection_pool import db_pool
 from utils.web.cors_utils import create_cors_response
@@ -35,11 +34,6 @@ def _build_client(creds: Dict[str, Any]) -> Optional[JenkinsClient]:
     return JenkinsClient(base_url=base_url, username=username, api_token=api_token)
 
 
-# =========================================================================
-# Connect / Status / Disconnect
-# =========================================================================
-
-
 @jenkins_bp.route("/connect", methods=["POST", "OPTIONS"])
 def connect():
     """Validate and store Jenkins credentials."""
@@ -68,17 +62,21 @@ def connect():
     masked_token = mask_credential_value(api_token)
     logger.info("[JENKINS] Connecting user %s to %s (user=%s, token=%s)", user_id, base_url, username, masked_token)
 
-    success, server_info, error = validate_jenkins_credentials(base_url, username, api_token)
+    client = JenkinsClient(base_url=base_url, username=username, api_token=api_token)
+    success, server_data, error = client.get_server_info()
     if not success:
         logger.warning("[JENKINS] Credential validation failed for user %s: %s", user_id, error)
         return jsonify({"error": error or "Failed to validate Jenkins credentials"}), 400
+
+    version = server_data.get("version", "unknown") if server_data else "unknown"
+    mode = server_data.get("mode", "unknown") if server_data else "unknown"
 
     token_payload = {
         "base_url": base_url,
         "username": username,
         "api_token": api_token,
-        "version": server_info.get("version"),
-        "mode": server_info.get("mode"),
+        "version": version,
+        "mode": mode,
     }
 
     try:
@@ -92,13 +90,13 @@ def connect():
         "success": True,
         "baseUrl": base_url,
         "username": username,
-        "server": server_info,
+        "server": {"version": version, "mode": mode},
     })
 
 
 @jenkins_bp.route("/status", methods=["GET", "OPTIONS"])
 def status():
-    """Check whether Jenkins is connected and credentials are valid."""
+    """Check whether Jenkins is connected and return summary dashboard data."""
     if request.method == "OPTIONS":
         return create_cors_response()
 
@@ -112,7 +110,6 @@ def status():
 
     client = _build_client(creds)
     if not client:
-        logger.warning("[JENKINS] Incomplete credentials for user %s", user_id)
         return jsonify({"connected": False})
 
     success, data, error = client.get_server_info()
@@ -209,168 +206,3 @@ def disconnect():
     except Exception as exc:
         logger.exception("[JENKINS] Failed to disconnect user %s: %s", user_id, exc)
         return jsonify({"error": "Failed to disconnect Jenkins"}), 500
-
-
-# =========================================================================
-# Read-only data endpoints
-# =========================================================================
-
-
-def _require_client(user_id: str):
-    """Helper that returns a JenkinsClient or a Flask error tuple."""
-    creds = _get_stored_jenkins_credentials(user_id)
-    if not creds:
-        return None, (jsonify({"error": "Jenkins is not connected"}), 400)
-    client = _build_client(creds)
-    if not client:
-        return None, (jsonify({"error": "Stored Jenkins credentials are incomplete"}), 400)
-    return client, None
-
-
-@jenkins_bp.route("/jobs", methods=["GET", "OPTIONS"])
-def list_jobs():
-    """List Jenkins jobs (optionally within a folder)."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
-
-    client, err = _require_client(user_id)
-    if err:
-        return err
-
-    folder = request.args.get("folder")
-    success, jobs, error = client.list_jobs(folder_path=folder)
-    if not success:
-        return jsonify({"error": error or "Failed to list Jenkins jobs"}), 502
-
-    return jsonify({"jobs": jobs})
-
-
-@jenkins_bp.route("/job/<path:job_path>", methods=["GET", "OPTIONS"])
-def get_job(job_path: str):
-    """Get details for a specific job."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
-
-    client, err = _require_client(user_id)
-    if err:
-        return err
-
-    success, data, error = client.get_job(job_path)
-    if not success:
-        return jsonify({"error": error or "Failed to get Jenkins job"}), 502
-
-    return jsonify(data)
-
-
-@jenkins_bp.route("/job/<path:job_path>/builds", methods=["GET", "OPTIONS"])
-def list_builds(job_path: str):
-    """List recent builds for a job."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
-
-    client, err = _require_client(user_id)
-    if err:
-        return err
-
-    limit = request.args.get("limit", 20, type=int)
-    success, builds, error = client.list_builds(job_path, limit=limit)
-    if not success:
-        return jsonify({"error": error or "Failed to list builds"}), 502
-
-    return jsonify({"builds": builds})
-
-
-@jenkins_bp.route("/job/<path:job_path>/builds/<int:build_number>", methods=["GET", "OPTIONS"])
-def get_build(job_path: str, build_number: int):
-    """Get details for a specific build."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
-
-    client, err = _require_client(user_id)
-    if err:
-        return err
-
-    success, data, error = client.get_build(job_path, build_number)
-    if not success:
-        return jsonify({"error": error or "Failed to get build"}), 502
-
-    return jsonify(data)
-
-
-@jenkins_bp.route("/job/<path:job_path>/builds/<int:build_number>/console", methods=["GET", "OPTIONS"])
-def get_build_console(job_path: str, build_number: int):
-    """Get console output for a build."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
-
-    client, err = _require_client(user_id)
-    if err:
-        return err
-
-    success, text, error = client.get_build_console(job_path, build_number)
-    if not success:
-        return jsonify({"error": error or "Failed to get console output"}), 502
-
-    return jsonify({"output": text})
-
-
-@jenkins_bp.route("/queue", methods=["GET", "OPTIONS"])
-def get_queue():
-    """Get the Jenkins build queue."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
-
-    client, err = _require_client(user_id)
-    if err:
-        return err
-
-    success, data, error = client.get_queue()
-    if not success:
-        return jsonify({"error": error or "Failed to get build queue"}), 502
-
-    return jsonify(data)
-
-
-@jenkins_bp.route("/nodes", methods=["GET", "OPTIONS"])
-def list_nodes():
-    """List Jenkins build agents / nodes."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
-
-    client, err = _require_client(user_id)
-    if err:
-        return err
-
-    success, nodes, error = client.list_nodes()
-    if not success:
-        return jsonify({"error": error or "Failed to list nodes"}), 502
-
-    return jsonify({"nodes": nodes})

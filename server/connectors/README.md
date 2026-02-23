@@ -31,7 +31,7 @@ Backend configuration guides for Aurora connectors.
 
 | Connector | Auth Type | Guide |
 |-----------|-----------|-------|
-| **Jenkins** | Username + API Token | [Setup](./jenkins_connector/README.md) |
+| **Jenkins** | Username + API Token | — |
 
 ## Quick Start
 

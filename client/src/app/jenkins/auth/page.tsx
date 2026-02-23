@@ -60,26 +60,20 @@ export default function JenkinsAuthPage() {
   const loadStatus = async () => {
     setCheckingStatus(true);
     try {
-      // Show cached status immediately so the page doesn't flash
-      let hasCachedConnected = false;
       if (typeof window !== "undefined") {
         const cached = localStorage.getItem(CACHE_KEY);
         if (cached) {
           const parsed = JSON.parse(cached);
           setStatus(parsed);
           if (parsed?.connected) {
-            hasCachedConnected = true;
             setBaseUrl(parsed.baseUrl ?? "");
             setUsername(parsed.username ?? "");
           }
         }
       }
 
-      // Refresh from API in background
       const result = await jenkinsService.getStatus();
 
-      // Only update if we got a valid response; don't overwrite
-      // a known-good cache with a failed API call
       if (result) {
         setStatus(result);
         if (typeof window !== "undefined") {
@@ -111,11 +105,9 @@ export default function JenkinsAuthPage() {
     setLoading(true);
 
     try {
-      const result = await jenkinsService.connect({ baseUrl, username, apiToken });
-      setStatus(result);
+      await jenkinsService.connect({ baseUrl, username, apiToken });
 
       if (typeof window !== "undefined") {
-        localStorage.setItem(CACHE_KEY, JSON.stringify(result));
         localStorage.setItem("isJenkinsConnected", "true");
         window.dispatchEvent(new CustomEvent("providerStateChanged"));
       }
@@ -130,12 +122,11 @@ export default function JenkinsAuthPage() {
         // preferences update is best-effort
       }
 
-      // Fetch full status (with summary data) now that credentials are stored
       await loadStatus();
 
       toast({
         title: "Jenkins Connected",
-        description: `Successfully connected to ${result.baseUrl || "Jenkins"}`,
+        description: `Successfully connected to ${baseUrl || "Jenkins"}`,
       });
     } catch (err: unknown) {
       console.error("Jenkins connection failed", err);

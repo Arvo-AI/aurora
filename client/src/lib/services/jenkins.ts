@@ -41,46 +41,32 @@ export interface JenkinsConnectPayload {
 
 const API_BASE = '/api/jenkins';
 
-async function parseJsonResponse<T>(response: Response): Promise<T | null> {
-  const text = await response.text();
-  if (!text) {
-    return null;
-  }
-  return JSON.parse(text) as T;
-}
-
-async function handleJsonFetch<T>(input: RequestInfo, init?: RequestInit): Promise<T> {
+async function fetchJson<T>(input: RequestInfo, init?: RequestInit): Promise<T> {
   const response = await fetch(input, {
     ...init,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(init?.headers ?? {}),
-    },
+    headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
     cache: 'no-store',
   });
 
   if (!response.ok) {
-    type ErrorBody = { error?: string; details?: string };
-    const parsed = await parseJsonResponse<ErrorBody>(response).catch(() => null);
-    const message = parsed?.error || parsed?.details || response.statusText || `Request failed with status ${response.status}`;
-    throw new Error(message);
+    const body = await response.json().catch(() => null) as { error?: string; details?: string } | null;
+    throw new Error(body?.error || body?.details || response.statusText || `Request failed (${response.status})`);
   }
 
-  const parsed = await parseJsonResponse<T>(response);
-  return (parsed ?? ({} as T));
+  return response.json();
 }
 
 export const jenkinsService = {
   async getStatus(): Promise<JenkinsStatus | null> {
     try {
-      const raw = await handleJsonFetch<Record<string, any>>(`${API_BASE}/status`);
+      const raw = await fetchJson<Record<string, unknown>>(`${API_BASE}/status`);
       return {
         connected: Boolean(raw?.connected),
-        baseUrl: raw?.baseUrl ?? raw?.base_url,
-        username: raw?.username,
-        server: raw?.server ?? null,
-        summary: raw?.summary ?? null,
-        error: raw?.error,
+        baseUrl: (raw?.baseUrl ?? raw?.base_url) as string | undefined,
+        username: raw?.username as string | undefined,
+        server: (raw?.server as JenkinsServer) ?? null,
+        summary: (raw?.summary as JenkinsSummary) ?? null,
+        error: raw?.error as string | undefined,
       };
     } catch (error) {
       console.error('[jenkinsService] Failed to fetch status:', error);
@@ -89,15 +75,15 @@ export const jenkinsService = {
   },
 
   async connect(payload: JenkinsConnectPayload): Promise<JenkinsStatus> {
-    const raw = await handleJsonFetch<Record<string, any>>(`${API_BASE}/connect`, {
+    const raw = await fetchJson<Record<string, unknown>>(`${API_BASE}/connect`, {
       method: 'POST',
       body: JSON.stringify(payload),
     });
     return {
       connected: Boolean(raw?.success ?? true),
-      baseUrl: raw?.baseUrl ?? payload.baseUrl,
-      username: raw?.username ?? payload.username,
-      server: raw?.server ?? null,
+      baseUrl: (raw?.baseUrl as string) ?? payload.baseUrl,
+      username: (raw?.username as string) ?? payload.username,
+      server: (raw?.server as JenkinsServer) ?? null,
     };
   },
 };
