@@ -63,7 +63,8 @@ class JenkinsClient:
             return False, None, "Cannot connect to Jenkins. Verify the URL and network access."
         except requests.exceptions.RequestException as e:
             logger.error("Jenkins API request failed: %s", e)
-            return False, None, f"Connection error: {str(e)}"
+            # Return a generic, user-safe error message without exposing exception details.
+            return False, None, "Cannot connect to Jenkins. Verify the URL and network access."
 
     @staticmethod
     def _job_segments(job_path: str) -> str:
