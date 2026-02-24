@@ -131,7 +131,9 @@ def _trim_metric_datapoints(raw: Any) -> Any:
         return raw
     trimmed = False
     for series in series_list:
-        values = series.get("data", [])
+        if not isinstance(series, dict):
+            continue
+        values = series.get("data") or []
         if len(values) > MAX_METRIC_DATAPOINTS:
             original_len = len(values)
             series["data"] = values[-MAX_METRIC_DATAPOINTS:]
@@ -282,7 +284,11 @@ def coroot_get_incidents(
     incidents: List[Dict] = raw if isinstance(raw, list) else [raw]
     summaries = []
     for inc in incidents:
+        if not isinstance(inc, dict):
+            continue
         rca = inc.get("rca") or {}
+        if not isinstance(rca, dict):
+            rca = {}
         summary = {
             "key": inc.get("key"),
             "application_id": inc.get("application_id"),
@@ -377,6 +383,8 @@ def coroot_get_applications(
     apps: List[Dict] = raw if isinstance(raw, list) else [raw]
     results = []
     for app in apps:
+        if not isinstance(app, dict):
+            continue
         entry: Dict[str, Any] = {
             "id": app.get("id"),
             "status": _status_label(app.get("status")),
@@ -440,25 +448,34 @@ def coroot_get_app_detail(
     app_map = raw.get("app_map") if isinstance(raw, dict) else None
     if app_map:
         app_info = app_map.get("application") or {}
+        if not isinstance(app_info, dict):
+            app_info = {}
         result["status"] = _status_label(app_info.get("status"))
         result["indicators"] = app_info.get("indicators") or []
         result["instances"] = [
             {"id": i.get("id"), "labels": i.get("labels")}
             for i in (app_map.get("instances") or [])
+            if isinstance(i, dict)
         ]
         result["clients"] = [
             {"id": c.get("id"), "status": _status_label(c.get("link_status")), "stats": c.get("link_stats")}
             for c in (app_map.get("clients") or [])
+            if isinstance(c, dict)
         ]
         result["dependencies"] = [
             {"id": d.get("id"), "status": _status_label(d.get("link_status")), "stats": d.get("link_stats")}
             for d in (app_map.get("dependencies") or [])
+            if isinstance(d, dict)
         ]
 
     reports = (raw.get("reports") or []) if isinstance(raw, dict) else []
     failing_checks = []
     for report in reports:
-        for check in report.get("checks", []):
+        if not isinstance(report, dict):
+            continue
+        for check in (report.get("checks") or []):
+            if not isinstance(check, dict):
+                continue
             status = check.get("status", 0)
             try:
                 status_int = int(status)
@@ -521,8 +538,10 @@ def coroot_get_app_logs(
         return json.dumps({"error": f"Coroot API error: {exc}"})
 
     entries = []
-    raw_entries = raw.get("entries", []) if isinstance(raw, dict) else []
+    raw_entries = (raw.get("entries") or []) if isinstance(raw, dict) else []
     for e in raw_entries:
+        if not isinstance(e, dict):
+            continue
         entries.append({
             "timestamp": e.get("timestamp"),
             "severity": e.get("severity"),
@@ -620,19 +639,25 @@ def coroot_get_service_map(
     services: List[Dict] = raw if isinstance(raw, list) else [raw]
     result = []
     for svc in services:
+        if not isinstance(svc, dict):
+            continue
         entry: Dict[str, Any] = {
             "id": svc.get("id"),
             "status": _status_label(svc.get("status")),
         }
-        ups = svc.get("upstreams", [])
+        ups = svc.get("upstreams") or []
         if ups:
             entry["upstreams"] = [
                 {"id": u.get("id"), "status": _status_label(u.get("status")), "stats": u.get("stats")}
                 for u in ups
+                if isinstance(u, dict)
             ]
-        downs = svc.get("downstreams", [])
+        downs = svc.get("downstreams") or []
         if downs:
-            entry["downstreams"] = [d.get("id") for d in downs] if isinstance(downs[0], dict) else downs
+            if isinstance(downs[0], dict):
+                entry["downstreams"] = [d.get("id") for d in downs if isinstance(d, dict)]
+            else:
+                entry["downstreams"] = downs
         result.append(entry)
 
     items, trunc_meta = _truncate_list(
@@ -779,8 +804,10 @@ def coroot_get_overview_logs(
         return json.dumps({"error": f"Coroot API error: {exc}"})
 
     entries = []
-    raw_entries = raw.get("entries", []) if isinstance(raw, dict) else []
+    raw_entries = (raw.get("entries") or []) if isinstance(raw, dict) else []
     for e in raw_entries:
+        if not isinstance(e, dict):
+            continue
         entries.append({
             "timestamp": e.get("timestamp"),
             "severity": e.get("severity"),
