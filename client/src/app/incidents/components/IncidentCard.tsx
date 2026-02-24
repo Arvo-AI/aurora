@@ -1,6 +1,6 @@
 'use client';
 
-import { Incident, AuroraStatus, Citation, incidentsService, postmortemService } from '@/lib/services/incidents';
+import { Incident, AuroraStatus, Citation, incidentsService } from '@/lib/services/incidents';
 import { Badge } from '@/components/ui/badge';
 import {
   ExternalLink,
