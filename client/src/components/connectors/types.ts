@@ -6,6 +6,7 @@ export interface ConnectorConfig {
   description: string;
   icon?: LucideIcon;
   iconPath?: string;
+  iconClassName?: string;
   iconColor?: string;
   iconBgColor?: string;
   category?: string;
