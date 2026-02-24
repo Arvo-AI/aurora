@@ -46,9 +46,15 @@ def bitbucket_login():
 
                 # Validate credentials by fetching user profile
                 user_data = client.get_current_user()
-                if not user_data:
+                if not user_data or user_data.get("error"):
                     logger.error("Bitbucket API token validation failed")
-                    return jsonify({"error": "Invalid Bitbucket credentials"}), 400
+                    if user_data and user_data.get("missing_scopes"):
+                        missing = ", ".join(user_data["missing_scopes"])
+                        return jsonify({
+                            "error": f"Missing required scopes: {missing}. "
+                                     "Please create a new API token that includes these scopes.",
+                        }), 400
+                    return jsonify({"error": "Invalid Bitbucket credentials. Check your email and API token."}), 400
 
                 username = user_data.get("username")
                 display_name = user_data.get("display_name")
@@ -237,15 +243,15 @@ def bitbucket_status():
         )
         user_data = client.get_current_user()
 
-        if user_data:
-            return jsonify({
-                "connected": True,
-                "username": user_data.get("username"),
-                "display_name": user_data.get("display_name"),
-                "auth_type": auth_type,
-            })
-        else:
+        if not user_data or user_data.get("error"):
             return jsonify({"connected": False, "error": "Invalid or expired token"})
+
+        return jsonify({
+            "connected": True,
+            "username": user_data.get("username"),
+            "display_name": user_data.get("display_name"),
+            "auth_type": auth_type,
+        })
 
     except Exception as e:
         logger.error(f"Error checking Bitbucket status: {e}", exc_info=True)

@@ -73,15 +73,49 @@ class BitbucketAPIClient:
     # ------------------------------------------------------------------
 
     def get_current_user(self):
-        """Get the authenticated user's profile."""
+        """Get the authenticated user's profile.
+
+        Returns:
+            User profile dict on success, or a dict with ``"error"`` key on failure.
+        """
         response = requests.get(
             f"{BITBUCKET_API_BASE}/user",
             headers=self._get_headers(),
         )
         if response.status_code != 200:
             logger.error(f"Failed to get Bitbucket user: {response.status_code} {response.text}")
-            return None
+            return self._parse_user_error(response)
         return response.json()
+
+    def _parse_user_error(self, response):
+        """Build a structured error dict from a failed /user response.
+
+        Bitbucket scope errors include ``error.detail.required`` and
+        ``error.detail.granted`` lists, which we surface as ``missing_scopes``.
+        """
+        try:
+            error_body = response.json()
+        except Exception:
+            return {"error": True, "status": response.status_code, "message": response.text}
+
+        error_info = error_body.get("error", {})
+        scope_detail = error_info.get("detail", {})
+        required_scopes = scope_detail.get("required", [])
+        granted_scopes = scope_detail.get("granted", [])
+
+        result = {
+            "error": True,
+            "status": response.status_code,
+            "message": error_info.get("message", response.text),
+        }
+
+        if required_scopes:
+            missing = [s for s in required_scopes if s not in granted_scopes]
+            result["missing_scopes"] = missing
+            result["required"] = required_scopes
+            result["granted"] = granted_scopes
+
+        return result
 
     # ------------------------------------------------------------------
     # Workspaces / Projects / Repos

@@ -12,6 +12,15 @@ import { getEnv } from '@/lib/env';
 
 const BACKEND_URL = getEnv('NEXT_PUBLIC_BACKEND_URL');
 
+const REQUIRED_API_TOKEN_SCOPES = [
+  'read:user:bitbucket',
+  'read:workspace:bitbucket',
+  'read:project:bitbucket',
+  'read:repository:bitbucket',
+  'read:pullrequest:bitbucket',
+  'read:issue:bitbucket',
+] as const;
+
 export class BitbucketIntegrationService {
   private static getAuthHeaders(userId: string) {
     return { 'X-User-ID': userId };
@@ -536,11 +545,17 @@ export default function BitbucketProviderIntegration() {
           </TabsContent>
           <TabsContent value="api-token" className="space-y-3 mt-3">
             <p className="text-sm text-muted-foreground">
-              Connect using a Bitbucket API token. Create one at{' '}
+              Connect using a Bitbucket API token. Click{' '}
               <a href="https://id.atlassian.com/manage-profile/security/api-tokens" target="_blank" rel="noopener noreferrer" className="underline">
-                Atlassian Account &gt; Security &gt; API tokens
-              </a>.
+                &quot;Create API token with scopes&quot;
+              </a>{' '}
+              and grant these scopes:
             </p>
+            <div className="text-xs bg-muted rounded-md p-2.5 space-y-0.5 font-mono">
+              {REQUIRED_API_TOKEN_SCOPES.map((scope) => (
+                <div key={scope}>{scope}</div>
+              ))}
+            </div>
             <Input
               type="email"
               placeholder="Bitbucket email"
