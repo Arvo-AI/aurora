@@ -24,3 +24,7 @@ export const isConfluenceEnabled = () => {
 export const isScalewayEnabled = () => {
   return getEnv('NEXT_PUBLIC_ENABLE_SCALEWAY') === 'true';
 };
+
+export const isDynatraceEnabled = () => {
+  return getEnv('NEXT_PUBLIC_ENABLE_DYNATRACE') === 'true';
+};

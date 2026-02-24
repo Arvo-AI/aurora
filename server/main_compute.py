@@ -228,9 +228,11 @@ app.register_blueprint(splunk_bp, url_prefix="/splunk")
 app.register_blueprint(splunk_search_bp, url_prefix="/splunk")
 
 # --- Dynatrace Integration Routes ---
-from routes.dynatrace import bp as dynatrace_bp  # noqa: F401
-import routes.dynatrace.tasks  # noqa: F401
-app.register_blueprint(dynatrace_bp, url_prefix="/dynatrace")
+from utils.flags.feature_flags import is_dynatrace_enabled
+if is_dynatrace_enabled():
+    from routes.dynatrace import bp as dynatrace_bp  # noqa: F401
+    import routes.dynatrace.tasks  # noqa: F401
+    app.register_blueprint(dynatrace_bp, url_prefix="/dynatrace")
 
 # --- PagerDuty Integration Routes ---
 from routes.pagerduty.pagerduty_routes import pagerduty_bp  # noqa: F401
