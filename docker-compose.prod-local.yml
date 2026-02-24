@@ -350,10 +350,6 @@ services:
       FRONTEND_URL: ${FRONTEND_URL}
       CHATBOT_INTERNAL_URL: ${CHATBOT_INTERNAL_URL}
 
-
-
-      # Caching & Performance
-
       # Pod & MCP Settings
       CHATBOT_POD_TTL: ${CHATBOT_POD_TTL}
       ENABLE_POD_ISOLATION: ${ENABLE_POD_ISOLATION}
@@ -448,6 +444,15 @@ services:
     environment:
       # Next.js production configuration
       NODE_ENV: production
+
+      # Runtime env injection (docker-entrypoint.sh writes these to /app/public/env-config.js)
+      NEXT_PUBLIC_BACKEND_URL: ${NEXT_PUBLIC_BACKEND_URL}
+      NEXT_PUBLIC_WEBSOCKET_URL: ${NEXT_PUBLIC_WEBSOCKET_URL}
+      NEXT_PUBLIC_ENABLE_OVH: ${NEXT_PUBLIC_ENABLE_OVH}
+      NEXT_PUBLIC_ENABLE_SLACK: ${NEXT_PUBLIC_ENABLE_SLACK}
+      NEXT_PUBLIC_ENABLE_PAGERDUTY_OAUTH: ${NEXT_PUBLIC_ENABLE_PAGERDUTY_OAUTH}
+      NEXT_PUBLIC_ENABLE_CONFLUENCE: ${NEXT_PUBLIC_ENABLE_CONFLUENCE}
+      NEXT_PUBLIC_ENABLE_SCALEWAY: ${NEXT_PUBLIC_ENABLE_SCALEWAY}
 
       # Server-side only (Next.js API routes)
       BACKEND_URL: ${BACKEND_URL}

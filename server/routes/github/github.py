@@ -3,7 +3,6 @@ import requests
 import flask
 from flask import Blueprint, request, jsonify, Response
 import os
-import traceback
 from utils.web.cors_utils import create_cors_response
 from utils.auth.stateless_auth import get_user_id_from_request
 
@@ -70,8 +69,8 @@ def github_login():
                 })
                 
             except Exception as e:
-                logging.error(f"Error storing GitHub credentials: {e}")
-                return jsonify({"error": f"Failed to store credentials: {str(e)}"}), 500
+                logging.error(f"Error storing GitHub credentials: {e}", exc_info=True)
+                return jsonify({"error": "Failed to store GitHub credentials"}), 500
         else:
             # Check if GitHub OAuth environment variables are configured
             github_client_id = os.getenv("GH_OAUTH_CLIENT_ID")
@@ -85,11 +84,12 @@ def github_login():
                     "message": "GitHub OAuth environment variables (GH_OAUTH_CLIENT_ID and GH_OAUTH_CLIENT_SECRET) are not configured. Please configure them as described in the GitHub connector README."
                 }), 400
             
-            env = os.environ.get('AURORA_ENV', '').lower()
-            if env in ['prod', 'staging']:
-                redirect_uri = f"{request.host_url}backend/github/callback"
-            elif env in ['dev']:
-                redirect_uri = f"{request.host_url}github/callback"
+            # Build redirect URI from NEXT_PUBLIC_BACKEND_URL (same pattern as GCP/Slack)
+            backend_url = os.environ.get('NEXT_PUBLIC_BACKEND_URL').rstrip('/')
+            if backend_url:
+                redirect_uri = f"{backend_url}/github/callback"
+            else:
+                redirect_uri = f"{request.host_url.rstrip('/')}/github/callback"
 
                 
             # Use user_id as state parameter to identify user after OAuth
@@ -107,8 +107,8 @@ def github_login():
             })
     
     except Exception as e:
-        logging.error(f"Error in GitHub login: {e}")
-        return jsonify({"error": str(e)}), 500
+        logging.error(f"Error in GitHub login: {e}", exc_info=True)
+        return jsonify({"error": "Failed to process GitHub login"}), 500
 
 @github_bp.route("/status", methods=["GET", "OPTIONS"])
 def github_status():
@@ -145,8 +145,8 @@ def github_status():
             return jsonify({"connected": False, "error": "Invalid or expired token"})
     
     except Exception as e:
-        logging.error(f"Error checking GitHub status: {e}")
-        return jsonify({"connected": False, "error": str(e)}), 500
+        logging.error(f"Error checking GitHub status: {e}", exc_info=True)
+        return jsonify({"connected": False, "error": "Failed to check GitHub status"}), 500
 
 @github_bp.route("/disconnect", methods=["POST", "OPTIONS"])
 def github_disconnect():
@@ -172,8 +172,8 @@ def github_disconnect():
             return jsonify({"error": "Failed to disconnect GitHub account"}), 500
     
     except Exception as e:
-        logging.error(f"Error disconnecting GitHub: {e}")
-        return jsonify({"error": str(e)}), 500
+        logging.error(f"Error disconnecting GitHub: {e}", exc_info=True)
+        return jsonify({"error": "Failed to disconnect GitHub"}), 500
 
 @github_bp.route("/callback", methods=["GET", "POST"])
 def github_callback():
@@ -210,7 +210,7 @@ def github_callback():
         }
         headers = {"Accept": "application/json"}
         
-        logging.info(f"Requesting token with payload: {payload}")
+        logging.info("Requesting GitHub OAuth token exchange")
         response = requests.post(token_url, json=payload, headers=headers)
         logging.info(f"Token response status: {response.status_code}")
         
@@ -291,10 +291,9 @@ def github_callback():
                               frontend_url=FRONTEND_URL)
     
     except Exception as e:
-        logging.error(f"Error during GitHub callback: {e}")
-        logging.error(traceback.format_exc())
-        return flask.render_template("github_callback_error.html", 
-                                    error=f"An unexpected error occurred: {str(e)}",
+        logging.error(f"Error during GitHub callback: {e}", exc_info=True)
+        return flask.render_template("github_callback_error.html",
+                                    error="An unexpected error occurred during GitHub authentication",
                                     frontend_url=FRONTEND_URL)
 
 @github_bp.route("/repos", methods=["GET", "OPTIONS"])
@@ -400,9 +399,8 @@ def get_github_repos():
         })
         
     except Exception as e:
-        logging.error(f"Error fetching GitHub repos: {e}")
-        logging.error(traceback.format_exc())
-        return jsonify({"error": str(e), "stacktrace": traceback.format_exc()}), 500
+        logging.error(f"Error fetching GitHub repos: {e}", exc_info=True)
+        return jsonify({"error": "Failed to fetch GitHub repositories"}), 500
 
 @github_bp.route("/token-info", methods=["GET", "OPTIONS"])
 def github_token_info():
@@ -462,9 +460,8 @@ def github_token_info():
             "is_valid_token": False
         })
     except Exception as e:
-        logging.error(f"Error in token info endpoint: {e}")
-        logging.error(traceback.format_exc())
-        return jsonify({"error": str(e)}), 500
+        logging.error(f"Error in token info endpoint: {e}", exc_info=True)
+        return jsonify({"error": "Failed to retrieve token info"}), 500
 
 @github_bp.route("/download-repo", methods=["POST", "OPTIONS"])
 def download_github_repo():
@@ -545,6 +542,5 @@ def download_github_repo():
         return response_data
         
     except Exception as e:
-        logging.error(f"Error downloading GitHub repository: {e}")
-        logging.error(traceback.format_exc())
-        return jsonify({"error": str(e), "stacktrace": traceback.format_exc()}), 500
+        logging.error(f"Error downloading GitHub repository: {e}", exc_info=True)
+        return jsonify({"error": "Failed to download GitHub repository"}), 500

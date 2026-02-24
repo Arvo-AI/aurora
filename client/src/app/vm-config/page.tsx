@@ -38,6 +38,7 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { useUserId } from "@/hooks/use-user-id";
 import { isOvhEnabled } from "@/lib/feature-flags";
+import { getEnv } from '@/lib/env';
 
 type VMSource = "auto" | "manual";
 const CACHE_KEY = "vm-config-cache";
@@ -81,7 +82,7 @@ type ManualVMDraft = {
 
 // Manual VM APIs go through Next.js API routes to avoid CORS issues
 // OVH/Scaleway calls still use direct backend URL (CORS allowed for these endpoints)
-const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL;
+const backendUrl = getEnv('NEXT_PUBLIC_BACKEND_URL');
 
 export default function VMConfig() {
   const { toast } = useToast();

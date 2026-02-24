@@ -27,7 +27,8 @@ def debug_user_info():
             debug_info["token_keys"] = list(token.keys())
         return jsonify(debug_info)
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        logging.error(f"Error in debug user-info endpoint: {e}", exc_info=True)
+        return jsonify({"error": "Failed to retrieve debug info"}), 500
 
 
 @debug_util_bp.route("/test-endpoint", methods=["GET", "OPTIONS"])

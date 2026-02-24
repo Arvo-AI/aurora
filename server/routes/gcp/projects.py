@@ -35,7 +35,8 @@ def get_projects():
         try:
             refresh_token_if_needed(user_id, provider)
         except Exception as e:
-            return jsonify({"error": "Token refresh failed", "details": str(e)}), 401
+            logging.error(f"Token refresh failed: {e}", exc_info=True)
+            return jsonify({"error": "Token refresh failed"}), 401
 
         logging.info(f"Received user id:'{user_id}' successfully.")
         token_data = get_token_data(user_id, provider)
@@ -96,8 +97,8 @@ def get_projects():
         }), 200
 
     except Exception as e:
-        logging.error(f"Error in get_projects: {e}")
-        return jsonify({"error": str(e)}), 500
+        logging.error(f"Error in get_projects: {e}", exc_info=True)
+        return jsonify({"error": "Failed to fetch GCP projects"}), 500
 
 
 @gcp_projects_bp.route("/api/gcp/sa-project-access", methods=["GET", "POST", "OPTIONS"])
@@ -121,7 +122,7 @@ def sa_project_access():
             try:
                 refresh_token_if_needed(user_id, provider)
             except Exception as e:
-                return jsonify({"error": "Token refresh failed", "details": str(e)}), 401
+                return jsonify({"error": "Token refresh failed"}), 401
 
             token_data = get_token_data(user_id, provider)
             if not token_data:
@@ -199,7 +200,7 @@ def sa_project_access():
             try:
                 refresh_token_if_needed(user_id, provider)
             except Exception as e:
-                return jsonify({"error": "Token refresh failed", "details": str(e)}), 401
+                return jsonify({"error": "Token refresh failed"}), 401
             token_data = get_token_data(user_id, provider)
             if not token_data:
                 logging.warning(f"No token data found for user_id: {user_id}, provider: {provider}")
@@ -212,7 +213,7 @@ def sa_project_access():
             return jsonify({"success": True}), 200
     except ValueError as e:
         logging.warning(f"Validation error in sa_project_access: {e}")
-        return jsonify({"error": str(e)}), 400
+        return jsonify({"error": "Invalid request parameters"}), 400
     except Exception as e:
-        logging.error(f"Error in sa_project_access: {e}")
-        return jsonify({"error": str(e)}), 500
+        logging.error(f"Error in sa_project_access: {e}", exc_info=True)
+        return jsonify({"error": "Failed to process service account project access"}), 500

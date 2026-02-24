@@ -43,8 +43,8 @@ def get_root_project():
             "service_accounts": sa_info
         })
     except Exception as e:
-        logger.error(f"Error getting root project: {e}")
-        return jsonify({"error": str(e)}), 500
+        logger.error(f"Error getting root project: {e}", exc_info=True)
+        return jsonify({"error": "Failed to get root project"}), 500
 
 @root_project_bp.route('/api/gcp/root-project', methods=['POST'])
 def set_root_project():
@@ -95,8 +95,7 @@ def set_root_project():
                 "preference_saved": True,
                 "service_account_setup": "failed_to_enqueue",
                 "root_project": project_id,
-                "error": "Preference saved but provisioning task could not be queued",
-                "error_details": str(enqueue_error)
+                "error": "Preference saved but provisioning task could not be queued"
             }), 500
 
         return jsonify({
@@ -109,8 +108,8 @@ def set_root_project():
         }), 202
 
     except Exception as e:
-        logger.error(f"Error setting root project: {e}")
-        return jsonify({"error": str(e)}), 500
+        logger.error(f"Error setting root project: {e}", exc_info=True)
+        return jsonify({"error": "Failed to set root project"}), 500
 
 def validate_root_project(credentials, project_id):
     """Validate if a project can be used as root project."""
@@ -136,8 +135,8 @@ def validate_root_project(credentials, project_id):
         return {"valid": True, "reason": "Project meets all requirements"}
 
     except Exception as e:
-        logger.error(f"Error validating project {project_id}: {e}")
-        return {"valid": False, "reason": str(e)}
+        logger.error(f"Error validating project {project_id}: {e}", exc_info=True)
+        return {"valid": False, "reason": "Failed to validate project"}
 
 def setup_service_accounts_in_project(*args, **kwargs):
     """Deprecated shim retained for backward compatibility."""

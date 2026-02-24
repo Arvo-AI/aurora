@@ -198,8 +198,8 @@ def setup_azure_environment_isolated(user_id: str, subscription_id: str | None =
         
         # Store auth command for chaining with user commands (NEVER log the secret!)
         auth_command = f"az login --service-principal --username {client_id} --password {client_secret} --tenant {tenant_id} --output none"
-        
-        logger.info(f"Azure isolated environment configured for subscription: {subscription_id}")
+
+        logger.info(f"Azure isolated environment configured for subscription: {subscription_id} (auth_command built with --password [REDACTED])")
         
         return True, subscription_id, "service_principal", isolated_env, auth_command
         

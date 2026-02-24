@@ -1,4 +1,4 @@
-import os, logging, traceback
+import os, logging
 from flask import Blueprint, request, jsonify, Response
 import flask
 from azure.identity import ClientSecretCredential
@@ -114,7 +114,7 @@ def fetch_data():
         return jsonify({"status": "success", "subscription_id": subscription_id, "subscription_name": subscription_name})
     except Exception as e:
         logging.error("Error in Azure fetch_data", exc_info=e)
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": "Failed to fetch Azure data"}), 500
 
 
 @azure_bp.route("/azure/clusters", methods=["GET", "OPTIONS"])
@@ -148,7 +148,7 @@ def azure_clusters():
         return jsonify(cluster_info)
     except Exception as e:
         logging.error("Error fetching AKS clusters", exc_info=e)
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": "Failed to fetch AKS clusters"}), 500
 
 
 @azure_bp.route("/api/azure-subscriptions", methods=["GET", "POST", "OPTIONS"])
@@ -178,4 +178,4 @@ def azure_subscriptions():
             return jsonify({"status": "success"})
     except Exception as e:
         logging.error("Error in azure_subscriptions", exc_info=e)
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": "Failed to process Azure subscriptions"}), 500

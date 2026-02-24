@@ -111,10 +111,10 @@ class TailscaleClient:
             return False, None, "Request timeout"
         except requests.exceptions.RequestException as e:
             logger.error(f"Tailscale API request failed: {e}")
-            return False, None, f"Connection error: {str(e)}"
+            return False, None, "Connection error. Please check your network and try again."
         except Exception as e:
             logger.error(f"Unexpected error in Tailscale API request: {e}")
-            return False, None, str(e)
+            return False, None, "An unexpected error occurred. Please try again."
 
     # =========================================================================
     # Device Management
@@ -336,7 +336,7 @@ class TailscaleClient:
 
         except Exception as e:
             logger.error(f"ACL update error: {e}")
-            return False, None, str(e)
+            return False, None, "ACL update failed"
 
     def preview_acl(
         self,

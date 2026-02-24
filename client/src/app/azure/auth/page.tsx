@@ -9,8 +9,9 @@ import { Loader2, Download, Check } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { AuthCard } from "@/components/cloud-provider";
 import { CardDescription } from "@/components/ui/card";
+import { getEnv } from '@/lib/env';
 
-const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL;
+const backendUrl = getEnv('NEXT_PUBLIC_BACKEND_URL');
 
 interface Cluster {
   name: string;

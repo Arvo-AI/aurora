@@ -27,6 +27,9 @@ on:
       - 'docker-compose*.yaml'
       - 'scripts/validate-env-vars.sh'
 
+permissions:
+  contents: read
+
 jobs:
   validate-env-vars:
     name: Validate Environment Variables

@@ -122,7 +122,8 @@ def connect():
         org_data = client.get_org()
         user_profile = client.get_user()
     except GrafanaAPIError as exc:
-        return jsonify({"error": str(exc)}), 502
+        logger.error(f"[GRAFANA] Connection validation failed for user {user_id}: {exc}")
+        return jsonify({"error": "Failed to validate Grafana credentials"}), 502
 
     org_name = org_data.get("name") or "Grafana"
     org_id = str(org_data.get("id")) if org_data.get("id") is not None else None
@@ -183,7 +184,7 @@ def status():
         user_profile = client.get_user()
     except GrafanaAPIError as exc:
         logger.warning(f"[GRAFANA] Status check failed for user {user_id}: {exc}")
-        return jsonify({"connected": False, "error": str(exc)})
+        return jsonify({"connected": False, "error": "Failed to validate stored Grafana credentials"})
 
     return jsonify({
         "connected": True,

@@ -94,8 +94,8 @@ def get_chat_sessions():
         return jsonify({'sessions': result}), 200
         
     except Exception as e:
-        logging.error(f"Error fetching chat sessions: {e}")
-        return jsonify({'error': str(e)}), 500
+        logging.error(f"Error fetching chat sessions: {e}", exc_info=True)
+        return jsonify({'error': 'Failed to fetch chat sessions'}), 500
     finally:
         if 'cursor' in locals() and cursor:
             cursor.close()
@@ -157,8 +157,8 @@ def create_chat_session():
         return jsonify(response_data), 201
         
     except Exception as e:
-        logging.error(f"Error creating chat session: {e}")
-        return jsonify({'error': str(e)}), 500
+        logging.error(f"Error creating chat session: {e}", exc_info=True)
+        return jsonify({'error': 'Failed to create chat session'}), 500
     finally:
         # Cleanup connections if they weren't closed in the success path
         if 'cursor' in locals() and cursor and not cursor.closed:
@@ -273,8 +273,8 @@ def get_chat_session(session_id):
         return jsonify(result), 200
         
     except Exception as e:
-        logging.error(f"Error fetching chat session: {e}")
-        return jsonify({'error': str(e)}), 500
+        logging.error(f"Error fetching chat session: {e}", exc_info=True)
+        return jsonify({'error': 'Failed to fetch chat session'}), 500
     finally:
         if 'cursor' in locals() and cursor:
             cursor.close()
@@ -390,8 +390,8 @@ def update_chat_session(session_id):
         return jsonify(result), 200
         
     except Exception as e:
-        logging.error(f"Error updating chat session: {e}")
-        return jsonify({'error': str(e)}), 500
+        logging.error(f"Error updating chat session: {e}", exc_info=True)
+        return jsonify({'error': 'Failed to update chat session'}), 500
     finally:
         if 'cursor' in locals() and cursor:
             cursor.close()
@@ -447,8 +447,8 @@ def delete_chat_session(session_id):
         return jsonify({'message': 'Chat session deleted successfully'}), 200
         
     except Exception as e:
-        logging.error(f"Error deleting chat session: {e}")
-        return jsonify({'error': str(e)}), 500
+        logging.error(f"Error deleting chat session: {e}", exc_info=True)
+        return jsonify({'error': 'Failed to delete chat session'}), 500
     finally:
         if 'cursor' in locals() and cursor:
             cursor.close()
@@ -496,8 +496,8 @@ def delete_all_chat_sessions():
             return jsonify({'message': f'Successfully deleted {deleted_count} chat sessions'}), 200
         
     except Exception as e:
-        logging.error(f"Error deleting chat sessions: {e}")
-        return jsonify({'error': str(e)}), 500
+        logging.error(f"Error deleting chat sessions: {e}", exc_info=True)
+        return jsonify({'error': 'Failed to delete chat sessions'}), 500
     finally:
         if 'cursor' in locals() and cursor:
             cursor.close()

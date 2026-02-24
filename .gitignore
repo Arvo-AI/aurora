@@ -91,3 +91,6 @@ scripts/publish-helm-chart.sh
 
 # Third-party helm charts (Datadog)
 helm-charts/.worktrees/
+
+# SearXNG local config
+config/searxng/

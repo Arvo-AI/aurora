@@ -148,8 +148,8 @@ def search_sync():
         logger.error(f"[SPLUNK-SEARCH] Search timeout for user {user_id}")
         return jsonify({"error": "Search timed out. Try a narrower time range or simpler query."}), 504
     except requests.exceptions.RequestException as exc:
-        logger.error(f"[SPLUNK-SEARCH] Search failed for user {user_id}: {exc}")
-        return jsonify({"error": f"Search failed: {str(exc)}"}), 502
+        logger.error(f"[SPLUNK-SEARCH] Search failed for user {user_id}: {exc}", exc_info=True)
+        return jsonify({"error": "Search request failed"}), 502
 
 
 @search_bp.route("/search/jobs", methods=["POST", "OPTIONS"])
@@ -220,8 +220,8 @@ def create_search_job():
         })
 
     except requests.exceptions.RequestException as exc:
-        logger.error(f"[SPLUNK-SEARCH] Job creation failed for user {user_id}: {exc}")
-        return jsonify({"error": f"Failed to create search job: {str(exc)}"}), 502
+        logger.error(f"[SPLUNK-SEARCH] Job creation failed for user {user_id}: {exc}", exc_info=True)
+        return jsonify({"error": "Failed to create search job"}), 502
 
 
 @search_bp.route("/search/jobs/<sid>", methods=["GET", "OPTIONS"])
@@ -279,8 +279,8 @@ def get_job_status(sid: str):
         })
 
     except requests.exceptions.RequestException as exc:
-        logger.error(f"[SPLUNK-SEARCH] Failed to get job status for {sid}: {exc}")
-        return jsonify({"error": f"Failed to get job status: {str(exc)}"}), 502
+        logger.error(f"[SPLUNK-SEARCH] Failed to get job status for {sid}: {exc}", exc_info=True)
+        return jsonify({"error": "Failed to get job status"}), 502
 
 
 @search_bp.route("/search/jobs/<sid>/results", methods=["GET", "OPTIONS"])
@@ -339,8 +339,8 @@ def get_job_results(sid: str):
         })
 
     except requests.exceptions.RequestException as exc:
-        logger.error(f"[SPLUNK-SEARCH] Failed to get job results for {sid}: {exc}")
-        return jsonify({"error": f"Failed to get results: {str(exc)}"}), 502
+        logger.error(f"[SPLUNK-SEARCH] Failed to get job results for {sid}: {exc}", exc_info=True)
+        return jsonify({"error": "Failed to get search results"}), 502
 
 
 @search_bp.route("/search/jobs/<sid>", methods=["DELETE", "OPTIONS"])
@@ -383,5 +383,5 @@ def cancel_job(sid: str):
         })
 
     except requests.exceptions.RequestException as exc:
-        logger.error(f"[SPLUNK-SEARCH] Failed to cancel job {sid}: {exc}")
-        return jsonify({"error": f"Failed to cancel job: {str(exc)}"}), 502
+        logger.error(f"[SPLUNK-SEARCH] Failed to cancel job {sid}: {exc}", exc_info=True)
+        return jsonify({"error": "Failed to cancel job"}), 502

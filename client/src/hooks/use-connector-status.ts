@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import GitHubProviderIntegration, { GitHubIntegrationService } from "@/components/github-provider-integration";
 import { isSlackEnabled, isOvhEnabled, isScalewayEnabled } from "@/lib/feature-flags";
+import { getEnv } from '@/lib/env';
 import type { ConnectorConfig } from "@/components/connectors/types";
 
 const slackService = isSlackEnabled() ? require("@/lib/services/slack").slackService : null;
@@ -163,7 +164,7 @@ export function useConnectorStatus(connector: ConnectorConfig, userId: string | 
         }
       }
       
-      const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL;
+      const backendUrl = getEnv('NEXT_PUBLIC_BACKEND_URL');
       if (!backendUrl || !userId) {
         setIsConnected(false);
         if (typeof window !== "undefined") {

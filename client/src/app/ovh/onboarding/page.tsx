@@ -13,8 +13,9 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
+import { getEnv } from '@/lib/env';
 
-const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL;
+const backendUrl = getEnv('NEXT_PUBLIC_BACKEND_URL');
 
 // OVH regions with their display names
 const OVH_REGIONS = [

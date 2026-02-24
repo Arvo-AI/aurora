@@ -11,10 +11,10 @@
 - **Deploy with Docker Compose**: `make prod` (production build)
 
 ## Docker deployments
-- For development, use `make dev-build` to build the project, `make dev` to start it and `make down` to stop it ;
-- For production with prebuilt images, use `make prod-prebuilt` (pulls from GHCR, retags, runs), or `make prod-local` to build from source; use `make down` to stop it ;
-- To build from source (e.g. feature branch demos), use `make prod-local` or `make prod-build` ;
-- Always update `docker-compose.yaml` along with `docker-compose.prod-local.yml`, especially to keep env variables in sync.
+- **Development**: Use `make dev-build` to build the project, `make dev` to start containers, and `make down` to stop them.
+- **Production (prebuilt images)**: Use `make prod-prebuilt` to pull from GHCR, retag, and run. Use `make prod-local` to build from source instead. Use `make down` to stop.
+- **Production (build from source)**: Use `make prod-local` or `make prod-build` for feature branch demos and custom builds.
+- **Important**: Always update both `docker-compose.yaml` and `docker-compose.prod-local.yml` together to keep environment variables in sync.
 
 ## Architecture
 - **Docker Compose stack**: aurora-server (Flask API on :5080), celery_worker (background tasks), chatbot (WebSocket on :5006), frontend (Next.js on :3000), postgres (:5432), weaviate (vector DB :8080), redis (:6379), vault (secrets :8200), seaweedfs (object storage :8333)

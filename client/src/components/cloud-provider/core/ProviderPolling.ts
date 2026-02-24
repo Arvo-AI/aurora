@@ -1,6 +1,7 @@
 import { Provider } from '../types';
+import { getEnv } from '@/lib/env';
 
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL;
+const BACKEND_URL = getEnv('NEXT_PUBLIC_BACKEND_URL');
 
 export interface ProviderError {
   message: string;

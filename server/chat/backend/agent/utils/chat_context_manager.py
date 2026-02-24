@@ -16,6 +16,7 @@ from .llm_context_manager import LLMContextManager
 from ..llm import LLMManager
 from .llm_usage_tracker import LLMUsageTracker
 from utils.db.connection_pool import db_pool
+from chat.backend.agent.model_mapper import ModelMapper
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +25,7 @@ class ChatContextManager:
     """Manages chat context length to prevent exceeding model limits."""
 
     # Model context limits (tokens) - leaving some buffer for system prompts and tool calls
+    # Keys use OpenRouter format (dot notation) since ModelMapper resolves to this
     MODEL_CONTEXT_LIMITS = {
         "openai/gpt-5.2": 950000,  # 1M - 50K buffer
         "anthropic/claude-sonnet-4.5": 950000,  # 1M - 50K buffer
@@ -37,9 +39,15 @@ class ChatContextManager:
     @classmethod
     def get_context_limit(cls, model_name: str) -> int:
         """Get the context limit for a specific model."""
-        # Try exact match first
-        if model_name in cls.MODEL_CONTEXT_LIMITS:
-            return cls.MODEL_CONTEXT_LIMITS[model_name]
+        # Resolve via ModelMapper so all name variants (dash/dot) map correctly
+        try:
+            resolved = ModelMapper.get_native_name(model_name, "openrouter")
+        except Exception:
+            resolved = model_name
+
+        for name in (resolved, model_name):
+            if name in cls.MODEL_CONTEXT_LIMITS:
+                return cls.MODEL_CONTEXT_LIMITS[name]
 
         # Try without version suffix
         base_model = model_name.split(".")[0].split("-v")[0]
