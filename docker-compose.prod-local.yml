@@ -102,6 +102,25 @@ x-common-env: &common-env
   FRONTEND_URL: ${FRONTEND_URL}
 
 services:
+  caddy:
+    image: caddy:2-alpine
+    container_name: aurora-caddy
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./config/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    environment:
+      DOMAIN: ${DOMAIN}
+      FLASK_PORT: ${FLASK_PORT}
+    restart: unless-stopped
+    depends_on:
+      - frontend
+      - aurora-server
+      - chatbot
+
   aurora-server:
     build:
       context: ./server
@@ -607,6 +626,8 @@ services:
     restart: unless-stopped
 
 volumes:
+  caddy-data:
+  caddy-config:
   postgres-data:
   weaviate_data:
   terraform-workdir:

@@ -1,0 +1,19 @@
+{
+    email demo@aurora-ai.net
+}
+
+{$DOMAIN:localhost} {
+    encode gzip
+    
+    handle /api/* {
+        reverse_proxy aurora-server:{$FLASK_PORT:5080}
+    }
+    
+    handle /ws* {
+        reverse_proxy chatbot:5006
+    }
+    
+    handle {
+        reverse_proxy frontend:3000
+    }
+}
