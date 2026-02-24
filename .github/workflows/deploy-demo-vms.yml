@@ -211,8 +211,9 @@ jobs:
             echo '📥 Pulling latest code from demo branch...'
             git fetch origin
             git checkout demo
+            git checkout .
             git pull origin demo
-            
+
             echo '🔧 Configuring domain in .env...'
             sudo sed -i 's|^DOMAIN=.*|DOMAIN=${{ env.VM2_DOMAIN }}|' .env || echo 'DOMAIN=${{ env.VM2_DOMAIN }}' | sudo tee -a .env
             sudo sed -i 's|^FRONTEND_URL=.*|FRONTEND_URL=${{ env.VM2_FRONTEND_URL }}|' .env
@@ -267,6 +268,7 @@ jobs:
             echo '📥 Pulling latest code from demo branch...'
             git fetch origin
             git checkout demo
+            git checkout .
             git pull origin demo
             
             echo '🔧 Configuring domain in .env...'
