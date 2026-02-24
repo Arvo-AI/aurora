@@ -50,6 +50,7 @@ celery_app.conf.update(
         'routes.datadog.tasks',
         'routes.netdata.tasks',
         'routes.splunk.tasks',
+        'routes.dynatrace.tasks',
         'routes.pagerduty.tasks',
         'utils.terminal.terminal_pod_cleanup',
         'chat.background.task',
@@ -101,6 +102,12 @@ try:
     logging.info("Background chat tasks imported successfully")
 except ImportError as e:
     logging.warning(f"Failed to import background chat tasks: {e}")
+
+try:
+    import routes.dynatrace.tasks
+    logging.info("Dynatrace tasks imported successfully")
+except ImportError as e:
+    logging.warning(f"Failed to import Dynatrace tasks: {e}")
 
 try:
     import routes.pagerduty.tasks
