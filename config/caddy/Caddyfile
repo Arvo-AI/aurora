@@ -12,10 +12,10 @@
     
     # Flask backend auth endpoints (not handled by Next.js)
     handle /api/auth/register {
-        reverse_proxy server:5080
+        reverse_proxy aurora-server:5080
     }
     handle /api/auth/login {
-        reverse_proxy server:5080
+        reverse_proxy aurora-server:5080
     }
     
     # Everything else goes to frontend (Next.js handles its own /api/auth/* via NextAuth)
