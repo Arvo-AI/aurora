@@ -51,20 +51,15 @@ jobs:
         id: load-config
         run: |
           echo "Loading workload identity configuration from GCP Secret Manager..."
-          echo "(These secrets are publicly readable - just project identifiers)"
+          echo "(These secrets are publicly readable - using anonymous access)"
           
-          # Fetch workload identity configuration (public secrets)
-          WORKLOAD_IDENTITY_PROVIDER=$(gcloud secrets versions access latest \
-            --secret="demo-workload-identity-provider-path" \
-            --project="${{ env.PROJECT_ID_FOR_SECRETS }}")
+          # Fetch workload identity configuration without authentication
+          # Using curl with GCP Secret Manager REST API for public secrets
+          WORKLOAD_IDENTITY_PROVIDER=$(curl -s "https://secretmanager.googleapis.com/v1/projects/${{ env.PROJECT_ID_FOR_SECRETS }}/secrets/demo-workload-identity-provider-path/versions/latest:access" | jq -r '.payload.data' | base64 -d)
           
-          SERVICE_ACCOUNT=$(gcloud secrets versions access latest \
-            --secret="demo-service-account" \
-            --project="${{ env.PROJECT_ID_FOR_SECRETS }}")
+          SERVICE_ACCOUNT=$(curl -s "https://secretmanager.googleapis.com/v1/projects/${{ env.PROJECT_ID_FOR_SECRETS }}/secrets/demo-service-account/versions/latest:access" | jq -r '.payload.data' | base64 -d)
           
-          GCP_PROJECT=$(gcloud secrets versions access latest \
-            --secret="demo-gcp-project-id" \
-            --project="${{ env.PROJECT_ID_FOR_SECRETS }}")
+          GCP_PROJECT=$(curl -s "https://secretmanager.googleapis.com/v1/projects/${{ env.PROJECT_ID_FOR_SECRETS }}/secrets/demo-gcp-project-id/versions/latest:access" | jq -r '.payload.data' | base64 -d)
           
           # Export for next steps
           echo "WORKLOAD_IDENTITY_PROVIDER=$WORKLOAD_IDENTITY_PROVIDER" >> $GITHUB_ENV
