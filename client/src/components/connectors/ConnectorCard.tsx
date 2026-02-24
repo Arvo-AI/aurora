@@ -54,7 +54,6 @@ export default function ConnectorCard({ connector }: ConnectorCardProps) {
   const {
     isConnecting: isConnectingOAuthHandler,
     handleGitHubOAuth,
-    handleBitbucketOAuth,
     handleSlackOAuth,
     handleGCPOAuth,
   } = useConnectorOAuth(connector, userId);
@@ -195,23 +194,14 @@ export default function ConnectorCard({ connector }: ConnectorCardProps) {
   const IconComponent = connector.icon;
 
   function renderStatusBadge() {
-    // GitHub and Bitbucket use their own two-tier status (authenticated vs connected)
-    if (connector.id === "github" && githubStatus.isAuthenticated) {
-      return githubStatus.isConnected ? (
-        <div className="flex items-center gap-1 text-green-600 dark:text-green-500">
-          <Check className="h-4 w-4" />
-          <span className="text-xs font-medium">Connected</span>
-        </div>
-      ) : (
-        <div className="flex items-center gap-1 text-yellow-600 dark:text-yellow-500">
-          <AlertCircle className="h-4 w-4" />
-          <span className="text-xs font-medium">Available</span>
-        </div>
-      );
-    }
+    // GitHub and Bitbucket use two-tier status (authenticated vs fully connected)
+    const devToolStatus =
+      connector.id === "github" ? githubStatus :
+      connector.id === "bitbucket" ? bitbucketStatus :
+      null;
 
-    if (connector.id === "bitbucket" && bitbucketStatus.isAuthenticated) {
-      return bitbucketStatus.isConnected ? (
+    if (devToolStatus?.isAuthenticated) {
+      return devToolStatus.isConnected ? (
         <div className="flex items-center gap-1 text-green-600 dark:text-green-500">
           <Check className="h-4 w-4" />
           <span className="text-xs font-medium">Connected</span>

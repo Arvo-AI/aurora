@@ -9,46 +9,37 @@ interface BitbucketStatus {
   displayName?: string;
 }
 
+const DISCONNECTED_STATUS: BitbucketStatus = {
+  isAuthenticated: false,
+  isConnected: false,
+  hasWorkspaceSelected: null,
+};
+
 /**
- * Single source of truth for Bitbucket connection status
+ * Single source of truth for Bitbucket connection status.
  * - isAuthenticated: credentials exist
  * - isConnected: credentials exist AND workspace+repo+branch selected
  */
 export function useBitbucketStatus(userId: string | null) {
-  const [status, setStatus] = useState<BitbucketStatus>({
-    isAuthenticated: false,
-    isConnected: false,
-    hasWorkspaceSelected: null,
-  });
+  const [status, setStatus] = useState<BitbucketStatus>(DISCONNECTED_STATUS);
 
   const checkStatus = useCallback(async () => {
     if (!userId) {
-      setStatus({
-        isAuthenticated: false,
-        isConnected: false,
-        hasWorkspaceSelected: null,
-      });
+      setStatus(DISCONNECTED_STATUS);
       return;
     }
 
     try {
       const credentials = await BitbucketIntegrationService.checkStatus(userId);
-      const isAuthenticated = credentials.connected || false;
-
-      if (!isAuthenticated) {
-        setStatus({
-          isAuthenticated: false,
-          isConnected: false,
-          hasWorkspaceSelected: false,
-        });
+      if (!credentials.connected) {
+        setStatus({ ...DISCONNECTED_STATUS, hasWorkspaceSelected: false });
         return;
       }
 
       const selection = await BitbucketIntegrationService.loadWorkspaceSelection(userId);
-      const hasWorkspaceSelected = selection !== null &&
-        selection.workspace !== null &&
-        selection.repository !== null &&
-        selection.branch !== null;
+      const hasWorkspaceSelected = Boolean(
+        selection?.workspace && selection?.repository && selection?.branch
+      );
 
       setStatus({
         isAuthenticated: true,
@@ -59,11 +50,7 @@ export function useBitbucketStatus(userId: string | null) {
       });
     } catch (error) {
       console.error('Error checking Bitbucket status:', error);
-      setStatus({
-        isAuthenticated: false,
-        isConnected: false,
-        hasWorkspaceSelected: null,
-      });
+      setStatus(DISCONNECTED_STATUS);
     }
   }, [userId]);
 
@@ -72,14 +59,8 @@ export function useBitbucketStatus(userId: string | null) {
   }, [checkStatus]);
 
   useEffect(() => {
-    const handleProviderChange = () => {
-      checkStatus();
-    };
-
-    window.addEventListener('providerStateChanged', handleProviderChange);
-    return () => {
-      window.removeEventListener('providerStateChanged', handleProviderChange);
-    };
+    window.addEventListener('providerStateChanged', checkStatus);
+    return () => window.removeEventListener('providerStateChanged', checkStatus);
   }, [checkStatus]);
 
   return {

@@ -70,23 +70,20 @@ export function useConnectorOAuth(connector: ConnectorConfig, userId: string | n
         if (popup?.closed) {
           clearInterval(checkClosed);
           setIsConnecting(false);
-          setTimeout(async () => {
+          setTimeout(() => {
             onStatusChange();
             window.dispatchEvent(new CustomEvent("providerStateChanged"));
           }, 1000);
         }
       }, 1000);
     } catch (error: any) {
-      // Prevent error from being logged as uncaught
       if (error.isHandled) {
-        // Error is already marked as handled, just log for debugging
         console.log("OAuth error (handled):", error.message);
       } else {
         console.error("OAuth error:", error);
       }
       setIsConnecting(false);
-      
-      // Check if this is a configuration error
+
       if (error.errorCode === 'GITHUB_NOT_CONFIGURED' || error.message?.includes('not configured')) {
         const readmeAction = createElement(
           ToastAction,
@@ -118,10 +115,6 @@ export function useConnectorOAuth(connector: ConnectorConfig, userId: string | n
           variant: "destructive",
         });
       }
-      
-      // Don't re-throw the error to prevent app crash
-      // The error is already handled with user feedback via toast
-      return;
     }
   };
 
@@ -149,7 +142,7 @@ export function useConnectorOAuth(connector: ConnectorConfig, userId: string | n
         if (popup?.closed) {
           clearInterval(checkClosed);
           setIsConnecting(false);
-          setTimeout(async () => {
+          setTimeout(() => {
             onStatusChange();
             window.dispatchEvent(new CustomEvent("providerStateChanged"));
           }, 1000);
@@ -163,7 +156,6 @@ export function useConnectorOAuth(connector: ConnectorConfig, userId: string | n
         description: error.message || "Failed to connect to Bitbucket",
         variant: "destructive",
       });
-      return;
     }
   };
 

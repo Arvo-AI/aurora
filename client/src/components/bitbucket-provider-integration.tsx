@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -26,200 +26,120 @@ export class BitbucketIntegrationService {
     return { 'X-User-ID': userId };
   }
 
-  static async checkStatus(userId: string) {
-    const response = await fetch(`${BACKEND_URL}/bitbucket/status`, {
-      headers: this.getAuthHeaders(userId),
+  /**
+   * Shared fetch helper that handles auth headers, error responses, and JSON parsing.
+   * Pass `errorMessage: null` to return null on non-OK responses instead of throwing.
+   */
+  private static async request<T>(
+    path: string,
+    userId: string,
+    options: { method?: string; body?: object; errorMessage?: string | null } = {}
+  ): Promise<T> {
+    const { method, body, errorMessage } = options;
+    const headers: Record<string, string> = { ...this.getAuthHeaders(userId) };
+    if (body) headers['Content-Type'] = 'application/json';
+
+    const response = await fetch(`${BACKEND_URL}${path}`, {
+      method,
+      headers,
+      body: body ? JSON.stringify(body) : undefined,
     });
 
     if (!response.ok) {
-      return { connected: false };
+      if (errorMessage === null) return null as T;
+      const errorText = await response.text();
+      throw new Error(errorText || errorMessage || 'Request failed');
     }
 
-    return response.json();
+    const contentType = response.headers.get('content-type');
+    if (contentType?.includes('application/json')) {
+      return response.json();
+    }
+    return undefined as T;
+  }
+
+  static async checkStatus(userId: string) {
+    return this.request<{ connected: boolean; display_name?: string; username?: string; auth_type?: string }>(
+      '/bitbucket/status', userId, { errorMessage: null }
+    ).then(data => data ?? { connected: false });
   }
 
   static async initiateOAuth(userId: string): Promise<string> {
-    const response = await fetch(`${BACKEND_URL}/bitbucket/login`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...this.getAuthHeaders(userId),
-      },
-      body: JSON.stringify({}),
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(errorText || 'Failed to initiate Bitbucket OAuth');
-    }
-
-    const data = await response.json();
+    const data = await this.request<{ oauth_url?: string }>(
+      '/bitbucket/login', userId,
+      { method: 'POST', body: {}, errorMessage: 'Failed to initiate Bitbucket OAuth' }
+    );
     if (!data?.oauth_url) {
       throw new Error('Bitbucket OAuth URL was not returned by the server');
     }
-
     return data.oauth_url;
   }
 
   static async connectWithApiToken(userId: string, email: string, apiToken: string) {
-    const response = await fetch(`${BACKEND_URL}/bitbucket/login`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...this.getAuthHeaders(userId),
-      },
-      body: JSON.stringify({ api_token: apiToken, email }),
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(errorText || 'Failed to connect with API token');
-    }
-
-    return response.json();
+    return this.request(
+      '/bitbucket/login', userId,
+      { method: 'POST', body: { api_token: apiToken, email }, errorMessage: 'Failed to connect with API token' }
+    );
   }
 
   static async disconnect(userId: string): Promise<void> {
-    const response = await fetch(`${BACKEND_URL}/bitbucket/disconnect`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...this.getAuthHeaders(userId),
-      },
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(errorText || 'Failed to disconnect Bitbucket');
-    }
+    await this.request(
+      '/bitbucket/disconnect', userId,
+      { method: 'POST', errorMessage: 'Failed to disconnect Bitbucket' }
+    );
   }
 
   static async getWorkspaces(userId: string) {
-    const response = await fetch(`${BACKEND_URL}/bitbucket/workspaces`, {
-      headers: this.getAuthHeaders(userId),
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(errorText || 'Failed to fetch workspaces');
-    }
-
-    return response.json();
+    return this.request<any>('/bitbucket/workspaces', userId, { errorMessage: 'Failed to fetch workspaces' });
   }
 
   static async getProjects(userId: string, workspace: string) {
-    const response = await fetch(`${BACKEND_URL}/bitbucket/projects/${encodeURIComponent(workspace)}`, {
-      headers: this.getAuthHeaders(userId),
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(errorText || 'Failed to fetch projects');
-    }
-
-    return response.json();
+    return this.request<any>(
+      `/bitbucket/projects/${encodeURIComponent(workspace)}`, userId,
+      { errorMessage: 'Failed to fetch projects' }
+    );
   }
 
   static async getRepos(userId: string, workspace: string, project?: string) {
-    const url = new URL(`${BACKEND_URL}/bitbucket/repos/${encodeURIComponent(workspace)}`);
-    if (project) url.searchParams.set('project', project);
-
-    const response = await fetch(url.toString(), {
-      headers: this.getAuthHeaders(userId),
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(errorText || 'Failed to fetch repositories');
-    }
-
-    return response.json();
+    const path = `/bitbucket/repos/${encodeURIComponent(workspace)}${project ? `?project=${encodeURIComponent(project)}` : ''}`;
+    return this.request<any>(path, userId, { errorMessage: 'Failed to fetch repositories' });
   }
 
   static async getBranches(userId: string, workspace: string, repoSlug: string) {
-    const response = await fetch(
-      `${BACKEND_URL}/bitbucket/branches/${encodeURIComponent(workspace)}/${encodeURIComponent(repoSlug)}`,
-      { headers: this.getAuthHeaders(userId) }
+    return this.request<any>(
+      `/bitbucket/branches/${encodeURIComponent(workspace)}/${encodeURIComponent(repoSlug)}`, userId,
+      { errorMessage: 'Failed to fetch branches' }
     );
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(errorText || 'Failed to fetch branches');
-    }
-
-    return response.json();
   }
 
   static async getPullRequests(userId: string, workspace: string, repoSlug: string, state?: string) {
-    const url = new URL(`${BACKEND_URL}/bitbucket/pull-requests/${encodeURIComponent(workspace)}/${encodeURIComponent(repoSlug)}`);
-    if (state) url.searchParams.set('state', state);
-
-    const response = await fetch(url.toString(), {
-      headers: this.getAuthHeaders(userId),
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(errorText || 'Failed to fetch pull requests');
-    }
-
-    return response.json();
+    const path = `/bitbucket/pull-requests/${encodeURIComponent(workspace)}/${encodeURIComponent(repoSlug)}${state ? `?state=${encodeURIComponent(state)}` : ''}`;
+    return this.request<any>(path, userId, { errorMessage: 'Failed to fetch pull requests' });
   }
 
   static async getIssues(userId: string, workspace: string, repoSlug: string) {
-    const response = await fetch(
-      `${BACKEND_URL}/bitbucket/issues/${encodeURIComponent(workspace)}/${encodeURIComponent(repoSlug)}`,
-      { headers: this.getAuthHeaders(userId) }
+    return this.request<any>(
+      `/bitbucket/issues/${encodeURIComponent(workspace)}/${encodeURIComponent(repoSlug)}`, userId,
+      { errorMessage: 'Failed to fetch issues' }
     );
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(errorText || 'Failed to fetch issues');
-    }
-
-    return response.json();
   }
 
   static async loadWorkspaceSelection(userId: string) {
-    const response = await fetch(`${BACKEND_URL}/bitbucket/workspace-selection`, {
-      headers: this.getAuthHeaders(userId),
-    });
-
-    if (!response.ok) {
-      return null;
-    }
-
-    return response.json();
+    return this.request<any>('/bitbucket/workspace-selection', userId, { errorMessage: null });
   }
 
   static async saveWorkspaceSelection(userId: string, data: any) {
-    const response = await fetch(`${BACKEND_URL}/bitbucket/workspace-selection`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...this.getAuthHeaders(userId),
-      },
-      body: JSON.stringify(data),
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(errorText || 'Failed to save workspace selection');
-    }
-
-    return response.json();
+    return this.request(
+      '/bitbucket/workspace-selection', userId,
+      { method: 'POST', body: data, errorMessage: 'Failed to save workspace selection' }
+    );
   }
 
-  static async clearWorkspaceSelection(userId: string) {
-    const response = await fetch(`${BACKEND_URL}/bitbucket/workspace-selection`, {
-      method: 'DELETE',
-      headers: this.getAuthHeaders(userId),
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(errorText || 'Failed to clear workspace selection');
-    }
+  static async clearWorkspaceSelection(userId: string): Promise<void> {
+    await this.request(
+      '/bitbucket/workspace-selection', userId,
+      { method: 'DELETE', errorMessage: 'Failed to clear workspace selection' }
+    );
   }
 }
 
@@ -267,6 +187,8 @@ export default function BitbucketProviderIntegration() {
   const [branches, setBranches] = useState<Branch[]>([]);
   const [selectedBranch, setSelectedBranch] = useState<string>('');
   const [isLoadingBranches, setIsLoadingBranches] = useState(false);
+  const isRestoringSelectionRef = useRef(false);
+  const [savedSelection, setSavedSelection] = useState<{ workspace: string; repoSlug: string; branch: string } | null>(null);
 
   // Fetch user ID on mount
   useEffect(() => {
@@ -299,8 +221,9 @@ export default function BitbucketProviderIntegration() {
     }
   }, [isAuthenticated, userId]);
 
-  // Fetch repos when workspace changes
+  // Fetch repos when workspace changes (skip during selection restore)
   useEffect(() => {
+    if (isRestoringSelectionRef.current) return;
     if (isAuthenticated && userId && selectedWorkspace) {
       fetchRepos(selectedWorkspace);
     }
@@ -460,17 +383,39 @@ export default function BitbucketProviderIntegration() {
     if (!userId) return;
     try {
       const data = await BitbucketIntegrationService.loadWorkspaceSelection(userId);
-      if (data?.workspace) {
-        setSelectedWorkspace(data.workspace);
-        if (data.repository) {
-          setSelectedRepo(data.repository);
+      if (!data?.workspace) return;
+
+      isRestoringSelectionRef.current = true;
+      setSelectedWorkspace(data.workspace);
+
+      // Fetch repos for the stored workspace
+      const repoData = await BitbucketIntegrationService.getRepos(userId, data.workspace);
+      const repoList = Array.isArray(repoData) ? repoData : repoData?.repositories || [];
+      setRepos(repoList);
+
+      if (data.repository) {
+        const repoSlug = typeof data.repository === 'string' ? data.repository : data.repository.slug;
+        const matchedRepo = repoList.find((r: Repo) => r.slug === repoSlug);
+        if (matchedRepo) {
+          setSelectedRepo(matchedRepo);
+
+          // Fetch branches for the stored repo
+          const branchData = await BitbucketIntegrationService.getBranches(userId, data.workspace, matchedRepo.slug);
+          const branchList = Array.isArray(branchData) ? branchData : branchData?.branches || [];
+          setBranches(branchList);
+
           if (data.branch) {
-            setSelectedBranch(data.branch);
+            const branchName = typeof data.branch === 'string' ? data.branch : data.branch.name;
+            setSelectedBranch(branchName);
+            setSavedSelection({ workspace: data.workspace, repoSlug: matchedRepo.slug, branch: branchName });
           }
         }
       }
+
+      isRestoringSelectionRef.current = false;
     } catch (error) {
       console.error('Error loading stored selection:', error);
+      isRestoringSelectionRef.current = false;
     }
   };
 
@@ -485,6 +430,7 @@ export default function BitbucketProviderIntegration() {
         repository: selectedRepo,
         branch: selectedBranch,
       });
+      setSavedSelection({ workspace: selectedWorkspace, repoSlug: selectedRepo.slug, branch: selectedBranch });
       window.dispatchEvent(new CustomEvent('providerStateChanged'));
       toast({ title: "Selection Saved", description: `${selectedWorkspace} / ${selectedRepo.name} / ${selectedBranch}` });
     } catch (error: any) {
@@ -502,6 +448,7 @@ export default function BitbucketProviderIntegration() {
       setBranches([]);
       setSelectedBranch('');
       setRepos([]);
+      setSavedSelection(null);
       window.dispatchEvent(new CustomEvent('providerStateChanged'));
       toast({ title: "Selection Cleared", description: "Bitbucket workspace selection cleared" });
     } catch (error: any) {
@@ -519,9 +466,14 @@ export default function BitbucketProviderIntegration() {
     );
   }
 
+  const hasCompleteSelection = selectedWorkspace && selectedRepo && selectedBranch;
+  const selectionMatchesSaved = hasCompleteSelection && savedSelection &&
+    savedSelection.workspace === selectedWorkspace &&
+    savedSelection.repoSlug === selectedRepo.slug &&
+    savedSelection.branch === selectedBranch;
+
   return (
     <div className="space-y-4">
-      {/* Auth section */}
       {!isAuthenticated ? (
         <Tabs defaultValue="oauth" className="w-full">
           <TabsList className="grid w-full grid-cols-2">
@@ -583,9 +535,7 @@ export default function BitbucketProviderIntegration() {
       ) : (
         <div className="flex items-center justify-between p-3 border border-border rounded-lg">
           <div className="flex items-center gap-3">
-            <div className="relative h-6 w-6">
-              <img src="/bitbucket.svg" alt="Bitbucket" className="h-6 w-6 object-contain" />
-            </div>
+            <img src="/bitbucket.svg" alt="Bitbucket" className="h-6 w-6 object-contain" />
             <div>
               <div className="flex items-center gap-2">
                 <span className="font-medium text-sm">{displayName || 'Bitbucket'}</span>
@@ -621,10 +571,8 @@ export default function BitbucketProviderIntegration() {
         </div>
       )}
 
-      {/* Workspace browser */}
       {isAuthenticated && (
         <div className="space-y-3">
-          {/* Workspace selector */}
           <div>
             <label className="text-sm font-medium mb-1.5 block">Workspace</label>
             {isLoadingWorkspaces ? (
@@ -648,7 +596,6 @@ export default function BitbucketProviderIntegration() {
             )}
           </div>
 
-          {/* Repo list */}
           {selectedWorkspace && (
             <div>
               <div className="flex items-center justify-between mb-1.5">
@@ -675,11 +622,9 @@ export default function BitbucketProviderIntegration() {
                       <div className="flex flex-col min-w-0 flex-1">
                         <div className="flex items-center gap-2">
                           <span className="text-sm font-medium truncate">{repo.name}</span>
-                          {repo.is_private ? (
-                            <Badge variant="secondary" className="text-xs">Private</Badge>
-                          ) : (
-                            <Badge variant="outline" className="text-xs">Public</Badge>
-                          )}
+                          <Badge variant={repo.is_private ? "secondary" : "outline"} className="text-xs">
+                            {repo.is_private ? 'Private' : 'Public'}
+                          </Badge>
                         </div>
                       </div>
                     </div>
@@ -691,7 +636,6 @@ export default function BitbucketProviderIntegration() {
             </div>
           )}
 
-          {/* Branch selector */}
           {selectedRepo && (
             <div>
               <label className="text-sm font-medium mb-1.5 block">Branch</label>
@@ -722,20 +666,22 @@ export default function BitbucketProviderIntegration() {
             </div>
           )}
 
-          {/* Selection summary and actions */}
-          {selectedWorkspace && selectedRepo && selectedBranch && (
+          {hasCompleteSelection && (
             <div className="flex items-center justify-between p-3 border border-border rounded-lg bg-muted/30">
-              <div className="text-sm">
+              <div className="text-sm flex items-center gap-2">
+                {selectionMatchesSaved && <Check className="w-4 h-4 text-green-500" />}
                 <span className="font-medium">{selectedWorkspace}</span>
-                <span className="text-muted-foreground"> / </span>
+                <span className="text-muted-foreground">/</span>
                 <span className="font-medium">{selectedRepo.name}</span>
-                <span className="text-muted-foreground"> / </span>
+                <span className="text-muted-foreground">/</span>
                 <span className="font-medium">{selectedBranch}</span>
               </div>
               <div className="flex gap-2">
-                <Button size="sm" onClick={handleSaveSelection}>
-                  Save
-                </Button>
+                {!selectionMatchesSaved && (
+                  <Button size="sm" onClick={handleSaveSelection}>
+                    Save
+                  </Button>
+                )}
                 <Button size="sm" variant="outline" onClick={handleClearSelection}>
                   Clear
                 </Button>
