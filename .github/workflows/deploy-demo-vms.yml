@@ -141,7 +141,8 @@ jobs:
             echo '📂 Navigating to project directory...'
             cd /opt/aurora-demo
             
-            echo '🔧 Configuring git safe directory...'
+            echo '🔧 Fixing git permissions for deployment...'
+            sudo chown -R \$(whoami):\$(whoami) /opt/aurora-demo
             git config --global --add safe.directory /opt/aurora-demo
             
             echo '📥 Pulling latest code from demo branch...'
@@ -150,7 +151,7 @@ jobs:
             git pull origin demo
             
             echo '🔄 Restarting services...'
-            docker compose -f docker-compose.prod-local.yml up -d --remove-orphans
+            sudo docker compose -f docker-compose.prod-local.yml up -d --remove-orphans
             
             echo '✅ VM-2 deployment complete!'
           " 2>&1
