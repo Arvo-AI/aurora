@@ -5,6 +5,10 @@
 {$DOMAIN:localhost} {
     encode gzip
     
+    handle /api/auth/* {
+        reverse_proxy frontend:3000
+    }
+    
     handle /api/* {
         reverse_proxy aurora-server:{$FLASK_PORT:5080}
     }

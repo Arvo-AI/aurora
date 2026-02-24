@@ -73,20 +73,30 @@ jobs:
       - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@v2
 
-      - name: Load deployment configuration from GCP Secret Manager
-        id: secrets
-        run: |
-          echo "Loading deployment configuration from GCP Secret Manager..."
-          
-          # Fetch deployment configuration (private secrets)
-          GCP_ZONE=$(gcloud secrets versions access latest --secret="demo-gcp-zone" --project="${{ env.GCP_PROJECT }}")
-          VM2_NAME=$(gcloud secrets versions access latest --secret="demo-vm2-name" --project="${{ env.GCP_PROJECT }}")
-          
-          # Export as environment variables
-          echo "GCP_ZONE=$GCP_ZONE" >> $GITHUB_ENV
-          echo "VM2_NAME=$VM2_NAME" >> $GITHUB_ENV
-          
-          echo "✅ Deployment configuration loaded"
+    - name: Load deployment configuration from GCP Secret Manager
+      id: secrets
+      run: |
+        echo "Loading deployment configuration from GCP Secret Manager..."
+        
+        # Fetch deployment configuration
+        GCP_ZONE=$(gcloud secrets versions access latest --secret="demo-gcp-zone" --project="${{ env.GCP_PROJECT }}")
+        VM2_NAME=$(gcloud secrets versions access latest --secret="demo-vm2-name" --project="${{ env.GCP_PROJECT }}")
+        
+        # Fetch domain-specific configuration for VM-2
+        VM2_DOMAIN=$(gcloud secrets versions access latest --secret="demo-vm2-domain" --project="${{ env.GCP_PROJECT }}")
+        VM2_FRONTEND_URL=$(gcloud secrets versions access latest --secret="demo-vm2-frontend-url" --project="${{ env.GCP_PROJECT }}")
+        VM2_BACKEND_URL=$(gcloud secrets versions access latest --secret="demo-vm2-backend-url" --project="${{ env.GCP_PROJECT }}")
+        VM2_WEBSOCKET_URL=$(gcloud secrets versions access latest --secret="demo-vm2-websocket-url" --project="${{ env.GCP_PROJECT }}")
+        
+        # Export as environment variables
+        echo "GCP_ZONE=$GCP_ZONE" >> $GITHUB_ENV
+        echo "VM2_NAME=$VM2_NAME" >> $GITHUB_ENV
+        echo "VM2_DOMAIN=$VM2_DOMAIN" >> $GITHUB_ENV
+        echo "VM2_FRONTEND_URL=$VM2_FRONTEND_URL" >> $GITHUB_ENV
+        echo "VM2_BACKEND_URL=$VM2_BACKEND_URL" >> $GITHUB_ENV
+        echo "VM2_WEBSOCKET_URL=$VM2_WEBSOCKET_URL" >> $GITHUB_ENV
+        
+        echo "✅ Deployment configuration loaded"
 
       # Commented out - only deploying to VM-2 for now
       # - name: Deploy to VM-1 (aurora-demo-vm)
@@ -149,6 +159,12 @@ jobs:
             git fetch origin
             git checkout demo
             git pull origin demo
+            
+            echo '🔧 Configuring domain URLs in .env...'
+            sudo sed -i \"s|DOMAIN=.*|DOMAIN=${{ env.VM2_DOMAIN }}|\" .env || echo \"DOMAIN=${{ env.VM2_DOMAIN }}\" | sudo tee -a .env
+            sudo sed -i \"s|FRONTEND_URL=.*|FRONTEND_URL=${{ env.VM2_FRONTEND_URL }}|\" .env
+            sudo sed -i \"s|NEXT_PUBLIC_BACKEND_URL=.*|NEXT_PUBLIC_BACKEND_URL=${{ env.VM2_BACKEND_URL }}|\" .env
+            sudo sed -i \"s|NEXT_PUBLIC_WEBSOCKET_URL=.*|NEXT_PUBLIC_WEBSOCKET_URL=${{ env.VM2_WEBSOCKET_URL }}|\" .env
             
             echo '🔄 Restarting services...'
             sudo docker compose -f docker-compose.prod-local.yml up -d --remove-orphans
