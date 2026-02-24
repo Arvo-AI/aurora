@@ -10,8 +10,15 @@
         reverse_proxy chatbot:5006
     }
     
-    # Everything else (including all /api/*) goes to frontend
-    # Frontend Next.js API routes will proxy to Flask backend internally
+    # Flask backend auth endpoints (not handled by Next.js)
+    handle /api/auth/register {
+        reverse_proxy server:5080
+    }
+    handle /api/auth/login {
+        reverse_proxy server:5080
+    }
+    
+    # Everything else goes to frontend (Next.js handles its own /api/auth/* via NextAuth)
     handle {
         reverse_proxy frontend:3000
     }
