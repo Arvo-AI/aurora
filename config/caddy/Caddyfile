@@ -5,7 +5,27 @@
 {$DOMAIN:localhost} {
     encode gzip
     
-    handle /api/auth/* {
+    handle /api/auth/session* {
+        reverse_proxy frontend:3000
+    }
+    
+    handle /api/auth/providers* {
+        reverse_proxy frontend:3000
+    }
+    
+    handle /api/auth/signin* {
+        reverse_proxy frontend:3000
+    }
+    
+    handle /api/auth/signout* {
+        reverse_proxy frontend:3000
+    }
+    
+    handle /api/auth/callback* {
+        reverse_proxy frontend:3000
+    }
+    
+    handle /api/auth/csrf* {
         reverse_proxy frontend:3000
     }
     
