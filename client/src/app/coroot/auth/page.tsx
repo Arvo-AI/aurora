@@ -188,7 +188,7 @@ export default function CorootAuthPage() {
       <div className="mb-6">
         <h1 className="text-3xl font-bold">Coroot Integration</h1>
         <p className="text-muted-foreground mt-1">
-          Connect your Coroot instance to access metrics, logs, traces, incidents, RCA, and more inside Aurora.
+          Connect your Coroot instance to access metrics, logs, traces, incidents, and more inside Aurora.
         </p>
       </div>
 
