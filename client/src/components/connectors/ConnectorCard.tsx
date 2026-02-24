@@ -115,11 +115,7 @@ export default function ConnectorCard({ connector }: ConnectorCardProps) {
     }
 
     if (connector.id === "bitbucket") {
-      if (!bitbucketStatus.isConnected) {
-        await handleBitbucketOAuth(bitbucketStatus.refresh);
-      } else {
-        setShowBitbucketDialog(true);
-      }
+      setShowBitbucketDialog(true);
       return;
     }
 
