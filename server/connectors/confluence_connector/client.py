@@ -235,7 +235,7 @@ class ConfluenceClient:
             response.raise_for_status()
             return response.json()
         except requests.RequestException as exc:
-            logger.error("Confluence API POST failed: %s (%s)", url, exc)
+            logger.error("Confluence API POST failed at path %s: %s", path, type(exc).__name__)
             raise
 
     def get_current_user(self) -> Dict[str, Any]:
@@ -343,5 +343,5 @@ class ConfluenceClient:
             base = links.get("base", self.base_url)
             web_link = f"{base}{links['webui']}"
 
-        logger.info("Created Confluence page id=%s title=%r", page_id, title)
+        logger.info("Created Confluence page id=%s", page_id)
         return {"id": page_id, "url": web_link, "_raw": result}
