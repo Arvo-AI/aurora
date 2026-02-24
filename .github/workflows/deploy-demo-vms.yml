@@ -167,6 +167,7 @@ jobs:
             sudo sed -i 's|^NEXT_PUBLIC_WEBSOCKET_URL=.*|NEXT_PUBLIC_WEBSOCKET_URL=${{ env.VM2_WEBSOCKET_URL }}|' .env
             
             echo '🔄 Restarting services...'
+            sudo docker compose -f docker-compose.prod-local.yml build frontend
             sudo docker compose -f docker-compose.prod-local.yml up -d --remove-orphans
             
             echo '✅ VM-2 deployment complete!'
