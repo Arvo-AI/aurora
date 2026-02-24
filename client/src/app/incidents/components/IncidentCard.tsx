@@ -281,11 +281,11 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
             )}
             <div className="flex items-center gap-2">
               <Image 
-                src={alert.source === 'pagerduty' ? '/pagerduty-icon.svg' : `/${alert.source}.svg`}
+                src={alert.source === 'pagerduty' ? '/pagerduty-icon.svg' : alert.source === 'dynatrace' ? '/dynatrace.png' : `/${alert.source}.svg`}
                 alt={alert.source}
                 width={20}
                 height={20}
-                className="object-contain"
+                className={`object-contain${alert.source === 'dynatrace' ? ' scale-[2.2]' : ''}`}
               />
               {isSafeUrl(alert.sourceUrl) ? (
                 <a 

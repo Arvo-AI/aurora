@@ -82,6 +82,7 @@ class ConnectorRegistry {
       name: "Dynatrace",
       description: "Connect to Dynatrace for full-stack observability. Receive problem notifications and query metrics, logs, and entities for root cause analysis.",
       iconPath: "/dynatrace.png",
+      iconClassName: "scale-[2.2]",
       iconBgColor: "bg-white dark:bg-white",
       category: "Monitoring",
       path: "/dynatrace/auth",
