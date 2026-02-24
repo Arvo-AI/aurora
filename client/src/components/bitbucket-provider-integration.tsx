@@ -482,8 +482,20 @@ export default function BitbucketProviderIntegration() {
           </TabsList>
           <TabsContent value="oauth" className="space-y-3 mt-3">
             <p className="text-sm text-muted-foreground">
-              Connect your Bitbucket Cloud account using OAuth.
+              Connect your Bitbucket Cloud account using OAuth. Create an{' '}
+              <a href="https://bitbucket.org/arvoai/workspace/settings/api" target="_blank" rel="noopener noreferrer" className="underline">
+                OAuth consumer
+              </a>{' '}
+              in your workspace settings with these permissions:
             </p>
+            <div className="text-xs bg-muted rounded-md p-2.5 space-y-0.5">
+              <div>Account: <span className="font-medium">Read</span></div>
+              <div>Workspace membership: <span className="font-medium">Read</span></div>
+              <div>Projects: <span className="font-medium">Read</span></div>
+              <div>Repositories: <span className="font-medium">Read</span></div>
+              <div>Pull requests: <span className="font-medium">Read</span></div>
+              <div>Issues: <span className="font-medium">Read</span></div>
+            </div>
             <Button onClick={handleOAuthLogin} disabled={isLoading || !userId} className="w-full">
               {isLoading ? (
                 <>
