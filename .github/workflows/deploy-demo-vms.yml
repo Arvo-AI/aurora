@@ -90,54 +90,54 @@ jobs:
       - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@v2
 
-    - name: Load deployment configuration from GCP Secret Manager
-      id: secrets
-      run: |
-        echo "Loading deployment configuration from GCP Secret Manager..."
-        
-        # Fetch deployment configuration
-        GCP_ZONE=$(gcloud secrets versions access latest --secret="demo-gcp-zone" --project="${{ env.GCP_PROJECT }}")
-        
-        # Fetch VM-1 configuration
-        VM1_NAME=$(gcloud secrets versions access latest --secret="demo-vm1-name" --project="${{ env.GCP_PROJECT }}")
-        VM1_DOMAIN=$(gcloud secrets versions access latest --secret="demo-vm1-domain" --project="${{ env.GCP_PROJECT }}")
-        VM1_FRONTEND_URL=$(gcloud secrets versions access latest --secret="demo-vm1-frontend-url" --project="${{ env.GCP_PROJECT }}")
-        VM1_BACKEND_URL=$(gcloud secrets versions access latest --secret="demo-vm1-backend-url" --project="${{ env.GCP_PROJECT }}")
-        VM1_WEBSOCKET_URL=$(gcloud secrets versions access latest --secret="demo-vm1-websocket-url" --project="${{ env.GCP_PROJECT }}")
-        
-        # Fetch VM-2 configuration
-        VM2_NAME=$(gcloud secrets versions access latest --secret="demo-vm2-name" --project="${{ env.GCP_PROJECT }}")
-        VM2_DOMAIN=$(gcloud secrets versions access latest --secret="demo-vm2-domain" --project="${{ env.GCP_PROJECT }}")
-        VM2_FRONTEND_URL=$(gcloud secrets versions access latest --secret="demo-vm2-frontend-url" --project="${{ env.GCP_PROJECT }}")
-        VM2_BACKEND_URL=$(gcloud secrets versions access latest --secret="demo-vm2-backend-url" --project="${{ env.GCP_PROJECT }}")
-        VM2_WEBSOCKET_URL=$(gcloud secrets versions access latest --secret="demo-vm2-websocket-url" --project="${{ env.GCP_PROJECT }}")
-        
-        # Fetch VM-3 configuration
-        VM3_NAME=$(gcloud secrets versions access latest --secret="demo-vm3-name" --project="${{ env.GCP_PROJECT }}")
-        VM3_DOMAIN=$(gcloud secrets versions access latest --secret="demo-vm3-domain" --project="${{ env.GCP_PROJECT }}")
-        VM3_FRONTEND_URL=$(gcloud secrets versions access latest --secret="demo-vm3-frontend-url" --project="${{ env.GCP_PROJECT }}")
-        VM3_BACKEND_URL=$(gcloud secrets versions access latest --secret="demo-vm3-backend-url" --project="${{ env.GCP_PROJECT }}")
-        VM3_WEBSOCKET_URL=$(gcloud secrets versions access latest --secret="demo-vm3-websocket-url" --project="${{ env.GCP_PROJECT }}")
-        
-        # Export as environment variables
-        echo "GCP_ZONE=$GCP_ZONE" >> $GITHUB_ENV
-        echo "VM1_NAME=$VM1_NAME" >> $GITHUB_ENV
-        echo "VM1_DOMAIN=$VM1_DOMAIN" >> $GITHUB_ENV
-        echo "VM1_FRONTEND_URL=$VM1_FRONTEND_URL" >> $GITHUB_ENV
-        echo "VM1_BACKEND_URL=$VM1_BACKEND_URL" >> $GITHUB_ENV
-        echo "VM1_WEBSOCKET_URL=$VM1_WEBSOCKET_URL" >> $GITHUB_ENV
-        echo "VM2_NAME=$VM2_NAME" >> $GITHUB_ENV
-        echo "VM2_DOMAIN=$VM2_DOMAIN" >> $GITHUB_ENV
-        echo "VM2_FRONTEND_URL=$VM2_FRONTEND_URL" >> $GITHUB_ENV
-        echo "VM2_BACKEND_URL=$VM2_BACKEND_URL" >> $GITHUB_ENV
-        echo "VM2_WEBSOCKET_URL=$VM2_WEBSOCKET_URL" >> $GITHUB_ENV
-        echo "VM3_NAME=$VM3_NAME" >> $GITHUB_ENV
-        echo "VM3_DOMAIN=$VM3_DOMAIN" >> $GITHUB_ENV
-        echo "VM3_FRONTEND_URL=$VM3_FRONTEND_URL" >> $GITHUB_ENV
-        echo "VM3_BACKEND_URL=$VM3_BACKEND_URL" >> $GITHUB_ENV
-        echo "VM3_WEBSOCKET_URL=$VM3_WEBSOCKET_URL" >> $GITHUB_ENV
-        
-        echo "✅ Deployment configuration loaded"
+      - name: Load deployment configuration from GCP Secret Manager
+        id: secrets
+        run: |
+          echo "Loading deployment configuration from GCP Secret Manager..."
+          
+          # Fetch deployment configuration
+          GCP_ZONE=$(gcloud secrets versions access latest --secret="demo-gcp-zone" --project="${{ env.GCP_PROJECT }}")
+          
+          # Fetch VM-1 configuration
+          VM1_NAME=$(gcloud secrets versions access latest --secret="demo-vm1-name" --project="${{ env.GCP_PROJECT }}")
+          VM1_DOMAIN=$(gcloud secrets versions access latest --secret="demo-vm1-domain" --project="${{ env.GCP_PROJECT }}")
+          VM1_FRONTEND_URL=$(gcloud secrets versions access latest --secret="demo-vm1-frontend-url" --project="${{ env.GCP_PROJECT }}")
+          VM1_BACKEND_URL=$(gcloud secrets versions access latest --secret="demo-vm1-backend-url" --project="${{ env.GCP_PROJECT }}")
+          VM1_WEBSOCKET_URL=$(gcloud secrets versions access latest --secret="demo-vm1-websocket-url" --project="${{ env.GCP_PROJECT }}")
+          
+          # Fetch VM-2 configuration
+          VM2_NAME=$(gcloud secrets versions access latest --secret="demo-vm2-name" --project="${{ env.GCP_PROJECT }}")
+          VM2_DOMAIN=$(gcloud secrets versions access latest --secret="demo-vm2-domain" --project="${{ env.GCP_PROJECT }}")
+          VM2_FRONTEND_URL=$(gcloud secrets versions access latest --secret="demo-vm2-frontend-url" --project="${{ env.GCP_PROJECT }}")
+          VM2_BACKEND_URL=$(gcloud secrets versions access latest --secret="demo-vm2-backend-url" --project="${{ env.GCP_PROJECT }}")
+          VM2_WEBSOCKET_URL=$(gcloud secrets versions access latest --secret="demo-vm2-websocket-url" --project="${{ env.GCP_PROJECT }}")
+          
+          # Fetch VM-3 configuration
+          VM3_NAME=$(gcloud secrets versions access latest --secret="demo-vm3-name" --project="${{ env.GCP_PROJECT }}")
+          VM3_DOMAIN=$(gcloud secrets versions access latest --secret="demo-vm3-domain" --project="${{ env.GCP_PROJECT }}")
+          VM3_FRONTEND_URL=$(gcloud secrets versions access latest --secret="demo-vm3-frontend-url" --project="${{ env.GCP_PROJECT }}")
+          VM3_BACKEND_URL=$(gcloud secrets versions access latest --secret="demo-vm3-backend-url" --project="${{ env.GCP_PROJECT }}")
+          VM3_WEBSOCKET_URL=$(gcloud secrets versions access latest --secret="demo-vm3-websocket-url" --project="${{ env.GCP_PROJECT }}")
+          
+          # Export as environment variables
+          echo "GCP_ZONE=$GCP_ZONE" >> $GITHUB_ENV
+          echo "VM1_NAME=$VM1_NAME" >> $GITHUB_ENV
+          echo "VM1_DOMAIN=$VM1_DOMAIN" >> $GITHUB_ENV
+          echo "VM1_FRONTEND_URL=$VM1_FRONTEND_URL" >> $GITHUB_ENV
+          echo "VM1_BACKEND_URL=$VM1_BACKEND_URL" >> $GITHUB_ENV
+          echo "VM1_WEBSOCKET_URL=$VM1_WEBSOCKET_URL" >> $GITHUB_ENV
+          echo "VM2_NAME=$VM2_NAME" >> $GITHUB_ENV
+          echo "VM2_DOMAIN=$VM2_DOMAIN" >> $GITHUB_ENV
+          echo "VM2_FRONTEND_URL=$VM2_FRONTEND_URL" >> $GITHUB_ENV
+          echo "VM2_BACKEND_URL=$VM2_BACKEND_URL" >> $GITHUB_ENV
+          echo "VM2_WEBSOCKET_URL=$VM2_WEBSOCKET_URL" >> $GITHUB_ENV
+          echo "VM3_NAME=$VM3_NAME" >> $GITHUB_ENV
+          echo "VM3_DOMAIN=$VM3_DOMAIN" >> $GITHUB_ENV
+          echo "VM3_FRONTEND_URL=$VM3_FRONTEND_URL" >> $GITHUB_ENV
+          echo "VM3_BACKEND_URL=$VM3_BACKEND_URL" >> $GITHUB_ENV
+          echo "VM3_WEBSOCKET_URL=$VM3_WEBSOCKET_URL" >> $GITHUB_ENV
+          
+          echo "Deployment configuration loaded"
 
       # Commented out - only deploying to VM-2 for now
       # - name: Deploy to VM-1 (primary demo VM)
