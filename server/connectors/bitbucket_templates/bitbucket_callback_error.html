@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bitbucket Authentication Error</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            margin: 0;
+            padding: 20px;
+            text-align: center;
+            color: #333;
+        }
+        .error-container {
+            background-color: #fff5f5;
+            border: 1px solid #fed7d7;
+            border-radius: 8px;
+            padding: 20px;
+            max-width: 500px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        }
+        h1 {
+            color: #e53e3e;
+            margin-bottom: 12px;
+        }
+        p {
+            margin-bottom: 8px;
+            line-height: 1.5;
+        }
+        .error-message {
+            background-color: #f8d7da;
+            padding: 10px;
+            border-radius: 4px;
+            margin: 16px 0;
+            font-family: monospace;
+            word-break: break-word;
+        }
+        .close-text {
+            margin-top: 16px;
+            font-size: 0.9em;
+            color: #718096;
+        }
+    </style>
+</head>
+<body>
+    <div class="error-container">
+        <h1>Authentication Failed</h1>
+        <p>We encountered an error while trying to authenticate with Bitbucket.</p>
+        <div class="error-message">{{ error }}</div>
+        <p>You can close this window and try again.</p>
+        <p class="close-text">(This window will close automatically in a few seconds.)</p>
+    </div>
+
+    <script>
+        console.log('Bitbucket authentication error: {{ error }}');
+        // Send error message to parent window
+        if (window.opener) {
+            window.opener.postMessage(
+                {
+                    type: 'bitbucket_auth_error',
+                    error: '{{ error }}'
+                },
+                '{{ frontend_url }}'
+            );
+        }
+
+        // Close this window after a short delay
+        setTimeout(function() {
+            window.close();
+        }, 5000);
+    </script>
+</body>
+</html>
