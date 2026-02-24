@@ -104,7 +104,7 @@ except ImportError as e:
     logging.warning(f"Failed to import background chat tasks: {e}")
 
 try:
-    import routes.dynatrace.tasks
+    import routes.dynatrace.tasks  # noqa: F401
     logging.info("Dynatrace tasks imported successfully")
 except ImportError as e:
     logging.warning(f"Failed to import Dynatrace tasks: {e}")

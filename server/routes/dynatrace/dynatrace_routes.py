@@ -11,7 +11,6 @@ from flask import Blueprint, jsonify, request
 from routes.dynatrace.tasks import process_dynatrace_problem
 from utils.db.connection_pool import db_pool
 from utils.web.cors_utils import create_cors_response
-from utils.logging.secure_logging import mask_credential_value
 from utils.auth.stateless_auth import (
     get_user_id_from_request,
     get_user_preference,
@@ -115,7 +114,7 @@ def connect():
     if not environment_url:
         return jsonify({"error": "A valid Dynatrace environment URL is required (e.g., https://abc12345.live.dynatrace.com)"}), 400
 
-    logger.info("[DYNATRACE] Connecting user %s to %s (token=%s)", user_id, environment_url, mask_credential_value(api_token))
+    logger.info("[DYNATRACE] Connecting user %s to %s", user_id, environment_url)
 
     client = DynatraceClient(environment_url, api_token)
     try:

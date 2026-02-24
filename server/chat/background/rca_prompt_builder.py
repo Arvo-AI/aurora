@@ -697,7 +697,6 @@ def build_dynatrace_rca_prompt(
 ) -> str:
     """Build RCA prompt from Dynatrace problem notification payload."""
     title = payload.get("ProblemTitle") or "Unknown Problem"
-    severity = payload.get("ProblemSeverity") or "unknown"
     impact = payload.get("ProblemImpact") or "unknown"
     entity = payload.get("ImpactedEntity") or "unknown"
     problem_url = payload.get("ProblemURL") or ""
