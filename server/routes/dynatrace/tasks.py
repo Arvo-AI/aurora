@@ -107,7 +107,11 @@ def process_dynatrace_problem(
                     payload.get("Tags"), json.dumps(payload), received_at,
                 ),
             )
-            alert_db_id = cursor.fetchone()[0]
+            row = cursor.fetchone()
+            if row is None:
+                logger.error("[DYNATRACE][ALERT] INSERT returned no row for user %s, problem %s", user_id, payload.get("ProblemID"))
+                return
+            alert_db_id = row[0]
             conn.commit()
 
             try:

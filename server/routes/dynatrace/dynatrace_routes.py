@@ -17,8 +17,7 @@ from utils.auth.stateless_auth import (
     store_user_preference,
 )
 from utils.auth.token_management import get_token_data, store_tokens_in_db
-
-DYNATRACE_TIMEOUT = 15
+from routes.dynatrace.config import DYNATRACE_TIMEOUT
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +35,7 @@ class DynatraceClient:
         self.environment_url = environment_url
         self.headers = {
             "Authorization": f"Api-Token {api_token}",
-            "Accept": "*/*",
+            "Accept": "application/json",
         }
 
     @staticmethod

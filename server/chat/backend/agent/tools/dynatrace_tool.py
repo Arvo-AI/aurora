@@ -8,12 +8,9 @@ import requests
 from pydantic import BaseModel, Field
 
 from utils.auth.token_management import get_token_data
+from routes.dynatrace.config import DYNATRACE_TIMEOUT, MAX_OUTPUT_SIZE, MAX_RESULTS_CAP
 
 logger = logging.getLogger(__name__)
-
-DYNATRACE_TIMEOUT = 60
-MAX_OUTPUT_SIZE = 2 * 1024 * 1024
-MAX_RESULTS_CAP = 500
 
 
 class QueryDynatraceArgs(BaseModel):
