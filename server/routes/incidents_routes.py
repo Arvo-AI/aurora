@@ -6,6 +6,7 @@ from datetime import timezone
 from flask import Blueprint, jsonify, request
 from utils.db.connection_pool import db_pool
 from utils.auth.stateless_auth import get_user_id_from_request
+from utils.auth.token_management import get_token_data
 from chat.background.task import run_background_chat
 from typing import List, Dict, Any, Optional
 from uuid import UUID
@@ -73,6 +74,10 @@ def _build_source_url(source_type: str, user_id: str) -> str:
             )
         elif source_type == "grafana":
             return client_id if client_id else "https://grafana.com"
+        elif source_type == "dynatrace":
+            creds = get_token_data(user_id, "dynatrace") if not client_id else None
+            env_url = (creds or {}).get("environment_url", "") if not client_id else client_id
+            return env_url or ""
     except Exception as e:
         logger.error(f"[INCIDENTS] Failed to build source URL for {source_type}: {e}")
     return ""
@@ -449,6 +454,26 @@ def get_incident(incident_id: str):
                             "[INCIDENTS] Skipping payload fetch for splunk alert_id: %s",
                             source_alert_id,
                         )
+                elif source_type == "dynatrace":
+                    try:
+                        alert_id_int = int(source_alert_id)
+                        cursor.execute(
+                            "SELECT payload FROM dynatrace_problems WHERE id = %s AND user_id = %s",
+                            (alert_id_int, user_id),
+                        )
+                        alert_row = cursor.fetchone()
+                        if alert_row and alert_row[0] is not None:
+                            raw_payload = alert_row[0]
+                            logger.debug(
+                                "[INCIDENTS] Found Dynatrace payload: type=%s, has_data=%s",
+                                type(raw_payload).__name__,
+                                bool(raw_payload),
+                            )
+                    except (ValueError, TypeError):
+                        logger.debug(
+                            "[INCIDENTS] Skipping payload fetch for dynatrace alert_id: %s",
+                            int(source_alert_id) if str(source_alert_id).isdigit() else 0,
+                        )
 
                 # Log warning if no payload found for any source type
                 if not raw_payload:
@@ -456,7 +481,7 @@ def get_incident(incident_id: str):
                         "[INCIDENTS] No payload found for incident %s (source_type=%s, source_alert_id=%s)",
                         incident_id,
                         source_type,
-                        source_alert_id,
+                        int(source_alert_id) if str(source_alert_id).isdigit() else 0,
                     )
 
                 # Add raw payload to alert object (sourceUrl already set by _format_incident_response)
