@@ -1,6 +1,7 @@
 import { useState, createElement } from "react";
 import { useToast } from "@/hooks/use-toast";
 import { GitHubIntegrationService } from "@/components/github-provider-integration";
+import { BitbucketIntegrationService } from "@/components/bitbucket-provider-integration";
 import { isSlackEnabled } from "@/lib/feature-flags";
 import type { ConnectorConfig } from "@/components/connectors/types";
 import { ToastAction } from "@/components/ui/toast";
@@ -124,6 +125,48 @@ export function useConnectorOAuth(connector: ConnectorConfig, userId: string | n
     }
   };
 
+  const handleBitbucketOAuth = async (onStatusChange: () => void) => {
+    if (!userId) {
+      toast({
+        title: "Error",
+        description: "User ID is required",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setIsConnecting(true);
+
+    try {
+      const oauthUrl = await BitbucketIntegrationService.initiateOAuth(userId);
+      const popup = window.open(
+        oauthUrl,
+        'bitbucket-oauth',
+        'width=600,height=700,scrollbars=yes,resizable=yes'
+      );
+
+      const checkClosed = setInterval(() => {
+        if (popup?.closed) {
+          clearInterval(checkClosed);
+          setIsConnecting(false);
+          setTimeout(async () => {
+            onStatusChange();
+            window.dispatchEvent(new CustomEvent("providerStateChanged"));
+          }, 1000);
+        }
+      }, 1000);
+    } catch (error: any) {
+      console.error("Bitbucket OAuth error:", error);
+      setIsConnecting(false);
+      toast({
+        title: "Connection Failed",
+        description: error.message || "Failed to connect to Bitbucket",
+        variant: "destructive",
+      });
+      return;
+    }
+  };
+
   const handleSlackOAuth = async () => {
     await withOAuthHandler(
       async () => {
@@ -170,6 +213,7 @@ export function useConnectorOAuth(connector: ConnectorConfig, userId: string | n
   return {
     isConnecting,
     handleGitHubOAuth,
+    handleBitbucketOAuth,
     handleSlackOAuth,
     handleGCPOAuth,
   };

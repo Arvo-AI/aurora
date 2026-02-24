@@ -1,5 +1,5 @@
 import { Github, Server } from "lucide-react";
-import { isSlackEnabled, isOvhEnabled, isConfluenceEnabled } from "@/lib/feature-flags";
+import { isSlackEnabled, isOvhEnabled, isConfluenceEnabled, isBitbucketEnabled } from "@/lib/feature-flags";
 import type { ConnectorConfig } from "./types";
 
 class ConnectorRegistry {
@@ -122,6 +122,19 @@ class ConnectorRegistry {
       category: "Development",
       useCustomConnection: true,
     });
+
+    if (isBitbucketEnabled()) {
+      this.register({
+        id: "bitbucket",
+        name: "Bitbucket",
+        description: "Connect to Bitbucket Cloud to browse workspaces, manage repositories, track pull requests, and collaborate on code.",
+        iconPath: "/bitbucket.svg",
+        iconBgColor: "bg-white dark:bg-white",
+        category: "Development",
+        useCustomConnection: true,
+        storageKey: "isBitbucketConnected",
+      });
+    }
 
     if (isSlackEnabled()) {
       this.register({
