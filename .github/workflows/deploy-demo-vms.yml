@@ -141,6 +141,9 @@ jobs:
             echo '📂 Navigating to project directory...'
             cd /opt/aurora-demo
             
+            echo '🔧 Configuring git safe directory...'
+            git config --global --add safe.directory /opt/aurora-demo
+            
             echo '📥 Pulling latest code from demo branch...'
             git fetch origin
             git checkout demo
