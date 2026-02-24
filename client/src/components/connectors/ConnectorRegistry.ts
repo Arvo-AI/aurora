@@ -80,7 +80,7 @@ class ConnectorRegistry {
     this.register({
       id: "coroot",
       name: "Coroot",
-      description: "Connect Coroot for full-stack observability: metrics, logs, traces, incidents, RCA, service maps, and profiling.",
+      description: "Connect Coroot for full-stack observability: metrics, logs, traces, incidents, service maps, and profiling.",
       iconPath: "/coroot.svg",
       iconBgColor: "bg-white dark:bg-white",
       category: "Monitoring",
