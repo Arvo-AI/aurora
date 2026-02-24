@@ -12,15 +12,25 @@
 #
 # 2. Create GCP secrets for VM configuration:
 #    gcloud secrets create demo-gcp-zone --data-file=- <<< "us-central1-a"
+#    gcloud secrets create demo-vm1-name --data-file=- <<< "aurora-demo-vm"
+#    gcloud secrets create demo-vm1-domain --data-file=- <<< "demo1.aurora-ai.net"
+#    gcloud secrets create demo-vm1-frontend-url --data-file=- <<< "https://demo1.aurora-ai.net"
+#    gcloud secrets create demo-vm1-backend-url --data-file=- <<< "https://demo1.aurora-ai.net"
+#    gcloud secrets create demo-vm1-websocket-url --data-file=- <<< "wss://demo1.aurora-ai.net/ws"
 #    gcloud secrets create demo-vm2-name --data-file=- <<< "aurora-demo-vm-2"
+#    gcloud secrets create demo-vm2-domain --data-file=- <<< "demo2.aurora-ai.net"
+#    gcloud secrets create demo-vm2-frontend-url --data-file=- <<< "https://demo2.aurora-ai.net"
+#    gcloud secrets create demo-vm2-backend-url --data-file=- <<< "https://demo2.aurora-ai.net"
+#    gcloud secrets create demo-vm2-websocket-url --data-file=- <<< "wss://demo2.aurora-ai.net/ws"
 #
 # 3. Grant the service account access to these secrets:
-#    gcloud secrets add-iam-policy-binding demo-gcp-zone \
-#      --member="serviceAccount:YOUR-SERVICE-ACCOUNT" \
-#      --role="roles/secretmanager.secretAccessor"
-#    gcloud secrets add-iam-policy-binding demo-vm2-name \
-#      --member="serviceAccount:YOUR-SERVICE-ACCOUNT" \
-#      --role="roles/secretmanager.secretAccessor"
+#    for secret in demo-gcp-zone demo-vm1-name demo-vm1-domain demo-vm1-frontend-url \
+#                  demo-vm1-backend-url demo-vm1-websocket-url demo-vm2-name demo-vm2-domain \
+#                  demo-vm2-frontend-url demo-vm2-backend-url demo-vm2-websocket-url; do
+#      gcloud secrets add-iam-policy-binding $secret \
+#        --member="serviceAccount:YOUR-SERVICE-ACCOUNT" \
+#        --role="roles/secretmanager.secretAccessor"
+#    done
 #
 # 4. Ensure your VMs have:
 #    - Git repository cloned to /opt/aurora-demo
@@ -80,9 +90,16 @@ jobs:
         
         # Fetch deployment configuration
         GCP_ZONE=$(gcloud secrets versions access latest --secret="demo-gcp-zone" --project="${{ env.GCP_PROJECT }}")
-        VM2_NAME=$(gcloud secrets versions access latest --secret="demo-vm2-name" --project="${{ env.GCP_PROJECT }}")
         
-        # Fetch domain-specific configuration for VM-2
+        # Fetch VM-1 configuration
+        VM1_NAME=$(gcloud secrets versions access latest --secret="demo-vm1-name" --project="${{ env.GCP_PROJECT }}")
+        VM1_DOMAIN=$(gcloud secrets versions access latest --secret="demo-vm1-domain" --project="${{ env.GCP_PROJECT }}")
+        VM1_FRONTEND_URL=$(gcloud secrets versions access latest --secret="demo-vm1-frontend-url" --project="${{ env.GCP_PROJECT }}")
+        VM1_BACKEND_URL=$(gcloud secrets versions access latest --secret="demo-vm1-backend-url" --project="${{ env.GCP_PROJECT }}")
+        VM1_WEBSOCKET_URL=$(gcloud secrets versions access latest --secret="demo-vm1-websocket-url" --project="${{ env.GCP_PROJECT }}")
+        
+        # Fetch VM-2 configuration
+        VM2_NAME=$(gcloud secrets versions access latest --secret="demo-vm2-name" --project="${{ env.GCP_PROJECT }}")
         VM2_DOMAIN=$(gcloud secrets versions access latest --secret="demo-vm2-domain" --project="${{ env.GCP_PROJECT }}")
         VM2_FRONTEND_URL=$(gcloud secrets versions access latest --secret="demo-vm2-frontend-url" --project="${{ env.GCP_PROJECT }}")
         VM2_BACKEND_URL=$(gcloud secrets versions access latest --secret="demo-vm2-backend-url" --project="${{ env.GCP_PROJECT }}")
@@ -90,6 +107,11 @@ jobs:
         
         # Export as environment variables
         echo "GCP_ZONE=$GCP_ZONE" >> $GITHUB_ENV
+        echo "VM1_NAME=$VM1_NAME" >> $GITHUB_ENV
+        echo "VM1_DOMAIN=$VM1_DOMAIN" >> $GITHUB_ENV
+        echo "VM1_FRONTEND_URL=$VM1_FRONTEND_URL" >> $GITHUB_ENV
+        echo "VM1_BACKEND_URL=$VM1_BACKEND_URL" >> $GITHUB_ENV
+        echo "VM1_WEBSOCKET_URL=$VM1_WEBSOCKET_URL" >> $GITHUB_ENV
         echo "VM2_NAME=$VM2_NAME" >> $GITHUB_ENV
         echo "VM2_DOMAIN=$VM2_DOMAIN" >> $GITHUB_ENV
         echo "VM2_FRONTEND_URL=$VM2_FRONTEND_URL" >> $GITHUB_ENV
@@ -99,21 +121,32 @@ jobs:
         echo "✅ Deployment configuration loaded"
 
       # Commented out - only deploying to VM-2 for now
-      # - name: Deploy to VM-1 (aurora-demo-vm)
+      # - name: Deploy to VM-1 (primary demo VM)
       #   run: |
-      #     echo "🚀 Deploying to aurora-demo-vm..."
-      #     gcloud compute ssh $VM1_NAME --zone=$GCP_ZONE --command="
+      #     echo "🚀 Deploying to $VM1_NAME..."
+      #     gcloud compute ssh $VM1_NAME --zone=$GCP_ZONE --project=${{ env.GCP_PROJECT }} --command="
       #       set -e
       #       echo '📂 Navigating to project directory...'
       #       cd /opt/aurora-demo
+      #       
+      #       echo '🔧 Fixing git permissions for deployment...'
+      #       sudo chown -R \$(whoami):\$(whoami) /opt/aurora-demo
+      #       git config --global --add safe.directory /opt/aurora-demo
       #       
       #       echo '📥 Pulling latest code from demo branch...'
       #       git fetch origin
       #       git checkout demo
       #       git pull origin demo
       #       
+      #       echo '🔧 Configuring domain in .env...'
+      #       sudo sed -i 's|^DOMAIN=.*|DOMAIN=${{ env.VM1_DOMAIN }}|' .env || echo 'DOMAIN=${{ env.VM1_DOMAIN }}' | sudo tee -a .env
+      #       sudo sed -i 's|^FRONTEND_URL=.*|FRONTEND_URL=${{ env.VM1_FRONTEND_URL }}|' .env
+      #       sudo sed -i 's|^NEXT_PUBLIC_BACKEND_URL=.*|NEXT_PUBLIC_BACKEND_URL=${{ env.VM1_BACKEND_URL }}|' .env
+      #       sudo sed -i 's|^NEXT_PUBLIC_WEBSOCKET_URL=.*|NEXT_PUBLIC_WEBSOCKET_URL=${{ env.VM1_WEBSOCKET_URL }}|' .env
+      #       
       #       echo '🔄 Restarting services...'
-      #       docker compose -f docker-compose.prod-local.yml up -d --remove-orphans
+      #       sudo docker compose -f docker-compose.prod-local.yml build frontend
+      #       sudo docker compose -f docker-compose.prod-local.yml up -d --remove-orphans
       #       
       #       echo '✅ VM-1 deployment complete!'
       #     " 2>&1
@@ -127,20 +160,21 @@ jobs:
       #   run: |
       #     echo "🏥 Checking VM-1 health..."
       #     
-      #     VM1_IP=$(gcloud compute instances describe $VM1_NAME --zone=$GCP_ZONE --format='get(networkInterfaces[0].accessConfigs[0].natIP)')
+      #     VM1_IP=$(gcloud compute instances describe $VM1_NAME --zone=$GCP_ZONE --project=${{ env.GCP_PROJECT }} --format='get(networkInterfaces[0].accessConfigs[0].natIP)')
       #     
-      #     # Check backend
-      #     if curl -f -s "http://$VM1_IP:5080/health" > /dev/null 2>&1; then
-      #       echo "✅ VM-1 Backend is healthy"
+      #     # Check backend via domain if configured, fallback to IP
+      #     if [ -n "${{ env.VM1_DOMAIN }}" ]; then
+      #       BACKEND_URL="https://${{ env.VM1_DOMAIN }}"
+      #       echo "Checking via domain: $BACKEND_URL"
       #     else
-      #       echo "⚠️  VM-1 Backend health check failed (may still be starting)"
+      #       BACKEND_URL="http://$VM1_IP:3000"
+      #       echo "Checking via IP: $BACKEND_URL"
       #     fi
       #     
-      #     # Check frontend
-      #     if curl -f -s "http://$VM1_IP:3000" > /dev/null 2>&1; then
-      #       echo "✅ VM-1 Frontend is healthy"
+      #     if curl -f -s -k "$BACKEND_URL" > /dev/null 2>&1; then
+      #       echo "✅ VM-1 is responding"
       #     else
-      #       echo "⚠️  VM-1 Frontend health check failed (may still be starting)"
+      #       echo "⚠️  VM-1 health check failed (may still be starting)"
       #     fi
 
       - name: Deploy to VM-2 (backup demo VM)
@@ -184,18 +218,19 @@ jobs:
           
           VM2_IP=$(gcloud compute instances describe $VM2_NAME --zone=$GCP_ZONE --project=${{ env.GCP_PROJECT }} --format='get(networkInterfaces[0].accessConfigs[0].natIP)')
           
-          # Check backend
-          if curl -f -s "http://$VM2_IP:5080/health" > /dev/null 2>&1; then
-            echo "✅ VM-2 Backend is healthy"
+          # Check via domain if configured, fallback to IP
+          if [ -n "${{ env.VM2_DOMAIN }}" ]; then
+            BACKEND_URL="https://${{ env.VM2_DOMAIN }}"
+            echo "Checking via domain: $BACKEND_URL"
           else
-            echo "⚠️  VM-2 Backend health check failed (may still be starting)"
+            BACKEND_URL="http://$VM2_IP:3000"
+            echo "Checking via IP: $BACKEND_URL"
           fi
           
-          # Check frontend
-          if curl -f -s "http://$VM2_IP:3000" > /dev/null 2>&1; then
-            echo "✅ VM-2 Frontend is healthy"
+          if curl -f -s -k "$BACKEND_URL" > /dev/null 2>&1; then
+            echo "✅ VM-2 is responding"
           else
-            echo "⚠️  VM-2 Frontend health check failed (may still be starting)"
+            echo "⚠️  VM-2 health check failed (may still be starting)"
           fi
 
       - name: Deployment summary
@@ -207,17 +242,12 @@ jobs:
           echo ""
           echo "Branch: demo"
           echo "Commit: ${{ github.sha }}"
+          echo ""
           echo "VMs deployed:"
-          echo "  - $VM2_NAME (backup demo VM)"
+          # echo "  - $VM1_NAME: https://${{ env.VM1_DOMAIN }}" (currently disabled)
+          echo "  - $VM2_NAME: https://${{ env.VM2_DOMAIN }}"
           echo ""
-          echo "Note: Primary VM deployment is currently disabled"
+          echo "Note: VM-1 deployment is currently disabled"
+          echo "      Uncomment VM-1 steps in workflow to enable"
           echo ""
-          
-          VM2_IP=$(gcloud compute instances describe $VM2_NAME --zone=$GCP_ZONE --project=${{ env.GCP_PROJECT }} --format='get(networkInterfaces[0].accessConfigs[0].natIP)')
-          
-          echo "Access URLs:"
-          echo "  VM-2 Frontend: http://$VM2_IP:3000"
-          echo "  VM-2 Backend:  http://$VM2_IP:5080"
-          echo ""
-          echo "View logs: make prod-local-logs"
           echo "================================================"
