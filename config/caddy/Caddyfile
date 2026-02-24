@@ -5,38 +5,13 @@
 {$DOMAIN:localhost} {
     encode gzip
     
-    handle /api/auth/session* {
-        reverse_proxy frontend:3000
-    }
-    
-    handle /api/auth/providers* {
-        reverse_proxy frontend:3000
-    }
-    
-    handle /api/auth/signin* {
-        reverse_proxy frontend:3000
-    }
-    
-    handle /api/auth/signout* {
-        reverse_proxy frontend:3000
-    }
-    
-    handle /api/auth/callback* {
-        reverse_proxy frontend:3000
-    }
-    
-    handle /api/auth/csrf* {
-        reverse_proxy frontend:3000
-    }
-    
-    handle /api/* {
-        reverse_proxy aurora-server:{$FLASK_PORT:5080}
-    }
-    
+    # WebSocket chatbot
     handle /ws* {
         reverse_proxy chatbot:5006
     }
     
+    # Everything else (including all /api/*) goes to frontend
+    # Frontend Next.js API routes will proxy to Flask backend internally
     handle {
         reverse_proxy frontend:3000
     }
