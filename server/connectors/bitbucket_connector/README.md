@@ -14,14 +14,16 @@ Connects Aurora to Bitbucket Cloud for repository browsing, pull requests, and i
    - **Permissions**: Check `Account: Read`, `Repositories: Read`, `Pull requests: Read`, `Issues: Read`, `Projects: Read`
 4. Save and copy the **Key** (client ID) and **Secret** (client secret).
 
-### Option 2: App Password
+### Option 2: API Token
 
-1. Go to **Personal Bitbucket settings > App passwords**.
-2. Click **Create app password**.
-3. Select permissions: `Account: Read`, `Repositories: Read`, `Pull requests: Read`, `Issues: Read`, `Projects: Read`.
-4. Save the generated password.
+> **Note:** Bitbucket deprecated App Passwords in September 2025. They will be fully disabled in June 2026. Use API tokens instead.
 
-Users provide their Bitbucket email and app password via the Aurora UI.
+1. Go to **[Atlassian Account > Security > API tokens](https://id.atlassian.com/manage-profile/security/api-tokens)**.
+2. Click **Create API token with scopes**.
+3. Select scopes: `Account: Read`, `Repositories: Read`, `Pull requests: Read`, `Issues: Read`, `Projects: Read`.
+4. Save the generated token.
+
+Users provide their Bitbucket email and API token via the Aurora UI.
 
 ## Required Environment Variables
 
@@ -52,7 +54,7 @@ All endpoints are prefixed with `/bitbucket` and require the `X-User-ID` header.
 
 | Method | Path                                        | Description                       |
 |--------|---------------------------------------------|-----------------------------------|
-| POST   | `/bitbucket/login`                          | Initiate OAuth or app password    |
+| POST   | `/bitbucket/login`                          | Initiate OAuth or API token       |
 | GET    | `/bitbucket/callback`                       | OAuth callback                    |
 | GET    | `/bitbucket/status`                         | Check connection status           |
 | POST   | `/bitbucket/disconnect`                     | Disconnect account                |

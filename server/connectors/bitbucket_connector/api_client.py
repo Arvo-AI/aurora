@@ -17,9 +17,9 @@ class BitbucketAPIClient:
     def __init__(self, access_token, auth_type="oauth", email=None):
         """
         Args:
-            access_token: OAuth access token or app password.
-            auth_type: ``"oauth"`` or ``"app_password"``.
-            email: Required when *auth_type* is ``"app_password"`` (used for Basic Auth).
+            access_token: OAuth access token or API token.
+            auth_type: ``"oauth"`` or ``"api_token"``.
+            email: Required when *auth_type* is ``"api_token"`` (used for Basic Auth).
         """
         self.access_token = access_token
         self.auth_type = auth_type
@@ -27,7 +27,7 @@ class BitbucketAPIClient:
 
     def _get_headers(self):
         """Build the Authorization header based on auth_type."""
-        if self.auth_type == "app_password":
+        if self.auth_type == "api_token":
             credentials = base64.b64encode(
                 f"{self.email}:{self.access_token}".encode()
             ).decode()

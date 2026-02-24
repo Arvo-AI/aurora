@@ -1,6 +1,6 @@
 """
 Bitbucket Cloud authentication routes.
-Handles OAuth login, app password login, callback, status, and disconnect.
+Handles OAuth login, API token login, callback, status, and disconnect.
 """
 import logging
 import os
@@ -19,7 +19,7 @@ FRONTEND_URL = os.getenv("FRONTEND_URL")
 
 @bitbucket_bp.route("/login", methods=["POST", "OPTIONS"])
 def bitbucket_login():
-    """Handle Bitbucket login - either app password or OAuth initiation."""
+    """Handle Bitbucket login - either API token or OAuth initiation."""
     if request.method == "OPTIONS":
         return create_cors_response()
 
@@ -30,24 +30,24 @@ def bitbucket_login():
         if not user_id:
             return jsonify({"error": "User ID is required"}), 400
 
-        app_password = data.get("app_password")
+        api_token = data.get("api_token")
         email = data.get("email")
 
-        if app_password and email:
-            # --- App password flow ---
+        if api_token and email:
+            # --- API token flow ---
             try:
                 from connectors.bitbucket_connector.api_client import BitbucketAPIClient
 
                 client = BitbucketAPIClient(
-                    access_token=app_password,
-                    auth_type="app_password",
+                    access_token=api_token,
+                    auth_type="api_token",
                     email=email,
                 )
 
                 # Validate credentials by fetching user profile
                 user_data = client.get_current_user()
                 if not user_data:
-                    logger.error("Bitbucket app password validation failed")
+                    logger.error("Bitbucket API token validation failed")
                     return jsonify({"error": "Invalid Bitbucket credentials"}), 400
 
                 username = user_data.get("username")
@@ -56,15 +56,15 @@ def bitbucket_login():
                 from utils.auth.token_management import store_tokens_in_db
 
                 token_data = {
-                    "access_token": app_password,
-                    "auth_type": "app_password",
+                    "access_token": api_token,
+                    "auth_type": "api_token",
                     "email": email,
                     "username": username,
                     "display_name": display_name,
                 }
 
                 store_tokens_in_db(user_id, token_data, "bitbucket")
-                logger.info(f"Stored Bitbucket app password credentials for user {user_id}")
+                logger.info(f"Stored Bitbucket API token credentials for user {user_id}")
 
                 return jsonify({
                     "success": True,
@@ -73,7 +73,7 @@ def bitbucket_login():
                 })
 
             except Exception as e:
-                logger.error(f"Error storing Bitbucket app password: {e}", exc_info=True)
+                logger.error(f"Error storing Bitbucket API token: {e}", exc_info=True)
                 return jsonify({"error": "Failed to store Bitbucket credentials"}), 500
         else:
             # --- OAuth flow ---

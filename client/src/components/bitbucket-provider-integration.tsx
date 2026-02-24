@@ -52,19 +52,19 @@ export class BitbucketIntegrationService {
     return data.oauth_url;
   }
 
-  static async connectWithAppPassword(userId: string, email: string, appPassword: string) {
+  static async connectWithApiToken(userId: string, email: string, apiToken: string) {
     const response = await fetch(`${BACKEND_URL}/bitbucket/login`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         ...this.getAuthHeaders(userId),
       },
-      body: JSON.stringify({ app_password: appPassword, email }),
+      body: JSON.stringify({ api_token: apiToken, email }),
     });
 
     if (!response.ok) {
       const errorText = await response.text();
-      throw new Error(errorText || 'Failed to connect with app password');
+      throw new Error(errorText || 'Failed to connect with API token');
     }
 
     return response.json();
@@ -242,9 +242,9 @@ export default function BitbucketProviderIntegration() {
   const [isLoading, setIsLoading] = useState(false);
   const { toast } = useToast();
 
-  // App password form
+  // API token form
   const [email, setEmail] = useState('');
-  const [appPassword, setAppPassword] = useState('');
+  const [apiToken, setApiToken] = useState('');
 
   // Workspace browser state
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
@@ -340,26 +340,26 @@ export default function BitbucketProviderIntegration() {
     }
   };
 
-  const handleAppPasswordLogin = async () => {
+  const handleApiTokenLogin = async () => {
     if (!userId) {
       toast({ title: "Error", description: "User ID is required", variant: "destructive" });
       return;
     }
-    if (!email || !appPassword) {
-      toast({ title: "Error", description: "Email and app password are required", variant: "destructive" });
+    if (!email || !apiToken) {
+      toast({ title: "Error", description: "Email and API token are required", variant: "destructive" });
       return;
     }
     setIsLoading(true);
     try {
-      await BitbucketIntegrationService.connectWithAppPassword(userId, email, appPassword);
-      toast({ title: "Connected", description: "Bitbucket connected with app password" });
+      await BitbucketIntegrationService.connectWithApiToken(userId, email, apiToken);
+      toast({ title: "Connected", description: "Bitbucket connected with API token" });
       setEmail('');
-      setAppPassword('');
+      setApiToken('');
       checkStatus();
       window.dispatchEvent(new CustomEvent('providerStateChanged'));
     } catch (error: any) {
-      console.error('App password login error:', error);
-      toast({ title: "Connection Failed", description: error.message || "Failed to connect with app password", variant: "destructive" });
+      console.error('API token login error:', error);
+      toast({ title: "Connection Failed", description: error.message || "Failed to connect with API token", variant: "destructive" });
     } finally {
       setIsLoading(false);
     }
@@ -517,7 +517,7 @@ export default function BitbucketProviderIntegration() {
         <Tabs defaultValue="oauth" className="w-full">
           <TabsList className="grid w-full grid-cols-2">
             <TabsTrigger value="oauth">OAuth</TabsTrigger>
-            <TabsTrigger value="app-password">App Password</TabsTrigger>
+            <TabsTrigger value="api-token">API Token</TabsTrigger>
           </TabsList>
           <TabsContent value="oauth" className="space-y-3 mt-3">
             <p className="text-sm text-muted-foreground">
@@ -534,9 +534,12 @@ export default function BitbucketProviderIntegration() {
               )}
             </Button>
           </TabsContent>
-          <TabsContent value="app-password" className="space-y-3 mt-3">
+          <TabsContent value="api-token" className="space-y-3 mt-3">
             <p className="text-sm text-muted-foreground">
-              Connect using a Bitbucket app password. Create one in your Bitbucket settings under App passwords.
+              Connect using a Bitbucket API token. Create one at{' '}
+              <a href="https://id.atlassian.com/manage-profile/security/api-tokens" target="_blank" rel="noopener noreferrer" className="underline">
+                Atlassian Account &gt; Security &gt; API tokens
+              </a>.
             </p>
             <Input
               type="email"
@@ -546,11 +549,11 @@ export default function BitbucketProviderIntegration() {
             />
             <Input
               type="password"
-              placeholder="App password"
-              value={appPassword}
-              onChange={(e) => setAppPassword(e.target.value)}
+              placeholder="API token"
+              value={apiToken}
+              onChange={(e) => setApiToken(e.target.value)}
             />
-            <Button onClick={handleAppPasswordLogin} disabled={isLoading || !userId || !email || !appPassword} className="w-full">
+            <Button onClick={handleApiTokenLogin} disabled={isLoading || !userId || !email || !apiToken} className="w-full">
               {isLoading ? (
                 <>
                   <Loader2 className="h-4 w-4 mr-2 animate-spin" />
