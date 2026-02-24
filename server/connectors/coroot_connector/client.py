@@ -3,11 +3,19 @@ Coroot API client with session-cookie authentication.
 
 Uses email/password login to obtain a `coroot_session` cookie (7-day TTL)
 and transparently re-authenticates on 401 responses.
+
+Use :func:`get_coroot_client` to obtain a cached, authenticated client
+instance for a given user.  The cache keeps a single ``CorootClient`` per
+user_id alive for ``CLIENT_CACHE_TTL`` seconds so that the underlying
+``requests.Session`` (and its session cookie) are reused across Flask
+requests and agent tool calls.
 """
 
 import json
 import logging
-from typing import Any, Dict, List, Optional
+import threading
+import time
+from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import quote
 
 import requests
@@ -15,10 +23,52 @@ import requests
 logger = logging.getLogger(__name__)
 
 COROOT_TIMEOUT = 30
+CLIENT_CACHE_TTL = 36000  # 10 hours — within the 7-day cookie TTL
+
+_client_cache: Dict[str, Tuple["CorootClient", float]] = {}
+_cache_lock = threading.Lock()
 
 
 class CorootAPIError(Exception):
     """Custom error for Coroot API interactions."""
+
+
+def get_coroot_client(
+    user_id: str,
+    url: str,
+    email: str,
+    password: str,
+) -> "CorootClient":
+    """Return a cached, authenticated :class:`CorootClient` for *user_id*.
+
+    A new client is created (and logged in) when no cached entry exists,
+    the TTL has expired, or the credentials have changed.
+    """
+    now = time.monotonic()
+    with _cache_lock:
+        entry = _client_cache.get(user_id)
+        if entry is not None:
+            client, created_at = entry
+            creds_match = (
+                client.url == url.rstrip("/")
+                and client.email == email
+                and client.password == password
+            )
+            if creds_match and (now - created_at) < CLIENT_CACHE_TTL:
+                return client
+
+    client = CorootClient(url=url, email=email, password=password)
+    client.login()
+
+    with _cache_lock:
+        _client_cache[user_id] = (client, now)
+    return client
+
+
+def invalidate_coroot_client(user_id: str) -> None:
+    """Remove *user_id*'s client from the cache (e.g. on disconnect)."""
+    with _cache_lock:
+        _client_cache.pop(user_id, None)
 
 
 class CorootClient:
@@ -26,22 +76,16 @@ class CorootClient:
 
     All data is accessed through Coroot's HTTP API using session-cookie auth.
     No direct ClickHouse or Prometheus connections are required.
+
+    Prefer :func:`get_coroot_client` over constructing this directly.
     """
 
-    def __init__(
-        self,
-        url: str,
-        email: str,
-        password: str,
-        session_cookie: Optional[str] = None,
-    ):
+    def __init__(self, url: str, email: str, password: str):
         self.url = url.rstrip("/")
         self.email = email
         self.password = password
-        self.session_cookie = session_cookie
+        self.session_cookie: Optional[str] = None
         self._session = requests.Session()
-        if session_cookie:
-            self._session.cookies.set("coroot_session", session_cookie)
 
     # ------------------------------------------------------------------
     # Authentication
@@ -52,6 +96,8 @@ class CorootClient:
 
         Returns the ``coroot_session`` cookie value.
         """
+        self._session.cookies.clear()
+
         try:
             resp = self._session.post(
                 f"{self.url}/api/login",
@@ -137,6 +183,10 @@ class CorootClient:
 
     @staticmethod
     def _time_params(from_ts: int, to_ts: int) -> Dict[str, str]:
+        if from_ts < 1e12:
+            from_ts *= 1000
+        if to_ts < 1e12:
+            to_ts *= 1000
         return {"from": str(from_ts), "to": str(to_ts)}
 
     @staticmethod
@@ -148,9 +198,18 @@ class CorootClient:
     # ------------------------------------------------------------------
 
     def discover_projects(self) -> List[Dict[str, Any]]:
-        """Return the list of Coroot projects."""
-        data = self._get("/api/project/")
-        return data if isinstance(data, list) else []
+        """Return the list of Coroot projects with their internal IDs.
+
+        Coroot's ``GET /api/user`` returns a ``projects`` list with both
+        the opaque hash ``id`` (needed for all data endpoints) and the
+        human-readable ``name``.
+        """
+        data = self._get("/api/user")
+        if isinstance(data, dict):
+            projects = data.get("projects")
+            if isinstance(projects, list):
+                return projects
+        return []
 
     # ------------------------------------------------------------------
     # Application health & audit reports
@@ -291,26 +350,36 @@ class CorootClient:
         return self._unwrap(resp)
 
     # ------------------------------------------------------------------
-    # Metrics (PromQL)
+    # Metrics (PromQL via panel/data)
     # ------------------------------------------------------------------
 
-    def query_prom(
+    def query_panel_data(
         self,
         project: str,
-        query: str,
-        start: int,
-        end: int,
-        step: str = "60s",
+        promql: str,
+        from_ts: int,
+        to_ts: int,
+        legend: str = "",
     ) -> Any:
-        """Prometheus-compatible query_range. Returns raw Prom JSON (no envelope)."""
-        return self._get(
-            f"/api/project/{project}/prom/api/v1/query_range",
-            params={
-                "query": query,
-                "start": str(start),
-                "end": str(end),
-                "step": step,
+        """Execute a PromQL query via Coroot's dashboard panel/data endpoint.
+
+        Returns ``{"chart": {"ctx": {...}, "series": [...]}}`` where each
+        series has ``name`` (label string) and ``data`` (list of values).
+        """
+        panel_cfg = json.dumps({
+            "name": "",
+            "source": {
+                "metrics": {
+                    "queries": [{"query": promql, "legend": legend}],
+                },
             },
+            "widget": {"chart": {"display": "line"}},
+        })
+        params: Dict[str, str] = {"query": panel_cfg}
+        params.update(self._time_params(from_ts, to_ts))
+        return self._get(
+            f"/api/project/{project}/panel/data",
+            params=params,
         )
 
     # ------------------------------------------------------------------
@@ -352,7 +421,7 @@ class CorootClient:
     # - Per-app traces: GET /app/{app}/tracing scopes traces to one app.
     #   Redundant today (cross-app endpoint + ServiceName filter), but
     #   could improve performance on large clusters.
-    # - Metric discovery: GET /prom/api/v1/series and /label/{name}/values
-    #   help the agent explore unknown environments where metric names
-    #   and label values aren't known upfront.
+    # - Metric discovery: GET /prom/series and /prom/metadata help the
+    #   agent explore unknown environments where metric names and label
+    #   values aren't known upfront.
     # ------------------------------------------------------------------

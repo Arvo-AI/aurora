@@ -4,7 +4,12 @@ from typing import Any, Dict, Optional
 
 from flask import Blueprint, jsonify, request
 
-from connectors.coroot_connector.client import CorootAPIError, CorootClient
+from connectors.coroot_connector.client import (
+    CorootAPIError,
+    CorootClient,
+    get_coroot_client,
+    invalidate_coroot_client,
+)
 from utils.auth.stateless_auth import get_user_id_from_request
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.secrets.secret_ref_utils import delete_user_secret
@@ -28,16 +33,18 @@ def _get_stored_coroot_credentials(user_id: str) -> Optional[Dict[str, Any]]:
         return None
 
 
-def _build_client_from_creds(creds: Dict[str, Any]) -> Optional[CorootClient]:
+def _build_client_from_creds(
+    user_id: str, creds: Dict[str, Any]
+) -> Optional[CorootClient]:
     url = creds.get("url")
     email = creds.get("email")
     password = creds.get("password")
-    session_cookie = creds.get("session_cookie")
     if not url or not email or not password:
         return None
-    return CorootClient(
-        url=url, email=email, password=password, session_cookie=session_cookie,
-    )
+    try:
+        return get_coroot_client(user_id, url=url, email=email, password=password)
+    except CorootAPIError:
+        return None
 
 
 # ------------------------------------------------------------------
@@ -70,10 +77,8 @@ def connect():
 
     logger.info("[COROOT] Connecting user %s to %s", user_id, url)
 
-    client = CorootClient(url=url, email=email, password=password)
-
     try:
-        client.login()
+        client = get_coroot_client(user_id, url=url, email=email, password=password)
     except CorootAPIError as exc:
         logger.warning("[COROOT] Login failed for user %s: %s", user_id, exc)
         msg = str(exc)
@@ -96,7 +101,6 @@ def connect():
         "url": url,
         "email": email,
         "password": password,
-        "session_cookie": client.session_cookie,
         "projects": projects,
         "validated_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -128,7 +132,7 @@ def status():
     if not creds:
         return jsonify({"connected": False})
 
-    client = _build_client_from_creds(creds)
+    client = _build_client_from_creds(user_id, creds)
     if not client:
         return jsonify({"connected": False})
 
@@ -160,6 +164,7 @@ def disconnect():
         return jsonify({"error": "User authentication required"}), 401
 
     try:
+        invalidate_coroot_client(user_id)
         vault_ok, rows = delete_user_secret(user_id, "coroot")
 
         if not vault_ok:

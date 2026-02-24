@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
-from connectors.coroot_connector.client import CorootAPIError, CorootClient
+from connectors.coroot_connector.client import CorootAPIError, CorootClient, get_coroot_client
 from utils.auth.token_management import get_token_data
 
 logger = logging.getLogger(__name__)
@@ -45,12 +45,16 @@ def _build_client(user_id: str) -> Optional[CorootClient]:
     creds = _get_coroot_credentials(user_id)
     if not creds:
         return None
-    return CorootClient(
-        url=creds["url"],
-        email=creds["email"],
-        password=creds["password"],
-        session_cookie=creds.get("session_cookie"),
-    )
+    try:
+        return get_coroot_client(
+            user_id,
+            url=creds["url"],
+            email=creds["email"],
+            password=creds["password"],
+        )
+    except CorootAPIError as exc:
+        logger.error("[COROOT-TOOL] Failed to build client: %s", exc)
+        return None
 
 
 def is_coroot_connected(user_id: str) -> bool:
@@ -115,23 +119,23 @@ def _truncate_list(
 
 
 def _trim_metric_datapoints(raw: Any) -> Any:
-    """For PromQL results, keep only the last MAX_METRIC_DATAPOINTS per series
-    so the agent gets recent data without being overwhelmed."""
+    """For panel/data results, keep only the last MAX_METRIC_DATAPOINTS per
+    series so the agent gets recent data without being overwhelmed."""
     if not isinstance(raw, dict):
         return raw
-    data = raw.get("data")
-    if not isinstance(data, dict):
+    chart = raw.get("chart")
+    if not isinstance(chart, dict):
         return raw
-    results = data.get("result")
-    if not isinstance(results, list):
+    series_list = chart.get("series")
+    if not isinstance(series_list, list):
         return raw
     trimmed = False
-    for series in results:
-        values = series.get("values", [])
+    for series in series_list:
+        values = series.get("data", [])
         if len(values) > MAX_METRIC_DATAPOINTS:
             original_len = len(values)
-            series["values"] = values[-MAX_METRIC_DATAPOINTS:]
-            series["_trimmed_datapoints"] = f"Showing last {MAX_METRIC_DATAPOINTS} of {original_len}. Use a larger step or shorter lookback_hours."
+            series["data"] = values[-MAX_METRIC_DATAPOINTS:]
+            series["_trimmed_datapoints"] = f"Showing last {MAX_METRIC_DATAPOINTS} of {original_len}. Use a shorter lookback_hours."
             trimmed = True
     if trimmed:
         raw["_note"] = "Some series were trimmed to most recent datapoints."
@@ -190,8 +194,8 @@ class CorootGetServiceMapArgs(BaseModel):
 
 class CorootQueryMetricsArgs(BaseModel):
     promql: str = Field(description="PromQL query (e.g. 'rate(container_resources_cpu_usage_seconds_total[5m])')")
+    legend: str = Field(default="", description="Legend template using {{label}} syntax (e.g. '{{instance}}'). Leave empty for auto.")
     lookback_hours: int = Field(default=1, description="Hours of data (default: 1)")
-    step: str = Field(default="60s", description="Resolution step (default: '60s')")
     project_id: Optional[str] = Field(default=None, description="Coroot project ID. Auto-detected if omitted.")
 
 
@@ -643,13 +647,13 @@ def coroot_get_service_map(
 
 def coroot_query_metrics(
     promql: str,
+    legend: str = "",
     lookback_hours: int = 1,
-    step: str = "60s",
     project_id: Optional[str] = None,
     user_id: Optional[str] = None,
     **kwargs,
 ) -> str:
-    """Execute a PromQL query against Coroot's Prometheus-compatible endpoint."""
+    """Execute a PromQL query against Coroot's panel/data endpoint."""
     if not user_id:
         return json.dumps({"error": "User context not available"})
 
@@ -665,7 +669,7 @@ def coroot_query_metrics(
     start_ts = end_ts - (lookback_hours * 3600)
 
     try:
-        raw = client.query_prom(pid, promql, start_ts, end_ts, step)
+        raw = client.query_panel_data(pid, promql, start_ts, end_ts, legend)
     except CorootAPIError as exc:
         return json.dumps({"error": f"Coroot API error: {exc}"})
 
