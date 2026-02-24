@@ -151,7 +151,7 @@ def status():
         if q_ok and q_data:
             queue_size = len(q_data.get("items", []))
     except Exception:
-        pass
+        logger.exception("[JENKINS] Failed to fetch queue information for user %s", user_id)
 
     nodes_online = 0
     nodes_offline = 0
@@ -169,7 +169,7 @@ def status():
                     if not node.get("idle", True):
                         busy_executors += node.get("numExecutors", 0)
     except Exception:
-        pass
+        logger.exception("[JENKINS] Failed to fetch node information for user %s", user_id)
 
     return jsonify({
         "connected": True,
