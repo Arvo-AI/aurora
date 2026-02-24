@@ -1,10 +1,6 @@
 # Deploy to Demo VMs - GitHub Actions Workflow
 # 
 # This workflow automatically deploys Aurora to demo VMs when code is pushed to the demo branch.
-# 
-# 100% GENERIC - ALL configuration from GCP Secret Manager!
-# 
-# This workflow deploys Aurora to demo VMs on every push to the `demo` branch.
 #
 # 🔧 SETUP FOR YOUR PROJECT:
 #
@@ -67,24 +63,24 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-    - name: Authenticate to Google Cloud
-      id: auth
-      uses: google-github-actions/auth@v2
-      with:
-        workload_identity_provider: ${{ env.WORKLOAD_IDENTITY_PROVIDER }}
-        service_account: ${{ env.SERVICE_ACCOUNT }}
-    
-    - name: Set up Cloud SDK
-      uses: google-github-actions/setup-gcloud@v2
+      - name: Authenticate to Google Cloud
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ env.WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ env.SERVICE_ACCOUNT }}
+      
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
 
-    - name: Load deployment configuration from GCP Secret Manager
-      id: secrets
-      run: |
-        echo "Loading deployment configuration from GCP Secret Manager..."
-        
-        # Fetch deployment configuration (private secrets)
-        GCP_ZONE=$(gcloud secrets versions access latest --secret="demo-gcp-zone" --project="${{ env.GCP_PROJECT }}")
-        VM2_NAME=$(gcloud secrets versions access latest --secret="demo-vm2-name" --project="${{ env.GCP_PROJECT }}")
+      - name: Load deployment configuration from GCP Secret Manager
+        id: secrets
+        run: |
+          echo "Loading deployment configuration from GCP Secret Manager..."
+          
+          # Fetch deployment configuration (private secrets)
+          GCP_ZONE=$(gcloud secrets versions access latest --secret="demo-gcp-zone" --project="${{ env.GCP_PROJECT }}")
+          VM2_NAME=$(gcloud secrets versions access latest --secret="demo-vm2-name" --project="${{ env.GCP_PROJECT }}")
           
           # Export as environment variables
           echo "GCP_ZONE=$GCP_ZONE" >> $GITHUB_ENV
@@ -137,10 +133,10 @@ jobs:
       #       echo "⚠️  VM-1 Frontend health check failed (may still be starting)"
       #     fi
 
-    - name: Deploy to VM-2 (backup demo VM)
-      run: |
-        echo "🚀 Deploying to $VM2_NAME..."
-        gcloud compute ssh $VM2_NAME --zone=$GCP_ZONE --project=${{ env.GCP_PROJECT }} --command="
+      - name: Deploy to VM-2 (backup demo VM)
+        run: |
+          echo "🚀 Deploying to $VM2_NAME..."
+          gcloud compute ssh $VM2_NAME --zone=$GCP_ZONE --project=${{ env.GCP_PROJECT }} --command="
             set -e
             echo '📂 Navigating to project directory...'
             cd /opt/aurora-demo
@@ -161,11 +157,11 @@ jobs:
           echo "⏳ Waiting 30 seconds for services to start..."
           sleep 30
 
-    - name: Health check VM-2
-      run: |
-        echo "🏥 Checking VM-2 health..."
-        
-        VM2_IP=$(gcloud compute instances describe $VM2_NAME --zone=$GCP_ZONE --project=${{ env.GCP_PROJECT }} --format='get(networkInterfaces[0].accessConfigs[0].natIP)')
+      - name: Health check VM-2
+        run: |
+          echo "🏥 Checking VM-2 health..."
+          
+          VM2_IP=$(gcloud compute instances describe $VM2_NAME --zone=$GCP_ZONE --project=${{ env.GCP_PROJECT }} --format='get(networkInterfaces[0].accessConfigs[0].natIP)')
           
           # Check backend
           if curl -f -s "http://$VM2_IP:5080/health" > /dev/null 2>&1; then
@@ -181,22 +177,22 @@ jobs:
             echo "⚠️  VM-2 Frontend health check failed (may still be starting)"
           fi
 
-    - name: Deployment summary
-      if: always()
-      run: |
-        echo "================================================"
-        echo "🎉 Deployment Summary"
-        echo "================================================"
-        echo ""
-        echo "Branch: demo"
-        echo "Commit: ${{ github.sha }}"
-        echo "VMs deployed:"
-        echo "  - $VM2_NAME (backup demo VM)"
-        echo ""
-        echo "Note: Primary VM deployment is currently disabled"
-        echo ""
-        
-        VM2_IP=$(gcloud compute instances describe $VM2_NAME --zone=$GCP_ZONE --project=${{ env.GCP_PROJECT }} --format='get(networkInterfaces[0].accessConfigs[0].natIP)')
+      - name: Deployment summary
+        if: always()
+        run: |
+          echo "================================================"
+          echo "🎉 Deployment Summary"
+          echo "================================================"
+          echo ""
+          echo "Branch: demo"
+          echo "Commit: ${{ github.sha }}"
+          echo "VMs deployed:"
+          echo "  - $VM2_NAME (backup demo VM)"
+          echo ""
+          echo "Note: Primary VM deployment is currently disabled"
+          echo ""
+          
+          VM2_IP=$(gcloud compute instances describe $VM2_NAME --zone=$GCP_ZONE --project=${{ env.GCP_PROJECT }} --format='get(networkInterfaces[0].accessConfigs[0].natIP)')
           
           echo "Access URLs:"
           echo "  VM-2 Frontend: http://$VM2_IP:3000"
