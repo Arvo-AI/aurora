@@ -74,8 +74,9 @@ class JenkinsClient:
         )
 
     def get_server_info(self) -> Tuple[bool, Optional[Dict], Optional[str]]:
-        """Get top-level Jenkins server information including jobs."""
-        return self._request("GET", "/api/json")
+        """Get top-level Jenkins server information (excludes jobs for efficiency)."""
+        tree = "mode,nodeDescription,numExecutors,useSecurity"
+        return self._request("GET", "/api/json", params={"tree": tree})
 
     def list_jobs(self, folder_path: Optional[str] = None) -> Tuple[bool, List[Dict], Optional[str]]:
         """List jobs, optionally within a folder."""
@@ -104,9 +105,18 @@ class JenkinsClient:
         """Get details for a specific build."""
         return self._request("GET", f"/{self._job_segments(job_path)}/{build_number}/api/json")
 
+    MAX_CONSOLE_BYTES = 1_000_000  # 1 MB
+
     def get_build_console(self, job_path: str, build_number: int) -> Tuple[bool, Optional[str], Optional[str]]:
-        """Get console output for a build (plain text)."""
-        return self._request("GET", f"/{self._job_segments(job_path)}/{build_number}/consoleText", accept="text/plain")
+        """Get console output for a build (plain text), truncated to MAX_CONSOLE_BYTES."""
+        success, text, error = self._request(
+            "GET",
+            f"/{self._job_segments(job_path)}/{build_number}/consoleText",
+            accept="text/plain",
+        )
+        if success and text and len(text) > self.MAX_CONSOLE_BYTES:
+            text = text[: self.MAX_CONSOLE_BYTES] + "\n\n--- Output truncated (exceeded 1 MB) ---\n"
+        return success, text, error
 
     def get_queue(self) -> Tuple[bool, Optional[Dict], Optional[str]]:
         """Get the current build queue."""

@@ -1,5 +1,3 @@
-'use client';
-
 interface JenkinsServer {
   version?: string;
   mode?: string;
@@ -59,7 +57,7 @@ async function fetchJson<T>(input: RequestInfo, init?: RequestInit): Promise<T> 
 export const jenkinsService = {
   async getStatus(): Promise<JenkinsStatus | null> {
     try {
-      const raw = await fetchJson<Record<string, unknown>>(`${API_BASE}/status`);
+      const raw = await fetchJson<Record<string, unknown>>(`${API_BASE}/status?full=true`);
       return {
         connected: Boolean(raw?.connected),
         baseUrl: (raw?.baseUrl ?? raw?.base_url) as string | undefined,

@@ -44,7 +44,7 @@ def connect():
     except Exception:
         data = {}
 
-    user_id = data.get("userId") or get_user_id_from_request()
+    user_id = get_user_id_from_request()
     base_url = data.get("baseUrl", "").strip().rstrip("/")
     username = data.get("username", "").strip()
     api_token = data.get("apiToken") or data.get("token")
@@ -128,48 +128,58 @@ def status():
         logger.warning("[JENKINS] Status check failed for user %s: %s", user_id, error)
         return jsonify({"connected": False, "error": "Failed to validate stored Jenkins credentials"})
 
-    jobs = data.get("jobs", []) if data else []
-    job_count = len(jobs)
+    include_extras = request.args.get("full", "").lower() in ("true", "1", "yes")
 
+    jobs: list = []
+    job_count = 0
     job_health = {"healthy": 0, "unstable": 0, "failing": 0, "disabled": 0, "other": 0}
-    for job in jobs:
-        color = (job.get("color") or "").lower().replace("_anime", "")
-        if color == "blue":
-            job_health["healthy"] += 1
-        elif color == "yellow":
-            job_health["unstable"] += 1
-        elif color == "red":
-            job_health["failing"] += 1
-        elif color in ("disabled", "notbuilt"):
-            job_health["disabled"] += 1
-        else:
-            job_health["other"] += 1
+    try:
+        j_ok, j_data, _ = client.list_jobs()
+        if j_ok:
+            jobs = j_data
+            job_count = len(jobs)
+            for job in jobs:
+                color = (job.get("color") or "").lower().replace("_anime", "")
+                if color == "blue":
+                    job_health["healthy"] += 1
+                elif color == "yellow":
+                    job_health["unstable"] += 1
+                elif color == "red":
+                    job_health["failing"] += 1
+                elif color in ("disabled", "notbuilt"):
+                    job_health["disabled"] += 1
+                else:
+                    job_health["other"] += 1
+    except Exception:
+        logger.exception("[JENKINS] Failed to fetch job list for user %s", user_id)
 
     queue_size = 0
-    try:
-        q_ok, q_data, _ = client.get_queue()
-        if q_ok and q_data:
-            queue_size = len(q_data.get("items", []))
-    except Exception:
-        logger.exception("[JENKINS] Failed to fetch queue information for user %s", user_id)
-
     nodes_online = 0
     nodes_offline = 0
     total_executors = 0
     busy_executors = 0
-    try:
-        n_ok, n_data, _ = client.list_nodes()
-        if n_ok:
-            for node in n_data:
-                if node.get("offline"):
-                    nodes_offline += 1
-                else:
-                    nodes_online += 1
-                    total_executors += node.get("numExecutors", 0)
-                    if not node.get("idle", True):
-                        busy_executors += node.get("numExecutors", 0)
-    except Exception:
-        logger.exception("[JENKINS] Failed to fetch node information for user %s", user_id)
+
+    if include_extras:
+        try:
+            q_ok, q_data, _ = client.get_queue()
+            if q_ok and q_data:
+                queue_size = len(q_data.get("items", []))
+        except Exception:
+            logger.exception("[JENKINS] Failed to fetch queue information for user %s", user_id)
+
+        try:
+            n_ok, n_data, _ = client.list_nodes()
+            if n_ok:
+                for node in n_data:
+                    if node.get("offline"):
+                        nodes_offline += 1
+                    else:
+                        nodes_online += 1
+                        total_executors += node.get("numExecutors", 0)
+                        if not node.get("idle", True):
+                            busy_executors += node.get("numExecutors", 0)
+        except Exception:
+            logger.exception("[JENKINS] Failed to fetch node information for user %s", user_id)
 
     return jsonify({
         "connected": True,

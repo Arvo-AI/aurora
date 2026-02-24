@@ -60,15 +60,13 @@ export default function JenkinsAuthPage() {
   const loadStatus = async () => {
     setCheckingStatus(true);
     try {
-      if (typeof window !== "undefined") {
-        const cached = localStorage.getItem(CACHE_KEY);
-        if (cached) {
-          const parsed = JSON.parse(cached);
-          setStatus(parsed);
-          if (parsed?.connected) {
-            setBaseUrl(parsed.baseUrl ?? "");
-            setUsername(parsed.username ?? "");
-          }
+      const cached = localStorage.getItem(CACHE_KEY);
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        setStatus(parsed);
+        if (parsed?.connected) {
+          setBaseUrl(parsed.baseUrl ?? "");
+          setUsername(parsed.username ?? "");
         }
       }
 
@@ -76,13 +74,11 @@ export default function JenkinsAuthPage() {
 
       if (result) {
         setStatus(result);
-        if (typeof window !== "undefined") {
-          localStorage.setItem(CACHE_KEY, JSON.stringify(result));
-          if (result.connected) {
-            localStorage.setItem("isJenkinsConnected", "true");
-          } else {
-            localStorage.removeItem("isJenkinsConnected");
-          }
+        localStorage.setItem(CACHE_KEY, JSON.stringify(result));
+        if (result.connected) {
+          localStorage.setItem("isJenkinsConnected", "true");
+        } else {
+          localStorage.removeItem("isJenkinsConnected");
         }
         if (result.connected) {
           setBaseUrl(result.baseUrl ?? "");
@@ -107,10 +103,8 @@ export default function JenkinsAuthPage() {
     try {
       await jenkinsService.connect({ baseUrl, username, apiToken });
 
-      if (typeof window !== "undefined") {
-        localStorage.setItem("isJenkinsConnected", "true");
-        window.dispatchEvent(new CustomEvent("providerStateChanged"));
-      }
+      localStorage.setItem("isJenkinsConnected", "true");
+      window.dispatchEvent(new CustomEvent("providerStateChanged"));
 
       try {
         await fetch("/api/provider-preferences", {
@@ -159,11 +153,9 @@ export default function JenkinsAuthPage() {
       setBaseUrl("");
       setUsername("");
 
-      if (typeof window !== "undefined") {
-        localStorage.removeItem(CACHE_KEY);
-        localStorage.removeItem("isJenkinsConnected");
-        window.dispatchEvent(new CustomEvent("providerStateChanged"));
-      }
+      localStorage.removeItem(CACHE_KEY);
+      localStorage.removeItem("isJenkinsConnected");
+      window.dispatchEvent(new CustomEvent("providerStateChanged"));
 
       try {
         await fetch("/api/provider-preferences", {
