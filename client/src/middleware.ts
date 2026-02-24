@@ -12,6 +12,8 @@ const publicRoutes = [
   "/api/auth/session",    // NextAuth session
   "/api/auth/providers",  // NextAuth providers
   "/api/auth/csrf",       // NextAuth CSRF
+  "/api/auth/register",
+  "/api/auth/login",
 ]
 
 // Routes that should redirect authenticated users away
