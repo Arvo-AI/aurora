@@ -160,11 +160,11 @@ jobs:
             git checkout demo
             git pull origin demo
             
-            echo '🔧 Configuring domain URLs in .env...'
-            sudo sed -i \"s|DOMAIN=.*|DOMAIN=${{ env.VM2_DOMAIN }}|\" .env || echo \"DOMAIN=${{ env.VM2_DOMAIN }}\" | sudo tee -a .env
-            sudo sed -i \"s|FRONTEND_URL=.*|FRONTEND_URL=${{ env.VM2_FRONTEND_URL }}|\" .env
-            sudo sed -i \"s|NEXT_PUBLIC_BACKEND_URL=.*|NEXT_PUBLIC_BACKEND_URL=${{ env.VM2_BACKEND_URL }}|\" .env
-            sudo sed -i \"s|NEXT_PUBLIC_WEBSOCKET_URL=.*|NEXT_PUBLIC_WEBSOCKET_URL=${{ env.VM2_WEBSOCKET_URL }}|\" .env
+            echo '🔧 Configuring domain in .env...'
+            sudo sed -i 's|^DOMAIN=.*|DOMAIN=${{ env.VM2_DOMAIN }}|' .env || echo 'DOMAIN=${{ env.VM2_DOMAIN }}' | sudo tee -a .env
+            sudo sed -i 's|^FRONTEND_URL=.*|FRONTEND_URL=${{ env.VM2_FRONTEND_URL }}|' .env
+            sudo sed -i 's|^NEXT_PUBLIC_BACKEND_URL=.*|NEXT_PUBLIC_BACKEND_URL=${{ env.VM2_BACKEND_URL }}|' .env
+            sudo sed -i 's|^NEXT_PUBLIC_WEBSOCKET_URL=.*|NEXT_PUBLIC_WEBSOCKET_URL=${{ env.VM2_WEBSOCKET_URL }}|' .env
             
             echo '🔄 Restarting services...'
             sudo docker compose -f docker-compose.prod-local.yml up -d --remove-orphans
