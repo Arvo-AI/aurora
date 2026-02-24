@@ -2,7 +2,7 @@
 
 import Link from "next/link"
 import { usePathname, useRouter } from "next/navigation"
-import { ChevronLeft, List, Settings, LogOut, User, HelpCircle, Bug, Sparkles, Zap, Plug } from "lucide-react"
+import { ChevronLeft, Settings, LogOut, User, Zap, Plug } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import ChatHistory from "@/components/ChatHistory"

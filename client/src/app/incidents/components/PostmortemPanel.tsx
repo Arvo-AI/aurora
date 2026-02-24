@@ -16,7 +16,6 @@ interface PostmortemPanelProps {
 
 export default function PostmortemPanel({ incidentId, incidentTitle, isVisible, onClose }: PostmortemPanelProps) {
   const [postmortem, setPostmortem] = useState<PostmortemData | null>(null);
-  const [loading, setLoading] = useState(false);
   const [editing, setEditing] = useState(false);
   const [editContent, setEditContent] = useState('');
   const [saving, setSaving] = useState(false);
@@ -28,15 +27,12 @@ export default function PostmortemPanel({ incidentId, incidentTitle, isVisible, 
   const [exportError, setExportError] = useState<string | null>(null);
 
   const loadPostmortem = useCallback(async () => {
-    setLoading(true);
     try {
       const data = await postmortemService.getPostmortem(incidentId);
       setPostmortem(data);
       if (data) setEditContent(data.content);
     } catch (e) {
       console.error('Failed to load postmortem:', e);
-    } finally {
-      setLoading(false);
     }
   }, [incidentId]);
 

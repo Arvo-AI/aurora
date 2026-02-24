@@ -99,7 +99,7 @@ try:
     import chat.background.task
     import chat.background.summarization
     import chat.background.visualization_generator
-    import chat.background.postmortem_generator
+    import chat.background.postmortem_generator  # noqa: F401
     logging.info("Background chat tasks imported successfully")
 except ImportError as e:
     logging.warning(f"Failed to import background chat tasks: {e}")
