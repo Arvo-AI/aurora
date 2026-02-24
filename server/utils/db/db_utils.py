@@ -804,6 +804,22 @@ def initialize_tables():
                     CREATE INDEX IF NOT EXISTS idx_incident_feedback_user_id ON incident_feedback(user_id);
                     CREATE INDEX IF NOT EXISTS idx_incident_feedback_type ON incident_feedback(feedback_type);
                 """,
+                "postmortems": """
+                    CREATE TABLE IF NOT EXISTS postmortems (
+                        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                        incident_id UUID NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
+                        user_id VARCHAR(255) NOT NULL,
+                        content TEXT,
+                        generated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        confluence_page_id TEXT,
+                        confluence_page_url TEXT,
+                        confluence_exported_at TIMESTAMP
+                    );
+
+                    CREATE INDEX IF NOT EXISTS idx_postmortems_incident_id ON postmortems(incident_id);
+                    CREATE INDEX IF NOT EXISTS idx_postmortems_user_id ON postmortems(user_id);
+                """,
             }
 
             # List of tables that should have RLS enabled and a policy applied.
@@ -843,6 +859,7 @@ def initialize_tables():
             rls_tables.append("incidents")
             rls_tables.append("incident_alerts")
             rls_tables.append("incident_feedback")
+            rls_tables.append("postmortems")
 
 
             # Migration: Add rca_celery_task_id column to incidents table if it doesn't exist
@@ -1254,6 +1271,33 @@ def initialize_tables():
                 logging.warning(
                     f"Error adding fix-type columns to incident_suggestions: {e}"
                 )
+                conn.rollback()
+
+            # Migration: Create postmortems table if it doesn't exist
+            # Note: 'resolved' is now a valid incident status value.
+            # The incidents.status column is VARCHAR so no ALTER TABLE is needed.
+            try:
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS postmortems (
+                        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                        incident_id UUID NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
+                        user_id VARCHAR(255) NOT NULL,
+                        content TEXT,
+                        generated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        confluence_page_id TEXT,
+                        confluence_page_url TEXT,
+                        confluence_exported_at TIMESTAMP
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_postmortems_incident_id ON postmortems(incident_id);
+                    CREATE INDEX IF NOT EXISTS idx_postmortems_user_id ON postmortems(user_id);
+                """)
+                logging.info(
+                    "Created postmortems table (if not exists)."
+                )
+                conn.commit()
+            except Exception as e:
+                logging.warning(f"Error creating postmortems table: {e}")
                 conn.rollback()
 
             # Create indexes for performance
