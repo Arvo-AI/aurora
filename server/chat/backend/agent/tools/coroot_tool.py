@@ -439,23 +439,23 @@ def coroot_get_app_detail(
 
     app_map = raw.get("app_map") if isinstance(raw, dict) else None
     if app_map:
-        app_info = app_map.get("application", {})
+        app_info = app_map.get("application") or {}
         result["status"] = _status_label(app_info.get("status"))
-        result["indicators"] = app_info.get("indicators", [])
+        result["indicators"] = app_info.get("indicators") or []
         result["instances"] = [
             {"id": i.get("id"), "labels": i.get("labels")}
-            for i in app_map.get("instances", [])
+            for i in (app_map.get("instances") or [])
         ]
         result["clients"] = [
             {"id": c.get("id"), "status": _status_label(c.get("link_status")), "stats": c.get("link_stats")}
-            for c in app_map.get("clients", [])
+            for c in (app_map.get("clients") or [])
         ]
         result["dependencies"] = [
             {"id": d.get("id"), "status": _status_label(d.get("link_status")), "stats": d.get("link_stats")}
-            for d in app_map.get("dependencies", [])
+            for d in (app_map.get("dependencies") or [])
         ]
 
-    reports = raw.get("reports", []) if isinstance(raw, dict) else []
+    reports = (raw.get("reports") or []) if isinstance(raw, dict) else []
     failing_checks = []
     for report in reports:
         for check in report.get("checks", []):
