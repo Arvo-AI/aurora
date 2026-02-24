@@ -1,0 +1,277 @@
+"""
+Bitbucket Cloud authentication routes.
+Handles OAuth login, app password login, callback, status, and disconnect.
+"""
+import logging
+import os
+import time
+
+from flask import Blueprint, jsonify, render_template, request
+
+from utils.auth.stateless_auth import get_user_id_from_request, get_credentials_from_db
+from utils.web.cors_utils import create_cors_response
+
+bitbucket_bp = Blueprint("bitbucket", __name__)
+logger = logging.getLogger(__name__)
+
+FRONTEND_URL = os.getenv("FRONTEND_URL")
+
+
+@bitbucket_bp.route("/login", methods=["POST", "OPTIONS"])
+def bitbucket_login():
+    """Handle Bitbucket login - either app password or OAuth initiation."""
+    if request.method == "OPTIONS":
+        return create_cors_response()
+
+    try:
+        data = request.get_json() or {}
+        user_id = data.get("userId") or get_user_id_from_request()
+
+        if not user_id:
+            return jsonify({"error": "User ID is required"}), 400
+
+        app_password = data.get("app_password")
+        email = data.get("email")
+
+        if app_password and email:
+            # --- App password flow ---
+            try:
+                from connectors.bitbucket_connector.api_client import BitbucketAPIClient
+
+                client = BitbucketAPIClient(
+                    access_token=app_password,
+                    auth_type="app_password",
+                    email=email,
+                )
+
+                # Validate credentials by fetching user profile
+                user_data = client.get_current_user()
+                if not user_data:
+                    logger.error("Bitbucket app password validation failed")
+                    return jsonify({"error": "Invalid Bitbucket credentials"}), 400
+
+                username = user_data.get("username")
+                display_name = user_data.get("display_name")
+
+                from utils.auth.token_management import store_tokens_in_db
+
+                token_data = {
+                    "access_token": app_password,
+                    "auth_type": "app_password",
+                    "email": email,
+                    "username": username,
+                    "display_name": display_name,
+                }
+
+                store_tokens_in_db(user_id, token_data, "bitbucket")
+                logger.info(f"Stored Bitbucket app password credentials for user {user_id}")
+
+                return jsonify({
+                    "success": True,
+                    "message": f"Successfully connected to Bitbucket as {username}",
+                    "username": username,
+                })
+
+            except Exception as e:
+                logger.error(f"Error storing Bitbucket app password: {e}", exc_info=True)
+                return jsonify({"error": "Failed to store Bitbucket credentials"}), 500
+        else:
+            # --- OAuth flow ---
+            client_id = os.getenv("BB_OAUTH_CLIENT_ID")
+            client_secret = os.getenv("BB_OAUTH_CLIENT_SECRET")
+
+            if not client_id or not client_secret:
+                logger.error("Bitbucket OAuth client ID or secret not configured")
+                return jsonify({
+                    "error": "Bitbucket OAuth is not configured",
+                    "error_code": "BITBUCKET_NOT_CONFIGURED",
+                    "message": "Bitbucket OAuth environment variables (BB_OAUTH_CLIENT_ID and BB_OAUTH_CLIENT_SECRET) are not configured.",
+                }), 400
+
+            from connectors.bitbucket_connector.oauth_utils import get_auth_url
+
+            oauth_url = get_auth_url(user_id)
+
+            return jsonify({
+                "oauth_url": oauth_url,
+                "message": "Redirect to Bitbucket for authentication",
+            })
+
+    except Exception as e:
+        logger.error(f"Error in Bitbucket login: {e}", exc_info=True)
+        return jsonify({"error": "Failed to process Bitbucket login"}), 500
+
+
+@bitbucket_bp.route("/callback", methods=["GET", "POST"])
+def bitbucket_callback():
+    """Handle the OAuth callback from Bitbucket."""
+    try:
+        code = request.args.get("code")
+        if not code:
+            logger.error("No code provided in Bitbucket callback")
+            return render_template(
+                "bitbucket_callback_error.html",
+                error="No authorization code provided",
+                frontend_url=FRONTEND_URL,
+            )
+
+        logger.info(f"Received Bitbucket code: {code[:5]}...")
+
+        from connectors.bitbucket_connector.oauth_utils import exchange_code_for_token
+
+        token_response = exchange_code_for_token(code)
+        if not token_response:
+            return render_template(
+                "bitbucket_callback_error.html",
+                error="Failed to authenticate with Bitbucket",
+                frontend_url=FRONTEND_URL,
+            )
+
+        access_token = token_response.get("access_token")
+        if not access_token:
+            logger.error(f"No access token in Bitbucket response: {list(token_response.keys())}")
+            return render_template(
+                "bitbucket_callback_error.html",
+                error="Invalid response from Bitbucket",
+                frontend_url=FRONTEND_URL,
+            )
+
+        # Fetch user info using the API client
+        from connectors.bitbucket_connector.api_client import BitbucketAPIClient
+
+        client = BitbucketAPIClient(access_token=access_token)
+        user_data = client.get_current_user()
+
+        if not user_data:
+            return render_template(
+                "bitbucket_callback_error.html",
+                error="Failed to get user information",
+                frontend_url=FRONTEND_URL,
+            )
+
+        username = user_data.get("username")
+        display_name = user_data.get("display_name")
+
+        logger.info(f"Authenticated as Bitbucket user: {username}")
+
+        # Calculate token expiry
+        expires_in = token_response.get("expires_in", 7200)
+        expires_at = time.time() + expires_in
+
+        # Store credentials
+        user_id = request.args.get("state")
+        if user_id:
+            try:
+                from utils.auth.token_management import store_tokens_in_db
+
+                bb_token_data = {
+                    "access_token": access_token,
+                    "refresh_token": token_response.get("refresh_token"),
+                    "expires_at": expires_at,
+                    "auth_type": "oauth",
+                    "username": username,
+                    "display_name": display_name,
+                }
+
+                store_tokens_in_db(user_id, bb_token_data, "bitbucket")
+                logger.info(f"Stored Bitbucket OAuth credentials for user {user_id}")
+            except Exception as e:
+                logger.error(f"Failed to store Bitbucket credentials: {e}", exc_info=True)
+        else:
+            logger.warning("No user_id provided in Bitbucket OAuth state parameter")
+
+        return render_template(
+            "bitbucket_callback_success.html",
+            bitbucket_username=username,
+            frontend_url=FRONTEND_URL,
+        )
+
+    except Exception as e:
+        logger.error(f"Error during Bitbucket callback: {e}", exc_info=True)
+        return render_template(
+            "bitbucket_callback_error.html",
+            error="An unexpected error occurred during Bitbucket authentication",
+            frontend_url=FRONTEND_URL,
+        )
+
+
+@bitbucket_bp.route("/status", methods=["GET", "OPTIONS"])
+def bitbucket_status():
+    """Check Bitbucket connection status for a user."""
+    if request.method == "OPTIONS":
+        return create_cors_response()
+
+    try:
+        user_id = get_user_id_from_request()
+        if not user_id:
+            return jsonify({"connected": False, "error": "User ID required"}), 400
+
+        bb_creds = get_credentials_from_db(user_id, "bitbucket")
+        if not bb_creds or not bb_creds.get("access_token"):
+            return jsonify({"connected": False})
+
+        auth_type = bb_creds.get("auth_type", "oauth")
+
+        # Auto-refresh OAuth tokens
+        if auth_type == "oauth":
+            from connectors.bitbucket_connector.oauth_utils import refresh_token_if_needed
+
+            old_access_token = bb_creds.get("access_token")
+            bb_creds = refresh_token_if_needed(bb_creds)
+
+            # Persist if the access token was refreshed
+            if bb_creds.get("access_token") != old_access_token:
+                try:
+                    from utils.auth.token_management import store_tokens_in_db
+                    store_tokens_in_db(user_id, bb_creds, "bitbucket")
+                except Exception as e:
+                    logger.warning(f"Failed to persist refreshed Bitbucket token: {e}")
+
+        # Validate by making an API call
+        from connectors.bitbucket_connector.api_client import BitbucketAPIClient
+
+        client = BitbucketAPIClient(
+            access_token=bb_creds["access_token"],
+            auth_type=auth_type,
+            email=bb_creds.get("email"),
+        )
+        user_data = client.get_current_user()
+
+        if user_data:
+            return jsonify({
+                "connected": True,
+                "username": user_data.get("username"),
+                "display_name": user_data.get("display_name"),
+                "auth_type": auth_type,
+            })
+        else:
+            return jsonify({"connected": False, "error": "Invalid or expired token"})
+
+    except Exception as e:
+        logger.error(f"Error checking Bitbucket status: {e}", exc_info=True)
+        return jsonify({"connected": False, "error": "Failed to check Bitbucket status"}), 500
+
+
+@bitbucket_bp.route("/disconnect", methods=["POST", "OPTIONS"])
+def bitbucket_disconnect():
+    """Disconnect Bitbucket account for a user."""
+    if request.method == "OPTIONS":
+        return create_cors_response()
+
+    try:
+        user_id = get_user_id_from_request()
+        if not user_id:
+            return jsonify({"error": "User ID required"}), 400
+
+        from utils.secrets.secret_ref_utils import delete_user_secret
+
+        # Delete both bitbucket credentials and workspace selection
+        delete_user_secret(user_id, "bitbucket")
+        delete_user_secret(user_id, "bitbucket_workspace_selection")
+
+        logger.info(f"Disconnected Bitbucket for user {user_id}")
+        return jsonify({"success": True, "message": "Bitbucket account disconnected"})
+
+    except Exception as e:
+        logger.error(f"Error disconnecting Bitbucket: {e}", exc_info=True)
+        return jsonify({"error": "Failed to disconnect Bitbucket"}), 500
