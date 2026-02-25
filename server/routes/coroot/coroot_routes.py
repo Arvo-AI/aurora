@@ -81,15 +81,7 @@ def connect():
         client = get_coroot_client(user_id, url=url, email=email, password=password)
     except CorootAPIError as exc:
         logger.warning("[COROOT] Login failed for user %s: %s", user_id, exc)
-        msg = str(exc)
-        safe_messages = {
-            "Invalid email or password",
-            "Unable to reach Coroot server",
-            "Login succeeded but no session cookie was returned",
-        }
-        if msg not in safe_messages:
-            msg = "Failed to connect to Coroot"
-        return jsonify({"error": msg}), 400
+        return jsonify({"error": "Failed to connect to Coroot"}), 400
 
     try:
         projects = client.discover_projects()

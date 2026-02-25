@@ -69,8 +69,8 @@ def _default_project(client: CorootClient) -> Optional[str]:
             pid = projects[0].get("id")
             if pid:
                 return str(pid)
-    except CorootAPIError:
-        pass
+    except CorootAPIError as exc:
+        logger.error("[COROOT-TOOL] Failed to discover projects for default selection: %s", exc)
     return None
 
 
