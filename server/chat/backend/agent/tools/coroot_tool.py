@@ -65,11 +65,10 @@ def _default_project(client: CorootClient) -> Optional[str]:
     """Return the first project id, or None."""
     try:
         projects = client.discover_projects()
-        if projects and isinstance(projects, list):
-            for p in projects:
-                pid = p.get("id") if isinstance(p, dict) else p
-                if pid:
-                    return str(pid)
+        if projects:
+            pid = projects[0].get("id")
+            if pid:
+                return str(pid)
     except CorootAPIError:
         pass
     return None
@@ -149,6 +148,21 @@ def _status_label(code: Any) -> str:
         return STATUS_LABELS.get(int(code), str(code))
     except (TypeError, ValueError):
         return str(code)
+
+
+def _extract_field(raw: Any, field: str) -> Any:
+    """Extract a specific field from the Coroot unified response envelope.
+
+    Coroot's overview endpoints return a full context object like:
+        {"applications": [...], "map": {...}, "nodes": [...], "deployments": [...],
+         "traces": {...}, "logs": {...}, "costs": {...}, "risks": [...],
+         "categories": [...], "fluxcd": null}
+    Only one field is populated; the rest are null.  This helper returns
+    just the requested field so tool output is clean and token-efficient.
+    """
+    if isinstance(raw, dict):
+        return raw.get(field)
+    return raw
 
 
 # ---------------------------------------------------------------------------
@@ -281,14 +295,9 @@ def coroot_get_incidents(
     if not raw:
         return json.dumps({"incidents": [], "message": f"No incidents in the last {lookback_hours}h"})
 
-    incidents: List[Dict] = raw if isinstance(raw, list) else [raw]
     summaries = []
-    for inc in incidents:
-        if not isinstance(inc, dict):
-            continue
+    for inc in raw:
         rca = inc.get("rca") or {}
-        if not isinstance(rca, dict):
-            rca = {}
         summary = {
             "key": inc.get("key"),
             "application_id": inc.get("application_id"),
@@ -348,6 +357,12 @@ def coroot_get_incident_detail(
     except CorootAPIError as exc:
         return json.dumps({"error": f"Coroot API error: {exc}"})
 
+    if not raw:
+        return json.dumps({
+            "incident_key": incident_key,
+            "message": f"No detail found for incident '{incident_key}'. It may have been resolved and aged out.",
+        })
+
     return _safe_json(raw)
 
 
@@ -377,14 +392,12 @@ def coroot_get_applications(
     except CorootAPIError as exc:
         return json.dumps({"error": f"Coroot API error: {exc}"})
 
-    if not raw:
+    app_list = _extract_field(raw, "applications")
+    if not app_list:
         return json.dumps({"applications": [], "message": "No applications found"})
 
-    apps: List[Dict] = raw if isinstance(raw, list) else [raw]
     results = []
-    for app in apps:
-        if not isinstance(app, dict):
-            continue
+    for app in app_list:
         entry: Dict[str, Any] = {
             "id": app.get("id"),
             "status": _status_label(app.get("status")),
@@ -448,34 +461,25 @@ def coroot_get_app_detail(
     app_map = raw.get("app_map") if isinstance(raw, dict) else None
     if app_map:
         app_info = app_map.get("application") or {}
-        if not isinstance(app_info, dict):
-            app_info = {}
         result["status"] = _status_label(app_info.get("status"))
         result["indicators"] = app_info.get("indicators") or []
         result["instances"] = [
             {"id": i.get("id"), "labels": i.get("labels")}
             for i in (app_map.get("instances") or [])
-            if isinstance(i, dict)
         ]
         result["clients"] = [
             {"id": c.get("id"), "status": _status_label(c.get("link_status")), "stats": c.get("link_stats")}
             for c in (app_map.get("clients") or [])
-            if isinstance(c, dict)
         ]
         result["dependencies"] = [
             {"id": d.get("id"), "status": _status_label(d.get("link_status")), "stats": d.get("link_stats")}
             for d in (app_map.get("dependencies") or [])
-            if isinstance(d, dict)
         ]
 
-    reports = (raw.get("reports") or []) if isinstance(raw, dict) else []
+    reports = raw.get("reports") or [] if raw else []
     failing_checks = []
     for report in reports:
-        if not isinstance(report, dict):
-            continue
         for check in (report.get("checks") or []):
-            if not isinstance(check, dict):
-                continue
             status = check.get("status", 0)
             try:
                 status_int = int(status)
@@ -538,10 +542,7 @@ def coroot_get_app_logs(
         return json.dumps({"error": f"Coroot API error: {exc}"})
 
     entries = []
-    raw_entries = (raw.get("entries") or []) if isinstance(raw, dict) else []
-    for e in raw_entries:
-        if not isinstance(e, dict):
-            continue
+    for e in (raw.get("entries") or []):
         entries.append({
             "timestamp": e.get("timestamp"),
             "severity": e.get("severity"),
@@ -557,10 +558,12 @@ def coroot_get_app_logs(
 
     result = {
         "app_id": app_id,
-        "source": raw.get("source") if isinstance(raw, dict) else source,
+        "source": raw.get("source", source),
         "total_entries": len(entries),
         "entries": items,
     }
+    if not entries:
+        result["message"] = f"No log entries found for {app_id} (source={source}) in the last {lookback_hours}h."
     result.update(trunc_meta)
     return _safe_json(result)
 
@@ -604,7 +607,21 @@ def coroot_get_traces(
     except CorootAPIError as exc:
         return json.dumps({"error": f"Coroot API error: {exc}"})
 
-    return _safe_json(raw)
+    traces_data = _extract_field(raw, "traces")
+    if not traces_data:
+        filters_desc = f"service={service_name}" if service_name else "all services"
+        if status_error:
+            filters_desc += ", errors only"
+        if trace_id:
+            filters_desc = f"trace_id={trace_id}"
+        return json.dumps({
+            "traces": [],
+            "filters": filters_desc,
+            "lookback_hours": lookback_hours,
+            "message": f"No traces found for {filters_desc} in the last {lookback_hours}h.",
+        })
+
+    return _safe_json(traces_data)
 
 
 def coroot_get_service_map(
@@ -633,14 +650,13 @@ def coroot_get_service_map(
     except CorootAPIError as exc:
         return json.dumps({"error": f"Coroot API error: {exc}"})
 
-    if not raw:
+    map_data = _extract_field(raw, "map")
+    services: List[Dict] = map_data if isinstance(map_data, list) else []
+    if not services:
         return json.dumps({"services": [], "message": "No service map data"})
 
-    services: List[Dict] = raw if isinstance(raw, list) else [raw]
     result = []
     for svc in services:
-        if not isinstance(svc, dict):
-            continue
         entry: Dict[str, Any] = {
             "id": svc.get("id"),
             "status": _status_label(svc.get("status")),
@@ -650,14 +666,10 @@ def coroot_get_service_map(
             entry["upstreams"] = [
                 {"id": u.get("id"), "status": _status_label(u.get("status")), "stats": u.get("stats")}
                 for u in ups
-                if isinstance(u, dict)
             ]
         downs = svc.get("downstreams") or []
         if downs:
-            if isinstance(downs[0], dict):
-                entry["downstreams"] = [d.get("id") for d in downs if isinstance(d, dict)]
-            else:
-                entry["downstreams"] = downs
+            entry["downstreams"] = [d.get("id") for d in downs]
         result.append(entry)
 
     items, trunc_meta = _truncate_list(
@@ -698,6 +710,23 @@ def coroot_query_metrics(
     except CorootAPIError as exc:
         return json.dumps({"error": f"Coroot API error: {exc}"})
 
+    if not raw or raw == {}:
+        return json.dumps({
+            "query": promql,
+            "lookback_hours": lookback_hours,
+            "series": [],
+            "message": f"No data returned for query '{promql}' over the last {lookback_hours}h.",
+        })
+
+    chart = raw.get("chart") or {}
+    if not chart.get("series"):
+        return json.dumps({
+            "query": promql,
+            "lookback_hours": lookback_hours,
+            "series": [],
+            "message": f"Query '{promql}' returned no time-series data for the last {lookback_hours}h.",
+        })
+
     raw = _trim_metric_datapoints(raw)
     return _safe_json(raw)
 
@@ -728,7 +757,15 @@ def coroot_get_deployments(
     except CorootAPIError as exc:
         return json.dumps({"error": f"Coroot API error: {exc}"})
 
-    return _safe_json(raw)
+    deployments = _extract_field(raw, "deployments")
+    if not deployments:
+        return json.dumps({
+            "deployments": [],
+            "lookback_hours": lookback_hours,
+            "message": f"No deployments detected in the last {lookback_hours}h.",
+        })
+
+    return _safe_json(deployments)
 
 
 def coroot_get_nodes(
@@ -757,7 +794,14 @@ def coroot_get_nodes(
     except CorootAPIError as exc:
         return json.dumps({"error": f"Coroot API error: {exc}"})
 
-    return _safe_json(raw)
+    nodes = _extract_field(raw, "nodes")
+    if not nodes:
+        return json.dumps({
+            "nodes": [],
+            "message": "No nodes found. Coroot's node-agent may not be installed.",
+        })
+
+    return _safe_json(nodes)
 
 
 def coroot_get_overview_logs(
@@ -804,10 +848,7 @@ def coroot_get_overview_logs(
         return json.dumps({"error": f"Coroot API error: {exc}"})
 
     entries = []
-    raw_entries = (raw.get("entries") or []) if isinstance(raw, dict) else []
-    for e in raw_entries:
-        if not isinstance(e, dict):
-            continue
+    for e in (raw.get("entries") or []):
         entries.append({
             "timestamp": e.get("timestamp"),
             "severity": e.get("severity"),
@@ -827,6 +868,8 @@ def coroot_get_overview_logs(
         "total_entries": len(entries),
         "entries": items,
     }
+    if not entries:
+        result["message"] = f"No log entries found in the last {lookback_hours}h."
     result.update(trunc_meta)
     return _safe_json(result)
 
@@ -858,6 +901,12 @@ def coroot_get_node_detail(
     except CorootAPIError as exc:
         return json.dumps({"error": f"Coroot API error: {exc}"})
 
+    if not raw:
+        return json.dumps({
+            "node_name": node_name,
+            "message": f"No data found for node '{node_name}'. Verify the name via coroot_get_nodes.",
+        })
+
     return _safe_json(raw)
 
 
@@ -887,7 +936,14 @@ def coroot_get_costs(
     except CorootAPIError as exc:
         return json.dumps({"error": f"Coroot API error: {exc}"})
 
-    return _safe_json(raw)
+    costs_data = _extract_field(raw, "costs")
+    if not costs_data:
+        return json.dumps({
+            "costs": [],
+            "message": "No cost data available. Cloud pricing integration may not be configured in Coroot.",
+        })
+
+    return _safe_json(costs_data)
 
 
 def coroot_get_risks(
@@ -916,4 +972,11 @@ def coroot_get_risks(
     except CorootAPIError as exc:
         return json.dumps({"error": f"Coroot API error: {exc}"})
 
-    return _safe_json(raw)
+    risks_data = _extract_field(raw, "risks")
+    if not risks_data:
+        return json.dumps({
+            "risks": [],
+            "message": "No risks detected or risk analysis is not available for this project.",
+        })
+
+    return _safe_json(risks_data)
