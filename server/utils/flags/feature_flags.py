@@ -21,3 +21,8 @@ def is_slack_enabled() -> bool:
 def is_confluence_enabled() -> bool:
     """Check if Confluence integration is enabled via environment variable."""
     return os.getenv("NEXT_PUBLIC_ENABLE_CONFLUENCE", "false").lower() == "true"
+
+
+def is_dynatrace_enabled() -> bool:
+    """Check if Dynatrace integration is enabled via environment variable."""
+    return os.getenv("NEXT_PUBLIC_ENABLE_DYNATRACE", "false").lower() == "true"
