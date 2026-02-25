@@ -167,11 +167,11 @@ class CorootClient:
 
         if resp.status_code == 401:
             raise CorootAPIError(
-                f"Invalid email or password"
+                "Invalid email or password"
             )
         if resp.status_code == 404:
             raise CorootAPIError(
-                f"Login endpoint not found — check base URL"
+                "Login endpoint not found — check base URL"
             )
         if not resp.ok:
             raise CorootAPIError(f"Login failed (HTTP {resp.status_code})")

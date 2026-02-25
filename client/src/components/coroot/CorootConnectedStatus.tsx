@@ -68,7 +68,7 @@ export function CorootConnectedStatus({
               "Metrics (PromQL)",
               "Logs",
               "Traces",
-              "Incidents & RCA",
+              "Incidents",
               "Service Maps",
               "Profiling",
               "Deployments",

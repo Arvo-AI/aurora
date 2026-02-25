@@ -100,17 +100,14 @@ export default function CorootAuthPage() {
         email,
       };
       setStatus(newStatus);
-
-      if (typeof window !== "undefined") {
-        localStorage.setItem(CACHE_KEY, JSON.stringify(newStatus));
-      }
+      updateLocalStorageConnection(true);
 
       toast({
         title: "Success",
         description: `Coroot connected successfully. ${result.projects?.length ?? 0} project(s) discovered.`,
       });
 
-      updateLocalStorageConnection(true);
+      await fetchAndUpdateStatus();
 
       try {
         await fetch("/api/provider-preferences", {
