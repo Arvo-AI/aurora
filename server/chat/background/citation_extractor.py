@@ -156,6 +156,17 @@ class CitationExtractor:
                 return str(args["query"])
             if "path" in args:
                 return str(args["path"])
+            if "promql" in args:
+                return str(args["promql"])
+
+            # Coroot tools: build a descriptive command from args
+            coroot_args = {k: v for k, v in args.items()
+                          if k not in ("user_id", "session_id", "project_id") and v is not None}
+            if coroot_args:
+                parts = [f"{k}={v}" for k, v in coroot_args.items()]
+                candidate = ", ".join(parts)
+                if candidate:
+                    return candidate
 
         # Try to parse from JSON content
         try:
@@ -182,9 +193,18 @@ class CitationExtractor:
             parsed = json.loads(content) if isinstance(content, str) else content
             if isinstance(parsed, dict):
                 # Common output field names - check chat_output first (used by cloud tools)
-                for field in ["chat_output", "output", "message", "result", "data", "response"]:
+                for field in ["chat_output", "output", "result", "data", "response"]:
                     if field in parsed and parsed[field]:
                         return str(parsed[field])
+
+                # "message" alone is often just a status string (e.g. "No incidents in the last 24h").
+                # Only use it when there are no richer data fields present (e.g. Coroot responses
+                # contain both "message" and "incidents"/"applications"/etc.).
+                _data_keys = {"incidents", "applications", "entries", "services",
+                              "failing_checks", "app_id", "total_incidents",
+                              "total_applications", "total_entries", "total_services"}
+                if "message" in parsed and parsed["message"] and not _data_keys.intersection(parsed.keys()):
+                    return str(parsed["message"])
 
                 # If no specific output field, return the whole structure for RenderOutput to handle
                 return json.dumps(parsed, indent=2)
@@ -218,6 +238,20 @@ class CitationExtractor:
             "list_splunk_indexes": "Splunk Indexes",
             "list_splunk_sourcetypes": "Splunk Sourcetypes",
             "web_search": "Web Search",
+            "coroot_get_incidents": "Coroot Incidents",
+            "coroot_get_incident_detail": "Coroot Incident Detail",
+            "coroot_get_applications": "Coroot Applications",
+            "coroot_get_app_detail": "Coroot App Detail",
+            "coroot_get_app_logs": "Coroot App Logs",
+            "coroot_get_traces": "Coroot Traces",
+            "coroot_get_service_map": "Coroot Service Map",
+            "coroot_query_metrics": "Coroot Metrics",
+            "coroot_get_deployments": "Coroot Deployments",
+            "coroot_get_nodes": "Coroot Nodes",
+            "coroot_get_overview_logs": "Coroot Overview Logs",
+            "coroot_get_node_detail": "Coroot Node Detail",
+            "coroot_get_costs": "Coroot Costs",
+            "coroot_get_risks": "Coroot Risks",
         }
         # Handle MCP tools (prefixed with mcp_)
         if tool_name.startswith("mcp_"):
