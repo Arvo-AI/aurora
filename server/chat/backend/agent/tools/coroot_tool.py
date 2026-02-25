@@ -234,7 +234,7 @@ class CorootGetNodesArgs(BaseModel):
 class CorootGetOverviewLogsArgs(BaseModel):
     severity: Optional[str] = Field(default=None, description="Filter by severity: Error, Warning, Info")
     message_filter: Optional[str] = Field(default=None, description="Substring or regex to filter log messages")
-    include_k8s_events: bool = Field(default=False, description="Include Kubernetes events (OOMKilled, Evicted, etc.)")
+    kubernetes_only: bool = Field(default=False, description="If true, return only Kubernetes events (OOMKilled, Evicted, CrashLoopBackOff, FailedScheduling). If false (default), return application logs. Call twice to get both.")
     limit: int = Field(default=50, description="Max log entries to return (default: 50)")
     lookback_hours: int = Field(default=1, description="Hours of data (default: 1)")
     project_id: Optional[str] = Field(default=None, description="Coroot project ID. Auto-detected if omitted.")
@@ -510,7 +510,7 @@ def coroot_get_app_logs(
     user_id: Optional[str] = None,
     **kwargs,
 ) -> str:
-    """Fetch logs for a specific application from Coroot."""
+    """Fetch logs for a SINGLE application (requires app_id). Use coroot_get_overview_logs for cluster-wide search."""
     if not user_id:
         return json.dumps({"error": "User context not available"})
 
@@ -807,14 +807,14 @@ def coroot_get_nodes(
 def coroot_get_overview_logs(
     severity: Optional[str] = None,
     message_filter: Optional[str] = None,
-    include_k8s_events: bool = False,
+    kubernetes_only: bool = False,
     limit: int = 50,
     lookback_hours: int = 1,
     project_id: Optional[str] = None,
     user_id: Optional[str] = None,
     **kwargs,
 ) -> str:
-    """Search logs across all applications (cross-app log grep). Includes Kubernetes events."""
+    """Search logs across ALL applications at once (no app_id needed), or query Kubernetes events. Use coroot_get_app_logs when you already know the app."""
     if not user_id:
         return json.dumps({"error": "User context not available"})
 
@@ -839,7 +839,7 @@ def coroot_get_overview_logs(
         query["filters"].append({"name": "Severity", "op": "=", "value": severity})
     if message_filter:
         query["filters"].append({"name": "Message", "op": "=", "value": message_filter})
-    if include_k8s_events:
+    if kubernetes_only:
         query["filters"].append({"name": "service.name", "op": "=", "value": "KubernetesEvents"})
 
     try:

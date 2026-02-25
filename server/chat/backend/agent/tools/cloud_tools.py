@@ -1322,7 +1322,8 @@ def get_cloud_tools():
              "Detects kernel-level issues invisible to app logs: OOM kills, TCP failures, disk I/O saturation, "
              "CPU throttling, DNS errors, network packet loss, DB connection pool exhaustion."),
             (coroot_get_app_logs, "coroot_get_app_logs", CorootGetAppLogsArgs,
-             "Fetch application logs from Coroot. Filter by severity (Error/Warning/Info) and message content. "
+             "Fetch logs for a SINGLE application (requires app_id). Use this when you already know which app to "
+             "investigate. Filter by severity (Error/Warning/Info) and message content. "
              "Returns timestamps, messages, attributes, and trace IDs for correlation."),
             (coroot_get_traces, "coroot_get_traces", CorootGetTracesArgs,
              "Search distributed traces across all applications or look up a specific trace by ID. "
@@ -1340,9 +1341,9 @@ def get_cloud_tools():
             (coroot_get_nodes, "coroot_get_nodes", CorootGetNodesArgs,
              "List all infrastructure nodes with kernel-level CPU, memory, disk I/O, and network health."),
             (coroot_get_overview_logs, "coroot_get_overview_logs", CorootGetOverviewLogsArgs,
-             "Search logs across ALL applications (cross-app grep). Finds errors cluster-wide without knowing "
-             "which app is failing. Supports Kubernetes Events filter to surface OOMKilled, Evicted, "
-             "CrashLoopBackOff, FailedScheduling. Use this before drilling into per-app logs."),
+             "Search logs cluster-wide across ALL applications (no app_id needed). Use this when you don't yet know "
+             "which app is failing. Set kubernetes_only=true to get K8s events (OOMKilled, Evicted, CrashLoopBackOff, "
+             "FailedScheduling). Use coroot_get_app_logs instead when you already know the target app."),
             (coroot_get_node_detail, "coroot_get_node_detail", CorootGetNodeDetailArgs,
              "Get full audit report for a specific node (CPU breakdown, memory breakdown, disk per-mount, "
              "network per-interface, GPU). Use after coroot_get_nodes shows a WARNING/CRITICAL node."),

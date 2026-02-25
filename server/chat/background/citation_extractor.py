@@ -114,7 +114,7 @@ class CitationExtractor:
                     tool_name = call_info.get("name", "unknown")
 
                 # Parse the command from tool args or output
-                command = self._extract_command(call_info.get("args", {}), content)
+                command = self._extract_command(call_info.get("args", {}), content, tool_name)
 
                 # Parse output
                 output = self._extract_output(content)
@@ -146,7 +146,7 @@ class CitationExtractor:
         )
         return citations
 
-    def _extract_command(self, args: Dict[str, Any], content: str) -> str:
+    def _extract_command(self, args: Dict[str, Any], content: str, tool_name: str = "") -> str:
         """Extract the command from tool args or parsed output."""
         # Try to get command from args first
         if args:
@@ -159,14 +159,14 @@ class CitationExtractor:
             if "promql" in args:
                 return str(args["promql"])
 
-            # Coroot tools: build a descriptive command from args
-            coroot_args = {k: v for k, v in args.items()
-                          if k not in ("user_id", "session_id", "project_id") and v is not None}
-            if coroot_args:
-                parts = [f"{k}={v}" for k, v in coroot_args.items()]
-                candidate = ", ".join(parts)
-                if candidate:
-                    return candidate
+            if tool_name.startswith("coroot_"):
+                coroot_args = {k: v for k, v in args.items()
+                              if k not in ("user_id", "session_id", "project_id") and v is not None}
+                if coroot_args:
+                    parts = [f"{k}={v}" for k, v in coroot_args.items()]
+                    candidate = ", ".join(parts)
+                    if candidate:
+                        return candidate
 
         # Try to parse from JSON content
         try:
