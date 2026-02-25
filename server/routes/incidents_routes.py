@@ -472,7 +472,7 @@ def get_incident(incident_id: str):
                     except (ValueError, TypeError):
                         logger.debug(
                             "[INCIDENTS] Skipping payload fetch for dynatrace alert_id: %s",
-                            source_alert_id,
+                            str(source_alert_id)[:8] + "..." if source_alert_id else "None",
                         )
 
                 # Log warning if no payload found for any source type
@@ -481,7 +481,7 @@ def get_incident(incident_id: str):
                         "[INCIDENTS] No payload found for incident %s (source_type=%s, source_alert_id=%s)",
                         incident_id,
                         source_type,
-                        source_alert_id,
+                        str(source_alert_id)[:8] + "..." if source_alert_id else "None",
                     )
 
                 # Add raw payload to alert object (sourceUrl already set by _format_incident_response)
