@@ -25,6 +25,7 @@ class PromptSegments:
     model_overlay: str
     failure_recovery: str
     github_context: str
+    bitbucket_context: str = ""
     manual_vm_access: str = ""  # Manual VM access hints with managed keys
     kubectl_onprem: str = ""
     background_mode: str = ""  # Background chat autonomous operation instructions
@@ -588,6 +589,81 @@ def build_github_context_segment(user_id: Optional[str]) -> str:
     except Exception as e:
         import logging
         logging.warning(f"Error building GitHub context segment: {e}")
+        return ""
+
+
+def build_bitbucket_context_segment(user_id: Optional[str]) -> str:
+    """Build Bitbucket context segment with connected account and selected repo info."""
+    import logging
+
+    if not user_id:
+        return ""
+
+    try:
+        from utils.auth.stateless_auth import get_credentials_from_db
+
+        parts: List[str] = []
+
+        bb_creds = get_credentials_from_db(user_id, "bitbucket")
+        if not bb_creds:
+            return ""
+
+        username = bb_creds.get("username", "")
+        display_name = bb_creds.get("display_name", username)
+        if not username and not display_name:
+            return ""
+
+        parts.append("BITBUCKET INTEGRATION CONTEXT:\n")
+        parts.append(f"- Connected Bitbucket account: {display_name or username}\n")
+
+        from chat.backend.agent.tools.bitbucket.utils import _extract_field
+
+        selection = get_credentials_from_db(user_id, "bitbucket_workspace_selection") or {}
+
+        ws_slug = _extract_field(selection.get("workspace"), "slug")
+        repo_slug = _extract_field(selection.get("repository"), "slug")
+        repo_name = _extract_field(selection.get("repository"), "name", default=repo_slug)
+        branch_name = _extract_field(selection.get("branch"), "name")
+
+        if ws_slug:
+            parts.append(f"- Selected workspace: {ws_slug}\n")
+        if repo_slug:
+            parts.append(f"- Selected repository: {repo_name or repo_slug}\n")
+            parts.append(f"- Repository slug: {repo_slug}\n")
+        if branch_name:
+            parts.append(f"- Selected branch: {branch_name}\n")
+
+        parts.append("\n")
+        parts.append("BITBUCKET NATIVE TOOLS AVAILABLE (5 tools, 41 actions):\n\n")
+
+        parts.append("**bitbucket_repos** — Repository, File & Code Operations:\n")
+        parts.append("- list_repos, get_repo, get_file_contents, create_or_update_file, delete_file\n")
+        parts.append("- get_directory_tree, search_code, list_workspaces, get_workspace\n\n")
+
+        parts.append("**bitbucket_branches** — Branch & Commit Operations:\n")
+        parts.append("- list_branches, create_branch, delete_branch, list_commits, get_commit, get_diff, compare\n\n")
+
+        parts.append("**bitbucket_pull_requests** — Pull Request Operations:\n")
+        parts.append("- list_prs, get_pr, create_pr, update_pr, merge_pr, approve_pr, unapprove_pr, decline_pr\n")
+        parts.append("- list_pr_comments, add_pr_comment, get_pr_diff, get_pr_activity\n\n")
+
+        parts.append("**bitbucket_issues** — Issue Operations:\n")
+        parts.append("- list_issues, get_issue, create_issue, update_issue, list_issue_comments, add_issue_comment\n\n")
+
+        parts.append("**bitbucket_pipelines** — CI/CD Pipeline Operations:\n")
+        parts.append("- list_pipelines, get_pipeline, trigger_pipeline, stop_pipeline\n")
+        parts.append("- list_pipeline_steps, get_step_log, get_pipeline_step\n\n")
+
+        parts.append("BITBUCKET TOOL USAGE RULES:\n")
+        parts.append("- When user asks about PRs, issues, repos, or branches WITHOUT specifying a repository, use the selected workspace/repo above.\n")
+        parts.append("- Workspace and repo_slug auto-resolve from saved selection if not passed explicitly.\n")
+        parts.append("- For write operations (create, update, merge, delete), always confirm with the user before proceeding.\n")
+        parts.append("- If no repository is selected and user doesn't specify one, ask which repository they want to work with.\n")
+
+        return "".join(parts)
+
+    except Exception as e:
+        logging.warning(f"Error building Bitbucket context segment: {e}")
         return ""
 
 
@@ -1658,6 +1734,11 @@ def build_prompt_segments(provider_preference: Optional[Any], mode: Optional[str
     if state and hasattr(state, 'user_id'):
         github_context = build_github_context_segment(state.user_id)
 
+    # Build Bitbucket context for authenticated users with Bitbucket connected
+    bitbucket_context = ""
+    if state and hasattr(state, 'user_id'):
+        bitbucket_context = build_bitbucket_context_segment(state.user_id)
+
     # Build kubectl on-prem context for all users
     kubectl_onprem = ""
     if state and hasattr(state, 'user_id'):
@@ -1681,6 +1762,7 @@ def build_prompt_segments(provider_preference: Optional[Any], mode: Optional[str
         failure_recovery=failure_recovery,
         background_mode=background_mode,
         github_context=github_context,
+        bitbucket_context=bitbucket_context,
         manual_vm_access=manual_vm_access,
         kubectl_onprem=kubectl_onprem,
         knowledge_base_memory=knowledge_base_memory,
@@ -1705,6 +1787,8 @@ def assemble_system_prompt(segments: PromptSegments) -> str: #main prompt builde
         parts.append(segments.manual_vm_access)
     if segments.github_context:
         parts.append(segments.github_context)
+    if segments.bitbucket_context:
+        parts.append(segments.bitbucket_context)
     if segments.kubectl_onprem:
         parts.append(segments.kubectl_onprem)
     if segments.prerequisite_checks:
@@ -1762,6 +1846,14 @@ def register_prompt_cache_breakpoints(
         pcm.register_segment(
             segment_name="github_context",
             content=segments.github_context,
+            provider=provider,
+            tenant_id=tenant_id,
+            ttl_s=PREFIX_CACHE_EPHEMERAL_TTL,
+        )
+    if segments.bitbucket_context:
+        pcm.register_segment(
+            segment_name="bitbucket_context",
+            content=segments.bitbucket_context,
             provider=provider,
             tenant_id=tenant_id,
             ttl_s=PREFIX_CACHE_EPHEMERAL_TTL,

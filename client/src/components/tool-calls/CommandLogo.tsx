@@ -132,6 +132,14 @@ const logos = {
       onError={(e) => console.error('Failed to load Dynatrace logo:', e)}
     />
   ),
+  bitbucket: (
+    <img
+      src="/bitbucket.svg"
+      className="w-4 h-4 min-w-4 min-h-4 object-contain"
+      alt="Bitbucket"
+      onError={(e) => console.error('Failed to load Bitbucket logo:', e)}
+    />
+  ),
   web: (
     <svg
       className="w-4 h-4 min-w-4 min-h-4 text-blue-600 dark:text-blue-400"
@@ -205,6 +213,11 @@ const getLogoForCommand = (command: string | any, toolName: string, provider?: s
 
   if (tool.includes('dynatrace') || tool === 'query_dynatrace') {
     return 'dynatrace'
+  }
+
+  // Bitbucket tools
+  if (tool.startsWith('bitbucket_')) {
+    return 'bitbucket'
   }
 
   // IAC tools
