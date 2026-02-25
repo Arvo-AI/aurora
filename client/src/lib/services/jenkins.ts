@@ -37,6 +37,31 @@ export interface JenkinsConnectPayload {
   apiToken: string;
 }
 
+export interface JenkinsDeploymentEvent {
+  id: number;
+  service: string;
+  environment: string;
+  result: string;
+  buildNumber: number;
+  buildUrl: string;
+  commitSha: string;
+  branch: string;
+  repository: string;
+  deployer: string;
+  durationMs: number | null;
+  jobName: string;
+  traceId: string | null;
+  receivedAt: string | null;
+}
+
+export interface JenkinsWebhookInfo {
+  webhookUrl: string;
+  jenkinsfileBasic: string;
+  jenkinsfileOtel: string;
+  jenkinsfileCurl: string;
+  instructions: string[];
+}
+
 const API_BASE = '/api/jenkins';
 
 async function fetchJson<T>(input: RequestInfo, init?: RequestInit): Promise<T> {
@@ -83,5 +108,25 @@ export const jenkinsService = {
       username: (raw?.username as string) ?? payload.username,
       server: (raw?.server as JenkinsServer) ?? null,
     };
+  },
+
+  async getWebhookUrl(): Promise<JenkinsWebhookInfo | null> {
+    try {
+      return await fetchJson<JenkinsWebhookInfo>(`${API_BASE}/webhook-url`);
+    } catch (error) {
+      console.error('[jenkinsService] Failed to fetch webhook URL:', error);
+      return null;
+    }
+  },
+
+  async getDeployments(limit = 10): Promise<{ deployments: JenkinsDeploymentEvent[]; total: number } | null> {
+    try {
+      return await fetchJson<{ deployments: JenkinsDeploymentEvent[]; total: number }>(
+        `${API_BASE}/deployments?limit=${limit}`
+      );
+    } catch (error) {
+      console.error('[jenkinsService] Failed to fetch deployments:', error);
+      return null;
+    }
   },
 };

@@ -712,6 +712,34 @@ def initialize_tables():
                     CREATE INDEX IF NOT EXISTS idx_splunk_alerts_state ON splunk_alerts(alert_state);
                     CREATE INDEX IF NOT EXISTS idx_splunk_alerts_received_at ON splunk_alerts(received_at DESC);
                 """,
+                "jenkins_deployment_events": """
+                    CREATE TABLE IF NOT EXISTS jenkins_deployment_events (
+                        id SERIAL PRIMARY KEY,
+                        user_id VARCHAR(255) NOT NULL,
+                        event_type VARCHAR(50) DEFAULT 'deployment',
+                        service VARCHAR(255),
+                        environment VARCHAR(100),
+                        result VARCHAR(50),
+                        build_number INTEGER,
+                        build_url TEXT,
+                        commit_sha VARCHAR(64),
+                        branch VARCHAR(255),
+                        repository TEXT,
+                        deployer VARCHAR(255),
+                        duration_ms BIGINT,
+                        job_name TEXT,
+                        trace_id VARCHAR(64),
+                        span_id VARCHAR(32),
+                        payload JSONB NOT NULL,
+                        received_at TIMESTAMP NOT NULL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+
+                    CREATE INDEX IF NOT EXISTS idx_jenkins_deploy_user ON jenkins_deployment_events(user_id, received_at DESC);
+                    CREATE INDEX IF NOT EXISTS idx_jenkins_deploy_service ON jenkins_deployment_events(service, received_at DESC);
+                    CREATE INDEX IF NOT EXISTS idx_jenkins_deploy_commit ON jenkins_deployment_events(commit_sha);
+                    CREATE INDEX IF NOT EXISTS idx_jenkins_deploy_trace ON jenkins_deployment_events(trace_id) WHERE trace_id IS NOT NULL;
+                """,
                 "kubectl_agent_tokens": """
                     CREATE TABLE IF NOT EXISTS kubectl_agent_tokens (
                         id SERIAL PRIMARY KEY,
@@ -836,6 +864,7 @@ def initialize_tables():
             rls_tables.append("netdata_alerts")
             rls_tables.append("netdata_verification_tokens")
             rls_tables.append("splunk_alerts")
+            rls_tables.append("jenkins_deployment_events")
 
             # Add incidents table
             # Note: incident_suggestions and incident_thoughts are child tables with CASCADE DELETE

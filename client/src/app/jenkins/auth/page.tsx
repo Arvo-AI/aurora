@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useToast } from "@/hooks/use-toast";
-import { jenkinsService, JenkinsStatus } from "@/lib/services/jenkins";
+import { jenkinsService, JenkinsStatus, JenkinsWebhookInfo, JenkinsDeploymentEvent } from "@/lib/services/jenkins";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -12,11 +12,14 @@ import { Badge } from "@/components/ui/badge";
 import {
   Check,
   ChevronLeft,
+  Copy,
   ExternalLink,
   Eye,
   EyeOff,
   Loader2,
+  Rocket,
   ShieldCheck,
+  Webhook,
 } from "lucide-react";
 
 const getUserFriendlyError = (err: unknown): string => {
@@ -41,6 +44,32 @@ const getUserFriendlyError = (err: unknown): string => {
 
 const CACHE_KEY = "jenkins_connection_status";
 
+const formatTimeAgo = (date: Date): string => {
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  const diffMins = Math.floor(diffMs / 60000);
+  const diffHours = Math.floor(diffMs / 3600000);
+  const diffDays = Math.floor(diffMs / 86400000);
+  
+  if (diffMins < 1) return "just now";
+  if (diffMins < 60) return `${diffMins}m ago`;
+  if (diffHours < 24) return `${diffHours}h ago`;
+  if (diffDays < 7) return `${diffDays}d ago`;
+  return date.toLocaleDateString();
+};
+
+const formatDuration = (ms: number): string => {
+  if (ms < 1000) return `${ms}ms`;
+  const secs = Math.floor(ms / 1000);
+  if (secs < 60) return `${secs}s`;
+  const mins = Math.floor(secs / 60);
+  const remainingSecs = secs % 60;
+  if (mins < 60) return remainingSecs > 0 ? `${mins}m ${remainingSecs}s` : `${mins}m`;
+  const hours = Math.floor(mins / 60);
+  const remainingMins = mins % 60;
+  return remainingMins > 0 ? `${hours}h ${remainingMins}m` : `${hours}h`;
+};
+
 export default function JenkinsAuthPage() {
   const router = useRouter();
   const { toast } = useToast();
@@ -52,6 +81,9 @@ export default function JenkinsAuthPage() {
   const [loading, setLoading] = useState(false);
   const [checkingStatus, setCheckingStatus] = useState(true);
   const [expandedStep, setExpandedStep] = useState<number | null>(1);
+  const [webhookInfo, setWebhookInfo] = useState<JenkinsWebhookInfo | null>(null);
+  const [deployments, setDeployments] = useState<JenkinsDeploymentEvent[]>([]);
+  const [copied, setCopied] = useState(false);
 
   const toggleStep = (step: number) => {
     setExpandedStep(expandedStep === step ? null : step);
@@ -95,6 +127,19 @@ export default function JenkinsAuthPage() {
   useEffect(() => {
     loadStatus();
   }, []);
+
+  useEffect(() => {
+    if (status?.connected) {
+      jenkinsService.getWebhookUrl().then(info => { if (info) setWebhookInfo(info); });
+      jenkinsService.getDeployments(10).then(data => { if (data) setDeployments(data.deployments); });
+    }
+  }, [status?.connected]);
+
+  const copyToClipboard = (text: string) => {
+    navigator.clipboard.writeText(text);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
 
   const handleConnect = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -338,6 +383,175 @@ export default function JenkinsAuthPage() {
               )}
             </CardContent>
           </Card>
+
+          {/* Webhook Configuration Card */}
+          {webhookInfo && (
+            <Card>
+              <CardHeader className="pb-3">
+                <div className="flex items-center gap-2">
+                  <Webhook className="h-5 w-5 text-orange-600" />
+                  <CardTitle className="text-lg">Send Deployment Events to Aurora</CardTitle>
+                </div>
+                <CardDescription>
+                  Add this to your Jenkinsfile to notify Aurora when builds complete
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                {/* Main snippet - curl by default */}
+                <div className="relative">
+                  <pre className="text-xs bg-muted p-3 rounded-lg whitespace-pre-wrap break-all pr-20">
+                    <code>{webhookInfo.jenkinsfileCurl}</code>
+                  </pre>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    className="absolute top-2 right-2 h-8 gap-1.5"
+                    onClick={() => copyToClipboard(webhookInfo.jenkinsfileCurl)}
+                  >
+                    {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+                    {copied ? "Copied!" : "Copy"}
+                  </Button>
+                </div>
+
+                {/* Alternative snippets - collapsed */}
+                <details className="text-xs group">
+                  <summary className="cursor-pointer text-muted-foreground hover:text-foreground flex items-center gap-1">
+                    <svg className="h-3 w-3 transition-transform group-open:rotate-90" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                    </svg>
+                    Alternative snippets (with plugins)
+                  </summary>
+                  <div className="mt-3 space-y-3 pl-4 border-l-2 border-muted">
+                    {/* httpRequest option */}
+                    <div>
+                      <div className="flex items-center justify-between mb-1.5">
+                        <span className="font-medium">With HTTP Request Plugin</span>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="h-6 text-xs gap-1"
+                          onClick={() => copyToClipboard(webhookInfo.jenkinsfileBasic)}
+                        >
+                          <Copy className="h-3 w-3" />
+                          Copy
+                        </Button>
+                      </div>
+                      <p className="text-muted-foreground mb-2">
+                        Better error handling. Requires{" "}
+                        <a href="https://plugins.jenkins.io/http_request/" target="_blank" rel="noopener noreferrer" className="underline hover:text-foreground">
+                          HTTP Request Plugin
+                        </a>
+                      </p>
+                      <pre className="bg-muted/50 p-2 rounded text-[11px] whitespace-pre-wrap break-all">
+                        <code>{webhookInfo.jenkinsfileBasic}</code>
+                      </pre>
+                    </div>
+
+                    {/* OTel option */}
+                    <div>
+                      <div className="flex items-center justify-between mb-1.5">
+                        <span className="font-medium">With Trace Correlation</span>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="h-6 text-xs gap-1"
+                          onClick={() => copyToClipboard(webhookInfo.jenkinsfileOtel)}
+                        >
+                          <Copy className="h-3 w-3" />
+                          Copy
+                        </Button>
+                      </div>
+                      <p className="text-muted-foreground mb-2">
+                        Links Jenkins builds to application traces. Requires{" "}
+                        <a href="https://plugins.jenkins.io/http_request/" target="_blank" rel="noopener noreferrer" className="underline hover:text-foreground">
+                          HTTP Request
+                        </a>
+                        {" + "}
+                        <a href="https://plugins.jenkins.io/opentelemetry/" target="_blank" rel="noopener noreferrer" className="underline hover:text-foreground">
+                          OpenTelemetry
+                        </a>
+                        {" plugins"}
+                      </p>
+                      <pre className="bg-muted/50 p-2 rounded text-[11px] whitespace-pre-wrap break-all">
+                        <code>{webhookInfo.jenkinsfileOtel}</code>
+                      </pre>
+                    </div>
+                  </div>
+                </details>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Recent Deployments Card */}
+          {deployments.length > 0 && (
+            <Card>
+              <CardHeader className="pb-3">
+                <div className="flex items-center gap-2">
+                  <Rocket className="h-5 w-5 text-orange-600" />
+                  <CardTitle className="text-lg">Recent Deployments</CardTitle>
+                </div>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-2">
+                  {deployments.map((dep) => {
+                    const timeAgo = dep.receivedAt ? formatTimeAgo(new Date(dep.receivedAt)) : null;
+                    const duration = dep.durationMs ? formatDuration(dep.durationMs) : null;
+                    
+                    return (
+                      <div key={dep.id} className="flex items-start justify-between p-3 rounded-lg border bg-card hover:bg-muted/50 transition-colors">
+                        <div className="flex-1 min-w-0 space-y-1">
+                          {/* Row 1: Result + Service + Environment */}
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <Badge 
+                              variant={dep.result === "SUCCESS" ? "default" : dep.result === "FAILURE" ? "destructive" : "secondary"} 
+                              className="h-5 text-xs shrink-0"
+                            >
+                              {dep.result}
+                            </Badge>
+                            <span className="font-medium text-sm">{dep.service}</span>
+                            <span className="text-xs text-muted-foreground">→ {dep.environment}</span>
+                          </div>
+                          {/* Row 2: Build # + Duration + Time + Deployer */}
+                          <div className="flex items-center gap-2 text-xs text-muted-foreground flex-wrap">
+                            <span className="font-mono">#{dep.buildNumber}</span>
+                            {duration && (
+                              <>
+                                <span>•</span>
+                                <span>{duration}</span>
+                              </>
+                            )}
+                            {timeAgo && (
+                              <>
+                                <span>•</span>
+                                <span>{timeAgo}</span>
+                              </>
+                            )}
+                            {dep.deployer && dep.deployer !== "automated" && (
+                              <>
+                                <span>•</span>
+                                <span>by {dep.deployer}</span>
+                              </>
+                            )}
+                          </div>
+                        </div>
+                        {dep.buildUrl && (
+                          <a
+                            href={dep.buildUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="ml-3 p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted rounded transition-colors shrink-0"
+                            title="View in Jenkins"
+                          >
+                            <ExternalLink className="h-4 w-4" />
+                          </a>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </CardContent>
+            </Card>
+          )}
 
           {/* Disconnect */}
           <div className="flex items-center justify-between px-1">

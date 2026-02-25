@@ -1,4 +1,5 @@
 import logging
+import os
 from typing import Any, Dict, Optional
 
 from flask import Blueprint, jsonify, request
@@ -227,3 +228,170 @@ def disconnect():
     except Exception as exc:
         logger.exception("[JENKINS] Failed to disconnect user %s: %s", user_id, exc)
         return jsonify({"error": "Failed to disconnect Jenkins"}), 500
+
+
+# ------------------------------------------------------------------
+# Webhook: receive deployment events from Jenkinsfile post blocks
+# ------------------------------------------------------------------
+
+@jenkins_bp.route("/webhook/<user_id>", methods=["POST", "OPTIONS"])
+def deployment_webhook(user_id: str):
+    """Receive a deployment event webhook from a Jenkins pipeline."""
+    if request.method == "OPTIONS":
+        return create_cors_response()
+
+    if not user_id:
+        return jsonify({"error": "user_id is required"}), 400
+
+    payload = request.get_json(silent=True) or {}
+    logger.info(
+        "[JENKINS] Received deployment webhook for user %s: service=%s result=%s",
+        user_id,
+        payload.get("service") or payload.get("job_name", "unknown"),
+        payload.get("result", "unknown"),
+    )
+
+    from routes.jenkins.tasks import process_jenkins_deployment
+
+    metadata = {
+        "headers": {k: v for k, v in request.headers if k.lower() != "authorization"},
+        "remote_addr": request.remote_addr,
+    }
+    process_jenkins_deployment.delay(payload, metadata, user_id)
+
+    return jsonify({"received": True})
+
+
+@jenkins_bp.route("/webhook-url", methods=["GET", "OPTIONS"])
+def get_webhook_url():
+    """Return the webhook URL and Jenkinsfile snippets for the authenticated user."""
+    if request.method == "OPTIONS":
+        return create_cors_response()
+
+    user_id = get_user_id_from_request()
+    if not user_id:
+        return jsonify({"error": "User authentication required"}), 401
+
+    backend_url = os.getenv("BACKEND_URL", "").rstrip("/")
+    if not backend_url:
+        backend_url = os.getenv("AURORA_BACKEND_URL", request.host_url.rstrip("/"))
+
+    webhook_url = f"{backend_url}/jenkins/webhook/{user_id}"
+
+    # Compact snippets - just the post block users need to add
+    jenkinsfile_basic = f'''post {{
+  always {{
+    httpRequest(
+      url: "{webhook_url}",
+      httpMode: 'POST',
+      contentType: 'APPLICATION_JSON',
+      requestBody: """{{"service":"${{env.JOB_NAME}}","environment":"${{params.ENVIRONMENT ?: 'production'}}","result":"${{currentBuild.currentResult}}","build_number":${{env.BUILD_NUMBER}},"build_url":"${{env.BUILD_URL}}","git":{{"commit_sha":"${{env.GIT_COMMIT}}","branch":"${{env.GIT_BRANCH}}"}}}}"""
+    )
+  }}
+}}'''
+
+    jenkinsfile_otel = f'''post {{
+  always {{
+    httpRequest(
+      url: "{webhook_url}",
+      httpMode: 'POST',
+      contentType: 'APPLICATION_JSON',
+      requestBody: """{{"service":"${{env.JOB_NAME}}","environment":"${{params.ENVIRONMENT ?: 'production'}}","result":"${{currentBuild.currentResult}}","build_number":${{env.BUILD_NUMBER}},"build_url":"${{env.BUILD_URL}}","git":{{"commit_sha":"${{env.GIT_COMMIT}}","branch":"${{env.GIT_BRANCH}}"}},"trace_id":"${{env.TRACEPARENT?.split('-')?.getAt(1) ?: ''}}","span_id":"${{env.TRACEPARENT?.split('-')?.getAt(2) ?: ''}}"}}"""
+    )
+  }}
+}}'''
+
+    jenkinsfile_curl = f'''post {{
+  always {{
+    sh \'\'\'
+      curl -sS -X POST "{webhook_url}" \\
+        -H "Content-Type: application/json" \\
+        -d "{{\\"service\\":\\"$JOB_NAME\\",\\"result\\":\\"$BUILD_RESULT\\",\\"build_number\\":$BUILD_NUMBER,\\"build_url\\":\\"$BUILD_URL\\",\\"git\\":{{\\"commit_sha\\":\\"$GIT_COMMIT\\",\\"branch\\":\\"$GIT_BRANCH\\"}}}}"
+    \'\'\'
+  }}
+}}'''
+
+    return jsonify({
+        "webhookUrl": webhook_url,
+        "jenkinsfileBasic": jenkinsfile_basic,
+        "jenkinsfileOtel": jenkinsfile_otel,
+        "jenkinsfileCurl": jenkinsfile_curl,
+        "instructions": [
+            "1. Add the httpRequest call to the post block of your Jenkinsfile",
+            "2. Ensure the HTTP Request Plugin is installed on your Jenkins instance",
+            "3. Aurora will receive deployment events and correlate them with incidents",
+            "4. (Optional) Install the OpenTelemetry plugin for W3C Trace Context propagation",
+        ],
+    })
+
+
+@jenkins_bp.route("/deployments", methods=["GET", "OPTIONS"])
+def list_deployments():
+    """List recent Jenkins deployment events for the authenticated user."""
+    if request.method == "OPTIONS":
+        return create_cors_response()
+
+    user_id = get_user_id_from_request()
+    if not user_id:
+        return jsonify({"error": "User authentication required"}), 401
+
+    limit = request.args.get("limit", 20, type=int)
+    offset = request.args.get("offset", 0, type=int)
+    service_filter = request.args.get("service")
+
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                if service_filter:
+                    cursor.execute(
+                        """SELECT id, service, environment, result, build_number, build_url,
+                                  commit_sha, branch, repository, deployer, duration_ms,
+                                  job_name, trace_id, received_at
+                           FROM jenkins_deployment_events
+                           WHERE user_id = %s AND service = %s
+                           ORDER BY received_at DESC
+                           LIMIT %s OFFSET %s""",
+                        (user_id, service_filter, limit, offset),
+                    )
+                else:
+                    cursor.execute(
+                        """SELECT id, service, environment, result, build_number, build_url,
+                                  commit_sha, branch, repository, deployer, duration_ms,
+                                  job_name, trace_id, received_at
+                           FROM jenkins_deployment_events
+                           WHERE user_id = %s
+                           ORDER BY received_at DESC
+                           LIMIT %s OFFSET %s""",
+                        (user_id, limit, offset),
+                    )
+                rows = cursor.fetchall()
+
+                cursor.execute(
+                    "SELECT COUNT(*) FROM jenkins_deployment_events WHERE user_id = %s",
+                    (user_id,),
+                )
+                total = cursor.fetchone()[0]
+
+        deployments = []
+        for r in rows:
+            deployments.append({
+                "id": r[0],
+                "service": r[1],
+                "environment": r[2],
+                "result": r[3],
+                "buildNumber": r[4],
+                "buildUrl": r[5],
+                "commitSha": r[6],
+                "branch": r[7],
+                "repository": r[8],
+                "deployer": r[9],
+                "durationMs": r[10],
+                "jobName": r[11],
+                "traceId": r[12],
+                "receivedAt": r[13].isoformat() if r[13] else None,
+            })
+
+        return jsonify({"deployments": deployments, "total": total, "limit": limit, "offset": offset})
+    except Exception as exc:
+        logger.exception("[JENKINS] Failed to list deployments for user %s", user_id)
+        return jsonify({"error": "Failed to list deployments"}), 500
