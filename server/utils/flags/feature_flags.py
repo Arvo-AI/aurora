@@ -23,6 +23,11 @@ def is_confluence_enabled() -> bool:
     return os.getenv("NEXT_PUBLIC_ENABLE_CONFLUENCE", "false").lower() == "true"
 
 
+def is_bitbucket_enabled() -> bool:
+    """Check if Bitbucket integration is enabled via environment variable."""
+    return os.getenv("NEXT_PUBLIC_ENABLE_BITBUCKET", "false").lower() == "true"
+
+  
 def is_dynatrace_enabled() -> bool:
     """Check if Dynatrace integration is enabled via environment variable."""
     return os.getenv("NEXT_PUBLIC_ENABLE_DYNATRACE", "false").lower() == "true"

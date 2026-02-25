@@ -14,6 +14,7 @@ import { ConnectorDialogs } from "./ConnectorDialogs";
 import { ConnectorCardContent } from "./ConnectorCardContent";
 import type { ConnectorConfig } from "./types";
 import { useGitHubStatus } from "@/hooks/use-github-status";
+import { useBitbucketStatus } from "@/hooks/use-bitbucket-status";
 import { useGraphDiscoveryStatus } from "@/hooks/use-graph-discovery-status";
 
 const slackService = isSlackEnabled() ? require("@/lib/services/slack").slackService : null;
@@ -26,6 +27,7 @@ export default function ConnectorCard({ connector }: ConnectorCardProps) {
   const router = useRouter();
   const { toast } = useToast();
   const [showGitHubDialog, setShowGitHubDialog] = useState(false);
+  const [showBitbucketDialog, setShowBitbucketDialog] = useState(false);
   const [showGcpDialog, setShowGcpDialog] = useState(false);
   const [showOvhDialog, setShowOvhDialog] = useState(false);
   const [showScalewayDialog, setShowScalewayDialog] = useState(false);
@@ -35,6 +37,7 @@ export default function ConnectorCard({ connector }: ConnectorCardProps) {
   
   // Single source of truth for GitHub status
   const githubStatus = useGitHubStatus(connector.id === "github" ? userId : null);
+  const bitbucketStatus = useBitbucketStatus(connector.id === "bitbucket" ? userId : null);
 
   const {
     isConnected,
@@ -107,6 +110,11 @@ export default function ConnectorCard({ connector }: ConnectorCardProps) {
       } else {
         setShowGitHubDialog(true);
       }
+      return;
+    }
+
+    if (connector.id === "bitbucket") {
+      setShowBitbucketDialog(true);
       return;
     }
 
@@ -185,6 +193,48 @@ export default function ConnectorCard({ connector }: ConnectorCardProps) {
 
   const IconComponent = connector.icon;
 
+  function renderStatusBadge() {
+    // GitHub and Bitbucket use two-tier status (authenticated vs fully connected)
+    const devToolStatus =
+      connector.id === "github" ? githubStatus :
+      connector.id === "bitbucket" ? bitbucketStatus :
+      null;
+
+    if (devToolStatus?.isAuthenticated) {
+      return devToolStatus.isConnected ? (
+        <div className="flex items-center gap-1 text-green-600 dark:text-green-500">
+          <Check className="h-4 w-4" />
+          <span className="text-xs font-medium">Connected</span>
+        </div>
+      ) : (
+        <div className="flex items-center gap-1 text-yellow-600 dark:text-yellow-500">
+          <AlertCircle className="h-4 w-4" />
+          <span className="text-xs font-medium">Available</span>
+        </div>
+      );
+    }
+
+    if (connector.id === "onprem" && isCheckingConnection) {
+      return (
+        <div className="flex items-center gap-1 text-muted-foreground">
+          <Loader2 className="h-4 w-4 animate-spin" />
+          <span className="text-xs font-medium">Checking...</span>
+        </div>
+      );
+    }
+
+    if (isConnected) {
+      return (
+        <div className="flex items-center gap-1 text-green-600 dark:text-green-500">
+          <Check className="h-4 w-4" />
+          <span className="text-xs font-medium">Connected</span>
+        </div>
+      );
+    }
+
+    return null;
+  }
+
   return (
     <>
       <Card className="flex flex-col hover:shadow-lg transition-all duration-200 hover:border-primary/50">
@@ -209,29 +259,7 @@ export default function ConnectorCard({ connector }: ConnectorCardProps) {
                 )}
             </div>
           </div>
-            {connector.id === "github" && githubStatus.isAuthenticated ? (
-              githubStatus.isConnected ? (
-                <div className="flex items-center gap-1 text-green-600 dark:text-green-500">
-                  <Check className="h-4 w-4" />
-                  <span className="text-xs font-medium">Connected</span>
-                </div>
-              ) : (
-                <div className="flex items-center gap-1 text-yellow-600 dark:text-yellow-500">
-                  <AlertCircle className="h-4 w-4" />
-                  <span className="text-xs font-medium">Available</span>
-                </div>
-              )
-            ) : connector.id === "onprem" && isCheckingConnection ? (
-              <div className="flex items-center gap-1 text-muted-foreground">
-                <Loader2 className="h-4 w-4 animate-spin" />
-                <span className="text-xs font-medium">Checking...</span>
-              </div>
-            ) : isConnected ? (
-              <div className="flex items-center gap-1 text-green-600 dark:text-green-500">
-                <Check className="h-4 w-4" />
-                <span className="text-xs font-medium">Connected</span>
-              </div>
-            ) : null}
+            {renderStatusBadge()}
           </div>
         </CardHeader>
         
@@ -362,6 +390,7 @@ export default function ConnectorCard({ connector }: ConnectorCardProps) {
       <ConnectorDialogs
         connectorId={connector.id}
         showGitHubDialog={showGitHubDialog}
+        showBitbucketDialog={showBitbucketDialog}
         showGcpDialog={showGcpDialog}
         showAzureDialog={showAzureDialog}
         showOvhDialog={showOvhDialog}
@@ -372,6 +401,14 @@ export default function ConnectorCard({ connector }: ConnectorCardProps) {
             setTimeout(() => {
               checkGitHubStatus();
               githubStatus.refresh();
+            }, 500);
+          }
+        }}
+        onBitbucketDialogChange={(open) => {
+          setShowBitbucketDialog(open);
+          if (!open) {
+            setTimeout(() => {
+              bitbucketStatus.refresh();
             }, 500);
           }
         }}
