@@ -46,6 +46,9 @@ def _build_client_from_creds(
         return get_coroot_client(user_id, url=url, email=email, password=password)
     except CorootAPIError:
         return None
+    except Exception as exc:
+        logger.error("[COROOT] Unexpected error building client for user %s: %s", user_id, exc)
+        return None
 
 
 # ------------------------------------------------------------------

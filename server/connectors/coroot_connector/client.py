@@ -28,6 +28,8 @@ CLIENT_CACHE_TTL = 36000  # 10 hours — within the 7-day cookie TTL
 _client_cache: Dict[str, Tuple["CorootClient", float]] = {}
 _cache_lock = threading.Lock()
 _user_locks: Dict[str, threading.Lock] = {}
+_last_sweep: float = 0.0
+_SWEEP_INTERVAL: float = CLIENT_CACHE_TTL / 2
 
 
 class CorootAPIError(Exception):
@@ -41,6 +43,23 @@ def _get_user_lock(user_id: str) -> threading.Lock:
             lock = threading.Lock()
             _user_locks[user_id] = lock
         return lock
+
+
+def _sweep_stale_locks() -> None:
+    """Remove ``_user_locks`` entries whose user_id has no live cache entry.
+
+    Must be called while holding ``_cache_lock``.
+    """
+    global _last_sweep
+    now = time.monotonic()
+    if now - _last_sweep < _SWEEP_INTERVAL:
+        return
+    _last_sweep = now
+    stale = [uid for uid in _user_locks if uid not in _client_cache]
+    for uid in stale:
+        del _user_locks[uid]
+    if stale:
+        logger.debug("[COROOT] Swept %d stale user locks", len(stale))
 
 
 def get_coroot_client(
@@ -77,14 +96,21 @@ def get_coroot_client(
 
         with _cache_lock:
             _client_cache[user_id] = (client, now)
+            _sweep_stale_locks()
         return client
 
 
 def invalidate_coroot_client(user_id: str) -> None:
     """Remove *user_id*'s client from the cache (e.g. on disconnect)."""
     with _cache_lock:
-        _client_cache.pop(user_id, None)
+        entry = _client_cache.pop(user_id, None)
         _user_locks.pop(user_id, None)
+    if entry is not None:
+        client = entry[0]
+        try:
+            client._session.close()
+        except Exception:
+            pass
 
 
 class CorootClient:
@@ -381,6 +407,9 @@ class CorootClient:
 
         Returns ``{"chart": {"ctx": {...}, "series": [...]}}`` where each
         series has ``name`` (label string) and ``data`` (list of values).
+
+        Caveat: panel config is sent as a query param; long PromQL may
+        exceed URL length limits (2–8 KB). Use POST if Coroot adds support.
         """
         panel_cfg = json.dumps({
             "name": "",

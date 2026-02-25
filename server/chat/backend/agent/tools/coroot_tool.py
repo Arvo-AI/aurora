@@ -6,10 +6,11 @@ deployments, and node status.  Credentials are loaded from Vault via
 ``get_token_data(user_id, "coroot")``.
 """
 
+import functools
 import json
 import logging
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -113,13 +114,18 @@ def _clamp_limit(value: Any, default: int = 50) -> int:
 
 def _truncate(text: str, limit: int = MAX_OUTPUT_CHARS) -> str:
     """Character-level safety net. Only used for detail endpoints where
-    record-level truncation isn't practical. Always produces valid JSON
-    by wrapping the cut in a proper object."""
+    record-level truncation isn't practical. The returned envelope is
+    valid JSON, but ``partial_data`` is a raw prefix of the original
+    text and is NOT guaranteed to be syntactically valid JSON itself."""
     if len(text) <= limit:
         return text
     return json.dumps({
         "_truncated": True,
-        "_message": "Response exceeded size limit. Use filters or a shorter lookback_hours to narrow the query.",
+        "_message": (
+            "Response exceeded size limit and was cut off. "
+            "'partial_data' is a truncated raw text prefix and may not be valid JSON. "
+            "Use filters or a shorter lookback_hours to narrow the query."
+        ),
         "partial_data": text[:limit],
     })
 
@@ -299,36 +305,65 @@ def _resolve_project(client: CorootClient, project_id: Optional[str]) -> Optiona
     return _default_project(client)
 
 
+def _coroot_tool(fn: Callable[..., str]) -> Callable[..., str]:
+    """Decorator that centralizes the boilerplate shared by every Coroot tool.
+
+    Handles: user_id validation, client construction, project resolution,
+    lookback clamping, timestamp window computation, and CorootAPIError /
+    generic exception wrapping.
+
+    The decorated function receives ``(client, pid, from_ts, to_ts, **kwargs)``
+    and only needs to implement the API call + response formatting.
+    """
+
+    @functools.wraps(fn)
+    def wrapper(
+        *,
+        user_id: Optional[str] = None,
+        lookback_hours: int = 1,
+        project_id: Optional[str] = None,
+        **kwargs: Any,
+    ) -> str:
+        if not user_id:
+            return json.dumps({"error": "User context not available"})
+
+        lookback_hours = _clamp_lookback_hours(lookback_hours)
+
+        client = _build_client(user_id)
+        if not client:
+            return json.dumps({"error": "Coroot not connected. Ask the user to connect Coroot first."})
+
+        pid = _resolve_project(client, project_id)
+        if not pid:
+            return json.dumps({"error": "No Coroot project found. Check the connection."})
+
+        to_ts = _now_ts()
+        from_ts = to_ts - (lookback_hours * 3600)
+
+        try:
+            return fn(client=client, pid=pid, from_ts=from_ts, to_ts=to_ts,
+                      lookback_hours=lookback_hours, **kwargs)
+        except CorootAPIError as exc:
+            return json.dumps({"error": f"Coroot API error: {exc}"})
+        except Exception as exc:
+            logger.error("[COROOT-TOOL] %s failed: %s", fn.__name__, exc)
+            return json.dumps({"error": f"Unexpected error contacting Coroot: {exc}"})
+
+    return wrapper
+
+
+@_coroot_tool
 def coroot_get_incidents(
+    *,
+    client: CorootClient,
+    pid: str,
+    from_ts: int,
+    to_ts: int,
     lookback_hours: int = 24,
-    project_id: Optional[str] = None,
-    user_id: Optional[str] = None,
     **kwargs,
 ) -> str:
     """List recent incidents from Coroot with RCA summaries."""
-    if not user_id:
-        return json.dumps({"error": "User context not available"})
-
-    lookback_hours = _clamp_lookback_hours(lookback_hours)
-
-    client = _build_client(user_id)
-    if not client:
-        return json.dumps({"error": "Coroot not connected. Ask the user to connect Coroot first."})
-
-    pid = _resolve_project(client, project_id)
-    if not pid:
-        return json.dumps({"error": "No Coroot project found. Check the connection."})
-
-    to_ts = _now_ts()
-    from_ts = to_ts - (lookback_hours * 3600)
-
-    try:
-        raw = client.get_incidents(pid, from_ts, to_ts)
-    except CorootAPIError as exc:
-        return json.dumps({"error": f"Coroot API error: {exc}"})
-    except Exception as exc:
-        logger.error("[COROOT-TOOL] Unexpected error fetching incidents: %s", exc)
-        return json.dumps({"error": f"Unexpected error contacting Coroot: {exc}"})
+    raw = client.get_incidents(pid, from_ts, to_ts)
 
     if not raw:
         return json.dumps({"incidents": [], "message": f"No incidents in the last {lookback_hours}h"})
@@ -368,37 +403,19 @@ def coroot_get_incidents(
     return _safe_json(result)
 
 
+@_coroot_tool
 def coroot_get_incident_detail(
+    *,
+    client: CorootClient,
+    pid: str,
+    from_ts: int,
+    to_ts: int,
     incident_key: str,
     lookback_hours: int = 6,
-    project_id: Optional[str] = None,
-    user_id: Optional[str] = None,
     **kwargs,
 ) -> str:
     """Get full detail for a specific incident including RCA and propagation map."""
-    if not user_id:
-        return json.dumps({"error": "User context not available"})
-
-    lookback_hours = _clamp_lookback_hours(lookback_hours)
-
-    client = _build_client(user_id)
-    if not client:
-        return json.dumps({"error": "Coroot not connected."})
-
-    pid = _resolve_project(client, project_id)
-    if not pid:
-        return json.dumps({"error": "No Coroot project found."})
-
-    to_ts = _now_ts()
-    from_ts = to_ts - (lookback_hours * 3600)
-
-    try:
-        raw = client.get_incident_detail(pid, incident_key, from_ts, to_ts)
-    except CorootAPIError as exc:
-        return json.dumps({"error": f"Coroot API error: {exc}"})
-    except Exception as exc:
-        logger.error("[COROOT-TOOL] Unexpected error fetching incident detail: %s", exc)
-        return json.dumps({"error": f"Unexpected error contacting Coroot: {exc}"})
+    raw = client.get_incident_detail(pid, incident_key, from_ts, to_ts)
 
     if not raw:
         return json.dumps({
@@ -409,36 +426,18 @@ def coroot_get_incident_detail(
     return _safe_json(raw)
 
 
+@_coroot_tool
 def coroot_get_applications(
+    *,
+    client: CorootClient,
+    pid: str,
+    from_ts: int,
+    to_ts: int,
     lookback_hours: int = 1,
-    project_id: Optional[str] = None,
-    user_id: Optional[str] = None,
     **kwargs,
 ) -> str:
     """List all applications with health status from Coroot."""
-    if not user_id:
-        return json.dumps({"error": "User context not available"})
-
-    lookback_hours = _clamp_lookback_hours(lookback_hours)
-
-    client = _build_client(user_id)
-    if not client:
-        return json.dumps({"error": "Coroot not connected."})
-
-    pid = _resolve_project(client, project_id)
-    if not pid:
-        return json.dumps({"error": "No Coroot project found."})
-
-    to_ts = _now_ts()
-    from_ts = to_ts - (lookback_hours * 3600)
-
-    try:
-        raw = client.get_applications(pid, from_ts, to_ts)
-    except CorootAPIError as exc:
-        return json.dumps({"error": f"Coroot API error: {exc}"})
-    except Exception as exc:
-        logger.error("[COROOT-TOOL] Unexpected error fetching applications: %s", exc)
-        return json.dumps({"error": f"Unexpected error contacting Coroot: {exc}"})
+    raw = client.get_applications(pid, from_ts, to_ts)
 
     app_list = _extract_field(raw, "applications")
     if not app_list:
@@ -477,37 +476,19 @@ def coroot_get_applications(
     return _safe_json(result)
 
 
+@_coroot_tool
 def coroot_get_app_detail(
+    *,
+    client: CorootClient,
+    pid: str,
+    from_ts: int,
+    to_ts: int,
     app_id: str,
     lookback_hours: int = 1,
-    project_id: Optional[str] = None,
-    user_id: Optional[str] = None,
     **kwargs,
 ) -> str:
     """Get full audit reports for one application (SLO, CPU, Memory, Net, Logs, DB, etc.)."""
-    if not user_id:
-        return json.dumps({"error": "User context not available"})
-
-    lookback_hours = _clamp_lookback_hours(lookback_hours)
-
-    client = _build_client(user_id)
-    if not client:
-        return json.dumps({"error": "Coroot not connected."})
-
-    pid = _resolve_project(client, project_id)
-    if not pid:
-        return json.dumps({"error": "No Coroot project found."})
-
-    to_ts = _now_ts()
-    from_ts = to_ts - (lookback_hours * 3600)
-
-    try:
-        raw = client.get_app_detail(pid, app_id, from_ts, to_ts)
-    except CorootAPIError as exc:
-        return json.dumps({"error": f"Coroot API error: {exc}"})
-    except Exception as exc:
-        logger.error("[COROOT-TOOL] Unexpected error fetching app detail: %s", exc)
-        return json.dumps({"error": f"Unexpected error contacting Coroot: {exc}"})
+    raw = client.get_app_detail(pid, app_id, from_ts, to_ts)
 
     result: Dict[str, Any] = {"app_id": app_id}
 
@@ -529,7 +510,7 @@ def coroot_get_app_detail(
             for d in (app_map.get("dependencies") or [])
         ]
 
-    reports = raw.get("reports") or [] if raw else []
+    reports = (raw.get("reports") or []) if raw else []
     failing_checks = []
     for report in reports:
         for check in (report.get("checks") or []):
@@ -552,34 +533,23 @@ def coroot_get_app_detail(
     return _safe_json(result)
 
 
+@_coroot_tool
 def coroot_get_app_logs(
+    *,
+    client: CorootClient,
+    pid: str,
+    from_ts: int,
+    to_ts: int,
     app_id: str,
     severity: Optional[str] = None,
     message_filter: Optional[str] = None,
     source: str = "otel",
     limit: int = 50,
     lookback_hours: int = 1,
-    project_id: Optional[str] = None,
-    user_id: Optional[str] = None,
     **kwargs,
 ) -> str:
     """Fetch logs for a SINGLE application (requires app_id). Use coroot_get_overview_logs for cluster-wide search."""
-    if not user_id:
-        return json.dumps({"error": "User context not available"})
-
-    lookback_hours = _clamp_lookback_hours(lookback_hours)
     limit = _clamp_limit(limit, default=50)
-
-    client = _build_client(user_id)
-    if not client:
-        return json.dumps({"error": "Coroot not connected."})
-
-    pid = _resolve_project(client, project_id)
-    if not pid:
-        return json.dumps({"error": "No Coroot project found."})
-
-    to_ts = _now_ts()
-    from_ts = to_ts - (lookback_hours * 3600)
 
     query: Dict[str, Any] = {
         "source": source,
@@ -592,15 +562,9 @@ def coroot_get_app_logs(
     if message_filter:
         query["filters"].append({"name": "Message", "op": "=", "value": message_filter})
 
-    try:
-        raw = client.get_app_logs(pid, app_id, from_ts, to_ts, query)
-    except CorootAPIError as exc:
-        return json.dumps({"error": f"Coroot API error: {exc}"})
-    except Exception as exc:
-        logger.error("[COROOT-TOOL] Unexpected error fetching app logs: %s", exc)
-        return json.dumps({"error": f"Unexpected error contacting Coroot: {exc}"})
+    raw = client.get_app_logs(pid, app_id, from_ts, to_ts, query)
 
-    if not raw:
+    if not isinstance(raw, dict):
         return json.dumps({
             "app_id": app_id,
             "source": source,
@@ -636,32 +600,20 @@ def coroot_get_app_logs(
     return _safe_json(result)
 
 
+@_coroot_tool
 def coroot_get_traces(
+    *,
+    client: CorootClient,
+    pid: str,
+    from_ts: int,
+    to_ts: int,
     service_name: Optional[str] = None,
     status_error: bool = False,
     trace_id: Optional[str] = None,
     lookback_hours: int = 1,
-    project_id: Optional[str] = None,
-    user_id: Optional[str] = None,
     **kwargs,
 ) -> str:
     """Search traces across all applications or look up a trace by ID."""
-    if not user_id:
-        return json.dumps({"error": "User context not available"})
-
-    lookback_hours = _clamp_lookback_hours(lookback_hours)
-
-    client = _build_client(user_id)
-    if not client:
-        return json.dumps({"error": "Coroot not connected."})
-
-    pid = _resolve_project(client, project_id)
-    if not pid:
-        return json.dumps({"error": "No Coroot project found."})
-
-    to_ts = _now_ts()
-    from_ts = to_ts - (lookback_hours * 3600)
-
     if trace_id:
         query: Dict[str, Any] = {"trace_id": trace_id}
     else:
@@ -672,13 +624,7 @@ def coroot_get_traces(
             filters.append({"field": "StatusCode", "op": "=", "value": "STATUS_CODE_ERROR"})
         query = {"view": "traces", "filters": filters}
 
-    try:
-        raw = client.get_traces(pid, from_ts, to_ts, query)
-    except CorootAPIError as exc:
-        return json.dumps({"error": f"Coroot API error: {exc}"})
-    except Exception as exc:
-        logger.error("[COROOT-TOOL] Unexpected error fetching traces: %s", exc)
-        return json.dumps({"error": f"Unexpected error contacting Coroot: {exc}"})
+    raw = client.get_traces(pid, from_ts, to_ts, query)
 
     traces_data = _extract_field(raw, "traces")
     if not traces_data:
@@ -697,36 +643,18 @@ def coroot_get_traces(
     return _safe_json(traces_data)
 
 
+@_coroot_tool
 def coroot_get_service_map(
+    *,
+    client: CorootClient,
+    pid: str,
+    from_ts: int,
+    to_ts: int,
     lookback_hours: int = 1,
-    project_id: Optional[str] = None,
-    user_id: Optional[str] = None,
     **kwargs,
 ) -> str:
     """Get the service dependency map showing all applications and their connections."""
-    if not user_id:
-        return json.dumps({"error": "User context not available"})
-
-    lookback_hours = _clamp_lookback_hours(lookback_hours)
-
-    client = _build_client(user_id)
-    if not client:
-        return json.dumps({"error": "Coroot not connected."})
-
-    pid = _resolve_project(client, project_id)
-    if not pid:
-        return json.dumps({"error": "No Coroot project found."})
-
-    to_ts = _now_ts()
-    from_ts = to_ts - (lookback_hours * 3600)
-
-    try:
-        raw = client.get_service_map(pid, from_ts, to_ts)
-    except CorootAPIError as exc:
-        return json.dumps({"error": f"Coroot API error: {exc}"})
-    except Exception as exc:
-        logger.error("[COROOT-TOOL] Unexpected error fetching service map: %s", exc)
-        return json.dumps({"error": f"Unexpected error contacting Coroot: {exc}"})
+    raw = client.get_service_map(pid, from_ts, to_ts)
 
     map_data = _extract_field(raw, "map")
     services: List[Dict] = map_data if isinstance(map_data, list) else []
@@ -760,40 +688,22 @@ def coroot_get_service_map(
     return _safe_json(out)
 
 
+@_coroot_tool
 def coroot_query_metrics(
+    *,
+    client: CorootClient,
+    pid: str,
+    from_ts: int,
+    to_ts: int,
     promql: str,
     legend: str = "",
     lookback_hours: int = 1,
-    project_id: Optional[str] = None,
-    user_id: Optional[str] = None,
     **kwargs,
 ) -> str:
     """Execute a PromQL query against Coroot's panel/data endpoint."""
-    if not user_id:
-        return json.dumps({"error": "User context not available"})
+    raw = client.query_panel_data(pid, promql, from_ts, to_ts, legend)
 
-    lookback_hours = _clamp_lookback_hours(lookback_hours)
-
-    client = _build_client(user_id)
-    if not client:
-        return json.dumps({"error": "Coroot not connected."})
-
-    pid = _resolve_project(client, project_id)
-    if not pid:
-        return json.dumps({"error": "No Coroot project found."})
-
-    end_ts = _now_ts()
-    start_ts = end_ts - (lookback_hours * 3600)
-
-    try:
-        raw = client.query_panel_data(pid, promql, start_ts, end_ts, legend)
-    except CorootAPIError as exc:
-        return json.dumps({"error": f"Coroot API error: {exc}"})
-    except Exception as exc:
-        logger.error("[COROOT-TOOL] Unexpected error querying metrics: %s", exc)
-        return json.dumps({"error": f"Unexpected error contacting Coroot: {exc}"})
-
-    if not raw or raw == {}:
+    if not raw:
         return json.dumps({
             "query": promql,
             "lookback_hours": lookback_hours,
@@ -814,36 +724,18 @@ def coroot_query_metrics(
     return _safe_json(raw)
 
 
+@_coroot_tool
 def coroot_get_deployments(
+    *,
+    client: CorootClient,
+    pid: str,
+    from_ts: int,
+    to_ts: int,
     lookback_hours: int = 24,
-    project_id: Optional[str] = None,
-    user_id: Optional[str] = None,
     **kwargs,
 ) -> str:
     """List recent deployments to correlate with incidents."""
-    if not user_id:
-        return json.dumps({"error": "User context not available"})
-
-    lookback_hours = _clamp_lookback_hours(lookback_hours)
-
-    client = _build_client(user_id)
-    if not client:
-        return json.dumps({"error": "Coroot not connected."})
-
-    pid = _resolve_project(client, project_id)
-    if not pid:
-        return json.dumps({"error": "No Coroot project found."})
-
-    to_ts = _now_ts()
-    from_ts = to_ts - (lookback_hours * 3600)
-
-    try:
-        raw = client.get_deployments(pid, from_ts, to_ts)
-    except CorootAPIError as exc:
-        return json.dumps({"error": f"Coroot API error: {exc}"})
-    except Exception as exc:
-        logger.error("[COROOT-TOOL] Unexpected error fetching deployments: %s", exc)
-        return json.dumps({"error": f"Unexpected error contacting Coroot: {exc}"})
+    raw = client.get_deployments(pid, from_ts, to_ts)
 
     deployments = _extract_field(raw, "deployments")
     if not deployments:
@@ -853,39 +745,27 @@ def coroot_get_deployments(
             "message": f"No deployments detected in the last {lookback_hours}h.",
         })
 
-    return _safe_json(deployments)
+    items, trunc_meta = _truncate_list(
+        deployments, len(deployments),
+        hint="Use a shorter lookback_hours to narrow results.",
+    )
+    result = {"total_deployments": len(deployments), "deployments": items}
+    result.update(trunc_meta)
+    return _safe_json(result)
 
 
+@_coroot_tool
 def coroot_get_nodes(
+    *,
+    client: CorootClient,
+    pid: str,
+    from_ts: int,
+    to_ts: int,
     lookback_hours: int = 1,
-    project_id: Optional[str] = None,
-    user_id: Optional[str] = None,
     **kwargs,
 ) -> str:
     """List all nodes with health status (CPU, memory, disk)."""
-    if not user_id:
-        return json.dumps({"error": "User context not available"})
-
-    lookback_hours = _clamp_lookback_hours(lookback_hours)
-
-    client = _build_client(user_id)
-    if not client:
-        return json.dumps({"error": "Coroot not connected."})
-
-    pid = _resolve_project(client, project_id)
-    if not pid:
-        return json.dumps({"error": "No Coroot project found."})
-
-    to_ts = _now_ts()
-    from_ts = to_ts - (lookback_hours * 3600)
-
-    try:
-        raw = client.get_nodes(pid, from_ts, to_ts)
-    except CorootAPIError as exc:
-        return json.dumps({"error": f"Coroot API error: {exc}"})
-    except Exception as exc:
-        logger.error("[COROOT-TOOL] Unexpected error fetching nodes: %s", exc)
-        return json.dumps({"error": f"Unexpected error contacting Coroot: {exc}"})
+    raw = client.get_nodes(pid, from_ts, to_ts)
 
     nodes = _extract_field(raw, "nodes")
     if not nodes:
@@ -894,36 +774,31 @@ def coroot_get_nodes(
             "message": "No nodes found. Coroot's node-agent may not be installed.",
         })
 
-    return _safe_json(nodes)
+    items, trunc_meta = _truncate_list(
+        nodes, len(nodes),
+        hint="Use filters or a shorter lookback_hours to narrow results.",
+    )
+    result = {"total_nodes": len(nodes), "nodes": items}
+    result.update(trunc_meta)
+    return _safe_json(result)
 
 
+@_coroot_tool
 def coroot_get_overview_logs(
+    *,
+    client: CorootClient,
+    pid: str,
+    from_ts: int,
+    to_ts: int,
     severity: Optional[str] = None,
     message_filter: Optional[str] = None,
     kubernetes_only: bool = False,
     limit: int = 50,
     lookback_hours: int = 1,
-    project_id: Optional[str] = None,
-    user_id: Optional[str] = None,
     **kwargs,
 ) -> str:
     """Search logs across ALL applications at once (no app_id needed), or query Kubernetes events. Use coroot_get_app_logs when you already know the app."""
-    if not user_id:
-        return json.dumps({"error": "User context not available"})
-
-    lookback_hours = _clamp_lookback_hours(lookback_hours)
     limit = _clamp_limit(limit, default=50)
-
-    client = _build_client(user_id)
-    if not client:
-        return json.dumps({"error": "Coroot not connected."})
-
-    pid = _resolve_project(client, project_id)
-    if not pid:
-        return json.dumps({"error": "No Coroot project found."})
-
-    to_ts = _now_ts()
-    from_ts = to_ts - (lookback_hours * 3600)
 
     query: Dict[str, Any] = {
         "agent": True,
@@ -938,13 +813,14 @@ def coroot_get_overview_logs(
     if kubernetes_only:
         query["filters"].append({"name": "service.name", "op": "=", "value": "KubernetesEvents"})
 
-    try:
-        raw = client.get_overview_logs(pid, from_ts, to_ts, query)
-    except CorootAPIError as exc:
-        return json.dumps({"error": f"Coroot API error: {exc}"})
-    except Exception as exc:
-        logger.error("[COROOT-TOOL] Unexpected error fetching overview logs: %s", exc)
-        return json.dumps({"error": f"Unexpected error contacting Coroot: {exc}"})
+    raw = client.get_overview_logs(pid, from_ts, to_ts, query)
+
+    if not isinstance(raw, dict):
+        return json.dumps({
+            "total_entries": 0,
+            "entries": [],
+            "message": f"No log entries found in the last {lookback_hours}h.",
+        })
 
     entries = []
     for e in (raw.get("entries") or []):
@@ -973,37 +849,19 @@ def coroot_get_overview_logs(
     return _safe_json(result)
 
 
+@_coroot_tool
 def coroot_get_node_detail(
+    *,
+    client: CorootClient,
+    pid: str,
+    from_ts: int,
+    to_ts: int,
     node_name: str,
     lookback_hours: int = 1,
-    project_id: Optional[str] = None,
-    user_id: Optional[str] = None,
     **kwargs,
 ) -> str:
     """Get full audit report for a specific node (CPU, memory, disk, network, GPU)."""
-    if not user_id:
-        return json.dumps({"error": "User context not available"})
-
-    lookback_hours = _clamp_lookback_hours(lookback_hours)
-
-    client = _build_client(user_id)
-    if not client:
-        return json.dumps({"error": "Coroot not connected."})
-
-    pid = _resolve_project(client, project_id)
-    if not pid:
-        return json.dumps({"error": "No Coroot project found."})
-
-    to_ts = _now_ts()
-    from_ts = to_ts - (lookback_hours * 3600)
-
-    try:
-        raw = client.get_node_detail(pid, node_name, from_ts, to_ts)
-    except CorootAPIError as exc:
-        return json.dumps({"error": f"Coroot API error: {exc}"})
-    except Exception as exc:
-        logger.error("[COROOT-TOOL] Unexpected error fetching node detail: %s", exc)
-        return json.dumps({"error": f"Unexpected error contacting Coroot: {exc}"})
+    raw = client.get_node_detail(pid, node_name, from_ts, to_ts)
 
     if not raw:
         return json.dumps({
@@ -1014,36 +872,18 @@ def coroot_get_node_detail(
     return _safe_json(raw)
 
 
+@_coroot_tool
 def coroot_get_costs(
+    *,
+    client: CorootClient,
+    pid: str,
+    from_ts: int,
+    to_ts: int,
     lookback_hours: int = 24,
-    project_id: Optional[str] = None,
-    user_id: Optional[str] = None,
     **kwargs,
 ) -> str:
     """Get cost breakdown per node and per application, plus right-sizing recommendations."""
-    if not user_id:
-        return json.dumps({"error": "User context not available"})
-
-    lookback_hours = _clamp_lookback_hours(lookback_hours)
-
-    client = _build_client(user_id)
-    if not client:
-        return json.dumps({"error": "Coroot not connected."})
-
-    pid = _resolve_project(client, project_id)
-    if not pid:
-        return json.dumps({"error": "No Coroot project found."})
-
-    to_ts = _now_ts()
-    from_ts = to_ts - (lookback_hours * 3600)
-
-    try:
-        raw = client.get_costs(pid, from_ts, to_ts)
-    except CorootAPIError as exc:
-        return json.dumps({"error": f"Coroot API error: {exc}"})
-    except Exception as exc:
-        logger.error("[COROOT-TOOL] Unexpected error fetching costs: %s", exc)
-        return json.dumps({"error": f"Unexpected error contacting Coroot: {exc}"})
+    raw = client.get_costs(pid, from_ts, to_ts)
 
     costs_data = _extract_field(raw, "costs")
     if not costs_data:
@@ -1055,36 +895,18 @@ def coroot_get_costs(
     return _safe_json(costs_data)
 
 
+@_coroot_tool
 def coroot_get_risks(
+    *,
+    client: CorootClient,
+    pid: str,
+    from_ts: int,
+    to_ts: int,
     lookback_hours: int = 1,
-    project_id: Optional[str] = None,
-    user_id: Optional[str] = None,
     **kwargs,
 ) -> str:
     """Get security and availability risks (single-instance, single-AZ, exposed ports, spot-only)."""
-    if not user_id:
-        return json.dumps({"error": "User context not available"})
-
-    lookback_hours = _clamp_lookback_hours(lookback_hours)
-
-    client = _build_client(user_id)
-    if not client:
-        return json.dumps({"error": "Coroot not connected."})
-
-    pid = _resolve_project(client, project_id)
-    if not pid:
-        return json.dumps({"error": "No Coroot project found."})
-
-    to_ts = _now_ts()
-    from_ts = to_ts - (lookback_hours * 3600)
-
-    try:
-        raw = client.get_risks(pid, from_ts, to_ts)
-    except CorootAPIError as exc:
-        return json.dumps({"error": f"Coroot API error: {exc}"})
-    except Exception as exc:
-        logger.error("[COROOT-TOOL] Unexpected error fetching risks: %s", exc)
-        return json.dumps({"error": f"Unexpected error contacting Coroot: {exc}"})
+    raw = client.get_risks(pid, from_ts, to_ts)
 
     risks_data = _extract_field(raw, "risks")
     if not risks_data:
@@ -1093,4 +915,10 @@ def coroot_get_risks(
             "message": "No risks detected or risk analysis is not available for this project.",
         })
 
-    return _safe_json(risks_data)
+    items, trunc_meta = _truncate_list(
+        risks_data, len(risks_data),
+        hint="Use filters or a shorter lookback_hours to narrow results.",
+    )
+    result = {"total_risks": len(risks_data), "risks": items}
+    result.update(trunc_meta)
+    return _safe_json(result)
