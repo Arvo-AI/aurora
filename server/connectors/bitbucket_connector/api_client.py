@@ -14,6 +14,8 @@ BITBUCKET_API_BASE = "https://api.bitbucket.org/2.0"
 class BitbucketAPIClient:
     """Client for interacting with the Bitbucket Cloud 2.0 API."""
 
+    REQUEST_TIMEOUT = 30  # seconds
+
     def __init__(self, access_token, auth_type="oauth", email=None):
         """
         Args:
@@ -72,7 +74,7 @@ class BitbucketAPIClient:
 
     def _get(self, url, params=None):
         """Single-resource GET. Returns response JSON or error dict."""
-        response = requests.get(url, headers=self._get_headers(), params=params)
+        response = requests.get(url, headers=self._get_headers(), params=params, timeout=self.REQUEST_TIMEOUT)
         if response.status_code != 200:
             logger.error(f"Bitbucket GET {url} failed: {response.status_code}")
             return self._handle_error(response)
@@ -82,7 +84,7 @@ class BitbucketAPIClient:
         """GET that returns raw text (for diffs, logs). Returns string or error dict."""
         headers = self._get_headers()
         headers["Accept"] = "text/plain"
-        response = requests.get(url, headers=headers, params=params)
+        response = requests.get(url, headers=headers, params=params, timeout=self.REQUEST_TIMEOUT)
         if response.status_code != 200:
             logger.error(f"Bitbucket GET (raw) {url} failed: {response.status_code}")
             return self._handle_error(response)
@@ -93,7 +95,7 @@ class BitbucketAPIClient:
         headers = self._get_headers()
         if json_data is not None:
             headers["Content-Type"] = "application/json"
-        response = requests.post(url, headers=headers, json=json_data, data=data, files=files)
+        response = requests.post(url, headers=headers, json=json_data, data=data, files=files, timeout=self.REQUEST_TIMEOUT)
         if response.status_code not in (200, 201):
             logger.error(f"Bitbucket POST {url} failed: {response.status_code}")
             return self._handle_error(response)
@@ -106,7 +108,7 @@ class BitbucketAPIClient:
         """PUT with JSON data. Returns response JSON or error dict."""
         headers = self._get_headers()
         headers["Content-Type"] = "application/json"
-        response = requests.put(url, headers=headers, json=json_data)
+        response = requests.put(url, headers=headers, json=json_data, timeout=self.REQUEST_TIMEOUT)
         if response.status_code != 200:
             logger.error(f"Bitbucket PUT {url} failed: {response.status_code}")
             return self._handle_error(response)
@@ -114,7 +116,7 @@ class BitbucketAPIClient:
 
     def _delete(self, url):
         """DELETE. Returns status dict."""
-        response = requests.delete(url, headers=self._get_headers())
+        response = requests.delete(url, headers=self._get_headers(), timeout=self.REQUEST_TIMEOUT)
         if response.status_code not in (200, 204):
             logger.error(f"Bitbucket DELETE {url} failed: {response.status_code}")
             return self._handle_error(response)
@@ -137,7 +139,7 @@ class BitbucketAPIClient:
         page_count = 0
 
         while url and page_count < page_limit:
-            response = requests.get(url, headers=headers, params=params)
+            response = requests.get(url, headers=headers, params=params, timeout=self.REQUEST_TIMEOUT)
             if response.status_code != 200:
                 logger.error(f"Bitbucket API error {response.status_code}: {response.text}")
                 if not all_values:
@@ -198,7 +200,7 @@ class BitbucketAPIClient:
         """Get the contents of a file at a specific commit/branch."""
         url = f"{BITBUCKET_API_BASE}/repositories/{workspace}/{repo_slug}/src/{commit}/{path}"
         headers = self._get_headers()
-        response = requests.get(url, headers=headers)
+        response = requests.get(url, headers=headers, timeout=self.REQUEST_TIMEOUT)
         if response.status_code != 200:
             logger.error(f"Failed to get file {path}: {response.status_code}")
             return self._handle_error(response)

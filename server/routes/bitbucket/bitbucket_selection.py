@@ -38,9 +38,12 @@ def get_workspace_selection():
         return jsonify({"error": "Failed to get workspace selection"}), 500
 
 
-@bitbucket_selection_bp.route("/workspace-selection", methods=["POST", "PUT"])
+@bitbucket_selection_bp.route("/workspace-selection", methods=["POST", "PUT", "OPTIONS"])
 def save_workspace_selection():
     """Save the Bitbucket workspace selection for a user."""
+    if request.method == "OPTIONS":
+        return create_cors_response()
+
     try:
         user_id = get_user_id_from_request()
         if not user_id:
@@ -82,9 +85,12 @@ def save_workspace_selection():
         return jsonify({"error": "Failed to save workspace selection"}), 500
 
 
-@bitbucket_selection_bp.route("/workspace-selection", methods=["DELETE"])
+@bitbucket_selection_bp.route("/workspace-selection", methods=["DELETE", "OPTIONS"])
 def clear_workspace_selection():
     """Clear the Bitbucket workspace selection for a user."""
+    if request.method == "OPTIONS":
+        return create_cors_response()
+
     try:
         user_id = get_user_id_from_request()
         if not user_id:

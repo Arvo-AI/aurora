@@ -89,8 +89,14 @@ export default function BitbucketProviderIntegration() {
       const oauthUrl = await BitbucketIntegrationService.initiateOAuth(userId);
       const popup = window.open(oauthUrl, 'bitbucket-oauth', 'width=600,height=700,scrollbars=yes,resizable=yes');
 
+      if (!popup) {
+        toast({ title: "Popup Blocked", description: "Please allow popups for this site and try again", variant: "destructive" });
+        setIsLoading(false);
+        return;
+      }
+
       const checkClosed = setInterval(() => {
-        if (popup?.closed) {
+        if (popup.closed) {
           clearInterval(checkClosed);
           setIsLoading(false);
           setTimeout(() => {
@@ -166,7 +172,7 @@ export default function BitbucketProviderIntegration() {
           <TabsContent value="oauth" className="space-y-3 mt-3">
             <p className="text-sm text-muted-foreground">
               Connect your Bitbucket Cloud account using OAuth. Create an{' '}
-              <a href="https://bitbucket.org/arvoai/workspace/settings/api" target="_blank" rel="noopener noreferrer" className="underline">
+              <a href="https://support.atlassian.com/bitbucket-cloud/docs/use-oauth-on-bitbucket-cloud/" target="_blank" rel="noopener noreferrer" className="underline">
                 OAuth consumer
               </a>{' '}
               in your workspace settings with these permissions:

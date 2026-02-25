@@ -33,6 +33,9 @@ def bitbucket_login():
         api_token = data.get("api_token")
         email = data.get("email")
 
+        if bool(api_token) != bool(email):
+            return jsonify({"error": "Both email and API token are required for API token authentication"}), 400
+
         if api_token and email:
             # --- API token flow ---
             try:
@@ -195,6 +198,11 @@ def bitbucket_callback():
             logger.info("Stored Bitbucket OAuth credentials")
         except Exception as e:
             logger.error(f"Failed to store Bitbucket credentials: {e}", exc_info=True)
+            return render_template(
+                "bitbucket_callback_error.html",
+                error="Authentication succeeded but failed to save credentials. Please try again.",
+                frontend_url=FRONTEND_URL,
+            )
 
         return render_template(
             "bitbucket_callback_success.html",

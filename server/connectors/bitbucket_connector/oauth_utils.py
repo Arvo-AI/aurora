@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 BITBUCKET_AUTHORIZE_URL = "https://bitbucket.org/site/oauth2/authorize"
 BITBUCKET_TOKEN_URL = "https://bitbucket.org/site/oauth2/access_token"
 BITBUCKET_SCOPES = "repository:write pullrequest:write issue:write account project pipeline:write"
+REQUEST_TIMEOUT = 30  # seconds
 
 
 def _get_redirect_uri():
@@ -101,6 +102,7 @@ def exchange_code_for_token(code):
             },
             auth=(client_id, client_secret),
             headers={"Content-Type": "application/x-www-form-urlencoded"},
+            timeout=REQUEST_TIMEOUT,
         )
 
         if response.status_code != 200:
@@ -135,6 +137,7 @@ def refresh_access_token(refresh_token):
             },
             auth=(client_id, client_secret),
             headers={"Content-Type": "application/x-www-form-urlencoded"},
+            timeout=REQUEST_TIMEOUT,
         )
 
         if response.status_code != 200:
