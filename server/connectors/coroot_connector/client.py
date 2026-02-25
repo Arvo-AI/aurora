@@ -110,7 +110,12 @@ def invalidate_coroot_client(user_id: str) -> None:
         try:
             client._session.close()
         except Exception:
-            pass
+            # Best-effort cleanup: ignore errors when closing the session.
+            logger.debug(
+                "[COROOT] Failed to close session for user_id=%s",
+                user_id,
+                exc_info=True,
+            )
 
 
 class CorootClient:
