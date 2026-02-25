@@ -56,8 +56,7 @@ async function jsonFetch<T>(input: RequestInfo, init?: RequestInit): Promise<T> 
     throw new Error(parsed?.error || response.statusText || `Request failed (${response.status})`);
   }
 
-  const text = await response.text();
-  return text ? (JSON.parse(text) as T) : (null as T);
+  return await response.json().catch(() => null as T);
 }
 
 export const dynatraceService = {
@@ -113,5 +112,12 @@ export const dynatraceService = {
       method: 'PUT',
       body: JSON.stringify({ rcaEnabled }),
     }) ?? { rcaEnabled };
+  },
+
+  async disconnect(): Promise<void> {
+    const response = await fetch('/api/connected-accounts/dynatrace', { method: 'DELETE', credentials: 'include' });
+    if (!response.ok && response.status !== 204) {
+      throw new Error(await response.text() || 'Failed to disconnect');
+    }
   },
 };

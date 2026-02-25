@@ -35,10 +35,14 @@ export default function DynatraceAuthPage() {
   useEffect(() => {
     const cached = localStorage.getItem(CACHE_KEY);
     if (cached) {
-      const parsed: DynatraceStatus = JSON.parse(cached);
-      setStatus(parsed);
-      setIsCheckingStatus(false);
-      if (parsed.connected) setEnvironmentUrl(parsed.environmentUrl ?? "");
+      try {
+        const parsed: DynatraceStatus = JSON.parse(cached);
+        setStatus(parsed);
+        setIsCheckingStatus(false);
+        if (parsed.connected) setEnvironmentUrl(parsed.environmentUrl ?? "");
+      } catch {
+        localStorage.removeItem(CACHE_KEY);
+      }
     }
 
     dynatraceService.getStatus()
@@ -71,10 +75,7 @@ export default function DynatraceAuthPage() {
   const handleDisconnect = async () => {
     setLoading(true);
     try {
-      const response = await fetch("/api/connected-accounts/dynatrace", { method: "DELETE", credentials: "include" });
-      if (!response.ok && response.status !== 204) {
-        throw new Error(await response.text() || "Failed to disconnect");
-      }
+      await dynatraceService.disconnect();
       setStatus({ connected: false });
       setEnvironmentUrl("");
       persistStatus(null);
