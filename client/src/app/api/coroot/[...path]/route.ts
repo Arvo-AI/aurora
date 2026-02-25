@@ -40,8 +40,15 @@ async function proxyToBackend(request: NextRequest, { params }: { params: Promis
     if (!response.ok) {
       const text = await response.text();
       console.error(`[api/coroot/${subPath}] Backend error:`, text);
+      let errorMessage: string;
+      try {
+        const parsed = JSON.parse(text);
+        errorMessage = parsed?.error ? String(parsed.error) : text.trim() || 'Backend request failed';
+      } catch {
+        errorMessage = text.trim() || 'Backend request failed';
+      }
       return NextResponse.json(
-        { error: `Backend request failed` },
+        { error: errorMessage },
         { status: response.status },
       );
     }
