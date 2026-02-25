@@ -50,8 +50,8 @@ def get_repo_selection():
             })
         
     except Exception as e:
-        logger.error(f"Error getting repo selection: {e}")
-        return create_cors_response({"error": str(e)}, 500)
+        logger.error(f"Error getting repo selection: {e}", exc_info=True)
+        return create_cors_response({"error": "Failed to get repository selection"}, 500)
 
 @github_repo_selection_bp.route("/repo-selection", methods=["POST", "PUT"])
 def save_repo_selection():
@@ -101,8 +101,8 @@ def save_repo_selection():
         })
         
     except Exception as e:
-        logger.error(f"Error saving repo selection: {e}")
-        return create_cors_response({"error": str(e)}, 500)
+        logger.error(f"Error saving repo selection: {e}", exc_info=True)
+        return create_cors_response({"error": "Failed to save repository selection"}, 500)
 
 @github_repo_selection_bp.route("/repo-selection", methods=["DELETE"])
 def clear_repo_selection():
@@ -134,5 +134,5 @@ def clear_repo_selection():
         })
         
     except Exception as e:
-        logger.error(f"Error clearing repo selection: {e}")
-        return create_cors_response({"error": str(e)}, 500)
+        logger.error(f"Error clearing repo selection: {e}", exc_info=True)
+        return create_cors_response({"error": "Failed to clear repository selection"}, 500)

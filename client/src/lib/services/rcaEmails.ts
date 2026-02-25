@@ -17,7 +17,9 @@ export interface RCAEmailsResponse {
   additional_emails: RCAEmail[];
 }
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_BACKEND_URL;
+import { getEnv } from '@/lib/env';
+
+const API_BASE_URL = getEnv('NEXT_PUBLIC_BACKEND_URL');
 
 /**
  * List all RCA notification emails for the user

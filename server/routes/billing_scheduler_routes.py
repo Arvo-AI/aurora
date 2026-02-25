@@ -72,21 +72,17 @@ def run_weekly_billing():
             logger.info(f"Weekly billing execution completed with result: {result}")
             
         except ImportError as ie:
-            logger.error(f"Import error in weekly billing: {ie}")
-            import traceback
-            logger.error(traceback.format_exc())
+            logger.error(f"Import error in weekly billing: {ie}", exc_info=True)
             return jsonify({
                 "success": False,
-                "error": f"Import error: {str(ie)}",
+                "error": "Failed to import billing module",
                 "environment": environment
             }), 500
         except Exception as be:
-            logger.error(f"Billing execution error: {be}")
-            import traceback
-            logger.error(traceback.format_exc())
+            logger.error(f"Billing execution error: {be}", exc_info=True)
             return jsonify({
                 "success": False,
-                "error": f"Billing error: {str(be)}",
+                "error": "Billing execution failed",
                 "environment": environment
             }), 500
         
@@ -111,13 +107,10 @@ def run_weekly_billing():
         return jsonify(response_data), 200
         
     except Exception as e:
-        logger.error(f"Error in weekly billing automation: {e}")
-        import traceback
-        logger.error(traceback.format_exc())
+        logger.error(f"Error in weekly billing automation: {e}", exc_info=True)
         return jsonify({
             "success": False,
-            "error": str(e),
-            "traceback": traceback.format_exc()
+            "error": "Weekly billing automation failed"
         }), 500
 
 def handle_debug_action(action, environment, debug):
@@ -167,9 +160,9 @@ def handle_debug_action(action, environment, debug):
             }), 400
             
     except Exception as e:
-        logger.error(f"Error in debug action {action}: {e}")
+        logger.error(f"Error in debug action {action}: {e}", exc_info=True)
         return jsonify({
-            "error": f"Debug action failed: {str(e)}",
+            "error": "Debug action failed",
             "action": action,
             "environment": environment
         }), 500
@@ -192,8 +185,8 @@ def get_billing_status():
         }), 200
         
     except Exception as e:
-        logger.error(f"Error checking billing status: {e}")
+        logger.error(f"Error checking billing status: {e}", exc_info=True)
         return jsonify({
             "status": "error",
-            "error": str(e)
+            "error": "Failed to check billing status"
         }), 500

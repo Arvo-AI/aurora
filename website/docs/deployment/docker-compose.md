@@ -118,6 +118,24 @@ Once the services are running:
 - **WebSocket**: ws://localhost:5006
 - **SeaweedFS UI**: http://localhost:8888 (file browser)
 
+### Remote / VM Access
+
+If Aurora is running on a remote server or VM, update the URL variables in `.env` to point to the machine's IP (or hostname):
+
+```bash
+FRONTEND_URL=http://YOUR_IP:3000
+NEXT_PUBLIC_BACKEND_URL=http://YOUR_IP:5080
+NEXT_PUBLIC_WEBSOCKET_URL=ws://YOUR_IP:5006
+```
+
+Then recreate the frontend container to pick up the new values (no rebuild needed):
+
+```bash
+docker compose -f docker-compose.prod-local.yml up -d frontend
+```
+
+Make sure the relevant ports (3000, 5080, 5006) are open in your firewall or cloud security group.
+
 ## Service Architecture
 
 All services run in Docker containers:

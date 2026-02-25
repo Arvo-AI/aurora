@@ -258,7 +258,7 @@ def tailscale_ssh(
             })
 
         # Try to join tailnet if targeting a Tailscale hostname
-        is_tailscale_hostname = ".ts.net" in device_hostname or device_hostname.startswith("100.")
+        is_tailscale_hostname = device_hostname.endswith(".ts.net") or device_hostname.startswith("100.")
         if is_tailscale_hostname:
             import subprocess as sp
             try:

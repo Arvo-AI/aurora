@@ -3,8 +3,9 @@
 import { useState, useEffect } from "react";
 import { ProjectSelectionModal } from "@/components/ProjectSelectionModal";
 import { useToast } from "@/hooks/use-toast";
+import { getEnv } from '@/lib/env';
 
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL;
+const BACKEND_URL = getEnv('NEXT_PUBLIC_BACKEND_URL');
 
 /**
  * Global component that monitors for GCP project selection needs

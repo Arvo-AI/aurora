@@ -153,6 +153,24 @@ Open your browser to **http://localhost:3000**
 
 You should see the Aurora login page. Create an account to get started.
 
+:::tip Deploying on a Remote Server or VM?
+Replace `localhost` in your `.env` with the machine's IP or hostname:
+
+```bash
+FRONTEND_URL=http://YOUR_IP:3000
+NEXT_PUBLIC_BACKEND_URL=http://YOUR_IP:5080
+NEXT_PUBLIC_WEBSOCKET_URL=ws://YOUR_IP:5006
+```
+
+Then recreate the frontend container (no rebuild needed):
+
+```bash
+docker compose -f docker-compose.prod-local.yml up -d frontend
+```
+
+Open ports 3000, 5080, and 5006 in your firewall / security group, then access Aurora at `http://YOUR_IP:3000`.
+:::
+
 ## Verify Installation
 
 Check all services are running:

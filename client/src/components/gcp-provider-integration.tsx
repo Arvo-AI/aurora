@@ -8,8 +8,9 @@ import { ProjectListItem } from '@/components/cloud-provider/ui/ProjectListItem'
 import { fetchProjects, saveProjects, ProjectCache } from '@/components/cloud-provider/projects/projectUtils';
 import { Project } from '@/components/cloud-provider/types';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import { getEnv } from '@/lib/env';
 
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL;
+const BACKEND_URL = getEnv('NEXT_PUBLIC_BACKEND_URL');
 
 interface GcpProviderIntegrationProps {
   onDisconnect?: () => void;

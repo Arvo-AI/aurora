@@ -9,8 +9,9 @@ import Image from 'next/image';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useGitHubStatus } from '@/hooks/use-github-status';
 import { ToastAction } from "@/components/ui/toast";
+import { getEnv } from '@/lib/env';
 
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL;
+const BACKEND_URL = getEnv('NEXT_PUBLIC_BACKEND_URL');
 
 export interface GitHubCredentials {
   connected: boolean;

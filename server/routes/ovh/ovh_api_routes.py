@@ -152,7 +152,7 @@ def ovh_projects():
 
         if not response.ok:
             logger.error(f"OVH API error: {response.status_code} - {response.text}")
-            return jsonify({"error": f"OVH API error: {response.text}"}), response.status_code
+            return jsonify({"error": "OVH API request failed"}), response.status_code
 
         # Parse project IDs
         project_ids = response.json()
@@ -404,7 +404,7 @@ def save_ovh_ssh_keys(instance_id):
             if not is_valid:
                 return jsonify({"error": error_msg}), 400
         except ValueError as e:
-            return jsonify({"error": str(e)}), 400
+            return jsonify({"error": "Invalid private key format"}), 400
     
     logger.info(f"Received private key for instance {instance_id}, length: {len(private_key)} chars")
     
@@ -861,7 +861,7 @@ def ovh_connection_status():
         })
 
     except Exception as e:
-        logger.error(f"Error checking OVH status: {e}")
+        logger.error(f"Error checking OVH status: {e}", exc_info=True)
         return jsonify({"error": "Failed to check OVH status"}), 500
 
 
@@ -921,5 +921,5 @@ def ovh_disconnect():
         })
 
     except Exception as e:
-        logger.error(f"Error disconnecting OVH account: {e}")
+        logger.error(f"Error disconnecting OVH account: {e}", exc_info=True)
         return jsonify({"error": "Failed to disconnect OVH account"}), 500

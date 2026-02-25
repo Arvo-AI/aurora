@@ -6,6 +6,7 @@ but executes commands in isolated terminal pods via kubectl exec.
 
 import logging
 import os
+import re
 import shlex
 import subprocess
 from typing import Optional, List, Union, Dict
@@ -161,18 +162,23 @@ def terminal_run(
         raise RuntimeError(f"Cannot execute command: tool executor unavailable: {e}") from e
     
     # Setup environment variables if provided
+    # Keep the original user command for safe logging (before env exports are prepended)
+    loggable_command = command
     if env:
         env_setup_commands = []
         for key, value in env.items():
             # Escape value for shell
             escaped_value = value.replace("'", "'\"'\"'")
             env_setup_commands.append(f"export {key}='{escaped_value}'")
-        
+
         # Prepend env setup to command
         command = '; '.join(env_setup_commands) + f'; {command}'
-    
+
+    # Redact known sensitive flags from the loggable command
+    redacted_command = re.sub(r'(--password\s+)\S+', r'\1[REDACTED]', loggable_command)
+
     # Execute command in terminal pod
-    logger.info(f"Executing command in terminal pod for user {user_id}, session {session_id}: {command[:100]}")
+    logger.info(f"Executing command in terminal pod for user {user_id}, session {session_id}: {redacted_command[:100]}")
     try:
         returncode, stdout, stderr = executor.execute_command(
             user_id=user_id,

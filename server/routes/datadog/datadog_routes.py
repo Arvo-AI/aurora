@@ -256,7 +256,8 @@ def connect():
             logger.warning("[DATADOG] Validation failed for user %s: %s", user_id, validation)
             return jsonify({"error": "Unable to validate Datadog credentials"}), 400
     except DatadogAPIError as exc:
-        return jsonify({"error": str(exc)}), 502
+        logger.error("[DATADOG] Credential validation failed for user %s: %s", user_id, exc)
+        return jsonify({"error": "Failed to validate Datadog credentials"}), 502
 
     org_data = None
     try:
@@ -317,7 +318,7 @@ def status():
             return jsonify({"connected": False, "error": "Stored Datadog keys are no longer valid"})
     except DatadogAPIError as exc:
         logger.warning("[DATADOG] Status validation failed for user %s: %s", user_id, exc)
-        return jsonify({"connected": False, "error": str(exc)})
+        return jsonify({"connected": False, "error": "Failed to validate stored Datadog credentials"})
 
     org_data = client.get_org()
 
@@ -399,7 +400,8 @@ def search_logs():
         data = client.search_logs(query=query, start=start_str, end=end_str, limit=limit, cursor=cursor)
         return jsonify(data)
     except DatadogAPIError as exc:
-        return jsonify({"error": str(exc)}), 502
+        logger.error("[DATADOG] Log search failed for user %s: %s", user_id, exc)
+        return jsonify({"error": "Failed to search Datadog logs"}), 502
 
 
 @datadog_bp.route("/metrics/query", methods=["POST", "OPTIONS"])
@@ -437,7 +439,8 @@ def query_metrics():
         data = client.query_metrics(query=query, start_ms=from_ms, end_ms=to_ms, interval=interval)
         return jsonify(data)
     except DatadogAPIError as exc:
-        return jsonify({"error": str(exc)}), 502
+        logger.error("[DATADOG] Metrics query failed for user %s: %s", user_id, exc)
+        return jsonify({"error": "Failed to query Datadog metrics"}), 502
 
 
 @datadog_bp.route("/events", methods=["GET", "OPTIONS"])
@@ -477,7 +480,8 @@ def list_events():
         data = client.list_events(start_ts=start, end_ts=end, params=params)
         return jsonify(data)
     except DatadogAPIError as exc:
-        return jsonify({"error": str(exc)}), 502
+        logger.error("[DATADOG] List events failed for user %s: %s", user_id, exc)
+        return jsonify({"error": "Failed to list Datadog events"}), 502
 
 
 @datadog_bp.route("/monitors", methods=["GET", "OPTIONS"])
@@ -511,7 +515,8 @@ def list_monitors():
         data = client.list_monitors(params=raw_params)
         return jsonify(data)
     except DatadogAPIError as exc:
-        return jsonify({"error": str(exc)}), 502
+        logger.error("[DATADOG] List monitors failed for user %s: %s", user_id, exc)
+        return jsonify({"error": "Failed to list Datadog monitors"}), 502
 
 
 @datadog_bp.route("/events/ingested", methods=["GET", "OPTIONS"])
