@@ -27,10 +27,20 @@ CLIENT_CACHE_TTL = 36000  # 10 hours — within the 7-day cookie TTL
 
 _client_cache: Dict[str, Tuple["CorootClient", float]] = {}
 _cache_lock = threading.Lock()
+_user_locks: Dict[str, threading.Lock] = {}
 
 
 class CorootAPIError(Exception):
     """Custom error for Coroot API interactions."""
+
+
+def _get_user_lock(user_id: str) -> threading.Lock:
+    with _cache_lock:
+        lock = _user_locks.get(user_id)
+        if lock is None:
+            lock = threading.Lock()
+            _user_locks[user_id] = lock
+        return lock
 
 
 def get_coroot_client(
@@ -43,10 +53,15 @@ def get_coroot_client(
 
     A new client is created (and logged in) when no cached entry exists,
     the TTL has expired, or the credentials have changed.
+
+    A per-user lock ensures that concurrent requests for the same user
+    don't race through login() simultaneously.
     """
-    now = time.monotonic()
-    with _cache_lock:
-        entry = _client_cache.get(user_id)
+    user_lock = _get_user_lock(user_id)
+    with user_lock:
+        now = time.monotonic()
+        with _cache_lock:
+            entry = _client_cache.get(user_id)
         if entry is not None:
             client, created_at = entry
             creds_match = (
@@ -57,18 +72,19 @@ def get_coroot_client(
             if creds_match and (now - created_at) < CLIENT_CACHE_TTL:
                 return client
 
-    client = CorootClient(url=url, email=email, password=password)
-    client.login()
+        client = CorootClient(url=url, email=email, password=password)
+        client.login()
 
-    with _cache_lock:
-        _client_cache[user_id] = (client, now)
-    return client
+        with _cache_lock:
+            _client_cache[user_id] = (client, now)
+        return client
 
 
 def invalidate_coroot_client(user_id: str) -> None:
     """Remove *user_id*'s client from the cache (e.g. on disconnect)."""
     with _cache_lock:
         _client_cache.pop(user_id, None)
+        _user_locks.pop(user_id, None)
 
 
 class CorootClient:

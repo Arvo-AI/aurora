@@ -55,6 +55,9 @@ def _build_client(user_id: str) -> Optional[CorootClient]:
     except CorootAPIError as exc:
         logger.error("[COROOT-TOOL] Failed to build client: %s", exc)
         return None
+    except Exception as exc:
+        logger.error("[COROOT-TOOL] Unexpected error building client: %s", exc)
+        return None
 
 
 def is_coroot_connected(user_id: str) -> bool:
@@ -71,6 +74,8 @@ def _default_project(client: CorootClient) -> Optional[str]:
                 return str(pid)
     except CorootAPIError as exc:
         logger.error("[COROOT-TOOL] Failed to discover projects for default selection: %s", exc)
+    except Exception as exc:
+        logger.error("[COROOT-TOOL] Unexpected error discovering projects: %s", exc)
     return None
 
 
@@ -291,6 +296,9 @@ def coroot_get_incidents(
         raw = client.get_incidents(pid, from_ts, to_ts)
     except CorootAPIError as exc:
         return json.dumps({"error": f"Coroot API error: {exc}"})
+    except Exception as exc:
+        logger.error("[COROOT-TOOL] Unexpected error fetching incidents: %s", exc)
+        return json.dumps({"error": f"Unexpected error contacting Coroot: {exc}"})
 
     if not raw:
         return json.dumps({"incidents": [], "message": f"No incidents in the last {lookback_hours}h"})
@@ -356,6 +364,9 @@ def coroot_get_incident_detail(
         raw = client.get_incident_detail(pid, incident_key, from_ts, to_ts)
     except CorootAPIError as exc:
         return json.dumps({"error": f"Coroot API error: {exc}"})
+    except Exception as exc:
+        logger.error("[COROOT-TOOL] Unexpected error fetching incident detail: %s", exc)
+        return json.dumps({"error": f"Unexpected error contacting Coroot: {exc}"})
 
     if not raw:
         return json.dumps({
@@ -391,6 +402,9 @@ def coroot_get_applications(
         raw = client.get_applications(pid, from_ts, to_ts)
     except CorootAPIError as exc:
         return json.dumps({"error": f"Coroot API error: {exc}"})
+    except Exception as exc:
+        logger.error("[COROOT-TOOL] Unexpected error fetching applications: %s", exc)
+        return json.dumps({"error": f"Unexpected error contacting Coroot: {exc}"})
 
     app_list = _extract_field(raw, "applications")
     if not app_list:
@@ -455,6 +469,9 @@ def coroot_get_app_detail(
         raw = client.get_app_detail(pid, app_id, from_ts, to_ts)
     except CorootAPIError as exc:
         return json.dumps({"error": f"Coroot API error: {exc}"})
+    except Exception as exc:
+        logger.error("[COROOT-TOOL] Unexpected error fetching app detail: %s", exc)
+        return json.dumps({"error": f"Unexpected error contacting Coroot: {exc}"})
 
     result: Dict[str, Any] = {"app_id": app_id}
 
@@ -540,6 +557,18 @@ def coroot_get_app_logs(
         raw = client.get_app_logs(pid, app_id, from_ts, to_ts, query)
     except CorootAPIError as exc:
         return json.dumps({"error": f"Coroot API error: {exc}"})
+    except Exception as exc:
+        logger.error("[COROOT-TOOL] Unexpected error fetching app logs: %s", exc)
+        return json.dumps({"error": f"Unexpected error contacting Coroot: {exc}"})
+
+    if not raw:
+        return json.dumps({
+            "app_id": app_id,
+            "source": source,
+            "total_entries": 0,
+            "entries": [],
+            "message": f"No log entries found for {app_id} (source={source}) in the last {lookback_hours}h.",
+        })
 
     entries = []
     for e in (raw.get("entries") or []):
@@ -606,6 +635,9 @@ def coroot_get_traces(
         raw = client.get_traces(pid, from_ts, to_ts, query)
     except CorootAPIError as exc:
         return json.dumps({"error": f"Coroot API error: {exc}"})
+    except Exception as exc:
+        logger.error("[COROOT-TOOL] Unexpected error fetching traces: %s", exc)
+        return json.dumps({"error": f"Unexpected error contacting Coroot: {exc}"})
 
     traces_data = _extract_field(raw, "traces")
     if not traces_data:
@@ -649,6 +681,9 @@ def coroot_get_service_map(
         raw = client.get_service_map(pid, from_ts, to_ts)
     except CorootAPIError as exc:
         return json.dumps({"error": f"Coroot API error: {exc}"})
+    except Exception as exc:
+        logger.error("[COROOT-TOOL] Unexpected error fetching service map: %s", exc)
+        return json.dumps({"error": f"Unexpected error contacting Coroot: {exc}"})
 
     map_data = _extract_field(raw, "map")
     services: List[Dict] = map_data if isinstance(map_data, list) else []
@@ -709,6 +744,9 @@ def coroot_query_metrics(
         raw = client.query_panel_data(pid, promql, start_ts, end_ts, legend)
     except CorootAPIError as exc:
         return json.dumps({"error": f"Coroot API error: {exc}"})
+    except Exception as exc:
+        logger.error("[COROOT-TOOL] Unexpected error querying metrics: %s", exc)
+        return json.dumps({"error": f"Unexpected error contacting Coroot: {exc}"})
 
     if not raw or raw == {}:
         return json.dumps({
@@ -756,6 +794,9 @@ def coroot_get_deployments(
         raw = client.get_deployments(pid, from_ts, to_ts)
     except CorootAPIError as exc:
         return json.dumps({"error": f"Coroot API error: {exc}"})
+    except Exception as exc:
+        logger.error("[COROOT-TOOL] Unexpected error fetching deployments: %s", exc)
+        return json.dumps({"error": f"Unexpected error contacting Coroot: {exc}"})
 
     deployments = _extract_field(raw, "deployments")
     if not deployments:
@@ -793,6 +834,9 @@ def coroot_get_nodes(
         raw = client.get_nodes(pid, from_ts, to_ts)
     except CorootAPIError as exc:
         return json.dumps({"error": f"Coroot API error: {exc}"})
+    except Exception as exc:
+        logger.error("[COROOT-TOOL] Unexpected error fetching nodes: %s", exc)
+        return json.dumps({"error": f"Unexpected error contacting Coroot: {exc}"})
 
     nodes = _extract_field(raw, "nodes")
     if not nodes:
@@ -846,6 +890,9 @@ def coroot_get_overview_logs(
         raw = client.get_overview_logs(pid, from_ts, to_ts, query)
     except CorootAPIError as exc:
         return json.dumps({"error": f"Coroot API error: {exc}"})
+    except Exception as exc:
+        logger.error("[COROOT-TOOL] Unexpected error fetching overview logs: %s", exc)
+        return json.dumps({"error": f"Unexpected error contacting Coroot: {exc}"})
 
     entries = []
     for e in (raw.get("entries") or []):
@@ -900,6 +947,9 @@ def coroot_get_node_detail(
         raw = client.get_node_detail(pid, node_name, from_ts, to_ts)
     except CorootAPIError as exc:
         return json.dumps({"error": f"Coroot API error: {exc}"})
+    except Exception as exc:
+        logger.error("[COROOT-TOOL] Unexpected error fetching node detail: %s", exc)
+        return json.dumps({"error": f"Unexpected error contacting Coroot: {exc}"})
 
     if not raw:
         return json.dumps({
@@ -935,6 +985,9 @@ def coroot_get_costs(
         raw = client.get_costs(pid, from_ts, to_ts)
     except CorootAPIError as exc:
         return json.dumps({"error": f"Coroot API error: {exc}"})
+    except Exception as exc:
+        logger.error("[COROOT-TOOL] Unexpected error fetching costs: %s", exc)
+        return json.dumps({"error": f"Unexpected error contacting Coroot: {exc}"})
 
     costs_data = _extract_field(raw, "costs")
     if not costs_data:
@@ -971,6 +1024,9 @@ def coroot_get_risks(
         raw = client.get_risks(pid, from_ts, to_ts)
     except CorootAPIError as exc:
         return json.dumps({"error": f"Coroot API error: {exc}"})
+    except Exception as exc:
+        logger.error("[COROOT-TOOL] Unexpected error fetching risks: %s", exc)
+        return json.dumps({"error": f"Unexpected error contacting Coroot: {exc}"})
 
     risks_data = _extract_field(raw, "risks")
     if not risks_data:

@@ -43,9 +43,9 @@ async function proxyToBackend(request: NextRequest, { params }: { params: Promis
       let errorMessage = 'Backend request failed';
       try {
         const parsed = JSON.parse(text);
-        if (parsed?.error) errorMessage = parsed.error;
+        if (parsed?.error) errorMessage = String(parsed.error);
       } catch {
-        // not JSON — keep default message
+        errorMessage = text?.trim() || 'Backend request failed';
       }
       return NextResponse.json(
         { error: errorMessage },
