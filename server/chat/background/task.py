@@ -174,6 +174,7 @@ def _get_connected_integrations(user_id: str) -> Dict[str, bool]:
         'dynatrace': False,
         'github': False,
         'confluence': False,
+        'coroot': False,
     }
 
     try:
@@ -205,6 +206,12 @@ def _get_connected_integrations(user_id: str) -> Dict[str, bool]:
         )
     except Exception as e:
         logger.debug(f"[BackgroundChat] Error checking Confluence: {e}")
+
+    try:
+        from chat.backend.agent.tools.coroot_tool import is_coroot_connected
+        integrations['coroot'] = is_coroot_connected(user_id)
+    except Exception as e:
+        logger.info("[BackgroundChat] Error checking Coroot: %s", e, exc_info=True)
 
     return integrations
 

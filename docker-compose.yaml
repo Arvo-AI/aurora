@@ -556,7 +556,7 @@ services:
       - MEMGRAPH_PASSWORD=${MEMGRAPH_PASSWORD}
     command: >
       --memory-limit=512
-      --log-level=WARNING
+      --log-level=ERROR
       --also-log-to-stderr
     healthcheck:
       test: ["CMD-SHELL", "python3 -c \"import socket; s=socket.socket(); s.settimeout(2); s.connect(('localhost',7687)); s.close()\""]

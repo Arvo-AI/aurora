@@ -5,6 +5,7 @@ import { useToast } from "@/hooks/use-toast";
 import { datadogService, DatadogStatus } from "@/lib/services/datadog";
 import { DatadogConnectionStep } from "@/components/datadog/DatadogConnectionStep";
 import { DatadogWebhookStep } from "@/components/datadog/DatadogWebhookStep";
+import { getUserFriendlyError } from "@/lib/utils";
 
 const CACHE_KEYS = {
   STATUS: 'datadog_connection_status',
@@ -12,38 +13,6 @@ const CACHE_KEYS = {
 };
 
 const DEFAULT_SITE = 'datadoghq.com';
-
-const getUserFriendlyError = (err: unknown): string => {
-  if (!err) {
-    return "An unexpected error occurred. Please try again.";
-  }
-
-  if (typeof err === 'string') {
-    return err;
-  }
-
-  if (err instanceof Error) {
-    const { message } = err;
-    if (!message) {
-      return 'An unexpected error occurred. Please try again.';
-    }
-    try {
-      const parsed = JSON.parse(message) as { error?: string };
-      return parsed.error ?? message;
-    } catch {
-      return message;
-    }
-  }
-
-  if (typeof err === 'object') {
-    const errorValue = (err as Record<string, unknown>).error;
-    if (typeof errorValue === 'string') {
-      return errorValue;
-    }
-  }
-
-  return 'An unexpected error occurred. Please try again.';
-};
 
 export default function DatadogAuthPage() {
   const { toast } = useToast();

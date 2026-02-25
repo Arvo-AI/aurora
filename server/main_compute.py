@@ -237,6 +237,10 @@ import routes.splunk.tasks  # noqa: F401
 app.register_blueprint(splunk_bp, url_prefix="/splunk")
 app.register_blueprint(splunk_search_bp, url_prefix="/splunk")
 
+# --- Coroot Integration Routes ---
+from routes.coroot import bp as coroot_bp  # noqa: F401
+app.register_blueprint(coroot_bp, url_prefix="/coroot")
+
 # --- Dynatrace Integration Routes ---
 from utils.flags.feature_flags import is_dynatrace_enabled
 if is_dynatrace_enabled():

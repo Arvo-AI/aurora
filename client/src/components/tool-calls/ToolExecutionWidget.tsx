@@ -24,6 +24,7 @@ import {
   parseWebSearchCommand,
   parseAwsMcpCommand,
   parseAwsSuggestCommand,
+  parseCorootCommand,
 } from "./tool-command-parser"
 import { RenderOutput } from "./tool-output-renderer"
 
@@ -242,6 +243,10 @@ const ToolExecutionWidget = ({ tool, className, sendMessage, sendRaw, onToolUpda
   }
   else if (tool.tool_name === "mcp_suggest_aws_commands" && typeof command === "string" && command.trim().startsWith("{")) {
     command = parseAwsSuggestCommand(command)
+  }
+  // Coroot tools parsing
+  else if (tool.tool_name.startsWith("coroot_")) {
+    command = parseCorootCommand(tool.tool_name, normalizedInput)
   }
 
   // If command is still JSON blob, use default

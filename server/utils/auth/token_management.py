@@ -236,6 +236,20 @@ def store_tokens_in_db(user_id: str, token_data: Dict, provider: str,
                     "is_active = TRUE",
                     (user_id, secret_ref, provider, team_id)
                 )
+            elif provider == "coroot":
+                coroot_url = token_data.get("url") if isinstance(token_data, dict) else None
+                coroot_email = token_data.get("email") if isinstance(token_data, dict) else None
+
+                cursor.execute(
+                    "INSERT INTO user_tokens (user_id, secret_ref, provider, client_id, email) "
+                    "VALUES (%s, %s, %s, %s, %s) ON CONFLICT (user_id, provider) DO UPDATE "
+                    "SET secret_ref = EXCLUDED.secret_ref, "
+                    "client_id = EXCLUDED.client_id, "
+                    "email = EXCLUDED.email, "
+                    "timestamp = CURRENT_TIMESTAMP, "
+                    "is_active = TRUE",
+                    (user_id, secret_ref, provider, coroot_url, coroot_email)
+                )
             elif provider == "bitbucket":
                 # Bitbucket: Store workspace slug as subscription_name, workspace UUID as subscription_id,
                 # user email as email, auth_type as client_id
