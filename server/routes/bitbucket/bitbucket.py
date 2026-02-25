@@ -70,7 +70,7 @@ def bitbucket_login():
                 }
 
                 store_tokens_in_db(user_id, token_data, "bitbucket")
-                logger.info(f"Stored Bitbucket API token credentials for user {user_id}")
+                logger.info("Stored Bitbucket API token credentials")
 
                 return jsonify({
                     "success": True,
@@ -192,7 +192,7 @@ def bitbucket_callback():
             }
 
             store_tokens_in_db(user_id, bb_token_data, "bitbucket")
-            logger.info(f"Stored Bitbucket OAuth credentials for user {user_id}")
+            logger.info("Stored Bitbucket OAuth credentials")
         except Exception as e:
             logger.error(f"Failed to store Bitbucket credentials: {e}", exc_info=True)
 
@@ -285,7 +285,7 @@ def bitbucket_disconnect():
         delete_user_secret(user_id, "bitbucket")
         delete_user_secret(user_id, "bitbucket_workspace_selection")
 
-        logger.info(f"Disconnected Bitbucket for user {user_id}")
+        logger.info("Disconnected Bitbucket account")
         return jsonify({"success": True, "message": "Bitbucket account disconnected"})
 
     except Exception as e:
