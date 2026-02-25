@@ -288,52 +288,56 @@ export function parseCorootCommand(toolName: string, toolInput: string): string 
     }
   })()
 
-  const hours = args.lookback_hours
+  const hours = args.lookback_hours != null ? String(args.lookback_hours) : ""
   const window = hours ? ` (${hours}h)` : ""
+
+  const str = (v: unknown): string =>
+    v != null && typeof v !== "object" ? String(v) : ""
 
   switch (toolName) {
     case "coroot_query_metrics": {
-      const q = args.promql || args.query || ""
+      const q = str(args.promql) || str(args.query)
       const truncated = q.length > 60 ? q.substring(0, 57) + "..." : q
       return `Coroot: Query ${truncated ? `\`${truncated}\`` : "metrics"}${window}`
     }
     case "coroot_get_app_detail": {
-      const appId = args.app_id || ""
+      const appId = str(args.app_id)
       const short = appId.split(":").pop() || appId
       return `Coroot: App detail${short ? ` — ${short}` : ""}${window}`
     }
     case "coroot_get_app_logs": {
-      const appId = args.app_id || ""
+      const appId = str(args.app_id)
       const short = appId.split(":").pop() || appId
-      const sev = args.severity ? ` ${args.severity}` : ""
+      const sev = args.severity ? ` ${str(args.severity)}` : ""
       return `Coroot: App logs${short ? ` — ${short}` : ""}${sev}${window}`
     }
     case "coroot_get_overview_logs": {
-      const sev = args.severity ? ` ${args.severity}` : ""
-      const filter = args.message_filter ? ` "${args.message_filter}"` : ""
+      const sev = args.severity ? ` ${str(args.severity)}` : ""
+      const filter = args.message_filter ? ` "${str(args.message_filter)}"` : ""
       const k8s = args.include_k8s_events ? " +k8s-events" : ""
       return `Coroot: Overview logs${sev}${filter}${k8s}${window}`
     }
     case "coroot_get_incidents":
       return `Coroot: Incidents${window}`
     case "coroot_get_incident_detail":
-      return `Coroot: Incident detail — ${args.incident_key || "?"}`
+      return `Coroot: Incident detail — ${str(args.incident_key) || "?"}`
     case "coroot_get_applications":
       return `Coroot: List applications${window}`
     case "coroot_get_service_map":
       return `Coroot: Service map${window}`
     case "coroot_get_traces": {
-      const svc = args.service_name ? ` — ${args.service_name}` : ""
+      const svc = args.service_name ? ` — ${str(args.service_name)}` : ""
       const err = args.status_error ? " (errors)" : ""
-      const tid = args.trace_id ? ` trace:${args.trace_id.substring(0, 8)}` : ""
-      return `Coroot: Traces${svc}${err}${tid}${window}`
+      const tid = str(args.trace_id)
+      const tidLabel = tid ? ` trace:${tid.substring(0, 8)}` : ""
+      return `Coroot: Traces${svc}${err}${tidLabel}${window}`
     }
     case "coroot_get_deployments":
       return `Coroot: Deployments${window}`
     case "coroot_get_nodes":
       return `Coroot: Nodes${window}`
     case "coroot_get_node_detail":
-      return `Coroot: Node — ${args.node_name || "?"}${window}`
+      return `Coroot: Node — ${str(args.node_name) || "?"}${window}`
     case "coroot_get_costs":
       return `Coroot: Cost breakdown${window}`
     case "coroot_get_risks":

@@ -21,6 +21,8 @@ logger = logging.getLogger(__name__)
 MAX_OUTPUT_CHARS = 120000
 MAX_LIST_ITEMS = 100
 MAX_METRIC_DATAPOINTS = 120
+LOOKBACK_HOURS_MAX = 720  # 30 days
+MAX_LIMIT = 200
 STATUS_LABELS = {0: "UNKNOWN", 1: "OK", 2: "INFO", 3: "WARNING", 4: "CRITICAL"}
 
 
@@ -81,6 +83,32 @@ def _default_project(client: CorootClient) -> Optional[str]:
 
 def _now_ts() -> int:
     return int(time.time())
+
+
+def _clamp_lookback_hours(value: Any) -> int:
+    """Coerce *value* to a numeric lookback and clamp to [0, LOOKBACK_HOURS_MAX].
+
+    Non-numeric values fall back to a safe default of 1 hour.
+    """
+    try:
+        hours = int(float(value))
+    except (TypeError, ValueError):
+        logger.warning("[COROOT-TOOL] Non-numeric lookback_hours=%r, defaulting to 1", value)
+        return 1
+    return max(0, min(hours, LOOKBACK_HOURS_MAX))
+
+
+def _clamp_limit(value: Any, default: int = 50) -> int:
+    """Coerce *value* to an integer in [1, MAX_LIMIT].
+
+    Non-numeric values fall back to *default*.
+    """
+    try:
+        n = int(float(value))
+    except (TypeError, ValueError):
+        logger.warning("[COROOT-TOOL] Non-numeric limit=%r, defaulting to %d", value, default)
+        return default
+    return max(1, min(n, MAX_LIMIT))
 
 
 def _truncate(text: str, limit: int = MAX_OUTPUT_CHARS) -> str:
@@ -281,6 +309,8 @@ def coroot_get_incidents(
     if not user_id:
         return json.dumps({"error": "User context not available"})
 
+    lookback_hours = _clamp_lookback_hours(lookback_hours)
+
     client = _build_client(user_id)
     if not client:
         return json.dumps({"error": "Coroot not connected. Ask the user to connect Coroot first."})
@@ -349,6 +379,8 @@ def coroot_get_incident_detail(
     if not user_id:
         return json.dumps({"error": "User context not available"})
 
+    lookback_hours = _clamp_lookback_hours(lookback_hours)
+
     client = _build_client(user_id)
     if not client:
         return json.dumps({"error": "Coroot not connected."})
@@ -386,6 +418,8 @@ def coroot_get_applications(
     """List all applications with health status from Coroot."""
     if not user_id:
         return json.dumps({"error": "User context not available"})
+
+    lookback_hours = _clamp_lookback_hours(lookback_hours)
 
     client = _build_client(user_id)
     if not client:
@@ -453,6 +487,8 @@ def coroot_get_app_detail(
     """Get full audit reports for one application (SLO, CPU, Memory, Net, Logs, DB, etc.)."""
     if not user_id:
         return json.dumps({"error": "User context not available"})
+
+    lookback_hours = _clamp_lookback_hours(lookback_hours)
 
     client = _build_client(user_id)
     if not client:
@@ -531,6 +567,9 @@ def coroot_get_app_logs(
     if not user_id:
         return json.dumps({"error": "User context not available"})
 
+    lookback_hours = _clamp_lookback_hours(lookback_hours)
+    limit = _clamp_limit(limit, default=50)
+
     client = _build_client(user_id)
     if not client:
         return json.dumps({"error": "Coroot not connected."})
@@ -546,7 +585,7 @@ def coroot_get_app_logs(
         "source": source,
         "view": "messages",
         "filters": [],
-        "limit": min(limit, 200),
+        "limit": limit,
     }
     if severity:
         query["filters"].append({"name": "Severity", "op": "=", "value": severity})
@@ -610,6 +649,8 @@ def coroot_get_traces(
     if not user_id:
         return json.dumps({"error": "User context not available"})
 
+    lookback_hours = _clamp_lookback_hours(lookback_hours)
+
     client = _build_client(user_id)
     if not client:
         return json.dumps({"error": "Coroot not connected."})
@@ -665,6 +706,8 @@ def coroot_get_service_map(
     """Get the service dependency map showing all applications and their connections."""
     if not user_id:
         return json.dumps({"error": "User context not available"})
+
+    lookback_hours = _clamp_lookback_hours(lookback_hours)
 
     client = _build_client(user_id)
     if not client:
@@ -729,6 +772,8 @@ def coroot_query_metrics(
     if not user_id:
         return json.dumps({"error": "User context not available"})
 
+    lookback_hours = _clamp_lookback_hours(lookback_hours)
+
     client = _build_client(user_id)
     if not client:
         return json.dumps({"error": "Coroot not connected."})
@@ -779,6 +824,8 @@ def coroot_get_deployments(
     if not user_id:
         return json.dumps({"error": "User context not available"})
 
+    lookback_hours = _clamp_lookback_hours(lookback_hours)
+
     client = _build_client(user_id)
     if not client:
         return json.dumps({"error": "Coroot not connected."})
@@ -818,6 +865,8 @@ def coroot_get_nodes(
     """List all nodes with health status (CPU, memory, disk)."""
     if not user_id:
         return json.dumps({"error": "User context not available"})
+
+    lookback_hours = _clamp_lookback_hours(lookback_hours)
 
     client = _build_client(user_id)
     if not client:
@@ -862,6 +911,9 @@ def coroot_get_overview_logs(
     if not user_id:
         return json.dumps({"error": "User context not available"})
 
+    lookback_hours = _clamp_lookback_hours(lookback_hours)
+    limit = _clamp_limit(limit, default=50)
+
     client = _build_client(user_id)
     if not client:
         return json.dumps({"error": "Coroot not connected."})
@@ -877,7 +929,7 @@ def coroot_get_overview_logs(
         "agent": True,
         "otel": True,
         "filters": [],
-        "limit": min(limit, 200),
+        "limit": limit,
     }
     if severity:
         query["filters"].append({"name": "Severity", "op": "=", "value": severity})
@@ -932,6 +984,8 @@ def coroot_get_node_detail(
     if not user_id:
         return json.dumps({"error": "User context not available"})
 
+    lookback_hours = _clamp_lookback_hours(lookback_hours)
+
     client = _build_client(user_id)
     if not client:
         return json.dumps({"error": "Coroot not connected."})
@@ -969,6 +1023,8 @@ def coroot_get_costs(
     """Get cost breakdown per node and per application, plus right-sizing recommendations."""
     if not user_id:
         return json.dumps({"error": "User context not available"})
+
+    lookback_hours = _clamp_lookback_hours(lookback_hours)
 
     client = _build_client(user_id)
     if not client:
@@ -1008,6 +1064,8 @@ def coroot_get_risks(
     """Get security and availability risks (single-instance, single-AZ, exposed ports, spot-only)."""
     if not user_id:
         return json.dumps({"error": "User context not available"})
+
+    lookback_hours = _clamp_lookback_hours(lookback_hours)
 
     client = _build_client(user_id)
     if not client:

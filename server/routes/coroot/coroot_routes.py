@@ -10,6 +10,7 @@ from connectors.coroot_connector.client import (
     get_coroot_client,
     invalidate_coroot_client,
 )
+from chat.backend.agent.tools.mcp_tools import clear_credentials_cache
 from utils.auth.stateless_auth import get_user_id_from_request
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.secrets.secret_ref_utils import delete_user_secret
@@ -104,6 +105,8 @@ def connect():
         logger.exception("[COROOT] Failed to store credentials: %s", exc)
         return jsonify({"error": "Failed to store Coroot credentials"}), 500
 
+    clear_credentials_cache(user_id)
+
     return jsonify({
         "success": True,
         "url": url,
@@ -161,6 +164,8 @@ def disconnect():
 
         if not vault_ok:
             logger.warning("[COROOT] Disconnected user %s but Vault delete failed", user_id)
+
+        clear_credentials_cache(user_id)
 
         logger.info("[COROOT] Disconnected user %s", user_id)
         return jsonify({
