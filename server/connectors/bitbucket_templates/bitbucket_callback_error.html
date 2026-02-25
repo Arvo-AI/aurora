@@ -58,15 +58,15 @@
     </div>
 
     <script>
-        console.log('Bitbucket authentication error: {{ error }}');
+        console.log('Bitbucket authentication error:', {{ error | tojson }});
         // Send error message to parent window
         if (window.opener) {
             window.opener.postMessage(
                 {
                     type: 'bitbucket_auth_error',
-                    error: '{{ error }}'
+                    error: {{ error | tojson }}
                 },
-                '{{ frontend_url }}'
+                {{ frontend_url | tojson }}
             );
         }
 

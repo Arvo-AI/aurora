@@ -164,27 +164,37 @@ def bitbucket_callback():
         expires_in = token_response.get("expires_in", 7200)
         expires_at = time.time() + expires_in
 
-        # Store credentials
-        user_id = request.args.get("state")
-        if user_id:
-            try:
-                from utils.auth.token_management import store_tokens_in_db
+        # Validate CSRF state and extract user_id
+        state = request.args.get("state")
+        user_id = None
+        if state:
+            from connectors.bitbucket_connector.oauth_utils import validate_oauth_state
+            user_id = validate_oauth_state(state)
 
-                bb_token_data = {
-                    "access_token": access_token,
-                    "refresh_token": token_response.get("refresh_token"),
-                    "expires_at": expires_at,
-                    "auth_type": "oauth",
-                    "username": username,
-                    "display_name": display_name,
-                }
+        if not user_id:
+            logger.error("Invalid or expired OAuth state token in Bitbucket callback")
+            return render_template(
+                "bitbucket_callback_error.html",
+                error="Invalid or expired OAuth state. Please try connecting again.",
+                frontend_url=FRONTEND_URL,
+            )
 
-                store_tokens_in_db(user_id, bb_token_data, "bitbucket")
-                logger.info(f"Stored Bitbucket OAuth credentials for user {user_id}")
-            except Exception as e:
-                logger.error(f"Failed to store Bitbucket credentials: {e}", exc_info=True)
-        else:
-            logger.warning("No user_id provided in Bitbucket OAuth state parameter")
+        try:
+            from utils.auth.token_management import store_tokens_in_db
+
+            bb_token_data = {
+                "access_token": access_token,
+                "refresh_token": token_response.get("refresh_token"),
+                "expires_at": expires_at,
+                "auth_type": "oauth",
+                "username": username,
+                "display_name": display_name,
+            }
+
+            store_tokens_in_db(user_id, bb_token_data, "bitbucket")
+            logger.info(f"Stored Bitbucket OAuth credentials for user {user_id}")
+        except Exception as e:
+            logger.error(f"Failed to store Bitbucket credentials: {e}", exc_info=True)
 
         return render_template(
             "bitbucket_callback_success.html",

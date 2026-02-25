@@ -30,7 +30,15 @@ def _get_bb_client(user_id):
     if auth_type == "oauth":
         from connectors.bitbucket_connector.oauth_utils import refresh_token_if_needed
 
+        old_access_token = bb_creds.get("access_token")
         bb_creds = refresh_token_if_needed(bb_creds)
+
+        if bb_creds.get("access_token") != old_access_token:
+            try:
+                from utils.auth.token_management import store_tokens_in_db
+                store_tokens_in_db(user_id, bb_creds, "bitbucket")
+            except Exception as e:
+                logger.warning(f"Failed to persist refreshed Bitbucket token: {e}")
 
     from connectors.bitbucket_connector.api_client import BitbucketAPIClient
 

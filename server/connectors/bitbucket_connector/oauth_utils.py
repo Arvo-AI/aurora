@@ -4,14 +4,17 @@ Handles authorization URL generation, token exchange, and token refresh.
 """
 import logging
 import os
+import secrets
 import time
+from urllib.parse import urlencode
+
 import requests
 
 logger = logging.getLogger(__name__)
 
 BITBUCKET_AUTHORIZE_URL = "https://bitbucket.org/site/oauth2/authorize"
 BITBUCKET_TOKEN_URL = "https://bitbucket.org/site/oauth2/access_token"
-BITBUCKET_SCOPES = "repository pullrequest issue account project"
+BITBUCKET_SCOPES = "repository:write pullrequest:write issue:write account project pipeline:write"
 
 
 def _get_redirect_uri():
@@ -20,28 +23,58 @@ def _get_redirect_uri():
     return f"{backend_url}/bitbucket/callback"
 
 
-def get_auth_url(state):
+def generate_oauth_state(user_id):
     """
-    Build the Bitbucket OAuth authorization URL.
+    Generate a cryptographic state token for the OAuth flow and store it in Redis.
+
+    Returns:
+        A random state token string (the user_id is stored server-side, not in the URL).
+    """
+    from utils.auth.oauth2_state_cache import store_oauth2_state
+
+    state = secrets.token_urlsafe(32)
+    store_oauth2_state(state=state, user_id=user_id, endpoint="bitbucket")
+    return state
+
+
+def validate_oauth_state(state):
+    """
+    Validate a state token from the OAuth callback and return the associated user_id.
+
+    Returns:
+        The user_id if valid, or None if the token is invalid/expired/replayed.
+    """
+    from utils.auth.oauth2_state_cache import retrieve_oauth2_state
+
+    data = retrieve_oauth2_state(state)
+    if not data:
+        logger.warning("Invalid or expired Bitbucket OAuth state token")
+        return None
+    return data.get("user_id")
+
+
+def get_auth_url(user_id):
+    """
+    Build the Bitbucket OAuth authorization URL with CSRF-safe state.
 
     Args:
-        state: Opaque value passed through the OAuth flow (typically user_id).
+        user_id: The user initiating the OAuth flow.
 
     Returns:
         The full authorization URL string.
     """
     client_id = os.getenv("BB_OAUTH_CLIENT_ID")
     redirect_uri = _get_redirect_uri()
+    state = generate_oauth_state(user_id)
 
-    url = (
-        f"{BITBUCKET_AUTHORIZE_URL}"
-        f"?client_id={client_id}"
-        f"&response_type=code"
-        f"&scope={BITBUCKET_SCOPES}"
-        f"&state={state}"
-        f"&redirect_uri={redirect_uri}"
-    )
-    return url
+    params = urlencode({
+        "client_id": client_id,
+        "response_type": "code",
+        "scope": BITBUCKET_SCOPES,
+        "state": state,
+        "redirect_uri": redirect_uri,
+    })
+    return f"{BITBUCKET_AUTHORIZE_URL}?{params}"
 
 
 def exchange_code_for_token(code):
