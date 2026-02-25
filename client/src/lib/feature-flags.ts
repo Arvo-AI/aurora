@@ -27,4 +27,8 @@ export const isScalewayEnabled = () => {
 
 export const isBitbucketEnabled = () => {
   return getEnv('NEXT_PUBLIC_ENABLE_BITBUCKET') === 'true';
+};  
+  
+export const isDynatraceEnabled = () => {
+  return getEnv('NEXT_PUBLIC_ENABLE_DYNATRACE') === 'true';
 };

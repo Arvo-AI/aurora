@@ -123,6 +123,7 @@ export class ProviderPolling {
     const isKubectlConnected = this.getConnectionStatus('kubectl');
     const isSlackConnected = this.getConnectionStatus('slack');
     const isSplunkConnected = this.getConnectionStatus('splunk');
+    const isDynatraceConnected = this.getConnectionStatus('dynatrace');
 
     this.config.onProvidersUpdate(prev => {
       let hasChanges = false;
@@ -230,6 +231,15 @@ export class ProviderPolling {
             if (JSON.stringify(newSplunkState) !== JSON.stringify(provider)) hasChanges = true;
             return newSplunkState;
 
+          case 'dynatrace':
+            const newDynatraceState = {
+              ...provider,
+              isConnected: isDynatraceConnected,
+              status: isDynatraceConnected ? ('connected' as const) : ('disconnected' as const)
+            };
+            if (JSON.stringify(newDynatraceState) !== JSON.stringify(provider)) hasChanges = true;
+            return newDynatraceState;
+
           default:
             return provider;
         }
@@ -314,6 +324,7 @@ export class ProviderPolling {
         e.key === 'isKubectlConnected' ||
         e.key === 'isSlackConnected' ||
         e.key === 'isSplunkConnected' ||
+        e.key === 'isDynatraceConnected' ||
         e.key === 'isGCPConnected' ||
         e.key === 'isAzureFetched' ||
         e.key === 'isOVHFetched' ||

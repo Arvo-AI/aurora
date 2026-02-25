@@ -60,6 +60,11 @@ from .splunk_tool import (
     SplunkListIndexesArgs,
     SplunkListSourcetypesArgs,
 )
+from .dynatrace_tool import (
+    query_dynatrace,
+    is_dynatrace_connected,
+    QueryDynatraceArgs,
+)
 
 # Import all context management functions from utils
 from utils.cloud.cloud_utils import (
@@ -1244,6 +1249,25 @@ def get_cloud_tools():
         logging.info(f"Added 3 Splunk tools for user {user_id}")
     else:
         logging.debug(f"Splunk tools not added - user {user_id} not connected to Splunk")
+
+    # Add Dynatrace tool if connected
+    if user_id and is_dynatrace_connected(user_id):
+        context_wrapped_dt = with_user_context(query_dynatrace)
+        notification_wrapped_dt = with_completion_notification(context_wrapped_dt)
+        final_dt_func = wrap_func_with_capture(notification_wrapped_dt, "query_dynatrace") if tool_capture else notification_wrapped_dt
+
+        tools.append(StructuredTool.from_function(
+            func=final_dt_func,
+            name="query_dynatrace",
+            description=(
+                "Query Dynatrace for problems, logs, metrics, or monitored entities. "
+                "Set resource_type to 'problems', 'logs', 'metrics', or 'entities'. "
+                "Examples: query_dynatrace(resource_type='problems', query='status(\"open\")', time_from='now-1h') "
+                "or query_dynatrace(resource_type='metrics', query='builtin:host.cpu.usage', time_from='now-30m')"
+            ),
+            args_schema=QueryDynatraceArgs,
+        ))
+        logging.info(f"Added Dynatrace tool for user {user_id}")
 
     # Add Confluence search tools if enabled
     try:

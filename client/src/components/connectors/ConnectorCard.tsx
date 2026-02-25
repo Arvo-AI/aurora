@@ -244,7 +244,7 @@ export default function ConnectorCard({ connector }: ConnectorCardProps) {
               <div className={`p-2 rounded-lg ${connector.iconBgColor || "bg-muted"}`}>
                 {connector.iconPath ? (
                   <div className="relative h-6 w-6">
-                    <img src={connector.iconPath} alt={`${connector.name} icon`} className="h-6 w-6 object-contain" />
+                    <img src={connector.iconPath} alt={`${connector.name} icon`} className={`h-6 w-6 object-contain ${connector.iconClassName || ""}`} />
                   </div>
                 ) : IconComponent ? (
                   <IconComponent className={`h-6 w-6 ${connector.iconColor || "text-foreground"}`} />

@@ -1430,6 +1430,21 @@ def build_background_mode_segment(state: Optional[Any]) -> str:
             "After Splunk analysis, correlate with cloud resources if providers connected.",
         ])
 
+    # Dynatrace tools (if connected)
+    if integrations.get('dynatrace'):
+        parts.extend([
+            "",
+            "DYNATRACE INVESTIGATION:",
+            "IMPORTANT: Dynatrace is a REMOTE service. Use ONLY the query_dynatrace API tool.",
+            "Usage: query_dynatrace(resource_type=TYPE, query=SELECTOR, time_from=START)",
+            "Resource types:",
+            "1. 'problems' - Active/recent problems. query=problem selector e.g. status(\"open\")",
+            "2. 'entities' - Monitored hosts/services/processes. query=entity selector e.g. type(\"HOST\")",
+            "3. 'logs' - Log entries. query=search string",
+            "4. 'metrics' - Metric time series. query=metric selector e.g. builtin:host.cpu.usage",
+            "Start with problems to understand the issue, then drill into entities and logs.",
+        ])
+
     # GitHub tools (if connected)
     if integrations.get('github'):
         parts.extend([

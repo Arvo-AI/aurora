@@ -50,6 +50,7 @@ SUPPORTED_SECRET_PROVIDERS: Set[str] = {
     "confluence", # Confluence connector tokens
     "bitbucket", # Bitbucket connector tokens
     "bitbucket_workspace_selection",  # Bitbucket selected workspace and repo
+    "dynatrace", # Dynatrace connector tokens
     "aurora",   # Aurora-managed SSH keys
 }
 
