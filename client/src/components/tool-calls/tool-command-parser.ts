@@ -280,11 +280,16 @@ export function parseAwsSuggestCommand(toolInput: string): string {
 export function parseCorootCommand(toolName: string, toolInput: string): string {
   const args = (() => {
     try {
-      const parsable = toolInput.replace(/'/g, '"')
-      const parsed = JSON.parse(parsable)
+      const parsed = JSON.parse(toolInput)
       return parsed?.kwargs || parsed || {}
     } catch {
-      return {}
+      try {
+        const parsable = toolInput.replace(/'/g, '"')
+        const parsed = JSON.parse(parsable)
+        return parsed?.kwargs || parsed || {}
+      } catch {
+        return {}
+      }
     }
   })()
 

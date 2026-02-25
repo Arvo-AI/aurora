@@ -95,6 +95,16 @@ def get_coroot_client(
         client.login()
 
         with _cache_lock:
+            if entry is not None:
+                previous_client = entry[0]
+                try:
+                    previous_client._session.close()
+                except Exception:
+                    logger.debug(
+                        "[COROOT] Failed to close session for user_id=%s (replacement)",
+                        user_id,
+                        exc_info=True,
+                    )
             _client_cache[user_id] = (client, now)
             _sweep_stale_locks()
         return client

@@ -83,6 +83,16 @@ export default function CorootAuthPage() {
     try {
       const result = await corootService.connect({ url, email, password });
 
+      if (!result.success) {
+        updateLocalStorageConnection(false);
+        toast({
+          title: "Failed to connect to Coroot",
+          description: "Could not authenticate with the provided credentials. Please check the URL, email, and password.",
+          variant: "destructive",
+        });
+        return;
+      }
+
       const newStatus: CorootStatus = {
         connected: true,
         url: result.url,
