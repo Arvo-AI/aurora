@@ -57,6 +57,8 @@ x-common-env: &common-env
   NEXT_PUBLIC_ENABLE_SLACK: ${NEXT_PUBLIC_ENABLE_SLACK}
   NEXT_PUBLIC_ENABLE_PAGERDUTY_OAUTH: ${NEXT_PUBLIC_ENABLE_PAGERDUTY_OAUTH}
   NEXT_PUBLIC_ENABLE_CONFLUENCE: ${NEXT_PUBLIC_ENABLE_CONFLUENCE}
+  NEXT_PUBLIC_ENABLE_BITBUCKET: ${NEXT_PUBLIC_ENABLE_BITBUCKET}
+  NEXT_PUBLIC_ENABLE_DYNATRACE: ${NEXT_PUBLIC_ENABLE_DYNATRACE}
   # Slack OAuth (needed by celery_worker for formatting responses)
   SLACK_CLIENT_ID: ${SLACK_CLIENT_ID}
   SLACK_CLIENT_SECRET: ${SLACK_CLIENT_SECRET}
@@ -151,7 +153,11 @@ services:
       # GitHub OAuth
       GH_OAUTH_CLIENT_ID: ${GH_OAUTH_CLIENT_ID}
       GH_OAUTH_CLIENT_SECRET: ${GH_OAUTH_CLIENT_SECRET}
-      
+
+      # Bitbucket OAuth
+      BB_OAUTH_CLIENT_ID: ${BB_OAUTH_CLIENT_ID}
+      BB_OAUTH_CLIENT_SECRET: ${BB_OAUTH_CLIENT_SECRET}
+
       # PagerDuty OAuth
       PAGERDUTY_CLIENT_ID: ${PAGERDUTY_CLIENT_ID}
       PAGERDUTY_CLIENT_SECRET: ${PAGERDUTY_CLIENT_SECRET}
@@ -420,6 +426,7 @@ services:
       WATCHPACK_POLLING_INTERVAL: 1000
 
       # Public variables (browser-accessible, injected at runtime via docker-entrypoint.sh)
+      # Public variables (browser-accessible, injected at runtime via docker-entrypoint.sh)
       NEXT_PUBLIC_BACKEND_URL: ${NEXT_PUBLIC_BACKEND_URL}
       NEXT_PUBLIC_WEBSOCKET_URL: ${NEXT_PUBLIC_WEBSOCKET_URL}
       NEXT_PUBLIC_ENABLE_OVH: ${NEXT_PUBLIC_ENABLE_OVH}
@@ -427,7 +434,10 @@ services:
       NEXT_PUBLIC_ENABLE_PAGERDUTY_OAUTH: ${NEXT_PUBLIC_ENABLE_PAGERDUTY_OAUTH}
       NEXT_PUBLIC_ENABLE_CONFLUENCE: ${NEXT_PUBLIC_ENABLE_CONFLUENCE}
       NEXT_PUBLIC_ENABLE_SCALEWAY: ${NEXT_PUBLIC_ENABLE_SCALEWAY}
+      NEXT_PUBLIC_ENABLE_SCALEWAY: ${NEXT_PUBLIC_ENABLE_SCALEWAY}
+      NEXT_PUBLIC_ENABLE_BITBUCKET: ${NEXT_PUBLIC_ENABLE_BITBUCKET}
       # Server-side only (Next.js API routes)
+      NEXT_PUBLIC_ENABLE_DYNATRACE: ${NEXT_PUBLIC_ENABLE_DYNATRACE}
       BACKEND_URL: ${BACKEND_URL}
       FRONTEND_URL: ${FRONTEND_URL}
 
@@ -561,7 +571,7 @@ services:
       - MEMGRAPH_PASSWORD=${MEMGRAPH_PASSWORD}
     command: >
       --memory-limit=512
-      --log-level=WARNING
+      --log-level=ERROR
       --also-log-to-stderr
     healthcheck:
       test: ["CMD-SHELL", "python3 -c \"import socket; s=socket.socket(); s.settimeout(2); s.connect(('localhost',7687)); s.close()\""]

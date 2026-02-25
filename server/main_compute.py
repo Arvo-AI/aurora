@@ -80,8 +80,14 @@ from googleapiclient.discovery import build  # local import to avoid global depe
 
 
 # Initialize Flask application
-template_path = os.path.join(os.path.dirname(__file__), "connectors/github_templates")
-app = Flask(__name__, template_folder=template_path)
+from jinja2 import ChoiceLoader, FileSystemLoader
+github_template_path = os.path.join(os.path.dirname(__file__), "connectors/github_templates")
+bitbucket_template_path = os.path.join(os.path.dirname(__file__), "connectors/bitbucket_templates")
+app = Flask(__name__, template_folder=github_template_path)
+app.jinja_loader = ChoiceLoader([
+    FileSystemLoader(github_template_path),
+    FileSystemLoader(bitbucket_template_path),
+])
 
 # Ensure correct scheme (http/https) behind reverse proxy or load balancer
 app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
@@ -119,10 +125,14 @@ CORS(app, origins=FRONTEND_URL, supports_credentials=True,
                       "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID", 
                                       "Authorization", "X-Provider-Preference"], 
                       "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"]},
-         r"/github/*": {"origins": FRONTEND_URL, "supports_credentials": True, 
-                       "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID", 
-                                       "Authorization", "X-Provider-Preference"], 
+         r"/github/*": {"origins": FRONTEND_URL, "supports_credentials": True,
+                       "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
+                                       "Authorization", "X-Provider-Preference"],
                        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"]},
+         r"/bitbucket/*": {"origins": FRONTEND_URL, "supports_credentials": True,
+                          "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
+                                            "Authorization", "X-Provider-Preference"],
+                          "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"]},
          r"/slack/*": {"origins": FRONTEND_URL, "supports_credentials": True,
                        "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
                                          "Authorization", "X-Provider-Preference"],
@@ -227,6 +237,17 @@ import routes.splunk.tasks  # noqa: F401
 app.register_blueprint(splunk_bp, url_prefix="/splunk")
 app.register_blueprint(splunk_search_bp, url_prefix="/splunk")
 
+# --- Coroot Integration Routes ---
+from routes.coroot import bp as coroot_bp  # noqa: F401
+app.register_blueprint(coroot_bp, url_prefix="/coroot")
+
+# --- Dynatrace Integration Routes ---
+from utils.flags.feature_flags import is_dynatrace_enabled
+if is_dynatrace_enabled():
+    from routes.dynatrace import bp as dynatrace_bp  # noqa: F401
+    import routes.dynatrace.tasks  # noqa: F401
+    app.register_blueprint(dynatrace_bp, url_prefix="/dynatrace")
+
 # --- PagerDuty Integration Routes ---
 from routes.pagerduty.pagerduty_routes import pagerduty_bp  # noqa: F401
 app.register_blueprint(pagerduty_bp, url_prefix="/pagerduty")
@@ -241,6 +262,16 @@ from utils.flags.feature_flags import is_confluence_enabled
 if is_confluence_enabled():
     from routes.confluence import bp as confluence_bp  # noqa: F401
     app.register_blueprint(confluence_bp, url_prefix="/confluence")
+
+# --- Bitbucket Integration Routes ---
+from utils.flags.feature_flags import is_bitbucket_enabled
+if is_bitbucket_enabled():
+    from routes.bitbucket.bitbucket import bitbucket_bp
+    from routes.bitbucket.bitbucket_browsing import bitbucket_browsing_bp
+    from routes.bitbucket.bitbucket_selection import bitbucket_selection_bp
+    app.register_blueprint(bitbucket_bp, url_prefix="/bitbucket")
+    app.register_blueprint(bitbucket_browsing_bp, url_prefix="/bitbucket")
+    app.register_blueprint(bitbucket_selection_bp, url_prefix="/bitbucket")
 
 # --- Incidents Routes ---
 from routes.incidents_routes import incidents_bp

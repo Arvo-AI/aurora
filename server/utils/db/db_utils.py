@@ -712,6 +712,28 @@ def initialize_tables():
                     CREATE INDEX IF NOT EXISTS idx_splunk_alerts_state ON splunk_alerts(alert_state);
                     CREATE INDEX IF NOT EXISTS idx_splunk_alerts_received_at ON splunk_alerts(received_at DESC);
                 """,
+                "dynatrace_problems": """
+                    CREATE TABLE IF NOT EXISTS dynatrace_problems (
+                        id SERIAL PRIMARY KEY,
+                        user_id VARCHAR(255) NOT NULL,
+                        problem_id VARCHAR(255),
+                        pid VARCHAR(255),
+                        problem_title TEXT,
+                        problem_state VARCHAR(50),
+                        severity VARCHAR(50),
+                        impact VARCHAR(50),
+                        impacted_entity TEXT,
+                        problem_url TEXT,
+                        tags TEXT,
+                        payload JSONB NOT NULL,
+                        received_at TIMESTAMP NOT NULL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+
+                    CREATE INDEX IF NOT EXISTS idx_dynatrace_problems_user_id ON dynatrace_problems(user_id, received_at DESC);
+                    CREATE INDEX IF NOT EXISTS idx_dynatrace_problems_state ON dynatrace_problems(problem_state);
+                    CREATE INDEX IF NOT EXISTS idx_dynatrace_problems_received_at ON dynatrace_problems(received_at DESC);
+                """,
                 "kubectl_agent_tokens": """
                     CREATE TABLE IF NOT EXISTS kubectl_agent_tokens (
                         id SERIAL PRIMARY KEY,

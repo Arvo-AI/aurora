@@ -48,6 +48,10 @@ SUPPORTED_SECRET_PROVIDERS: Set[str] = {
     "tailscale", # Tailscale VPN
     "slack",    # Slack connector tokens
     "confluence", # Confluence connector tokens
+    "coroot",   # Coroot connector tokens
+    "bitbucket", # Bitbucket connector tokens
+    "bitbucket_workspace_selection",  # Bitbucket selected workspace and repo
+    "dynatrace", # Dynatrace connector tokens
     "aurora",   # Aurora-managed SSH keys
 }
 
