@@ -30,9 +30,10 @@ async function proxyToBackend(request: NextRequest, { params }: { params: Promis
       if (body) fetchOptions.body = body;
     }
 
+    const backendUrl = `${API_BASE_URL}/coroot/${subPath}${request.nextUrl.search}`;
     let response: Response;
     try {
-      response = await fetch(`${API_BASE_URL}/coroot/${subPath}`, fetchOptions);
+      response = await fetch(backendUrl, fetchOptions);
     } finally {
       clearTimeout(timeoutId);
     }

@@ -314,7 +314,7 @@ export function parseCorootCommand(toolName: string, toolInput: string): string 
     case "coroot_get_overview_logs": {
       const sev = args.severity ? ` ${str(args.severity)}` : ""
       const filter = args.message_filter ? ` "${str(args.message_filter)}"` : ""
-      const k8s = args.include_k8s_events ? " +k8s-events" : ""
+      const k8s = args.kubernetes_only ? " +k8s-events" : ""
       return `Coroot: Overview logs${sev}${filter}${k8s}${window}`
     }
     case "coroot_get_incidents":

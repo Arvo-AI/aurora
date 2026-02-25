@@ -385,7 +385,7 @@ def coroot_get_incidents(
         }
         summaries.append(summary)
 
-    summaries.sort(key=lambda x: x.get("opened_at") or 0, reverse=True)
+    summaries.sort(key=lambda x: x.get("opened_at") or "", reverse=True)
     open_count = sum(1 for s in summaries if not s.get("resolved_at"))
 
     items, trunc_meta = _truncate_list(

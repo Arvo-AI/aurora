@@ -44,16 +44,19 @@ export default function CorootAuthPage() {
       if (!skipCache && typeof window !== "undefined") {
         const cached = localStorage.getItem(CACHE_KEY);
         if (cached) {
-          const parsed = JSON.parse(cached) as CorootStatus;
-          setStatus(parsed);
-          updateLocalStorageConnection(parsed?.connected ?? false);
-
-          if (isInitialLoad) {
-            setIsInitialLoad(false);
-            fetchAndUpdateStatus();
+          try {
+            const parsed = JSON.parse(cached) as CorootStatus;
+            setStatus(parsed);
+            updateLocalStorageConnection(parsed?.connected ?? false);
+            if (isInitialLoad) {
+              setIsInitialLoad(false);
+              fetchAndUpdateStatus();
+              return;
+            }
             return;
+          } catch {
+            localStorage.removeItem(CACHE_KEY);
           }
-          return;
         }
       }
 

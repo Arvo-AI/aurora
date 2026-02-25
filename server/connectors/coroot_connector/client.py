@@ -155,8 +155,14 @@ class CorootClient:
             logger.error("[COROOT] Login network error: %s", exc)
             raise CorootAPIError("Unable to reach Coroot server") from exc
 
-        if resp.status_code in (401, 404):
-            raise CorootAPIError("Invalid email or password")
+        if resp.status_code == 401:
+            raise CorootAPIError(
+                f"Invalid email or password"
+            )
+        if resp.status_code == 404:
+            raise CorootAPIError(
+                f"Login endpoint not found — check base URL"
+            )
         if not resp.ok:
             raise CorootAPIError(f"Login failed (HTTP {resp.status_code})")
 
@@ -203,11 +209,15 @@ class CorootClient:
 
         if not resp.ok:
             logger.error(
-                "[COROOT] %s %s failed (%s): %s",
-                method, path, resp.status_code, resp.text[:500],
+                "[COROOT] %s %s failed (HTTP %s)",
+                method, path, resp.status_code,
+            )
+            logger.debug(
+                "Coroot response body: %s",
+                (resp.text[:1000] if resp.text else "(empty)"),
             )
             raise CorootAPIError(
-                resp.text[:200] or f"Request failed (HTTP {resp.status_code})"
+                f"Request to Coroot failed (HTTP {resp.status_code})"
             )
 
         try:

@@ -78,9 +78,15 @@ export const corootService = {
   },
 
   async connect(payload: CorootConnectPayload): Promise<CorootConnectResponse> {
-    return handleJsonFetch<CorootConnectResponse>(`${API_BASE}/connect`, {
-      method: 'POST',
-      body: JSON.stringify(payload),
-    });
+    try {
+      const result = await handleJsonFetch<CorootConnectResponse>(`${API_BASE}/connect`, {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+      return result ?? ({} as CorootConnectResponse);
+    } catch (error) {
+      console.error('[corootService] Connect failed:', error);
+      return { success: false, url: '', projects: [] };
+    }
   },
 };

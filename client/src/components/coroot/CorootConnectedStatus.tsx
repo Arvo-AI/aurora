@@ -88,9 +88,13 @@ export function CorootConnectedStatus({
           <div className="text-xs text-muted-foreground">
             Connected since{" "}
             <strong>
-              {status.validatedAt
-                ? new Date(status.validatedAt).toLocaleString()
-                : "just now"}
+              {(() => {
+                if (!status.validatedAt) return "just now";
+                const date = new Date(status.validatedAt);
+                return !Number.isNaN(date.getTime())
+                  ? date.toLocaleString()
+                  : "just now";
+              })()}
             </strong>
           </div>
           <Button variant="outline" onClick={onDisconnect} disabled={loading}>
