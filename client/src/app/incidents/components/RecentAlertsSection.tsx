@@ -28,11 +28,11 @@ function RecentAlertCard({
         {/* Source icon */}
         <div className="flex-shrink-0 mt-0.5 opacity-50">
           <Image 
-            src={incident.sourceType === 'pagerduty' ? '/pagerduty-icon.svg' : `/${incident.sourceType}.svg`}
+            src={incident.sourceType === 'pagerduty' ? '/pagerduty-icon.svg' : incident.sourceType === 'dynatrace' ? '/dynatrace.png' : `/${incident.sourceType}.svg`}
             alt={incident.sourceType}
             width={16}
             height={16}
-            className="object-contain"
+            className={`object-contain${incident.sourceType === 'dynatrace' ? ' scale-[2.2]' : ''}`}
           />
         </div>
         

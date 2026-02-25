@@ -16,6 +16,7 @@ export function useCloudProviderStatus() {
   const [isGitHubConnected, setIsGitHubConnected] = useState(false);
   const [isNetdataConnected, setIsNetdataConnected] = useState(false);
   const [isSplunkConnected, setIsSplunkConnected] = useState(false);
+  const [isDynatraceConnected, setIsDynatraceConnected] = useState(false);
   const [isPagerDutyConnected, setIsPagerDutyConnected] = useState(false);
   const [isKubectlConnected, setIsKubectlConnected] = useState(false);
   const [anyProviderConnected, setAnyProviderConnected] = useState(false);
@@ -46,6 +47,7 @@ export function useCloudProviderStatus() {
       const datadogConnected = localStorage.getItem('isDatadogConnected') === 'true';
       const netdataConnected = localStorage.getItem('isNetdataConnected') === 'true';
       const splunkConnected = localStorage.getItem('isSplunkConnected') === 'true';
+      const dynatraceConnected = localStorage.getItem('isDynatraceConnected') === 'true';
       const pagerdutyConnected = localStorage.getItem('isPagerDutyConnected') === 'true';
       const kubectlConnected = localStorage.getItem('isKubectlConnected') === 'true';
       const githubConnected = getGitHubConnected();
@@ -60,6 +62,7 @@ export function useCloudProviderStatus() {
       setIsDatadogConnected(datadogConnected);
       setIsNetdataConnected(netdataConnected);
       setIsSplunkConnected(splunkConnected);
+      setIsDynatraceConnected(dynatraceConnected);
       setIsPagerDutyConnected(pagerdutyConnected);
       setIsKubectlConnected(kubectlConnected);
       setIsGitHubConnected(githubConnected);
@@ -74,6 +77,7 @@ export function useCloudProviderStatus() {
         datadogConnected ||
         netdataConnected ||
         splunkConnected ||
+        dynatraceConnected ||
         pagerdutyConnected ||
         kubectlConnected ||
         githubConnected
@@ -130,6 +134,7 @@ export function useCloudProviderStatus() {
     isDatadogConnected,
     isNetdataConnected,
     isSplunkConnected,
+    isDynatraceConnected,
     isPagerDutyConnected,
     isKubectlConnected,
     isGitHubConnected,

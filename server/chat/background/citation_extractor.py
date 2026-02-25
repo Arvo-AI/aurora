@@ -237,6 +237,7 @@ class CitationExtractor:
             "search_splunk": "Splunk Search",
             "list_splunk_indexes": "Splunk Indexes",
             "list_splunk_sourcetypes": "Splunk Sourcetypes",
+            "query_dynatrace": "Dynatrace",
             "web_search": "Web Search",
             "coroot_get_incidents": "Coroot Incidents",
             "coroot_get_incident_detail": "Coroot Incident Detail",

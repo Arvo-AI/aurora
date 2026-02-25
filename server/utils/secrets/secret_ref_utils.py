@@ -49,6 +49,7 @@ SUPPORTED_SECRET_PROVIDERS: Set[str] = {
     "slack",    # Slack connector tokens
     "confluence", # Confluence connector tokens
     "coroot",   # Coroot connector tokens
+    "dynatrace", # Dynatrace connector tokens
     "aurora",   # Aurora-managed SSH keys
 }
 

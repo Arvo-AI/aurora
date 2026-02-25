@@ -82,11 +82,11 @@ function CorrelatedAlertCard({ alert, isNew }: { alert: CorrelatedAlert; isNew: 
         {/* Source icon */}
         <div className="flex-shrink-0 mt-0.5">
           <Image 
-            src={alert.sourceType === 'pagerduty' ? '/pagerduty-icon.svg' : `/${alert.sourceType}.svg`}
+            src={alert.sourceType === 'pagerduty' ? '/pagerduty-icon.svg' : alert.sourceType === 'dynatrace' ? '/dynatrace.png' : `/${alert.sourceType}.svg`}
             alt={alert.sourceType}
             width={18}
             height={18}
-            className="object-contain opacity-70"
+            className={`object-contain opacity-70${alert.sourceType === 'dynatrace' ? ' scale-[2.2]' : ''}`}
           />
         </div>
         

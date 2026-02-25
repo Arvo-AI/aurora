@@ -15,6 +15,7 @@ import { pagerdutyService } from '@/lib/services/pagerduty';
 import { netdataService } from '@/lib/services/netdata';
 import { splunkService } from '@/lib/services/splunk';
 import { datadogService } from '@/lib/services/datadog';
+import { dynatraceService } from '@/lib/services/dynatrace';
 import { useRouter } from 'next/navigation';
 
 export default function IncidentsPage() {
@@ -29,25 +30,27 @@ export default function IncidentsPage() {
         setLoading(true);
       }
 
-      const [data, grafanaStatus, pagerdutyStatus, netdataStatus, splunkStatus, datadogStatus] = await Promise.all([
+      const [data, grafanaStatus, pagerdutyStatus, netdataStatus, splunkStatus, datadogStatus, dynatraceStatus] = await Promise.all([
         incidentsService.getIncidents(),
         // Only check connection status on initial load (not silent refreshes)
         silent ? Promise.resolve(null) : grafanaService.getStatus(),
         silent ? Promise.resolve(null) : pagerdutyService.getStatus(),
         silent ? Promise.resolve(null) : netdataService.getStatus(),
         silent ? Promise.resolve(null) : splunkService.getStatus(),
-        silent ? Promise.resolve(null) : datadogService.getStatus()
+        silent ? Promise.resolve(null) : datadogService.getStatus(),
+        silent ? Promise.resolve(null) : dynatraceService.getStatus()
       ]);
 
       // Update connection status if this is initial load
-      // Consider connected if Grafana, PagerDuty, Netdata, Splunk, or Datadog is connected
+      // Consider connected if Grafana, PagerDuty, Netdata, Splunk, Datadog, or Dynatrace is connected
       if (!silent) {
         const grafanaConnected = grafanaStatus?.connected ?? false;
         const pagerdutyConnected = pagerdutyStatus?.connected ?? false;
         const netdataConnected = netdataStatus?.connected ?? false;
         const splunkConnected = splunkStatus?.connected ?? false;
         const datadogConnected = datadogStatus?.connected ?? false;
-        setIsConnectedToIncidentPlatform(grafanaConnected || pagerdutyConnected || netdataConnected || splunkConnected || datadogConnected);
+        const dynatraceConnected = dynatraceStatus?.connected ?? false;
+        setIsConnectedToIncidentPlatform(grafanaConnected || pagerdutyConnected || netdataConnected || splunkConnected || datadogConnected || dynatraceConnected);
       }
 
       // Only update state if the list actually changed (prevents unnecessary re-renders)
