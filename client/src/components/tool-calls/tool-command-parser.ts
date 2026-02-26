@@ -302,3 +302,46 @@ export function parseGitHubRcaCommand(toolInput: string): string {
     return "GitHub: investigate"
   }
 }
+
+export function parseJenkinsRcaCommand(toolInput: string): string {
+  try {
+    const parsableCommand = toolInput.replace(/'/g, '"')
+    const parsed = JSON.parse(parsableCommand)
+    const args = parsed?.kwargs || parsed || {}
+    const action = args.action || "investigate"
+    const jobPath = args.job_path || ""
+    const buildNumber = args.build_number
+    const service = args.service || ""
+    const pipelineName = args.pipeline_name || ""
+    const nodeId = args.node_id || ""
+
+    // Format job/build reference
+    const jobRef = jobPath ? (buildNumber ? `${jobPath} #${buildNumber}` : jobPath) : ""
+    const pipelineRef = pipelineName ? (args.run_number ? `${pipelineName} #${args.run_number}` : pipelineName) : ""
+
+    switch(action) {
+      case "recent_deployments":
+        return `Jenkins: Recent deployments${service ? ` for ${service}` : ""}`
+      case "build_detail":
+        return `Jenkins: Build details${jobRef ? ` for ${jobRef}` : ""}`
+      case "pipeline_stages":
+        return `Jenkins: Pipeline stages${jobRef ? ` for ${jobRef}` : ""}`
+      case "stage_log":
+        return `Jenkins: Stage log${nodeId ? ` (${nodeId})` : ""}${jobRef ? ` for ${jobRef}` : ""}`
+      case "build_logs":
+        return `Jenkins: Console output${jobRef ? ` for ${jobRef}` : ""}`
+      case "test_results":
+        return `Jenkins: Test results${jobRef ? ` for ${jobRef}` : ""}`
+      case "blue_ocean_run":
+        return `Jenkins: Blue Ocean run${pipelineRef ? ` for ${pipelineRef}` : ""}`
+      case "blue_ocean_steps":
+        return `Jenkins: Blue Ocean steps${nodeId ? ` (${nodeId})` : ""}${pipelineRef ? ` for ${pipelineRef}` : ""}`
+      case "trace_context":
+        return `Jenkins: Trace context${jobRef ? ` for ${jobRef}` : ""}`
+      default:
+        return `Jenkins: ${action.replace(/_/g, " ")}`
+    }
+  } catch (error) {
+    return "Jenkins: investigate"
+  }
+}
