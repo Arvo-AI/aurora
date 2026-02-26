@@ -33,28 +33,25 @@ while ! pg_isready -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" >/dev
 done
 echo "PostgreSQL is ready"
 
-# Check if demo data already initialized
-echo "Checking if demo data already loaded..."
+# Check if base demo data (aurora_db.sql) already loaded
+echo "Checking if base demo data already loaded..."
 DEMO_INCIDENT_EXISTS=$(psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" -tAc \
     "SELECT EXISTS(SELECT 1 FROM incidents WHERE id = 'a867c4b3-f09c-4a4f-a2bc-1c390d967b37')" 2>/dev/null || echo "false")
 
-if [ "$DEMO_INCIDENT_EXISTS" = "t" ]; then
-    echo "Demo data already loaded. Skipping restore."
-    echo "To reset demo data, run: make down && make dev"
-    exit 0
-fi
-
-echo "Demo data not found. Restoring from snapshot..."
-
-# Import SQL dump
+# Import SQL dump (only if not already loaded)
 echo "[1/3] Importing PostgreSQL data..."
-if psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" < "$SCRIPT_DIR/aurora_db.sql" >/dev/null 2>&1; then
-    echo "       Done"
+if [ "$DEMO_INCIDENT_EXISTS" = "t" ]; then
+    echo "       Base demo data already loaded, skipping aurora_db.sql"
 else
-    echo "       WARNING: SQL import had errors (may be harmless)"
+    echo "       Base data not found. Restoring from snapshot..."
+    if psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" < "$SCRIPT_DIR/aurora_db.sql" >/dev/null 2>&1; then
+        echo "       Done"
+    else
+        echo "       WARNING: SQL import had errors (may be harmless)"
+    fi
 fi
 
-# Import additional demo incidents
+# Always run supplemental incident files - each has its own internal idempotency check
 if [ -f "$SCRIPT_DIR/demo-incident-2.sql" ]; then
     echo "       Importing demo incident 2..."
     if psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" < "$SCRIPT_DIR/demo-incident-2.sql" >/dev/null 2>&1; then
