@@ -102,12 +102,17 @@ def process_jenkins_deployment(
         try:
             with db_pool.get_admin_connection() as conn:
                 with conn.cursor() as cursor:
+                    # Upsert the deployment event with dedup on (user_id, job_name, build_number)
                     cursor.execute(
                         """INSERT INTO jenkins_deployment_events
                            (user_id, event_type, service, environment, result, build_number,
                             build_url, commit_sha, branch, repository, deployer, duration_ms,
                             job_name, trace_id, span_id, payload, received_at)
                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                           ON CONFLICT (user_id, job_name, build_number) DO UPDATE
+                           SET result = EXCLUDED.result,
+                               payload = EXCLUDED.payload,
+                               received_at = EXCLUDED.received_at
                            RETURNING id""",
                         (
                             user_id,
@@ -131,6 +136,10 @@ def process_jenkins_deployment(
 
                     logger.info("[JENKINS][DEPLOY] Stored event %s for user %s", alert_id, user_id)
 
+                    # Only create incidents for non-success results
+                    if result in ("SUCCESS",):
+                        return
+
                     severity = _extract_severity(payload)
                     alert_title = f"Jenkins deploy: {service} [{result}]"
 
@@ -150,8 +159,10 @@ def process_jenkins_deployment(
                     if trace_id:
                         alert_metadata["traceId"] = trace_id
 
-                    # --- Correlation: attach to existing open incident if temporal/service match ---
+                    # --- Correlation: attach to existing open incident ---
+                    # Use SAVEPOINT so a DB error in correlate() doesn't poison the connection
                     try:
+                        cursor.execute("SAVEPOINT correlation_sp")
                         correlator = AlertCorrelator()
                         correlation_result = correlator.correlate(
                             cursor=cursor,
@@ -184,41 +195,19 @@ def process_jenkins_deployment(
                                 correlation_result.incident_id,
                             )
 
-                            # Inject deployment context into running RCA
-                            try:
-                                from chat.background.context_updates import enqueue_rca_context_update
-
-                                cursor.execute(
-                                    "SELECT aurora_chat_session_id FROM incidents WHERE id = %s",
-                                    (correlation_result.incident_id,),
-                                )
-                                inc_row = cursor.fetchone()
-                                if inc_row and inc_row[0]:
-                                    context_body = (
-                                        f"Jenkins deployment detected for {service}:\n"
-                                        f"- Result: {result}\n"
-                                        f"- Environment: {environment}\n"
-                                        f"- Commit: {git.get('commit_sha', 'unknown')}\n"
-                                        f"- Build: {build_url}\n"
-                                        f"- Deployer: {deployer}\n"
-                                    )
-                                    if trace_id:
-                                        context_body += f"- OTel Trace ID: {trace_id}\n"
-                                    enqueue_rca_context_update(
-                                        user_id=user_id,
-                                        session_id=str(inc_row[0]),
-                                        source="jenkins",
-                                        payload={"body": context_body, "title": alert_title, "service": service},
-                                        incident_id=str(correlation_result.incident_id),
-                                    )
-                            except Exception as ctx_exc:
-                                logger.warning("[JENKINS][DEPLOY] Failed to inject RCA context: %s", ctx_exc)
-
+                            _inject_rca_context(
+                                cursor, conn, user_id, correlation_result.incident_id,
+                                service, result, environment, git, build_url, deployer,
+                                trace_id, alert_title,
+                            )
                             return
+
+                        cursor.execute("RELEASE SAVEPOINT correlation_sp")
                     except Exception as corr_exc:
+                        cursor.execute("ROLLBACK TO SAVEPOINT correlation_sp")
                         logger.warning("[JENKINS][DEPLOY] Correlation failed, continuing: %s", corr_exc)
 
-                    # --- No correlation: create new incident only for failures ---
+                    # --- No correlation: create new incident + alert record in one transaction ---
                     if result in ("FAILURE", "UNSTABLE"):
                         cursor.execute(
                             """INSERT INTO incidents
@@ -237,32 +226,29 @@ def process_jenkins_deployment(
                         )
                         inc_row = cursor.fetchone()
                         incident_id = inc_row[0] if inc_row else None
-                        conn.commit()
 
                         if incident_id:
-                            # Record primary alert
-                            try:
-                                cursor.execute(
-                                    """INSERT INTO incident_alerts
-                                       (user_id, incident_id, source_type, source_alert_id, alert_title,
-                                        alert_service, alert_severity, correlation_strategy, correlation_score,
-                                        alert_metadata)
-                                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
-                                    (
-                                        user_id, incident_id, "jenkins", alert_id,
-                                        alert_title, service, severity, "primary", 1.0,
-                                        json.dumps(alert_metadata),
-                                    ),
-                                )
-                                cursor.execute(
-                                    "UPDATE incidents SET affected_services = ARRAY[%s] WHERE id = %s",
-                                    (service, incident_id),
-                                )
-                                conn.commit()
-                            except Exception as e:
-                                logger.warning("[JENKINS][DEPLOY] Failed to record primary alert: %s", e)
+                            cursor.execute(
+                                """INSERT INTO incident_alerts
+                                   (user_id, incident_id, source_type, source_alert_id, alert_title,
+                                    alert_service, alert_severity, correlation_strategy, correlation_score,
+                                    alert_metadata)
+                                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                                   ON CONFLICT DO NOTHING""",
+                                (
+                                    user_id, incident_id, "jenkins", alert_id,
+                                    alert_title, service, severity, "primary", 1.0,
+                                    json.dumps(alert_metadata),
+                                ),
+                            )
+                            cursor.execute(
+                                "UPDATE incidents SET affected_services = ARRAY[%s] WHERE id = %s",
+                                (service, incident_id),
+                            )
 
-                    # --- SSE notification ---
+                        conn.commit()
+
+                    # --- Post-commit side effects (SSE, summary, RCA) ---
                     if incident_id:
                         try:
                             from routes.incidents_sse import broadcast_incident_update_to_user_connections
@@ -273,7 +259,6 @@ def process_jenkins_deployment(
                         except Exception as e:
                             logger.warning("[JENKINS][DEPLOY] SSE notify failed: %s", e)
 
-                        # Trigger summary generation
                         from chat.background.summarization import generate_incident_summary
                         generate_incident_summary.delay(
                             incident_id=str(incident_id),
@@ -286,45 +271,10 @@ def process_jenkins_deployment(
                             alert_metadata=alert_metadata,
                         )
 
-                        # Trigger RCA
-                        try:
-                            from chat.background.task import (
-                                run_background_chat,
-                                create_background_chat_session,
-                                is_background_chat_allowed,
-                            )
-
-                            if is_background_chat_allowed(user_id):
-                                session_id = create_background_chat_session(
-                                    user_id=user_id,
-                                    title=f"RCA: {alert_title}",
-                                    trigger_metadata={
-                                        "source": "jenkins",
-                                        "build_number": build_number,
-                                        "result": result,
-                                    },
-                                )
-                                rca_prompt = _build_rca_prompt(payload, user_id=user_id)
-                                task = run_background_chat.delay(
-                                    user_id=user_id,
-                                    session_id=session_id,
-                                    initial_message=rca_prompt,
-                                    trigger_metadata={"source": "jenkins", "result": result},
-                                    incident_id=str(incident_id),
-                                )
-                                cursor.execute(
-                                    "UPDATE incidents SET rca_celery_task_id = %s WHERE id = %s",
-                                    (task.id, str(incident_id)),
-                                )
-                                conn.commit()
-                                logger.info(
-                                    "[JENKINS][DEPLOY] Triggered RCA for incident %s (task=%s)",
-                                    incident_id, task.id,
-                                )
-                            else:
-                                logger.info("[JENKINS][DEPLOY] RCA rate-limited for user %s", user_id)
-                        except Exception as rca_exc:
-                            logger.exception("[JENKINS][DEPLOY] Failed to trigger RCA: %s", rca_exc)
+                        _trigger_rca(
+                            cursor, conn, user_id, incident_id, alert_title,
+                            build_number, result, payload,
+                        )
 
         except Exception:
             logger.exception("[JENKINS][DEPLOY] DB error")
@@ -333,3 +283,84 @@ def process_jenkins_deployment(
     except Exception as exc:
         logger.exception("[JENKINS][DEPLOY] Failed to process deployment event")
         raise self.retry(exc=exc) from exc
+
+
+def _inject_rca_context(
+    cursor, conn, user_id: str, incident_id, service: str, result: str,
+    environment: str, git: Dict[str, str], build_url: str, deployer: str,
+    trace_id: str, alert_title: str,
+) -> None:
+    """Inject deployment context into a running RCA session if one exists."""
+    try:
+        from chat.background.context_updates import enqueue_rca_context_update
+
+        cursor.execute(
+            "SELECT aurora_chat_session_id FROM incidents WHERE id = %s",
+            (incident_id,),
+        )
+        inc_row = cursor.fetchone()
+        if inc_row and inc_row[0]:
+            context_body = (
+                f"Jenkins deployment detected for {service}:\n"
+                f"- Result: {result}\n"
+                f"- Environment: {environment}\n"
+                f"- Commit: {git.get('commit_sha', 'unknown')}\n"
+                f"- Build: {build_url}\n"
+                f"- Deployer: {deployer}\n"
+            )
+            if trace_id:
+                context_body += f"- OTel Trace ID: {trace_id}\n"
+            enqueue_rca_context_update(
+                user_id=user_id,
+                session_id=str(inc_row[0]),
+                source="jenkins",
+                payload={"body": context_body, "title": alert_title, "service": service},
+                incident_id=str(incident_id),
+            )
+    except Exception as ctx_exc:
+        logger.warning("[JENKINS][DEPLOY] Failed to inject RCA context: %s", ctx_exc)
+
+
+def _trigger_rca(
+    cursor, conn, user_id: str, incident_id, alert_title: str,
+    build_number, result: str, payload: Dict[str, Any],
+) -> None:
+    """Trigger background RCA chat for a new Jenkins incident."""
+    try:
+        from chat.background.task import (
+            run_background_chat,
+            create_background_chat_session,
+            is_background_chat_allowed,
+        )
+
+        if is_background_chat_allowed(user_id):
+            session_id = create_background_chat_session(
+                user_id=user_id,
+                title=f"RCA: {alert_title}",
+                trigger_metadata={
+                    "source": "jenkins",
+                    "build_number": build_number,
+                    "result": result,
+                },
+            )
+            rca_prompt = _build_rca_prompt(payload, user_id=user_id)
+            task = run_background_chat.delay(
+                user_id=user_id,
+                session_id=session_id,
+                initial_message=rca_prompt,
+                trigger_metadata={"source": "jenkins", "result": result},
+                incident_id=str(incident_id),
+            )
+            cursor.execute(
+                "UPDATE incidents SET rca_celery_task_id = %s WHERE id = %s",
+                (task.id, str(incident_id)),
+            )
+            conn.commit()
+            logger.info(
+                "[JENKINS][DEPLOY] Triggered RCA for incident %s (task=%s)",
+                incident_id, task.id,
+            )
+        else:
+            logger.info("[JENKINS][DEPLOY] RCA rate-limited for user %s", user_id)
+    except Exception as rca_exc:
+        logger.exception("[JENKINS][DEPLOY] Failed to trigger RCA: %s", rca_exc)

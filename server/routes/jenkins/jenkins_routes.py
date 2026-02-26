@@ -1,5 +1,8 @@
+import hmac
+import hashlib
 import logging
 import os
+import secrets
 from typing import Any, Dict, Optional
 
 from flask import Blueprint, jsonify, request
@@ -84,6 +87,7 @@ def connect():
         "api_token": api_token,
         "version": version,
         "mode": mode,
+        "webhook_secret": secrets.token_hex(32),
     }
 
     try:
@@ -234,6 +238,20 @@ def disconnect():
 # Webhook: receive deployment events from Jenkinsfile post blocks
 # ------------------------------------------------------------------
 
+def _get_webhook_secret(user_id: str) -> Optional[str]:
+    """Retrieve the stored webhook secret for HMAC validation."""
+    creds = _get_stored_jenkins_credentials(user_id)
+    if not creds:
+        return None
+    return creds.get("webhook_secret")
+
+
+def _verify_webhook_signature(payload_bytes: bytes, signature: str, secret: str) -> bool:
+    """Validate X-Aurora-Signature HMAC-SHA256 header."""
+    expected = hmac.new(secret.encode(), payload_bytes, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, signature)
+
+
 def _verify_webhook_user(user_id: str) -> bool:
     """Verify the user_id exists in the database to prevent arbitrary data injection."""
     if not user_id or len(user_id) > 255:
@@ -255,8 +273,8 @@ def _verify_webhook_user(user_id: str) -> bool:
 def deployment_webhook(user_id: str):
     """Receive a deployment event webhook from a Jenkins pipeline.
     
-    Security: We verify the user_id has Jenkins configured before accepting events.
-    This prevents arbitrary data injection for non-existent or unconfigured users.
+    Security: validates per-user HMAC-SHA256 signature via X-Aurora-Signature header.
+    Falls back to user verification only when no webhook secret is configured (pre-upgrade).
     """
     if request.method == "OPTIONS":
         return create_cors_response()
@@ -264,14 +282,23 @@ def deployment_webhook(user_id: str):
     if not user_id:
         return jsonify({"error": "user_id is required"}), 400
 
-    # Verify user has Jenkins configured before accepting webhook data
     if not _verify_webhook_user(user_id):
         logger.warning("[JENKINS] Webhook rejected: invalid or unconfigured user_id %s", user_id[:50])
         return jsonify({"error": "Invalid webhook configuration"}), 403
 
+    webhook_secret = _get_webhook_secret(user_id)
+    signature = request.headers.get("X-Aurora-Signature", "")
+
+    if webhook_secret:
+        if not signature:
+            logger.warning("[JENKINS] Webhook rejected: missing X-Aurora-Signature for user %s", user_id[:50])
+            return jsonify({"error": "Missing X-Aurora-Signature header"}), 401
+        if not _verify_webhook_signature(request.get_data(), signature, webhook_secret):
+            logger.warning("[JENKINS] Webhook rejected: invalid signature for user %s", user_id[:50])
+            return jsonify({"error": "Invalid webhook signature"}), 401
+
     payload = request.get_json(silent=True) or {}
-    
-    # Basic payload validation
+
     if not isinstance(payload, dict):
         return jsonify({"error": "Invalid payload format"}), 400
     
@@ -305,35 +332,56 @@ def get_webhook_url():
 
     webhook_url = f"{backend_url}/jenkins/webhook/{user_id}"
 
-    # Compact snippets - just the post block users need to add
+    # Retrieve per-user webhook secret for HMAC signing
+    creds = _get_stored_jenkins_credentials(user_id) or {}
+    webhook_secret = creds.get("webhook_secret", "")
+
+    # Compact snippets — includes HMAC-SHA256 signing via X-Aurora-Signature header
     jenkinsfile_basic = f'''post {{
   always {{
-    httpRequest(
-      url: "{webhook_url}",
-      httpMode: 'POST',
-      contentType: 'APPLICATION_JSON',
-      requestBody: """{{"service":"${{env.JOB_NAME}}","environment":"${{params.ENVIRONMENT ?: 'production'}}","result":"${{currentBuild.currentResult}}","build_number":${{env.BUILD_NUMBER}},"build_url":"${{env.BUILD_URL}}","git":{{"commit_sha":"${{env.GIT_COMMIT}}","branch":"${{env.GIT_BRANCH}}"}}}}"""
-    )
+    script {{
+      def payload = """{{"service":"${{env.JOB_NAME}}","environment":"${{params.ENVIRONMENT ?: 'production'}}","result":"${{currentBuild.currentResult}}","build_number":${{env.BUILD_NUMBER}},"build_url":"${{env.BUILD_URL}}","git":{{"commit_sha":"${{env.GIT_COMMIT}}","branch":"${{env.GIT_BRANCH}}"}}}}"""
+      def mac = javax.crypto.Mac.getInstance("HmacSHA256")
+      mac.init(new javax.crypto.spec.SecretKeySpec("{webhook_secret}".bytes, "HmacSHA256"))
+      def sig = mac.doFinal(payload.bytes).encodeHex().toString()
+      httpRequest(
+        url: "{webhook_url}",
+        httpMode: 'POST',
+        contentType: 'APPLICATION_JSON',
+        customHeaders: [[name: 'X-Aurora-Signature', value: sig]],
+        requestBody: payload
+      )
+    }}
   }}
 }}'''
 
     jenkinsfile_otel = f'''post {{
   always {{
-    httpRequest(
-      url: "{webhook_url}",
-      httpMode: 'POST',
-      contentType: 'APPLICATION_JSON',
-      requestBody: """{{"service":"${{env.JOB_NAME}}","environment":"${{params.ENVIRONMENT ?: 'production'}}","result":"${{currentBuild.currentResult}}","build_number":${{env.BUILD_NUMBER}},"build_url":"${{env.BUILD_URL}}","git":{{"commit_sha":"${{env.GIT_COMMIT}}","branch":"${{env.GIT_BRANCH}}"}},"trace_id":"${{env.TRACEPARENT?.split('-')?.getAt(1) ?: ''}}","span_id":"${{env.TRACEPARENT?.split('-')?.getAt(2) ?: ''}}"}}"""
-    )
+    script {{
+      def payload = """{{"service":"${{env.JOB_NAME}}","environment":"${{params.ENVIRONMENT ?: 'production'}}","result":"${{currentBuild.currentResult}}","build_number":${{env.BUILD_NUMBER}},"build_url":"${{env.BUILD_URL}}","git":{{"commit_sha":"${{env.GIT_COMMIT}}","branch":"${{env.GIT_BRANCH}}"}},"trace_id":"${{env.TRACEPARENT?.split('-')?.getAt(1) ?: ''}}","span_id":"${{env.TRACEPARENT?.split('-')?.getAt(2) ?: ''}}"}}"""
+      def mac = javax.crypto.Mac.getInstance("HmacSHA256")
+      mac.init(new javax.crypto.spec.SecretKeySpec("{webhook_secret}".bytes, "HmacSHA256"))
+      def sig = mac.doFinal(payload.bytes).encodeHex().toString()
+      httpRequest(
+        url: "{webhook_url}",
+        httpMode: 'POST',
+        contentType: 'APPLICATION_JSON',
+        customHeaders: [[name: 'X-Aurora-Signature', value: sig]],
+        requestBody: payload
+      )
+    }}
   }}
 }}'''
 
     jenkinsfile_curl = f'''post {{
   always {{
     sh \'\'\'
+      PAYLOAD='{{"service":"\'\"$JOB_NAME\"\'","result":"\'\"$BUILD_RESULT\"\'","build_number":\'$BUILD_NUMBER\',"build_url":"\'\"$BUILD_URL\"\'","git":{{"commit_sha":"\'\"$GIT_COMMIT\"\'","branch":"\'\"$GIT_BRANCH\"\'"}}}}'
+      SIG=$(echo -n "$PAYLOAD" | openssl dgst -sha256 -hmac "{webhook_secret}" | awk \'{{print $2}}\')
       curl -sS -X POST "{webhook_url}" \\
         -H "Content-Type: application/json" \\
-        -d "{{\\"service\\":\\"$JOB_NAME\\",\\"result\\":\\"$BUILD_RESULT\\",\\"build_number\\":$BUILD_NUMBER,\\"build_url\\":\\"$BUILD_URL\\",\\"git\\":{{\\"commit_sha\\":\\"$GIT_COMMIT\\",\\"branch\\":\\"$GIT_BRANCH\\"}}}}"
+        -H "X-Aurora-Signature: $SIG" \\
+        -d "$PAYLOAD"
     \'\'\'
   }}
 }}'''
@@ -344,7 +392,7 @@ def get_webhook_url():
         "jenkinsfileOtel": jenkinsfile_otel,
         "jenkinsfileCurl": jenkinsfile_curl,
         "instructions": [
-            "1. Add the httpRequest call to the post block of your Jenkinsfile",
+            "1. Add the post block snippet to your Jenkinsfile (HMAC signing is built in)",
             "2. Ensure the HTTP Request Plugin is installed on your Jenkins instance",
             "3. Aurora will receive deployment events and correlate them with incidents",
             "4. (Optional) Install the OpenTelemetry plugin for W3C Trace Context propagation",
