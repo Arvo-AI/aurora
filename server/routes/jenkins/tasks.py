@@ -16,12 +16,13 @@ logger = logging.getLogger(__name__)
 
 def _extract_service(payload: Dict[str, Any]) -> str:
     """Extract a service name from the deployment event payload."""
-    service = (
-        payload.get("service")
-        or payload.get("job_name")
-        or payload.get("git", {}).get("repository", "").rstrip("/").rsplit("/", 1)[-1]
-        or "unknown"
+    git_data = payload.get("git")
+    repository = (
+        git_data.get("repository", "").rstrip("/").rsplit("/", 1)[-1]
+        if isinstance(git_data, dict)
+        else ""
     )
+    service = payload.get("service") or payload.get("job_name") or repository or "unknown"
     return str(service)[:255]
 
 
@@ -325,9 +326,10 @@ def process_jenkins_deployment(
                         except Exception as rca_exc:
                             logger.exception("[JENKINS][DEPLOY] Failed to trigger RCA: %s", rca_exc)
 
-        except Exception as db_exc:
-            logger.exception("[JENKINS][DEPLOY] DB error: %s", db_exc)
+        except Exception:
+            logger.exception("[JENKINS][DEPLOY] DB error")
+            raise
 
     except Exception as exc:
         logger.exception("[JENKINS][DEPLOY] Failed to process deployment event")
-        raise self.retry(exc=exc)
+        raise self.retry(exc=exc) from exc
