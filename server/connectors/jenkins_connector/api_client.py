@@ -145,7 +145,7 @@ class JenkinsClient:
     _RCA_BUILD_TREE = (
         "result,timestamp,duration,building,displayName,"
         "actions[lastBuiltRevision[SHA1,branch[name]],remoteUrls,"
-        "parameters[name,value],causes[shortDescription,userId]],"
+        "parameters[name,value],causes[shortDescription,userId],environment],"
         "changeSets[kind,items[commitId,author[fullName],msg,timestamp,"
         "paths[editType,file]]]"
     )

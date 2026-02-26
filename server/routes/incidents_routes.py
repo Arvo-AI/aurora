@@ -469,6 +469,12 @@ def get_incident(incident_id: str):
                             "[INCIDENTS] Skipping payload fetch for jenkins alert_id: %s",
                             source_alert_id,
                         )
+                    except Exception as exc:
+                        logger.warning(
+                            "[INCIDENTS] Jenkins payload lookup failed for alert_id=%s: %s",
+                            source_alert_id,
+                            exc,
+                        )
 
                 # Log warning if no payload found for any source type
                 if not raw_payload:

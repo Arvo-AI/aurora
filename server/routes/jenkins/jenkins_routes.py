@@ -397,8 +397,9 @@ def list_deployments():
                 rows = cursor.fetchall()
 
                 cursor.execute(
-                    "SELECT COUNT(*) FROM jenkins_deployment_events WHERE user_id = %s",
-                    (user_id,),
+                    "SELECT COUNT(*) FROM jenkins_deployment_events WHERE user_id = %s"
+                    + (" AND service = %s" if service_filter else ""),
+                    (user_id, service_filter) if service_filter else (user_id,),
                 )
                 total = cursor.fetchone()[0]
 

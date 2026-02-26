@@ -77,7 +77,10 @@ def jenkins_rca(
     elif action == "trace_context":
         return _action_trace_context(user_id, deployment_event_id, job_path, build_number)
 
-    # All other actions need a Jenkins client
+    # All other actions need user context and a Jenkins client
+    if not user_id:
+        return json.dumps({"error": "No user context. Run this from an authenticated session."})
+
     client = _get_client_for_user(user_id)
     if not client:
         return json.dumps({"error": "Jenkins is not connected. Configure credentials in Settings > Connectors > Jenkins."})
@@ -150,9 +153,9 @@ def _action_recent_deployments(user_id: str, service: Optional[str], hours: int)
                 "received_at": r[13].isoformat() if r[13] else None,
             })
         return json.dumps({"deployments": deployments, "count": len(deployments)}, default=str)
-    except Exception as e:
-        logger.error("jenkins_rca recent_deployments error: %s", e)
-        return json.dumps({"error": str(e)})
+    except Exception:
+        logger.exception("jenkins_rca recent_deployments query failed")
+        return json.dumps({"error": "Failed to fetch recent deployments. Please try again."})
 
 
 def _action_build_detail(client, job_path: Optional[str], build_number: Optional[int]) -> str:
