@@ -82,6 +82,15 @@ if [ -f "$SCRIPT_DIR/demo-incident-4.sql" ]; then
     fi
 fi
 
+if [ -f "$SCRIPT_DIR/demo-incident-coroot.sql" ]; then
+    echo "       Importing demo incident (Coroot)..."
+    if psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" < "$SCRIPT_DIR/demo-incident-coroot.sql" >/dev/null 2>&1; then
+        echo "       Done"
+    else
+        echo "       WARNING: Demo incident (Coroot) import had errors"
+    fi
+fi
+
 # Extract Weaviate data
 echo "[2/3] Restoring Weaviate vector data..."
 if [ -d "/var/lib/weaviate" ]; then
@@ -118,5 +127,7 @@ echo "  - Demo incident 3: 'High 502 error rate on notification-service'"
 echo "    Source: Grafana | Cloud: AWS/EKS | Tools: kubectl, Splunk, GitHub, Web Search"
 echo "  - Demo incident 4: 'Intermittent 503 errors on payment-gateway service'"
 echo "    Source: Netdata | Cloud: Azure/AKS | Tools: kubectl, Splunk, GitHub, Web Search"
+echo "  - Demo incident (Coroot): 'Database connectivity issues - catalog service'"
+echo "    Source: Coroot | Shows exact code lines + PR fix | NVIDIA Demo Ready"
 echo "  - Access: Sign up at http://localhost:3000 to view the incidents"
 echo ""
