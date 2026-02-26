@@ -121,6 +121,8 @@ def bitbucket_pull_requests(
                 return build_error_response("source_branch is required")
             if not dest_branch:
                 dest_branch = saved_branch or "main"
+            if source_branch == dest_branch:
+                return build_error_response(f"source_branch and dest_branch are the same ('{source_branch}')")
             result = client.create_pull_request(
                 ws, repo, title, source_branch, dest_branch,
                 description=description or "",
