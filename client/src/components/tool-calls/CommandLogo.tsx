@@ -204,7 +204,7 @@ const getLogoForCommand = (command: string | any, toolName: string, provider?: s
   }
 
   // Jenkins tools
-  if (tool.includes('jenkins') || tool === 'jenkins_rca') {
+  if (tool.includes('jenkins')) {
     return 'jenkins'
   }
 
