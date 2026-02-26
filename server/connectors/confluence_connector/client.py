@@ -193,7 +193,7 @@ class ConfluenceClient:
             response.raise_for_status()
             return response.json()
         except requests.RequestException as exc:
-            logger.error("Confluence API request failed: %s %s (%s)", method, url, exc)
+            logger.error("Confluence API request failed: %s %s (%s)", method, path, type(exc).__name__)
             raise
 
     def _request_v2(
@@ -215,7 +215,7 @@ class ConfluenceClient:
             return response.json()
         except requests.RequestException as exc:
             logger.error(
-                "Confluence v2 API request failed: %s %s (%s)", method, url, exc
+                "Confluence v2 API request failed: %s %s (%s)", method, path, type(exc).__name__
             )
             raise
 
