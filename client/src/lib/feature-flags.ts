@@ -32,3 +32,7 @@ export const isBitbucketEnabled = () => {
 export const isDynatraceEnabled = () => {
   return getEnv('NEXT_PUBLIC_ENABLE_DYNATRACE') === 'true';
 };
+
+export const isBigPandaEnabled = () => {
+  return getEnv('NEXT_PUBLIC_ENABLE_BIGPANDA') === 'true';
+};

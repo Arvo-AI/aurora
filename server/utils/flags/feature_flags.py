@@ -31,3 +31,8 @@ def is_bitbucket_enabled() -> bool:
 def is_dynatrace_enabled() -> bool:
     """Check if Dynatrace integration is enabled via environment variable."""
     return os.getenv("NEXT_PUBLIC_ENABLE_DYNATRACE", "false").lower() == "true"
+
+
+def is_bigpanda_enabled() -> bool:
+    """Check if BigPanda integration is enabled via environment variable."""
+    return os.getenv("NEXT_PUBLIC_ENABLE_BIGPANDA", "false").lower() == "true"

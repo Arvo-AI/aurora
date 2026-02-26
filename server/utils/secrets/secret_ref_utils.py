@@ -52,6 +52,7 @@ SUPPORTED_SECRET_PROVIDERS: Set[str] = {
     "bitbucket", # Bitbucket connector tokens
     "bitbucket_workspace_selection",  # Bitbucket selected workspace and repo
     "dynatrace", # Dynatrace connector tokens
+    "bigpanda", # BigPanda connector tokens
     "aurora",   # Aurora-managed SSH keys
 }
 
