@@ -6,6 +6,8 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
+DIFF_TRUNCATE_LIMIT = 50_000
+
 
 def _extract_field(value, field: str, default=None):
     """Extract a field from a value that may be a dict or a plain string.
@@ -50,7 +52,7 @@ def get_bb_client_for_user(user_id: str):
                 try:
                     from utils.auth.token_management import store_tokens_in_db
                     store_tokens_in_db(user_id, bb_creds, "bitbucket")
-                    logger.info(f"Persisted refreshed Bitbucket token for user {user_id}")
+                    logger.info("Persisted refreshed Bitbucket token")
                 except Exception as e:
                     logger.warning(f"Failed to persist refreshed Bitbucket token: {e}")
 
@@ -58,7 +60,7 @@ def get_bb_client_for_user(user_id: str):
         return BitbucketAPIClient(access_token, auth_type=auth_type, email=email)
 
     except Exception as e:
-        logger.error(f"Failed to get Bitbucket client for user {user_id}: {e}", exc_info=True)
+        logger.error(f"Failed to get Bitbucket client: {e}", exc_info=True)
         return None
 
 
@@ -68,7 +70,8 @@ def is_bitbucket_connected(user_id: str) -> bool:
         from utils.auth.stateless_auth import get_credentials_from_db
         creds = get_credentials_from_db(user_id, "bitbucket")
         return bool(creds and creds.get("access_token"))
-    except Exception:
+    except Exception as e:
+        logger.warning(f"Error checking Bitbucket connection: {e}")
         return False
 
 
@@ -115,7 +118,7 @@ def require_repo(ws: Optional[str], repo: Optional[str]) -> Optional[str]:
 
 def forward_if_error(result) -> Optional[str]:
     """Return a JSON string if the result is an API error dict, else None."""
-    if isinstance(result, dict) and result.get("error"):
+    if isinstance(result, dict) and result.get("error") is True:
         return json.dumps(result, default=str)
     return None
 

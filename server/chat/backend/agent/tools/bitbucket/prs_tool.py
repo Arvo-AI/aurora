@@ -7,6 +7,7 @@ from typing import Literal, Optional
 from pydantic import BaseModel, Field
 
 from .utils import (
+    DIFF_TRUNCATE_LIMIT,
     get_bb_client_for_user,
     resolve_workspace_repo,
     require_repo,
@@ -18,8 +19,6 @@ from .utils import (
 )
 
 logger = logging.getLogger(__name__)
-
-DIFF_TRUNCATE_LIMIT = 50_000
 
 
 class BitbucketPullRequestsArgs(BaseModel):
@@ -157,12 +156,12 @@ def bitbucket_pull_requests(
             strategy = merge_strategy or "merge_commit"
             if cancelled := confirm_or_cancel(user_id,
                     f"Merge PR #{pr_id} in {ws}/{repo} (strategy: {strategy})",
-                    "bitbucket_prs"):
+                    "bitbucket_pull_requests"):
                 return cancelled
             result = client.merge_pull_request(
                 ws, repo, pr_id,
                 merge_strategy=strategy,
-                close_source=close_source if close_source is not None else True,
+                close_source=close_source if close_source is not None else False,
             )
             if err := forward_if_error(result):
                 return err
@@ -189,7 +188,7 @@ def bitbucket_pull_requests(
                 return build_error_response(err)
             if cancelled := confirm_or_cancel(user_id,
                     f"Decline PR #{pr_id} in {ws}/{repo}",
-                    "bitbucket_prs"):
+                    "bitbucket_pull_requests"):
                 return cancelled
             result = client.decline_pull_request(ws, repo, pr_id)
             if err := forward_if_error(result):

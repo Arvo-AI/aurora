@@ -7,6 +7,7 @@ from typing import Literal, Optional
 from pydantic import BaseModel, Field
 
 from .utils import (
+    DIFF_TRUNCATE_LIMIT,
     get_bb_client_for_user,
     resolve_workspace_repo,
     require_repo,
@@ -18,8 +19,6 @@ from .utils import (
 )
 
 logger = logging.getLogger(__name__)
-
-DIFF_TRUNCATE_LIMIT = 50_000
 
 
 class BitbucketBranchesArgs(BaseModel):

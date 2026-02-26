@@ -657,7 +657,8 @@ def build_bitbucket_context_segment(user_id: Optional[str]) -> str:
         parts.append("BITBUCKET TOOL USAGE RULES:\n")
         parts.append("- When user asks about PRs, issues, repos, or branches WITHOUT specifying a repository, use the selected workspace/repo above.\n")
         parts.append("- Workspace and repo_slug auto-resolve from saved selection if not passed explicitly.\n")
-        parts.append("- For write operations (create, update, merge, delete), always confirm with the user before proceeding.\n")
+        parts.append("- Destructive actions (delete branch, delete file, merge PR, decline PR, trigger/stop pipeline) require user confirmation and will prompt automatically.\n")
+        parts.append("- Non-destructive operations (create branch, create PR, update PR, approve, comment, create issue) proceed without extra confirmation.\n")
         parts.append("- If no repository is selected and user doesn't specify one, ask which repository they want to work with.\n")
 
         return "".join(parts)
