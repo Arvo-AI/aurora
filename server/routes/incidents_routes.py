@@ -499,6 +499,13 @@ def get_incident(incident_id: str):
                             )
                     except (ValueError, TypeError):
                         logger.debug("[INCIDENTS] Skipping payload fetch for dynatrace alert (non-integer id)")
+                elif source_type == "coroot":
+                    # Coroot stores the raw webhook payload inside alert_metadata under 'raw_payload'
+                    alert_metadata = incident.get("alert", {}).get("metadata", {})
+                    coroot_raw = alert_metadata.get("raw_payload")
+                    if coroot_raw:
+                        raw_payload = coroot_raw if isinstance(coroot_raw, str) else json.dumps(coroot_raw)
+                        logger.debug("[INCIDENTS] Found Coroot payload from alert_metadata")
 
                 # Log warning if no payload found for any source type
                 if not raw_payload:

@@ -41,7 +41,8 @@ BEGIN
       'incidentId', 'kf0x7ljs',
       'source_url', 'https://demo.coroot.com/p/tbuzvelk/incidents?incident=kf0x7ljs',
       'slo_breach', 'Latency: 98.96% (target: 99.9% < 500ms)',
-      'duration_minutes', 24
+      'duration_minutes', 24,
+      'raw_payload', $raw${"incident_key":"kf0x7ljs","project_id":"tbuzvelk","project_name":"acme-prod","application":"default/Deployment/catalog","severity":"critical","status":"open","started_at":"2026-02-17T14:13:22Z","resolved_at":"2026-02-17T14:37:23Z","duration_seconds":1441,"slos":[{"name":"Availability","objective":"99.9% of requests should not fail","compliance_actual":"100%","compliance_target":"99.9%","breached":false},{"name":"Latency","objective":"99.9% of requests < 500ms","compliance_actual":"98.96%","compliance_target":"99.9%","breached":true,"error_budget_burn_rate":{"short_window_15m":8.2,"long_window_6h":10.1,"alert_threshold":6.0}}],"root_cause":"The catalog service is experiencing database connectivity issues with db-main (PostgreSQL). Connection failures and timeouts are causing 10.4% error rate on catalog, cascading to front-end and order services.","affected_applications":[{"name":"default/Deployment/front-end","status":"degraded","error_rate":"0.8%"},{"name":"default/Deployment/catalog","status":"critical","error_rate":"10.4%"},{"name":"default/Deployment/order","status":"degraded","error_rate":"2.1%"},{"name":"default/StatefulSet/db-main","status":"warning","type":"postgresql"}],"metrics_at_trigger":{"catalog_p99_latency_ms":1247,"catalog_p95_latency_ms":850,"catalog_error_rate_pct":10.4,"catalog_db_connections_active":10,"catalog_db_connections_max":10,"catalog_db_connections_waiting":47,"front_end_p99_latency_ms":1200,"front_end_slo_compliance_pct":98.96},"webhook_url":"https://your-aurora-instance/api/coroot/webhook","webhook_version":"1","notification_id":"notif-kf0x7ljs-1739802802"}$raw$
     ),
     3,
     ARRAY['catalog', 'front-end', 'order', 'db-main'],
@@ -80,7 +81,7 @@ When one of the PostgreSQL replicas experienced a brief network partition (5-sec
     {"id": "conn-leak", "label": "Missing client.release()", "type": "event", "status": "failed", "parentId": "catalog-svc"},
     {"id": "network-blip", "label": "Network Partition (5s)", "type": "event", "status": "failed", "parentId": "db-main"},
     {"id": "slo-breach", "label": "Latency SLO Breach", "type": "alert", "status": "failed", "parentId": null},
-    {"id": "pr-152", "label": "PR #152: Fix connection leak", "type": "deployment", "status": "ok", "parentId": null}
+    {"id": "pr-152", "label": "PR #152: Fix connection leak", "type": "deployment", "status": "healthy", "parentId": null}
   ],
   "edges": [
     {"source": "network-blip", "target": "conn-pool", "label": "hung connections", "type": "causation"},
