@@ -53,7 +53,10 @@ async function handleJsonFetch<T>(input: RequestInfo, init?: RequestInit): Promi
   }
 
   const parsed = await parseJsonResponse<T>(response);
-  return parsed ?? ({} as T);
+  if (parsed === null) {
+    throw new Error(`Empty response body from ${typeof input === 'string' ? input : 'request'}`);
+  }
+  return parsed;
 }
 
 export const thousandEyesService = {

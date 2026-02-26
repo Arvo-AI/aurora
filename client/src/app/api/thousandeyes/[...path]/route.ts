@@ -54,7 +54,16 @@ async function proxyToBackend(request: NextRequest, { params }: { params: Promis
       );
     }
 
-    const data = await response.json();
+    let data: unknown;
+    try {
+      data = await response.json();
+    } catch {
+      const text = await response.text().catch(() => '');
+      return NextResponse.json(
+        { error: text || 'Non-JSON response from backend' },
+        { status: 502 },
+      );
+    }
     return NextResponse.json(data);
   } catch (error) {
     if (error instanceof Error && error.name === 'AbortError') {
