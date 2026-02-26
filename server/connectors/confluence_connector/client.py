@@ -94,6 +94,29 @@ def markdown_to_confluence_storage(markdown_text: str) -> str:
     while i < len(lines):
         line = lines[i]
 
+        # Fenced code blocks (```)
+        if re.match(r'^```', line):
+            lang_match = re.match(r'^```(\w+)?', line)
+            lang = lang_match.group(1) if lang_match and lang_match.group(1) else ""
+            i += 1
+            raw_code_lines: List[str] = []
+            while i < len(lines) and not re.match(r'^```\s*$', lines[i]):
+                raw_code_lines.append(lines[i])
+                i += 1
+            i += 1  # skip closing ```
+            if lang:
+                raw_body = "\n".join(raw_code_lines)
+                html_parts.append(
+                    f'<ac:structured-macro ac:name="code">'
+                    f'<ac:parameter ac:name="language">{html.escape(lang)}</ac:parameter>'
+                    f'<ac:plain-text-body><![CDATA[{raw_body}]]></ac:plain-text-body>'
+                    f'</ac:structured-macro>'
+                )
+            else:
+                escaped_body = "\n".join(html.escape(l) for l in raw_code_lines)
+                html_parts.append(f"<pre><code>{escaped_body}</code></pre>")
+            continue
+
         # Headings
         heading_match = re.match(r'^(#{1,6})\s+(.+)$', line)
         if heading_match:

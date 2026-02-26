@@ -1,7 +1,7 @@
 """Generate AI-powered postmortems when an incident is resolved."""
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Union
 
 from celery_config import celery_app
@@ -29,14 +29,9 @@ def _extract_text_from_response(content: Union[str, List[Any]]) -> str:
                 part_type = part.get("type", "")
                 if part_type in ("thinking", "reasoning"):
                     continue
-                elif part_type == "text":
-                    text = part.get("text", "")
-                    if text:
-                        text_parts.append(str(text))
-                else:
-                    text = part.get("text", "")
-                    if text:
-                        text_parts.append(str(text))
+                text = part.get("text", "")
+                if text:
+                    text_parts.append(str(text))
             elif isinstance(part, str):
                 text_parts.append(part)
         return "".join(text_parts).strip()
@@ -51,6 +46,8 @@ def _fetch_incident_for_postmortem(incident_id: str, user_id: str) -> Optional[D
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                cursor.execute("SET myapp.current_user_id = %s", (user_id,))
+                conn.commit()
                 cursor.execute(
                     """
                     SELECT alert_title, alert_service, severity, aurora_summary,
@@ -85,6 +82,72 @@ def _fetch_incident_for_postmortem(incident_id: str, user_id: str) -> Optional[D
     except Exception as e:
         logger.error(f"[Postmortem] Failed to fetch incident {incident_id}: {e}")
         return None
+
+
+def _fetch_rca_chat_messages(incident_id: str) -> List[Dict[str, Any]]:
+    """Fetch the RCA chat messages for the incident.
+
+    The chat session contains the full investigation conversation including
+    tool calls and outputs, which provide richer context than thoughts alone.
+    """
+    from utils.db.connection_pool import db_pool
+    import json
+
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT messages FROM chat_sessions
+                    WHERE incident_id = %s AND is_active = true
+                    ORDER BY updated_at DESC
+                    LIMIT 1
+                    """,
+                    (incident_id,),
+                )
+                row = cursor.fetchone()
+                if not row or not row[0]:
+                    return []
+                messages = row[0]
+                if isinstance(messages, str):
+                    messages = json.loads(messages)
+                return messages if isinstance(messages, list) else []
+    except Exception as e:
+        logger.error(
+            f"[Postmortem] Failed to fetch RCA chat for incident {incident_id}: {e}"
+        )
+        return []
+
+
+def _format_chat_for_prompt(messages: List[Dict[str, Any]], max_chars: int = 30000) -> str:
+    """Format chat messages into a readable text block for the LLM prompt.
+
+    Extracts human and AI messages, including tool call results, while
+    staying within a character budget.
+    """
+    lines = []
+    total = 0
+    for msg in messages:
+        role = msg.get("role") or msg.get("type", "unknown")
+        content = msg.get("content", "")
+        if isinstance(content, list):
+            text_parts = []
+            for part in content:
+                if isinstance(part, dict) and part.get("type") == "text":
+                    text_parts.append(part.get("text", ""))
+                elif isinstance(part, str):
+                    text_parts.append(part)
+            content = "\n".join(text_parts)
+        if not content or not isinstance(content, str):
+            continue
+        label = role.upper()
+        entry = f"[{label}]: {content}"
+        if total + len(entry) > max_chars:
+            lines.append("[... chat truncated for length ...]")
+            break
+        lines.append(entry)
+        total += len(entry)
+    return "\n\n".join(lines) if lines else "No RCA chat history available."
 
 
 def _fetch_incident_thoughts(incident_id: str) -> List[Dict[str, Any]]:
@@ -158,7 +221,7 @@ def _calculate_duration(
     if not started_at:
         return "Unknown"
 
-    end_time = analyzed_at if analyzed_at else datetime.now()
+    end_time = analyzed_at if analyzed_at else datetime.now(timezone.utc)
     try:
         delta = end_time - started_at
         total_seconds = int(delta.total_seconds())
@@ -185,6 +248,7 @@ def _build_postmortem_prompt(
     incident: Dict[str, Any],
     thoughts: List[Dict[str, Any]],
     suggestions: List[Dict[str, Any]],
+    chat_text: str = "",
 ) -> str:
     """Build a prompt for LLM to generate a structured postmortem."""
     title = incident["alert_title"]
@@ -240,6 +304,9 @@ INCIDENT INFORMATION:
 
 AURORA INVESTIGATION SUMMARY:
 {summary if summary else "No investigation summary available."}
+
+RCA CHAT HISTORY (full investigation conversation with tool calls and outputs):
+{chat_text if chat_text else "No RCA chat history available."}
 
 INVESTIGATION TIMELINE (thoughts from the AI investigation):
 {thoughts_text}
@@ -301,6 +368,8 @@ def _save_postmortem(incident_id: str, user_id: str, content: str) -> None:
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                cursor.execute("SET myapp.current_user_id = %s", (user_id,))
+                conn.commit()
                 cursor.execute(
                     """
                     INSERT INTO postmortems (incident_id, user_id, content, generated_at, updated_at)
@@ -357,16 +426,19 @@ def generate_postmortem(self, incident_id: str, user_id: str) -> Dict[str, Any]:
             )
             return {"incident_id": incident_id, "status": "not_found"}
 
-        # Fetch investigation thoughts and suggestions
+        # Fetch investigation context
         thoughts = _fetch_incident_thoughts(incident_id)
         suggestions = _fetch_incident_suggestions(incident_id)
+        chat_messages = _fetch_rca_chat_messages(incident_id)
+        chat_text = _format_chat_for_prompt(chat_messages)
 
         logger.info(
-            f"[Postmortem] Fetched {len(thoughts)} thoughts and {len(suggestions)} suggestions for incident {incident_id}"
+            f"[Postmortem] Fetched {len(thoughts)} thoughts, {len(suggestions)} suggestions, "
+            f"and {len(chat_messages)} chat messages for incident {incident_id}"
         )
 
         # Build the prompt
-        prompt = _build_postmortem_prompt(incident, thoughts, suggestions)
+        prompt = _build_postmortem_prompt(incident, thoughts, suggestions, chat_text)
 
         # Call LLM
         llm = create_chat_model(

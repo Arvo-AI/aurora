@@ -328,10 +328,16 @@ def export_to_confluence(incident_id):
 
 @postmortem_bp.route("/api/postmortems", methods=["GET"])
 def list_postmortems():
-    """Fetch all postmortems for the authenticated user."""
+    """Fetch postmortems for the authenticated user with pagination."""
     user_id = get_user_id_from_request()
     if not user_id:
         return jsonify({"error": "User authentication required"}), 401
+
+    try:
+        limit = min(int(request.args.get("limit", 50)), 100)
+        offset = max(int(request.args.get("offset", 0)), 0)
+    except (ValueError, TypeError):
+        limit, offset = 50, 0
 
     try:
         with db_pool.get_admin_connection() as conn:
@@ -345,8 +351,9 @@ def list_postmortems():
                        FROM postmortems p
                        LEFT JOIN incidents i ON p.incident_id = i.id
                        WHERE p.user_id = %s
-                       ORDER BY p.generated_at DESC""",
-                    (user_id,),
+                       ORDER BY p.generated_at DESC
+                       LIMIT %s OFFSET %s""",
+                    (user_id, limit, offset),
                 )
                 rows = cursor.fetchall()
 
