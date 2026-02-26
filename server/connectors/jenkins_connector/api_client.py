@@ -175,7 +175,7 @@ class JenkinsClient:
         """Fetch per-stage log segment via the Pipeline REST API."""
         success, text, error = self._request(
             "GET",
-            f"/{self._job_segments(job_path)}/{build_number}/execution/node/{node_id}/wfapi/log",
+            f"/{self._job_segments(job_path)}/{build_number}/execution/node/{url_quote(node_id, safe='')}/wfapi/log",
             accept="text/plain",
         )
         if success and text and len(text) > self.MAX_CONSOLE_BYTES:
@@ -221,13 +221,13 @@ class JenkinsClient:
                 f"/blue/rest/organizations/{organization}/pipelines/"
                 f"{url_quote(pipeline_name, safe='')}/branches/"
                 f"{url_quote(branch, safe='')}/runs/{run_number}/"
-                f"nodes/{node_id}/steps/"
+                f"nodes/{url_quote(node_id, safe='')}/steps/"
             )
         else:
             path = (
                 f"/blue/rest/organizations/{organization}/pipelines/"
                 f"{url_quote(pipeline_name, safe='')}/runs/{run_number}/"
-                f"nodes/{node_id}/steps/"
+                f"nodes/{url_quote(node_id, safe='')}/steps/"
             )
         return self._request("GET", path)
 

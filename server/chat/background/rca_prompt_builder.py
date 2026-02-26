@@ -385,11 +385,11 @@ def _get_github_context(user_id: str) -> Optional[Dict[str, str]]:
         return None
 
 
-def _get_jenkins_context(user_id: str) -> bool:
+def _has_jenkins_connected(user_id: str) -> bool:
     """Check if user has Jenkins connected."""
     try:
-        from utils.auth.stateless_auth import get_credentials_from_db
-        creds = get_credentials_from_db(user_id, "jenkins")
+        from utils.auth.token_management import get_token_data
+        creds = get_token_data(user_id, "jenkins")
         return bool(creds and creds.get("base_url"))
     except Exception as e:
         logger.warning(f"Error checking Jenkins context: {e}")
@@ -597,7 +597,7 @@ def build_rca_prompt(
         ])
 
     # Jenkins CI/CD context: inject recent deployments + investigation instructions
-    if user_id and _get_jenkins_context(user_id):
+    if user_id and _has_jenkins_connected(user_id):
         alert_service = alert_details.get('labels', {}).get('service', '') or ''
         if source == 'netdata':
             alert_service = alert_details.get('host', '') or ''
