@@ -26,7 +26,6 @@ BASE_URL = "https://api.thousandeyes.com/v7"
 _client_cache: Dict[str, Tuple["ThousandEyesClient", float]] = {}
 _cache_lock = threading.Lock()
 _user_locks: Dict[str, threading.Lock] = {}
-_last_sweep: float = 0.0
 _SWEEP_INTERVAL: float = CLIENT_CACHE_TTL / 2
 
 
@@ -48,11 +47,11 @@ def _sweep_stale_locks() -> None:
 
     Must be called while holding ``_cache_lock``.
     """
-    global _last_sweep
     now = time.monotonic()
-    if now - _last_sweep < _SWEEP_INTERVAL:
+    last_sweep = getattr(_sweep_stale_locks, "_last_sweep", 0.0)
+    if now - last_sweep < _SWEEP_INTERVAL:
         return
-    _last_sweep = now
+    _sweep_stale_locks._last_sweep = now
     stale = [uid for uid in _user_locks if uid not in _client_cache]
     for uid in stale:
         del _user_locks[uid]

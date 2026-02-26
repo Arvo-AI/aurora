@@ -62,7 +62,7 @@ def connect():
         account_groups = client.get_account_status().get("accountGroups", [])
     except ThousandEyesAPIError as exc:
         logger.warning("[THOUSANDEYES] Validation failed for user %s: %s", user_id, exc)
-        return jsonify({"error": str(exc)}), 400
+        return jsonify({"error": "Failed to validate ThousandEyes credentials"}), 400
 
     token_payload = {
         "api_token": api_token,
