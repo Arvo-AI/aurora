@@ -301,6 +301,9 @@ def deployment_webhook(user_id: str):
 
     if not isinstance(payload, dict):
         return jsonify({"error": "Invalid payload format"}), 400
+
+    if not payload.get("result") and not payload.get("build_number"):
+        return jsonify({"error": "Payload must include at least 'result' or 'build_number'"}), 400
     
     logger.info(
         "[JENKINS] Received deployment webhook for user %s: service=%s result=%s",

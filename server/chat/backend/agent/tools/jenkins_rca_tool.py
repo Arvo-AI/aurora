@@ -47,11 +47,14 @@ def _get_client_for_user(user_id: str):
 
     creds = get_token_data(user_id, "jenkins")
     if not creds:
+        logger.warning("[JENKINS_RCA] No stored credentials for user %s", user_id)
         return None
     base_url = creds.get("base_url")
     username = creds.get("username")
     api_token = creds.get("api_token")
     if not base_url or not username or not api_token:
+        logger.warning("[JENKINS_RCA] Incomplete credentials for user %s (missing %s)", user_id,
+                       ", ".join(k for k in ("base_url", "username", "api_token") if not creds.get(k)))
         return None
     return JenkinsClient(base_url=base_url, username=username, api_token=api_token)
 
