@@ -67,7 +67,6 @@ def _build_rca_prompt(payload: Dict[str, Any], user_id: Optional[str] = None) ->
 def process_jenkins_deployment(
     self,
     payload: Dict[str, Any],
-    metadata: Optional[Dict[str, Any]] = None,
     user_id: Optional[str] = None,
 ) -> None:
     """Process a Jenkins deployment event: persist, correlate, and optionally trigger RCA."""
@@ -86,7 +85,7 @@ def process_jenkins_deployment(
 
         logger.info(
             "[JENKINS][DEPLOY][USER:%s] %s → %s (env=%s, commit=%s)",
-            user_id or "unknown", service, result, environment, git.get("commit_sha", "")[:8],
+            user_id or "unknown", service, result, environment, (git.get("commit_sha") or "")[:8],
         )
 
         if not user_id:

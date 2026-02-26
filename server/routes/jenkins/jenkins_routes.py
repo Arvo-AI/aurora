@@ -234,16 +234,47 @@ def disconnect():
 # Webhook: receive deployment events from Jenkinsfile post blocks
 # ------------------------------------------------------------------
 
+def _verify_webhook_user(user_id: str) -> bool:
+    """Verify the user_id exists in the database to prevent arbitrary data injection."""
+    if not user_id or len(user_id) > 255:
+        return False
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT 1 FROM user_tokens WHERE user_id = %s AND provider = %s LIMIT 1",
+                    (user_id, JENKINS_PROVIDER),
+                )
+                return cursor.fetchone() is not None
+    except Exception as e:
+        logger.warning("[JENKINS] Webhook user verification failed: %s", e)
+        return False
+
+
 @jenkins_bp.route("/webhook/<user_id>", methods=["POST", "OPTIONS"])
 def deployment_webhook(user_id: str):
-    """Receive a deployment event webhook from a Jenkins pipeline."""
+    """Receive a deployment event webhook from a Jenkins pipeline.
+    
+    Security: We verify the user_id has Jenkins configured before accepting events.
+    This prevents arbitrary data injection for non-existent or unconfigured users.
+    """
     if request.method == "OPTIONS":
         return create_cors_response()
 
     if not user_id:
         return jsonify({"error": "user_id is required"}), 400
 
+    # Verify user has Jenkins configured before accepting webhook data
+    if not _verify_webhook_user(user_id):
+        logger.warning("[JENKINS] Webhook rejected: invalid or unconfigured user_id %s", user_id[:50])
+        return jsonify({"error": "Invalid webhook configuration"}), 403
+
     payload = request.get_json(silent=True) or {}
+    
+    # Basic payload validation
+    if not isinstance(payload, dict):
+        return jsonify({"error": "Invalid payload format"}), 400
+    
     logger.info(
         "[JENKINS] Received deployment webhook for user %s: service=%s result=%s",
         user_id,
@@ -253,11 +284,7 @@ def deployment_webhook(user_id: str):
 
     from routes.jenkins.tasks import process_jenkins_deployment
 
-    metadata = {
-        "headers": {k: v for k, v in request.headers if k.lower() != "authorization"},
-        "remote_addr": request.remote_addr,
-    }
-    process_jenkins_deployment.delay(payload, metadata, user_id)
+    process_jenkins_deployment.delay(payload, user_id)
 
     return jsonify({"received": True})
 
@@ -335,9 +362,12 @@ def list_deployments():
     if not user_id:
         return jsonify({"error": "User authentication required"}), 401
 
-    limit = request.args.get("limit", 20, type=int)
-    offset = request.args.get("offset", 0, type=int)
+    limit = min(max(request.args.get("limit", 20, type=int), 1), 100)  # Clamp to 1-100
+    offset = max(request.args.get("offset", 0, type=int), 0)  # Ensure non-negative
     service_filter = request.args.get("service")
+    # Sanitize service filter
+    if service_filter:
+        service_filter = service_filter[:255]  # Match DB column length
 
     try:
         with db_pool.get_admin_connection() as conn:

@@ -212,14 +212,23 @@ class JenkinsClient:
         pipeline_name: str,
         run_number: int,
         node_id: str,
+        branch: Optional[str] = None,
         organization: str = "jenkins",
     ) -> Tuple[bool, Optional[Any], Optional[str]]:
         """Fetch step-level detail for a pipeline node via Blue Ocean REST API."""
-        path = (
-            f"/blue/rest/organizations/{organization}/pipelines/"
-            f"{url_quote(pipeline_name, safe='')}/runs/{run_number}/"
-            f"nodes/{node_id}/steps/"
-        )
+        if branch:
+            path = (
+                f"/blue/rest/organizations/{organization}/pipelines/"
+                f"{url_quote(pipeline_name, safe='')}/branches/"
+                f"{url_quote(branch, safe='')}/runs/{run_number}/"
+                f"nodes/{node_id}/steps/"
+            )
+        else:
+            path = (
+                f"/blue/rest/organizations/{organization}/pipelines/"
+                f"{url_quote(pipeline_name, safe='')}/runs/{run_number}/"
+                f"nodes/{node_id}/steps/"
+            )
         return self._request("GET", path)
 
     # ------------------------------------------------------------------

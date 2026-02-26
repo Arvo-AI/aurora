@@ -95,7 +95,7 @@ def jenkins_rca(
     elif action == "blue_ocean_run":
         return _action_blue_ocean_run(client, pipeline_name or job_path, run_number or build_number, branch)
     elif action == "blue_ocean_steps":
-        return _action_blue_ocean_steps(client, pipeline_name or job_path, run_number or build_number, node_id)
+        return _action_blue_ocean_steps(client, pipeline_name or job_path, run_number or build_number, node_id, branch)
     else:
         return json.dumps({"error": f"Unknown action: {action}"})
 
@@ -260,11 +260,11 @@ def _action_blue_ocean_run(client, pipeline_name: Optional[str], run_number: Opt
     return json.dumps(data, default=str)
 
 
-def _action_blue_ocean_steps(client, pipeline_name: Optional[str], run_number: Optional[int], node_id: Optional[str]) -> str:
+def _action_blue_ocean_steps(client, pipeline_name: Optional[str], run_number: Optional[int], node_id: Optional[str], branch: Optional[str] = None) -> str:
     """Fetch step-level detail via Blue Ocean REST API."""
     if not pipeline_name or not run_number or not node_id:
         return json.dumps({"error": "pipeline_name, run_number, and node_id are required"})
-    success, data, error = client.get_blue_ocean_steps(pipeline_name, run_number, node_id)
+    success, data, error = client.get_blue_ocean_steps(pipeline_name, run_number, node_id, branch=branch)
     if not success:
         return json.dumps({"error": error or "Failed to fetch Blue Ocean steps"})
     return json.dumps(data, default=str)

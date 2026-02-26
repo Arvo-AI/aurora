@@ -403,6 +403,8 @@ def _get_recent_jenkins_deployments(user_id: str, service: str = "", lookback_mi
     """
     if not user_id:
         return []
+    # Validate lookback_minutes to prevent injection
+    lookback_minutes = max(1, min(int(lookback_minutes), 10080))  # 1 min to 7 days
     try:
         from utils.db.connection_pool import db_pool
         with db_pool.get_admin_connection() as conn:
@@ -413,7 +415,7 @@ def _get_recent_jenkins_deployments(user_id: str, service: str = "", lookback_mi
                                   commit_sha, branch, deployer, trace_id, received_at
                            FROM jenkins_deployment_events
                            WHERE user_id = %s AND service = %s
-                                 AND received_at >= NOW() - INTERVAL '%s minutes'
+                                 AND received_at >= NOW() - make_interval(mins => %s)
                            ORDER BY received_at DESC LIMIT 5""",
                         (user_id, service, lookback_minutes),
                     )
@@ -423,7 +425,7 @@ def _get_recent_jenkins_deployments(user_id: str, service: str = "", lookback_mi
                                   commit_sha, branch, deployer, trace_id, received_at
                            FROM jenkins_deployment_events
                            WHERE user_id = %s
-                                 AND received_at >= NOW() - INTERVAL '%s minutes'
+                                 AND received_at >= NOW() - make_interval(mins => %s)
                            ORDER BY received_at DESC LIMIT 5""",
                         (user_id, lookback_minutes),
                     )
@@ -431,7 +433,7 @@ def _get_recent_jenkins_deployments(user_id: str, service: str = "", lookback_mi
                 return [
                     {
                         "service": r[0], "environment": r[1], "result": r[2],
-                        "build_number": r[3], "build_url": r[4], "commit_sha": r[5],
+                        "build_number": r[3], "build_url": r[4], "commit_sha": r[5] or "",
                         "branch": r[6], "deployer": r[7], "trace_id": r[8],
                         "received_at": r[9].isoformat() if r[9] else None,
                     }
@@ -612,9 +614,10 @@ def build_rca_prompt(
             prompt_parts.append("### RECENT DEPLOYMENTS (potential change correlation):")
             for dep in recent_deploys:
                 ts = dep.get("received_at", "?")
+                commit_sha = dep.get('commit_sha') or '?'
                 prompt_parts.append(
                     f"- [{dep['result']}] {dep['service']} → {dep.get('environment', '?')} "
-                    f"at {ts} (commit: {dep.get('commit_sha', '?')[:8]}, "
+                    f"at {ts} (commit: {commit_sha[:8]}, "
                     f"build: #{dep.get('build_number', '?')})"
                 )
                 if dep.get("trace_id"):

@@ -13,7 +13,9 @@ export async function GET(request: NextRequest) {
 
     const { headers: authHeaders } = authResult;
     const { searchParams } = new URL(request.url);
-    const limit = searchParams.get('limit') || '20';
+    const limitParam = searchParams.get('limit');
+    // Validate and clamp limit to 1-100
+    const limit = Math.min(Math.max(parseInt(limitParam || '20', 10) || 20, 1), 100);
 
     const response = await fetch(`${API_BASE_URL}/jenkins/deployments?limit=${limit}`, {
       method: 'GET',
