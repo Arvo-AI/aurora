@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { Download, Edit2, Save, X, ExternalLink, RefreshCw, FileText } from 'lucide-react';
 import { postmortemService, PostmortemData } from '@/lib/services/incidents';
+import { postmortemMarkdownComponents } from '@/lib/markdown-components';
 
 interface PostmortemPanelProps {
   incidentId: string;
@@ -27,13 +28,12 @@ export default function PostmortemPanel({ incidentId, incidentTitle, isVisible, 
   const [exportError, setExportError] = useState<string | null>(null);
 
   const loadPostmortem = useCallback(async () => {
-    try {
-      const data = await postmortemService.getPostmortem(incidentId);
-      setPostmortem(data);
-      if (data) setEditContent(data.content);
-    } catch (e) {
-      console.error('Failed to load postmortem:', e);
+    const result = await postmortemService.getPostmortem(incidentId);
+    if (result.error) {
+      console.error('Failed to load postmortem:', result.error);
     }
+    setPostmortem(result.data);
+    if (result.data) setEditContent(result.data.content);
   }, [incidentId]);
 
   useEffect(() => {
@@ -94,7 +94,7 @@ export default function PostmortemPanel({ incidentId, incidentTitle, isVisible, 
       if (result.success) {
         setExportSuccess(result.pageUrl || 'Exported successfully');
         setShowConfluenceForm(false);
-        loadPostmortem(); // Refresh to get confluence URL
+        await loadPostmortem(); // Refresh to get confluence URL
       } else {
         setExportError(result.error || 'Export failed');
       }
@@ -257,16 +257,7 @@ export default function PostmortemPanel({ incidentId, incidentTitle, isVisible, 
       ) : (
         <div className="prose prose-invert prose-sm max-w-none">
           <ReactMarkdown
-            components={{
-              h1: ({ children }) => <h1 className="text-base font-semibold text-white mb-2">{children}</h1>,
-              h2: ({ children }) => <h2 className="text-sm font-semibold text-white mt-4 mb-2">{children}</h2>,
-              h3: ({ children }) => <h3 className="text-sm font-medium text-zinc-200 mt-3 mb-1">{children}</h3>,
-              strong: ({ children }) => <strong className="text-orange-300 font-semibold">{children}</strong>,
-              p: ({ children }) => <p className="mb-2 text-zinc-300 text-sm leading-normal">{children}</p>,
-              ul: ({ children }) => <ul className="list-disc list-outside ml-4 mb-2 space-y-1">{children}</ul>,
-              li: ({ children }) => <li className="text-zinc-300 text-sm">{children}</li>,
-              code: ({ children }) => <code className="bg-zinc-800 px-1.5 py-0.5 rounded text-orange-300 text-xs font-mono">{children}</code>,
-            }}
+            components={postmortemMarkdownComponents}
           >
             {postmortem.content}
           </ReactMarkdown>

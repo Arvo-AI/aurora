@@ -249,7 +249,7 @@ export const incidentsService = {
         correlatedAlertCount: inc.correlatedAlertCount || 0,
         mergedIntoIncidentId: inc.mergedIntoIncidentId,
         mergedIntoTitle: inc.mergedIntoTitle,
-        postMortem: inc.postMortem ? { id: inc.postMortem.id, incidentId: inc.postMortem.incidentId, content: inc.postMortem.content, generatedAt: inc.postMortem.generatedAt, updatedAt: inc.postMortem.updatedAt, confluencePageId: inc.postMortem.confluencePageId, confluencePageUrl: inc.postMortem.confluencePageUrl, confluenceExportedAt: inc.postMortem.confluenceExportedAt } : undefined,
+        postMortem: inc.postMortem ?? undefined,
         startedAt: inc.startedAt,
         analyzedAt: inc.analyzedAt,
         createdAt: inc.createdAt,
@@ -352,7 +352,7 @@ export const incidentsService = {
         })),
         mergedIntoIncidentId: inc.mergedIntoIncidentId,
         mergedIntoTitle: inc.mergedIntoTitle,
-        postMortem: inc.postMortem ? { id: inc.postMortem.id, incidentId: inc.postMortem.incidentId, content: inc.postMortem.content, generatedAt: inc.postMortem.generatedAt, updatedAt: inc.postMortem.updatedAt, confluencePageId: inc.postMortem.confluencePageId, confluencePageUrl: inc.postMortem.confluencePageUrl, confluenceExportedAt: inc.postMortem.confluenceExportedAt } : undefined,
+        postMortem: inc.postMortem ?? undefined,
         startedAt: inc.startedAt,
         analyzedAt: inc.analyzedAt,
         createdAt: inc.createdAt,
@@ -557,23 +557,16 @@ export const incidentsService = {
     }
   },
 
-  async resolveIncident(incidentId: string): Promise<{ success: boolean }> {
-    try {
-      const response = await fetch(`/api/incidents/${incidentId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({ status: 'resolved' }),
-      });
+  async resolveIncident(incidentId: string): Promise<void> {
+    const response = await fetch(`/api/incidents/${incidentId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ status: 'resolved' }),
+    });
 
-      if (!response.ok) {
-        throw new Error(`Failed to resolve incident: ${response.statusText}`);
-      }
-
-      return { success: true };
-    } catch (error) {
-      console.error('Error resolving incident:', error);
-      return { success: false };
+    if (!response.ok) {
+      throw new Error(`Failed to resolve incident: ${response.statusText}`);
     }
   },
 };
@@ -583,7 +576,7 @@ export const incidentsService = {
 // ============================================================================
 
 export const postmortemService = {
-  async getPostmortem(incidentId: string): Promise<PostmortemData | null> {
+  async getPostmortem(incidentId: string): Promise<{ data: PostmortemData | null; error?: string }> {
     try {
       const response = await fetch(`/api/incidents/${incidentId}/postmortem`, {
         method: 'GET',
@@ -593,16 +586,16 @@ export const postmortemService = {
 
       if (!response.ok) {
         if (response.status === 404) {
-          return null;
+          return { data: null };
         }
-        throw new Error(`Failed to fetch postmortem: ${response.statusText}`);
+        return { data: null, error: `Failed to fetch postmortem: ${response.statusText}` };
       }
 
       const data = await response.json();
-      return data.postmortem || null;
+      return { data: data.postmortem || null };
     } catch (error) {
       console.error('Error fetching postmortem:', error);
-      return null;
+      return { data: null, error: error instanceof Error ? error.message : 'Network error' };
     }
   },
 
@@ -663,7 +656,7 @@ export const postmortemService = {
 
   async listPostmortems(): Promise<PostmortemListItem[]> {
     try {
-      const res = await fetch('/api/postmortems', { cache: 'no-store' });
+      const res = await fetch('/api/postmortems', { cache: 'no-store', credentials: 'include' });
       if (!res.ok) throw new Error('Failed to fetch postmortems');
       const data = await res.json();
       return data.postmortems ?? [];

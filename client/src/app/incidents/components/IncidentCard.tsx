@@ -18,6 +18,7 @@ import {
 import React, { useState, useMemo, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { useRouter } from 'next/navigation';
+import { useToast } from '@/hooks/use-toast';
 import Link from 'next/link';
 import Image from 'next/image';
 import CitationBadge from './CitationBadge';
@@ -93,15 +94,18 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
   const [resolvingIncident, setResolvingIncident] = useState(false);
   const alert = incident.alert;
   const router = useRouter();
+  const { toast } = useToast();
   const showSeverity = (alert.severity && alert.severity !== 'unknown') || incident.status === 'analyzed';
 
   const handleResolveIncident = async () => {
     setResolvingIncident(true);
     try {
       await incidentsService.resolveIncident(incident.id);
+      toast({ title: 'Incident resolved', description: 'Postmortem generation has started.' });
       onRefresh?.();
     } catch (e) {
       console.error('Failed to resolve incident:', e);
+      toast({ title: 'Failed to resolve incident', variant: 'destructive' });
     } finally {
       setResolvingIncident(false);
     }
