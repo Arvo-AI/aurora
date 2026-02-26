@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { useToast } from "@/hooks/use-toast";
 import { jenkinsService, JenkinsStatus, JenkinsWebhookInfo, JenkinsDeploymentEvent } from "@/lib/services/jenkins";
+import { formatTimeAgo, formatDuration } from "@/lib/utils/time-format";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -44,32 +45,6 @@ const getUserFriendlyError = (err: unknown): string => {
 
 const CACHE_KEY = "jenkins_connection_status";
 
-const formatTimeAgo = (date: Date): string => {
-  const now = new Date();
-  const diffMs = now.getTime() - date.getTime();
-  const diffMins = Math.floor(diffMs / 60000);
-  const diffHours = Math.floor(diffMs / 3600000);
-  const diffDays = Math.floor(diffMs / 86400000);
-  
-  if (diffMins < 1) return "just now";
-  if (diffMins < 60) return `${diffMins}m ago`;
-  if (diffHours < 24) return `${diffHours}h ago`;
-  if (diffDays < 7) return `${diffDays}d ago`;
-  return date.toLocaleDateString();
-};
-
-const formatDuration = (ms: number): string => {
-  if (ms < 1000) return `${ms}ms`;
-  const secs = Math.floor(ms / 1000);
-  if (secs < 60) return `${secs}s`;
-  const mins = Math.floor(secs / 60);
-  const remainingSecs = secs % 60;
-  if (mins < 60) return remainingSecs > 0 ? `${mins}m ${remainingSecs}s` : `${mins}m`;
-  const hours = Math.floor(mins / 60);
-  const remainingMins = mins % 60;
-  return remainingMins > 0 ? `${hours}h ${remainingMins}m` : `${hours}h`;
-};
-
 export default function JenkinsAuthPage() {
   const router = useRouter();
   const { toast } = useToast();
@@ -83,7 +58,12 @@ export default function JenkinsAuthPage() {
   const [expandedStep, setExpandedStep] = useState<number | null>(1);
   const [webhookInfo, setWebhookInfo] = useState<JenkinsWebhookInfo | null>(null);
   const [deployments, setDeployments] = useState<JenkinsDeploymentEvent[]>([]);
-  const [copied, setCopied] = useState(false);
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    return () => { mountedRef.current = false; };
+  }, []);
 
   const toggleStep = (step: number) => {
     setExpandedStep(expandedStep === step ? null : step);
@@ -130,15 +110,28 @@ export default function JenkinsAuthPage() {
 
   useEffect(() => {
     if (status?.connected) {
-      jenkinsService.getWebhookUrl().then(info => { if (info) setWebhookInfo(info); });
-      jenkinsService.getDeployments(10).then(data => { if (data) setDeployments(data.deployments); });
+      jenkinsService.getWebhookUrl().then(info => {
+        if (info && mountedRef.current) setWebhookInfo(info);
+      }).catch(err => {
+        console.error("[Jenkins] Failed to load webhook URL:", err);
+        if (mountedRef.current) toast({ title: "Failed to load webhook config", variant: "destructive" });
+      });
+      jenkinsService.getDeployments(10).then(data => {
+        if (data && mountedRef.current) setDeployments(data.deployments);
+      }).catch(err => {
+        console.error("[Jenkins] Failed to load deployments:", err);
+      });
     }
   }, [status?.connected]);
 
-  const copyToClipboard = (text: string) => {
-    navigator.clipboard.writeText(text);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+  const copyToClipboard = async (text: string, key: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedKey(key);
+      setTimeout(() => setCopiedKey(null), 2000);
+    } catch {
+      toast({ title: "Failed to copy", description: "Clipboard access denied. Copy manually.", variant: "destructive" });
+    }
   };
 
   const handleConnect = async (e: React.FormEvent<HTMLFormElement>) => {
@@ -406,10 +399,10 @@ export default function JenkinsAuthPage() {
                     size="sm"
                     variant="secondary"
                     className="absolute top-2 right-2 h-8 gap-1.5"
-                    onClick={() => copyToClipboard(webhookInfo.jenkinsfileCurl)}
+                    onClick={() => copyToClipboard(webhookInfo.jenkinsfileCurl, 'curl')}
                   >
-                    {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
-                    {copied ? "Copied!" : "Copy"}
+                    {copiedKey === 'curl' ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+                    {copiedKey === 'curl' ? "Copied!" : "Copy"}
                   </Button>
                 </div>
 
@@ -430,7 +423,7 @@ export default function JenkinsAuthPage() {
                           size="sm"
                           variant="ghost"
                           className="h-6 text-xs gap-1"
-                          onClick={() => copyToClipboard(webhookInfo.jenkinsfileBasic)}
+                          onClick={() => copyToClipboard(webhookInfo.jenkinsfileBasic, 'basic')}
                         >
                           <Copy className="h-3 w-3" />
                           Copy
@@ -455,7 +448,7 @@ export default function JenkinsAuthPage() {
                           size="sm"
                           variant="ghost"
                           className="h-6 text-xs gap-1"
-                          onClick={() => copyToClipboard(webhookInfo.jenkinsfileOtel)}
+                          onClick={() => copyToClipboard(webhookInfo.jenkinsfileOtel, 'otel')}
                         >
                           <Copy className="h-3 w-3" />
                           Copy
@@ -506,7 +499,7 @@ export default function JenkinsAuthPage() {
                               variant={dep.result === "SUCCESS" ? "default" : dep.result === "FAILURE" ? "destructive" : "secondary"} 
                               className="h-5 text-xs shrink-0"
                             >
-                              {dep.result}
+                              {dep.result || "UNKNOWN"}
                             </Badge>
                             <span className="font-medium text-sm">{dep.service}</span>
                             <span className="text-xs text-muted-foreground">→ {dep.environment}</span>
@@ -534,7 +527,7 @@ export default function JenkinsAuthPage() {
                             )}
                           </div>
                         </div>
-                        {dep.buildUrl && (
+                        {dep.buildUrl && dep.buildUrl.startsWith("http") && (
                           <a
                             href={dep.buildUrl}
                             target="_blank"

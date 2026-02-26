@@ -305,9 +305,13 @@ export function parseGitHubRcaCommand(toolInput: string): string {
 
 export function parseJenkinsRcaCommand(toolInput: string): string {
   try {
-    const parsableCommand = toolInput.replace(/'/g, '"')
-    const parsed = JSON.parse(parsableCommand)
-    const args = parsed?.kwargs || parsed || {}
+    let parsed: Record<string, unknown> | null = null
+    try {
+      parsed = JSON.parse(toolInput)
+    } catch {
+      parsed = JSON.parse(toolInput.replace(/'/g, '"'))
+    }
+    const args = ((parsed as Record<string, unknown>)?.kwargs || parsed || {}) as Record<string, unknown>
     const action = args.action || "investigate"
     const jobPath = args.job_path || ""
     const buildNumber = args.build_number
