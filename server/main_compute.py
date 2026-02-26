@@ -157,6 +157,10 @@ CORS(app, origins=FRONTEND_URL, supports_credentials=True,
                         "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
                                           "Authorization", "X-Provider-Preference"],
                         "methods": ["GET", "POST", "DELETE", "OPTIONS"]},
+        r"/cloudbees/*": {"origins": FRONTEND_URL, "supports_credentials": True,
+                          "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
+                                            "Authorization", "X-Provider-Preference"],
+                          "methods": ["GET", "POST", "DELETE", "OPTIONS"]},
         r"/ovh_api/*": {"origins": FRONTEND_URL, "supports_credentials": True,
                        "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
                                          "Authorization", "X-Provider-Preference"],
@@ -223,6 +227,10 @@ if is_slack_enabled():
 from routes.jenkins import bp as jenkins_bp  # noqa: F401
 import routes.jenkins.tasks  # noqa: F401
 app.register_blueprint(jenkins_bp, url_prefix="/jenkins")
+
+# --- CloudBees CI Integration Routes (reuses Jenkins connector) ---
+from routes.cloudbees import bp as cloudbees_bp  # noqa: F401
+app.register_blueprint(cloudbees_bp, url_prefix="/cloudbees")
 
 # --- Grafana Integration Routes ---
 from routes.grafana import bp as grafana_bp  # noqa: F401

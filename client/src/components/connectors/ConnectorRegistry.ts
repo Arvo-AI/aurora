@@ -258,6 +258,17 @@ class ConnectorRegistry {
       path: "/jenkins/auth",
       storageKey: "isJenkinsConnected",
     });
+
+    this.register({
+      id: "cloudbees",
+      name: "CloudBees CI",
+      description: "Connect to CloudBees CI to view jobs, builds, pipeline status, and build agents. Enterprise Jenkins with Operations Center support.",
+      iconPath: "/cloudbees.svg",
+      iconBgColor: "bg-muted",
+      category: "CI/CD",
+      path: "/cloudbees/auth",
+      storageKey: "isCloudBeesConnected",
+    });
   }
 
   register(connector: ConnectorConfig): void {
