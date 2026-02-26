@@ -51,6 +51,7 @@ celery_app.conf.update(
         'routes.netdata.tasks',
         'routes.splunk.tasks',
         'routes.pagerduty.tasks',
+        'routes.jenkins.tasks',
         'utils.terminal.terminal_pod_cleanup',
         'chat.background.task',
         'chat.background.summarization',
@@ -107,6 +108,12 @@ try:
     logging.info("PagerDuty tasks imported successfully")
 except ImportError as e:
     logging.warning(f"Failed to import PagerDuty tasks: {e}")
+
+try:
+    import routes.jenkins.tasks
+    logging.info("Jenkins tasks imported successfully")
+except ImportError as e:
+    logging.warning(f"Failed to import Jenkins tasks: {e}")
 
 try:
     import services.discovery.tasks
