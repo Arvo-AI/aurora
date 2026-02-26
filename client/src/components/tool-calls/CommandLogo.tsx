@@ -140,6 +140,14 @@ const logos = {
       onError={(e) => console.error('Failed to load Dynatrace logo:', e)}
     />
   ),
+  thousandeyes: (
+    <img
+      src="/thousandeyes.svg"
+      className="w-4 h-4 min-w-4 min-h-4 object-contain"
+      alt="ThousandEyes"
+      onError={(e) => console.error('Failed to load ThousandEyes logo:', e)}
+    />
+  ),
   web: (
     <svg
       className="w-4 h-4 min-w-4 min-h-4 text-blue-600 dark:text-blue-400"
@@ -218,6 +226,11 @@ const getLogoForCommand = (command: string | any, toolName: string, provider?: s
 
   if (tool.includes('dynatrace') || tool === 'query_dynatrace') {
     return 'dynatrace'
+  }
+
+  // ThousandEyes tools
+  if (tool.includes('thousandeyes')) {
+    return 'thousandeyes'
   }
 
   // IAC tools

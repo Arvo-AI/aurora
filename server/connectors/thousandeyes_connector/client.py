@@ -331,7 +331,10 @@ class ThousandEyesClient:
 
     def get_dashboards(self) -> List[Dict[str, Any]]:
         """List all dashboards."""
-        return self._get("/dashboards").get("dashboards", [])
+        data = self._get("/dashboards")
+        if isinstance(data, list):
+            return data
+        return data.get("dashboards", [])
 
     def get_dashboard(self, dashboard_id: str) -> Dict[str, Any]:
         """Get a single dashboard including its widget list."""

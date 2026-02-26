@@ -277,6 +277,7 @@ def thousandeyes_list_tests(
     *,
     user_id: Optional[str] = None,
     test_type: Optional[str] = None,
+    **kwargs,
 ) -> str:
     """List all configured ThousandEyes tests."""
     ok, data = _call_api(user_id, "list_tests", lambda c: c.get_tests(test_type=test_type))
@@ -298,6 +299,7 @@ def thousandeyes_get_test_detail(
     *,
     user_id: Optional[str] = None,
     test_id: str = "",
+    **kwargs,
 ) -> str:
     """Get full configuration details for a single ThousandEyes test."""
     if not test_id:
@@ -319,6 +321,7 @@ def thousandeyes_get_test_results(
     test_id: str = "",
     result_type: str = "network",
     window: Optional[str] = None,
+    **kwargs,
 ) -> str:
     """Get results for a specific ThousandEyes test."""
     if not test_id:
@@ -347,6 +350,7 @@ def thousandeyes_get_alerts(
     state: Optional[str] = None,
     severity: Optional[str] = None,
     window: Optional[str] = None,
+    **kwargs,
 ) -> str:
     """Get ThousandEyes alerts."""
     ok, alerts = _call_api(
@@ -396,6 +400,7 @@ def thousandeyes_get_alerts(
 def thousandeyes_get_alert_rules(
     *,
     user_id: Optional[str] = None,
+    **kwargs,
 ) -> str:
     """List all ThousandEyes alert rule definitions."""
     ok, rules = _call_api(user_id, "get_alert_rules", lambda c: c.get_alert_rules())
@@ -412,6 +417,7 @@ def thousandeyes_get_agents(
     *,
     user_id: Optional[str] = None,
     agent_type: Optional[str] = None,
+    **kwargs,
 ) -> str:
     """List ThousandEyes agents and their status."""
     ok, agents = _call_api(user_id, "get_agents", lambda c: c.get_agents(agent_type=agent_type))
@@ -432,6 +438,7 @@ def thousandeyes_get_agents(
 def thousandeyes_get_endpoint_agents(
     *,
     user_id: Optional[str] = None,
+    **kwargs,
 ) -> str:
     """List ThousandEyes endpoint agents (employee devices)."""
     ok, agents = _call_api(user_id, "get_endpoint_agents", lambda c: c.get_endpoint_agents())
@@ -449,6 +456,7 @@ def thousandeyes_get_internet_insights(
     user_id: Optional[str] = None,
     outage_type: str = "network",
     window: Optional[str] = None,
+    **kwargs,
 ) -> str:
     """Get Internet Insights outage data from ThousandEyes."""
     ok, outages = _call_api(
@@ -483,6 +491,7 @@ def thousandeyes_get_dashboards(
     *,
     user_id: Optional[str] = None,
     dashboard_id: Optional[str] = None,
+    **kwargs,
 ) -> str:
     """List ThousandEyes dashboards, or get a specific dashboard with its widgets."""
     if dashboard_id:
@@ -510,6 +519,7 @@ def thousandeyes_get_dashboard_widget(
     dashboard_id: str = "",
     widget_id: str = "",
     window: Optional[str] = None,
+    **kwargs,
 ) -> str:
     """Get data for a specific widget within a ThousandEyes dashboard."""
     if not dashboard_id or not widget_id:
@@ -531,6 +541,7 @@ def thousandeyes_get_dashboard_widget(
 def thousandeyes_get_bgp_monitors(
     *,
     user_id: Optional[str] = None,
+    **kwargs,
 ) -> str:
     """List ThousandEyes BGP monitoring points."""
     ok, monitors = _call_api(user_id, "get_bgp_monitors", lambda c: c.get_bgp_monitors())

@@ -39,14 +39,14 @@ export function ThousandEyesConnectionStep({
             </p>
             <ol className="space-y-2 list-decimal list-inside">
               <li>Log in to ThousandEyes at <strong>app.thousandeyes.com</strong>.</li>
-              <li>Navigate to <strong>Account Settings &gt; Users and Roles &gt; User API Tokens</strong>.</li>
-              <li>Create a new OAuth Bearer Token with read permissions.</li>
+              <li>Click <strong>Manage</strong> (bottom of the left sidebar) &gt; <strong>Account Settings</strong> &gt; <strong>Users and Roles</strong>.</li>
+              <li>Scroll down to <strong>User API Tokens</strong> and click <strong>Create</strong> next to OAuth Bearer Token.</li>
               <li>Copy the token (it will only be shown once).</li>
             </ol>
             <div className="mt-4 p-3 bg-blue-50 dark:bg-blue-950/20 border border-blue-200 dark:border-blue-800 rounded">
               <p className="text-xs font-semibold text-blue-900 dark:text-blue-300">What Aurora accesses</p>
               <p className="text-xs text-blue-800 dark:text-blue-400 mt-1">
-                Tests &amp; results, alerts, agents, Internet Insights (network &amp; app outages), path visualization, and BGP data
+                Tests &amp; results, alerts &amp; alert rules, cloud/enterprise/endpoint agents, dashboards &amp; widgets, Internet Insights (network &amp; app outages), path visualization, BGP monitors, and DNS/VoIP data
               </p>
             </div>
           </div>
@@ -77,7 +77,7 @@ export function ThousandEyesConnectionStep({
                   required
                 />
                 <p className="text-xs text-muted-foreground">
-                  The OAuth Bearer Token from ThousandEyes Account Settings &gt; User API Tokens
+                  The OAuth Bearer Token from ThousandEyes Manage &gt; Account Settings &gt; Users and Roles &gt; User API Tokens
                 </p>
               </div>
 
