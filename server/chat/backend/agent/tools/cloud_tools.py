@@ -1300,6 +1300,49 @@ def get_cloud_tools():
         ))
         logging.info(f"Added Dynatrace tool for user {user_id}")
 
+    # Add Bitbucket tools if connected
+    try:
+        from .bitbucket import is_bitbucket_connected
+
+        if user_id and is_bitbucket_connected(user_id):
+            from .bitbucket import (
+                bitbucket_repos, BitbucketReposArgs,
+                bitbucket_branches, BitbucketBranchesArgs,
+                bitbucket_pull_requests, BitbucketPullRequestsArgs,
+                bitbucket_issues, BitbucketIssuesArgs,
+                bitbucket_pipelines, BitbucketPipelinesArgs,
+            )
+
+            _bb_tools = [
+                (bitbucket_repos, "bitbucket_repos", BitbucketReposArgs,
+                 "Manage Bitbucket repositories, files, and code. Actions: list_repos, get_repo, "
+                 "get_file_contents, create_or_update_file, delete_file, get_directory_tree, "
+                 "search_code, list_workspaces, get_workspace. Workspace and repo auto-resolve "
+                 "from saved selection if not specified."),
+                (bitbucket_branches, "bitbucket_branches", BitbucketBranchesArgs,
+                 "Manage Bitbucket branches and view commits/diffs. Actions: list_branches, create_branch, "
+                 "delete_branch, list_commits, get_commit, get_diff, compare."),
+                (bitbucket_pull_requests, "bitbucket_pull_requests", BitbucketPullRequestsArgs,
+                 "Manage Bitbucket pull requests. Actions: list_prs, get_pr, create_pr, update_pr, "
+                 "merge_pr, approve_pr, unapprove_pr, decline_pr, list_pr_comments, add_pr_comment, "
+                 "get_pr_diff, get_pr_activity."),
+                (bitbucket_issues, "bitbucket_issues", BitbucketIssuesArgs,
+                 "Manage Bitbucket issues. Actions: list_issues, get_issue, create_issue, "
+                 "update_issue, list_issue_comments, add_issue_comment."),
+                (bitbucket_pipelines, "bitbucket_pipelines", BitbucketPipelinesArgs,
+                 "Manage Bitbucket Pipelines CI/CD. Actions: list_pipelines, get_pipeline, "
+                 "trigger_pipeline, stop_pipeline, list_pipeline_steps, get_step_log, get_pipeline_step."),
+            ]
+            for _func, _name, _schema, _desc in _bb_tools:
+                _ctx = with_user_context(_func)
+                _notif = with_completion_notification(_ctx)
+                _final = wrap_func_with_capture(_notif, _name) if tool_capture else _notif
+                tools.append(StructuredTool.from_function(
+                    func=_final, name=_name, description=_desc, args_schema=_schema))
+            logging.info(f"Added {len(_bb_tools)} Bitbucket tools for user {user_id}")
+    except Exception as e:
+        logging.warning(f"Failed to add Bitbucket tools: {e}")
+
     # Add Confluence search tools if enabled
     try:
         from utils.flags.feature_flags import is_confluence_enabled
