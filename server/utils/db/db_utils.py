@@ -817,7 +817,7 @@ def initialize_tables():
                         confluence_exported_at TIMESTAMP
                     );
 
-                    CREATE INDEX IF NOT EXISTS idx_postmortems_incident_id ON postmortems(incident_id);
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_postmortems_incident_id ON postmortems(incident_id);
                     CREATE INDEX IF NOT EXISTS idx_postmortems_user_id ON postmortems(user_id);
                 """,
             }
@@ -1380,6 +1380,7 @@ def initialize_tables():
                     "user_manual_vms",
                     "incident_alerts",
                     "incident_feedback",
+                    "postmortems",
                 ]:
                     # INSERT policy
                     insert_policy_sql = f"""

@@ -292,6 +292,13 @@ def export_to_confluence(incident_id):
     page_id = result.get("id")
     page_url = result.get("url")
 
+    if not page_id:
+        logger.error(
+            "[POSTMORTEM] Confluence export returned no page id for incident %s",
+            incident_id,
+        )
+        return jsonify({"error": "Invalid response from Confluence"}), 502
+
     # Update postmortem record with Confluence details
     try:
         with db_pool.get_admin_connection() as conn:

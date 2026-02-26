@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 import logging
 import re
 from typing import Any, Dict, List, Optional
@@ -134,6 +135,7 @@ def markdown_to_confluence_storage(markdown_text: str) -> str:
 
 def _inline_format(text: str) -> str:
     """Apply inline markdown formatting (bold, italic, code)."""
+    text = html.escape(text, quote=False)
     # Bold must come before italic to handle ** vs *
     text = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', text)
     text = re.sub(r'\*(.+?)\*', r'<em>\1</em>', text)

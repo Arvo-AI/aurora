@@ -812,6 +812,16 @@ def update_incident(incident_id: str):
                 if not update_fields:
                     return jsonify({"error": "No valid fields to update"}), 400
 
+                # Check previous status before updating (for transition detection)
+                previous_status = None
+                if data.get("status") == "resolved":
+                    cursor.execute(
+                        "SELECT status FROM incidents WHERE id = %s AND user_id = %s",
+                        (incident_id, user_id),
+                    )
+                    prev_row = cursor.fetchone()
+                    previous_status = prev_row[0] if prev_row else None
+
                 # Always update updated_at
                 update_fields.append("updated_at = CURRENT_TIMESTAMP")
 
@@ -833,9 +843,8 @@ def update_incident(incident_id: str):
 
                 conn.commit()
 
-
-                # Trigger postmortem generation when incident is resolved
-                if data.get("status") == "resolved":
+                # Trigger postmortem generation only on transition to resolved
+                if data.get("status") == "resolved" and previous_status != "resolved":
                     try:
                         from chat.background.postmortem_generator import generate_postmortem
                         generate_postmortem.delay(incident_id, user_id)

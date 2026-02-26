@@ -44,7 +44,7 @@ def _extract_text_from_response(content: Union[str, List[Any]]) -> str:
     return str(content).strip()
 
 
-def _fetch_incident_for_postmortem(incident_id: str) -> Optional[Dict[str, Any]]:
+def _fetch_incident_for_postmortem(incident_id: str, user_id: str) -> Optional[Dict[str, Any]]:
     """Fetch incident data needed for postmortem generation."""
     from utils.db.connection_pool import db_pool
 
@@ -56,9 +56,9 @@ def _fetch_incident_for_postmortem(incident_id: str) -> Optional[Dict[str, Any]]
                     SELECT alert_title, alert_service, severity, aurora_summary,
                            started_at, analyzed_at, source_type
                     FROM incidents
-                    WHERE id = %s
+                    WHERE id = %s AND user_id = %s AND status = 'resolved'
                     """,
-                    (incident_id,),
+                    (incident_id, user_id),
                 )
                 row = cursor.fetchone()
                 if not row:
@@ -301,36 +301,18 @@ def _save_postmortem(incident_id: str, user_id: str, content: str) -> None:
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
-                # Check if a postmortem already exists for this incident
                 cursor.execute(
-                    "SELECT id FROM postmortems WHERE incident_id = %s",
-                    (incident_id,),
+                    """
+                    INSERT INTO postmortems (incident_id, user_id, content, generated_at, updated_at)
+                    VALUES (%s, %s, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                    ON CONFLICT (incident_id)
+                    DO UPDATE SET content = EXCLUDED.content,
+                                  user_id = EXCLUDED.user_id,
+                                  updated_at = CURRENT_TIMESTAMP
+                    """,
+                    (incident_id, user_id, content),
                 )
-                existing = cursor.fetchone()
-
-                if existing:
-                    cursor.execute(
-                        """
-                        UPDATE postmortems
-                        SET content = %s, updated_at = CURRENT_TIMESTAMP
-                        WHERE incident_id = %s
-                        """,
-                        (content, incident_id),
-                    )
-                    logger.info(
-                        f"[Postmortem] Updated existing postmortem for incident {incident_id}"
-                    )
-                else:
-                    cursor.execute(
-                        """
-                        INSERT INTO postmortems (incident_id, user_id, content, generated_at, updated_at)
-                        VALUES (%s, %s, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-                        """,
-                        (incident_id, user_id, content),
-                    )
-                    logger.info(
-                        f"[Postmortem] Created new postmortem for incident {incident_id}"
-                    )
+                logger.info("[Postmortem] Upserted postmortem for incident %s", incident_id)
             conn.commit()
     except Exception as e:
         logger.error(
@@ -368,7 +350,7 @@ def generate_postmortem(self, incident_id: str, user_id: str) -> Dict[str, Any]:
 
     try:
         # Fetch incident data
-        incident = _fetch_incident_for_postmortem(incident_id)
+        incident = _fetch_incident_for_postmortem(incident_id, user_id)
         if not incident:
             logger.warning(
                 f"[Postmortem] Incident {incident_id} not found; skipping postmortem generation"
