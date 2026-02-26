@@ -223,6 +223,10 @@ class ThousandEyesClient:
         path = f"/tests/{test_type}" if test_type else "/tests"
         return self._get(path).get("tests", [])
 
+    def get_test(self, test_id: str) -> Dict[str, Any]:
+        """Get full configuration details for a single test."""
+        return self._get(f"/tests/{test_id}")
+
     # ------------------------------------------------------------------
     # Test Results
     # ------------------------------------------------------------------
@@ -234,6 +238,14 @@ class ThousandEyesClient:
         "path-vis": "path-vis",
         "dns": "dns-server",
         "bgp": "bgp-routes",
+        "page-load": "page-load",
+        "web-transactions": "web-transactions",
+        "ftp": "ftp-server",
+        "api": "api",
+        "sip": "sip-server",
+        "voice": "voice",
+        "dns-trace": "dns-trace",
+        "dnssec": "dnssec",
     }
 
     def get_test_results(
@@ -241,7 +253,7 @@ class ThousandEyesClient:
     ) -> Dict[str, Any]:
         """Get results for a specific test.
 
-        result_type: 'network', 'http', 'path-vis', 'dns', or 'bgp'.
+        result_type: any key in ``_RESULT_TYPE_PATHS``.
         """
         suffix = self._RESULT_TYPE_PATHS.get(result_type, "network")
         params: Dict[str, str] = {}
@@ -304,3 +316,48 @@ class ThousandEyesClient:
         if window:
             params["window"] = window
         return self._get(f"/internet-insights/outages/{suffix}", params=params).get("outages", [])
+
+    # ------------------------------------------------------------------
+    # Alert Rules
+    # ------------------------------------------------------------------
+
+    def get_alert_rules(self) -> List[Dict[str, Any]]:
+        """List all alert rule definitions."""
+        return self._get("/alerts/rules").get("alertRules", [])
+
+    # ------------------------------------------------------------------
+    # Dashboards
+    # ------------------------------------------------------------------
+
+    def get_dashboards(self) -> List[Dict[str, Any]]:
+        """List all dashboards."""
+        return self._get("/dashboards").get("dashboards", [])
+
+    def get_dashboard(self, dashboard_id: str) -> Dict[str, Any]:
+        """Get a single dashboard including its widget list."""
+        return self._get(f"/dashboards/{dashboard_id}")
+
+    def get_dashboard_widget(
+        self, dashboard_id: str, widget_id: str, window: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Get data for a specific widget within a dashboard."""
+        params: Dict[str, str] = {}
+        if window:
+            params["window"] = window
+        return self._get(f"/dashboards/{dashboard_id}/widgets/{widget_id}", params=params)
+
+    # ------------------------------------------------------------------
+    # Endpoint Agents
+    # ------------------------------------------------------------------
+
+    def get_endpoint_agents(self) -> List[Dict[str, Any]]:
+        """List endpoint agents (employee devices)."""
+        return self._get("/endpoint/agents").get("agents", [])
+
+    # ------------------------------------------------------------------
+    # BGP Monitors
+    # ------------------------------------------------------------------
+
+    def get_bgp_monitors(self) -> List[Dict[str, Any]]:
+        """List BGP monitoring points."""
+        return self._get("/monitors").get("monitors", [])

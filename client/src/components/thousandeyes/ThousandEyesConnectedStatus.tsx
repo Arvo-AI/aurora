@@ -66,13 +66,17 @@ export function ThousandEyesConnectedStatus({
           <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
             {[
               "Tests & Results",
-              "Alerts",
-              "Agents",
+              "Alerts & Rules",
+              "Cloud/Enterprise Agents",
+              "Endpoint Agents",
+              "Dashboards & Widgets",
               "Path Visualization",
               "Network Outages",
               "App Outages",
-              "BGP Routes",
-              "DNS Results",
+              "BGP Monitors & Routes",
+              "DNS & DNSSEC",
+              "Page Load & Transactions",
+              "VoIP & SIP",
             ].map((item) => (
               <div key={item} className="flex items-center gap-1.5">
                 <span className="h-1.5 w-1.5 rounded-full bg-blue-500" />

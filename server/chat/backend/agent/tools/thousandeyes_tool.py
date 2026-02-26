@@ -7,7 +7,7 @@ Credentials are loaded from Vault via ``get_token_data(user_id, "thousandeyes")`
 
 import json
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from pydantic import BaseModel, Field
 
@@ -24,6 +24,9 @@ MAX_OUTPUT_CHARS = 120000
 MAX_LIST_ITEMS = 100
 
 NOT_CONNECTED_MSG = "ThousandEyes not connected. Ask the user to connect ThousandEyes first."
+
+_ERROR_USER = json.dumps({"error": "User context not available"})
+_ERROR_NOT_CONNECTED = json.dumps({"error": NOT_CONNECTED_MSG})
 
 
 # ---------------------------------------------------------------------------
@@ -101,6 +104,60 @@ def _truncate_list(
 
 
 # ---------------------------------------------------------------------------
+# Shared tool helpers - reduce boilerplate across all tool functions
+# ---------------------------------------------------------------------------
+
+def _call_api(
+    user_id: Optional[str],
+    tool_name: str,
+    api_fn: Callable[[ThousandEyesClient], Any],
+) -> Tuple[bool, Any]:
+    """Acquire a client and call *api_fn*, handling all common error paths.
+
+    Returns ``(True, data)`` on success, or ``(False, error_json_str)`` on
+    failure.  Every tool function can delegate its client-acquisition and
+    error-handling boilerplate to this single helper.
+    """
+    if not user_id:
+        return False, _ERROR_USER
+
+    client = _build_client(user_id)
+    if not client:
+        return False, _ERROR_NOT_CONNECTED
+
+    try:
+        data = api_fn(client)
+        return True, data
+    except ThousandEyesAPIError as exc:
+        return False, json.dumps({"error": f"ThousandEyes API error: {exc}"})
+    except Exception as exc:
+        logger.error("[THOUSANDEYES-TOOL] %s failed: %s", tool_name, exc)
+        return False, json.dumps({"error": f"Unexpected error: {exc}"})
+
+
+def _summarize_list(
+    items: List[Dict[str, Any]],
+    fields: Tuple[str, ...],
+    result_key: str,
+    total_key: str,
+    hint: str = "Use filters to narrow results.",
+    extra: Optional[Dict[str, Any]] = None,
+) -> str:
+    """Project *items* to *fields*, truncate, and return JSON.
+
+    Shared by every tool that returns a list of summarised records.
+    """
+    summaries = [{k: item.get(k) for k in fields} for item in items]
+    truncated, trunc_meta = _truncate_list(summaries, len(summaries), hint=hint)
+
+    result: Dict[str, Any] = {total_key: len(summaries), result_key: truncated}
+    if extra:
+        result.update(extra)
+    result.update(trunc_meta)
+    return _safe_json(result)
+
+
+# ---------------------------------------------------------------------------
 # Pydantic arg schemas
 # ---------------------------------------------------------------------------
 
@@ -116,6 +173,10 @@ class ThousandEyesListTestsArgs(BaseModel):
     )
 
 
+class ThousandEyesGetTestDetailArgs(BaseModel):
+    test_id: str = Field(description="The ThousandEyes test ID to get full details for.")
+
+
 class ThousandEyesGetTestResultsArgs(BaseModel):
     test_id: str = Field(description="The ThousandEyes test ID to get results for.")
     result_type: str = Field(
@@ -123,7 +184,10 @@ class ThousandEyesGetTestResultsArgs(BaseModel):
         description=(
             "Type of results to fetch: 'network' (latency, loss, jitter), "
             "'http' (response time, availability), 'path-vis' (hop-by-hop trace), "
-            "'dns' (DNS resolution), 'bgp' (BGP routes)."
+            "'dns' (DNS resolution), 'bgp' (BGP routes), 'page-load' (full waterfall), "
+            "'web-transactions' (scripted browser), 'ftp' (FTP results), 'api' (API test), "
+            "'sip' (SIP/VoIP), 'voice' (MOS, jitter), 'dns-trace' (trace chain), "
+            "'dnssec' (DNSSEC validation)."
         ),
     )
     window: Optional[str] = Field(
@@ -165,6 +229,46 @@ class ThousandEyesGetInternetInsightsArgs(BaseModel):
     )
 
 
+class ThousandEyesGetAlertRulesArgs(BaseModel):
+    pass
+
+
+class ThousandEyesGetDashboardsArgs(BaseModel):
+    dashboard_id: Optional[str] = Field(
+        default=None,
+        description="Optional dashboard ID to get a specific dashboard with its widgets. Leave empty to list all dashboards.",
+    )
+
+
+class ThousandEyesGetDashboardWidgetArgs(BaseModel):
+    dashboard_id: str = Field(description="The dashboard ID.")
+    widget_id: str = Field(description="The widget ID within the dashboard.")
+    window: Optional[str] = Field(
+        default=None,
+        description="Time window (e.g. '1h', '6h', '1d'). Defaults to the widget's configured window.",
+    )
+
+
+class ThousandEyesGetEndpointAgentsArgs(BaseModel):
+    pass
+
+
+class ThousandEyesGetBGPMonitorsArgs(BaseModel):
+    pass
+
+
+# ---------------------------------------------------------------------------
+# Field tuples for list summarization
+# ---------------------------------------------------------------------------
+
+_TEST_FIELDS = ("testId", "testName", "type", "enabled", "interval", "server", "url", "createdDate")
+_AGENT_FIELDS = ("agentId", "agentName", "agentType", "countryId", "location", "enabled", "agentState", "ipAddresses", "lastSeen")
+_RULE_FIELDS = ("ruleId", "ruleName", "expression", "alertType", "severity", "default", "testIds", "notifyOnClear")
+_DASH_FIELDS = ("dashboardId", "title", "description", "isBuiltIn", "createdBy", "modifiedDate")
+_EP_FIELDS = ("agentId", "agentName", "computerName", "osVersion", "platform", "location", "publicIP", "lastSeen", "status", "vpnProfiles")
+_MON_FIELDS = ("monitorId", "monitorName", "monitorType", "ipAddress", "network", "countryId")
+
+
 # ---------------------------------------------------------------------------
 # Tool implementations
 # ---------------------------------------------------------------------------
@@ -175,39 +279,38 @@ def thousandeyes_list_tests(
     test_type: Optional[str] = None,
 ) -> str:
     """List all configured ThousandEyes tests."""
-    if not user_id:
-        return json.dumps({"error": "User context not available"})
+    ok, data = _call_api(user_id, "list_tests", lambda c: c.get_tests(test_type=test_type))
+    if not ok:
+        return data
 
-    client = _build_client(user_id)
-    if not client:
-        return json.dumps({"error": NOT_CONNECTED_MSG})
-
-    try:
-        tests = client.get_tests(test_type=test_type)
-    except ThousandEyesAPIError as exc:
-        return json.dumps({"error": f"ThousandEyes API error: {exc}"})
-    except Exception as exc:
-        logger.error("[THOUSANDEYES-TOOL] list_tests failed: %s", exc)
-        return json.dumps({"error": f"Unexpected error: {exc}"})
-
-    if not tests:
+    if not data:
         filter_desc = f" (type={test_type})" if test_type else ""
         return json.dumps({"tests": [], "message": f"No tests found{filter_desc}."})
 
-    _TEST_FIELDS = ("testId", "testName", "type", "enabled", "interval", "server", "url", "createdDate")
-    summaries = [{k: t.get(k) for k in _TEST_FIELDS} for t in tests]
-
-    items, trunc_meta = _truncate_list(
-        summaries, len(summaries),
+    return _summarize_list(
+        data, _TEST_FIELDS,
+        result_key="tests", total_key="total_tests",
         hint="Use test_type filter to narrow results.",
     )
 
-    result: Dict[str, Any] = {
-        "total_tests": len(summaries),
-        "tests": items,
-    }
-    result.update(trunc_meta)
-    return _safe_json(result)
+
+def thousandeyes_get_test_detail(
+    *,
+    user_id: Optional[str] = None,
+    test_id: str = "",
+) -> str:
+    """Get full configuration details for a single ThousandEyes test."""
+    if not test_id:
+        return json.dumps({"error": "test_id is required"})
+
+    ok, data = _call_api(user_id, "get_test_detail", lambda c: c.get_test(test_id))
+    if not ok:
+        return data
+
+    if not data:
+        return json.dumps({"test_id": test_id, "message": "Test not found."})
+
+    return _safe_json(data)
 
 
 def thousandeyes_get_test_results(
@@ -218,23 +321,15 @@ def thousandeyes_get_test_results(
     window: Optional[str] = None,
 ) -> str:
     """Get results for a specific ThousandEyes test."""
-    if not user_id:
-        return json.dumps({"error": "User context not available"})
-
     if not test_id:
         return json.dumps({"error": "test_id is required"})
 
-    client = _build_client(user_id)
-    if not client:
-        return json.dumps({"error": NOT_CONNECTED_MSG})
-
-    try:
-        data = client.get_test_results(test_id, result_type=result_type, window=window)
-    except ThousandEyesAPIError as exc:
-        return json.dumps({"error": f"ThousandEyes API error: {exc}"})
-    except Exception as exc:
-        logger.error("[THOUSANDEYES-TOOL] get_test_results failed: %s", exc)
-        return json.dumps({"error": f"Unexpected error: {exc}"})
+    ok, data = _call_api(
+        user_id, "get_test_results",
+        lambda c: c.get_test_results(test_id, result_type=result_type, window=window),
+    )
+    if not ok:
+        return data
 
     if not data:
         return json.dumps({
@@ -254,20 +349,12 @@ def thousandeyes_get_alerts(
     window: Optional[str] = None,
 ) -> str:
     """Get ThousandEyes alerts."""
-    if not user_id:
-        return json.dumps({"error": "User context not available"})
-
-    client = _build_client(user_id)
-    if not client:
-        return json.dumps({"error": NOT_CONNECTED_MSG})
-
-    try:
-        alerts = client.get_alerts(state=state, severity=severity, window=window)
-    except ThousandEyesAPIError as exc:
-        return json.dumps({"error": f"ThousandEyes API error: {exc}"})
-    except Exception as exc:
-        logger.error("[THOUSANDEYES-TOOL] get_alerts failed: %s", exc)
-        return json.dumps({"error": f"Unexpected error: {exc}"})
+    ok, alerts = _call_api(
+        user_id, "get_alerts",
+        lambda c: c.get_alerts(state=state, severity=severity, window=window),
+    )
+    if not ok:
+        return alerts
 
     if not alerts:
         filter_parts = []
@@ -278,26 +365,19 @@ def thousandeyes_get_alerts(
         filter_desc = f" ({', '.join(filter_parts)})" if filter_parts else ""
         return json.dumps({"alerts": [], "message": f"No alerts found{filter_desc}."})
 
-    summaries = []
-    for a in alerts:
-        summaries.append({
-            "alertId": a.get("alertId"),
-            "testId": a.get("testId"),
-            "testName": a.get("testName"),
-            "alertType": a.get("alertType"),
-            "alertState": a.get("alertState"),
-            "alertSeverity": a.get("alertSeverity"),
-            "startDate": a.get("startDate"),
-            "endDate": a.get("endDate"),
-            "violationCount": a.get("violationCount"),
-            "ruleExpression": a.get("ruleExpression"),
-            "agents": [
-                {"agentName": agent.get("agentName"), "active": agent.get("active")}
-                for agent in (a.get("agents") or [])[:5]
-            ],
-        })
+    _ALERT_FIELDS = (
+        "alertId", "testId", "testName", "alertType", "alertState",
+        "alertSeverity", "startDate", "endDate", "violationCount", "ruleExpression",
+    )
+    summaries = [{k: a.get(k) for k in _ALERT_FIELDS} for a in alerts]
+    # Include a compact agent sub-summary (up to 5 agents per alert)
+    for summary, alert in zip(summaries, alerts):
+        summary["agents"] = [
+            {"agentName": agent.get("agentName"), "active": agent.get("active")}
+            for agent in (alert.get("agents") or [])[:5]
+        ]
 
-    items, trunc_meta = _truncate_list(
+    truncated, trunc_meta = _truncate_list(
         summaries, len(summaries),
         hint="Use state/severity filters to narrow results.",
     )
@@ -307,10 +387,25 @@ def thousandeyes_get_alerts(
     result: Dict[str, Any] = {
         "total_alerts": len(summaries),
         "active_alerts": active_count,
-        "alerts": items,
+        "alerts": truncated,
     }
     result.update(trunc_meta)
     return _safe_json(result)
+
+
+def thousandeyes_get_alert_rules(
+    *,
+    user_id: Optional[str] = None,
+) -> str:
+    """List all ThousandEyes alert rule definitions."""
+    ok, rules = _call_api(user_id, "get_alert_rules", lambda c: c.get_alert_rules())
+    if not ok:
+        return rules
+
+    if not rules:
+        return json.dumps({"alert_rules": [], "message": "No alert rules configured."})
+
+    return _summarize_list(rules, _RULE_FIELDS, result_key="alert_rules", total_key="total_rules")
 
 
 def thousandeyes_get_agents(
@@ -319,39 +414,34 @@ def thousandeyes_get_agents(
     agent_type: Optional[str] = None,
 ) -> str:
     """List ThousandEyes agents and their status."""
-    if not user_id:
-        return json.dumps({"error": "User context not available"})
-
-    client = _build_client(user_id)
-    if not client:
-        return json.dumps({"error": NOT_CONNECTED_MSG})
-
-    try:
-        agents = client.get_agents(agent_type=agent_type)
-    except ThousandEyesAPIError as exc:
-        return json.dumps({"error": f"ThousandEyes API error: {exc}"})
-    except Exception as exc:
-        logger.error("[THOUSANDEYES-TOOL] get_agents failed: %s", exc)
-        return json.dumps({"error": f"Unexpected error: {exc}"})
+    ok, agents = _call_api(user_id, "get_agents", lambda c: c.get_agents(agent_type=agent_type))
+    if not ok:
+        return agents
 
     if not agents:
         filter_desc = f" (type={agent_type})" if agent_type else ""
         return json.dumps({"agents": [], "message": f"No agents found{filter_desc}."})
 
-    _AGENT_FIELDS = ("agentId", "agentName", "agentType", "countryId", "location", "enabled", "agentState", "ipAddresses", "lastSeen")
-    summaries = [{k: a.get(k) for k in _AGENT_FIELDS} for a in agents]
-
-    items, trunc_meta = _truncate_list(
-        summaries, len(summaries),
+    return _summarize_list(
+        agents, _AGENT_FIELDS,
+        result_key="agents", total_key="total_agents",
         hint="Use agent_type filter ('cloud' or 'enterprise') to narrow results.",
     )
 
-    result: Dict[str, Any] = {
-        "total_agents": len(summaries),
-        "agents": items,
-    }
-    result.update(trunc_meta)
-    return _safe_json(result)
+
+def thousandeyes_get_endpoint_agents(
+    *,
+    user_id: Optional[str] = None,
+) -> str:
+    """List ThousandEyes endpoint agents (employee devices)."""
+    ok, agents = _call_api(user_id, "get_endpoint_agents", lambda c: c.get_endpoint_agents())
+    if not ok:
+        return agents
+
+    if not agents:
+        return json.dumps({"agents": [], "message": "No endpoint agents found."})
+
+    return _summarize_list(agents, _EP_FIELDS, result_key="agents", total_key="total_endpoint_agents")
 
 
 def thousandeyes_get_internet_insights(
@@ -361,20 +451,12 @@ def thousandeyes_get_internet_insights(
     window: Optional[str] = None,
 ) -> str:
     """Get Internet Insights outage data from ThousandEyes."""
-    if not user_id:
-        return json.dumps({"error": "User context not available"})
-
-    client = _build_client(user_id)
-    if not client:
-        return json.dumps({"error": NOT_CONNECTED_MSG})
-
-    try:
-        outages = client.get_outages(outage_type=outage_type, window=window)
-    except ThousandEyesAPIError as exc:
-        return json.dumps({"error": f"ThousandEyes API error: {exc}"})
-    except Exception as exc:
-        logger.error("[THOUSANDEYES-TOOL] get_internet_insights failed: %s", exc)
-        return json.dumps({"error": f"Unexpected error: {exc}"})
+    ok, outages = _call_api(
+        user_id, "get_internet_insights",
+        lambda c: c.get_outages(outage_type=outage_type, window=window),
+    )
+    if not ok:
+        return outages
 
     if not outages:
         return json.dumps({
@@ -383,7 +465,7 @@ def thousandeyes_get_internet_insights(
             "message": f"No {outage_type} outages detected.",
         })
 
-    items, trunc_meta = _truncate_list(
+    truncated, trunc_meta = _truncate_list(
         outages, len(outages),
         hint="Use a shorter window to narrow results.",
     )
@@ -391,7 +473,71 @@ def thousandeyes_get_internet_insights(
     result: Dict[str, Any] = {
         "total_outages": len(outages),
         "outage_type": outage_type,
-        "outages": items,
+        "outages": truncated,
     }
     result.update(trunc_meta)
     return _safe_json(result)
+
+
+def thousandeyes_get_dashboards(
+    *,
+    user_id: Optional[str] = None,
+    dashboard_id: Optional[str] = None,
+) -> str:
+    """List ThousandEyes dashboards, or get a specific dashboard with its widgets."""
+    if dashboard_id:
+        ok, data = _call_api(
+            user_id, "get_dashboards",
+            lambda c: c.get_dashboard(dashboard_id),
+        )
+        if not ok:
+            return data
+        return _safe_json(data)
+
+    ok, dashboards = _call_api(user_id, "get_dashboards", lambda c: c.get_dashboards())
+    if not ok:
+        return dashboards
+
+    if not dashboards:
+        return json.dumps({"dashboards": [], "message": "No dashboards found."})
+
+    return _summarize_list(dashboards, _DASH_FIELDS, result_key="dashboards", total_key="total_dashboards")
+
+
+def thousandeyes_get_dashboard_widget(
+    *,
+    user_id: Optional[str] = None,
+    dashboard_id: str = "",
+    widget_id: str = "",
+    window: Optional[str] = None,
+) -> str:
+    """Get data for a specific widget within a ThousandEyes dashboard."""
+    if not dashboard_id or not widget_id:
+        return json.dumps({"error": "dashboard_id and widget_id are required"})
+
+    ok, data = _call_api(
+        user_id, "get_dashboard_widget",
+        lambda c: c.get_dashboard_widget(dashboard_id, widget_id, window=window),
+    )
+    if not ok:
+        return data
+
+    if not data:
+        return json.dumps({"dashboard_id": dashboard_id, "widget_id": widget_id, "message": "No widget data found."})
+
+    return _safe_json(data)
+
+
+def thousandeyes_get_bgp_monitors(
+    *,
+    user_id: Optional[str] = None,
+) -> str:
+    """List ThousandEyes BGP monitoring points."""
+    ok, monitors = _call_api(user_id, "get_bgp_monitors", lambda c: c.get_bgp_monitors())
+    if not ok:
+        return monitors
+
+    if not monitors:
+        return json.dumps({"monitors": [], "message": "No BGP monitors found."})
+
+    return _summarize_list(monitors, _MON_FIELDS, result_key="monitors", total_key="total_monitors")
