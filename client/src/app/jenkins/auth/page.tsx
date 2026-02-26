@@ -83,7 +83,7 @@ export default function JenkinsAuthPage() {
   const [expandedStep, setExpandedStep] = useState<number | null>(1);
   const [webhookInfo, setWebhookInfo] = useState<JenkinsWebhookInfo | null>(null);
   const [deployments, setDeployments] = useState<JenkinsDeploymentEvent[]>([]);
-  const [copied, setCopied] = useState(false);
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
   const toggleStep = (step: number) => {
     setExpandedStep(expandedStep === step ? null : step);
@@ -130,15 +130,19 @@ export default function JenkinsAuthPage() {
 
   useEffect(() => {
     if (status?.connected) {
-      jenkinsService.getWebhookUrl().then(info => { if (info) setWebhookInfo(info); });
-      jenkinsService.getDeployments(10).then(data => { if (data) setDeployments(data.deployments); });
+      jenkinsService.getWebhookUrl().then(info => { if (info) setWebhookInfo(info); }).catch(() => {});
+      jenkinsService.getDeployments(10).then(data => { if (data) setDeployments(data.deployments); }).catch(() => {});
     }
   }, [status?.connected]);
 
-  const copyToClipboard = (text: string) => {
-    navigator.clipboard.writeText(text);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+  const copyToClipboard = async (text: string, key: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedKey(key);
+      setTimeout(() => setCopiedKey(null), 2000);
+    } catch {
+      // Clipboard access denied or unavailable
+    }
   };
 
   const handleConnect = async (e: React.FormEvent<HTMLFormElement>) => {
@@ -406,10 +410,10 @@ export default function JenkinsAuthPage() {
                     size="sm"
                     variant="secondary"
                     className="absolute top-2 right-2 h-8 gap-1.5"
-                    onClick={() => copyToClipboard(webhookInfo.jenkinsfileCurl)}
+                    onClick={() => copyToClipboard(webhookInfo.jenkinsfileCurl, 'curl')}
                   >
-                    {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
-                    {copied ? "Copied!" : "Copy"}
+                    {copiedKey === 'curl' ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+                    {copiedKey === 'curl' ? "Copied!" : "Copy"}
                   </Button>
                 </div>
 
@@ -430,7 +434,7 @@ export default function JenkinsAuthPage() {
                           size="sm"
                           variant="ghost"
                           className="h-6 text-xs gap-1"
-                          onClick={() => copyToClipboard(webhookInfo.jenkinsfileBasic)}
+                          onClick={() => copyToClipboard(webhookInfo.jenkinsfileBasic, 'basic')}
                         >
                           <Copy className="h-3 w-3" />
                           Copy
@@ -455,7 +459,7 @@ export default function JenkinsAuthPage() {
                           size="sm"
                           variant="ghost"
                           className="h-6 text-xs gap-1"
-                          onClick={() => copyToClipboard(webhookInfo.jenkinsfileOtel)}
+                          onClick={() => copyToClipboard(webhookInfo.jenkinsfileOtel, 'otel')}
                         >
                           <Copy className="h-3 w-3" />
                           Copy

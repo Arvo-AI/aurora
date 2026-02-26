@@ -4,6 +4,11 @@ import { getAuthenticatedUser } from '@/lib/auth-helper';
 const API_BASE_URL = process.env.BACKEND_URL;
 
 export async function GET() {
+  if (!API_BASE_URL) {
+    console.error('[api/jenkins/webhook-url] BACKEND_URL not configured');
+    return NextResponse.json({ error: 'Server configuration error' }, { status: 500 });
+  }
+
   try {
     const authResult = await getAuthenticatedUser();
 
