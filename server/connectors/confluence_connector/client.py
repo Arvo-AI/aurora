@@ -343,5 +343,5 @@ class ConfluenceClient:
             base = links.get("base", self.base_url)
             web_link = f"{base}{links['webui']}"
 
-        logger.info("Created Confluence page id=%s", page_id)
+        logger.info("Created Confluence page")
         return {"id": page_id, "url": web_link, "_raw": result}
