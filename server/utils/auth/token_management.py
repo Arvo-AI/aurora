@@ -270,6 +270,19 @@ def store_tokens_in_db(user_id: str, token_data: Dict, provider: str,
                     "is_active = TRUE",
                     (user_id, secret_ref, provider, workspace_slug, workspace_uuid, user_email, auth_type)
                 )
+            elif provider == "thousandeyes":
+                # ThousandEyes: Store account_group_id as subscription_id
+                account_group_id = token_data.get("account_group_id") if isinstance(token_data, dict) else None
+
+                cursor.execute(
+                    "INSERT INTO user_tokens (user_id, secret_ref, provider, subscription_id) "
+                    "VALUES (%s, %s, %s, %s) ON CONFLICT (user_id, provider) DO UPDATE "
+                    "SET secret_ref = EXCLUDED.secret_ref, "
+                    "subscription_id = EXCLUDED.subscription_id, "
+                    "timestamp = CURRENT_TIMESTAMP, "
+                    "is_active = TRUE",
+                    (user_id, secret_ref, provider, account_group_id)
+                )
             elif provider == "bitbucket_workspace_selection":
                 cursor.execute(
                     "INSERT INTO user_tokens (user_id, secret_ref, provider) "

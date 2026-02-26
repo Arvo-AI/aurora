@@ -177,6 +177,10 @@ CORS(app, origins=FRONTEND_URL, supports_credentials=True,
                           "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
                                             "Authorization", "X-Provider-Preference"],
                           "methods": ["GET", "POST", "DELETE", "OPTIONS"]},
+        r"/thousandeyes/*": {"origins": FRONTEND_URL, "supports_credentials": True,
+                            "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
+                                              "Authorization", "X-Provider-Preference"],
+                            "methods": ["GET", "POST", "DELETE", "OPTIONS"]},
         r"/*": {"origins": FRONTEND_URL, "supports_credentials": True,
                 "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID", 
                                 "Authorization", "X-Provider-Preference"], 
@@ -240,6 +244,12 @@ app.register_blueprint(splunk_search_bp, url_prefix="/splunk")
 # --- Coroot Integration Routes ---
 from routes.coroot import bp as coroot_bp  # noqa: F401
 app.register_blueprint(coroot_bp, url_prefix="/coroot")
+
+# --- ThousandEyes Integration Routes ---
+from utils.flags.feature_flags import is_thousandeyes_enabled
+if is_thousandeyes_enabled():
+    from routes.thousandeyes import bp as thousandeyes_bp  # noqa: F401
+    app.register_blueprint(thousandeyes_bp, url_prefix="/thousandeyes")
 
 # --- Dynatrace Integration Routes ---
 from utils.flags.feature_flags import is_dynatrace_enabled
