@@ -96,6 +96,19 @@ from .dynatrace_tool import (
     is_dynatrace_connected,
     QueryDynatraceArgs,
 )
+from .thousandeyes_tool import (
+    thousandeyes_list_tests,
+    thousandeyes_get_test_results,
+    thousandeyes_get_alerts,
+    thousandeyes_get_agents,
+    thousandeyes_get_internet_insights,
+    is_thousandeyes_connected,
+    ThousandEyesListTestsArgs,
+    ThousandEyesGetTestResultsArgs,
+    ThousandEyesGetAlertsArgs,
+    ThousandEyesGetAgentsArgs,
+    ThousandEyesGetInternetInsightsArgs,
+)
 
 # Import all context management functions from utils
 from utils.cloud.cloud_utils import (
@@ -1395,6 +1408,43 @@ def get_cloud_tools():
             logging.debug(f"Coroot tools not added - user {user_id} not connected to Coroot")
     except Exception as e:
         logging.warning(f"Failed to add Coroot observability tools (treating as not connected): {e}")
+
+    # Add ThousandEyes network intelligence tools if connected
+    try:
+        if user_id and is_thousandeyes_connected(user_id):
+            _te_tools = [
+                (thousandeyes_list_tests, "thousandeyes_list_tests", ThousandEyesListTestsArgs,
+                 "List all configured ThousandEyes tests (network, HTTP, DNS, BGP, page load, etc.). "
+                 "Optionally filter by test_type. Use this first to discover available tests."),
+                (thousandeyes_get_test_results, "thousandeyes_get_test_results", ThousandEyesGetTestResultsArgs,
+                 "Get results for a specific ThousandEyes test. Set result_type to 'network' (latency, loss, jitter), "
+                 "'http' (response time, availability), 'path-vis' (hop-by-hop trace), 'dns' (resolution), "
+                 "or 'bgp' (route data). Requires a test_id from thousandeyes_list_tests."),
+                (thousandeyes_get_alerts, "thousandeyes_get_alerts", ThousandEyesGetAlertsArgs,
+                 "Get active or recent ThousandEyes alerts. Filter by state ('active'/'cleared') "
+                 "and severity ('major'/'minor'/'info'). Shows alert rules, affected agents, and violation counts."),
+                (thousandeyes_get_agents, "thousandeyes_get_agents", ThousandEyesGetAgentsArgs,
+                 "List ThousandEyes monitoring agents and their status. Filter by agent_type ('cloud' or 'enterprise'). "
+                 "Shows agent location, state, and IP addresses."),
+                (thousandeyes_get_internet_insights, "thousandeyes_get_internet_insights", ThousandEyesGetInternetInsightsArgs,
+                 "Get Internet Insights outage data from ThousandEyes. Set outage_type to 'network' for ISP/transit "
+                 "outages or 'application' for SaaS/CDN outages. Detects macro-scale internet issues affecting users."),
+            ]
+            for _func, _name, _schema, _desc in _te_tools:
+                _ctx = with_user_context(_func)
+                _notif = with_completion_notification(_ctx)
+                _final = wrap_func_with_capture(_notif, _name) if tool_capture else _notif
+                tools.append(StructuredTool.from_function(
+                    func=_final,
+                    name=_name,
+                    description=_desc,
+                    args_schema=_schema,
+                ))
+            logging.info(f"Added {len(_te_tools)} ThousandEyes tools for user {user_id}")
+        else:
+            logging.debug(f"ThousandEyes tools not added - user {user_id} not connected to ThousandEyes")
+    except Exception as e:
+        logging.warning(f"Failed to add ThousandEyes tools (treating as not connected): {e}")
 
     logging.info(f"Created {len(tools)} Aurora native tools")
     
