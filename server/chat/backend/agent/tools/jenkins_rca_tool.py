@@ -72,14 +72,13 @@ def jenkins_rca(
     """Unified Jenkins investigation tool for RCA."""
     user_id = kwargs.get("user_id", "")
 
+    if not user_id:
+        return json.dumps({"error": "No user context. Run this from an authenticated session."})
+
     if action == "recent_deployments":
         return _action_recent_deployments(user_id, service, time_window_hours)
     elif action == "trace_context":
         return _action_trace_context(user_id, deployment_event_id, job_path, build_number)
-
-    # All other actions need user context and a Jenkins client
-    if not user_id:
-        return json.dumps({"error": "No user context. Run this from an authenticated session."})
 
     client = _get_client_for_user(user_id)
     if not client:
@@ -109,9 +108,6 @@ def jenkins_rca(
 
 def _action_recent_deployments(user_id: str, service: Optional[str], hours: int) -> str:
     """Query stored deployment events for temporal correlation."""
-    if not user_id:
-        return json.dumps({"error": "No user context"})
-
     try:
         from utils.db.connection_pool import db_pool
         with db_pool.get_admin_connection() as conn:
