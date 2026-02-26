@@ -149,6 +149,10 @@ CORS(app, origins=FRONTEND_URL, supports_credentials=True,
                        "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
                                          "Authorization", "X-Provider-Preference"],
                        "methods": ["GET", "POST", "DELETE", "OPTIONS"]},
+         r"/bigpanda/*": {"origins": FRONTEND_URL, "supports_credentials": True,
+                          "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
+                                            "Authorization", "X-Provider-Preference"],
+                          "methods": ["GET", "POST", "DELETE", "OPTIONS"]},
         r"/pagerduty/*": {"origins": FRONTEND_URL, "supports_credentials": True,
                          "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
                                            "Authorization", "X-Provider-Preference"],
@@ -247,6 +251,13 @@ if is_dynatrace_enabled():
     from routes.dynatrace import bp as dynatrace_bp  # noqa: F401
     import routes.dynatrace.tasks  # noqa: F401
     app.register_blueprint(dynatrace_bp, url_prefix="/dynatrace")
+
+# --- BigPanda Integration Routes ---
+from utils.flags.feature_flags import is_bigpanda_enabled
+if is_bigpanda_enabled():
+    from routes.bigpanda import bp as bigpanda_bp  # noqa: F401
+    import routes.bigpanda.tasks  # noqa: F401
+    app.register_blueprint(bigpanda_bp, url_prefix="/bigpanda")
 
 # --- PagerDuty Integration Routes ---
 from routes.pagerduty.pagerduty_routes import pagerduty_bp  # noqa: F401

@@ -734,6 +734,29 @@ def initialize_tables():
                     CREATE INDEX IF NOT EXISTS idx_dynatrace_problems_state ON dynatrace_problems(problem_state);
                     CREATE INDEX IF NOT EXISTS idx_dynatrace_problems_received_at ON dynatrace_problems(received_at DESC);
                 """,
+                "bigpanda_events": """
+                    CREATE TABLE IF NOT EXISTS bigpanda_events (
+                        id SERIAL PRIMARY KEY,
+                        user_id VARCHAR(255) NOT NULL,
+                        event_type VARCHAR(100),
+                        incident_id VARCHAR(255),
+                        incident_title TEXT,
+                        incident_status VARCHAR(50),
+                        incident_severity VARCHAR(20),
+                        primary_property VARCHAR(255),
+                        secondary_property VARCHAR(255),
+                        source_system VARCHAR(255),
+                        child_alert_count INTEGER DEFAULT 0,
+                        payload JSONB NOT NULL,
+                        received_at TIMESTAMP NOT NULL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+
+                    CREATE INDEX IF NOT EXISTS idx_bigpanda_events_user_id ON bigpanda_events(user_id, received_at DESC);
+                    CREATE INDEX IF NOT EXISTS idx_bigpanda_events_incident_id ON bigpanda_events(incident_id);
+                    CREATE INDEX IF NOT EXISTS idx_bigpanda_events_status ON bigpanda_events(incident_status);
+                    CREATE INDEX IF NOT EXISTS idx_bigpanda_events_received_at ON bigpanda_events(received_at DESC);
+                """,
                 "kubectl_agent_tokens": """
                     CREATE TABLE IF NOT EXISTS kubectl_agent_tokens (
                         id SERIAL PRIMARY KEY,

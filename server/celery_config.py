@@ -51,6 +51,7 @@ celery_app.conf.update(
         'routes.netdata.tasks',
         'routes.splunk.tasks',
         'routes.dynatrace.tasks',
+        'routes.bigpanda.tasks',
         'routes.pagerduty.tasks',
         'utils.terminal.terminal_pod_cleanup',
         'chat.background.task',
@@ -108,6 +109,12 @@ try:
     logging.info("Dynatrace tasks imported successfully")
 except ImportError as e:
     logging.warning(f"Failed to import Dynatrace tasks: {e}")
+
+try:
+    import routes.bigpanda.tasks
+    logging.info("BigPanda tasks imported successfully")
+except ImportError as e:
+    logging.warning(f"Failed to import BigPanda tasks: {e}")
 
 try:
     import routes.pagerduty.tasks
