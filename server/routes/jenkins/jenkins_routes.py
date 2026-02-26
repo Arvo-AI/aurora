@@ -252,6 +252,7 @@ def _verify_webhook_signature(payload_bytes: bytes, signature: str, secret: str)
     return hmac.compare_digest(expected, signature)
 
 
+
 def _verify_webhook_user(user_id: str) -> bool:
     """Verify the user_id exists in the database to prevent arbitrary data injection."""
     if not user_id or len(user_id) > 255:
