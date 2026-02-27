@@ -24,7 +24,7 @@ export async function DELETE(
     const { provider } = await context.params
 
     // Validate provider
-    if (!['gcp', 'azure', 'aws', 'github', 'grafana', 'datadog', 'netdata', 'ovh', 'scaleway', 'tailscale', 'slack', 'splunk', 'dynatrace', 'confluence', 'coroot', 'thousandeyes'].includes(provider)) {
+    if (!['gcp', 'azure', 'aws', 'github', 'grafana', 'datadog', 'netdata', 'ovh', 'scaleway', 'tailscale', 'slack', 'splunk', 'dynatrace', 'confluence', 'coroot', 'thousandeyes', 'jenkins'].includes(provider)) {
       return NextResponse.json(
         { error: 'Invalid provider' },
         { status: 400 }
@@ -243,6 +243,26 @@ export async function DELETE(
         console.error('Backend error disconnecting Confluence:', errorText)
         return NextResponse.json(
           { error: 'Failed to disconnect Confluence' },
+          { status: response.status }
+        )
+      }
+
+      const data = await response.json()
+      return NextResponse.json(data)
+    }
+
+    // Special handling for Jenkins
+    if (provider === 'jenkins') {
+      const response = await fetch(`${API_BASE_URL}/jenkins/disconnect`, {
+        method: 'DELETE',
+        headers: authHeaders,
+      })
+
+      if (!response.ok) {
+        const errorText = await response.text()
+        console.error('Backend error disconnecting Jenkins:', errorText)
+        return NextResponse.json(
+          { error: 'Failed to disconnect Jenkins' },
           { status: response.status }
         )
       }

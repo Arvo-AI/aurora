@@ -54,6 +54,7 @@ SUPPORTED_SECRET_PROVIDERS: Set[str] = {
     "dynatrace", # Dynatrace connector tokens
     "thousandeyes", # ThousandEyes connector tokens
     "aurora",   # Aurora-managed SSH keys
+    "jenkins",  # Jenkins CI/CD connector tokens
 }
 
 

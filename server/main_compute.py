@@ -153,6 +153,10 @@ CORS(app, origins=FRONTEND_URL, supports_credentials=True,
                          "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
                                            "Authorization", "X-Provider-Preference"],
                          "methods": ["GET", "POST", "DELETE", "OPTIONS", "PATCH"]},
+        r"/jenkins/*": {"origins": FRONTEND_URL, "supports_credentials": True,
+                        "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
+                                          "Authorization", "X-Provider-Preference"],
+                        "methods": ["GET", "POST", "DELETE", "OPTIONS"]},
         r"/ovh_api/*": {"origins": FRONTEND_URL, "supports_credentials": True,
                        "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
                                          "Authorization", "X-Provider-Preference"],
@@ -214,6 +218,11 @@ if is_slack_enabled():
     from routes.slack.slack_events import slack_events_bp
     app.register_blueprint(slack_bp, url_prefix="/slack")
     app.register_blueprint(slack_events_bp, url_prefix="/slack")
+
+# --- Jenkins Integration Routes ---
+from routes.jenkins import bp as jenkins_bp  # noqa: F401
+import routes.jenkins.tasks  # noqa: F401
+app.register_blueprint(jenkins_bp, url_prefix="/jenkins")
 
 # --- Grafana Integration Routes ---
 from routes.grafana import bp as grafana_bp  # noqa: F401
@@ -287,6 +296,9 @@ app.register_blueprint(incidents_bp)
 app.register_blueprint(incidents_sse_bp)
 app.register_blueprint(incident_feedback_bp)
 
+from routes.postmortem_routes import postmortem_bp
+app.register_blueprint(postmortem_bp)
+
 # --- Visualization Streaming Routes ---
 from routes.visualization_stream import visualization_bp
 app.register_blueprint(visualization_bp)
@@ -309,8 +321,6 @@ app.register_blueprint(aws_bp)  # Primary AWS routes at root
 app.register_blueprint(rca_emails_bp)  # RCA email management routes
 app.register_blueprint(ssh_keys_bp)  # SSH key management routes
 app.register_blueprint(vms_bp)  # VM management routes
-from routes.billing_scheduler_routes import billing_scheduler_bp
-app.register_blueprint(billing_scheduler_bp)  # NEW: Automated billing endpoints
 
 app.register_blueprint(user_connections_bp)
 app.register_blueprint(account_management_bp)

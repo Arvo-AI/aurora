@@ -28,6 +28,7 @@ iac_tool = run_iac_tool
 from .github_commit_tool import github_commit, GitHubCommitArgs
 from .github_rca_tool import github_rca, GitHubRCAArgs
 from .github_fix_tool import github_fix, GitHubFixArgs
+from .jenkins_rca_tool import jenkins_rca, JenkinsRCAArgs
 
 # Visualization trigger caching
 from cachetools import TTLCache
@@ -1110,6 +1111,7 @@ def get_cloud_tools():
         (github_commit, "github_commit"),
         (github_rca, "github_rca"),
         (github_fix, "github_fix"),
+        (jenkins_rca, "jenkins_rca"),
         (github_apply_fix, "github_apply_fix"),
         (cloud_exec_wrapper, "cloud_exec"),
         (terminal_exec, "terminal_exec"),
@@ -1179,6 +1181,28 @@ def get_cloud_tools():
                     "Optional: repo (owner/repo format), commit_message, branch."
                 ),
                 args_schema=GitHubFixArgs
+            )
+        elif name == 'jenkins_rca':
+            tool = StructuredTool.from_function(
+                func=final_func,
+                name=name,
+                description=(
+                    "Unified Jenkins CI/CD investigation tool for Root Cause Analysis. "
+                    "Uses three Jenkins APIs: Core REST API, Pipeline REST API (wfapi), and Blue Ocean REST API. "
+                    "Actions: "
+                    "'recent_deployments' (query stored deployment events; optional service filter and time_window_hours), "
+                    "'build_detail' (Core API: SCM revision, changeSets, build causes, parameters), "
+                    "'pipeline_stages' (wfapi: stage-level breakdown with status and timing), "
+                    "'stage_log' (wfapi: per-stage log output for a specific node_id), "
+                    "'build_logs' (Core API: console output, truncated to ~1MB), "
+                    "'test_results' (Core API: test report with failure details), "
+                    "'blue_ocean_run' (Blue Ocean API: run data with changeSet and commit info), "
+                    "'blue_ocean_steps' (Blue Ocean API: step-level detail for a pipeline node), "
+                    "'trace_context' (extract OTel W3C Trace Context; params: deployment_event_id or job_path+build_number). "
+                    "Required params vary by action: job_path+build_number for Core/wfapi, "
+                    "pipeline_name+run_number for Blue Ocean. service is optional for recent_deployments."
+                ),
+                args_schema=JenkinsRCAArgs
             )
         elif name == 'github_apply_fix':
             tool = StructuredTool.from_function(
@@ -1324,6 +1348,49 @@ def get_cloud_tools():
             args_schema=QueryDynatraceArgs,
         ))
         logging.info(f"Added Dynatrace tool for user {user_id}")
+
+    # Add Bitbucket tools if connected
+    try:
+        from .bitbucket import is_bitbucket_connected
+
+        if user_id and is_bitbucket_connected(user_id):
+            from .bitbucket import (
+                bitbucket_repos, BitbucketReposArgs,
+                bitbucket_branches, BitbucketBranchesArgs,
+                bitbucket_pull_requests, BitbucketPullRequestsArgs,
+                bitbucket_issues, BitbucketIssuesArgs,
+                bitbucket_pipelines, BitbucketPipelinesArgs,
+            )
+
+            _bb_tools = [
+                (bitbucket_repos, "bitbucket_repos", BitbucketReposArgs,
+                 "Manage Bitbucket repositories, files, and code. Actions: list_repos, get_repo, "
+                 "get_file_contents, create_or_update_file, delete_file, get_directory_tree, "
+                 "search_code, list_workspaces, get_workspace. Workspace and repo auto-resolve "
+                 "from saved selection if not specified."),
+                (bitbucket_branches, "bitbucket_branches", BitbucketBranchesArgs,
+                 "Manage Bitbucket branches and view commits/diffs. Actions: list_branches, create_branch, "
+                 "delete_branch, list_commits, get_commit, get_diff, compare."),
+                (bitbucket_pull_requests, "bitbucket_pull_requests", BitbucketPullRequestsArgs,
+                 "Manage Bitbucket pull requests. Actions: list_prs, get_pr, create_pr, update_pr, "
+                 "merge_pr, approve_pr, unapprove_pr, decline_pr, list_pr_comments, add_pr_comment, "
+                 "get_pr_diff, get_pr_activity."),
+                (bitbucket_issues, "bitbucket_issues", BitbucketIssuesArgs,
+                 "Manage Bitbucket issues. Actions: list_issues, get_issue, create_issue, "
+                 "update_issue, list_issue_comments, add_issue_comment."),
+                (bitbucket_pipelines, "bitbucket_pipelines", BitbucketPipelinesArgs,
+                 "Manage Bitbucket Pipelines CI/CD. Actions: list_pipelines, get_pipeline, "
+                 "trigger_pipeline, stop_pipeline, list_pipeline_steps, get_step_log, get_pipeline_step."),
+            ]
+            for _func, _name, _schema, _desc in _bb_tools:
+                _ctx = with_user_context(_func)
+                _notif = with_completion_notification(_ctx)
+                _final = wrap_func_with_capture(_notif, _name) if tool_capture else _notif
+                tools.append(StructuredTool.from_function(
+                    func=_final, name=_name, description=_desc, args_schema=_schema))
+            logging.info(f"Added {len(_bb_tools)} Bitbucket tools for user {user_id}")
+    except Exception as e:
+        logging.warning(f"Failed to add Bitbucket tools: {e}")
 
     # Add Confluence search tools if enabled
     try:
