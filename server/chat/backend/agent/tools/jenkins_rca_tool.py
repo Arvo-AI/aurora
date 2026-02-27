@@ -10,7 +10,7 @@ Plus OTel W3C Trace Context extraction for end-to-end correlation.
 
 import json
 import logging
-from typing import Any, Dict, Literal, Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 

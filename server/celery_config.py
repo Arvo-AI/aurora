@@ -119,7 +119,7 @@ except ImportError as e:
     logging.warning(f"Failed to import PagerDuty tasks: {e}")
 
 try:
-    import routes.jenkins.tasks
+    import routes.jenkins.tasks  # noqa: F401
     logging.info("Jenkins tasks imported successfully")
 except ImportError as e:
     logging.warning(f"Failed to import Jenkins tasks: {e}")
