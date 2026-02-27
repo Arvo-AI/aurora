@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useToast } from "@/hooks/use-toast";
 import { jenkinsService, JenkinsStatus, JenkinsWebhookInfo, JenkinsDeploymentEvent } from "@/lib/services/jenkins";
@@ -59,14 +59,29 @@ export default function JenkinsAuthPage() {
   const [webhookInfo, setWebhookInfo] = useState<JenkinsWebhookInfo | null>(null);
   const [deployments, setDeployments] = useState<JenkinsDeploymentEvent[]>([]);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
-  const mountedRef = useRef(true);
-
-  useEffect(() => {
-    return () => { mountedRef.current = false; };
-  }, []);
 
   const toggleStep = (step: number) => {
     setExpandedStep(expandedStep === step ? null : step);
+  };
+
+  const loadConnectedData = async () => {
+    try {
+      const [info, depData] = await Promise.allSettled([
+        jenkinsService.getWebhookUrl(),
+        jenkinsService.getDeployments(10),
+      ]);
+      if (info.status === "fulfilled" && info.value) {
+        setWebhookInfo(info.value);
+      } else if (info.status === "rejected") {
+        console.error("[Jenkins] Failed to load webhook URL:", info.reason);
+        toast({ title: "Failed to load webhook config", variant: "destructive" });
+      }
+      if (depData.status === "fulfilled" && depData.value) {
+        setDeployments(depData.value.deployments);
+      }
+    } catch (err) {
+      console.error("[Jenkins] Failed to load connected data:", err);
+    }
   };
 
   const loadStatus = async () => {
@@ -89,6 +104,7 @@ export default function JenkinsAuthPage() {
         localStorage.setItem(CACHE_KEY, JSON.stringify(result));
         if (result.connected) {
           localStorage.setItem("isJenkinsConnected", "true");
+          loadConnectedData();
         } else {
           localStorage.removeItem("isJenkinsConnected");
         }
@@ -107,22 +123,6 @@ export default function JenkinsAuthPage() {
   useEffect(() => {
     loadStatus();
   }, []);
-
-  useEffect(() => {
-    if (status?.connected) {
-      jenkinsService.getWebhookUrl().then(info => {
-        if (info && mountedRef.current) setWebhookInfo(info);
-      }).catch(err => {
-        console.error("[Jenkins] Failed to load webhook URL:", err);
-        if (mountedRef.current) toast({ title: "Failed to load webhook config", variant: "destructive" });
-      });
-      jenkinsService.getDeployments(10).then(data => {
-        if (data && mountedRef.current) setDeployments(data.deployments);
-      }).catch(err => {
-        console.error("[Jenkins] Failed to load deployments:", err);
-      });
-    }
-  }, [status?.connected]);
 
   const copyToClipboard = async (text: string, key: string) => {
     try {
