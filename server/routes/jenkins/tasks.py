@@ -109,7 +109,7 @@ def process_jenkins_deployment(
                             build_url, commit_sha, branch, repository, deployer, duration_ms,
                             job_name, trace_id, span_id, payload, received_at)
                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                           ON CONFLICT (user_id, job_name, build_number) DO UPDATE
+                           ON CONFLICT (user_id, COALESCE(job_name, ''), COALESCE(build_number, -1)) DO UPDATE
                            SET result = EXCLUDED.result,
                                payload = EXCLUDED.payload,
                                received_at = EXCLUDED.received_at

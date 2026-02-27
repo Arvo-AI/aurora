@@ -6,7 +6,9 @@
 
 export function formatTimeAgo(dateOrString: Date | string): string {
   const date = typeof dateOrString === "string" ? new Date(dateOrString) : dateOrString;
-  const diffMs = Date.now() - date.getTime();
+  const ts = date.getTime();
+  if (!Number.isFinite(ts)) return "unknown";
+  const diffMs = Math.max(0, Date.now() - ts);
   const diffMins = Math.floor(diffMs / 60000);
   const diffHours = Math.floor(diffMs / 3600000);
   const diffDays = Math.floor(diffMs / 86400000);
@@ -31,6 +33,7 @@ export function formatDuration(ms: number): string {
 }
 
 export function formatDurationFromStart(startTime: string): string {
-  const diffMs = Date.now() - new Date(startTime).getTime();
-  return formatDuration(diffMs);
+  const ts = new Date(startTime).getTime();
+  if (!Number.isFinite(ts)) return "unknown";
+  return formatDuration(Math.max(0, Date.now() - ts));
 }

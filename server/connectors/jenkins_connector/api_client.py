@@ -55,7 +55,11 @@ class JenkinsClient:
                 return True, response.text, None
             if not response.text:
                 return True, None, None
-            return True, response.json(), None
+            try:
+                return True, response.json(), None
+            except ValueError:
+                logger.warning("Jenkins API returned non-JSON response for %s", url)
+                return False, None, "Unexpected response format from Jenkins."
 
         except requests.exceptions.Timeout:
             return False, None, "Connection timeout. Verify the Jenkins URL is reachable."
@@ -280,7 +284,7 @@ class JenkinsClient:
                             "span_id": parts[2],
                         }
             # Also check parameters for explicitly forwarded trace context
-            for param in action.get("parameters", []):
+            for param in (action.get("parameters") or []):
                 if isinstance(param, dict) and param.get("name") == "TRACEPARENT":
                     traceparent = param.get("value", "")
                     parts = traceparent.split("-")

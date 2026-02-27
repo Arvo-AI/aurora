@@ -739,7 +739,7 @@ def initialize_tables():
                     CREATE INDEX IF NOT EXISTS idx_jenkins_deploy_service ON jenkins_deployment_events(service, received_at DESC);
                     CREATE INDEX IF NOT EXISTS idx_jenkins_deploy_commit ON jenkins_deployment_events(commit_sha);
                     CREATE INDEX IF NOT EXISTS idx_jenkins_deploy_trace ON jenkins_deployment_events(trace_id) WHERE trace_id IS NOT NULL;
-                    CREATE UNIQUE INDEX IF NOT EXISTS idx_jenkins_deploy_dedup ON jenkins_deployment_events(user_id, job_name, build_number);
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_jenkins_deploy_dedup ON jenkins_deployment_events(user_id, COALESCE(job_name, ''), COALESCE(build_number, -1));
                 """,
                 "dynatrace_problems": """
                     CREATE TABLE IF NOT EXISTS dynatrace_problems (

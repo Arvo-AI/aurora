@@ -231,7 +231,7 @@ const ToolExecutionWidget = ({ tool, className, sendMessage, sendRaw, onToolUpda
     command = parseGitHubRcaCommand(command)
   }
   // Jenkins RCA tool parsing
-  else if (tool.tool_name === "jenkins_rca") {
+  else if (tool.tool_name === "jenkins_rca" && typeof command === "string" && command.trim().startsWith("{")) {
     command = parseJenkinsRcaCommand(normalizedInput)
   }
   // IAC tool parsing
