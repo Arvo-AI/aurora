@@ -2,7 +2,7 @@
 # 
 # This workflow automatically deploys Aurora to demo VMs when code is pushed to the demo branch.
 #
-# 🔧 SETUP FOR YOUR PROJECT:
+# SETUP FOR YOUR PROJECT:
 #
 # 1. Update the `env` section below with your GCP infrastructure details:
 #    - GCP_PROJECT: Your GCP project ID
@@ -27,13 +27,17 @@
 #    gcloud secrets create demo-vm3-frontend-url --data-file=- <<< "https://demo3.aurora-ai.net"
 #    gcloud secrets create demo-vm3-backend-url --data-file=- <<< "https://demo3.aurora-ai.net"
 #    gcloud secrets create demo-vm3-websocket-url --data-file=- <<< "wss://demo3.aurora-ai.net/ws"
+#    gcloud secrets create demo-bb-oauth-client-id --data-file=- <<< "<value>"
+#    gcloud secrets create demo-bb-oauth-client-secret --data-file=- <<< "<value>"
+#    gcloud secrets create demo-bb-enable-bitbucket --data-file=- <<< "true"
 #
 # 3. Grant the service account access to these secrets:
 #    for secret in demo-gcp-zone demo-vm1-name demo-vm1-domain demo-vm1-frontend-url \
 #                  demo-vm1-backend-url demo-vm1-websocket-url demo-vm2-name demo-vm2-domain \
 #                  demo-vm2-frontend-url demo-vm2-backend-url demo-vm2-websocket-url \
 #                  demo-vm3-name demo-vm3-domain demo-vm3-frontend-url demo-vm3-backend-url \
-#                  demo-vm3-websocket-url; do
+#                  demo-vm3-websocket-url demo-bb-oauth-client-id demo-bb-oauth-client-secret \
+#                  demo-bb-enable-bitbucket; do
 #      gcloud secrets add-iam-policy-binding $secret \
 #        --member="serviceAccount:YOUR-SERVICE-ACCOUNT" \
 #        --role="roles/secretmanager.secretAccessor"
@@ -55,279 +59,287 @@ on:
       - demo
   workflow_dispatch:
 
-# ⚠️  CHANGE THESE to match your GCP Workload Identity setup
 # These are infrastructure values (not sensitive secrets)
 env:
-  # Your GCP project ID where secrets are stored
   GCP_PROJECT: sublime-flux-414616
-  
-  # Workload Identity Federation provider path
-  # Format: projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/POOL_ID/providers/PROVIDER_ID
   WORKLOAD_IDENTITY_PROVIDER: projects/1015371839961/locations/global/workloadIdentityPools/github-actions/providers/github
-  
-  # Service account email for deployments
   SERVICE_ACCOUNT: aurora-demo-deployer@sublime-flux-414616.iam.gserviceaccount.com
 
 jobs:
-  deploy:
-    name: Deploy to Demo VMs
+  deploy-vm2:
+    name: Deploy to VM-2
     runs-on: ubuntu-latest
     permissions:
       contents: read
       id-token: write
-    
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
 
+    steps:
       - name: Authenticate to Google Cloud
-        id: auth
         uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: ${{ env.WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ env.SERVICE_ACCOUNT }}
-      
+
       - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@v2
 
-      - name: Load deployment configuration from GCP Secret Manager
-        id: secrets
+      - name: Load configuration from GCP Secret Manager
         run: |
-          echo "Loading deployment configuration from GCP Secret Manager..."
-          
-          # Fetch deployment configuration
           GCP_ZONE=$(gcloud secrets versions access latest --secret="demo-gcp-zone" --project="${{ env.GCP_PROJECT }}")
-          
-          # Fetch VM-1 configuration
-          VM1_NAME=$(gcloud secrets versions access latest --secret="demo-vm1-name" --project="${{ env.GCP_PROJECT }}")
-          VM1_DOMAIN=$(gcloud secrets versions access latest --secret="demo-vm1-domain" --project="${{ env.GCP_PROJECT }}")
-          VM1_FRONTEND_URL=$(gcloud secrets versions access latest --secret="demo-vm1-frontend-url" --project="${{ env.GCP_PROJECT }}")
-          VM1_BACKEND_URL=$(gcloud secrets versions access latest --secret="demo-vm1-backend-url" --project="${{ env.GCP_PROJECT }}")
-          VM1_WEBSOCKET_URL=$(gcloud secrets versions access latest --secret="demo-vm1-websocket-url" --project="${{ env.GCP_PROJECT }}")
-          
-          # Fetch VM-2 configuration
           VM2_NAME=$(gcloud secrets versions access latest --secret="demo-vm2-name" --project="${{ env.GCP_PROJECT }}")
           VM2_DOMAIN=$(gcloud secrets versions access latest --secret="demo-vm2-domain" --project="${{ env.GCP_PROJECT }}")
           VM2_FRONTEND_URL=$(gcloud secrets versions access latest --secret="demo-vm2-frontend-url" --project="${{ env.GCP_PROJECT }}")
           VM2_BACKEND_URL=$(gcloud secrets versions access latest --secret="demo-vm2-backend-url" --project="${{ env.GCP_PROJECT }}")
           VM2_WEBSOCKET_URL=$(gcloud secrets versions access latest --secret="demo-vm2-websocket-url" --project="${{ env.GCP_PROJECT }}")
-          
-          # Fetch VM-3 configuration
-          VM3_NAME=$(gcloud secrets versions access latest --secret="demo-vm3-name" --project="${{ env.GCP_PROJECT }}")
-          VM3_DOMAIN=$(gcloud secrets versions access latest --secret="demo-vm3-domain" --project="${{ env.GCP_PROJECT }}")
-          VM3_FRONTEND_URL=$(gcloud secrets versions access latest --secret="demo-vm3-frontend-url" --project="${{ env.GCP_PROJECT }}")
-          VM3_BACKEND_URL=$(gcloud secrets versions access latest --secret="demo-vm3-backend-url" --project="${{ env.GCP_PROJECT }}")
-          VM3_WEBSOCKET_URL=$(gcloud secrets versions access latest --secret="demo-vm3-websocket-url" --project="${{ env.GCP_PROJECT }}")
-          
-          # Export as environment variables
+          BB_OAUTH_CLIENT_ID=$(gcloud secrets versions access latest --secret="demo-bb-oauth-client-id" --project="${{ env.GCP_PROJECT }}")
+          BB_OAUTH_CLIENT_SECRET=$(gcloud secrets versions access latest --secret="demo-bb-oauth-client-secret" --project="${{ env.GCP_PROJECT }}")
+          BB_ENABLE_BITBUCKET=$(gcloud secrets versions access latest --secret="demo-bb-enable-bitbucket" --project="${{ env.GCP_PROJECT }}")
+
+          echo "::add-mask::$BB_OAUTH_CLIENT_SECRET"
+
           echo "GCP_ZONE=$GCP_ZONE" >> $GITHUB_ENV
-          echo "VM1_NAME=$VM1_NAME" >> $GITHUB_ENV
-          echo "VM1_DOMAIN=$VM1_DOMAIN" >> $GITHUB_ENV
-          echo "VM1_FRONTEND_URL=$VM1_FRONTEND_URL" >> $GITHUB_ENV
-          echo "VM1_BACKEND_URL=$VM1_BACKEND_URL" >> $GITHUB_ENV
-          echo "VM1_WEBSOCKET_URL=$VM1_WEBSOCKET_URL" >> $GITHUB_ENV
           echo "VM2_NAME=$VM2_NAME" >> $GITHUB_ENV
           echo "VM2_DOMAIN=$VM2_DOMAIN" >> $GITHUB_ENV
           echo "VM2_FRONTEND_URL=$VM2_FRONTEND_URL" >> $GITHUB_ENV
           echo "VM2_BACKEND_URL=$VM2_BACKEND_URL" >> $GITHUB_ENV
           echo "VM2_WEBSOCKET_URL=$VM2_WEBSOCKET_URL" >> $GITHUB_ENV
+          echo "BB_OAUTH_CLIENT_ID=$BB_OAUTH_CLIENT_ID" >> $GITHUB_ENV
+          echo "BB_OAUTH_CLIENT_SECRET=$BB_OAUTH_CLIENT_SECRET" >> $GITHUB_ENV
+          echo "BB_ENABLE_BITBUCKET=$BB_ENABLE_BITBUCKET" >> $GITHUB_ENV
+
+          echo "Configuration loaded for $VM2_NAME"
+
+      - name: Snooze VM-2 uptime alerts
+        run: |
+          ACCESS_TOKEN=$(gcloud auth print-access-token)
+          START_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          END_TIME=$(date -u -d '+45 minutes' +%Y-%m-%dT%H:%M:%SZ)
+
+          RESPONSE=$(curl -sf -X POST \
+            "https://monitoring.googleapis.com/v3/projects/${{ env.GCP_PROJECT }}/snoozes" \
+            -H "Authorization: Bearer $ACCESS_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"displayName\": \"cicd-deploy-vm2-${{ github.run_id }}\",
+              \"criteria\": {
+                \"policies\": [\"projects/${{ env.GCP_PROJECT }}/alertPolicies/3387004217654143013\"]
+              },
+              \"interval\": {
+                \"startTime\": \"$START_TIME\",
+                \"endTime\": \"$END_TIME\"
+              }
+            }")
+
+          SNOOZE_NAME=$(echo "$RESPONSE" | jq -r '.name')
+          echo "SNOOZE_NAME=$SNOOZE_NAME" >> $GITHUB_ENV
+          echo "Snooze created: $SNOOZE_NAME"
+
+      - name: Deploy to VM-2
+        timeout-minutes: 30
+        run: |
+          gcloud compute ssh $VM2_NAME --zone=$GCP_ZONE --project=${{ env.GCP_PROJECT }} --command="
+            set -e
+            cd /opt/aurora-demo
+            sudo chown -R \$(whoami):\$(whoami) /opt/aurora-demo
+            git config --global --add safe.directory /opt/aurora-demo
+            git fetch origin
+            git checkout demo
+            git checkout .
+            git pull origin demo
+
+            sudo sed -i 's|^DOMAIN=.*|DOMAIN=${{ env.VM2_DOMAIN }}|' .env || echo 'DOMAIN=${{ env.VM2_DOMAIN }}' | sudo tee -a .env
+            sudo sed -i 's|^FRONTEND_URL=.*|FRONTEND_URL=${{ env.VM2_FRONTEND_URL }}|' .env
+            sudo sed -i 's|^NEXT_PUBLIC_BACKEND_URL=.*|NEXT_PUBLIC_BACKEND_URL=${{ env.VM2_BACKEND_URL }}|' .env
+            sudo sed -i 's|^NEXT_PUBLIC_WEBSOCKET_URL=.*|NEXT_PUBLIC_WEBSOCKET_URL=${{ env.VM2_WEBSOCKET_URL }}|' .env
+            sudo sed -i 's|^NEXT_PUBLIC_ENABLE_BITBUCKET=.*|NEXT_PUBLIC_ENABLE_BITBUCKET=${{ env.BB_ENABLE_BITBUCKET }}|' .env
+            sudo sed -i 's|^BB_OAUTH_CLIENT_ID=.*|BB_OAUTH_CLIENT_ID=${{ env.BB_OAUTH_CLIENT_ID }}|' .env
+            sudo sed -i 's|^BB_OAUTH_CLIENT_SECRET=.*|BB_OAUTH_CLIENT_SECRET=${{ env.BB_OAUTH_CLIENT_SECRET }}|' .env
+
+            sudo docker compose -f docker-compose.prod-local.yml build frontend aurora-server
+            sudo docker compose -f docker-compose.prod-local.yml up -d --remove-orphans
+            sudo docker compose -f docker-compose.prod-local.yml up -d --force-recreate demo-init
+          " 2>&1
+
+      - name: Health check VM-2
+        run: |
+          echo "Waiting 30 seconds for services to start..."
+          sleep 30
+          if curl -f -s -k "https://${{ env.VM2_DOMAIN }}" > /dev/null 2>&1; then
+            echo "VM-2 is responding"
+          else
+            echo "VM-2 health check failed (may still be starting)"
+          fi
+
+      - name: Unsnooze VM-2 uptime alerts
+        if: always()
+        run: |
+          if [ -z "$SNOOZE_NAME" ] || [ "$SNOOZE_NAME" = "null" ]; then
+            echo "No snooze to remove"
+            exit 0
+          fi
+
+          ACCESS_TOKEN=$(gcloud auth print-access-token)
+          START_TIME=$(curl -sf "https://monitoring.googleapis.com/v3/$SNOOZE_NAME" \
+            -H "Authorization: Bearer $ACCESS_TOKEN" | jq -r '.interval.startTime')
+          NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+          curl -sf -X PATCH \
+            "https://monitoring.googleapis.com/v3/$SNOOZE_NAME?updateMask=interval" \
+            -H "Authorization: Bearer $ACCESS_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"interval\": {
+                \"startTime\": \"$START_TIME\",
+                \"endTime\": \"$NOW\"
+              }
+            }"
+
+          echo "Snooze cancelled: $SNOOZE_NAME"
+
+  deploy-vm3:
+    name: Deploy to VM-3
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ env.WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ env.SERVICE_ACCOUNT }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Load configuration from GCP Secret Manager
+        run: |
+          GCP_ZONE=$(gcloud secrets versions access latest --secret="demo-gcp-zone" --project="${{ env.GCP_PROJECT }}")
+          VM3_NAME=$(gcloud secrets versions access latest --secret="demo-vm3-name" --project="${{ env.GCP_PROJECT }}")
+          VM3_DOMAIN=$(gcloud secrets versions access latest --secret="demo-vm3-domain" --project="${{ env.GCP_PROJECT }}")
+          VM3_FRONTEND_URL=$(gcloud secrets versions access latest --secret="demo-vm3-frontend-url" --project="${{ env.GCP_PROJECT }}")
+          VM3_BACKEND_URL=$(gcloud secrets versions access latest --secret="demo-vm3-backend-url" --project="${{ env.GCP_PROJECT }}")
+          VM3_WEBSOCKET_URL=$(gcloud secrets versions access latest --secret="demo-vm3-websocket-url" --project="${{ env.GCP_PROJECT }}")
+          BB_OAUTH_CLIENT_ID=$(gcloud secrets versions access latest --secret="demo-bb-oauth-client-id" --project="${{ env.GCP_PROJECT }}")
+          BB_OAUTH_CLIENT_SECRET=$(gcloud secrets versions access latest --secret="demo-bb-oauth-client-secret" --project="${{ env.GCP_PROJECT }}")
+          BB_ENABLE_BITBUCKET=$(gcloud secrets versions access latest --secret="demo-bb-enable-bitbucket" --project="${{ env.GCP_PROJECT }}")
+
+          echo "::add-mask::$BB_OAUTH_CLIENT_SECRET"
+
+          echo "GCP_ZONE=$GCP_ZONE" >> $GITHUB_ENV
           echo "VM3_NAME=$VM3_NAME" >> $GITHUB_ENV
           echo "VM3_DOMAIN=$VM3_DOMAIN" >> $GITHUB_ENV
           echo "VM3_FRONTEND_URL=$VM3_FRONTEND_URL" >> $GITHUB_ENV
           echo "VM3_BACKEND_URL=$VM3_BACKEND_URL" >> $GITHUB_ENV
           echo "VM3_WEBSOCKET_URL=$VM3_WEBSOCKET_URL" >> $GITHUB_ENV
-          
-          echo "Deployment configuration loaded"
+          echo "BB_OAUTH_CLIENT_ID=$BB_OAUTH_CLIENT_ID" >> $GITHUB_ENV
+          echo "BB_OAUTH_CLIENT_SECRET=$BB_OAUTH_CLIENT_SECRET" >> $GITHUB_ENV
+          echo "BB_ENABLE_BITBUCKET=$BB_ENABLE_BITBUCKET" >> $GITHUB_ENV
 
-      # Commented out - only deploying to VM-2 for now
-      # - name: Deploy to VM-1 (primary demo VM)
-      #   run: |
-      #     echo "🚀 Deploying to $VM1_NAME..."
-      #     gcloud compute ssh $VM1_NAME --zone=$GCP_ZONE --project=${{ env.GCP_PROJECT }} --command="
-      #       set -e
-      #       echo '📂 Navigating to project directory...'
-      #       cd /opt/aurora-demo
-      #       
-      #       echo '🔧 Fixing git permissions for deployment...'
-      #       sudo chown -R \$(whoami):\$(whoami) /opt/aurora-demo
-      #       git config --global --add safe.directory /opt/aurora-demo
-      #       
-      #       echo '📥 Pulling latest code from demo branch...'
-      #       git fetch origin
-      #       git checkout demo
-      #       git pull origin demo
-      #       
-      #       echo '🔧 Configuring domain in .env...'
-      #       sudo sed -i 's|^DOMAIN=.*|DOMAIN=${{ env.VM1_DOMAIN }}|' .env || echo 'DOMAIN=${{ env.VM1_DOMAIN }}' | sudo tee -a .env
-      #       sudo sed -i 's|^FRONTEND_URL=.*|FRONTEND_URL=${{ env.VM1_FRONTEND_URL }}|' .env
-      #       sudo sed -i 's|^NEXT_PUBLIC_BACKEND_URL=.*|NEXT_PUBLIC_BACKEND_URL=${{ env.VM1_BACKEND_URL }}|' .env
-      #       sudo sed -i 's|^NEXT_PUBLIC_WEBSOCKET_URL=.*|NEXT_PUBLIC_WEBSOCKET_URL=${{ env.VM1_WEBSOCKET_URL }}|' .env
-      #       
-      #       echo '🔄 Restarting services...'
-      #       sudo docker compose -f docker-compose.prod-local.yml build frontend
-      #       sudo docker compose -f docker-compose.prod-local.yml up -d --remove-orphans
-      #       
-      #       echo '✅ VM-1 deployment complete!'
-      #     " 2>&1
+          echo "Configuration loaded for $VM3_NAME"
 
-      # - name: Wait for VM-1 services to stabilize
-      #   run: |
-      #     echo "⏳ Waiting 30 seconds for services to start..."
-      #     sleep 30
-
-      # - name: Health check VM-1
-      #   run: |
-      #     echo "🏥 Checking VM-1 health..."
-      #     
-      #     VM1_IP=$(gcloud compute instances describe $VM1_NAME --zone=$GCP_ZONE --project=${{ env.GCP_PROJECT }} --format='get(networkInterfaces[0].accessConfigs[0].natIP)')
-      #     
-      #     # Check backend via domain if configured, fallback to IP
-      #     if [ -n "${{ env.VM1_DOMAIN }}" ]; then
-      #       BACKEND_URL="https://${{ env.VM1_DOMAIN }}"
-      #       echo "Checking via domain: $BACKEND_URL"
-      #     else
-      #       BACKEND_URL="http://$VM1_IP:3000"
-      #       echo "Checking via IP: $BACKEND_URL"
-      #     fi
-      #     
-      #     if curl -f -s -k "$BACKEND_URL" > /dev/null 2>&1; then
-      #       echo "✅ VM-1 is responding"
-      #     else
-      #       echo "⚠️  VM-1 health check failed (may still be starting)"
-      #     fi
-
-      - name: Deploy to VM-2 (backup demo VM)
+      - name: Snooze VM-3 uptime alerts
         run: |
-          echo "🚀 Deploying to $VM2_NAME..."
-          gcloud compute ssh $VM2_NAME --zone=$GCP_ZONE --project=${{ env.GCP_PROJECT }} --command="
-            set -e
-            echo '📂 Navigating to project directory...'
-            cd /opt/aurora-demo
-            
-            echo '🔧 Fixing git permissions for deployment...'
-            sudo chown -R \$(whoami):\$(whoami) /opt/aurora-demo
-            git config --global --add safe.directory /opt/aurora-demo
-            
-            echo '📥 Pulling latest code from demo branch...'
-            git fetch origin
-            git checkout demo
-            git checkout .
-            git pull origin demo
+          ACCESS_TOKEN=$(gcloud auth print-access-token)
+          START_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          END_TIME=$(date -u -d '+45 minutes' +%Y-%m-%dT%H:%M:%SZ)
 
-            echo '🔧 Configuring domain in .env...'
-            sudo sed -i 's|^DOMAIN=.*|DOMAIN=${{ env.VM2_DOMAIN }}|' .env || echo 'DOMAIN=${{ env.VM2_DOMAIN }}' | sudo tee -a .env
-            sudo sed -i 's|^FRONTEND_URL=.*|FRONTEND_URL=${{ env.VM2_FRONTEND_URL }}|' .env
-            sudo sed -i 's|^NEXT_PUBLIC_BACKEND_URL=.*|NEXT_PUBLIC_BACKEND_URL=${{ env.VM2_BACKEND_URL }}|' .env
-            sudo sed -i 's|^NEXT_PUBLIC_WEBSOCKET_URL=.*|NEXT_PUBLIC_WEBSOCKET_URL=${{ env.VM2_WEBSOCKET_URL }}|' .env
-            
-            echo '🔄 Restarting services...'
-            sudo docker compose -f docker-compose.prod-local.yml build frontend aurora-server
-            sudo docker compose -f docker-compose.prod-local.yml up -d --remove-orphans
-            sudo docker compose -f docker-compose.prod-local.yml up -d --force-recreate demo-init
-            
-            echo '✅ VM-2 deployment complete!'
-          " 2>&1
+          RESPONSE=$(curl -sf -X POST \
+            "https://monitoring.googleapis.com/v3/projects/${{ env.GCP_PROJECT }}/snoozes" \
+            -H "Authorization: Bearer $ACCESS_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"displayName\": \"cicd-deploy-vm3-${{ github.run_id }}\",
+              \"criteria\": {
+                \"policies\": [\"projects/${{ env.GCP_PROJECT }}/alertPolicies/8353618263584682505\"]
+              },
+              \"interval\": {
+                \"startTime\": \"$START_TIME\",
+                \"endTime\": \"$END_TIME\"
+              }
+            }")
 
-      - name: Wait for VM-2 services to stabilize
+          SNOOZE_NAME=$(echo "$RESPONSE" | jq -r '.name')
+          echo "SNOOZE_NAME=$SNOOZE_NAME" >> $GITHUB_ENV
+          echo "Snooze created: $SNOOZE_NAME"
+
+      - name: Deploy to VM-3
+        timeout-minutes: 30
         run: |
-          echo "⏳ Waiting 30 seconds for services to start..."
-          sleep 30
-
-      - name: Health check VM-2
-        run: |
-          echo "🏥 Checking VM-2 health..."
-          
-          VM2_IP=$(gcloud compute instances describe $VM2_NAME --zone=$GCP_ZONE --project=${{ env.GCP_PROJECT }} --format='get(networkInterfaces[0].accessConfigs[0].natIP)')
-          
-          # Check via domain if configured, fallback to IP
-          if [ -n "${{ env.VM2_DOMAIN }}" ]; then
-            BACKEND_URL="https://${{ env.VM2_DOMAIN }}"
-            echo "Checking via domain: $BACKEND_URL"
-          else
-            BACKEND_URL="http://$VM2_IP:3000"
-            echo "Checking via IP: $BACKEND_URL"
-          fi
-          
-          if curl -f -s -k "$BACKEND_URL" > /dev/null 2>&1; then
-            echo "✅ VM-2 is responding"
-          else
-            echo "⚠️  VM-2 health check failed (may still be starting)"
-          fi
-
-      - name: Deploy to VM-3 (new demo VM)
-        run: |
-          echo "🚀 Deploying to $VM3_NAME..."
           gcloud compute ssh $VM3_NAME --zone=$GCP_ZONE --project=${{ env.GCP_PROJECT }} --command="
             set -e
-            echo '📂 Navigating to project directory...'
             cd /opt/aurora-demo
-            
-            echo '🔧 Fixing git permissions for deployment...'
             sudo chown -R \$(whoami):\$(whoami) /opt/aurora-demo
             git config --global --add safe.directory /opt/aurora-demo
-            
-            echo '📥 Pulling latest code from demo branch...'
             git fetch origin
             git checkout demo
             git checkout .
             git pull origin demo
-            
-            echo '🔧 Configuring domain in .env...'
+
             sudo sed -i 's|^DOMAIN=.*|DOMAIN=${{ env.VM3_DOMAIN }}|' .env || echo 'DOMAIN=${{ env.VM3_DOMAIN }}' | sudo tee -a .env
             sudo sed -i 's|^FRONTEND_URL=.*|FRONTEND_URL=${{ env.VM3_FRONTEND_URL }}|' .env
             sudo sed -i 's|^NEXT_PUBLIC_BACKEND_URL=.*|NEXT_PUBLIC_BACKEND_URL=${{ env.VM3_BACKEND_URL }}|' .env
             sudo sed -i 's|^NEXT_PUBLIC_WEBSOCKET_URL=.*|NEXT_PUBLIC_WEBSOCKET_URL=${{ env.VM3_WEBSOCKET_URL }}|' .env
-            
-            echo '🔄 Restarting services...'
+            sudo sed -i 's|^NEXT_PUBLIC_ENABLE_BITBUCKET=.*|NEXT_PUBLIC_ENABLE_BITBUCKET=${{ env.BB_ENABLE_BITBUCKET }}|' .env
+            sudo sed -i 's|^BB_OAUTH_CLIENT_ID=.*|BB_OAUTH_CLIENT_ID=${{ env.BB_OAUTH_CLIENT_ID }}|' .env
+            sudo sed -i 's|^BB_OAUTH_CLIENT_SECRET=.*|BB_OAUTH_CLIENT_SECRET=${{ env.BB_OAUTH_CLIENT_SECRET }}|' .env
+
             sudo docker compose -f docker-compose.prod-local.yml build frontend aurora-server
             sudo docker compose -f docker-compose.prod-local.yml up -d --remove-orphans
             sudo docker compose -f docker-compose.prod-local.yml up -d --force-recreate demo-init
-            
-            echo '✅ VM-3 deployment complete!'
           " 2>&1
-
-      - name: Wait for VM-3 services to stabilize
-        run: |
-          echo "⏳ Waiting 30 seconds for services to start..."
-          sleep 30
 
       - name: Health check VM-3
         run: |
-          echo "🏥 Checking VM-3 health..."
-          
-          VM3_IP=$(gcloud compute instances describe $VM3_NAME --zone=$GCP_ZONE --project=${{ env.GCP_PROJECT }} --format='get(networkInterfaces[0].accessConfigs[0].natIP)')
-          
-          # Check via domain if configured, fallback to IP
-          if [ -n "${{ env.VM3_DOMAIN }}" ]; then
-            BACKEND_URL="https://${{ env.VM3_DOMAIN }}"
-            echo "Checking via domain: $BACKEND_URL"
+          echo "Waiting 30 seconds for services to start..."
+          sleep 30
+          if curl -f -s -k "https://${{ env.VM3_DOMAIN }}" > /dev/null 2>&1; then
+            echo "VM-3 is responding"
           else
-            BACKEND_URL="http://$VM3_IP:3000"
-            echo "Checking via IP: $BACKEND_URL"
-          fi
-          
-          if curl -f -s -k "$BACKEND_URL" > /dev/null 2>&1; then
-            echo "✅ VM-3 is responding"
-          else
-            echo "⚠️  VM-3 health check failed (may still be starting)"
+            echo "VM-3 health check failed (may still be starting)"
           fi
 
-      - name: Deployment summary
+      - name: Unsnooze VM-3 uptime alerts
         if: always()
         run: |
+          if [ -z "$SNOOZE_NAME" ] || [ "$SNOOZE_NAME" = "null" ]; then
+            echo "No snooze to remove"
+            exit 0
+          fi
+
+          ACCESS_TOKEN=$(gcloud auth print-access-token)
+          START_TIME=$(curl -sf "https://monitoring.googleapis.com/v3/$SNOOZE_NAME" \
+            -H "Authorization: Bearer $ACCESS_TOKEN" | jq -r '.interval.startTime')
+          NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+          curl -sf -X PATCH \
+            "https://monitoring.googleapis.com/v3/$SNOOZE_NAME?updateMask=interval" \
+            -H "Authorization: Bearer $ACCESS_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"interval\": {
+                \"startTime\": \"$START_TIME\",
+                \"endTime\": \"$NOW\"
+              }
+            }"
+
+          echo "Snooze cancelled: $SNOOZE_NAME"
+
+  summary:
+    name: Deployment Summary
+    runs-on: ubuntu-latest
+    needs: [deploy-vm2, deploy-vm3]
+    if: always()
+    steps:
+      - name: Print summary
+        run: |
           echo "================================================"
-          echo "🎉 Deployment Summary"
+          echo "Deployment Summary"
           echo "================================================"
-          echo ""
           echo "Branch: demo"
           echo "Commit: ${{ github.sha }}"
           echo ""
-          echo "VMs deployed:"
-          # echo "  - $VM1_NAME: https://${{ env.VM1_DOMAIN }}" (currently disabled)
-          echo "  - $VM2_NAME: https://${{ env.VM2_DOMAIN }}"
-          echo "  - $VM3_NAME: https://${{ env.VM3_DOMAIN }}"
-          echo ""
-          echo "Note: VM-1 deployment is currently disabled"
-          echo "      Uncomment VM-1 steps in workflow to enable"
-          echo ""
+          echo "VM-2: ${{ needs.deploy-vm2.result }}"
+          echo "VM-3: ${{ needs.deploy-vm3.result }}"
           echo "================================================"
