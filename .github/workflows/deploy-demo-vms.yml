@@ -94,6 +94,7 @@ jobs:
           BB_OAUTH_CLIENT_ID=$(gcloud secrets versions access latest --secret="demo-bb-oauth-client-id" --project="${{ env.GCP_PROJECT }}")
           BB_OAUTH_CLIENT_SECRET=$(gcloud secrets versions access latest --secret="demo-bb-oauth-client-secret" --project="${{ env.GCP_PROJECT }}")
           BB_ENABLE_BITBUCKET=$(gcloud secrets versions access latest --secret="demo-bb-enable-bitbucket" --project="${{ env.GCP_PROJECT }}")
+          ENABLE_DYNATRACE=$(gcloud secrets versions access latest --secret="demo-dynatrace-enable" --project="${{ env.GCP_PROJECT }}")
 
           echo "::add-mask::$BB_OAUTH_CLIENT_SECRET"
 
@@ -106,6 +107,7 @@ jobs:
           echo "BB_OAUTH_CLIENT_ID=$BB_OAUTH_CLIENT_ID" >> $GITHUB_ENV
           echo "BB_OAUTH_CLIENT_SECRET=$BB_OAUTH_CLIENT_SECRET" >> $GITHUB_ENV
           echo "BB_ENABLE_BITBUCKET=$BB_ENABLE_BITBUCKET" >> $GITHUB_ENV
+          echo "ENABLE_DYNATRACE=$ENABLE_DYNATRACE" >> $GITHUB_ENV
 
           echo "Configuration loaded for $VM2_NAME"
 
@@ -151,9 +153,10 @@ jobs:
             sudo sed -i 's|^FRONTEND_URL=.*|FRONTEND_URL=${{ env.VM2_FRONTEND_URL }}|' .env
             sudo sed -i 's|^NEXT_PUBLIC_BACKEND_URL=.*|NEXT_PUBLIC_BACKEND_URL=${{ env.VM2_BACKEND_URL }}|' .env
             sudo sed -i 's|^NEXT_PUBLIC_WEBSOCKET_URL=.*|NEXT_PUBLIC_WEBSOCKET_URL=${{ env.VM2_WEBSOCKET_URL }}|' .env
-            sudo sed -i 's|^NEXT_PUBLIC_ENABLE_BITBUCKET=.*|NEXT_PUBLIC_ENABLE_BITBUCKET=${{ env.BB_ENABLE_BITBUCKET }}|' .env
-            sudo sed -i 's|^BB_OAUTH_CLIENT_ID=.*|BB_OAUTH_CLIENT_ID=${{ env.BB_OAUTH_CLIENT_ID }}|' .env
-            sudo sed -i 's|^BB_OAUTH_CLIENT_SECRET=.*|BB_OAUTH_CLIENT_SECRET=${{ env.BB_OAUTH_CLIENT_SECRET }}|' .env
+            sudo sed -i 's|^NEXT_PUBLIC_ENABLE_BITBUCKET=.*|NEXT_PUBLIC_ENABLE_BITBUCKET=${{ env.BB_ENABLE_BITBUCKET }}|' .env || echo 'NEXT_PUBLIC_ENABLE_BITBUCKET=${{ env.BB_ENABLE_BITBUCKET }}' | sudo tee -a .env
+            sudo sed -i 's|^BB_OAUTH_CLIENT_ID=.*|BB_OAUTH_CLIENT_ID=${{ env.BB_OAUTH_CLIENT_ID }}|' .env || echo 'BB_OAUTH_CLIENT_ID=${{ env.BB_OAUTH_CLIENT_ID }}' | sudo tee -a .env
+            sudo sed -i 's|^BB_OAUTH_CLIENT_SECRET=.*|BB_OAUTH_CLIENT_SECRET=${{ env.BB_OAUTH_CLIENT_SECRET }}|' .env || echo 'BB_OAUTH_CLIENT_SECRET=${{ env.BB_OAUTH_CLIENT_SECRET }}' | sudo tee -a .env
+            sudo sed -i 's|^NEXT_PUBLIC_ENABLE_DYNATRACE=.*|NEXT_PUBLIC_ENABLE_DYNATRACE=${{ env.ENABLE_DYNATRACE }}|' .env || echo 'NEXT_PUBLIC_ENABLE_DYNATRACE=${{ env.ENABLE_DYNATRACE }}' | sudo tee -a .env
 
             sudo docker compose -f docker-compose.prod-local.yml build frontend aurora-server
             sudo docker compose -f docker-compose.prod-local.yml up -d --remove-orphans
@@ -224,6 +227,7 @@ jobs:
           BB_OAUTH_CLIENT_ID=$(gcloud secrets versions access latest --secret="demo-bb-oauth-client-id" --project="${{ env.GCP_PROJECT }}")
           BB_OAUTH_CLIENT_SECRET=$(gcloud secrets versions access latest --secret="demo-bb-oauth-client-secret" --project="${{ env.GCP_PROJECT }}")
           BB_ENABLE_BITBUCKET=$(gcloud secrets versions access latest --secret="demo-bb-enable-bitbucket" --project="${{ env.GCP_PROJECT }}")
+          ENABLE_DYNATRACE=$(gcloud secrets versions access latest --secret="demo-dynatrace-enable" --project="${{ env.GCP_PROJECT }}")
 
           echo "::add-mask::$BB_OAUTH_CLIENT_SECRET"
 
@@ -236,6 +240,7 @@ jobs:
           echo "BB_OAUTH_CLIENT_ID=$BB_OAUTH_CLIENT_ID" >> $GITHUB_ENV
           echo "BB_OAUTH_CLIENT_SECRET=$BB_OAUTH_CLIENT_SECRET" >> $GITHUB_ENV
           echo "BB_ENABLE_BITBUCKET=$BB_ENABLE_BITBUCKET" >> $GITHUB_ENV
+          echo "ENABLE_DYNATRACE=$ENABLE_DYNATRACE" >> $GITHUB_ENV
 
           echo "Configuration loaded for $VM3_NAME"
 
@@ -281,9 +286,10 @@ jobs:
             sudo sed -i 's|^FRONTEND_URL=.*|FRONTEND_URL=${{ env.VM3_FRONTEND_URL }}|' .env
             sudo sed -i 's|^NEXT_PUBLIC_BACKEND_URL=.*|NEXT_PUBLIC_BACKEND_URL=${{ env.VM3_BACKEND_URL }}|' .env
             sudo sed -i 's|^NEXT_PUBLIC_WEBSOCKET_URL=.*|NEXT_PUBLIC_WEBSOCKET_URL=${{ env.VM3_WEBSOCKET_URL }}|' .env
-            sudo sed -i 's|^NEXT_PUBLIC_ENABLE_BITBUCKET=.*|NEXT_PUBLIC_ENABLE_BITBUCKET=${{ env.BB_ENABLE_BITBUCKET }}|' .env
-            sudo sed -i 's|^BB_OAUTH_CLIENT_ID=.*|BB_OAUTH_CLIENT_ID=${{ env.BB_OAUTH_CLIENT_ID }}|' .env
-            sudo sed -i 's|^BB_OAUTH_CLIENT_SECRET=.*|BB_OAUTH_CLIENT_SECRET=${{ env.BB_OAUTH_CLIENT_SECRET }}|' .env
+            sudo sed -i 's|^NEXT_PUBLIC_ENABLE_BITBUCKET=.*|NEXT_PUBLIC_ENABLE_BITBUCKET=${{ env.BB_ENABLE_BITBUCKET }}|' .env || echo 'NEXT_PUBLIC_ENABLE_BITBUCKET=${{ env.BB_ENABLE_BITBUCKET }}' | sudo tee -a .env
+            sudo sed -i 's|^BB_OAUTH_CLIENT_ID=.*|BB_OAUTH_CLIENT_ID=${{ env.BB_OAUTH_CLIENT_ID }}|' .env || echo 'BB_OAUTH_CLIENT_ID=${{ env.BB_OAUTH_CLIENT_ID }}' | sudo tee -a .env
+            sudo sed -i 's|^BB_OAUTH_CLIENT_SECRET=.*|BB_OAUTH_CLIENT_SECRET=${{ env.BB_OAUTH_CLIENT_SECRET }}|' .env || echo 'BB_OAUTH_CLIENT_SECRET=${{ env.BB_OAUTH_CLIENT_SECRET }}' | sudo tee -a .env
+            sudo sed -i 's|^NEXT_PUBLIC_ENABLE_DYNATRACE=.*|NEXT_PUBLIC_ENABLE_DYNATRACE=${{ env.ENABLE_DYNATRACE }}|' .env || echo 'NEXT_PUBLIC_ENABLE_DYNATRACE=${{ env.ENABLE_DYNATRACE }}' | sudo tee -a .env
 
             sudo docker compose -f docker-compose.prod-local.yml build frontend aurora-server
             sudo docker compose -f docker-compose.prod-local.yml up -d --remove-orphans
