@@ -45,7 +45,7 @@ export default function ThousandEyesAuthPage() {
           const parsed = JSON.parse(cached) as ThousandEyesStatus;
           setStatus(parsed);
           updateLocalStorageConnection(parsed?.connected ?? false);
-          fetchAndUpdateStatus();
+          void fetchAndUpdateStatus();
           return;
         } catch {
           localStorage.removeItem(CACHE_KEY);
@@ -104,16 +104,20 @@ export default function ThousandEyesAuthPage() {
       await fetchAndUpdateStatus();
 
       try {
-        await fetch("/api/provider-preferences", {
+        const prefResp = await fetch("/api/provider-preferences", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ action: "add", provider: "thousandeyes" }),
         });
-        window.dispatchEvent(
-          new CustomEvent("providerPreferenceChanged", {
-            detail: { providers: ["thousandeyes"] },
-          })
-        );
+        if (prefResp.ok) {
+          window.dispatchEvent(
+            new CustomEvent("providerPreferenceChanged", {
+              detail: { providers: ["thousandeyes"] },
+            })
+          );
+        } else {
+          console.warn("[thousandeyes] Provider preference update failed:", prefResp.status);
+        }
       } catch (prefErr: unknown) {
         console.warn("[thousandeyes] Failed to update provider preferences", prefErr);
       }
@@ -155,16 +159,20 @@ export default function ThousandEyesAuthPage() {
       });
 
       try {
-        await fetch("/api/provider-preferences", {
+        const prefResp = await fetch("/api/provider-preferences", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ action: "remove", provider: "thousandeyes" }),
         });
-        window.dispatchEvent(
-          new CustomEvent("providerPreferenceChanged", {
-            detail: { providers: [] },
-          })
-        );
+        if (prefResp.ok) {
+          window.dispatchEvent(
+            new CustomEvent("providerPreferenceChanged", {
+              detail: { providers: [] },
+            })
+          );
+        } else {
+          console.warn("[thousandeyes] Provider preference removal failed:", prefResp.status);
+        }
       } catch (prefErr: unknown) {
         console.warn("[thousandeyes] Failed to update provider preferences", prefErr);
       }

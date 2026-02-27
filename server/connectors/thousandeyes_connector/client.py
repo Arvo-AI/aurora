@@ -52,7 +52,7 @@ def _sweep_stale_locks() -> None:
     if now - last_sweep < _SWEEP_INTERVAL:
         return
     _sweep_stale_locks._last_sweep = now
-    stale = [uid for uid in _user_locks if uid not in _client_cache]
+    stale = [uid for uid in _user_locks if uid not in _client_cache and not _user_locks[uid].locked()]
     for uid in stale:
         del _user_locks[uid]
     if stale:
@@ -88,7 +88,11 @@ def get_thousandeyes_client(
             account_group_id=account_group_id,
         )
         # Validate the token by fetching account info
-        client.get_account_status()
+        try:
+            client.get_account_status()
+        except Exception:
+            client._session.close()
+            raise
 
         with _cache_lock:
             if entry is not None:

@@ -279,8 +279,7 @@ export async function DELETE(
       })
 
       if (!response.ok) {
-        const errorText = await response.text()
-        console.error('Backend error disconnecting ThousandEyes:', errorText)
+        console.error('Backend error disconnecting ThousandEyes: status=%d', response.status)
         return NextResponse.json(
           { error: 'Failed to disconnect ThousandEyes' },
           { status: response.status }

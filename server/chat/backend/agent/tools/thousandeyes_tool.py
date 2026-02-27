@@ -132,7 +132,7 @@ def _call_api(
         return False, json.dumps({"error": f"ThousandEyes API error: {exc}"})
     except Exception as exc:
         logger.error("[THOUSANDEYES-TOOL] %s failed: %s", tool_name, exc)
-        return False, json.dumps({"error": f"Unexpected error: {exc}"})
+        return False, json.dumps({"error": "An unexpected error occurred"})
 
 
 def _summarize_list(

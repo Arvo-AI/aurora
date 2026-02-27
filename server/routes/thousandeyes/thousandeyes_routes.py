@@ -42,14 +42,13 @@ def connect():
     if request.method == "OPTIONS":
         return create_cors_response()
 
-    payload = request.get_json(force=True, silent=True) or {}
-
     user_id = get_user_id_from_request()
-    api_token = payload.get("api_token", "").strip()
-    account_group_id = payload.get("account_group_id", "").strip() or None
-
     if not user_id:
         return jsonify({"error": "User authentication required"}), 401
+
+    payload = request.get_json(force=True, silent=True) or {}
+    api_token = payload.get("api_token", "").strip()
+    account_group_id = payload.get("account_group_id", "").strip() or None
     if not api_token:
         return jsonify({"error": "Bearer token is required"}), 400
 
@@ -139,7 +138,12 @@ def disconnect():
         vault_ok, rows = delete_user_secret(user_id, "thousandeyes")
 
         if not vault_ok:
-            logger.warning("[THOUSANDEYES] Disconnected user %s but Vault delete failed", user_id)
+            logger.error("[THOUSANDEYES] Vault delete failed for user %s", user_id)
+            return jsonify({
+                "success": False,
+                "error": "Failed to remove credentials from Vault",
+                "tokensDeleted": rows,
+            }), 500
 
         clear_credentials_cache(user_id)
 

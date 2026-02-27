@@ -77,14 +77,9 @@ export const thousandEyesService = {
   },
 
   async connect(payload: ThousandEyesConnectPayload): Promise<ThousandEyesConnectResponse> {
-    try {
-      return await handleJsonFetch<ThousandEyesConnectResponse>(`${API_BASE}/connect`, {
-        method: 'POST',
-        body: JSON.stringify(payload),
-      });
-    } catch (error) {
-      console.error('[thousandEyesService] Connect failed:', error);
-      return { success: false, account_groups: [] };
-    }
+    return await handleJsonFetch<ThousandEyesConnectResponse>(`${API_BASE}/connect`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
   },
 };

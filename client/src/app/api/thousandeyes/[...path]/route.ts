@@ -5,6 +5,10 @@ const API_BASE_URL = process.env.BACKEND_URL;
 const FETCH_TIMEOUT_MS = 15000;
 
 async function proxyToBackend(request: NextRequest, { params }: { params: Promise<{ path: string[] }> }) {
+  if (!API_BASE_URL) {
+    return NextResponse.json({ error: 'BACKEND_URL is not configured' }, { status: 500 });
+  }
+
   try {
     const authResult = await getAuthenticatedUser();
     if (authResult instanceof NextResponse) {
@@ -21,7 +25,6 @@ async function proxyToBackend(request: NextRequest, { params }: { params: Promis
     const fetchOptions: RequestInit = {
       method: request.method,
       headers: { ...authHeaders, 'Content-Type': 'application/json' },
-      credentials: 'include',
       signal: controller.signal,
     };
 
@@ -52,6 +55,10 @@ async function proxyToBackend(request: NextRequest, { params }: { params: Promis
         { error: errorMessage },
         { status: response.status },
       );
+    }
+
+    if (response.status === 204 || response.headers.get('content-length') === '0') {
+      return NextResponse.json(null, { status: response.status });
     }
 
     let data: unknown;
