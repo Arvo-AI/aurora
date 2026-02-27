@@ -48,12 +48,15 @@ def connect():
     if request.method == "OPTIONS":
         return create_cors_response()
 
+    user_id = get_user_id_from_request()
+    if not user_id:
+        return jsonify({"error": "User authentication required"}), 401
+
     try:
         data = request.get_json(force=True, silent=True) or {}
     except Exception:
         data = {}
 
-    user_id = get_user_id_from_request()
     base_url = data.get("baseUrl", "").strip().rstrip("/")
     # Strip common Jenkins redirect paths that users may accidentally copy
     for suffix in ("/loginError", "/login", "/manage", "/configure", "/view/all"):
@@ -63,8 +66,6 @@ def connect():
     username = data.get("username", "").strip()
     api_token = data.get("apiToken") or data.get("token")
 
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
     if not base_url:
         return jsonify({"error": "CloudBees CI URL is required"}), 400
     if not username:
@@ -431,7 +432,7 @@ def list_deployments():
                                   commit_sha, branch, repository, deployer, duration_ms,
                                   job_name, trace_id, received_at
                            FROM jenkins_deployment_events
-                           WHERE user_id = %s AND service = %s
+                           WHERE user_id = %s AND provider = 'cloudbees' AND service = %s
                            ORDER BY received_at DESC
                            LIMIT %s OFFSET %s""",
                         (user_id, service_filter, limit, offset),
@@ -442,7 +443,7 @@ def list_deployments():
                                   commit_sha, branch, repository, deployer, duration_ms,
                                   job_name, trace_id, received_at
                            FROM jenkins_deployment_events
-                           WHERE user_id = %s
+                           WHERE user_id = %s AND provider = 'cloudbees'
                            ORDER BY received_at DESC
                            LIMIT %s OFFSET %s""",
                         (user_id, limit, offset),
@@ -450,7 +451,7 @@ def list_deployments():
                 rows = cursor.fetchall()
 
                 cursor.execute(
-                    "SELECT COUNT(*) FROM jenkins_deployment_events WHERE user_id = %s"
+                    "SELECT COUNT(*) FROM jenkins_deployment_events WHERE user_id = %s AND provider = 'cloudbees'"
                     + (" AND service = %s" if service_filter else ""),
                     (user_id, service_filter) if service_filter else (user_id,),
                 )

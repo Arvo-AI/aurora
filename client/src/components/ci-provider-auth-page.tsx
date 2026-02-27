@@ -13,51 +13,8 @@ import {
   Check, ChevronLeft, Copy, ExternalLink, Eye, EyeOff,
   Loader2, Rocket, ShieldCheck, Webhook,
 } from "lucide-react";
-
-const getUserFriendlyError = (err: unknown): string => {
-  if (!err) return "An unexpected error occurred. Please try again.";
-  if (typeof err === "string") return err;
-  if (err instanceof Error) {
-    const { message } = err;
-    if (!message) return "An unexpected error occurred. Please try again.";
-    try {
-      const parsed = JSON.parse(message) as { error?: string };
-      return parsed.error ?? message;
-    } catch {
-      return message;
-    }
-  }
-  if (typeof err === "object") {
-    const errorValue = (err as Record<string, unknown>).error;
-    if (typeof errorValue === "string") return errorValue;
-  }
-  return "An unexpected error occurred. Please try again.";
-};
-
-const formatTimeAgo = (date: Date): string => {
-  const now = new Date();
-  const diffMs = now.getTime() - date.getTime();
-  const diffMins = Math.floor(diffMs / 60000);
-  const diffHours = Math.floor(diffMs / 3600000);
-  const diffDays = Math.floor(diffMs / 86400000);
-  if (diffMins < 1) return "just now";
-  if (diffMins < 60) return `${diffMins}m ago`;
-  if (diffHours < 24) return `${diffHours}h ago`;
-  if (diffDays < 7) return `${diffDays}d ago`;
-  return date.toLocaleDateString();
-};
-
-const formatDuration = (ms: number): string => {
-  if (ms < 1000) return `${ms}ms`;
-  const secs = Math.floor(ms / 1000);
-  if (secs < 60) return `${secs}s`;
-  const mins = Math.floor(secs / 60);
-  const remainingSecs = secs % 60;
-  if (mins < 60) return remainingSecs > 0 ? `${mins}m ${remainingSecs}s` : `${mins}m`;
-  const hours = Math.floor(mins / 60);
-  const remainingMins = mins % 60;
-  return remainingMins > 0 ? `${hours}h ${remainingMins}m` : `${hours}h`;
-};
+import { getUserFriendlyError } from "@/lib/utils";
+import { formatTimeAgo, formatDuration } from "@/lib/utils/time-format";
 
 export default function CIProviderAuthPage({ config }: { config: CIProviderConfig }) {
   const router = useRouter();
@@ -114,19 +71,23 @@ export default function CIProviderAuthPage({ config }: { config: CIProviderConfi
     }
   };
 
-  useEffect(() => { loadStatus(); }, []);
+  useEffect(() => { loadStatus(); }, [slug]);
 
   useEffect(() => {
     if (status?.connected) {
-      service.getWebhookUrl().then(info => { if (info) setWebhookInfo(info); });
-      service.getDeployments(10).then(data => { if (data) setDeployments(data.deployments); });
+      service.getWebhookUrl().then(info => { if (info) setWebhookInfo(info); }).catch(() => {});
+      service.getDeployments(10).then(data => { if (data) setDeployments(data.deployments); }).catch(() => {});
     }
-  }, [status?.connected]);
+  }, [status?.connected, service]);
 
-  const copyToClipboard = (text: string) => {
-    navigator.clipboard.writeText(text);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+  const copyToClipboard = async (text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      toast({ title: "Copy failed", description: "Unable to copy to clipboard", variant: "destructive" });
+    }
   };
 
   const handleConnect = async (e: React.FormEvent<HTMLFormElement>) => {
@@ -407,7 +368,7 @@ function WebhookCard({
           <CardTitle className="text-lg">Send Deployment Events to Aurora</CardTitle>
         </div>
         <CardDescription>
-          Add this to your Jenkinsfile to notify Aurora when builds complete
+          Add this to your {config.slug === "jenkins" ? "Jenkinsfile" : `${config.displayName} pipeline`} to notify Aurora when builds complete
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">

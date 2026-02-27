@@ -89,7 +89,7 @@ def cloudbees_rca(
         return json.dumps({"error": "No user context. Run this from an authenticated session."})
 
     if action == "recent_deployments":
-        return _action_recent_deployments(user_id, service, time_window_hours)
+        return _action_recent_deployments(user_id, service, time_window_hours, provider="cloudbees")
     elif action == "trace_context":
         return _action_trace_context(user_id, deployment_event_id, job_path, build_number)
 

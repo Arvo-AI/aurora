@@ -40,7 +40,7 @@ export function createCIGetHandler({ slug, endpoint, label }: RouteConfig) {
       const apiBaseUrl = getApiBaseUrl();
       const response = await fetchWithTimeout(
         `${apiBaseUrl}/${slug}/${endpoint}${qs ? `?${qs}` : ""}`,
-        { method: "GET", headers: authHeaders, credentials: "include", cache: "no-store" }
+        { method: "GET", headers: authHeaders, cache: "no-store" }
       );
 
       if (!response.ok) {
@@ -80,7 +80,6 @@ export function createCIPostHandler({ slug, endpoint, label }: RouteConfig) {
         method: "POST",
         headers: { ...authHeaders, "Content-Type": "application/json" },
         body: JSON.stringify(payload),
-        credentials: "include",
       });
 
       if (!response.ok) {
