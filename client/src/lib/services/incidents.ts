@@ -99,6 +99,29 @@ export interface PostMortem {
   attendees?: string[];
 }
 
+export interface PostmortemData {
+  id: string;
+  incidentId: string;
+  content: string;  // markdown
+  generatedAt: string;
+  updatedAt: string;
+  confluencePageId?: string;
+  confluencePageUrl?: string;
+  confluenceExportedAt?: string;
+}
+
+export interface PostmortemListItem {
+  id: string;
+  incidentId: string;
+  incidentTitle: string | null;
+  content: string;
+  generatedAt: string;
+  updatedAt: string | null;
+  confluencePageId: string | null;
+  confluencePageUrl: string | null;
+  confluenceExportedAt: string | null;
+}
+
 export interface StreamingThought {
   id: string;
   timestamp: string;
@@ -174,7 +197,7 @@ export interface Incident {
   correlatedAlertCount?: number; // Count of correlated alerts (for list view)
   mergedIntoIncidentId?: string; // ID of incident this was merged into
   mergedIntoTitle?: string; // Title of incident this was merged into
-  postMortem: PostMortem;
+  postMortem?: PostmortemData;
   startedAt: string;
   analyzedAt?: string;
   createdAt?: string;
@@ -226,7 +249,7 @@ export const incidentsService = {
         correlatedAlertCount: inc.correlatedAlertCount || 0,
         mergedIntoIncidentId: inc.mergedIntoIncidentId,
         mergedIntoTitle: inc.mergedIntoTitle,
-        postMortem: {} as PostMortem, // Not implemented yet
+        postMortem: inc.postMortem ?? undefined,
         startedAt: inc.startedAt,
         analyzedAt: inc.analyzedAt,
         createdAt: inc.createdAt,
@@ -329,7 +352,7 @@ export const incidentsService = {
         })),
         mergedIntoIncidentId: inc.mergedIntoIncidentId,
         mergedIntoTitle: inc.mergedIntoTitle,
-        postMortem: {} as PostMortem, // Not implemented yet
+        postMortem: inc.postMortem ?? undefined,
         startedAt: inc.startedAt,
         analyzedAt: inc.analyzedAt,
         createdAt: inc.createdAt,
@@ -531,6 +554,115 @@ export const incidentsService = {
       console.error('Error merging alert:', error);
       const message = error instanceof Error ? error.message : 'Unknown error';
       return { success: false, error: message };
+    }
+  },
+
+  async resolveIncident(incidentId: string): Promise<void> {
+    const response = await fetch(`/api/incidents/${incidentId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ status: 'resolved' }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to resolve incident: ${response.statusText}`);
+    }
+  },
+};
+
+// ============================================================================
+// Postmortem Service
+// ============================================================================
+
+export const postmortemService = {
+  async getPostmortem(incidentId: string): Promise<{ data: PostmortemData | null; error?: string }> {
+    try {
+      const response = await fetch(`/api/incidents/${incidentId}/postmortem`, {
+        method: 'GET',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+      });
+
+      if (!response.ok) {
+        if (response.status === 404) {
+          return { data: null };
+        }
+        return { data: null, error: `Failed to fetch postmortem: ${response.statusText}` };
+      }
+
+      const data = await response.json();
+      return { data: data.postmortem || null };
+    } catch (error) {
+      console.error('Error fetching postmortem:', error);
+      return { data: null, error: error instanceof Error ? error.message : 'Network error' };
+    }
+  },
+
+  async updatePostmortem(incidentId: string, content: string): Promise<{ success: boolean }> {
+    try {
+      const response = await fetch(`/api/incidents/${incidentId}/postmortem`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ content }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to update postmortem: ${response.statusText}`);
+      }
+
+      return { success: true };
+    } catch (error) {
+      console.error('Error updating postmortem:', error);
+      return { success: false };
+    }
+  },
+
+  async exportToConfluence(
+    incidentId: string,
+    spaceKey: string,
+    parentPageId?: string
+  ): Promise<{ success: boolean; pageUrl?: string; error?: string }> {
+    try {
+      const response = await fetch(`/api/incidents/${incidentId}/postmortem/export/confluence`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ spaceKey, parentPageId }),
+      });
+
+      const data = await response.json();
+      if (!response.ok) {
+        return { success: false, error: data.error || 'Failed to export to Confluence' };
+      }
+      return data;
+    } catch (error) {
+      console.error('Error exporting to Confluence:', error);
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      return { success: false, error: message };
+    }
+  },
+
+  downloadMarkdown(incidentId: string, content: string, title: string): void {
+    const blob = new Blob([content], { type: 'text/markdown' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `postmortem-${title.replace(/[^a-z0-9]/gi, '-').toLowerCase()}.md`;
+    a.click();
+    URL.revokeObjectURL(url);
+  },
+
+  async listPostmortems(): Promise<PostmortemListItem[]> {
+    try {
+      const res = await fetch('/api/postmortems', { cache: 'no-store', credentials: 'include' });
+      if (!res.ok) throw new Error('Failed to fetch postmortems');
+      const data = await res.json();
+      return data.postmortems ?? [];
+    } catch (error) {
+      console.error('Error fetching postmortems:', error);
+      return [];
     }
   },
 };
