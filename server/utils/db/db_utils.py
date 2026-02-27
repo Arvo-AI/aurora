@@ -818,6 +818,7 @@ def initialize_tables():
                     );
 
                     CREATE UNIQUE INDEX IF NOT EXISTS idx_postmortems_incident_id ON postmortems(incident_id);
+                    CREATE UNIQUE INDEX IF NOT EXISTS postmortems_incident_id_unique ON postmortems(incident_id);
                     CREATE INDEX IF NOT EXISTS idx_postmortems_user_id ON postmortems(user_id);
                 """,
             }
@@ -1289,7 +1290,7 @@ def initialize_tables():
                         confluence_page_url TEXT,
                         confluence_exported_at TIMESTAMP
                     );
-                    CREATE INDEX IF NOT EXISTS idx_postmortems_incident_id ON postmortems(incident_id);
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_postmortems_incident_id ON postmortems(incident_id);
                     CREATE INDEX IF NOT EXISTS idx_postmortems_user_id ON postmortems(user_id);
                 """)
                 logging.info(
