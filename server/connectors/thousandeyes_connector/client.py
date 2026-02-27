@@ -115,7 +115,9 @@ def invalidate_thousandeyes_client(user_id: str) -> None:
     """Remove *user_id*'s client from the cache (e.g. on disconnect)."""
     with _cache_lock:
         entry = _client_cache.pop(user_id, None)
-        _user_locks.pop(user_id, None)
+        lock = _user_locks.get(user_id)
+        if lock is not None and not lock.locked():
+            _user_locks.pop(user_id, None)
     if entry is not None:
         client = entry[0]
         try:
