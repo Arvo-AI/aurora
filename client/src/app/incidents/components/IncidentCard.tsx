@@ -566,7 +566,7 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
           )}
 
           {/* Postmortem button */}
-          {incident.auroraStatus === 'complete' && incident.status !== 'merged' && (
+          {incident.auroraStatus === 'complete' && incident.status === 'resolved' && (
             <button
               onClick={() => setShowPostmortem(!showPostmortem)}
               className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-md text-xs transition-colors ${
