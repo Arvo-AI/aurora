@@ -389,14 +389,13 @@ export function parseJenkinsRcaCommand(toolInput: string): string {
       parsed = JSON.parse(toolInput.replace(/'/g, '"'))
     }
     const args = ((parsed as Record<string, unknown>)?.kwargs || parsed || {}) as Record<string, unknown>
-    const action = args.action || "investigate"
+    const action = (args.action as string) || "investigate"
     const jobPath = args.job_path || ""
     const buildNumber = args.build_number
     const service = args.service || ""
     const pipelineName = args.pipeline_name || ""
     const nodeId = args.node_id || ""
 
-    // Format job/build reference
     const jobRef = jobPath ? (buildNumber ? `${jobPath} #${buildNumber}` : jobPath) : ""
     const pipelineRef = pipelineName ? (args.run_number ? `${pipelineName} #${args.run_number}` : pipelineName) : ""
 
@@ -424,5 +423,51 @@ export function parseJenkinsRcaCommand(toolInput: string): string {
     }
   } catch (error) {
     return "Jenkins: investigate"
+  }
+}
+
+export function parseCloudbeesRcaCommand(toolInput: string): string {
+  try {
+    let parsed: Record<string, unknown> | null = null
+    try {
+      parsed = JSON.parse(toolInput)
+    } catch {
+      parsed = JSON.parse(toolInput.replace(/'/g, '"'))
+    }
+    const args = ((parsed as Record<string, unknown>)?.kwargs || parsed || {}) as Record<string, unknown>
+    const action = (args.action as string) || "investigate"
+    const jobPath = args.job_path || ""
+    const buildNumber = args.build_number
+    const service = args.service || ""
+    const pipelineName = args.pipeline_name || ""
+    const nodeId = args.node_id || ""
+
+    const jobRef = jobPath ? (buildNumber ? `${jobPath} #${buildNumber}` : jobPath) : ""
+    const pipelineRef = pipelineName ? (args.run_number ? `${pipelineName} #${args.run_number}` : pipelineName) : ""
+
+    switch(action) {
+      case "recent_deployments":
+        return `CloudBees: Recent deployments${service ? ` for ${service}` : ""}`
+      case "build_detail":
+        return `CloudBees: Build details${jobRef ? ` for ${jobRef}` : ""}`
+      case "pipeline_stages":
+        return `CloudBees: Pipeline stages${jobRef ? ` for ${jobRef}` : ""}`
+      case "stage_log":
+        return `CloudBees: Stage log${nodeId ? ` (${nodeId})` : ""}${jobRef ? ` for ${jobRef}` : ""}`
+      case "build_logs":
+        return `CloudBees: Console output${jobRef ? ` for ${jobRef}` : ""}`
+      case "test_results":
+        return `CloudBees: Test results${jobRef ? ` for ${jobRef}` : ""}`
+      case "blue_ocean_run":
+        return `CloudBees: Blue Ocean run${pipelineRef ? ` for ${pipelineRef}` : ""}`
+      case "blue_ocean_steps":
+        return `CloudBees: Blue Ocean steps${nodeId ? ` (${nodeId})` : ""}${pipelineRef ? ` for ${pipelineRef}` : ""}`
+      case "trace_context":
+        return `CloudBees: Trace context${jobRef ? ` for ${jobRef}` : ""}`
+      default:
+        return `CloudBees: ${action.replace(/_/g, " ")}`
+    }
+  } catch (error) {
+    return "CloudBees: investigate"
   }
 }

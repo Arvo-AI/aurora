@@ -6,6 +6,7 @@ with a separate provider identifier for credential storage.
 
 import logging
 import os
+import secrets
 from typing import Any, Dict, Optional
 
 from flask import Blueprint, jsonify, request
@@ -13,6 +14,7 @@ from flask import Blueprint, jsonify, request
 from connectors.jenkins_connector.api_client import JenkinsClient
 from utils.db.connection_pool import db_pool
 from utils.web.cors_utils import create_cors_response
+from utils.web.webhook_signature import SIGNATURE_HEADER, verify_webhook_signature
 from utils.auth.stateless_auth import get_user_id_from_request
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 
@@ -95,6 +97,7 @@ def connect():
         "api_token": api_token,
         "version": version,
         "mode": mode,
+        "webhook_secret": secrets.token_hex(32),
     }
 
     try:
@@ -244,6 +247,14 @@ def disconnect():
 # Webhook: receive deployment events from Jenkinsfile post blocks
 # ------------------------------------------------------------------
 
+def _get_webhook_secret(user_id: str) -> Optional[str]:
+    """Retrieve the stored webhook secret for HMAC validation."""
+    creds = _get_stored_cloudbees_credentials(user_id)
+    if not creds:
+        return None
+    return creds.get("webhook_secret")
+
+
 def _verify_webhook_user(user_id: str) -> bool:
     """Verify the user_id exists in the database to prevent arbitrary data injection."""
     if not user_id or len(user_id) > 255:
@@ -263,7 +274,11 @@ def _verify_webhook_user(user_id: str) -> bool:
 
 @cloudbees_bp.route("/webhook/<user_id>", methods=["POST", "OPTIONS"])
 def deployment_webhook(user_id: str):
-    """Receive a deployment event webhook from a CloudBees CI pipeline."""
+    """Receive a deployment event webhook from a CloudBees CI pipeline.
+
+    Security: validates per-user HMAC-SHA256 signature via X-Aurora-Signature header.
+    Falls back to user verification only when no webhook secret is configured (pre-upgrade).
+    """
     if request.method == "OPTIONS":
         return create_cors_response()
 
@@ -273,6 +288,17 @@ def deployment_webhook(user_id: str):
     if not _verify_webhook_user(user_id):
         logger.warning("[CLOUDBEES] Webhook rejected: invalid or unconfigured user_id %s", user_id[:50])
         return jsonify({"error": "Invalid webhook configuration"}), 403
+
+    webhook_secret = _get_webhook_secret(user_id)
+    signature = request.headers.get(SIGNATURE_HEADER, "")
+
+    if webhook_secret:
+        if not signature:
+            logger.warning("[CLOUDBEES] Webhook rejected: missing %s for user %s", SIGNATURE_HEADER, user_id[:50])
+            return jsonify({"error": f"Missing {SIGNATURE_HEADER} header"}), 401
+        if not verify_webhook_signature(request.get_data(), signature, webhook_secret):
+            logger.warning("[CLOUDBEES] Webhook rejected: invalid signature for user %s", user_id[:50])
+            return jsonify({"error": "Invalid webhook signature"}), 401
 
     payload = request.get_json(silent=True) or {}
 
@@ -288,7 +314,7 @@ def deployment_webhook(user_id: str):
 
     from routes.jenkins.tasks import process_jenkins_deployment
 
-    process_jenkins_deployment.delay(payload, user_id)
+    process_jenkins_deployment.apply_async(args=[payload, user_id, "cloudbees"])
 
     return jsonify({"received": True})
 
@@ -309,34 +335,57 @@ def get_webhook_url():
 
     webhook_url = f"{backend_url}/cloudbees/webhook/{user_id}"
 
+    creds = _get_stored_cloudbees_credentials(user_id) or {}
+    webhook_secret = creds.get("webhook_secret", "")
+
     jenkinsfile_basic = f'''post {{
   always {{
-    httpRequest(
-      url: "{webhook_url}",
-      httpMode: 'POST',
-      contentType: 'APPLICATION_JSON',
-      requestBody: """{{"service":"${{env.JOB_NAME}}","environment":"${{params.ENVIRONMENT ?: 'production'}}","result":"${{currentBuild.currentResult}}","build_number":${{env.BUILD_NUMBER}},"build_url":"${{env.BUILD_URL}}","git":{{"commit_sha":"${{env.GIT_COMMIT}}","branch":"${{env.GIT_BRANCH}}"}}}}"""
-    )
+    script {{
+      def payload = """{{"service":"${{env.JOB_NAME}}","environment":"${{params.ENVIRONMENT ?: 'production'}}","result":"${{currentBuild.currentResult}}","build_number":${{env.BUILD_NUMBER}},"build_url":"${{env.BUILD_URL}}","git":{{"commit_sha":"${{env.GIT_COMMIT}}","branch":"${{env.GIT_BRANCH}}"}}}}"""
+      def mac = javax.crypto.Mac.getInstance("HmacSHA256")
+      mac.init(new javax.crypto.spec.SecretKeySpec("{webhook_secret}".bytes, "HmacSHA256"))
+      def sig = mac.doFinal(payload.bytes).encodeHex().toString()
+      httpRequest(
+        url: "{webhook_url}",
+        httpMode: 'POST',
+        contentType: 'APPLICATION_JSON',
+        customHeaders: [[name: '{SIGNATURE_HEADER}', value: sig]],
+        requestBody: payload
+      )
+    }}
   }}
 }}'''
 
     jenkinsfile_otel = f'''post {{
   always {{
-    httpRequest(
-      url: "{webhook_url}",
-      httpMode: 'POST',
-      contentType: 'APPLICATION_JSON',
-      requestBody: """{{"service":"${{env.JOB_NAME}}","environment":"${{params.ENVIRONMENT ?: 'production'}}","result":"${{currentBuild.currentResult}}","build_number":${{env.BUILD_NUMBER}},"build_url":"${{env.BUILD_URL}}","git":{{"commit_sha":"${{env.GIT_COMMIT}}","branch":"${{env.GIT_BRANCH}}"}},"trace_id":"${{env.TRACEPARENT?.split('-')?.getAt(1) ?: ''}}","span_id":"${{env.TRACEPARENT?.split('-')?.getAt(2) ?: ''}}"}}"""
-    )
+    script {{
+      def payload = """{{"service":"${{env.JOB_NAME}}","environment":"${{params.ENVIRONMENT ?: 'production'}}","result":"${{currentBuild.currentResult}}","build_number":${{env.BUILD_NUMBER}},"build_url":"${{env.BUILD_URL}}","git":{{"commit_sha":"${{env.GIT_COMMIT}}","branch":"${{env.GIT_BRANCH}}"}},"trace_id":"${{env.TRACEPARENT?.split('-')?.getAt(1) ?: ''}}","span_id":"${{env.TRACEPARENT?.split('-')?.getAt(2) ?: ''}}"}}"""
+      def mac = javax.crypto.Mac.getInstance("HmacSHA256")
+      mac.init(new javax.crypto.spec.SecretKeySpec("{webhook_secret}".bytes, "HmacSHA256"))
+      def sig = mac.doFinal(payload.bytes).encodeHex().toString()
+      httpRequest(
+        url: "{webhook_url}",
+        httpMode: 'POST',
+        contentType: 'APPLICATION_JSON',
+        customHeaders: [[name: '{SIGNATURE_HEADER}', value: sig]],
+        requestBody: payload
+      )
+    }}
   }}
 }}'''
 
     jenkinsfile_curl = f'''post {{
   always {{
+    script {{
+      env.BUILD_RESULT = currentBuild.currentResult ?: 'UNKNOWN'
+    }}
     sh \'\'\'
+      PAYLOAD='{{"service":"\'\"$JOB_NAME\"\'","result":"\'\"$BUILD_RESULT\"\'","build_number":\'$BUILD_NUMBER\',"build_url":"\'\"$BUILD_URL\"\'","git":{{"commit_sha":"\'\"$GIT_COMMIT\"\'","branch":"\'\"$GIT_BRANCH\"\'"}}}}'
+      SIG=$(echo -n "$PAYLOAD" | openssl dgst -sha256 -hmac "{webhook_secret}" | awk \'{{print $2}}\')
       curl -sS -X POST "{webhook_url}" \\
         -H "Content-Type: application/json" \\
-        -d "{{\\"service\\":\\"$JOB_NAME\\",\\"result\\":\\"$BUILD_RESULT\\",\\"build_number\\":$BUILD_NUMBER,\\"build_url\\":\\"$BUILD_URL\\",\\"git\\":{{\\"commit_sha\\":\\"$GIT_COMMIT\\",\\"branch\\":\\"$GIT_BRANCH\\"}}}}"
+        -H "{SIGNATURE_HEADER}: $SIG" \\
+        -d "$PAYLOAD"
     \'\'\'
   }}
 }}'''
@@ -347,7 +396,7 @@ def get_webhook_url():
         "jenkinsfileOtel": jenkinsfile_otel,
         "jenkinsfileCurl": jenkinsfile_curl,
         "instructions": [
-            "1. Add the httpRequest call to the post block of your Jenkinsfile",
+            "1. Add the post block snippet to your Jenkinsfile (HMAC signing is built in)",
             "2. Ensure the HTTP Request Plugin is installed on your CloudBees CI instance",
             "3. Aurora will receive deployment events and correlate them with incidents",
             "4. (Optional) Install the OpenTelemetry plugin for W3C Trace Context propagation",
