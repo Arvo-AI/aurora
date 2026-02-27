@@ -223,6 +223,7 @@ jobs:
             echo '🔄 Restarting services...'
             sudo docker compose -f docker-compose.prod-local.yml build frontend
             sudo docker compose -f docker-compose.prod-local.yml up -d --remove-orphans
+            sudo docker compose -f docker-compose.prod-local.yml up -d --force-recreate demo-init
             
             echo '✅ VM-2 deployment complete!'
           " 2>&1
@@ -280,6 +281,7 @@ jobs:
             echo '🔄 Restarting services...'
             sudo docker compose -f docker-compose.prod-local.yml build frontend
             sudo docker compose -f docker-compose.prod-local.yml up -d --remove-orphans
+            sudo docker compose -f docker-compose.prod-local.yml up -d --force-recreate demo-init
             
             echo '✅ VM-3 deployment complete!'
           " 2>&1

@@ -1,6 +1,21 @@
 -- Demo Incident 1 postmortem: Database connection pool exhausted - payment-service
 -- The incident itself lives in aurora_db.sql; this adds the postmortem (idempotent).
 
+-- Ensure postmortems table exists (migration may not have run on older installs)
+CREATE TABLE IF NOT EXISTS postmortems (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    incident_id UUID NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
+    user_id VARCHAR(255) NOT NULL,
+    content TEXT,
+    generated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    confluence_page_id TEXT,
+    confluence_page_url TEXT,
+    confluence_exported_at TIMESTAMP
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_postmortems_incident_id ON postmortems(incident_id);
+CREATE INDEX IF NOT EXISTS idx_postmortems_user_id ON postmortems(user_id);
+
 -- Ensure resolved status on existing installs
 UPDATE incidents SET status = 'resolved' WHERE id = 'a867c4b3-f09c-4a4f-a2bc-1c390d967b37' AND status != 'resolved';
 

@@ -93,8 +93,12 @@ def get_postmortem(incident_id):
                     """SELECT id, incident_id, user_id, content, generated_at, updated_at,
                               confluence_page_id, confluence_page_url, confluence_exported_at
                        FROM postmortems
-                       WHERE incident_id = %s AND user_id = %s""",
-                    (incident_id, user_id),
+                       WHERE incident_id = %s
+                         AND (user_id = %s OR EXISTS (
+                             SELECT 1 FROM incidents
+                             WHERE id = %s AND (alert_metadata->>'is_demo')::boolean = true
+                         ))""",
+                    (incident_id, user_id, incident_id),
                 )
                 row = cursor.fetchone()
 
@@ -351,6 +355,7 @@ def list_postmortems():
                        FROM postmortems p
                        LEFT JOIN incidents i ON p.incident_id = i.id
                        WHERE p.user_id = %s
+                          OR (i.alert_metadata->>'is_demo')::boolean = true
                        ORDER BY p.generated_at DESC
                        LIMIT %s OFFSET %s""",
                     (user_id, limit, offset),
