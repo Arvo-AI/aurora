@@ -4,6 +4,23 @@ import type { CIProviderSlug } from "@/lib/services/ci-provider";
 
 const API_BASE_URL = process.env.BACKEND_URL;
 
+function getApiBaseUrl(): string {
+  if (!API_BASE_URL) {
+    throw new Error("BACKEND_URL is not configured");
+  }
+  return API_BASE_URL.replace(/\/$/, "");
+}
+
+async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs = 15000) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 interface RouteConfig {
   slug: CIProviderSlug;
   endpoint: string;
@@ -20,8 +37,9 @@ export function createCIGetHandler({ slug, endpoint, label }: RouteConfig) {
       const { searchParams } = new URL(request.url);
       const qs = searchParams.toString();
 
-      const response = await fetch(
-        `${API_BASE_URL}/${slug}/${endpoint}${qs ? `?${qs}` : ""}`,
+      const apiBaseUrl = getApiBaseUrl();
+      const response = await fetchWithTimeout(
+        `${apiBaseUrl}/${slug}/${endpoint}${qs ? `?${qs}` : ""}`,
         { method: "GET", headers: authHeaders, credentials: "include", cache: "no-store" }
       );
 
@@ -49,9 +67,16 @@ export function createCIPostHandler({ slug, endpoint, label }: RouteConfig) {
       if (authResult instanceof NextResponse) return authResult;
 
       const { headers: authHeaders } = authResult;
-      const payload = await request.json();
 
-      const response = await fetch(`${API_BASE_URL}/${slug}/${endpoint}`, {
+      let payload: unknown;
+      try {
+        payload = await request.json();
+      } catch {
+        return NextResponse.json({ error: "Invalid JSON payload" }, { status: 400 });
+      }
+
+      const apiBaseUrl = getApiBaseUrl();
+      const response = await fetchWithTimeout(`${apiBaseUrl}/${slug}/${endpoint}`, {
         method: "POST",
         headers: { ...authHeaders, "Content-Type": "application/json" },
         body: JSON.stringify(payload),

@@ -201,7 +201,6 @@ export default function CIProviderAuthPage({ config }: { config: CIProviderConfi
   };
 
   const isConnected = Boolean(status?.connected);
-  const accent = config.accentColor;
 
   if (checkingStatus && !status) {
     return (
@@ -282,7 +281,6 @@ function ConnectedView({
   onDisconnect: () => void;
   onCopy: (text: string) => void;
 }) {
-  const accent = config.accentColor;
   return (
     <div className="space-y-4">
       <Card>

@@ -280,7 +280,11 @@ export async function DELETE(
 
       if (!response.ok) {
         const errorText = await response.text()
-        console.error('Backend error disconnecting CloudBees:', errorText)
+        console.error('Backend error disconnecting CloudBees', {
+          status: response.status,
+          statusText: response.statusText,
+          bodyLength: errorText.length,
+        })
         return NextResponse.json(
           { error: 'Failed to disconnect CloudBees' },
           { status: response.status }

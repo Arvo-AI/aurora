@@ -299,8 +299,9 @@ export function useConnectorStatus(connector: ConnectorConfig, userId: string | 
       if (isConnectedInDb) {
         setIsConnected(true);
         localStorage.setItem(storageKey, "true");
-      } else if (!localStorage.getItem(storageKey)) {
+      } else {
         setIsConnected(false);
+        localStorage.removeItem(storageKey);
       }
     } catch {
       // On error, keep existing localStorage state

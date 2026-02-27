@@ -304,6 +304,8 @@ def deployment_webhook(user_id: str):
 
     if not isinstance(payload, dict):
         return jsonify({"error": "Invalid payload format"}), 400
+    if not payload.get("result") and not payload.get("build_number"):
+        return jsonify({"error": "Payload must include at least 'result' or 'build_number'"}), 400
 
     logger.info(
         "[CLOUDBEES] Received deployment webhook for user %s: service=%s result=%s",
@@ -329,9 +331,12 @@ def get_webhook_url():
     if not user_id:
         return jsonify({"error": "User authentication required"}), 401
 
-    backend_url = os.getenv("BACKEND_URL", "").rstrip("/")
-    if not backend_url:
-        backend_url = os.getenv("AURORA_BACKEND_URL", request.host_url.rstrip("/"))
+    backend_url = (
+        os.getenv("NEXT_PUBLIC_BACKEND_URL")
+        or os.getenv("BACKEND_URL")
+        or os.getenv("AURORA_BACKEND_URL")
+        or request.host_url
+    ).rstrip("/")
 
     webhook_url = f"{backend_url}/cloudbees/webhook/{user_id}"
 
