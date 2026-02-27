@@ -20,6 +20,7 @@ import {
   parseCloudExecCommand,
   parseGitHubToolCommand,
   parseGitHubRcaCommand,
+  parseJenkinsRcaCommand,
   parseIacToolCommand,
   parseWebSearchCommand,
   parseAwsMcpCommand,
@@ -228,6 +229,10 @@ const ToolExecutionWidget = ({ tool, className, sendMessage, sendRaw, onToolUpda
   // GitHub RCA tool parsing
   else if (tool.tool_name === "github_rca" && typeof command === "string" && command.trim().startsWith("{")) {
     command = parseGitHubRcaCommand(command)
+  }
+  // Jenkins RCA tool parsing
+  else if (tool.tool_name === "jenkins_rca" && typeof command === "string" && command.trim().startsWith("{")) {
+    command = parseJenkinsRcaCommand(normalizedInput)
   }
   // IAC tool parsing
   else if (tool.tool_name === "iac_tool" || tool.tool_name === "iac_write" || tool.tool_name === "iac_plan" || tool.tool_name === "iac_apply") {

@@ -124,6 +124,14 @@ const logos = {
       onError={(e) => console.error('Failed to load Splunk logo:', e)}
     />
   ),
+  jenkins: (
+    <img
+      src="/jenkins.svg"
+      className="w-4 h-4 min-w-4 min-h-4 object-contain"
+      alt="Jenkins"
+      onError={(e) => console.error('Failed to load Jenkins logo:', e)}
+    />
+  ),
   coroot: (
     <img
       src="/coroot.svg"
@@ -217,6 +225,11 @@ const getLogoForCommand = (command: string | any, toolName: string, provider?: s
   // Splunk tools
   if (tool.includes('splunk') || tool === 'search_splunk' || tool === 'list_splunk_indexes' || tool === 'list_splunk_sourcetypes') {
     return 'splunk'
+  }
+
+  // Jenkins tools
+  if (tool.includes('jenkins')) {
+    return 'jenkins'
   }
 
   // Coroot tools
