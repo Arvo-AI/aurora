@@ -15,7 +15,6 @@ from pydantic import BaseModel, Field
 from typing import Literal
 
 from .jenkins_rca_tool import (
-    jenkins_rca,
     _action_recent_deployments,
     _action_trace_context,
 )
