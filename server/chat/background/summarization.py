@@ -107,6 +107,16 @@ def _build_summary_prompt(
         if alert_metadata.get("metric"):
             key_details.append(f"Metric: {alert_metadata['metric']}")
 
+    elif source_type == "dynatrace":
+        if alert_metadata.get("impact"):
+            key_details.append(f"Impact: {alert_metadata['impact']}")
+        if raw_payload.get("ImpactedEntity"):
+            key_details.append(f"Impacted Entity: {raw_payload['ImpactedEntity']}")
+        if alert_metadata.get("problemUrl"):
+            key_details.append(f"Problem URL: {alert_metadata['problemUrl']}")
+        if raw_payload.get("Tags"):
+            key_details.append(f"Tags: {raw_payload['Tags']}")
+
     elif source_type == "pagerduty":
         if alert_metadata.get("incidentId"):
             key_details.append(f"Incident ID: {alert_metadata['incidentId']}")

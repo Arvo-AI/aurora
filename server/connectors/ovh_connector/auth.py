@@ -52,13 +52,13 @@ def validate_ovh_credentials(endpoint: str, application_key: str, application_se
         )
         _ = client.get('/me')
         return True, None
-    except ovh.exceptions.InvalidCredential as e:
-        return False, f"Invalid credentials: {str(e)}"
-    except ovh.exceptions.InvalidKey as e:
-        return False, f"Invalid application key: {str(e)}"
+    except ovh.exceptions.InvalidCredential:
+        return False, "Invalid credentials. Please check your consumer key and permissions."
+    except ovh.exceptions.InvalidKey:
+        return False, "Invalid application key. Please check your application key."
     except Exception as e:
         logger.error(f"Credential validation error: {e}", exc_info=True)
-        return False, f"Validation error: {str(e)}"
+        return False, "Credential validation failed. Please check your configuration."
 
 
 def create_ovh_service_account(endpoint: str, application_key: str, application_secret: str, consumer_key: str, user_id: str, create_iam_policy: bool = False, project_id: Optional[str] = None) -> Dict:

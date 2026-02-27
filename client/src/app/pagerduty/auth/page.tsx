@@ -19,49 +19,9 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { getUserFriendlyError } from "@/lib/utils";
 
 const CACHE_KEY = 'pagerduty_connection_status';
-
-const getUserFriendlyError = (err: unknown): string => {
-  if (!err) {
-    return "An unexpected error occurred. Please try again.";
-  }
-
-  if (typeof err === 'string') {
-    // Try to parse if it's a JSON string
-    try {
-      const parsed = JSON.parse(err);
-      if (parsed.message) return parsed.message;
-      if (parsed.error) return parsed.error;
-    } catch {
-      return err;
-    }
-  }
-
-  if (err instanceof Error) {
-    // Try to parse the message if it's JSON
-    try {
-      const parsed = JSON.parse(err.message);
-      if (parsed.message) return parsed.message;
-      if (parsed.error) return parsed.error;
-    } catch {
-      return err.message;
-    }
-  }
-
-  if (typeof err === 'object') {
-    const errorObj = err as Record<string, unknown>;
-    // Prioritize 'message' field over 'error' field
-    if (typeof errorObj.message === 'string') {
-      return errorObj.message;
-    }
-    if (typeof errorObj.error === 'string') {
-      return errorObj.error;
-    }
-  }
-
-  return 'An unexpected error occurred. Please try again.';
-};
 
 export default function PagerDutyAuthPage() {
   const { toast } = useToast();

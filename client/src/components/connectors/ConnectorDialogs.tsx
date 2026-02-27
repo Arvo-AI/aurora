@@ -6,6 +6,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import GitHubProviderIntegration from "@/components/github-provider-integration";
+import BitbucketProviderIntegration from "@/components/bitbucket-provider-integration";
 import GcpProviderIntegration from "@/components/gcp-provider-integration";
 import OvhProviderIntegration from "@/components/ovh-provider-integration";
 import ScalewayProviderIntegration from "@/components/scaleway-provider-integration";
@@ -14,11 +15,13 @@ import AzureProviderIntegration from "@/components/azure-provider-integration";
 interface ConnectorDialogsProps {
   connectorId: string;
   showGitHubDialog: boolean;
+  showBitbucketDialog: boolean;
   showGcpDialog: boolean;
   showAzureDialog: boolean;
   showOvhDialog: boolean;
   showScalewayDialog: boolean;
   onGitHubDialogChange: (open: boolean) => void;
+  onBitbucketDialogChange: (open: boolean) => void;
   onGcpDialogChange: (open: boolean) => void;
   onAzureDialogChange: (open: boolean) => void;
   onOvhDialogChange: (open: boolean) => void;
@@ -29,11 +32,13 @@ interface ConnectorDialogsProps {
 export function ConnectorDialogs({
   connectorId,
   showGitHubDialog,
+  showBitbucketDialog,
   showGcpDialog,
   showAzureDialog,
   showOvhDialog,
   showScalewayDialog,
   onGitHubDialogChange,
+  onBitbucketDialogChange,
   onGcpDialogChange,
   onAzureDialogChange,
   onOvhDialogChange,
@@ -49,6 +54,17 @@ export function ConnectorDialogs({
               <DialogTitle>GitHub Integration</DialogTitle>
             </DialogHeader>
             <GitHubProviderIntegration />
+          </DialogContent>
+        </Dialog>
+      )}
+
+      {connectorId === "bitbucket" && (
+        <Dialog open={showBitbucketDialog} onOpenChange={onBitbucketDialogChange}>
+          <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle>Bitbucket Integration</DialogTitle>
+            </DialogHeader>
+            <BitbucketProviderIntegration />
           </DialogContent>
         </Dialog>
       )}

@@ -13,10 +13,12 @@ import {
   ChevronRight,
   Play,
   GitBranch,
+  FileText,
 } from 'lucide-react';
 import React, { useState, useMemo, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { useRouter } from 'next/navigation';
+import { useToast } from '@/hooks/use-toast';
 import Link from 'next/link';
 import Image from 'next/image';
 import CitationBadge from './CitationBadge';
@@ -26,6 +28,7 @@ import FixSuggestionModal from './FixSuggestionModal';
 import IncidentFeedback from './IncidentFeedback';
 import CorrelatedAlertsSection from './CorrelatedAlertsSection';
 import RecentAlertsSection from './RecentAlertsSection';
+import PostmortemPanel from './PostmortemPanel';
 import { Suggestion } from '@/lib/services/incidents';
 import InfrastructureVisualization from '@/components/incidents/InfrastructureVisualization';
 import { ReactFlowProvider } from '@xyflow/react';
@@ -87,9 +90,26 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
   const [selectedSuggestion, setSelectedSuggestion] = useState<Suggestion | null>(null);
   const [selectedFixSuggestion, setSelectedFixSuggestion] = useState<Suggestion | null>(null);
   const [showVisualization, setShowVisualization] = useState(false);
+  const [showPostmortem, setShowPostmortem] = useState(false);
+  const [resolvingIncident, setResolvingIncident] = useState(false);
   const alert = incident.alert;
   const router = useRouter();
+  const { toast } = useToast();
   const showSeverity = (alert.severity && alert.severity !== 'unknown') || incident.status === 'analyzed';
+
+  const handleResolveIncident = async () => {
+    setResolvingIncident(true);
+    try {
+      await incidentsService.resolveIncident(incident.id);
+      toast({ title: 'Incident resolved', description: 'Postmortem generation has started.' });
+      onRefresh?.();
+    } catch (e) {
+      console.error('Failed to resolve incident:', e);
+      toast({ title: 'Failed to resolve incident', variant: 'destructive' });
+    } finally {
+      setResolvingIncident(false);
+    }
+  };
 
   // Extract significant words (length > 3) from text for matching
   const extractSignificantWords = useCallback((text: string): string[] => {
@@ -281,11 +301,11 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
             )}
             <div className="flex items-center gap-2">
               <Image 
-                src={alert.source === 'pagerduty' ? '/pagerduty-icon.svg' : `/${alert.source}.svg`}
+                src={alert.source === 'pagerduty' ? '/pagerduty-icon.svg' : alert.source === 'dynatrace' ? '/dynatrace.png' : `/${alert.source}.svg`}
                 alt={alert.source}
                 width={20}
                 height={20}
-                className="object-contain"
+                className={`object-contain${alert.source === 'dynatrace' ? ' scale-[2.2]' : ''}`}
               />
               {isSafeUrl(alert.sourceUrl) ? (
                 <a 
@@ -532,6 +552,33 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
               <ChevronRight className={`w-3 h-3 transition-transform ${showVisualization ? 'rotate-90' : ''}`} />
             </button>
           )}
+
+          {/* Resolve Incident button */}
+          {incident.auroraStatus === 'complete' && incident.status !== 'resolved' && incident.status !== 'merged' && (
+            <button
+              onClick={handleResolveIncident}
+              disabled={resolvingIncident}
+              className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md text-xs transition-colors text-green-400 hover:text-green-300 hover:bg-green-500/10 disabled:opacity-50"
+            >
+              <CheckCircle2 className="w-3 h-3" />
+              {resolvingIncident ? 'Resolving...' : 'Resolve Incident'}
+            </button>
+          )}
+
+          {/* Postmortem button */}
+          {incident.auroraStatus === 'complete' && incident.status === 'resolved' && (
+            <button
+              onClick={() => setShowPostmortem(!showPostmortem)}
+              className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-md text-xs transition-colors ${
+                showPostmortem
+                  ? 'text-orange-300 bg-orange-500/10'
+                  : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800'
+              }`}
+            >
+              <FileText className="w-3 h-3" />
+              Postmortem
+            </button>
+          )}
         </div>
       )}
 
@@ -541,6 +588,14 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
           <IncidentFeedback incidentId={incident.id} />
         </div>
       )}
+
+      {/* Postmortem Panel */}
+      <PostmortemPanel
+        incidentId={incident.id}
+        incidentTitle={incident.alert.title}
+        isVisible={showPostmortem}
+        onClose={() => setShowPostmortem(false)}
+      />
 
       {/* Infrastructure Visualization */}
       {showVisualization && (incident.auroraStatus === 'complete' || incident.auroraStatus === 'running') && (

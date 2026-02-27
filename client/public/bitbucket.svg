@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+  <defs>
+    <linearGradient id="bitbucket-gradient" x1="28.593" y1="4.653" x2="17.673" y2="27.716" gradientUnits="userSpaceOnUse">
+      <stop offset="0.18" stop-color="#0052CC"/>
+      <stop offset="1" stop-color="#2684FF"/>
+    </linearGradient>
+  </defs>
+  <path d="M3.213 4a.963.963 0 00-.957 1.113l3.57 21.656a1.308 1.308 0 001.279 1.088h17.967a.963.963 0 00.957-.802l3.57-21.944A.963.963 0 0028.642 4H3.213zm16.093 15.592h-6.755L11.068 12.4h9.675l-1.437 7.192z" fill="url(#bitbucket-gradient)"/>
+</svg>

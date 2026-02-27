@@ -741,6 +741,28 @@ def initialize_tables():
                     CREATE INDEX IF NOT EXISTS idx_jenkins_deploy_trace ON jenkins_deployment_events(trace_id) WHERE trace_id IS NOT NULL;
                     CREATE UNIQUE INDEX IF NOT EXISTS idx_jenkins_deploy_dedup ON jenkins_deployment_events(user_id, job_name, build_number);
                 """,
+                "dynatrace_problems": """
+                    CREATE TABLE IF NOT EXISTS dynatrace_problems (
+                        id SERIAL PRIMARY KEY,
+                        user_id VARCHAR(255) NOT NULL,
+                        problem_id VARCHAR(255),
+                        pid VARCHAR(255),
+                        problem_title TEXT,
+                        problem_state VARCHAR(50),
+                        severity VARCHAR(50),
+                        impact VARCHAR(50),
+                        impacted_entity TEXT,
+                        problem_url TEXT,
+                        tags TEXT,
+                        payload JSONB NOT NULL,
+                        received_at TIMESTAMP NOT NULL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+
+                    CREATE INDEX IF NOT EXISTS idx_dynatrace_problems_user_id ON dynatrace_problems(user_id, received_at DESC);
+                    CREATE INDEX IF NOT EXISTS idx_dynatrace_problems_state ON dynatrace_problems(problem_state);
+                    CREATE INDEX IF NOT EXISTS idx_dynatrace_problems_received_at ON dynatrace_problems(received_at DESC);
+                """,
                 "kubectl_agent_tokens": """
                     CREATE TABLE IF NOT EXISTS kubectl_agent_tokens (
                         id SERIAL PRIMARY KEY,
@@ -833,6 +855,23 @@ def initialize_tables():
                     CREATE INDEX IF NOT EXISTS idx_incident_feedback_user_id ON incident_feedback(user_id);
                     CREATE INDEX IF NOT EXISTS idx_incident_feedback_type ON incident_feedback(feedback_type);
                 """,
+                "postmortems": """
+                    CREATE TABLE IF NOT EXISTS postmortems (
+                        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                        incident_id UUID NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
+                        user_id VARCHAR(255) NOT NULL,
+                        content TEXT,
+                        generated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        confluence_page_id TEXT,
+                        confluence_page_url TEXT,
+                        confluence_exported_at TIMESTAMP
+                    );
+
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_postmortems_incident_id ON postmortems(incident_id);
+                    CREATE UNIQUE INDEX IF NOT EXISTS postmortems_incident_id_unique ON postmortems(incident_id);
+                    CREATE INDEX IF NOT EXISTS idx_postmortems_user_id ON postmortems(user_id);
+                """,
             }
 
             # List of tables that should have RLS enabled and a policy applied.
@@ -866,6 +905,7 @@ def initialize_tables():
             rls_tables.append("netdata_verification_tokens")
             rls_tables.append("splunk_alerts")
             rls_tables.append("jenkins_deployment_events")
+            rls_tables.append("dynatrace_problems")
 
             # Add incidents table
             # Note: incident_suggestions and incident_thoughts are child tables with CASCADE DELETE
@@ -873,6 +913,7 @@ def initialize_tables():
             rls_tables.append("incidents")
             rls_tables.append("incident_alerts")
             rls_tables.append("incident_feedback")
+            rls_tables.append("postmortems")
 
 
             # Migration: Add rca_celery_task_id column to incidents table if it doesn't exist
@@ -1286,6 +1327,33 @@ def initialize_tables():
                 )
                 conn.rollback()
 
+            # Migration: Create postmortems table if it doesn't exist
+            # Note: 'resolved' is now a valid incident status value.
+            # The incidents.status column is VARCHAR so no ALTER TABLE is needed.
+            try:
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS postmortems (
+                        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                        incident_id UUID NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
+                        user_id VARCHAR(255) NOT NULL,
+                        content TEXT,
+                        generated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        confluence_page_id TEXT,
+                        confluence_page_url TEXT,
+                        confluence_exported_at TIMESTAMP
+                    );
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_postmortems_incident_id ON postmortems(incident_id);
+                    CREATE INDEX IF NOT EXISTS idx_postmortems_user_id ON postmortems(user_id);
+                """)
+                logging.info(
+                    "Created postmortems table (if not exists)."
+                )
+                conn.commit()
+            except Exception as e:
+                logging.warning(f"Error creating postmortems table: {e}")
+                conn.rollback()
+
             # Create indexes for performance
             indexes = [
                 "CREATE INDEX IF NOT EXISTS idx_user_tokens_last_activity ON user_tokens(last_activity);",
@@ -1366,6 +1434,7 @@ def initialize_tables():
                     "user_manual_vms",
                     "incident_alerts",
                     "incident_feedback",
+                    "postmortems",
                 ]:
                     # INSERT policy
                     insert_policy_sql = f"""

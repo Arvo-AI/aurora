@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
-import GitHubProviderIntegration, { GitHubIntegrationService } from "@/components/github-provider-integration";
+import { GitHubIntegrationService } from "@/components/github-provider-integration";
+import { BitbucketIntegrationService } from "@/components/bitbucket-provider-integration";
 import { isSlackEnabled, isOvhEnabled, isScalewayEnabled } from "@/lib/feature-flags";
 import { getEnv } from '@/lib/env';
 import type { ConnectorConfig } from "@/components/connectors/types";
@@ -70,6 +71,9 @@ export function useConnectorStatus(connector: ConnectorConfig, userId: string | 
       }
       checkPagerDutyStatus();
     }
+    if (connector.id === "bitbucket" && userId) {
+      checkBitbucketStatus();
+    }
     if (connector.id === "onprem" && userId) {
       // Don't trust localStorage - always verify with API
       checkVmConfigStatus();
@@ -91,6 +95,18 @@ export function useConnectorStatus(connector: ConnectorConfig, userId: string | 
       // Only dispatch when explicitly disconnecting/connecting (handled in github-auth.tsx and github-settings.tsx)
     } catch (error) {
       console.error("Error checking GitHub status:", error);
+      setIsConnected(false);
+    }
+  };
+
+  const checkBitbucketStatus = async () => {
+    if (!userId) return;
+
+    try {
+      const data = await BitbucketIntegrationService.checkStatus(userId);
+      setIsConnected(data.connected || false);
+    } catch (error) {
+      console.error("Error checking Bitbucket status:", error);
       setIsConnected(false);
     }
   };
@@ -319,6 +335,7 @@ export function useConnectorStatus(connector: ConnectorConfig, userId: string | 
     isLoadingDetails,
     slackStatus,
     checkGitHubStatus,
+    checkBitbucketStatus,
     checkSlackStatus,
     checkPagerDutyStatus,
     checkVmConfigStatus,

@@ -1,5 +1,5 @@
 import { Github, Server } from "lucide-react";
-import { isSlackEnabled, isOvhEnabled, isConfluenceEnabled } from "@/lib/feature-flags";
+import { isSlackEnabled, isOvhEnabled, isConfluenceEnabled, isBitbucketEnabled, isDynatraceEnabled } from "@/lib/feature-flags";
 import type { ConnectorConfig } from "./types";
 
 class ConnectorRegistry {
@@ -77,6 +77,32 @@ class ConnectorRegistry {
       alertsLabel: "View Alerts",
     });
 
+    if (isDynatraceEnabled()) {
+      this.register({
+        id: "dynatrace",
+        name: "Dynatrace",
+        description: "Connect to Dynatrace for full-stack observability. Receive problem notifications and query metrics, logs, and entities for root cause analysis.",
+        iconPath: "/dynatrace.png",
+        iconBgColor: "bg-white dark:bg-white",
+        category: "Monitoring",
+        path: "/dynatrace/auth",
+        storageKey: "isDynatraceConnected",
+        alertsPath: "/dynatrace/alerts",
+        alertsLabel: "View Problems",
+      });
+    }
+
+    this.register({
+      id: "coroot",
+      name: "Coroot",
+      description: "Connect Coroot for full-stack observability: metrics, logs, traces, incidents, service maps, and profiling.",
+      iconPath: "/coroot.svg",
+      iconBgColor: "bg-white dark:bg-white",
+      category: "Monitoring",
+      path: "/coroot/auth",
+      storageKey: "isCorootConnected",
+    });
+
     this.register({
       id: "pagerduty",
       name: "PagerDuty",
@@ -122,6 +148,19 @@ class ConnectorRegistry {
       category: "Development",
       useCustomConnection: true,
     });
+
+    if (isBitbucketEnabled()) {
+      this.register({
+        id: "bitbucket",
+        name: "Bitbucket",
+        description: "Connect to Bitbucket Cloud to browse workspaces, manage repositories, track pull requests, and collaborate on code.",
+        iconPath: "/bitbucket.svg",
+        iconBgColor: "bg-white dark:bg-white",
+        category: "Development",
+        useCustomConnection: true,
+        storageKey: "isBitbucketConnected",
+      });
+    }
 
     if (isSlackEnabled()) {
       this.register({

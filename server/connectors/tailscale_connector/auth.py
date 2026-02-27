@@ -89,10 +89,10 @@ def get_oauth_token(client_id: str, client_secret: str) -> Tuple[bool, Optional[
         return False, None, "Connection timeout. Please try again."
     except requests.exceptions.RequestException as e:
         logger.error(f"Tailscale token request failed: {e}")
-        return False, None, f"Connection error: {str(e)}"
+        return False, None, "Connection error. Please check your network and try again."
     except Exception as e:
         logger.error(f"Unexpected error getting Tailscale token: {e}")
-        return False, None, f"Unexpected error: {str(e)}"
+        return False, None, "An unexpected error occurred. Please try again."
 
 
 def refresh_oauth_token(client_id: str, client_secret: str) -> Tuple[bool, Optional[Dict], Optional[str]]:
@@ -200,10 +200,10 @@ def validate_tailscale_credentials(
         return False, None, "Connection timeout. Please try again."
     except requests.exceptions.RequestException as e:
         logger.error(f"Tailscale API request failed: {e}")
-        return False, None, f"Connection error: {str(e)}"
+        return False, None, "Connection error. Please check your network and try again."
     except Exception as e:
         logger.error(f"Unexpected error validating Tailscale credentials: {e}")
-        return False, None, f"Unexpected error: {str(e)}"
+        return False, None, "An unexpected error occurred. Please try again."
 
 
 def get_user_tailnets(access_token: str) -> Tuple[bool, List[Dict], Optional[str]]:
@@ -277,10 +277,10 @@ def get_user_tailnets(access_token: str) -> Tuple[bool, List[Dict], Optional[str
         return False, [], "Connection timeout"
     except requests.exceptions.RequestException as e:
         logger.error(f"Failed to fetch Tailscale tailnets: {e}")
-        return False, [], str(e)
+        return False, [], "Failed to fetch tailnets"
     except Exception as e:
         logger.error(f"Unexpected error fetching tailnets: {e}")
-        return False, [], str(e)
+        return False, [], "Failed to fetch tailnets"
 
 
 def get_valid_access_token(

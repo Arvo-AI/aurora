@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import html
 import logging
+import re
 from typing import Any, Dict, List, Optional
 from urllib.parse import parse_qs, urlparse
 
@@ -74,6 +76,119 @@ def parse_confluence_page_id(page_url: str) -> Optional[str]:
     return None
 
 
+
+
+def markdown_to_confluence_storage(markdown_text: str) -> str:
+    """Convert basic markdown to Confluence storage format (XHTML).
+
+    Simple regex-based converter for headings, bold, italic, inline code,
+    lists (with checkboxes), and paragraphs.  Not a full markdown parser.
+    """
+    if not markdown_text:
+        return ""
+
+    lines = markdown_text.split("\n")
+    html_parts: List[str] = []
+    i = 0
+
+    while i < len(lines):
+        line = lines[i]
+
+        # Fenced code blocks (```)
+        if re.match(r'^```', line):
+            lang_match = re.match(r'^```(\w+)?', line)
+            lang = lang_match.group(1) if lang_match and lang_match.group(1) else ""
+            i += 1
+            raw_code_lines: List[str] = []
+            while i < len(lines) and not re.match(r'^```\s*$', lines[i]):
+                raw_code_lines.append(lines[i])
+                i += 1
+            i += 1  # skip closing ```
+            if lang:
+                raw_body = "\n".join(raw_code_lines)
+                html_parts.append(
+                    f'<ac:structured-macro ac:name="code">'
+                    f'<ac:parameter ac:name="language">{html.escape(lang)}</ac:parameter>'
+                    f'<ac:plain-text-body><![CDATA[{raw_body}]]></ac:plain-text-body>'
+                    f'</ac:structured-macro>'
+                )
+            else:
+                escaped_body = "\n".join(html.escape(l) for l in raw_code_lines)
+                html_parts.append(f"<pre><code>{escaped_body}</code></pre>")
+            continue
+
+        # Headings
+        heading_match = re.match(r'^(#{1,6})\s+(.+)$', line)
+        if heading_match:
+            level = len(heading_match.group(1))
+            text = heading_match.group(2).strip()
+            html_parts.append(f"<h{level}>{_inline_format(text)}</h{level}>")
+            i += 1
+            continue
+
+        # Fenced code blocks
+        fence_match = re.match(r'^```(\w*)$', line.strip())
+        if fence_match:
+            language = fence_match.group(1)
+            i += 1
+            code_lines: List[str] = []
+            while i < len(lines) and not re.match(r'^```$', lines[i].strip()):
+                code_lines.append(lines[i])
+                i += 1
+            i += 1  # skip closing ```
+            code_body = "\n".join(code_lines)
+            lang_param = (
+                f'<ac:parameter ac:name="language">{language}</ac:parameter>'
+                if language
+                else ""
+            )
+            html_parts.append(
+                f'<ac:structured-macro ac:name="code">'
+                f"{lang_param}"
+                f"<ac:plain-text-body><![CDATA[{code_body}]]></ac:plain-text-body>"
+                f"</ac:structured-macro>"
+            )
+            continue
+
+        # List items (group consecutive)
+        if re.match(r'^[-*]\s+', line):
+            items: List[str] = []
+            while i < len(lines) and re.match(r'^[-*]\s+', lines[i]):
+                item_line = lines[i]
+                checkbox_done = re.match(r'^[-*]\s+\[x\]\s+(.+)$', item_line, re.IGNORECASE)
+                checkbox_open = re.match(r'^[-*]\s+\[\s?\]\s+(.+)$', item_line)
+                if checkbox_done:
+                    items.append(f"<li>\u2611 {_inline_format(checkbox_done.group(1))}</li>")
+                elif checkbox_open:
+                    items.append(f"<li>\u2610 {_inline_format(checkbox_open.group(1))}</li>")
+                else:
+                    item_text = re.sub(r'^[-*]\s+', '', item_line)
+                    items.append(f"<li>{_inline_format(item_text)}</li>")
+                i += 1
+            html_parts.append(f"<ul>{''.join(items)}</ul>")
+            continue
+
+        # Blank lines \u2014 skip
+        if not line.strip():
+            i += 1
+            continue
+
+        # Regular text \u2192 paragraph
+        html_parts.append(f"<p>{_inline_format(line)}</p>")
+        i += 1
+
+    return "\n".join(html_parts)
+
+
+def _inline_format(text: str) -> str:
+    """Apply inline markdown formatting (bold, italic, code)."""
+    text = html.escape(text, quote=False)
+    # Bold must come before italic to handle ** vs *
+    text = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', text)
+    text = re.sub(r'\*(.+?)\*', r'<em>\1</em>', text)
+    text = re.sub(r'`(.+?)`', r'<code>\1</code>', text)
+    return text
+
 class ConfluenceClient:
     """Minimal Confluence API client for user validation and page retrieval."""
 
@@ -127,7 +242,7 @@ class ConfluenceClient:
             response.raise_for_status()
             return response.json()
         except requests.RequestException as exc:
-            logger.error("Confluence API request failed: %s %s (%s)", method, url, exc)
+            logger.error("Confluence API request failed: %s %s (%s)", method, path, type(exc).__name__)
             raise
 
     def _request_v2(
@@ -149,8 +264,27 @@ class ConfluenceClient:
             return response.json()
         except requests.RequestException as exc:
             logger.error(
-                "Confluence v2 API request failed: %s %s (%s)", method, url, exc
+                "Confluence v2 API request failed: %s %s (%s)", method, path, type(exc).__name__
             )
+            raise
+
+    def _request_post(
+        self, path: str, json_body: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Make a POST request with JSON body to the v1 API."""
+        url = f"{self.api_base}{path}"
+        headers = {**self.headers, "Content-Type": "application/json"}
+        try:
+            response = requests.post(
+                url,
+                headers=headers,
+                json=json_body,
+                timeout=self.timeout,
+            )
+            response.raise_for_status()
+            return response.json()
+        except requests.RequestException as exc:
+            logger.error("Confluence API POST failed at path %s: %s", path, type(exc).__name__)
             raise
 
     def get_current_user(self) -> Dict[str, Any]:
@@ -211,3 +345,52 @@ class ConfluenceClient:
         if self.api_v2_base:
             return self._request_v2("GET", "/spaces", params={"limit": limit})
         return self._request("GET", "/space", params={"limit": limit})
+
+    def create_page(
+        self,
+        space_key: str,
+        title: str,
+        content_html: str,
+        parent_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Create a Confluence page using the v1 REST API.
+
+        Uses ``/rest/api/content`` (v1) which works for both Cloud and
+        Data Center, regardless of OAuth or PAT auth type.
+
+        Args:
+            space_key: The Confluence space key (e.g. ``ENG``).
+            title: Page title.
+            content_html: Page body in Confluence storage format (XHTML).
+            parent_id: Optional parent page ID to nest under.
+
+        Returns:
+            Dict with ``id`` and ``url`` keys for the created page,
+            plus ``_raw`` containing the full API response.
+        """
+        body: Dict[str, Any] = {
+            "type": "page",
+            "title": title,
+            "space": {"key": space_key},
+            "body": {
+                "storage": {
+                    "value": content_html,
+                    "representation": "storage",
+                }
+            },
+        }
+        if parent_id:
+            body["ancestors"] = [{"id": parent_id}]
+
+        result = self._request_post("/content", body)
+
+        # Extract page URL from response
+        page_id = result.get("id", "")
+        web_link = ""
+        links = result.get("_links", {})
+        if "webui" in links:
+            base = links.get("base", self.base_url)
+            web_link = f"{base}{links['webui']}"
+
+        logger.info("Created Confluence page")
+        return {"id": page_id, "url": web_link, "_raw": result}

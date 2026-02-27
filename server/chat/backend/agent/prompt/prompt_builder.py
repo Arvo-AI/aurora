@@ -25,6 +25,7 @@ class PromptSegments:
     model_overlay: str
     failure_recovery: str
     github_context: str
+    bitbucket_context: str = ""
     manual_vm_access: str = ""  # Manual VM access hints with managed keys
     kubectl_onprem: str = ""
     background_mode: str = ""  # Background chat autonomous operation instructions
@@ -588,6 +589,82 @@ def build_github_context_segment(user_id: Optional[str]) -> str:
     except Exception as e:
         import logging
         logging.warning(f"Error building GitHub context segment: {e}")
+        return ""
+
+
+def build_bitbucket_context_segment(user_id: Optional[str]) -> str:
+    """Build Bitbucket context segment with connected account and selected repo info."""
+    import logging
+
+    if not user_id:
+        return ""
+
+    try:
+        from utils.auth.stateless_auth import get_credentials_from_db
+
+        parts: List[str] = []
+
+        bb_creds = get_credentials_from_db(user_id, "bitbucket")
+        if not bb_creds:
+            return ""
+
+        username = bb_creds.get("username", "")
+        display_name = bb_creds.get("display_name", username)
+        if not username and not display_name:
+            return ""
+
+        parts.append("BITBUCKET INTEGRATION CONTEXT:\n")
+        parts.append(f"- Connected Bitbucket account: {display_name or username}\n")
+
+        from chat.backend.agent.tools.bitbucket.utils import _extract_field
+
+        selection = get_credentials_from_db(user_id, "bitbucket_workspace_selection") or {}
+
+        ws_slug = _extract_field(selection.get("workspace"), "slug")
+        repo_slug = _extract_field(selection.get("repository"), "slug")
+        repo_name = _extract_field(selection.get("repository"), "name", default=repo_slug)
+        branch_name = _extract_field(selection.get("branch"), "name")
+
+        if ws_slug:
+            parts.append(f"- Selected workspace: {ws_slug}\n")
+        if repo_slug:
+            parts.append(f"- Selected repository: {repo_name or repo_slug}\n")
+            parts.append(f"- Repository slug: {repo_slug}\n")
+        if branch_name:
+            parts.append(f"- Selected branch: {branch_name}\n")
+
+        parts.append("\n")
+        parts.append("BITBUCKET NATIVE TOOLS AVAILABLE (5 tools, 41 actions):\n\n")
+
+        parts.append("**bitbucket_repos** — Repository, File & Code Operations:\n")
+        parts.append("- list_repos, get_repo, get_file_contents, create_or_update_file, delete_file\n")
+        parts.append("- get_directory_tree, search_code, list_workspaces, get_workspace\n\n")
+
+        parts.append("**bitbucket_branches** — Branch & Commit Operations:\n")
+        parts.append("- list_branches, create_branch, delete_branch, list_commits, get_commit, get_diff, compare\n\n")
+
+        parts.append("**bitbucket_pull_requests** — Pull Request Operations:\n")
+        parts.append("- list_prs, get_pr, create_pr, update_pr, merge_pr, approve_pr, unapprove_pr, decline_pr\n")
+        parts.append("- list_pr_comments, add_pr_comment, get_pr_diff, get_pr_activity\n\n")
+
+        parts.append("**bitbucket_issues** — Issue Operations:\n")
+        parts.append("- list_issues, get_issue, create_issue, update_issue, list_issue_comments, add_issue_comment\n\n")
+
+        parts.append("**bitbucket_pipelines** — CI/CD Pipeline Operations:\n")
+        parts.append("- list_pipelines, get_pipeline, trigger_pipeline, stop_pipeline\n")
+        parts.append("- list_pipeline_steps, get_step_log, get_pipeline_step\n\n")
+
+        parts.append("BITBUCKET TOOL USAGE RULES:\n")
+        parts.append("- When user asks about PRs, issues, repos, or branches WITHOUT specifying a repository, use the selected workspace/repo above.\n")
+        parts.append("- Workspace and repo_slug auto-resolve from saved selection if not passed explicitly.\n")
+        parts.append("- Destructive actions (delete branch, delete file, merge PR, decline PR, trigger/stop pipeline) require user confirmation and will prompt automatically.\n")
+        parts.append("- Non-destructive operations (create branch, create PR, update PR, approve, comment, create issue) proceed without extra confirmation.\n")
+        parts.append("- If no repository is selected and user doesn't specify one, ask which repository they want to work with.\n")
+
+        return "".join(parts)
+
+    except Exception as e:
+        logging.warning(f"Error building Bitbucket context segment: {e}")
         return ""
 
 
@@ -1430,6 +1507,21 @@ def build_background_mode_segment(state: Optional[Any]) -> str:
             "After Splunk analysis, correlate with cloud resources if providers connected.",
         ])
 
+    # Dynatrace tools (if connected)
+    if integrations.get('dynatrace'):
+        parts.extend([
+            "",
+            "DYNATRACE INVESTIGATION:",
+            "IMPORTANT: Dynatrace is a REMOTE service. Use ONLY the query_dynatrace API tool.",
+            "Usage: query_dynatrace(resource_type=TYPE, query=SELECTOR, time_from=START)",
+            "Resource types:",
+            "1. 'problems' - Active/recent problems. query=problem selector e.g. status(\"open\")",
+            "2. 'entities' - Monitored hosts/services/processes. query=entity selector e.g. type(\"HOST\")",
+            "3. 'logs' - Log entries. query=search string",
+            "4. 'metrics' - Metric time series. query=metric selector e.g. builtin:host.cpu.usage",
+            "Start with problems to understand the issue, then drill into entities and logs.",
+        ])
+
     # GitHub tools (if connected)
     if integrations.get('github'):
         parts.extend([
@@ -1464,6 +1556,66 @@ def build_background_mode_segment(state: Optional[Any]) -> str:
             "",
             "Workflow: search first, then fetch promising pages for detailed procedures.",
             "Cross-reference Confluence findings with live infrastructure state.",
+        ])
+
+    # Coroot observability (if connected)
+    if integrations.get('coroot'):
+        parts.extend([
+            "",
+            "COROOT OBSERVABILITY (CONNECTED - USE THESE TOOLS):",
+            "Coroot is an eBPF-powered observability platform. Its node agent instruments at the KERNEL level,",
+            "capturing data that applications cannot self-report and requires NO code changes or SDK integration.",
+            "",
+            "WHAT eBPF GIVES YOU (data invisible to application logs):",
+            "- TCP connections: every connect/accept/close between services, including failed connects and retransmissions",
+            "- Network latency: actual round-trip time measured at the kernel, not application-reported",
+            "- DNS queries: every resolution with latency, NXDOMAIN errors, and server failures",
+            "- Disk I/O: per-process read/write latency and throughput at the block device level",
+            "- Container resources: CPU usage, memory RSS, OOM kills, throttling — from cgroups",
+            "- L7 protocol parsing: HTTP, PostgreSQL, MySQL, Redis, MongoDB, Memcached request/response metrics",
+            "  extracted from TCP streams without application instrumentation",
+            "- Service map: automatically discovered from observed TCP connections — not configured manually",
+            "",
+            "This means Coroot sees issues BEFORE they appear in application logs:",
+            "- A service failing to connect to a dependency (TCP connect failures)",
+            "- Network packet loss and retransmissions between pods/nodes",
+            "- DNS resolution failures causing timeouts",
+            "- Disk I/O saturation causing slow queries",
+            "- OOM kills that happen before the app can log anything",
+            "- Container CPU throttling invisible to the application",
+            "",
+            "INVESTIGATION FLOW:",
+            "1. coroot_get_incidents(lookback_hours=24) — List incidents with RCA summaries, root cause, and fixes",
+            "2. coroot_get_overview_logs(severity='Error', limit=50) — Search all logs cluster-wide for errors",
+            "   (includes Kubernetes Events: OOMKilled, Evicted, CrashLoopBackOff, FailedScheduling)",
+            "3. coroot_get_incident_detail(incident_key='KEY') — Full incident detail with propagation map",
+            "4. coroot_get_app_detail(app_id='ID') — Audit reports for affected app (35+ health checks)",
+            "5. coroot_get_app_logs(app_id='ID', severity='Error') — Error logs with trace correlation",
+            "6. coroot_get_traces(service_name='svc', status_error=True) — Error traces across services",
+            "7. coroot_get_traces(trace_id='ID') — Full trace tree for a specific request",
+            "",
+            "PROACTIVE HEALTH SCAN:",
+            "1. coroot_get_applications() — All apps sorted by status (CRITICAL first)",
+            "2. coroot_get_service_map() — Auto-discovered dependencies from eBPF TCP tracking",
+            "3. coroot_get_deployments(lookback_hours=24) — Correlate deploys with failures",
+            "4. coroot_get_risks() — Security and availability risks (single-instance, single-AZ, exposed ports)",
+            "",
+            "NODE INVESTIGATION:",
+            "1. coroot_get_nodes() — List all nodes with health status",
+            "2. coroot_get_node_detail(node_name='NODE') — Full audit (CPU, memory, disk, network per-interface)",
+            "",
+            "COST INVESTIGATION:",
+            "1. coroot_get_costs(lookback_hours=24) — Cost breakdown per node/app + right-sizing recommendations",
+            "   (cost spikes correlate with autoscaling issues, memory leaks, retry storms)",
+            "",
+            "METRICS (PromQL via Coroot — all collected by eBPF, no exporters needed):",
+            "coroot_query_metrics(promql='rate(container_resources_cpu_usage_seconds_total[5m])')",
+            "Key queries: CPU, memory RSS, OOM kills, HTTP error rate, TCP connect failures,",
+            "  TCP retransmissions, network RTT, DNS latency, DB query latency, container restarts",
+            "",
+            "Status codes: 0=UNKNOWN, 1=OK, 2=INFO, 3=WARNING, 4=CRITICAL",
+            "Check Coroot FIRST for any infrastructure-layer issue — it sees kernel-level events that",
+            "application logs and cloud provider metrics cannot capture.",
         ])
 
     # Knowledge Base search (always available for authenticated users)
@@ -1643,6 +1795,11 @@ def build_prompt_segments(provider_preference: Optional[Any], mode: Optional[str
     if state and hasattr(state, 'user_id'):
         github_context = build_github_context_segment(state.user_id)
 
+    # Build Bitbucket context for authenticated users with Bitbucket connected
+    bitbucket_context = ""
+    if state and hasattr(state, 'user_id'):
+        bitbucket_context = build_bitbucket_context_segment(state.user_id)
+
     # Build kubectl on-prem context for all users
     kubectl_onprem = ""
     if state and hasattr(state, 'user_id'):
@@ -1666,6 +1823,7 @@ def build_prompt_segments(provider_preference: Optional[Any], mode: Optional[str
         failure_recovery=failure_recovery,
         background_mode=background_mode,
         github_context=github_context,
+        bitbucket_context=bitbucket_context,
         manual_vm_access=manual_vm_access,
         kubectl_onprem=kubectl_onprem,
         knowledge_base_memory=knowledge_base_memory,
@@ -1690,6 +1848,8 @@ def assemble_system_prompt(segments: PromptSegments) -> str: #main prompt builde
         parts.append(segments.manual_vm_access)
     if segments.github_context:
         parts.append(segments.github_context)
+    if segments.bitbucket_context:
+        parts.append(segments.bitbucket_context)
     if segments.kubectl_onprem:
         parts.append(segments.kubectl_onprem)
     if segments.prerequisite_checks:
@@ -1747,6 +1907,14 @@ def register_prompt_cache_breakpoints(
         pcm.register_segment(
             segment_name="github_context",
             content=segments.github_context,
+            provider=provider,
+            tenant_id=tenant_id,
+            ttl_s=PREFIX_CACHE_EPHEMERAL_TTL,
+        )
+    if segments.bitbucket_context:
+        pcm.register_segment(
+            segment_name="bitbucket_context",
+            content=segments.bitbucket_context,
             provider=provider,
             tenant_id=tenant_id,
             ttl_s=PREFIX_CACHE_EPHEMERAL_TTL,
