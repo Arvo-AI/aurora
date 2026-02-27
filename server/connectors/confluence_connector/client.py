@@ -126,6 +126,30 @@ def markdown_to_confluence_storage(markdown_text: str) -> str:
             i += 1
             continue
 
+        # Fenced code blocks
+        fence_match = re.match(r'^```(\w*)$', line.strip())
+        if fence_match:
+            language = fence_match.group(1)
+            i += 1
+            code_lines: List[str] = []
+            while i < len(lines) and not re.match(r'^```$', lines[i].strip()):
+                code_lines.append(lines[i])
+                i += 1
+            i += 1  # skip closing ```
+            code_body = "\n".join(code_lines)
+            lang_param = (
+                f'<ac:parameter ac:name="language">{language}</ac:parameter>'
+                if language
+                else ""
+            )
+            html_parts.append(
+                f'<ac:structured-macro ac:name="code">'
+                f"{lang_param}"
+                f"<ac:plain-text-body><![CDATA[{code_body}]]></ac:plain-text-body>"
+                f"</ac:structured-macro>"
+            )
+            continue
+
         # List items (group consecutive)
         if re.match(r'^[-*]\s+', line):
             items: List[str] = []
