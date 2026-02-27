@@ -148,6 +148,14 @@ const logos = {
       onError={(e) => console.error('Failed to load Dynatrace logo:', e)}
     />
   ),
+  thousandeyes: (
+    <img
+      src="/thousandeyes.svg"
+      className="w-4 h-4 min-w-4 min-h-4 object-contain"
+      alt="ThousandEyes"
+      onError={(e) => console.error('Failed to load ThousandEyes logo:', e)}
+    />
+  ),
   bitbucket: (
     <img
       src="/bitbucket.svg"
@@ -239,6 +247,11 @@ const getLogoForCommand = (command: string | any, toolName: string, provider?: s
 
   if (tool.includes('dynatrace') || tool === 'query_dynatrace') {
     return 'dynatrace'
+  }
+
+  // ThousandEyes tools
+  if (tool.includes('thousandeyes')) {
+    return 'thousandeyes'
   }
 
   // Bitbucket tools

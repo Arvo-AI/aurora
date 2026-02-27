@@ -1,5 +1,5 @@
 import { Github, Server } from "lucide-react";
-import { isSlackEnabled, isOvhEnabled, isConfluenceEnabled, isBitbucketEnabled, isDynatraceEnabled } from "@/lib/feature-flags";
+import { isSlackEnabled, isOvhEnabled, isConfluenceEnabled, isBitbucketEnabled, isDynatraceEnabled, isThousandEyesEnabled } from "@/lib/feature-flags";
 import type { ConnectorConfig } from "./types";
 
 class ConnectorRegistry {
@@ -102,6 +102,19 @@ class ConnectorRegistry {
       path: "/coroot/auth",
       storageKey: "isCorootConnected",
     });
+
+    if (isThousandEyesEnabled()) {
+      this.register({
+        id: "thousandeyes",
+        name: "ThousandEyes",
+        description: "Connect Cisco ThousandEyes for network intelligence: tests, alerts, path visualization, BGP monitoring, and Internet Insights outage detection.",
+        iconPath: "/thousandeyes.svg",
+        iconBgColor: "bg-white dark:bg-white",
+        category: "Monitoring",
+        path: "/thousandeyes/auth",
+        storageKey: "isThousandEyesConnected",
+      });
+    }
 
     this.register({
       id: "pagerduty",
