@@ -6,6 +6,8 @@ const publicRoutes = [
   "/sign-in",
   "/sign-up",
   "/terms",
+  "/api/auth/register",   // Flask registration endpoint
+  "/api/auth/login",      // Flask login endpoint
   "/api/auth/callback",  // NextAuth callbacks
   "/api/auth/signin",     // NextAuth sign-in
   "/api/auth/signout",    // NextAuth sign-out
