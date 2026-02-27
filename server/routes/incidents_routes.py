@@ -78,6 +78,9 @@ def _build_source_url(source_type: str, user_id: str) -> str:
             creds = get_token_data(user_id, "dynatrace") if not client_id else None
             env_url = (creds or {}).get("environment_url", "") if not client_id else client_id
             return env_url or ""
+        elif source_type in ("jenkins", "cloudbees"):
+            creds = get_token_data(user_id, source_type)
+            return (creds or {}).get("base_url", "")
     except Exception as e:
         logger.error(f"[INCIDENTS] Failed to build source URL for {source_type}: {e}")
     return ""
@@ -454,7 +457,7 @@ def get_incident(incident_id: str):
                             "[INCIDENTS] Skipping payload fetch for splunk alert_id: %s",
                             source_alert_id,
                         )
-                elif source_type == "jenkins":
+                elif source_type == "jenkins" or source_type == "cloudbees":
                     try:
                         alert_id_int = int(source_alert_id)
                         cursor.execute(
@@ -465,13 +468,15 @@ def get_incident(incident_id: str):
                         if alert_row and alert_row[0] is not None:
                             raw_payload = alert_row[0]
                             logger.debug(
-                                "[INCIDENTS] Found Jenkins payload: type=%s, has_data=%s",
+                                "[INCIDENTS] Found %s payload: type=%s, has_data=%s",
+                                source_type,
                                 type(raw_payload).__name__,
                                 bool(raw_payload),
                             )
                     except (ValueError, TypeError):
                         logger.debug(
-                            "[INCIDENTS] Skipping payload fetch for jenkins alert_id: %s",
+                            "[INCIDENTS] Skipping payload fetch for %s alert_id: %s",
+                            source_type,
                             source_alert_id,
                         )
                 elif source_type == "dynatrace":

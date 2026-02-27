@@ -149,7 +149,7 @@ def _action_recent_deployments(user_id: str, service: Optional[str], hours: int)
                 "build_number": r[4], "build_url": r[5], "commit_sha": r[6],
                 "branch": r[7], "repository": r[8], "deployer": r[9],
                 "duration_ms": r[10], "job_name": r[11], "trace_id": r[12],
-                "received_at": r[13].isoformat() if r[13] else None,
+                "webhook_received_at": r[13].isoformat() if r[13] else None,
             })
         return json.dumps({"deployments": deployments, "count": len(deployments)}, default=str)
     except Exception:

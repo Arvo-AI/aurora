@@ -446,7 +446,7 @@ def _get_recent_jenkins_deployments(user_id: str, service: str = "", lookback_mi
                         "service": r[0], "environment": r[1], "result": r[2],
                         "build_number": r[3], "build_url": r[4], "commit_sha": r[5] or "",
                         "branch": r[6], "deployer": r[7], "trace_id": r[8],
-                        "received_at": r[9].isoformat() if r[9] else None,
+                        "webhook_received_at": r[9].isoformat() if r[9] else None,
                     }
                     for r in rows
                 ]
@@ -628,11 +628,11 @@ def build_rca_prompt(
         if recent_deploys:
             prompt_parts.append("### RECENT DEPLOYMENTS (potential change correlation):")
             for dep in recent_deploys:
-                ts = dep.get("received_at", "?")
+                ts = dep.get("webhook_received_at", "?")
                 commit_sha = dep.get('commit_sha') or '?'
                 prompt_parts.append(
                     f"- [{dep['result']}] {dep['service']} → {dep.get('environment', '?')} "
-                    f"at {ts} (commit: {commit_sha[:8]}, "
+                    f"received {ts} (commit: {commit_sha[:8]}, "
                     f"build: #{dep.get('build_number', '?')})"
                 )
                 if dep.get("trace_id"):
@@ -671,11 +671,11 @@ def build_rca_prompt(
         if recent_deploys:
             prompt_parts.append("### RECENT DEPLOYMENTS (potential change correlation):")
             for dep in recent_deploys:
-                ts = dep.get("received_at", "?")
+                ts = dep.get("webhook_received_at", "?")
                 commit_sha = dep.get('commit_sha') or '?'
                 prompt_parts.append(
                     f"- [{dep['result']}] {dep['service']} → {dep.get('environment', '?')} "
-                    f"at {ts} (commit: {commit_sha[:8]}, "
+                    f"received {ts} (commit: {commit_sha[:8]}, "
                     f"build: #{dep.get('build_number', '?')})"
                 )
                 if dep.get("trace_id"):
