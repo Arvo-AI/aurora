@@ -153,10 +153,10 @@ jobs:
             sudo sed -i 's|^FRONTEND_URL=.*|FRONTEND_URL=${{ env.VM2_FRONTEND_URL }}|' .env
             sudo sed -i 's|^NEXT_PUBLIC_BACKEND_URL=.*|NEXT_PUBLIC_BACKEND_URL=${{ env.VM2_BACKEND_URL }}|' .env
             sudo sed -i 's|^NEXT_PUBLIC_WEBSOCKET_URL=.*|NEXT_PUBLIC_WEBSOCKET_URL=${{ env.VM2_WEBSOCKET_URL }}|' .env
-            sudo sed -i 's|^NEXT_PUBLIC_ENABLE_BITBUCKET=.*|NEXT_PUBLIC_ENABLE_BITBUCKET=${{ env.BB_ENABLE_BITBUCKET }}|' .env || echo 'NEXT_PUBLIC_ENABLE_BITBUCKET=${{ env.BB_ENABLE_BITBUCKET }}' | sudo tee -a .env
-            sudo sed -i 's|^BB_OAUTH_CLIENT_ID=.*|BB_OAUTH_CLIENT_ID=${{ env.BB_OAUTH_CLIENT_ID }}|' .env || echo 'BB_OAUTH_CLIENT_ID=${{ env.BB_OAUTH_CLIENT_ID }}' | sudo tee -a .env
-            sudo sed -i 's|^BB_OAUTH_CLIENT_SECRET=.*|BB_OAUTH_CLIENT_SECRET=${{ env.BB_OAUTH_CLIENT_SECRET }}|' .env || echo 'BB_OAUTH_CLIENT_SECRET=${{ env.BB_OAUTH_CLIENT_SECRET }}' | sudo tee -a .env
-            sudo sed -i 's|^NEXT_PUBLIC_ENABLE_DYNATRACE=.*|NEXT_PUBLIC_ENABLE_DYNATRACE=${{ env.ENABLE_DYNATRACE }}|' .env || echo 'NEXT_PUBLIC_ENABLE_DYNATRACE=${{ env.ENABLE_DYNATRACE }}' | sudo tee -a .env
+            grep -q '^NEXT_PUBLIC_ENABLE_BITBUCKET=' .env && sudo sed -i 's|^NEXT_PUBLIC_ENABLE_BITBUCKET=.*|NEXT_PUBLIC_ENABLE_BITBUCKET=${{ env.BB_ENABLE_BITBUCKET }}|' .env || echo 'NEXT_PUBLIC_ENABLE_BITBUCKET=${{ env.BB_ENABLE_BITBUCKET }}' | sudo tee -a .env
+            grep -q '^BB_OAUTH_CLIENT_ID=' .env && sudo sed -i 's|^BB_OAUTH_CLIENT_ID=.*|BB_OAUTH_CLIENT_ID=${{ env.BB_OAUTH_CLIENT_ID }}|' .env || echo 'BB_OAUTH_CLIENT_ID=${{ env.BB_OAUTH_CLIENT_ID }}' | sudo tee -a .env
+            grep -q '^BB_OAUTH_CLIENT_SECRET=' .env && sudo sed -i 's|^BB_OAUTH_CLIENT_SECRET=.*|BB_OAUTH_CLIENT_SECRET=${{ env.BB_OAUTH_CLIENT_SECRET }}|' .env || echo 'BB_OAUTH_CLIENT_SECRET=${{ env.BB_OAUTH_CLIENT_SECRET }}' | sudo tee -a .env
+            grep -q '^NEXT_PUBLIC_ENABLE_DYNATRACE=' .env && sudo sed -i 's|^NEXT_PUBLIC_ENABLE_DYNATRACE=.*|NEXT_PUBLIC_ENABLE_DYNATRACE=${{ env.ENABLE_DYNATRACE }}|' .env || echo 'NEXT_PUBLIC_ENABLE_DYNATRACE=${{ env.ENABLE_DYNATRACE }}' | sudo tee -a .env
 
             sudo docker compose -f docker-compose.prod-local.yml build frontend aurora-server
             sudo docker compose -f docker-compose.prod-local.yml up -d --remove-orphans
@@ -286,10 +286,10 @@ jobs:
             sudo sed -i 's|^FRONTEND_URL=.*|FRONTEND_URL=${{ env.VM3_FRONTEND_URL }}|' .env
             sudo sed -i 's|^NEXT_PUBLIC_BACKEND_URL=.*|NEXT_PUBLIC_BACKEND_URL=${{ env.VM3_BACKEND_URL }}|' .env
             sudo sed -i 's|^NEXT_PUBLIC_WEBSOCKET_URL=.*|NEXT_PUBLIC_WEBSOCKET_URL=${{ env.VM3_WEBSOCKET_URL }}|' .env
-            sudo sed -i 's|^NEXT_PUBLIC_ENABLE_BITBUCKET=.*|NEXT_PUBLIC_ENABLE_BITBUCKET=${{ env.BB_ENABLE_BITBUCKET }}|' .env || echo 'NEXT_PUBLIC_ENABLE_BITBUCKET=${{ env.BB_ENABLE_BITBUCKET }}' | sudo tee -a .env
-            sudo sed -i 's|^BB_OAUTH_CLIENT_ID=.*|BB_OAUTH_CLIENT_ID=${{ env.BB_OAUTH_CLIENT_ID }}|' .env || echo 'BB_OAUTH_CLIENT_ID=${{ env.BB_OAUTH_CLIENT_ID }}' | sudo tee -a .env
-            sudo sed -i 's|^BB_OAUTH_CLIENT_SECRET=.*|BB_OAUTH_CLIENT_SECRET=${{ env.BB_OAUTH_CLIENT_SECRET }}|' .env || echo 'BB_OAUTH_CLIENT_SECRET=${{ env.BB_OAUTH_CLIENT_SECRET }}' | sudo tee -a .env
-            sudo sed -i 's|^NEXT_PUBLIC_ENABLE_DYNATRACE=.*|NEXT_PUBLIC_ENABLE_DYNATRACE=${{ env.ENABLE_DYNATRACE }}|' .env || echo 'NEXT_PUBLIC_ENABLE_DYNATRACE=${{ env.ENABLE_DYNATRACE }}' | sudo tee -a .env
+            grep -q '^NEXT_PUBLIC_ENABLE_BITBUCKET=' .env && sudo sed -i 's|^NEXT_PUBLIC_ENABLE_BITBUCKET=.*|NEXT_PUBLIC_ENABLE_BITBUCKET=${{ env.BB_ENABLE_BITBUCKET }}|' .env || echo 'NEXT_PUBLIC_ENABLE_BITBUCKET=${{ env.BB_ENABLE_BITBUCKET }}' | sudo tee -a .env
+            grep -q '^BB_OAUTH_CLIENT_ID=' .env && sudo sed -i 's|^BB_OAUTH_CLIENT_ID=.*|BB_OAUTH_CLIENT_ID=${{ env.BB_OAUTH_CLIENT_ID }}|' .env || echo 'BB_OAUTH_CLIENT_ID=${{ env.BB_OAUTH_CLIENT_ID }}' | sudo tee -a .env
+            grep -q '^BB_OAUTH_CLIENT_SECRET=' .env && sudo sed -i 's|^BB_OAUTH_CLIENT_SECRET=.*|BB_OAUTH_CLIENT_SECRET=${{ env.BB_OAUTH_CLIENT_SECRET }}|' .env || echo 'BB_OAUTH_CLIENT_SECRET=${{ env.BB_OAUTH_CLIENT_SECRET }}' | sudo tee -a .env
+            grep -q '^NEXT_PUBLIC_ENABLE_DYNATRACE=' .env && sudo sed -i 's|^NEXT_PUBLIC_ENABLE_DYNATRACE=.*|NEXT_PUBLIC_ENABLE_DYNATRACE=${{ env.ENABLE_DYNATRACE }}|' .env || echo 'NEXT_PUBLIC_ENABLE_DYNATRACE=${{ env.ENABLE_DYNATRACE }}' | sudo tee -a .env
 
             sudo docker compose -f docker-compose.prod-local.yml build frontend aurora-server
             sudo docker compose -f docker-compose.prod-local.yml up -d --remove-orphans
