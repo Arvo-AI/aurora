@@ -139,7 +139,7 @@ def status():
 
     success, data, error = client.get_server_info()
     if not success:
-        logger.warning("[CLOUDBEES] Status check failed for user %s: %s", user_id, error)
+        logger.warning("[CLOUDBEES] Status check failed for user %s", user_id)
         return jsonify({"connected": False, "error": "Failed to validate stored CloudBees CI credentials"})
 
     include_extras = request.args.get("full", "").lower() in ("true", "1", "yes")
@@ -331,12 +331,9 @@ def get_webhook_url():
     if not user_id:
         return jsonify({"error": "User authentication required"}), 401
 
-    backend_url = (
-        os.getenv("NEXT_PUBLIC_BACKEND_URL")
-        or os.getenv("BACKEND_URL")
-        or os.getenv("AURORA_BACKEND_URL")
-        or request.host_url
-    ).rstrip("/")
+    backend_url = os.getenv("BACKEND_URL", "").rstrip("/")
+    if not backend_url:
+        backend_url = request.host_url.rstrip("/")
 
     webhook_url = f"{backend_url}/cloudbees/webhook/{user_id}"
 
