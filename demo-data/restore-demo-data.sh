@@ -97,6 +97,24 @@ if [ -f "$SCRIPT_DIR/demo-incident-coroot.sql" ]; then
     fi
 fi
 
+if [ -f "$SCRIPT_DIR/cloudbees.sql" ]; then
+    echo "       Importing demo incident (CloudBees)..."
+    if psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" < "$SCRIPT_DIR/cloudbees.sql" >/dev/null 2>&1; then
+        echo "       Done"
+    else
+        echo "       WARNING: Demo incident (CloudBees) import had errors"
+    fi
+fi
+
+if [ -f "$SCRIPT_DIR/demo-incident-jenkins-bb.sql" ]; then
+    echo "       Importing demo incident (Jenkins+Bitbucket)..."
+    if psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" < "$SCRIPT_DIR/demo-incident-jenkins-bb.sql" >/dev/null 2>&1; then
+        echo "       Done"
+    else
+        echo "       WARNING: Demo incident (Jenkins+Bitbucket) import had errors"
+    fi
+fi
+
 # Extract Weaviate data
 echo "[2/3] Restoring Weaviate vector data..."
 if [ -d "/var/lib/weaviate" ]; then
