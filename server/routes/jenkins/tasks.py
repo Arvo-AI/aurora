@@ -113,8 +113,8 @@ def process_jenkins_deployment(
                         """INSERT INTO jenkins_deployment_events
                            (user_id, event_type, service, environment, result, build_number,
                             build_url, commit_sha, branch, repository, deployer, duration_ms,
-                            job_name, trace_id, span_id, payload, received_at)
-                           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            job_name, trace_id, span_id, payload, received_at, provider)
+                           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                            ON CONFLICT (user_id, COALESCE(job_name, ''), COALESCE(build_number, -1)) DO UPDATE
                            SET result = EXCLUDED.result,
                                payload = EXCLUDED.payload,
@@ -130,6 +130,7 @@ def process_jenkins_deployment(
                             trace_id if trace_id else None,
                             span_id if span_id else None,
                             json.dumps(payload), received_at,
+                            source,
                         ),
                     )
                     row = cursor.fetchone()

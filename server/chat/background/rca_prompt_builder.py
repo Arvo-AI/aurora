@@ -407,39 +407,38 @@ def _has_cloudbees_connected(user_id: str) -> bool:
         return False
 
 
-def _get_recent_jenkins_deployments(user_id: str, service: str = "", lookback_minutes: int = 60) -> List[Dict[str, Any]]:
+def _get_recent_jenkins_deployments(user_id: str, service: str = "", lookback_minutes: int = 60, provider: str = "") -> List[Dict[str, Any]]:
     """Query jenkins_deployment_events for recent deployments matching a service.
 
     Used to inject deployment context into ANY RCA prompt (not just Jenkins-sourced).
     """
     if not user_id:
         return []
-    # Validate lookback_minutes to prevent injection
     lookback_minutes = max(1, min(int(lookback_minutes), 10080))  # 1 min to 7 days
     try:
         from utils.db.connection_pool import db_pool
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                conditions = ["user_id = %s", "received_at >= NOW() - make_interval(mins => %s)"]
+                params: list = [user_id, lookback_minutes]
+
                 if service and service != "unknown":
-                    cursor.execute(
-                        """SELECT service, environment, result, build_number, build_url,
-                                  commit_sha, branch, deployer, trace_id, received_at
-                           FROM jenkins_deployment_events
-                           WHERE user_id = %s AND service = %s
-                                 AND received_at >= NOW() - make_interval(mins => %s)
-                           ORDER BY received_at DESC LIMIT 5""",
-                        (user_id, service, lookback_minutes),
-                    )
-                else:
-                    cursor.execute(
-                        """SELECT service, environment, result, build_number, build_url,
-                                  commit_sha, branch, deployer, trace_id, received_at
-                           FROM jenkins_deployment_events
-                           WHERE user_id = %s
-                                 AND received_at >= NOW() - make_interval(mins => %s)
-                           ORDER BY received_at DESC LIMIT 5""",
-                        (user_id, lookback_minutes),
-                    )
+                    conditions.append("service = %s")
+                    params.insert(1, service)
+
+                if provider:
+                    conditions.append("provider = %s")
+                    params.append(provider)
+
+                where = " AND ".join(conditions)
+                cursor.execute(
+                    f"""SELECT service, environment, result, build_number, build_url,
+                              commit_sha, branch, deployer, trace_id, received_at
+                       FROM jenkins_deployment_events
+                       WHERE {where}
+                       ORDER BY received_at DESC LIMIT 5""",
+                    tuple(params),
+                )
                 rows = cursor.fetchall()
                 return [
                     {
@@ -617,7 +616,7 @@ def build_rca_prompt(
         if source == 'netdata':
             alert_service = alert_details.get('host', '') or ''
 
-        recent_deploys = _get_recent_jenkins_deployments(user_id, alert_service)
+        recent_deploys = _get_recent_jenkins_deployments(user_id, alert_service, provider="jenkins")
         prompt_parts.extend([
             "",
             "## JENKINS CI/CD INTEGRATION:",
@@ -660,7 +659,7 @@ def build_rca_prompt(
         if source == 'netdata':
             alert_service = alert_details.get('host', '') or ''
 
-        recent_deploys = _get_recent_jenkins_deployments(user_id, alert_service)
+        recent_deploys = _get_recent_jenkins_deployments(user_id, alert_service, provider="cloudbees")
         prompt_parts.extend([
             "",
             "## CLOUDBEES CI/CD INTEGRATION:",
