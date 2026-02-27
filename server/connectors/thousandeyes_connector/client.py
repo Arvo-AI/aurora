@@ -86,6 +86,7 @@ def get_thousandeyes_client(
         client = ThousandEyesClient(
             api_token=api_token,
             account_group_id=account_group_id,
+            user_id=user_id,
         )
         # Validate the token by fetching account info
         try:
@@ -140,9 +141,11 @@ class ThousandEyesClient:
         self,
         api_token: str,
         account_group_id: Optional[str] = None,
+        user_id: Optional[str] = None,
     ):
         self.api_token = api_token
         self.account_group_id = account_group_id
+        self._user_id = user_id
         self._session = requests.Session()
         self._session.headers.update({
             "Authorization": f"Bearer {api_token}",
@@ -174,6 +177,8 @@ class ThousandEyesClient:
             raise ThousandEyesAPIError("Unable to reach ThousandEyes API") from exc
 
         if resp.status_code == 401:
+            if self._user_id:
+                invalidate_thousandeyes_client(self._user_id)
             raise ThousandEyesAPIError(
                 "Invalid or expired Bearer token. Generate a new token in "
                 "ThousandEyes > Account Settings > User API Tokens."
