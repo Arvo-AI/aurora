@@ -329,9 +329,9 @@ def get_webhook_url():
     if not user_id:
         return jsonify({"error": "User authentication required"}), 401
 
-    backend_url = os.getenv("BACKEND_URL", "").rstrip("/")
+    backend_url = os.getenv("NEXT_PUBLIC_BACKEND_URL", "").rstrip("/")
     if not backend_url:
-        backend_url = os.getenv("AURORA_BACKEND_URL", request.host_url.rstrip("/"))
+        backend_url = request.host_url.rstrip("/")
 
     webhook_url = f"{backend_url}/jenkins/webhook/{user_id}"
 
