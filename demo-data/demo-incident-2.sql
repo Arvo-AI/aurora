@@ -55,7 +55,7 @@ BEGIN
     v_demo_user_id,
     'datadog',
     v_datadog_event_id,
-    'analyzed',
+    'resolved',
     'critical',
     'Memory leak causing OOMKilled pods - checkout-service',
     'checkout-service',
@@ -358,3 +358,73 @@ deployment "checkout-svc" successfully rolled out', '2026-02-13 10:08:10');
   WHERE id = v_chat_session_id;
 
 END $$;
+
+-- Ensure resolved status on existing installs
+UPDATE incidents SET status = 'resolved' WHERE id = 'b923d5a1-7e4c-4f8b-9a1d-2c5e8f3b6d90' AND status != 'resolved';
+
+-- Postmortem for incident 2 (idempotent)
+INSERT INTO postmortems (incident_id, user_id, content, generated_at, updated_at)
+VALUES (
+  'b923d5a1-7e4c-4f8b-9a1d-2c5e8f3b6d90',
+  'ab209180-626b-4601-8042-9f6328d03ae9',
+  $postmortem_2$# Postmortem: Memory leak causing OOMKilled pods - checkout-service
+
+**Date:** 2026-02-13 10:00 UTC
+**Duration:** 12m
+**Severity:** critical
+**Service:** checkout-service
+**Source:** datadog
+
+## Summary
+The checkout-service experienced repeated OOMKilled events due to an unbounded in-memory session cache introduced in PR #47. Pods exceeded their 512Mi memory limit approximately every 15-20 minutes under production traffic, causing service disruptions with 12% of checkout requests failing with 503 errors. The service was stabilized by increasing memory limits to 1Gi and a permanent fix was implemented using an LRU cache with bounded size and TTL.
+
+## Timeline
+- **10:00:00** - Incident detected: checkout-service pods experiencing OOMKilled events
+- **10:02:01** - Investigation started on OOMKilled pods in EKS production cluster
+- **10:02:35** - Confirmed multiple checkout-service pods in CrashLoopBackOff with 5+ restarts
+- **10:02:55** - Pod description revealed 512Mi memory limit with OOMKilled termination reason (exit code 137)
+- **10:03:15** - Pod logs showed JavaScript heap out of memory errors repeating every 10-15 minutes
+- **10:03:35** - Memory consumption confirmed growing linearly across all 3 replicas (487Mi, 423Mi, 391Mi)
+- **10:03:55** - AWS CloudWatch showed node memory utilization spike from 45% to 78% over 2 hours
+- **10:04:45** - Identified deployment at 08:15 UTC: PR #47 "Add session caching for faster checkout"
+- **10:05:35** - Root cause identified: unbounded Map cache with no eviction policy in checkout.js
+- **10:05:55** - Calculated memory growth rate: ~24MB/minute under 200 req/sec traffic
+- **10:07:30** - Created PR #48 with LRU cache fix (max 10K entries, 5-minute TTL)
+- **10:08:15** - Applied mitigation: restarted pods with 1Gi memory limit
+- **10:08:30** - All 3 replicas running healthy with increased memory limit
+- **10:09:00** - Investigation complete, service stabilized
+
+## Root Cause
+PR #47, deployed at 08:15 UTC on 2026-02-13, introduced an in-memory session cache using a JavaScript Map in `services/checkout-service/src/handlers/checkout.js`. This cache had no eviction policy, TTL, or size limit. Under production traffic of approximately 200 requests per second, with each session entry consuming roughly 2KB, the cache grew at a rate of ~24MB per minute. This unbounded growth caused pods to exceed their 512Mi memory limit every 15-20 minutes, triggering OOMKilled events and pod restarts.
+
+## Impact
+- **Service Availability**: checkout-service pods cycled through OOMKill restarts, causing approximately 12% of checkout requests to fail with 503 errors
+- **User Experience**: End users received 5xx errors from the api-gateway when checkout-service pods were restarting
+- **Infrastructure**: Node memory utilization increased from 45% to 78% on the EKS production cluster (eks-prod-us-east-1)
+- **Monitoring**: Three correlated Datadog alerts fired across checkout-service and api-gateway monitors
+- **Duration**: Service degradation occurred for approximately 2 hours from initial deployment (08:15 UTC) until mitigation was applied
+
+## Resolution
+The incident was resolved through a two-phase approach:
+1. **Immediate Mitigation**: Increased pod memory limits from 512Mi to 1Gi and restarted all checkout-service pods to stabilize the service
+2. **Permanent Fix**: Created PR #48 replacing the unbounded Map cache with an LRU cache (lru-cache package) configured with a maximum of 10,000 entries and 5-minute TTL, bounding memory usage to approximately 20MB under peak traffic
+
+## Action Items
+- [ ] Review and merge PR #48 with LRU cache implementation after validating memory behavior under sustained load in staging environment
+- [ ] Add Datadog monitor for pod memory usage that alerts when consumption exceeds 70% of configured limit
+- [ ] Audit codebase for similar unbounded Map or Object usage patterns in other services that could cause memory leaks
+- [ ] Enable Node.js heap profiling (--inspect flag) in staging environment and establish periodic heap snapshot capture process
+- [ ] Review and adjust memory limits and requests for checkout-service based on expected workload after fix deployment
+- [ ] Update code review guidelines to require eviction policies for all in-memory cache implementations
+- [ ] Add load testing requirements for PRs that introduce caching mechanisms
+
+## Lessons Learned
+- **In-memory caches require bounds**: Any in-memory cache implementation must include eviction policies, size limits, and TTLs to prevent unbounded growth. Unbounded Map/Object caches are a common source of memory leaks in Node.js applications.
+- **Pre-production testing gaps**: The memory leak was not caught in staging, indicating that load testing did not adequately simulate production traffic patterns or duration. Sustained load tests are necessary to detect gradual memory growth.
+- **Monitoring coverage**: Memory usage alerts at pod level would have provided early warning before OOMKill events occurred. Proactive monitoring at 70% threshold would enable intervention before service impact.
+- **Deployment correlation**: The 2-hour delay between deployment (08:15 UTC) and incident detection (10:00 UTC) demonstrates the importance of monitoring memory trends immediately following deployments, especially for changes involving caching or data structures.
+- **Code review process**: The PR introducing the unbounded cache should have been flagged during code review for lacking eviction logic. This indicates a need for stronger review guidelines around resource management patterns.$postmortem_2$,
+  '2026-02-27 01:55:48',
+  '2026-02-27 01:55:48'
+)
+ON CONFLICT (incident_id) DO NOTHING;

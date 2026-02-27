@@ -28,7 +28,7 @@ BEGIN
     visualization_updated_at
   ) VALUES (
     v_incident_id, v_demo_user_id, 'coroot', v_source_alert_id,
-    'analyzed', 'critical',
+    'resolved', 'critical',
     'Database connectivity issues causing cascading latency - catalog service',
     'catalog', 'production', 'complete',
     '', v_chat_session_id::uuid,
@@ -346,3 +346,74 @@ BEGIN
 
   RAISE NOTICE 'Demo incident (Coroot) fully inserted.';
 END $$;
+
+-- Ensure resolved status on existing installs
+UPDATE incidents SET status = 'resolved' WHERE id = 'c0c00e01-db4c-4f8b-9a1d-2c5e8f3b6d91' AND status != 'resolved';
+
+-- Postmortem for coroot incident (idempotent)
+INSERT INTO postmortems (incident_id, user_id, content, generated_at, updated_at)
+VALUES (
+  'c0c00e01-db4c-4f8b-9a1d-2c5e8f3b6d91',
+  'ab209180-626b-4601-8042-9f6328d03ae9',
+  $postmortem_coroot$# Postmortem: Database connectivity issues causing cascading latency - catalog service
+
+**Date:** 2026-02-17 14:13 UTC
+**Duration:** 14m
+**Severity:** critical
+**Service:** catalog
+**Source:** coroot
+
+## Summary
+The catalog service experienced database connectivity failures with PostgreSQL instance db-main due to connection pool exhaustion. The incident was triggered by missing `client.release()` calls in error handling paths combined with an undersized connection pool (max 10 connections). This caused cascading failures to front-end and order services, with p99 latency SLO compliance degrading to 98.96% against a 99.9% target.
+
+## Timeline
+- **14:13:30** - SLO breach detected on front-end service; latency compliance dropped to 98.96% against 99.9% target
+- **14:14:30** - Coroot RCA identified database connectivity issues between catalog service and db-main PostgreSQL
+- **14:15:00** - Service dependency chain confirmed: front-end → catalog → db-main; order service also affected
+- **14:17:00** - Catalog service showing 10% error rate with "operation was canceled" and "context canceled" errors
+- **14:19:00** - Logs revealed 1,247 occurrences of "pq: canceling statement due to user request" indicating connection pool exhaustion
+- **14:21:00** - Traces identified product lookup endpoint (/api/products/:id) as primary failure point
+- **14:23:00** - Root cause identified: connection leak in product-lookup.js:87-94 where catch block never calls client.release()
+- **14:24:00** - Secondary issue found: pool configuration in connection.js:42-58 with max size of only 10 and no timeout settings
+- **14:25:00** - Immediate mitigation applied: scaled connection pool from 10 to 50 and added 5s timeout via env var update and pod restart
+- **14:26:00** - Catalog service recovering; error rate dropping
+- **14:28:00** - Investigation complete; permanent fix submitted as PR #152
+
+## Root Cause
+The catalog service's database connection pool was exhausted due to two compounding issues:
+
+1. **Connection leak in error handling**: The product lookup handler at `catalog-service/src/handlers/product-lookup.js:87-94` failed to call `client.release()` in the catch block, causing connections to leak on every failed query.
+
+2. **Undersized and misconfigured connection pool**: The pool at `catalog-service/src/db/connection.js:42-58` was initialized with only 10 maximum connections and lacked timeout or lifecycle configuration.
+
+When a PostgreSQL replica experienced a 5-second network partition at 14:12 UTC, several connections hung indefinitely. Combined with the connection leak, the pool exhausted all 10 connections within 30 seconds, causing all subsequent requests to fail.
+
+## Impact
+- **Catalog service**: Approximately 28,800 requests failed during the 24-minute incident window (200 req/s × 24 min × 10% error rate)
+- **Front-end service**: p95/p99 latency increased from 180ms to 1,200ms as requests timed out waiting for catalog responses
+- **Order service**: 15% of order placements failed due to missing inventory checks from catalog service
+- **Customer impact**: Customer-facing errors increased by 12%
+- **SLO breach**: Latency compliance degraded to 98.96% against 99.9% target for requests served under 500ms
+
+## Resolution
+The incident was resolved by scaling the database connection pool from 10 to 50 connections and adding a 5-second connection timeout via environment variable update and pod restart at 14:25 UTC. Service health was restored within 3 minutes. A permanent fix addressing the connection leak in error handling paths was submitted as PR #152.
+
+## Action Items
+- [ ] Merge and deploy PR #152 to fix connection leak in product-lookup.js error handling with proper try-finally cleanup
+- [ ] Update database connection pool configuration in connection.js:42-58 to include connectionTimeoutMillis, idleTimeoutMillis, and maxUses settings
+- [ ] Implement connection pool monitoring by exposing pool.totalCount, pool.idleCount, and pool.waitingCount as Prometheus metrics
+- [ ] Create alert for connection pool utilization exceeding 80% to detect exhaustion before outages occur
+- [ ] Conduct code review of all database query handlers to identify and fix similar connection leak patterns
+- [ ] Document connection pool best practices and add to service development guidelines
+- [ ] Review connection pool sizing across all services to ensure adequate capacity for expected load
+
+## Lessons Learned
+- **Resource cleanup is critical**: Missing `client.release()` calls in error paths can quickly exhaust connection pools under normal load. All database operations must use try-finally blocks to ensure resources are always released.
+- **Connection pool sizing matters**: A pool size of 10 connections was insufficient for 200 req/s traffic. Connection pools should be sized based on expected concurrency with adequate headroom for bursts.
+- **Configuration defaults are insufficient**: Connection pools require explicit timeout and lifecycle settings to prevent indefinite hangs and resource exhaustion.
+- **Observability gaps delay detection**: Lack of connection pool metrics prevented early detection of pool exhaustion. Monitoring resource utilization is as important as monitoring error rates.
+- **Cascading failures amplify impact**: A failure in a mid-tier service (catalog) cascaded to both upstream (front-end) and downstream (order) services, multiplying the customer impact. Circuit breakers and graceful degradation should be considered for critical dependency chains.$postmortem_coroot$,
+  '2026-02-27 01:21:14',
+  '2026-02-27 01:21:14'
+)
+ON CONFLICT (incident_id) DO NOTHING;

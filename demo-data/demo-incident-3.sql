@@ -49,7 +49,7 @@ BEGIN
     visualization_updated_at
   ) VALUES (
     v_incident_id, v_demo_user_id, 'grafana', v_grafana_alert_id,
-    'analyzed', 'medium',
+    'resolved', 'medium',
     'High 502 error rate on notification-service',
     'notification-service', 'production', 'complete',
     '', v_chat_session_id::uuid,
@@ -364,3 +364,57 @@ BEGIN
   RAISE NOTICE 'Demo incident 3 fully inserted.';
 
 END $$;
+
+-- Ensure resolved status on existing installs
+UPDATE incidents SET status = 'resolved' WHERE id = 'd4e5f6a7-b8c9-4d0e-a1f2-3b4c5d6e7f80' AND status != 'resolved';
+
+-- Postmortem for incident 3 (idempotent)
+INSERT INTO postmortems (incident_id, user_id, content, generated_at, updated_at)
+VALUES (
+  'd4e5f6a7-b8c9-4d0e-a1f2-3b4c5d6e7f80',
+  'ab209180-626b-4601-8042-9f6328d03ae9',
+  $postmortem_3$# Postmortem: High 502 error rate on notification-service
+
+**Date:** 2026-02-14 14:30 UTC
+**Duration:** 15m
+**Severity:** medium
+**Service:** notification-service
+**Source:** grafana
+
+## Summary
+The notification-service experienced a recurring pattern of 502 errors with a 23% error rate occurring every 30 minutes, each lasting approximately 5 seconds. Investigation revealed a misconfigured Kubernetes CronJob was executing FLUSHDB against production Redis every 30 minutes, triggering Redis Sentinel failovers that caused connection errors during the failover window. The CronJob, intended for the dev environment, was deployed three days earlier with a hardcoded production Redis Sentinel address.
+
+## Timeline
+- **14:30:30** - Investigation started for 502 errors on notification-service in EKS production cluster (us-west-2)
+- **14:31:00** - Confirmed all notification-service pods are healthy with 0 restarts, ruling out application crashes
+- **14:31:20** - Pod logs revealed "Redis connection lost" errors occurring at exactly 30-minute intervals
+- **14:31:50** - Splunk logs confirmed Redis Sentinel triggering failover events every 30 minutes at 14:00, 13:30, 13:00, 12:30
+- **14:32:10** - Discovered suspicious CronJob named "redis-cleanup" in messaging namespace running every 30 minutes
+- **14:32:20** - Identified CronJob executing `redis-cli -h redis-sentinel.messaging.svc FLUSHDB` against production Redis
+- **14:32:50** - Traced deployment to PR #312 "Add dev cache cleanup automation" merged 3 days ago with misconfigured production endpoint
+- **14:33:50** - Deleted rogue CronJob to stop recurring failures
+- **14:34:10** - Created PR #315 with Redis retry logic for long-term resilience
+
+## Root Cause
+A Kubernetes CronJob named `redis-cleanup` was deployed to production via PR #312 three days prior with a misconfigured Redis Sentinel address. The CronJob was intended for the dev environment but was hardcoded with the production Redis Sentinel endpoint (`redis-sentinel.messaging.svc`). Every 30 minutes, it executed `FLUSHDB` against the production Redis primary, causing Redis Sentinel to detect an anomaly and initiate a failover. During the ~5 second failover window, all services depending on Redis experienced connection errors, which manifested as 502 errors at the load balancer level.
+
+## Impact
+The notification-service experienced 23% error rate spikes lasting approximately 5 seconds every 30 minutes over a 3-day period. All services depending on the production Redis instance were affected during each failover window, resulting in degraded user experience for notification delivery. The periodic nature and short duration of each incident likely resulted in intermittent failures for end users attempting to receive notifications during the failover windows.
+
+## Resolution
+The incident was resolved by immediately deleting the misconfigured `redis-cleanup` CronJob, which stopped the recurring Redis Sentinel failovers. A code fix was submitted via PR #315 to add Redis connection retry logic with exponential backoff to the notification-service using ioredis Sentinel-aware retry configuration, providing resilience against future brief failover events.
+
+## Action Items
+- [ ] Audit all CronJobs across namespaces for hardcoded production endpoint references and correct any misconfigurations
+- [ ] Verify Redis Sentinel health and monitor for 1 hour to confirm no additional forced failovers occur
+- [ ] Implement namespace-scoped NetworkPolicies to prevent dev/staging workloads from accessing production Redis endpoints
+- [ ] Add Redis connection retry logic with exponential backoff to all services consuming Redis
+- [ ] Add CronJob deployment guardrails in CI/CD pipelines requiring environment-specific validation before deploying to production namespaces
+- [ ] Review and merge PR #315 to add Sentinel retry configuration to notification-service
+
+## Lessons Learned
+This incident highlights the critical importance of environment isolation and configuration validation in deployment pipelines. A CronJob intended for development was deployed to production with a hardcoded production endpoint, demonstrating gaps in both code review processes and infrastructure controls. Key lessons include: (1) environment-specific configurations should never be hardcoded and should use environment variables or namespace-scoped service discovery, (2) network policies should enforce namespace isolation to prevent accidental cross-environment access, (3) services should implement connection resilience patterns to handle transient infrastructure events gracefully, and (4) CI/CD pipelines should include automated validation to detect environment mismatches before deployment. Additionally, the 3-day delay in detection suggests monitoring could be improved to alert on periodic patterns of Redis Sentinel failovers.$postmortem_3$,
+  '2026-02-27 01:53:02',
+  '2026-02-27 01:53:02'
+)
+ON CONFLICT (incident_id) DO NOTHING;

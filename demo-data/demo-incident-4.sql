@@ -55,7 +55,7 @@ BEGIN
     visualization_updated_at
   ) VALUES (
     v_incident_id, v_demo_user_id, 'netdata', v_netdata_alert_id,
-    'analyzed', 'high',
+    'resolved', 'high',
     'Intermittent 503 errors on payment-gateway service',
     'payment-gateway', 'production', 'complete',
     '', v_chat_session_id::uuid,
@@ -359,3 +359,63 @@ BEGIN
   RAISE NOTICE 'Demo incident 4 fully inserted.';
 
 END $$;
+
+-- Ensure resolved status on existing installs
+UPDATE incidents SET status = 'resolved' WHERE id = 'f1a2b3c4-d5e6-4f7a-8b9c-0d1e2f3a4b5c' AND status != 'resolved';
+
+-- Postmortem for incident 4 (idempotent)
+INSERT INTO postmortems (incident_id, user_id, content, generated_at, updated_at)
+VALUES (
+  'f1a2b3c4-d5e6-4f7a-8b9c-0d1e2f3a4b5c',
+  'ab209180-626b-4601-8042-9f6328d03ae9',
+  $postmortem_4$# Postmortem: Intermittent 503 errors on payment-gateway service
+
+**Date:** 2026-02-15 09:00 UTC
+**Duration:** 18m
+**Severity:** high
+**Service:** payment-gateway
+**Source:** netdata
+
+## Summary
+The payment-gateway service experienced a 31% HTTP 503 error rate due to expired Istio mTLS certificates. The root cause was a cert-manager deployment failure (OOMKilled) that began on February 10, preventing automatic certificate rotation. Certificates expired on February 13, causing 3 of 5 pods with cached expired certificates to fail TLS handshakes while 2 newer pods with fallback certificates continued functioning.
+
+## Timeline
+- **09:00:15** - Investigation initiated following Netdata alert for 503 errors on payment-gateway service
+- **09:00:45** - Confirmed all 5 payment-gateway pods running with 0 restarts, ruling out application crashes
+- **09:01:05** - Identified pattern: 3 pods created 3+ days ago, 2 pods created 22 hours ago, matching the 70/30 failure/success rate
+- **09:01:25** - Logs from older pods revealed TLS handshake failures with "certificate has expired" errors
+- **09:01:55** - Certificate inspection confirmed payment-gateway workload certificate expired on February 13, 2026 at 14:23 UTC
+- **09:02:15** - Discovered cert-manager deployment in CrashLoopBackOff with OOMKilled status since February 10
+- **09:02:55** - Splunk analysis confirmed TLS errors isolated to payment-gateway service only
+- **09:03:45** - Increased cert-manager memory limit from 256Mi to 512Mi and restarted deployment
+- **09:03:55** - Manually triggered certificate renewal for payment-gateway workload
+- **09:04:15** - Completed rolling restart of payment-gateway pods; 503 error rate dropped to 0%
+
+## Root Cause
+The cert-manager deployment responsible for automatic Istio certificate rotation crashed with OOMKilled status on February 10, 2026 due to insufficient memory limits (256Mi). Without a functioning cert-manager, the payment-gateway workload certificate was not rotated and expired on February 13, 2026 at 14:23 UTC. Pods created before expiration cached the expired certificate and failed all TLS handshakes, while pods created after expiration received Istio's self-signed fallback certificate and operated normally, resulting in intermittent failures based on load balancer distribution.
+
+## Impact
+Approximately 70% of payment requests (7 out of 10) returned 503 errors, causing customer payment failures and support escalations. The issue affected only the payment-gateway service in the Azure AKS production cluster (aks-prod-westus2). Two Netdata alerts fired for elevated 503 error rates and TLS handshake failures. The intermittent nature of failures created inconsistent customer experiences during the 18-minute incident window.
+
+## Resolution
+The incident was resolved through a three-step process:
+1. Increased cert-manager memory limits from 256Mi to 512Mi and restarted the deployment to restore certificate rotation functionality
+2. Manually triggered Istio certificate rotation for the payment-gateway workload to generate new valid certificates
+3. Performed a rolling restart of the payment-gateway deployment to ensure all pods picked up the new certificates
+
+All pods became healthy and the 503 error rate returned to 0%.
+
+## Action Items
+- [ ] Add Prometheus alerting on cert-manager pod health, memory usage, and certificate processing queue depth
+- [ ] Implement certificate expiration monitoring with alerts when Istio workload certificates are within 7 days of expiration
+- [ ] Permanently increase cert-manager memory limits to 512Mi or 1Gi to handle cluster certificate load
+- [ ] Implement a daily CronJob to audit all workload certificates and report any expired or expiring within 14 days
+- [ ] Conduct cluster-wide audit of all Istio workload certificates to ensure no other services have expired or near-expiring certificates
+- [ ] Document runbook for Istio certificate rotation failures and cert-manager recovery procedures
+
+## Lessons Learned
+Certificate management infrastructure requires the same monitoring rigor as application services. The cert-manager failure went undetected for 5 days, allowing certificates to expire and cause customer-facing outages. Proactive monitoring of both the certificate management system health and certificate expiration dates would have prevented this incident. Additionally, resource limits for critical infrastructure components like cert-manager should be sized appropriately for cluster scale and monitored for adequacy as the cluster grows. The intermittent failure pattern (some pods working, others failing) made the issue less obvious than a total outage, highlighting the importance of pod-level health checks and certificate validation in service mesh environments.$postmortem_4$,
+  '2026-02-27 01:56:45',
+  '2026-02-27 01:56:45'
+)
+ON CONFLICT (incident_id) DO NOTHING;

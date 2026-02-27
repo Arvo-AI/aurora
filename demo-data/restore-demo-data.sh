@@ -52,6 +52,15 @@ else
 fi
 
 # Always run supplemental incident files - each has its own internal idempotency check
+if [ -f "$SCRIPT_DIR/demo-incident-1.sql" ]; then
+    echo "       Importing demo incident 1 postmortem..."
+    if psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" < "$SCRIPT_DIR/demo-incident-1.sql" >/dev/null 2>&1; then
+        echo "       Done"
+    else
+        echo "       WARNING: Demo incident 1 postmortem import had errors"
+    fi
+fi
+
 if [ -f "$SCRIPT_DIR/demo-incident-2.sql" ]; then
     echo "       Importing demo incident 2..."
     if psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" < "$SCRIPT_DIR/demo-incident-2.sql" >/dev/null 2>&1; then
