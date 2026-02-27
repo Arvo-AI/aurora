@@ -281,6 +281,9 @@ app.register_blueprint(incidents_bp)
 app.register_blueprint(incidents_sse_bp)
 app.register_blueprint(incident_feedback_bp)
 
+from routes.postmortem_routes import postmortem_bp
+app.register_blueprint(postmortem_bp)
+
 # --- Visualization Streaming Routes ---
 from routes.visualization_stream import visualization_bp
 app.register_blueprint(visualization_bp)
@@ -303,8 +306,6 @@ app.register_blueprint(aws_bp)  # Primary AWS routes at root
 app.register_blueprint(rca_emails_bp)  # RCA email management routes
 app.register_blueprint(ssh_keys_bp)  # SSH key management routes
 app.register_blueprint(vms_bp)  # VM management routes
-from routes.billing_scheduler_routes import billing_scheduler_bp
-app.register_blueprint(billing_scheduler_bp)  # NEW: Automated billing endpoints
 
 app.register_blueprint(user_connections_bp)
 app.register_blueprint(account_management_bp)
