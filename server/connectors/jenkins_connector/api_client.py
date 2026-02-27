@@ -58,7 +58,11 @@ class JenkinsClient:
             try:
                 return True, response.json(), None
             except ValueError:
-                logger.warning("Jenkins API returned non-JSON response for %s", url)
+                logger.warning(
+                    "Jenkins API returned non-JSON response for %s %s",
+                    method,
+                    path,
+                )
                 return False, None, "Unexpected response format from Jenkins."
 
         except requests.exceptions.Timeout:
