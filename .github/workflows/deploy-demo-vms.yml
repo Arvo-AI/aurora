@@ -221,7 +221,7 @@ jobs:
             sudo sed -i 's|^NEXT_PUBLIC_WEBSOCKET_URL=.*|NEXT_PUBLIC_WEBSOCKET_URL=${{ env.VM2_WEBSOCKET_URL }}|' .env
             
             echo '🔄 Restarting services...'
-            sudo docker compose -f docker-compose.prod-local.yml build frontend
+            sudo docker compose -f docker-compose.prod-local.yml build frontend aurora-server
             sudo docker compose -f docker-compose.prod-local.yml up -d --remove-orphans
             sudo docker compose -f docker-compose.prod-local.yml up -d --force-recreate demo-init
             
@@ -279,7 +279,7 @@ jobs:
             sudo sed -i 's|^NEXT_PUBLIC_WEBSOCKET_URL=.*|NEXT_PUBLIC_WEBSOCKET_URL=${{ env.VM3_WEBSOCKET_URL }}|' .env
             
             echo '🔄 Restarting services...'
-            sudo docker compose -f docker-compose.prod-local.yml build frontend
+            sudo docker compose -f docker-compose.prod-local.yml build frontend aurora-server
             sudo docker compose -f docker-compose.prod-local.yml up -d --remove-orphans
             sudo docker compose -f docker-compose.prod-local.yml up -d --force-recreate demo-init
             
