@@ -137,3 +137,157 @@ class JenkinsClient:
                 "numExecutors": node.get("numExecutors", 0),
             })
         return True, nodes, None
+
+    # ------------------------------------------------------------------
+    # On-demand RCA enrichment: Core REST API
+    # ------------------------------------------------------------------
+
+    _RCA_BUILD_TREE = (
+        "result,timestamp,duration,building,displayName,"
+        "actions[lastBuiltRevision[SHA1,branch[name]],remoteUrls,"
+        "parameters[name,value],causes[shortDescription,userId],environment],"
+        "changeSets[kind,items[commitId,author[fullName],msg,timestamp,"
+        "paths[editType,file]]]"
+    )
+
+    def get_build_detail(self, job_path: str, build_number: int) -> Tuple[bool, Optional[Dict], Optional[str]]:
+        """Fetch RCA-relevant build details using the tree parameter for efficiency."""
+        return self._request(
+            "GET",
+            f"/{self._job_segments(job_path)}/{build_number}/api/json",
+            params={"tree": self._RCA_BUILD_TREE},
+        )
+
+    # ------------------------------------------------------------------
+    # On-demand RCA enrichment: Pipeline REST API (wfapi)
+    # ------------------------------------------------------------------
+
+    def get_pipeline_stages(self, job_path: str, build_number: int) -> Tuple[bool, Optional[Dict], Optional[str]]:
+        """Fetch stage-level breakdown via the Pipeline REST API (wfapi)."""
+        return self._request(
+            "GET",
+            f"/{self._job_segments(job_path)}/{build_number}/wfapi/describe",
+        )
+
+    def get_pipeline_stage_log(
+        self, job_path: str, build_number: int, node_id: str
+    ) -> Tuple[bool, Optional[str], Optional[str]]:
+        """Fetch per-stage log segment via the Pipeline REST API."""
+        success, text, error = self._request(
+            "GET",
+            f"/{self._job_segments(job_path)}/{build_number}/execution/node/{url_quote(node_id, safe='')}/wfapi/log",
+            accept="text/plain",
+        )
+        if success and text and len(text) > self.MAX_CONSOLE_BYTES:
+            text = text[: self.MAX_CONSOLE_BYTES] + "\n\n--- Stage log truncated ---\n"
+        return success, text, error
+
+    # ------------------------------------------------------------------
+    # On-demand RCA enrichment: Blue Ocean REST API
+    # ------------------------------------------------------------------
+
+    def get_blue_ocean_run(
+        self,
+        pipeline_name: str,
+        run_number: int,
+        branch: Optional[str] = None,
+        organization: str = "jenkins",
+    ) -> Tuple[bool, Optional[Dict], Optional[str]]:
+        """Fetch run data with changeSet via the Blue Ocean REST API."""
+        if branch:
+            path = (
+                f"/blue/rest/organizations/{organization}/pipelines/"
+                f"{url_quote(pipeline_name, safe='')}/branches/"
+                f"{url_quote(branch, safe='')}/runs/{run_number}/"
+            )
+        else:
+            path = (
+                f"/blue/rest/organizations/{organization}/pipelines/"
+                f"{url_quote(pipeline_name, safe='')}/runs/{run_number}/"
+            )
+        return self._request("GET", path)
+
+    def get_blue_ocean_steps(
+        self,
+        pipeline_name: str,
+        run_number: int,
+        node_id: str,
+        branch: Optional[str] = None,
+        organization: str = "jenkins",
+    ) -> Tuple[bool, Optional[Any], Optional[str]]:
+        """Fetch step-level detail for a pipeline node via Blue Ocean REST API."""
+        if branch:
+            path = (
+                f"/blue/rest/organizations/{organization}/pipelines/"
+                f"{url_quote(pipeline_name, safe='')}/branches/"
+                f"{url_quote(branch, safe='')}/runs/{run_number}/"
+                f"nodes/{url_quote(node_id, safe='')}/steps/"
+            )
+        else:
+            path = (
+                f"/blue/rest/organizations/{organization}/pipelines/"
+                f"{url_quote(pipeline_name, safe='')}/runs/{run_number}/"
+                f"nodes/{url_quote(node_id, safe='')}/steps/"
+            )
+        return self._request("GET", path)
+
+    # ------------------------------------------------------------------
+    # On-demand RCA enrichment: Test results
+    # ------------------------------------------------------------------
+
+    _TEST_REPORT_TREE = (
+        "failCount,passCount,skipCount,"
+        "suites[name,cases[name,status,errorDetails,errorStackTrace]{0,20}]"
+    )
+
+    def get_build_test_results(self, job_path: str, build_number: int) -> Tuple[bool, Optional[Dict], Optional[str]]:
+        """Fetch test report summary with failure details."""
+        return self._request(
+            "GET",
+            f"/{self._job_segments(job_path)}/{build_number}/testReport/api/json",
+            params={"tree": self._TEST_REPORT_TREE},
+        )
+
+    # ------------------------------------------------------------------
+    # OTel / W3C Trace Context extraction
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def extract_trace_context(build_data: Dict[str, Any]) -> Optional[Dict[str, str]]:
+        """Extract W3C Trace Context from build actions or environment variables.
+
+        When the OpenTelemetry Jenkins plugin is installed it injects
+        ``traceparent`` and ``tracestate`` into the build environment,
+        enabling end-to-end trace correlation.
+        """
+        if not build_data:
+            return None
+
+        for action in build_data.get("actions", []):
+            if not isinstance(action, dict):
+                continue
+            # OTel plugin stores trace context in EnvVars action
+            env_map = action.get("environment", {})
+            if isinstance(env_map, dict):
+                traceparent = env_map.get("TRACEPARENT") or env_map.get("traceparent")
+                if traceparent:
+                    parts = traceparent.split("-")
+                    if len(parts) >= 3:
+                        return {
+                            "traceparent": traceparent,
+                            "tracestate": env_map.get("TRACESTATE", ""),
+                            "trace_id": parts[1],
+                            "span_id": parts[2],
+                        }
+            # Also check parameters for explicitly forwarded trace context
+            for param in action.get("parameters", []):
+                if isinstance(param, dict) and param.get("name") == "TRACEPARENT":
+                    traceparent = param.get("value", "")
+                    parts = traceparent.split("-")
+                    if len(parts) >= 3:
+                        return {
+                            "traceparent": traceparent,
+                            "trace_id": parts[1],
+                            "span_id": parts[2],
+                        }
+        return None

@@ -28,6 +28,7 @@ iac_tool = run_iac_tool
 from .github_commit_tool import github_commit, GitHubCommitArgs
 from .github_rca_tool import github_rca, GitHubRCAArgs
 from .github_fix_tool import github_fix, GitHubFixArgs
+from .jenkins_rca_tool import jenkins_rca, JenkinsRCAArgs
 
 # Visualization trigger caching
 from cachetools import TTLCache
@@ -1049,6 +1050,7 @@ def get_cloud_tools():
         (github_commit, "github_commit"),
         (github_rca, "github_rca"),
         (github_fix, "github_fix"),
+        (jenkins_rca, "jenkins_rca"),
         (github_apply_fix, "github_apply_fix"),
         (cloud_exec_wrapper, "cloud_exec"),
         (terminal_exec, "terminal_exec"),
@@ -1118,6 +1120,28 @@ def get_cloud_tools():
                     "Optional: repo (owner/repo format), commit_message, branch."
                 ),
                 args_schema=GitHubFixArgs
+            )
+        elif name == 'jenkins_rca':
+            tool = StructuredTool.from_function(
+                func=final_func,
+                name=name,
+                description=(
+                    "Unified Jenkins CI/CD investigation tool for Root Cause Analysis. "
+                    "Uses three Jenkins APIs: Core REST API, Pipeline REST API (wfapi), and Blue Ocean REST API. "
+                    "Actions: "
+                    "'recent_deployments' (query stored deployment events; optional service filter and time_window_hours), "
+                    "'build_detail' (Core API: SCM revision, changeSets, build causes, parameters), "
+                    "'pipeline_stages' (wfapi: stage-level breakdown with status and timing), "
+                    "'stage_log' (wfapi: per-stage log output for a specific node_id), "
+                    "'build_logs' (Core API: console output, truncated to ~1MB), "
+                    "'test_results' (Core API: test report with failure details), "
+                    "'blue_ocean_run' (Blue Ocean API: run data with changeSet and commit info), "
+                    "'blue_ocean_steps' (Blue Ocean API: step-level detail for a pipeline node), "
+                    "'trace_context' (extract OTel W3C Trace Context; params: deployment_event_id or job_path+build_number). "
+                    "Required params vary by action: job_path+build_number for Core/wfapi, "
+                    "pipeline_name+run_number for Blue Ocean. service is optional for recent_deployments."
+                ),
+                args_schema=JenkinsRCAArgs
             )
         elif name == 'github_apply_fix':
             tool = StructuredTool.from_function(

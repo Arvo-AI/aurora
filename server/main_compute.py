@@ -143,6 +143,10 @@ CORS(app, origins=FRONTEND_URL, supports_credentials=True,
                          "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
                                            "Authorization", "X-Provider-Preference"],
                          "methods": ["GET", "POST", "DELETE", "OPTIONS", "PATCH"]},
+        r"/jenkins/*": {"origins": FRONTEND_URL, "supports_credentials": True,
+                        "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
+                                          "Authorization", "X-Provider-Preference"],
+                        "methods": ["GET", "POST", "DELETE", "OPTIONS"]},
         r"/ovh_api/*": {"origins": FRONTEND_URL, "supports_credentials": True,
                        "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
                                          "Authorization", "X-Provider-Preference"],
@@ -207,6 +211,7 @@ if is_slack_enabled():
 
 # --- Jenkins Integration Routes ---
 from routes.jenkins import bp as jenkins_bp  # noqa: F401
+import routes.jenkins.tasks  # noqa: F401
 app.register_blueprint(jenkins_bp, url_prefix="/jenkins")
 
 # --- Grafana Integration Routes ---

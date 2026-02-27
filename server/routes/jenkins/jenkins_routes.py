@@ -1,4 +1,8 @@
+import hmac
+import hashlib
 import logging
+import os
+import secrets
 from typing import Any, Dict, Optional
 
 from flask import Blueprint, jsonify, request
@@ -83,6 +87,7 @@ def connect():
         "api_token": api_token,
         "version": version,
         "mode": mode,
+        "webhook_secret": secrets.token_hex(32),
     }
 
     try:
@@ -227,3 +232,248 @@ def disconnect():
     except Exception as exc:
         logger.exception("[JENKINS] Failed to disconnect user %s: %s", user_id, exc)
         return jsonify({"error": "Failed to disconnect Jenkins"}), 500
+
+
+# ------------------------------------------------------------------
+# Webhook: receive deployment events from Jenkinsfile post blocks
+# ------------------------------------------------------------------
+
+def _get_webhook_secret(user_id: str) -> Optional[str]:
+    """Retrieve the stored webhook secret for HMAC validation."""
+    creds = _get_stored_jenkins_credentials(user_id)
+    if not creds:
+        return None
+    return creds.get("webhook_secret")
+
+
+def _verify_webhook_signature(payload_bytes: bytes, signature: str, secret: str) -> bool:
+    """Validate X-Aurora-Signature HMAC-SHA256 header."""
+    expected = hmac.new(secret.encode(), payload_bytes, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, signature)
+
+
+def _verify_webhook_user(user_id: str) -> bool:
+    """Verify the user_id exists in the database to prevent arbitrary data injection."""
+    if not user_id or len(user_id) > 255:
+        return False
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT 1 FROM user_tokens WHERE user_id = %s AND provider = %s LIMIT 1",
+                    (user_id, JENKINS_PROVIDER),
+                )
+                return cursor.fetchone() is not None
+    except Exception as e:
+        logger.warning("[JENKINS] Webhook user verification failed: %s", e)
+        return False
+
+
+@jenkins_bp.route("/webhook/<user_id>", methods=["POST", "OPTIONS"])
+def deployment_webhook(user_id: str):
+    """Receive a deployment event webhook from a Jenkins pipeline.
+    
+    Security: validates per-user HMAC-SHA256 signature via X-Aurora-Signature header.
+    Falls back to user verification only when no webhook secret is configured (pre-upgrade).
+    """
+    if request.method == "OPTIONS":
+        return create_cors_response()
+
+    if not user_id:
+        return jsonify({"error": "user_id is required"}), 400
+
+    if not _verify_webhook_user(user_id):
+        logger.warning("[JENKINS] Webhook rejected: invalid or unconfigured user_id %s", user_id[:50])
+        return jsonify({"error": "Invalid webhook configuration"}), 403
+
+    webhook_secret = _get_webhook_secret(user_id)
+    signature = request.headers.get("X-Aurora-Signature", "")
+
+    if webhook_secret:
+        if not signature:
+            logger.warning("[JENKINS] Webhook rejected: missing X-Aurora-Signature for user %s", user_id[:50])
+            return jsonify({"error": "Missing X-Aurora-Signature header"}), 401
+        if not _verify_webhook_signature(request.get_data(), signature, webhook_secret):
+            logger.warning("[JENKINS] Webhook rejected: invalid signature for user %s", user_id[:50])
+            return jsonify({"error": "Invalid webhook signature"}), 401
+
+    payload = request.get_json(silent=True) or {}
+
+    if not isinstance(payload, dict):
+        return jsonify({"error": "Invalid payload format"}), 400
+
+    if not payload.get("result") and not payload.get("build_number"):
+        return jsonify({"error": "Payload must include at least 'result' or 'build_number'"}), 400
+    
+    logger.info(
+        "[JENKINS] Received deployment webhook for user %s: service=%s result=%s",
+        user_id,
+        payload.get("service") or payload.get("job_name", "unknown"),
+        payload.get("result", "unknown"),
+    )
+
+    from routes.jenkins.tasks import process_jenkins_deployment
+
+    process_jenkins_deployment.delay(payload, user_id)
+
+    return jsonify({"received": True})
+
+
+@jenkins_bp.route("/webhook-url", methods=["GET", "OPTIONS"])
+def get_webhook_url():
+    """Return the webhook URL and Jenkinsfile snippets for the authenticated user."""
+    if request.method == "OPTIONS":
+        return create_cors_response()
+
+    user_id = get_user_id_from_request()
+    if not user_id:
+        return jsonify({"error": "User authentication required"}), 401
+
+    backend_url = os.getenv("BACKEND_URL", "").rstrip("/")
+    if not backend_url:
+        backend_url = os.getenv("AURORA_BACKEND_URL", request.host_url.rstrip("/"))
+
+    webhook_url = f"{backend_url}/jenkins/webhook/{user_id}"
+
+    # Retrieve per-user webhook secret for HMAC signing
+    creds = _get_stored_jenkins_credentials(user_id) or {}
+    webhook_secret = creds.get("webhook_secret", "")
+
+    # Compact snippets — includes HMAC-SHA256 signing via X-Aurora-Signature header
+    jenkinsfile_basic = f'''post {{
+  always {{
+    script {{
+      def payload = """{{"service":"${{env.JOB_NAME}}","environment":"${{params.ENVIRONMENT ?: 'production'}}","result":"${{currentBuild.currentResult}}","build_number":${{env.BUILD_NUMBER}},"build_url":"${{env.BUILD_URL}}","git":{{"commit_sha":"${{env.GIT_COMMIT}}","branch":"${{env.GIT_BRANCH}}"}}}}"""
+      def mac = javax.crypto.Mac.getInstance("HmacSHA256")
+      mac.init(new javax.crypto.spec.SecretKeySpec("{webhook_secret}".bytes, "HmacSHA256"))
+      def sig = mac.doFinal(payload.bytes).encodeHex().toString()
+      httpRequest(
+        url: "{webhook_url}",
+        httpMode: 'POST',
+        contentType: 'APPLICATION_JSON',
+        customHeaders: [[name: 'X-Aurora-Signature', value: sig]],
+        requestBody: payload
+      )
+    }}
+  }}
+}}'''
+
+    jenkinsfile_otel = f'''post {{
+  always {{
+    script {{
+      def payload = """{{"service":"${{env.JOB_NAME}}","environment":"${{params.ENVIRONMENT ?: 'production'}}","result":"${{currentBuild.currentResult}}","build_number":${{env.BUILD_NUMBER}},"build_url":"${{env.BUILD_URL}}","git":{{"commit_sha":"${{env.GIT_COMMIT}}","branch":"${{env.GIT_BRANCH}}"}},"trace_id":"${{env.TRACEPARENT?.split('-')?.getAt(1) ?: ''}}","span_id":"${{env.TRACEPARENT?.split('-')?.getAt(2) ?: ''}}"}}"""
+      def mac = javax.crypto.Mac.getInstance("HmacSHA256")
+      mac.init(new javax.crypto.spec.SecretKeySpec("{webhook_secret}".bytes, "HmacSHA256"))
+      def sig = mac.doFinal(payload.bytes).encodeHex().toString()
+      httpRequest(
+        url: "{webhook_url}",
+        httpMode: 'POST',
+        contentType: 'APPLICATION_JSON',
+        customHeaders: [[name: 'X-Aurora-Signature', value: sig]],
+        requestBody: payload
+      )
+    }}
+  }}
+}}'''
+
+    jenkinsfile_curl = f'''post {{
+  always {{
+    sh \'\'\'
+      PAYLOAD='{{"service":"\'\"$JOB_NAME\"\'","result":"\'\"$BUILD_RESULT\"\'","build_number":\'$BUILD_NUMBER\',"build_url":"\'\"$BUILD_URL\"\'","git":{{"commit_sha":"\'\"$GIT_COMMIT\"\'","branch":"\'\"$GIT_BRANCH\"\'"}}}}'
+      SIG=$(echo -n "$PAYLOAD" | openssl dgst -sha256 -hmac "{webhook_secret}" | awk \'{{print $2}}\')
+      curl -sS -X POST "{webhook_url}" \\
+        -H "Content-Type: application/json" \\
+        -H "X-Aurora-Signature: $SIG" \\
+        -d "$PAYLOAD"
+    \'\'\'
+  }}
+}}'''
+
+    return jsonify({
+        "webhookUrl": webhook_url,
+        "jenkinsfileBasic": jenkinsfile_basic,
+        "jenkinsfileOtel": jenkinsfile_otel,
+        "jenkinsfileCurl": jenkinsfile_curl,
+        "instructions": [
+            "1. Add the post block snippet to your Jenkinsfile (HMAC signing is built in)",
+            "2. Ensure the HTTP Request Plugin is installed on your Jenkins instance",
+            "3. Aurora will receive deployment events and correlate them with incidents",
+            "4. (Optional) Install the OpenTelemetry plugin for W3C Trace Context propagation",
+        ],
+    })
+
+
+@jenkins_bp.route("/deployments", methods=["GET", "OPTIONS"])
+def list_deployments():
+    """List recent Jenkins deployment events for the authenticated user."""
+    if request.method == "OPTIONS":
+        return create_cors_response()
+
+    user_id = get_user_id_from_request()
+    if not user_id:
+        return jsonify({"error": "User authentication required"}), 401
+
+    limit = min(max(request.args.get("limit", 20, type=int), 1), 100)  # Clamp to 1-100
+    offset = max(request.args.get("offset", 0, type=int), 0)  # Ensure non-negative
+    service_filter = request.args.get("service")
+    # Sanitize service filter
+    if service_filter:
+        service_filter = service_filter[:255]  # Match DB column length
+
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                if service_filter:
+                    cursor.execute(
+                        """SELECT id, service, environment, result, build_number, build_url,
+                                  commit_sha, branch, repository, deployer, duration_ms,
+                                  job_name, trace_id, received_at
+                           FROM jenkins_deployment_events
+                           WHERE user_id = %s AND service = %s
+                           ORDER BY received_at DESC
+                           LIMIT %s OFFSET %s""",
+                        (user_id, service_filter, limit, offset),
+                    )
+                else:
+                    cursor.execute(
+                        """SELECT id, service, environment, result, build_number, build_url,
+                                  commit_sha, branch, repository, deployer, duration_ms,
+                                  job_name, trace_id, received_at
+                           FROM jenkins_deployment_events
+                           WHERE user_id = %s
+                           ORDER BY received_at DESC
+                           LIMIT %s OFFSET %s""",
+                        (user_id, limit, offset),
+                    )
+                rows = cursor.fetchall()
+
+                cursor.execute(
+                    "SELECT COUNT(*) FROM jenkins_deployment_events WHERE user_id = %s"
+                    + (" AND service = %s" if service_filter else ""),
+                    (user_id, service_filter) if service_filter else (user_id,),
+                )
+                total = cursor.fetchone()[0]
+
+        deployments = []
+        for r in rows:
+            deployments.append({
+                "id": r[0],
+                "service": r[1],
+                "environment": r[2],
+                "result": r[3],
+                "buildNumber": r[4],
+                "buildUrl": r[5],
+                "commitSha": r[6],
+                "branch": r[7],
+                "repository": r[8],
+                "deployer": r[9],
+                "durationMs": r[10],
+                "jobName": r[11],
+                "traceId": r[12],
+                "receivedAt": r[13].isoformat() if r[13] else None,
+            })
+
+        return jsonify({"deployments": deployments, "total": total, "limit": limit, "offset": offset})
+    except Exception as exc:
+        logger.exception("[JENKINS] Failed to list deployments for user %s", user_id)
+        return jsonify({"error": "Failed to list deployments"}), 500

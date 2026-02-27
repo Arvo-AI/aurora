@@ -449,6 +449,32 @@ def get_incident(incident_id: str):
                             "[INCIDENTS] Skipping payload fetch for splunk alert_id: %s",
                             source_alert_id,
                         )
+                elif source_type == "jenkins":
+                    try:
+                        alert_id_int = int(source_alert_id)
+                        cursor.execute(
+                            "SELECT payload FROM jenkins_deployment_events WHERE id = %s AND user_id = %s",
+                            (alert_id_int, user_id),
+                        )
+                        alert_row = cursor.fetchone()
+                        if alert_row and alert_row[0] is not None:
+                            raw_payload = alert_row[0]
+                            logger.debug(
+                                "[INCIDENTS] Found Jenkins payload: type=%s, has_data=%s",
+                                type(raw_payload).__name__,
+                                bool(raw_payload),
+                            )
+                    except (ValueError, TypeError):
+                        logger.debug(
+                            "[INCIDENTS] Skipping payload fetch for jenkins alert_id: %s",
+                            source_alert_id,
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "[INCIDENTS] Jenkins payload lookup failed for alert_id=%s: %s",
+                            source_alert_id,
+                            exc,
+                        )
 
                 # Log warning if no payload found for any source type
                 if not raw_payload:
