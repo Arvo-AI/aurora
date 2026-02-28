@@ -284,6 +284,30 @@ export function useConnectorStatus(connector: ConnectorConfig, userId: string | 
     }
   };
 
+  const checkCIConnectionViaApi = async () => {
+    try {
+      const response = await fetch('/api/connected-accounts', {
+        credentials: 'include',
+      });
+      if (!response.ok) return;
+      const data = await response.json();
+      const accounts = data.accounts || {};
+      const isConnectedInDb = Object.keys(accounts).some(
+        key => key.toLowerCase() === connector.id.toLowerCase()
+      );
+      const storageKey = connector.storageKey || `is${connector.name}Connected`;
+      if (isConnectedInDb) {
+        setIsConnected(true);
+        localStorage.setItem(storageKey, "true");
+      } else {
+        setIsConnected(false);
+        localStorage.removeItem(storageKey);
+      }
+    } catch {
+      // On error, keep existing localStorage state
+    }
+  };
+
   const checkConnectionStatus = () => {
     if (typeof window === "undefined") return;
     
@@ -326,6 +350,10 @@ export function useConnectorStatus(connector: ConnectorConfig, userId: string | 
     const storageKey = connector.storageKey || `is${connector.name}Connected`;
     const connected = localStorage.getItem(storageKey) === "true";
     setIsConnected(connected);
+
+    if (connector.id === "jenkins" || connector.id === "cloudbees") {
+      checkCIConnectionViaApi();
+    }
   };
 
   return {

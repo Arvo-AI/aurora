@@ -128,7 +128,7 @@ _RATE_LIMIT_WINDOW_SECONDS = 300  # 5 minute window
 _RATE_LIMIT_MAX_REQUESTS = 5  # Max 5 background chats per window
 
 # RCA sources that use rca_context in system prompt
-_RCA_SOURCES = {'grafana', 'datadog', 'netdata', 'splunk', 'slack', 'pagerduty', 'dynatrace'}
+_RCA_SOURCES = {'grafana', 'datadog', 'netdata', 'splunk', 'slack', 'pagerduty', 'dynatrace', 'jenkins', 'cloudbees'}
 
 # Initialize Redis client at module load time - fails if Redis is unavailable
 _redis_client = get_redis_client()
@@ -175,6 +175,8 @@ def _get_connected_integrations(user_id: str) -> Dict[str, bool]:
         'github': False,
         'confluence': False,
         'coroot': False,
+        'jenkins': False,
+        'cloudbees': False,
     }
 
     try:
@@ -212,6 +214,20 @@ def _get_connected_integrations(user_id: str) -> Dict[str, bool]:
         integrations['coroot'] = is_coroot_connected(user_id)
     except Exception as e:
         logger.info("[BackgroundChat] Error checking Coroot: %s", e, exc_info=True)
+
+    try:
+        from utils.auth.token_management import get_token_data
+        jenkins_creds = get_token_data(user_id, "jenkins")
+        integrations['jenkins'] = bool(jenkins_creds and jenkins_creds.get("base_url"))
+    except Exception as e:
+        logger.debug(f"[BackgroundChat] Error checking Jenkins: {e}")
+
+    try:
+        from utils.auth.token_management import get_token_data
+        cloudbees_creds = get_token_data(user_id, "cloudbees")
+        integrations['cloudbees'] = bool(cloudbees_creds and cloudbees_creds.get("base_url"))
+    except Exception as e:
+        logger.debug(f"[BackgroundChat] Error checking CloudBees: {e}")
 
     return integrations
 

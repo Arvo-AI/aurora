@@ -78,6 +78,9 @@ def _build_source_url(source_type: str, user_id: str) -> str:
             creds = get_token_data(user_id, "dynatrace") if not client_id else None
             env_url = (creds or {}).get("environment_url", "") if not client_id else client_id
             return env_url or ""
+        elif source_type in ("jenkins", "cloudbees"):
+            creds = get_token_data(user_id, source_type)
+            return (creds or {}).get("base_url", "")
     except Exception as e:
         logger.error(f"[INCIDENTS] Failed to build source URL for {source_type}: {e}")
     return ""
@@ -333,10 +336,8 @@ def get_incident(incident_id: str):
                 raw_payload = None
 
                 logger.debug(
-                    "[INCIDENTS] Fetching raw payload for incident %s: source_type=%s, source_alert_id=%s",
+                    "[INCIDENTS] Fetching raw payload for incident %s",
                     incident_id,
-                    source_type,
-                    source_alert_id,
                 )
 
                 if source_type == "netdata":
@@ -454,6 +455,19 @@ def get_incident(incident_id: str):
                             "[INCIDENTS] Skipping payload fetch for splunk alert_id: %s",
                             source_alert_id,
                         )
+                elif source_type == "jenkins" or source_type == "cloudbees":
+                    try:
+                        alert_id_int = int(source_alert_id)
+                        cursor.execute(
+                            "SELECT payload FROM jenkins_deployment_events WHERE id = %s AND user_id = %s",
+                            (alert_id_int, user_id),
+                        )
+                        alert_row = cursor.fetchone()
+                        if alert_row and alert_row[0] is not None:
+                            raw_payload = alert_row[0]
+                            logger.debug("[INCIDENTS] Found jenkins/cloudbees payload for alert")
+                    except (ValueError, TypeError):
+                        logger.debug("[INCIDENTS] Skipping payload fetch for jenkins/cloudbees alert (invalid ID)")
                 elif source_type == "dynatrace":
                     try:
                         alert_id_int = int(source_alert_id)
@@ -464,20 +478,15 @@ def get_incident(incident_id: str):
                         alert_row = cursor.fetchone()
                         if alert_row and alert_row[0] is not None:
                             raw_payload = alert_row[0]
-                            logger.debug(
-                                "[INCIDENTS] Found Dynatrace payload: type=%s, has_data=%s",
-                                type(raw_payload).__name__,
-                                bool(raw_payload),
-                            )
+                            logger.debug("[INCIDENTS] Found Dynatrace payload for alert")
                     except (ValueError, TypeError):
                         logger.debug("[INCIDENTS] Skipping payload fetch for dynatrace alert (non-integer id)")
 
                 # Log warning if no payload found for any source type
                 if not raw_payload:
                     logger.warning(
-                        "[INCIDENTS] No payload found for incident %s (source_type=%s)",
+                        "[INCIDENTS] No payload found for incident %s",
                         incident_id,
-                        source_type,
                     )
 
                 # Add raw payload to alert object (sourceUrl already set by _format_incident_response)
@@ -502,10 +511,9 @@ def get_incident(incident_id: str):
                 incident["alert"]["triggeredAt"] = incident["startedAt"]
 
                 logger.debug(
-                    "[INCIDENTS] Incident %s: rawPayload length=%d, sourceUrl=%s",
+                    "[INCIDENTS] Incident %s: rawPayload length=%d",
                     incident_id,
                     len(incident["alert"]["rawPayload"]),
-                    incident["alert"].get("sourceUrl", ""),
                 )
 
                 cursor.execute(
@@ -757,7 +765,7 @@ def get_incident_alerts(incident_id: str):
 
 
 # Allowed values for validation
-ALLOWED_INCIDENT_STATUS = {"investigating", "analyzed", "merged"}
+ALLOWED_INCIDENT_STATUS = {"investigating", "analyzed", "merged", "resolved"}
 ALLOWED_AURORA_STATUS = {"idle", "running", "complete", "error"}
 ALLOWED_ACTIVE_TAB = {"thoughts", "chat"}
 
@@ -833,6 +841,16 @@ def update_incident(incident_id: str):
                 if not update_fields:
                     return jsonify({"error": "No valid fields to update"}), 400
 
+                # Check previous status before updating (for transition detection)
+                previous_status = None
+                if data.get("status") == "resolved":
+                    cursor.execute(
+                        "SELECT status FROM incidents WHERE id = %s AND user_id = %s",
+                        (incident_id, user_id),
+                    )
+                    prev_row = cursor.fetchone()
+                    previous_status = prev_row[0] if prev_row else None
+
                 # Always update updated_at
                 update_fields.append("updated_at = CURRENT_TIMESTAMP")
 
@@ -853,6 +871,22 @@ def update_incident(incident_id: str):
                     return jsonify({"error": "Incident not found"}), 404
 
                 conn.commit()
+
+                # Trigger postmortem generation only on transition to resolved
+                if data.get("status") == "resolved" and previous_status != "resolved":
+                    try:
+                        from chat.background.postmortem_generator import generate_postmortem
+                        generate_postmortem.delay(incident_id, user_id)
+                        logger.info(
+                            "[INCIDENTS] Triggered postmortem generation for resolved incident %s",
+                            incident_id,
+                        )
+                    except Exception as pm_exc:
+                        logger.warning(
+                            "[INCIDENTS] Failed to trigger postmortem generation for incident %s: %s",
+                            incident_id,
+                            pm_exc,
+                        )
 
                 logger.info(
                     "[INCIDENTS] Updated incident %s for user %s", incident_id, user_id

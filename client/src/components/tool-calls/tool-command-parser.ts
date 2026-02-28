@@ -379,3 +379,57 @@ export function parseGitHubRcaCommand(toolInput: string): string {
     return "GitHub: investigate"
   }
 }
+
+function parseCIRcaCommand(toolInput: string, label: string): string {
+  try {
+    let parsed: Record<string, unknown> | null = null
+    try {
+      parsed = JSON.parse(toolInput)
+    } catch {
+      parsed = JSON.parse(toolInput.replace(/'/g, '"'))
+    }
+    const args = ((parsed as Record<string, unknown>)?.kwargs || parsed || {}) as Record<string, unknown>
+    const action = (args.action as string) || "investigate"
+    const jobPath = args.job_path || ""
+    const buildNumber = args.build_number
+    const service = args.service || ""
+    const pipelineName = args.pipeline_name || ""
+    const nodeId = args.node_id || ""
+
+    const jobRef = jobPath ? (buildNumber ? `${jobPath} #${buildNumber}` : jobPath) : ""
+    const pipelineRef = pipelineName ? (args.run_number ? `${pipelineName} #${args.run_number}` : pipelineName) : ""
+
+    switch(action) {
+      case "recent_deployments":
+        return `${label}: Recent deployments${service ? ` for ${service}` : ""}`
+      case "build_detail":
+        return `${label}: Build details${jobRef ? ` for ${jobRef}` : ""}`
+      case "pipeline_stages":
+        return `${label}: Pipeline stages${jobRef ? ` for ${jobRef}` : ""}`
+      case "stage_log":
+        return `${label}: Stage log${nodeId ? ` (${nodeId})` : ""}${jobRef ? ` for ${jobRef}` : ""}`
+      case "build_logs":
+        return `${label}: Console output${jobRef ? ` for ${jobRef}` : ""}`
+      case "test_results":
+        return `${label}: Test results${jobRef ? ` for ${jobRef}` : ""}`
+      case "blue_ocean_run":
+        return `${label}: Blue Ocean run${pipelineRef ? ` for ${pipelineRef}` : ""}`
+      case "blue_ocean_steps":
+        return `${label}: Blue Ocean steps${nodeId ? ` (${nodeId})` : ""}${pipelineRef ? ` for ${pipelineRef}` : ""}`
+      case "trace_context":
+        return `${label}: Trace context${jobRef ? ` for ${jobRef}` : ""}`
+      default:
+        return `${label}: ${action.replace(/_/g, " ")}`
+    }
+  } catch (error) {
+    return `${label}: investigate`
+  }
+}
+
+export function parseJenkinsRcaCommand(toolInput: string): string {
+  return parseCIRcaCommand(toolInput, "Jenkins")
+}
+
+export function parseCloudbeesRcaCommand(toolInput: string): string {
+  return parseCIRcaCommand(toolInput, "CloudBees")
+}

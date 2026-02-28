@@ -53,10 +53,12 @@ celery_app.conf.update(
         'routes.dynatrace.tasks',
         'routes.bigpanda.tasks',
         'routes.pagerduty.tasks',
+        'routes.jenkins.tasks',
         'utils.terminal.terminal_pod_cleanup',
         'chat.background.task',
         'chat.background.summarization',
         'chat.background.visualization_generator',
+        'chat.background.postmortem_generator',
         'routes.knowledge_base.tasks',
         'services.discovery.tasks',
     ],
@@ -100,6 +102,7 @@ try:
     import chat.background.task
     import chat.background.summarization
     import chat.background.visualization_generator
+    import chat.background.postmortem_generator
     logging.info("Background chat tasks imported successfully")
 except ImportError as e:
     logging.warning(f"Failed to import background chat tasks: {e}")
@@ -121,6 +124,12 @@ try:
     logging.info("PagerDuty tasks imported successfully")
 except ImportError as e:
     logging.warning(f"Failed to import PagerDuty tasks: {e}")
+
+try:
+    import routes.jenkins.tasks  # noqa: F401
+    logging.info("Jenkins tasks imported successfully")
+except ImportError as e:
+    logging.warning(f"Failed to import Jenkins tasks: {e}")
 
 try:
     import services.discovery.tasks

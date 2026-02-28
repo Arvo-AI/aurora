@@ -3,18 +3,20 @@
 import React, { useState } from 'react';
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog";
-import { Settings, User, X, BookOpen } from "lucide-react";
+import { Settings, User, BookOpen, FileText } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { GeneralSettings } from "@/components/GeneralSettings";
 import { ProfileSettings } from "@/components/ProfileSettings";
 import { KnowledgeBaseSettings } from "@/components/KnowledgeBaseSettings";
+import { PostmortemsSettings } from "@/components/PostmortemsSettings";
+
 
 interface SettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
 }
 
-type SettingsTab = 'general' | 'profile' | 'knowledge-base';
+type SettingsTab = 'general' | 'profile' | 'knowledge-base' | 'postmortems';
 
 export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
   const [activeTab, setActiveTab] = useState<SettingsTab>('general');
@@ -37,6 +39,12 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
       label: 'Knowledge Base',
       icon: BookOpen,
       description: 'Manage documentation and context'
+    },
+    {
+      id: 'postmortems' as SettingsTab,
+      label: 'Postmortems',
+      icon: FileText,
+      description: 'View generated postmortems'
     }
   ];
 
@@ -68,6 +76,13 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
             <div className="flex-1 overflow-y-auto min-h-0">
               <ProfileSettings />
             </div>
+          </div>
+        );
+
+      case 'postmortems':
+        return (
+          <div className="h-full overflow-y-auto">
+            <PostmortemsSettings />
           </div>
         );
 
@@ -117,7 +132,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
           </div>
           
                                 {/* Right Content Area */}
-                      <div className="flex-1 overflow-y-auto h-full max-h-full min-h-0">
+                      <div className="flex-1 overflow-y-auto h-full max-h-full min-h-0 pr-8">
                         <div className="h-full min-h-0">
                           {renderContent()}
                         </div>

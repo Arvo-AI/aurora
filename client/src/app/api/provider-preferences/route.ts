@@ -50,7 +50,7 @@ export async function GET() {
     }
 
     // Ensure it's an array of valid providers
-    const validProviders = ['gcp', 'azure', 'aws', 'scaleway', 'tailscale', 'grafana', 'datadog'];
+    const validProviders = ['gcp', 'azure', 'aws', 'scaleway', 'tailscale', 'grafana', 'datadog', 'cloudbees'];
     if (isOvhEnabled()) {
       validProviders.push('ovh');
     }
@@ -93,7 +93,7 @@ export async function POST(request: NextRequest) {
     const { providers, action = 'set', provider } = body;
 
     // Validate input
-    const validProviders = ['gcp', 'azure', 'aws', 'scaleway', 'tailscale', 'grafana', 'datadog'];
+    const validProviders = ['gcp', 'azure', 'aws', 'scaleway', 'tailscale', 'grafana', 'datadog', 'cloudbees'];
     if (isOvhEnabled()) {
       validProviders.push('ovh');
     }
@@ -181,7 +181,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Also track unselected providers for smart auto-select
-    const allProviders = ['gcp', 'azure', 'aws', 'scaleway', 'tailscale', 'grafana', 'datadog'];
+    const allProviders = ['gcp', 'azure', 'aws', 'scaleway', 'tailscale', 'grafana', 'datadog', 'cloudbees'];
     if (isOvhEnabled()) {
       allProviders.push('ovh');
     }

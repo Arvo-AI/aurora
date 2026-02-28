@@ -16,6 +16,7 @@ import { netdataService } from '@/lib/services/netdata';
 import { splunkService } from '@/lib/services/splunk';
 import { datadogService } from '@/lib/services/datadog';
 import { dynatraceService } from '@/lib/services/dynatrace';
+import { jenkinsService, cloudbeesService } from '@/lib/services/ci-provider';
 import { useRouter } from 'next/navigation';
 
 export default function IncidentsPage() {
@@ -30,7 +31,7 @@ export default function IncidentsPage() {
         setLoading(true);
       }
 
-      const [data, grafanaStatus, pagerdutyStatus, netdataStatus, splunkStatus, datadogStatus, dynatraceStatus] = await Promise.all([
+      const [data, grafanaStatus, pagerdutyStatus, netdataStatus, splunkStatus, datadogStatus, dynatraceStatus, jenkinsStatus, cloudbeesStatus, jenkinsRca, cloudbeesRca] = await Promise.all([
         incidentsService.getIncidents(),
         // Only check connection status on initial load (not silent refreshes)
         silent ? Promise.resolve(null) : grafanaService.getStatus(),
@@ -38,11 +39,16 @@ export default function IncidentsPage() {
         silent ? Promise.resolve(null) : netdataService.getStatus(),
         silent ? Promise.resolve(null) : splunkService.getStatus(),
         silent ? Promise.resolve(null) : datadogService.getStatus(),
-        silent ? Promise.resolve(null) : dynatraceService.getStatus()
+        silent ? Promise.resolve(null) : dynatraceService.getStatus(),
+        silent ? Promise.resolve(null) : jenkinsService.getStatus(),
+        silent ? Promise.resolve(null) : cloudbeesService.getStatus(),
+        silent ? Promise.resolve(null) : jenkinsService.getRcaSettings(),
+        silent ? Promise.resolve(null) : cloudbeesService.getRcaSettings(),
       ]);
 
       // Update connection status if this is initial load
-      // Consider connected if Grafana, PagerDuty, Netdata, Splunk, Datadog, or Dynatrace is connected
+      // Consider connected if any alerting platform is connected,
+      // or a CI platform is connected AND has RCA enabled
       if (!silent) {
         const grafanaConnected = grafanaStatus?.connected ?? false;
         const pagerdutyConnected = pagerdutyStatus?.connected ?? false;
@@ -50,7 +56,13 @@ export default function IncidentsPage() {
         const splunkConnected = splunkStatus?.connected ?? false;
         const datadogConnected = datadogStatus?.connected ?? false;
         const dynatraceConnected = dynatraceStatus?.connected ?? false;
-        setIsConnectedToIncidentPlatform(grafanaConnected || pagerdutyConnected || netdataConnected || splunkConnected || datadogConnected || dynatraceConnected);
+        const jenkinsRcaActive = (jenkinsStatus?.connected ?? false) && (jenkinsRca?.rcaEnabled ?? false);
+        const cloudbeesRcaActive = (cloudbeesStatus?.connected ?? false) && (cloudbeesRca?.rcaEnabled ?? false);
+        setIsConnectedToIncidentPlatform(
+          grafanaConnected || pagerdutyConnected || netdataConnected ||
+          splunkConnected || datadogConnected || dynatraceConnected ||
+          jenkinsRcaActive || cloudbeesRcaActive
+        );
       }
 
       // Only update state if the list actually changed (prevents unnecessary re-renders)

@@ -385,6 +385,75 @@ def _get_github_context(user_id: str) -> Optional[Dict[str, str]]:
         return None
 
 
+def _has_jenkins_connected(user_id: str) -> bool:
+    """Check if user has Jenkins connected."""
+    try:
+        from utils.auth.token_management import get_token_data
+        creds = get_token_data(user_id, "jenkins")
+        return bool(creds and creds.get("base_url"))
+    except Exception as e:
+        logger.warning(f"Error checking Jenkins context: {e}")
+        return False
+
+
+def _has_cloudbees_connected(user_id: str) -> bool:
+    """Check if user has CloudBees CI connected."""
+    try:
+        from utils.auth.token_management import get_token_data
+        creds = get_token_data(user_id, "cloudbees")
+        return bool(creds and creds.get("base_url"))
+    except Exception as e:
+        logger.warning(f"Error checking CloudBees context: {e}")
+        return False
+
+
+def _get_recent_jenkins_deployments(user_id: str, service: str = "", lookback_minutes: int = 60, provider: str = "") -> List[Dict[str, Any]]:
+    """Query jenkins_deployment_events for recent deployments matching a service.
+
+    Used to inject deployment context into ANY RCA prompt (not just Jenkins-sourced).
+    """
+    if not user_id:
+        return []
+    lookback_minutes = max(1, min(int(lookback_minutes), 10080))  # 1 min to 7 days
+    try:
+        from utils.db.connection_pool import db_pool
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                conditions = ["user_id = %s", "received_at >= NOW() - make_interval(mins => %s)"]
+                params: list = [user_id, lookback_minutes]
+
+                if service and service != "unknown":
+                    conditions.append("service = %s")
+                    params.append(service)
+
+                if provider:
+                    conditions.append("provider = %s")
+                    params.append(provider)
+
+                where = " AND ".join(conditions)
+                cursor.execute(
+                    f"""SELECT service, environment, result, build_number, build_url,
+                              commit_sha, branch, deployer, trace_id, received_at
+                       FROM jenkins_deployment_events
+                       WHERE {where}
+                       ORDER BY received_at DESC LIMIT 5""",
+                    tuple(params),
+                )
+                rows = cursor.fetchall()
+                return [
+                    {
+                        "service": r[0], "environment": r[1], "result": r[2],
+                        "build_number": r[3], "build_url": r[4], "commit_sha": r[5] or "",
+                        "branch": r[6], "deployer": r[7], "trace_id": r[8],
+                        "webhook_received_at": r[9].isoformat() if r[9] else None,
+                    }
+                    for r in rows
+                ]
+    except Exception as e:
+        logger.warning(f"Error fetching recent Jenkins deployments: {e}")
+        return []
+
+
 def build_rca_prompt(
     source: str,
     alert_details: Dict[str, Any],
@@ -539,6 +608,92 @@ def build_rca_prompt(
             "",
             "## PROVIDER-SPECIFIC INVESTIGATION STEPS:",
             provider_section,
+        ])
+
+    # Jenkins CI/CD context: inject recent deployments + investigation instructions
+    if user_id and _has_jenkins_connected(user_id):
+        alert_service = alert_details.get('labels', {}).get('service', '') or ''
+        if source == 'netdata':
+            alert_service = alert_details.get('host', '') or ''
+
+        recent_deploys = _get_recent_jenkins_deployments(user_id, alert_service, provider="jenkins")
+        prompt_parts.extend([
+            "",
+            "## JENKINS CI/CD INTEGRATION:",
+            "Jenkins is connected. Use the `jenkins_rca` tool to investigate CI/CD activity.",
+            "",
+        ])
+
+        if recent_deploys:
+            prompt_parts.append("### RECENT DEPLOYMENTS (potential change correlation):")
+            for dep in recent_deploys:
+                ts = dep.get("webhook_received_at", "?")
+                commit_sha = dep.get('commit_sha') or '?'
+                prompt_parts.append(
+                    f"- [{dep['result']}] {dep['service']} → {dep.get('environment', '?')} "
+                    f"received {ts} (commit: {commit_sha[:8]}, "
+                    f"build: #{dep.get('build_number', '?')})"
+                )
+                if dep.get("trace_id"):
+                    prompt_parts.append(f"  OTel Trace ID: {dep['trace_id']}")
+            prompt_parts.append("")
+
+        prompt_parts.extend([
+            "### Jenkins Investigation Commands:",
+            "- Check recent deployments: `jenkins_rca(action='recent_deployments', service='SERVICE')`",
+            "- Get build details with commits: `jenkins_rca(action='build_detail', job_path='JOB', build_number=N)`",
+            "- Get pipeline stage breakdown: `jenkins_rca(action='pipeline_stages', job_path='JOB', build_number=N)`",
+            "- Get stage-specific logs: `jenkins_rca(action='stage_log', job_path='JOB', build_number=N, node_id='NODE')`",
+            "- Get build console output: `jenkins_rca(action='build_logs', job_path='JOB', build_number=N)`",
+            "- Get test failures: `jenkins_rca(action='test_results', job_path='JOB', build_number=N)`",
+            "- Blue Ocean run data: `jenkins_rca(action='blue_ocean_run', pipeline_name='PIPELINE', run_number=N)`",
+            "- Check OTel trace context: `jenkins_rca(action='trace_context', deployment_event_id=ID)`",
+            "",
+            "**IMPORTANT**: Recent deployments are a leading indicator of root cause.",
+            "Always check if a deployment occurred shortly before the alert fired.",
+        ])
+
+    # CloudBees CI/CD context (same API as Jenkins, separate credentials)
+    if user_id and _has_cloudbees_connected(user_id):
+        alert_service = alert_details.get('labels', {}).get('service', '') or ''
+        if source == 'netdata':
+            alert_service = alert_details.get('host', '') or ''
+
+        recent_deploys = _get_recent_jenkins_deployments(user_id, alert_service, provider="cloudbees")
+        prompt_parts.extend([
+            "",
+            "## CLOUDBEES CI/CD INTEGRATION:",
+            "CloudBees CI is connected. Use the `cloudbees_rca` tool to investigate CI/CD activity.",
+            "",
+        ])
+
+        if recent_deploys:
+            prompt_parts.append("### RECENT DEPLOYMENTS (potential change correlation):")
+            for dep in recent_deploys:
+                ts = dep.get("webhook_received_at", "?")
+                commit_sha = dep.get('commit_sha') or '?'
+                prompt_parts.append(
+                    f"- [{dep['result']}] {dep['service']} → {dep.get('environment', '?')} "
+                    f"received {ts} (commit: {commit_sha[:8]}, "
+                    f"build: #{dep.get('build_number', '?')})"
+                )
+                if dep.get("trace_id"):
+                    prompt_parts.append(f"  OTel Trace ID: {dep['trace_id']}")
+            prompt_parts.append("")
+
+        prompt_parts.extend([
+            "### CloudBees Investigation Commands:",
+            "- Check recent deployments: `cloudbees_rca(action='recent_deployments', service='SERVICE')`",
+            "- Get build details with commits: `cloudbees_rca(action='build_detail', job_path='JOB', build_number=N)`",
+            "- Get pipeline stage breakdown: `cloudbees_rca(action='pipeline_stages', job_path='JOB', build_number=N)`",
+            "- Get stage-specific logs: `cloudbees_rca(action='stage_log', job_path='JOB', build_number=N, node_id='NODE')`",
+            "- Get build console output: `cloudbees_rca(action='build_logs', job_path='JOB', build_number=N)`",
+            "- Get test failures: `cloudbees_rca(action='test_results', job_path='JOB', build_number=N)`",
+            "- Blue Ocean run data: `cloudbees_rca(action='blue_ocean_run', pipeline_name='PIPELINE', run_number=N)`",
+            "- Check OTel trace context: `cloudbees_rca(action='trace_context', deployment_event_id=ID)`",
+            "",
+            "**IMPORTANT**: Recent deployments are a leading indicator of root cause.",
+            "Always check if a deployment occurred shortly before the alert fired.",
         ])
 
     # Aurora Learn: Inject context from similar past incidents
@@ -843,3 +998,67 @@ def build_pagerduty_rca_prompt(
                 alert_details['labels'][f"custom_{field_name}"] = str(field_value)
     
     return build_rca_prompt('pagerduty', alert_details, providers, user_id)
+
+
+def build_jenkins_rca_prompt(
+    payload: Dict[str, Any],
+    providers: Optional[List[str]] = None,
+    user_id: Optional[str] = None,
+) -> str:
+    """Build RCA prompt from a Jenkins deployment failure event."""
+    service = payload.get("service") or payload.get("job_name") or "Unknown Service"
+    result = payload.get("result", "FAILURE")
+    environment = payload.get("environment", "unknown")
+    git = payload.get("git", {})
+
+    alert_details = {
+        'title': f"Jenkins Deployment {result}: {service}",
+        'status': result,
+        'message': f"Build #{payload.get('build_number', '?')} deployed to {environment}",
+        'labels': {
+            'service': service,
+            'environment': environment,
+            'deployer': payload.get('deployer', ''),
+        },
+    }
+
+    if git.get("commit_sha"):
+        alert_details['labels']['commit'] = git['commit_sha']
+    if git.get("branch"):
+        alert_details['labels']['branch'] = git['branch']
+    if payload.get("trace_id"):
+        alert_details['labels']['trace_id'] = payload['trace_id']
+
+    return build_rca_prompt('jenkins', alert_details, providers, user_id)
+
+
+def build_cloudbees_rca_prompt(
+    payload: Dict[str, Any],
+    providers: Optional[List[str]] = None,
+    user_id: Optional[str] = None,
+) -> str:
+    """Build RCA prompt from a CloudBees CI deployment failure event."""
+    service = payload.get("service") or payload.get("job_name") or "Unknown Service"
+    result = payload.get("result", "FAILURE")
+    environment = payload.get("environment", "unknown")
+    git = payload.get("git", {})
+
+    alert_details = {
+        'title': f"CloudBees CI Deployment {result}: {service}",
+        'status': result,
+        'message': f"Build #{payload.get('build_number', '?')} deployed to {environment}",
+        'labels': {
+            'service': service,
+            'environment': environment,
+            'deployer': payload.get('deployer', ''),
+        },
+    }
+
+    if git.get("commit_sha"):
+        alert_details['labels']['commit'] = git['commit_sha']
+    if git.get("branch"):
+        alert_details['labels']['branch'] = git['branch']
+    if payload.get("trace_id"):
+        alert_details['labels']['trace_id'] = payload['trace_id']
+
+    return build_rca_prompt('cloudbees', alert_details, providers, user_id)
