@@ -563,6 +563,10 @@ export default function AWSOnboardingPage() {
         return;
       }
       const accountId = arnMatch[1];
+      if (connectedAccounts.some(a => a.account_id === accountId)) {
+        setError(`Account ${accountId} is already connected.`);
+        return;
+      }
       const res = await fetch(`${BACKEND_URL}/workspaces/${workspaceId}/aws/accounts/bulk`, {
         method: 'POST',
         credentials: 'include',
