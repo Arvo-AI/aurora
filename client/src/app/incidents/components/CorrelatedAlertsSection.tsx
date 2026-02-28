@@ -86,7 +86,7 @@ function CorrelatedAlertCard({ alert, isNew }: { alert: CorrelatedAlert; isNew: 
             alt={alert.sourceType}
             width={18}
             height={18}
-            className={`object-contain opacity-70${alert.sourceType === 'dynatrace' ? ' scale-[2.2]' : ''}`}
+            className={`object-contain opacity-70${alert.sourceType === 'dynatrace' ? ' scale-[2.2]' : ''}${alert.sourceType === 'bigpanda' ? ' bg-white rounded-sm p-0.5' : ''}`}
           />
         </div>
         
