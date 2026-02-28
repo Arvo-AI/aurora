@@ -17,6 +17,16 @@ import {
   Upload
 } from 'lucide-react';
 import { Alert, AlertDescription } from '@/components/ui/alert';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { getEnv } from '@/lib/env';
 import { useToast } from '@/hooks/use-toast';
 
@@ -96,6 +106,7 @@ export default function AWSOnboardingPage() {
   const [addAccountId, setAddAccountId] = useState('');
   const [addAccountRegion, setAddAccountRegion] = useState('us-east-1');
   const [isAddingAccount, setIsAddingAccount] = useState(false);
+  const [disconnectTarget, setDisconnectTarget] = useState<string | 'all' | null>(null);
   const [quickCreateUrl, setQuickCreateUrl] = useState<string | null>(null);
   const [stackSetsCommand, setStackSetsCommand] = useState<string | null>(null);
   const [stackSetsCopied, setStackSetsCopied] = useState(false);
@@ -299,10 +310,6 @@ export default function AWSOnboardingPage() {
 
   const handleDisconnect = async () => {
     if (!workspaceId || !userId) return;
-    const confirmed = window.confirm(
-      'Disconnect all AWS accounts?\n\nThis removes Aurora\'s connections only. The IAM roles still exist in your AWS accounts. To fully revoke access, delete the CloudFormation stacks (or StackSet) in those accounts.'
-    );
-    if (!confirmed) return;
     setIsDisconnecting(true);
     try {
       const response = await fetch(
@@ -518,10 +525,6 @@ export default function AWSOnboardingPage() {
 
   const handleDeleteAccount = async (accountId: string) => {
     if (!workspaceId || !userId) return;
-    const confirmed = window.confirm(
-      `Disconnect account ${accountId}?\n\nThis removes Aurora's connection only. The IAM role still exists in your AWS account. To fully revoke access, delete the CloudFormation stack in that account.`
-    );
-    if (!confirmed) return;
     try {
       const res = await fetch(`${BACKEND_URL}/workspaces/${workspaceId}/aws/accounts/${accountId}`, {
         method: 'DELETE',
@@ -877,7 +880,7 @@ make dev`}</pre>
                     </CardDescription>
                   </div>
                 </div>
-                <Button variant="ghost" onClick={handleDisconnect} disabled={isDisconnecting} className="text-white/50 hover:text-white hover:bg-white/5">
+                <Button variant="ghost" onClick={() => setDisconnectTarget('all')} disabled={isDisconnecting} className="text-white/50 hover:text-white hover:bg-white/5">
                   {isDisconnecting ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Disconnect All'}
                 </Button>
               </div>
@@ -916,7 +919,7 @@ make dev`}</pre>
                             </td>
                             <td className="px-4 py-2 text-xs">{acct.last_verified_at ? new Date(acct.last_verified_at).toLocaleDateString() : '-'}</td>
                             <td className="px-4 py-2 text-right">
-                              <Button variant="ghost" size="icon" onClick={() => handleDeleteAccount(acct.account_id)} className="h-7 w-7 text-white/30 hover:text-red-400 hover:bg-white/5">
+                              <Button variant="ghost" size="icon" onClick={() => setDisconnectTarget(acct.account_id)} className="h-7 w-7 text-white/30 hover:text-red-400 hover:bg-white/5">
                                 <Trash2 className="w-3.5 h-3.5" />
                               </Button>
                             </td>
@@ -1280,6 +1283,37 @@ make dev`}</pre>
           </Card>
         )}
         </div>
+
+        {/* Disconnect confirmation dialog */}
+        <AlertDialog open={disconnectTarget !== null} onOpenChange={(open) => { if (!open) setDisconnectTarget(null); }}>
+          <AlertDialogContent className="bg-black border-white/10">
+            <AlertDialogHeader>
+              <AlertDialogTitle className="text-white">
+                {disconnectTarget === 'all' ? 'Disconnect all accounts?' : `Disconnect account ${disconnectTarget}?`}
+              </AlertDialogTitle>
+              <AlertDialogDescription className="text-white/50">
+                This removes Aurora&apos;s connection only. The IAM role still exists in {disconnectTarget === 'all' ? 'your AWS accounts' : 'the AWS account'}.
+                To fully revoke access, delete the CloudFormation stack{disconnectTarget === 'all' ? 's (or StackSet)' : ''} in {disconnectTarget === 'all' ? 'those accounts' : 'that account'}.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel className="border-white/10 text-white/70 hover:bg-white/5 hover:text-white">Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                className="bg-red-600 text-white hover:bg-red-700"
+                onClick={() => {
+                  if (disconnectTarget === 'all') {
+                    handleDisconnect();
+                  } else if (disconnectTarget) {
+                    handleDeleteAccount(disconnectTarget);
+                  }
+                  setDisconnectTarget(null);
+                }}
+              >
+                Disconnect
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
     </div>
   );
 }
