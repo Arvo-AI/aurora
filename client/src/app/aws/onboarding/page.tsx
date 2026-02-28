@@ -912,65 +912,56 @@ make dev`}</pre>
                 </div>
               )}
 
-              {/* Deploy to More Accounts */}
-              <div className="space-y-4 bg-white/5 border border-white/10 rounded-lg p-4">
+              {/* Add More Accounts */}
+              <div className="space-y-3 bg-white/5 border border-white/10 rounded-lg p-4">
                 <p className="text-sm font-medium text-white/70">Add More Accounts</p>
                 <p className="text-xs text-white/40">
-                  Deploy the Aurora IAM role to each AWS account you want to connect.
-                  Aurora never needs admin access to your accounts -- your AWS admin handles the deployment.
+                  Deploy the Aurora IAM role to another AWS account, then register it here.
                 </p>
 
-                <div className="space-y-3">
-                  {/* Quick-Create Link */}
-                  {quickCreateUrl && (
-                    <div className="space-y-1.5">
-                      <p className="text-xs text-white/60 font-medium">Option 1: Quick-Create Link (one account at a time)</p>
-                      <p className="text-xs text-white/40">Log into the target AWS account, then open this link:</p>
-                      <div className="flex gap-2">
-                        <Input value={quickCreateUrl} readOnly className="font-mono text-xs bg-black/50 text-white border-white/10 focus-visible:ring-white/20" />
-                        <Button variant="outline" size="icon" onClick={() => { navigator.clipboard.writeText(quickCreateUrl); }} className="border-white/10 hover:bg-white/5 text-white/70 shrink-0">
-                          <Copy className="w-4 h-4" />
-                        </Button>
-                        <a href={quickCreateUrl} target="_blank" rel="noopener noreferrer">
-                          <Button variant="outline" className="border-white/10 hover:bg-white/5 text-white/70 shrink-0 text-xs">
-                            Open
+                {/* Primary: Quick-Create */}
+                {quickCreateUrl && (
+                  <a href={quickCreateUrl} target="_blank" rel="noopener noreferrer" className="block">
+                    <Button variant="outline" size="sm" className="border-white/10 hover:bg-white/5 text-white/70 text-xs w-full justify-start">
+                      <Cloud className="w-3 h-3 mr-1.5" />
+                      Deploy role via AWS Console (Quick-Create)
+                    </Button>
+                  </a>
+                )}
+
+                <Button onClick={() => setShowBulkForm(!showBulkForm)} variant="outline" size="sm" className="border-white/10 hover:bg-white/5 text-white/70 text-xs w-full justify-start">
+                  <Upload className="w-3 h-3 mr-1.5" />
+                  {showBulkForm ? 'Hide Bulk Register' : 'Register accounts after deploying'}
+                </Button>
+
+                {/* Advanced options */}
+                <details className="group">
+                  <summary className="text-xs text-white/30 cursor-pointer hover:text-white/50 select-none">
+                    More options: StackSets, CLI, download template
+                  </summary>
+                  <div className="mt-3 space-y-3 border-t border-white/5 pt-3">
+                    {stackSetsCommand && (
+                      <div className="space-y-1.5">
+                        <p className="text-xs text-white/50">Deploy to all accounts via StackSets:</p>
+                        <div className="relative">
+                          <pre className="bg-black/50 p-3 pr-10 rounded border border-white/10 text-xs text-white/70 font-mono overflow-x-auto whitespace-pre">{stackSetsCommand}</pre>
+                          <Button
+                            variant="outline"
+                            size="icon"
+                            onClick={() => { navigator.clipboard.writeText(stackSetsCommand); setStackSetsCopied(true); setTimeout(() => setStackSetsCopied(false), 2000); }}
+                            className="absolute top-2 right-2 h-6 w-6 border-white/10 hover:bg-white/5 text-white/70"
+                          >
+                            {stackSetsCopied ? <CheckCircle className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
                           </Button>
-                        </a>
+                        </div>
                       </div>
-                    </div>
-                  )}
-
-                  {/* StackSets for orgs */}
-                  {stackSetsCommand && (
-                    <div className="space-y-1.5">
-                      <p className="text-xs text-white/60 font-medium">Option 2: StackSets (all accounts in your AWS Organization)</p>
-                      <p className="text-xs text-white/40">Run from your AWS Organizations management account:</p>
-                      <div className="relative">
-                        <pre className="bg-black/50 p-3 pr-10 rounded border border-white/10 text-xs text-white/70 font-mono overflow-x-auto whitespace-pre">{stackSetsCommand}</pre>
-                        <Button
-                          variant="outline"
-                          size="icon"
-                          onClick={() => { navigator.clipboard.writeText(stackSetsCommand); setStackSetsCopied(true); setTimeout(() => setStackSetsCopied(false), 2000); }}
-                          className="absolute top-2 right-2 h-6 w-6 border-white/10 hover:bg-white/5 text-white/70"
-                        >
-                          {stackSetsCopied ? <CheckCircle className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
-                        </Button>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Download template + Bulk register */}
-                  <div className="flex flex-wrap gap-3 pt-2 border-t border-white/5">
+                    )}
                     <Button onClick={handleDownloadCfnTemplate} disabled={isDownloadingCfn} variant="outline" size="sm" className="border-white/10 hover:bg-white/5 text-white/70 text-xs">
                       {isDownloadingCfn ? <Loader2 className="w-3 h-3 animate-spin mr-1.5" /> : <Download className="w-3 h-3 mr-1.5" />}
                       Download Template YAML
                     </Button>
-                    <Button onClick={() => setShowBulkForm(!showBulkForm)} variant="outline" size="sm" className="border-white/10 hover:bg-white/5 text-white/70 text-xs">
-                      <Upload className="w-3 h-3 mr-1.5" />
-                      {showBulkForm ? 'Hide Bulk Register' : 'Bulk Register Accounts'}
-                    </Button>
                   </div>
-                </div>
+                </details>
               </div>
 
               {/* Bulk Register Form */}
@@ -1027,42 +1018,123 @@ make dev`}</pre>
             <Card className="bg-black border-white/10">
               <CardHeader>
               <CardTitle className="text-white">Connect AWS Account</CardTitle>
-              <CardDescription className="text-white/50">Create an IAM role and grant Aurora access</CardDescription>
+              <CardDescription className="text-white/50">Deploy an IAM role to grant Aurora read-only access</CardDescription>
               </CardHeader>
               <CardContent className="space-y-6">
-              {/* External ID Display */}
+
+              {/* Primary: Quick-Create */}
+              {quickCreateUrl ? (
                 <div className="space-y-3">
-                <label className="text-sm text-white/70">External ID</label>
-                  <div className="flex gap-2">
-                    <Input
-                      value={onboardingData.externalId}
-                      readOnly
-                      className="font-mono bg-white/5 text-white border-white/10 focus-visible:ring-white/20"
-                    />
-                    <Button
-                      variant="outline"
-                      size="icon"
-                      onClick={() => copyToClipboard(onboardingData.externalId)}
-                      className="border-white/10 hover:bg-white/5 text-white/70"
-                    >
-                      {copySuccess ? <CheckCircle className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                  <p className="text-sm text-white/70 font-medium">1. Deploy the IAM role</p>
+                  <p className="text-xs text-white/40">
+                    Click below to open the AWS Console with a pre-filled CloudFormation stack.
+                    It creates a read-only IAM role that trusts Aurora.
+                  </p>
+                  <a href={quickCreateUrl} target="_blank" rel="noopener noreferrer" className="block">
+                    <Button className="w-full bg-[#FF9900] text-black hover:bg-[#FF9900]/90 h-11 font-medium">
+                      <Cloud className="w-4 h-4 mr-2" /> Open in AWS Console
                     </Button>
-                  </div>
-                <p className="text-xs text-white/40">Used to secure cross-account access. Include this in your IAM role trust policy.</p>
+                  </a>
+                  <p className="text-xs text-white/30 text-center">
+                    Review the stack, check the IAM acknowledgement box, and click Create stack.
+                  </p>
                 </div>
+              ) : (
+                <div className="space-y-3">
+                  <p className="text-sm text-white/70 font-medium">1. Deploy the IAM role</p>
+                  <p className="text-xs text-white/40">
+                    Download the CloudFormation template and deploy it in your AWS account.
+                  </p>
+                  <Button onClick={handleDownloadCfnTemplate} disabled={isDownloadingCfn} className="w-full bg-[#FF9900] text-black hover:bg-[#FF9900]/90 h-11 font-medium">
+                    {isDownloadingCfn ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Download className="w-4 h-4 mr-2" />}
+                    Download CloudFormation Template
+                  </Button>
+                </div>
+              )}
 
-              {/* Setup Instructions */}
-              <div className="space-y-2 bg-white/5 border border-white/10 rounded-lg p-4">
-                <p className="text-xs text-white/60 font-semibold">Setup Instructions:</p>
+              {/* Step 2: Paste role ARN */}
+              <div className="space-y-3">
+                <p className="text-sm text-white/70 font-medium">2. Paste the Role ARN</p>
+                <p className="text-xs text-white/40">
+                  After the stack is created, copy the role ARN from the CloudFormation Outputs tab.
+                </p>
+                <Input
+                  placeholder="arn:aws:iam::123456789012:role/AuroraReadOnlyRole"
+                  value={roleArn}
+                  onChange={(e: React.ChangeEvent<HTMLInputElement>) => setRoleArn(e.target.value)}
+                  className="bg-white/5 text-white border-white/10 focus-visible:ring-white/20 font-mono text-sm"
+                />
+              </div>
 
-                <div className="space-y-3 mt-3">
-                  <div>
-                    <p className="text-xs text-white/60 mb-1">1. Create an IAM role in your AWS account with the permissions you want Aurora to have</p>
+              {/* Error Display */}
+              {error && (
+                <div className="space-y-3">
+                  <Alert className="bg-red-500/10 border-red-500/20">
+                    <AlertCircle className="h-4 w-4 text-red-400" />
+                    <AlertDescription className="text-sm text-red-400">
+                      {error}
+                    </AlertDescription>
+                  </Alert>
+                  {(error.includes('cannot assume this role') || 
+                    error.includes('Access denied') || 
+                    error.includes('Role assumption failed')) && (
+                    <Alert className="bg-blue-500/10 border-blue-500/20">
+                      <Info className="h-4 w-4 text-blue-400" />
+                      <AlertDescription className="text-xs text-blue-400">
+                        <strong>Propagation Delay:</strong> If you just updated the trust policy, AWS changes can take up to <strong>5 minutes</strong> to propagate. Please wait a few minutes and try again.
+                      </AlertDescription>
+                    </Alert>
+                  )}
+                </div>
+              )}
+
+              {/* Connect Button */}
+              <Button
+                onClick={handleSetRole}
+                disabled={!roleArn || isSettingRole}
+                className="w-full bg-white text-black hover:bg-white/90 h-11"
+              >
+                {isSettingRole ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin mr-2" /> Connecting...
+                  </>
+                ) : (
+                  <>
+                    <Cloud className="w-4 h-4 mr-2" /> Connect AWS Account
+                  </>
+                )}
+              </Button>
+
+              {/* Advanced: Manual setup */}
+              <details className="group">
+                <summary className="text-xs text-white/30 cursor-pointer hover:text-white/50 select-none">
+                  Advanced: manual role setup or StackSets
+                </summary>
+                <div className="mt-4 space-y-4 border-t border-white/5 pt-4">
+                  {/* External ID */}
+                  <div className="space-y-2">
+                    <label className="text-xs text-white/50">External ID</label>
+                    <div className="flex gap-2">
+                      <Input
+                        value={onboardingData.externalId}
+                        readOnly
+                        className="font-mono text-xs bg-white/5 text-white border-white/10 focus-visible:ring-white/20"
+                      />
+                      <Button
+                        variant="outline"
+                        size="icon"
+                        onClick={() => copyToClipboard(onboardingData.externalId)}
+                        className="border-white/10 hover:bg-white/5 text-white/70"
+                      >
+                        {copySuccess ? <CheckCircle className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                      </Button>
+                    </div>
                   </div>
 
-                  <div>
-                    <p className="text-xs text-white/60 mb-1">2. Add this trust policy to the role:</p>
-                    <div className="relative mt-2">
+                  {/* Trust policy */}
+                  <div className="space-y-2">
+                    <label className="text-xs text-white/50">Trust Policy JSON</label>
+                    <div className="relative">
                       <pre className="text-white text-xs whitespace-pre-wrap font-mono bg-black/30 p-3 pr-10 rounded border border-white/10">
 {JSON.stringify({
     "Version": "2012-10-17",
@@ -1087,125 +1159,28 @@ make dev`}</pre>
                         size="icon"
                         onClick={() => copyTrustPolicyToClipboard(JSON.stringify({
                           "Version": "2012-10-17",
-                          "Statement": [
-                            {
-                              "Effect": "Allow",
-                              "Principal": {
-                                "AWS": `arn:aws:iam::${onboardingData.auroraAccountId}:root`
-                              },
-                              "Action": "sts:AssumeRole",
-                              "Condition": {
-                                "StringEquals": {
-                                  "sts:ExternalId": onboardingData.externalId
-                                }
-                              }
-                            }
-                          ]
+                          "Statement": [{
+                            "Effect": "Allow",
+                            "Principal": { "AWS": `arn:aws:iam::${onboardingData.auroraAccountId}:root` },
+                            "Action": "sts:AssumeRole",
+                            "Condition": { "StringEquals": { "sts:ExternalId": onboardingData.externalId } }
+                          }]
                         }, null, 2))}
                         className="absolute top-2 right-2 h-6 w-6 border-white/10 hover:bg-white/5 text-white/70"
                       >
                         {trustPolicyCopySuccess ? <CheckCircle className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
                       </Button>
                     </div>
-                    <Alert className="bg-yellow-500/10 border-yellow-500/20 mt-2">
-                      <AlertCircle className="h-4 w-4 text-yellow-400" />
-                      <AlertDescription className="text-xs text-yellow-400">
-                        <strong>Important:</strong> After updating the trust policy in AWS, changes can take up to <strong>5 minutes</strong> to propagate. If role assumption fails immediately after updating the trust policy, please wait a few minutes and try again.
-                      </AlertDescription>
-                    </Alert>
                   </div>
 
-                  <div>
-                    <p className="text-xs text-white/60 mb-1">3. Attach permission policies to the role (Aurora will inherit them when it assumes the role):</p>
-                    <ul className="ml-4 space-y-1 text-xs text-white/40 mt-1">
-                      <li>• Common choice: <span className="text-white/60">PowerUserAccess</span> (full access except IAM)</li>
-                      <li>• Custom policies for your specific needs</li>
-                    </ul>
-                  </div>
-
-                  <Alert className="bg-blue-500/10 border-blue-500/20 mt-3">
-                    <Info className="h-4 w-4 text-blue-400" />
-                    <AlertDescription className="text-xs text-blue-400">
-                      Aurora automatically applies read-only restrictions in Ask mode to prevent accidental modifications
-                    </AlertDescription>
-                  </Alert>
-
-                  <div className="mt-3 pt-3 border-t border-white/10">
-                    <p className="text-xs text-white/60 mb-2">Have multiple AWS accounts? Deploy the role using one of these methods:</p>
-                    <div className="space-y-2">
-                      {quickCreateUrl && (
-                        <div className="flex items-center gap-2">
-                          <a href={quickCreateUrl} target="_blank" rel="noopener noreferrer">
-                            <Button variant="outline" size="sm" className="border-white/10 hover:bg-white/5 text-white/70 text-xs">
-                              <Cloud className="w-3 h-3 mr-1.5" />
-                              Open Quick-Create in AWS Console
-                            </Button>
-                          </a>
-                          <Button variant="outline" size="sm" onClick={() => { if (quickCreateUrl) navigator.clipboard.writeText(quickCreateUrl); }} className="border-white/10 hover:bg-white/5 text-white/70 text-xs">
-                            <Copy className="w-3 h-3 mr-1.5" />
-                            Copy Link
-                          </Button>
-                        </div>
-                      )}
-                      <Button onClick={handleDownloadCfnTemplate} disabled={isDownloadingCfn} variant="outline" size="sm" className="border-white/10 hover:bg-white/5 text-white/70 text-xs">
-                        {isDownloadingCfn ? <Loader2 className="w-3 h-3 animate-spin mr-1.5" /> : <Download className="w-3 h-3 mr-1.5" />}
-                        Download Template for StackSets / CLI
-                      </Button>
-                    </div>
-                  </div>
+                  {/* Download template */}
+                  <Button onClick={handleDownloadCfnTemplate} disabled={isDownloadingCfn} variant="outline" size="sm" className="border-white/10 hover:bg-white/5 text-white/70 text-xs">
+                    {isDownloadingCfn ? <Loader2 className="w-3 h-3 animate-spin mr-1.5" /> : <Download className="w-3 h-3 mr-1.5" />}
+                    Download Template YAML
+                  </Button>
                 </div>
-        </div>
+              </details>
 
-              {/* Role ARN Input */}
-              <div className="space-y-3">
-                <label className="text-sm text-white/70">IAM Role ARN</label>
-                <Input
-                  placeholder="arn:aws:iam::123456789012:role/AuroraRole"
-                  value={roleArn}
-                  onChange={(e: React.ChangeEvent<HTMLInputElement>) => setRoleArn(e.target.value)}
-                  className="bg-white/5 text-white border-white/10 focus-visible:ring-white/20 font-mono text-sm"
-                />
-                <p className="text-xs text-white/40">Enter the ARN of the IAM role you created above</p>
-              </div>
-
-              {/* Error Display */}
-              {error && (
-                <div className="space-y-3">
-                  <Alert className="bg-red-500/10 border-red-500/20">
-                    <AlertCircle className="h-4 w-4 text-red-400" />
-                    <AlertDescription className="text-sm text-red-400">
-                      {error}
-                    </AlertDescription>
-                  </Alert>
-                  {(error.includes('cannot assume this role') || 
-                    error.includes('Access denied') || 
-                    error.includes('Role assumption failed')) && (
-                    <Alert className="bg-blue-500/10 border-blue-500/20">
-                      <Info className="h-4 w-4 text-blue-400" />
-                      <AlertDescription className="text-xs text-blue-400">
-                        <strong>Propagation Delay:</strong> If you just updated the trust policy, AWS changes can take up to <strong>5 minutes</strong> to propagate. Please wait a few minutes and try again before troubleshooting further.
-                      </AlertDescription>
-                    </Alert>
-                  )}
-                </div>
-              )}
-
-              {/* Connect Button */}
-              <Button
-                onClick={handleSetRole}
-                disabled={!roleArn || isSettingRole}
-                className="w-full bg-white text-black hover:bg-white/90 h-11"
-              >
-                {isSettingRole ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin mr-2" /> Connecting...
-                  </>
-                ) : (
-                  <>
-                    <Cloud className="w-4 h-4 mr-2" /> Connect AWS Account
-                  </>
-                )}
-              </Button>
             </CardContent>
           </Card>
         )}
