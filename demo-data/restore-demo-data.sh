@@ -115,6 +115,15 @@ if [ -f "$SCRIPT_DIR/demo-incident-jenkins-bb.sql" ]; then
     fi
 fi
 
+if [ -f "$SCRIPT_DIR/demo-incident-dt-bp-te.sql" ]; then
+    echo "       Importing demo incident (Dynatrace+BigPanda+ThousandEyes)..."
+    if psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" < "$SCRIPT_DIR/demo-incident-dt-bp-te.sql" >/dev/null 2>&1; then
+        echo "       Done"
+    else
+        echo "       WARNING: Demo incident (Dynatrace+BigPanda+ThousandEyes) import had errors"
+    fi
+fi
+
 # Extract Weaviate data
 echo "[2/3] Restoring Weaviate vector data..."
 if [ -d "/var/lib/weaviate" ]; then
