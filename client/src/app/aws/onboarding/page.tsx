@@ -104,7 +104,6 @@ export default function AWSOnboardingPage() {
   const [isDownloadingCfn, setIsDownloadingCfn] = useState(false);
   const [showBulkForm, setShowBulkForm] = useState(false);
   const [addAccountId, setAddAccountId] = useState('');
-  const [addAccountRegion, setAddAccountRegion] = useState('us-east-1');
   const [isAddingAccount, setIsAddingAccount] = useState(false);
   const [disconnectTarget, setDisconnectTarget] = useState<string | 'all' | null>(null);
   const [quickCreateUrl, setQuickCreateUrl] = useState<string | null>(null);
@@ -557,14 +556,18 @@ export default function AWSOnboardingPage() {
     setIsAddingAccount(true);
     setError(null);
     try {
-      const accountId = addAccountId.trim();
-      const region = addAccountRegion.trim() || 'us-east-1';
-      const roleArn = `arn:aws:iam::${accountId}:role/AuroraReadOnlyRole`;
+      const arn = addAccountId.trim();
+      const arnMatch = arn.match(/arn:aws:iam::(\d{12}):role\//);
+      if (!arnMatch) {
+        setError('Invalid Role ARN. Expected format: arn:aws:iam::123456789012:role/RoleName');
+        return;
+      }
+      const accountId = arnMatch[1];
       const res = await fetch(`${BACKEND_URL}/workspaces/${workspaceId}/aws/accounts/bulk`, {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json', 'X-User-ID': userId },
-        body: JSON.stringify({ accounts: [{ accountId, roleArn, region }] }),
+        body: JSON.stringify({ accounts: [{ accountId, roleArn: arn, region: 'us-east-1' }] }),
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
@@ -997,33 +1000,21 @@ make dev`}</pre>
 
                 {/* Step 2: Register */}
                 <div className="space-y-1.5">
-                  <p className="text-xs text-white/50">2. Register the account</p>
+                  <p className="text-xs text-white/50">2. Paste the Role ARN from the CloudFormation Outputs tab</p>
                   <div className="flex gap-2">
                     <Input
-                      placeholder="Account ID (e.g. 123456789012)"
+                      placeholder="arn:aws:iam::123456789012:role/AuroraReadOnlyRole"
                       value={addAccountId}
                       onChange={(e) => setAddAccountId(e.target.value)}
                       className="bg-black/50 text-white border-white/10 font-mono text-xs focus-visible:ring-white/20 flex-1"
                     />
-                    <select
-                      value={addAccountRegion}
-                      onChange={(e) => setAddAccountRegion(e.target.value)}
-                      className="bg-black/50 text-white/70 border border-white/10 rounded-md px-2 text-xs w-32"
-                    >
-                      <option value="us-east-1">us-east-1</option>
-                      <option value="us-west-2">us-west-2</option>
-                      <option value="eu-west-1">eu-west-1</option>
-                      <option value="eu-central-1">eu-central-1</option>
-                      <option value="ap-southeast-1">ap-southeast-1</option>
-                      <option value="ca-central-1">ca-central-1</option>
-                    </select>
                     <Button
                       onClick={handleAddSingleAccount}
                       disabled={isAddingAccount || !addAccountId.trim()}
                       size="sm"
                       className="bg-white text-black hover:bg-white/90 text-xs shrink-0"
                     >
-                      {isAddingAccount ? <Loader2 className="w-3 h-3 animate-spin" /> : 'Register'}
+                      {isAddingAccount ? <Loader2 className="w-3 h-3 animate-spin" /> : 'Connect'}
                     </Button>
                   </div>
                 </div>
