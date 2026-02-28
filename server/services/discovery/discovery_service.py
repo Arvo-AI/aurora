@@ -87,14 +87,9 @@ def _setup_provider_env(provider_name, user_id, credentials):
             # Try multi-account first; fall back to single-account
             account_envs = setup_aws_environments_all_accounts(user_id)
             if account_envs and len(account_envs) > 1:
-                # Signal the caller to use multi-account fan-out
                 creds = {
                     "_multi_account": True,
                     "_account_envs": account_envs,
-                    "access_key_id": account_envs[0]["credentials"]["accessKeyId"],
-                    "secret_access_key": account_envs[0]["credentials"]["secretAccessKey"],
-                    "session_token": account_envs[0]["credentials"]["sessionToken"],
-                    "region": account_envs[0]["region"],
                 }
                 return None, creds
 

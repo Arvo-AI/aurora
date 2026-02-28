@@ -43,13 +43,6 @@ def save_connection_metadata(
     conn = None
     try:
         conn = connect_to_db_as_admin()
-        logger.info(
-            "[CONN-META] Saving connection user=%s provider=%s account=%s status=%s",
-            user_id,
-            provider,
-            account_id,
-            status,
-        )
         with conn.cursor() as cur:
             cur.execute(
                 sql,
@@ -273,14 +266,12 @@ def delete_connection_secret(
     Returns ``True`` when database update succeeds.
     """
 
-    # Check if connection exists and get secret_ref if present
     sql_select = (
         "SELECT role_arn "
         "FROM user_connections "
         "WHERE user_id = %s AND provider = %s AND account_id = %s AND status = 'active' LIMIT 1;"
     )
 
-    # Mark connection as inactive
     sql_update = (
         "UPDATE user_connections "
         "SET status = 'inactive', last_verified_at = %s "
@@ -291,7 +282,6 @@ def delete_connection_secret(
     try:
         conn = connect_to_db_as_admin()
         with conn.cursor() as cur:
-            # Check if connection exists
             cur.execute(sql_select, (user_id, provider, account_id))
             row = cur.fetchone()
             
@@ -299,8 +289,6 @@ def delete_connection_secret(
                 logger.warning("[CONN-META] No active connection found for %s/%s/%s", user_id, provider, account_id)
                 return False
 
-            # For providers that might have Vault secrets, try to delete them
-            # (Note: AWS uses STS AssumeRole, so no Vault secrets to delete)
             if provider in ['gcp', 'azure', 'github']:
                 try:
                     from utils.secrets.secret_ref_utils import SecretRefManager
@@ -320,7 +308,6 @@ def delete_connection_secret(
                 except Exception as e:
                     logger.warning("[CONN-META] Vault secret deletion skipped for %s/%s/%s: %s", user_id, provider, account_id, e)
 
-            # Mark connection inactive
             cur.execute(
                 sql_update,
                 (

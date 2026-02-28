@@ -52,7 +52,6 @@ def check_aws_environment():
         
         account_id = None
         if configured:
-            # Try to get account ID using the credentials
             try:
                 from utils.aws.aws_sts_client import get_aurora_account_id
                 account_id = get_aurora_account_id()
@@ -86,31 +85,25 @@ def get_aws_onboarding_links(workspace_id):
         if not user_id:
             return jsonify({"error": "Unauthorized"}), 401
         
-        # Get workspace
         workspace = get_workspace_by_id(workspace_id)
         if not workspace:
             return jsonify({"error": "Workspace not found"}), 404
         
-        # Check ownership
         if workspace['user_id'] != user_id:
             return jsonify({"error": "Access denied"}), 403
         
-        # Auto-detect Aurora's account ID
         from utils.aws.aws_sts_client import get_aurora_account_id
         aurora_account_id = get_aurora_account_id()
         
-        # Prepare response
         response_data = {
             "workspaceId": workspace_id,
             "externalId": workspace['aws_external_id'],
             "status": get_workspace_aws_status(workspace)
         }
 
-        # Include Aurora account ID if available
         if aurora_account_id:
             response_data["auroraAccountId"] = aurora_account_id
 
-        # Include roleArn from user_connections (single source of truth)
         from utils.db.connection_utils import get_user_aws_connection
         aws_conn = get_user_aws_connection(user_id)
         if aws_conn and aws_conn.get('role_arn'):
@@ -143,7 +136,6 @@ def set_aws_role(workspace_id):
         if not user_id:
             return jsonify({"error": "Unauthorized"}), 401
         
-        # Get workspace and verify ownership
         workspace = get_workspace_by_id(workspace_id)
         if not workspace:
             return jsonify({"error": "Workspace not found"}), 404
@@ -159,7 +151,6 @@ def set_aws_role(workspace_id):
         if not role_arn:
             return jsonify({"error": "roleArn is required"}), 400
         
-        # Basic ARN validation
         if not role_arn.startswith('arn:aws:iam::'):
             return jsonify({"error": "Invalid role ARN format"}), 400
 
@@ -167,7 +158,6 @@ def set_aws_role(workspace_id):
 
         from utils.aws.aws_sts_client import assume_workspace_role, get_aurora_account_id
 
-        # Auto-detect Aurora's account ID
         aurora_account_id = get_aurora_account_id()
         if not aurora_account_id:
             logger.error("Could not determine Aurora's AWS account ID. Ensure Aurora has AWS credentials configured.")
@@ -182,7 +172,6 @@ def set_aws_role(workspace_id):
         except Exception as e:
             logger.warning(f"Role validation failed for workspace {workspace_id} using {role_arn}: {e}")
             
-            # Extract account ID from role ARN for better error messaging
             try:
                 account_id = role_arn.split(':')[4]
             except (IndexError, AttributeError):
@@ -229,8 +218,6 @@ def set_aws_role(workspace_id):
                     }
                 }), 400
 
-        # Update user_connections table (single source of truth)
-        # This also updates workspace table for compatibility, but connection state comes from user_connections
         update_workspace_aws_role(
             workspace_id,
             role_arn,
@@ -263,7 +250,6 @@ def get_aws_onboarding_status(workspace_id):
         if not user_id:
             return jsonify({"error": "Unauthorized"}), 401
         
-        # Get workspace and verify ownership
         workspace = get_workspace_by_id(workspace_id)
         if not workspace:
             return jsonify({"error": "Workspace not found"}), 404
@@ -273,7 +259,6 @@ def get_aws_onboarding_status(workspace_id):
         
         status = get_workspace_aws_status(workspace)
         
-        # Get AWS connection from user_connections (single source of truth)
         from utils.db.connection_utils import get_user_aws_connection
         aws_conn = get_user_aws_connection(user_id)
         
@@ -306,7 +291,6 @@ def manage_user_workspaces(user_id):
         if not authenticated_user_id:
             return jsonify({"error": "Unauthorized"}), 401
         
-        # Check if user can access this user's workspaces
         if authenticated_user_id != user_id:
             return jsonify({"error": "Access denied"}), 403
         
@@ -331,9 +315,8 @@ def manage_user_workspaces(user_id):
 
 @onboarding_bp.route('/workspaces/<workspace_id>/aws/cleanup', methods=['POST', 'OPTIONS'])
 def workspace_cleanup(workspace_id):
-    """Disconnect AWS connection by removing it from user_connections (single source of truth).
+    """Disconnect AWS connection.
     
-    This endpoint now properly disconnects AWS by removing the connection from user_connections.
     Users must manually remove IAM roles and other AWS resources in their AWS console.
     """
     if request.method == 'OPTIONS':
@@ -344,12 +327,10 @@ def workspace_cleanup(workspace_id):
         if not user_id:
             return jsonify({"error": "Unauthorized"}), 401
 
-        # Verify workspace ownership
         workspace = get_workspace_by_id(workspace_id)
         if not workspace or workspace['user_id'] != user_id:
             return jsonify({"error": "Access denied"}), 403
 
-        # Disconnect AWS using the proper disconnect endpoint (single source of truth)
         from utils.db.connection_utils import (
             get_user_aws_connection,
             delete_connection_secret,
@@ -362,7 +343,6 @@ def workspace_cleanup(workspace_id):
                 "message": "AWS connection already disconnected."
             })
 
-        # Delete connection from user_connections (single source of truth)
         account_id = aws_conn.get('account_id')
         if account_id:
             success = delete_connection_secret(user_id, "aws", account_id)
@@ -370,7 +350,6 @@ def workspace_cleanup(workspace_id):
                 logger.error("Failed to delete AWS connection for user %s account %s", user_id, account_id)
                 return jsonify({"error": "Failed to disconnect AWS connection"}), 500
         
-        # Clean up workspace discovery fields (role info is only in user_connections now)
         try:
             from utils.db.connection_pool import db_pool
             with db_pool.get_admin_connection() as conn:
@@ -726,7 +705,6 @@ def get_cfn_template(workspace_id):
         with open(template_path, "r") as f:
             template_body = f.read()
 
-        # Replace default parameter values so the downloaded template is ready to deploy
         template_body = template_body.replace(
             "Type: String\n    Description: The 12-digit AWS account ID where Aurora is hosted.",
             f"Type: String\n    Default: '{aurora_account_id}'\n    Description: The 12-digit AWS account ID where Aurora is hosted.",

@@ -5,7 +5,7 @@ import re
 import shlex
 import subprocess
 from utils.terminal.terminal_run import terminal_run
-import time  # Added for performance timing
+import time
 import requests
 import tiktoken
 from typing import Dict, Any, Optional, Tuple
@@ -528,94 +528,6 @@ def setup_aws_environments_all_accounts(user_id: str):
         len(account_envs), len(connections), user_id,
     )
     return account_envs
-
-
-# OLD GLOBAL GCP FUNCTION REMOVED - Use setup_gcp_environment_isolated() instead  
-def setup_gcp_impersonation_DEPRECATED(user_id: str, selected_project_id: str | None = None, provider_preference: str | None = None):
-    """Set up GCP authentication using OAuth impersonation."""
-    try:
-        fn_start = time.perf_counter()  # Start timing for entire impersonation setup
-        logger.info("Attempting impersonated access...")
-        token_start = time.perf_counter()
-        current_mode = get_mode_from_context()
-        token_resp = generate_contextual_access_token(
-            user_id,
-            selected_project_id=selected_project_id,
-            override_provider=provider_preference,
-            mode=current_mode,
-        )
-        logger.info(f"TIME: generate_contextual_access_token took {time.perf_counter() - token_start:.2f}s")
-        access_token = token_resp["access_token"]
-        project_id = token_resp["project_id"]
-        sa_email = token_resp["service_account_email"]
-
-        # Method 1: Use environment variables that Cloud SDK & gsutil respect
-        os.environ["GOOGLE_OAUTH_ACCESS_TOKEN"] = access_token
-        os.environ["CLOUDSDK_AUTH_ACCESS_TOKEN"] = access_token  # gcloud/gsutil pick this up
-        os.environ["GOOGLE_CLOUD_PROJECT"] = project_id
-
-        # Ensure all Cloud SDK commands (including gsutil) impersonate the SA.
-        # Setting this env var is honoured by gcloud, gsutil, bq, etc.
-        os.environ["CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT"] = sa_email  # new CLIs
-        os.environ["CLOUDSDK_IMPERSONATE_SERVICE_ACCOUNT"] = sa_email       # legacy CLIs
-        
-        # Method 2: Also try to configure gcloud settings
-        try:
-            # Set the default project
-            project_cmd = ["gcloud", "config", "set", "project", project_id]
-            config_start = time.perf_counter()
-            proj_result = terminal_run(
-                project_cmd,
-                capture_output=True,
-                text=True,
-                timeout=10
-            )
-            logger.info(f"TIME: gcloud config set project took {time.perf_counter() - config_start:.2f}s")
-            
-            if proj_result.returncode == 0:
-                logger.info(f"Successfully set default project: {project_id}")
-            else:
-                logger.warning(f"Failed to set default project: {proj_result.stderr}")
-
-            # Configure impersonation property so subsequent CLI calls inherit it.
-            imp_cmd = ["gcloud", "config", "set", "auth/impersonate_service_account", sa_email]
-            imp_start = time.perf_counter()
-            imp_result = terminal_run(
-                imp_cmd,
-                capture_output=True,
-                text=True,
-                timeout=10
-            )
-            logger.info(f"TIME: gcloud config set impersonate_sa took {time.perf_counter() - imp_start:.2f}s")
-            if imp_result.returncode == 0:
-                logger.info(f"Configured gcloud to impersonate {sa_email}")
-            else:
-                logger.warning(f"Failed to configure SA impersonation: {imp_result.stderr}")
-            
-            # Verify the configuration
-            try:
-                auth_start = time.perf_counter()
-                auth_list = terminal_run(
-                    ['gcloud', 'auth', 'list'],
-                    capture_output=True,
-                    text=True,
-                    timeout=10
-                )
-                logger.info(f"TIME: gcloud auth list took {time.perf_counter() - auth_start:.2f}s")
-                logger.info(f"Current auth configuration: {auth_list.stdout}")
-            except Exception as e:
-                logger.warning(f"Failed to verify auth configuration: {e}")
-                
-        except Exception as e:
-            logger.warning(f"Failed to configure gcloud settings: {e}")
-        
-        logger.info(f"Successfully set up impersonated access for project: {project_id}")
-        logger.info(f"TIME: setup_gcp_impersonation completed in {time.perf_counter() - fn_start:.2f}s")
-        return True, project_id, "impersonated"
-
-    except Exception as e:
-        logger.error(f"Failed to generate SA access token: {e}")
-        return False, None, None
 
 
 def setup_gcp_environment_isolated(user_id: str, selected_project_id: str | None = None, provider_preference: str | None = None):
