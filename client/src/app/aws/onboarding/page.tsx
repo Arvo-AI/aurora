@@ -15,7 +15,7 @@ import {
   Download,
   Trash2,
   Upload,
-  Shield,
+  Search,
   ShieldAlert
 } from 'lucide-react';
 import { Alert, AlertDescription } from '@/components/ui/alert';
@@ -84,26 +84,26 @@ const formatAWSErrorMessage = (message: string): { title: string; description: s
 
 function RoleTypeToggle({ value, onChange }: { value: 'ReadOnly' | 'Admin'; onChange: (v: 'ReadOnly' | 'Admin') => void }) {
   return (
-    <div className="flex items-center gap-2">
-      <div className="relative flex bg-white/5 border border-white/10 rounded-lg p-0.5">
+    <div className="flex items-center gap-3">
+      <div className="relative grid grid-cols-2 bg-white/5 border border-white/10 rounded-lg p-0.5 w-56">
         <div
-          className="absolute top-0.5 bottom-0.5 rounded-md bg-white/10 transition-all duration-300 ease-out"
-          style={{ left: value === 'ReadOnly' ? '2px' : 'calc(50% + 0px)', width: 'calc(50% - 2px)' }}
+          className="absolute top-0.5 bottom-0.5 w-[calc(50%-2px)] rounded-md bg-white/10 transition-all duration-300 ease-out"
+          style={{ left: value === 'ReadOnly' ? '2px' : 'calc(50% + 2px)' }}
         />
         <button
           type="button"
           onClick={() => onChange('ReadOnly')}
-          className={`relative z-10 flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors duration-200 ${
+          className={`relative z-10 flex items-center justify-center gap-1.5 py-1.5 rounded-md text-xs font-medium transition-colors duration-200 ${
             value === 'ReadOnly' ? 'text-emerald-400' : 'text-white/30 hover:text-white/50'
           }`}
         >
-          <Shield className="w-3 h-3" />
+          <Search className="w-3 h-3" />
           Read-Only
         </button>
         <button
           type="button"
           onClick={() => onChange('Admin')}
-          className={`relative z-10 flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors duration-200 ${
+          className={`relative z-10 flex items-center justify-center gap-1.5 py-1.5 rounded-md text-xs font-medium transition-colors duration-200 ${
             value === 'Admin' ? 'text-amber-400' : 'text-white/30 hover:text-white/50'
           }`}
         >
@@ -1047,7 +1047,7 @@ make dev`}</pre>
                   <p className="text-xs text-white/50">2. Paste the Role ARN from the CloudFormation Outputs tab</p>
                   <div className="flex gap-2">
                     <Input
-                      placeholder="arn:aws:iam::123456789012:role/AuroraReadOnlyRole"
+                      placeholder={`arn:aws:iam::123456789012:role/${roleType === 'Admin' ? 'AuroraAdminRole' : 'AuroraReadOnlyRole'}`}
                       value={addAccountId}
                       onChange={(e) => setAddAccountId(e.target.value)}
                       className="bg-black/50 text-white border-white/10 font-mono text-xs focus-visible:ring-white/20 flex-1"
