@@ -25,8 +25,8 @@ bigpanda_bp = Blueprint("bigpanda", __name__)
 def _get_stored_credentials(user_id: str) -> dict | None:
     try:
         return get_token_data(user_id, "bigpanda")
-    except Exception as exc:
-        logger.error("Failed to retrieve BigPanda credentials for user %s: %s", user_id, exc)
+    except Exception:
+        logger.exception("Failed to retrieve BigPanda credentials for user %s", user_id)
         return None
 
 
@@ -195,11 +195,14 @@ def get_webhook_url():
 
     return jsonify({
         "webhookUrl": f"{base_url}/bigpanda/webhook/{user_id}",
+        "signatureHeader": "X-Aurora-Signature",
+        "signatureAlgorithm": "HMAC-SHA256 of request body using your webhook secret",
         "instructions": [
             "1. In BigPanda, go to Integrations > Outbound Integrations > Webhooks",
             "2. Click 'New Integration' and select 'Alerts Webhook'",
             "3. Paste the webhook URL above",
-            "4. Select which environments/incident types should trigger notifications",
-            "5. Save the integration",
+            "4. Configure the signature header (X-Aurora-Signature) with HMAC-SHA256 of the request body",
+            "5. Select which environments/incident types should trigger notifications",
+            "6. Save the integration",
         ],
     })

@@ -94,7 +94,7 @@ def process_bigpanda_event(
                     ),
                 )
                 event_row = cursor.fetchone()
-                conn.commit()
+            conn.commit()
 
         event_db_id = event_row[0] if event_row else None
         logger.info(
