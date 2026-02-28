@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 _SEVERITY_MAP = {
     "critical": "critical",
     "warning": "high",
-    "unknown": "medium",
+    "unknown": "unknown",
 }
 
 
@@ -89,38 +89,8 @@ def _should_trigger_rca(user_id: str) -> bool:
 
 
 def _build_rca_prompt(incident: dict[str, Any], alerts: list[dict[str, Any]], user_id: str | None = None) -> str:
-    title = _extract_title(incident, alerts)
-    service = _extract_service(alerts, incident)
-    severity = incident.get("severity", "unknown")
-    parts = [
-        "A BigPanda incident has been detected and requires Root Cause Analysis.",
-        "",
-        "INCIDENT DETAILS:",
-        f"- Title: {title}",
-        f"- Severity: {severity}",
-        f"- Status: {incident.get('status', 'unknown')}",
-        f"- Service: {service}",
-        f"- Child Alerts: {len(alerts)}",
-    ]
-    if envs := incident.get("environments"):
-        parts.append(f"- Environments: {envs}")
-    if tags := incident.get("incident_tags"):
-        parts.append(f"- Tags: {tags}")
-    if alerts:
-        parts.append("")
-        parts.append("TOP CHILD ALERTS:")
-        for i, a in enumerate(alerts[:5], 1):
-            desc = a.get("description") or a.get("condition_name") or "no description"
-            src = a.get("source_system") or "unknown source"
-            parts.append(f"  {i}. [{src}] {desc}")
-
-    try:
-        from chat.background.rca_prompt_builder import inject_aurora_learn_context
-        inject_aurora_learn_context(parts, user_id, title, service, "bigpanda")
-    except Exception as exc:
-        logger.warning("[AURORA LEARN] Failed to get context: %s", exc)
-
-    return "\n".join(parts)
+    from chat.background.rca_prompt_builder import build_bigpanda_rca_prompt
+    return build_bigpanda_rca_prompt(incident, alerts, user_id=user_id)
 
 
 @celery_app.task(
@@ -164,8 +134,7 @@ def process_bigpanda_event(
 
         logger.info("[BIGPANDA][ALERT][USER:%s] %s", user_id, title)
 
-        with db_pool.get_admin_connection() as conn:
-            cursor = conn.cursor()
+        with db_pool.get_admin_connection() as conn, conn.cursor() as cursor:
 
             # 1. Store raw event in bigpanda_events
             cursor.execute(
@@ -279,6 +248,7 @@ def process_bigpanda_event(
                 user_id=user_id,
                 title=f"RCA: {title}",
                 trigger_metadata={"source": "bigpanda", "incident_id": incident_id},
+                incident_id=str(aurora_incident_id),
             )
             task = run_background_chat.delay(
                 user_id=user_id, session_id=session_id,
