@@ -811,7 +811,7 @@ def get_cfn_quickcreate_link(workspace_id):
         qs = urllib.parse.urlencode(params)
         console_url = f"https://{region}.console.aws.amazon.com/cloudformation/home?region={region}#/stacks/quickcreate?{qs}"
 
-        # Also build a StackSets CLI command the customer can copy-paste
+        short_id = external_id[:8]
         stacksets_command = (
             f"aws cloudformation create-stack-set \\\n"
             f"  --stack-set-name aurora-role-{short_id} \\\n"
