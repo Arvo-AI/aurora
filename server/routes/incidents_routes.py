@@ -335,13 +335,9 @@ def get_incident(incident_id: str):
                 source_alert_id = incident["sourceAlertId"]
                 raw_payload = None
 
-                allowed_sources = {"jenkins", "cloudbees", "pagerduty", "datadog", "grafana", "dynatrace", "coroot"}
-                safe_source = source_type if source_type in allowed_sources else "unknown"
-
                 logger.debug(
-                    "[INCIDENTS] Fetching raw payload for incident %s: source_type=%s",
+                    "[INCIDENTS] Fetching raw payload for incident %s",
                     incident_id,
-                    safe_source,
                 )
 
                 if source_type == "netdata":
@@ -489,9 +485,8 @@ def get_incident(incident_id: str):
                 # Log warning if no payload found for any source type
                 if not raw_payload:
                     logger.warning(
-                        "[INCIDENTS] No payload found for incident %s (source_type=%s)",
+                        "[INCIDENTS] No payload found for incident %s",
                         incident_id,
-                        safe_source,
                     )
 
                 # Add raw payload to alert object (sourceUrl already set by _format_incident_response)
