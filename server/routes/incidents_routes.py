@@ -335,11 +335,13 @@ def get_incident(incident_id: str):
                 source_alert_id = incident["sourceAlertId"]
                 raw_payload = None
 
+                allowed_sources = {"jenkins", "cloudbees", "pagerduty", "datadog", "grafana", "dynatrace", "coroot"}
+                safe_source = source_type if source_type in allowed_sources else "unknown"
+
                 logger.debug(
-                    "[INCIDENTS] Fetching raw payload for incident %s: source_type=%s, source_alert_id=%s",
+                    "[INCIDENTS] Fetching raw payload for incident %s: source_type=%s",
                     incident_id,
-                    source_type,
-                    source_alert_id,
+                    safe_source,
                 )
 
                 if source_type == "netdata":
@@ -467,15 +469,9 @@ def get_incident(incident_id: str):
                         alert_row = cursor.fetchone()
                         if alert_row and alert_row[0] is not None:
                             raw_payload = alert_row[0]
-                            logger.debug(
-                                "[INCIDENTS] Found %s payload for alert",
-                                source_type,
-                            )
+                            logger.debug("[INCIDENTS] Found jenkins/cloudbees payload for alert")
                     except (ValueError, TypeError):
-                        logger.debug(
-                            "[INCIDENTS] Skipping payload fetch for %s alert (invalid ID)",
-                            source_type,
-                        )
+                        logger.debug("[INCIDENTS] Skipping payload fetch for jenkins/cloudbees alert (invalid ID)")
                 elif source_type == "dynatrace":
                     try:
                         alert_id_int = int(source_alert_id)
@@ -486,11 +482,7 @@ def get_incident(incident_id: str):
                         alert_row = cursor.fetchone()
                         if alert_row and alert_row[0] is not None:
                             raw_payload = alert_row[0]
-                            logger.debug(
-                                "[INCIDENTS] Found Dynatrace payload: type=%s, has_data=%s",
-                                type(raw_payload).__name__,
-                                bool(raw_payload),
-                            )
+                            logger.debug("[INCIDENTS] Found Dynatrace payload for alert")
                     except (ValueError, TypeError):
                         logger.debug("[INCIDENTS] Skipping payload fetch for dynatrace alert (non-integer id)")
 
@@ -499,7 +491,7 @@ def get_incident(incident_id: str):
                     logger.warning(
                         "[INCIDENTS] No payload found for incident %s (source_type=%s)",
                         incident_id,
-                        source_type,
+                        safe_source,
                     )
 
                 # Add raw payload to alert object (sourceUrl already set by _format_incident_response)
@@ -524,10 +516,9 @@ def get_incident(incident_id: str):
                 incident["alert"]["triggeredAt"] = incident["startedAt"]
 
                 logger.debug(
-                    "[INCIDENTS] Incident %s: rawPayload length=%d, sourceUrl=%s",
+                    "[INCIDENTS] Incident %s: rawPayload length=%d",
                     incident_id,
                     len(incident["alert"]["rawPayload"]),
-                    incident["alert"].get("sourceUrl", ""),
                 )
 
                 cursor.execute(
