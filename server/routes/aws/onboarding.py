@@ -800,8 +800,9 @@ def get_cfn_quickcreate_link(workspace_id):
         template_url = request.args.get("templateUrl") or os.getenv("AWS_CFN_TEMPLATE_URL", "")
 
         import urllib.parse
+        short_id = external_id[:8]
         params = {
-            "stackName": "aurora-access",
+            "stackName": f"aurora-role-{short_id}",
             "param_AuroraAccountId": aurora_account_id,
             "param_ExternalId": external_id,
             "param_RoleName": "AuroraReadOnlyRole",
@@ -815,7 +816,7 @@ def get_cfn_quickcreate_link(workspace_id):
         # Also build a StackSets CLI command the customer can copy-paste
         stacksets_command = (
             f"aws cloudformation create-stack-set \\\n"
-            f"  --stack-set-name aurora-access \\\n"
+            f"  --stack-set-name aurora-role-{short_id} \\\n"
             f"  --template-body file://aurora-cross-account-role.yaml \\\n"
             f"  --parameters \\\n"
             f"      ParameterKey=AuroraAccountId,ParameterValue={aurora_account_id} \\\n"
@@ -824,7 +825,7 @@ def get_cfn_quickcreate_link(workspace_id):
             f"  --permission-model SERVICE_MANAGED \\\n"
             f"  --auto-deployment Enabled=true,RetainStacksOnAccountRemoval=false\n\n"
             f"aws cloudformation create-stack-instances \\\n"
-            f"  --stack-set-name aurora-access \\\n"
+            f"  --stack-set-name aurora-role-{short_id} \\\n"
             f"  --deployment-targets OrganizationalUnitIds=<YOUR_ROOT_OU_ID> \\\n"
             f"  --regions {region} \\\n"
             f"  --operation-preferences MaxConcurrentPercentage=100,FailureTolerancePercentage=10"

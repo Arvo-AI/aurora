@@ -928,6 +928,7 @@ make dev`}</pre>
                 <p className="text-sm font-medium text-white/70">Add More Accounts</p>
                 <p className="text-xs text-white/40">
                   Deploy the Aurora IAM role to another AWS account, then register it here.
+                  If the stack already exists in a target account, the role is already deployed -- just register the account below.
                 </p>
 
                 {/* Primary: Quick-Create */}
@@ -1048,6 +1049,7 @@ make dev`}</pre>
                   </a>
                   <p className="text-xs text-white/30 text-center">
                     Review the stack, check the IAM acknowledgement box, and click Create stack.
+                    If the stack already exists in that account, the role is already deployed -- just paste the ARN below.
                   </p>
                 </div>
               ) : (

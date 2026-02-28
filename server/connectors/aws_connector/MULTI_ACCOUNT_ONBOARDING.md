@@ -136,13 +136,16 @@ If you have one or a few accounts, deploy the template manually:
 ```bash
 aws cloudformation deploy \
   --template-file aurora-cross-account-role.yaml \
-  --stack-name aurora-access \
+  --stack-name aurora-role \
   --capabilities CAPABILITY_NAMED_IAM \
   --parameter-overrides \
       AuroraAccountId=<AURORA_ACCOUNT_ID> \
       ExternalId=<YOUR_EXTERNAL_ID> \
   --region us-east-1
 ```
+
+> **Note:** `deploy` creates or updates the stack, so re-running this command
+> is safe -- it won't fail if the stack already exists.
 
 ### 3b. Deploy Across an Organization (StackSets)
 
@@ -152,7 +155,7 @@ accounts at once using CloudFormation StackSets:
 ```bash
 # Create the StackSet (run from the management/delegated-admin account)
 aws cloudformation create-stack-set \
-  --stack-set-name aurora-access \
+  --stack-set-name aurora-role \
   --template-body file://aurora-cross-account-role.yaml \
   --parameters \
       ParameterKey=AuroraAccountId,ParameterValue=<AURORA_ACCOUNT_ID> \
@@ -163,7 +166,7 @@ aws cloudformation create-stack-set \
 
 # Deploy to all accounts in the organization
 aws cloudformation create-stack-instances \
-  --stack-set-name aurora-access \
+  --stack-set-name aurora-role \
   --deployment-targets OrganizationalUnitIds=<ROOT_OU_ID> \
   --regions us-east-1 \
   --operation-preferences MaxConcurrentPercentage=100,FailureTolerancePercentage=10
@@ -262,6 +265,7 @@ AWS accounts.
 | Symptom | Cause | Fix |
 |---|---|---|
 | Quick-Create link says "templateURL is required" | `AWS_CFN_TEMPLATE_URL` not set, or template not hosted on S3 | Follow the "Hosting the CloudFormation Template" section above to upload to S3 and set the env var |
+| Quick-Create says "stack already exists" | The role was already deployed to this account | The role is already there -- just register the account in Aurora (Bulk Register or paste the ARN). To redeploy, delete the existing stack first or change the stack name. |
 | "Access denied" on bulk register | Role not yet created, or External ID mismatch | Verify the CFN stack deployed successfully and uses the correct External ID |
 | Some accounts fail, others succeed | IAM role propagation delay | Wait 5 minutes and retry the failed accounts |
 | Discovery finds no resources | Resource Explorer not enabled | Run `aws resource-explorer-2 create-index --type AGGREGATOR` in your primary region |
