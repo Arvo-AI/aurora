@@ -93,6 +93,9 @@ export default function AWSOnboardingPage() {
   const [bulkResults, setBulkResults] = useState<BulkResult[] | null>(null);
   const [isDownloadingCfn, setIsDownloadingCfn] = useState(false);
   const [showBulkForm, setShowBulkForm] = useState(false);
+  const [addAccountId, setAddAccountId] = useState('');
+  const [addAccountRegion, setAddAccountRegion] = useState('us-east-1');
+  const [isAddingAccount, setIsAddingAccount] = useState(false);
   const [quickCreateUrl, setQuickCreateUrl] = useState<string | null>(null);
   const [stackSetsCommand, setStackSetsCommand] = useState<string | null>(null);
   const [stackSetsCopied, setStackSetsCopied] = useState(false);
@@ -546,6 +549,42 @@ export default function AWSOnboardingPage() {
     }
   };
 
+  const handleAddSingleAccount = async () => {
+    if (!workspaceId || !userId || !addAccountId.trim()) return;
+    setIsAddingAccount(true);
+    setError(null);
+    try {
+      const accountId = addAccountId.trim();
+      const region = addAccountRegion.trim() || 'us-east-1';
+      const roleArn = `arn:aws:iam::${accountId}:role/AuroraReadOnlyRole`;
+      const res = await fetch(`${BACKEND_URL}/workspaces/${workspaceId}/aws/accounts/bulk`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json', 'X-User-ID': userId },
+        body: JSON.stringify({ accounts: [{ accountId, roleArn, region }] }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setError(data.error || 'Failed to register account.');
+        return;
+      }
+      const data = await res.json();
+      const result = data.results?.[0];
+      if (result && !result.success) {
+        setError(result.error || 'Role assumption failed. Deploy the IAM role first.');
+        return;
+      }
+      setAddAccountId('');
+      toast({ title: 'Account connected', description: `Account ${accountId} registered successfully.` });
+      await fetchConnectedAccounts();
+    } catch (err) {
+      console.error('Add account error:', err);
+      setError('Failed to register account.');
+    } finally {
+      setIsAddingAccount(false);
+    }
+  };
+
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text);
     setCopySuccess(true);
@@ -939,31 +978,63 @@ make dev`}</pre>
               {/* Add More Accounts */}
               <div className="space-y-3 bg-white/5 border border-white/10 rounded-lg p-4">
                 <p className="text-sm font-medium text-white/70">Add More Accounts</p>
-                <p className="text-xs text-white/40">
-                  Deploy the Aurora IAM role to another AWS account, then register it here.
-                </p>
 
-                {/* Primary: Quick-Create */}
-                {quickCreateUrl && (
-                  <a href={quickCreateUrl} target="_blank" rel="noopener noreferrer" className="block">
-                    <Button variant="outline" size="sm" className="border-white/10 hover:bg-white/5 text-white/70 text-xs w-full justify-start">
-                      <Cloud className="w-3 h-3 mr-1.5" />
-                      Deploy role via AWS Console (Quick-Create)
+                {/* Step 1: Deploy */}
+                <div className="space-y-1.5">
+                  <p className="text-xs text-white/50">1. Deploy the IAM role to the target account</p>
+                  {quickCreateUrl && (
+                    <a href={quickCreateUrl} target="_blank" rel="noopener noreferrer" className="block">
+                      <Button variant="outline" size="sm" className="border-white/10 hover:bg-white/5 text-white/70 text-xs w-full justify-start">
+                        <Cloud className="w-3 h-3 mr-1.5" />
+                        Open Quick-Create in AWS Console
+                      </Button>
+                    </a>
+                  )}
+                </div>
+
+                {/* Step 2: Register */}
+                <div className="space-y-1.5">
+                  <p className="text-xs text-white/50">2. Register the account</p>
+                  <div className="flex gap-2">
+                    <Input
+                      placeholder="Account ID (e.g. 123456789012)"
+                      value={addAccountId}
+                      onChange={(e) => setAddAccountId(e.target.value)}
+                      className="bg-black/50 text-white border-white/10 font-mono text-xs focus-visible:ring-white/20 flex-1"
+                    />
+                    <select
+                      value={addAccountRegion}
+                      onChange={(e) => setAddAccountRegion(e.target.value)}
+                      className="bg-black/50 text-white/70 border border-white/10 rounded-md px-2 text-xs w-32"
+                    >
+                      <option value="us-east-1">us-east-1</option>
+                      <option value="us-west-2">us-west-2</option>
+                      <option value="eu-west-1">eu-west-1</option>
+                      <option value="eu-central-1">eu-central-1</option>
+                      <option value="ap-southeast-1">ap-southeast-1</option>
+                      <option value="ca-central-1">ca-central-1</option>
+                    </select>
+                    <Button
+                      onClick={handleAddSingleAccount}
+                      disabled={isAddingAccount || !addAccountId.trim()}
+                      size="sm"
+                      className="bg-white text-black hover:bg-white/90 text-xs shrink-0"
+                    >
+                      {isAddingAccount ? <Loader2 className="w-3 h-3 animate-spin" /> : 'Register'}
                     </Button>
-                  </a>
-                )}
-
-                <Button onClick={() => setShowBulkForm(!showBulkForm)} variant="outline" size="sm" className="border-white/10 hover:bg-white/5 text-white/70 text-xs w-full justify-start">
-                  <Upload className="w-3 h-3 mr-1.5" />
-                  {showBulkForm ? 'Hide Bulk Register' : 'Register accounts after deploying'}
-                </Button>
+                  </div>
+                </div>
 
                 {/* Advanced options */}
                 <details className="group">
                   <summary className="text-xs text-white/30 cursor-pointer hover:text-white/50 select-none">
-                    More options: StackSets, CLI, download template
+                    More options: bulk register, StackSets, download template
                   </summary>
                   <div className="mt-3 space-y-3 border-t border-white/5 pt-3">
+                    <Button onClick={() => setShowBulkForm(!showBulkForm)} variant="outline" size="sm" className="border-white/10 hover:bg-white/5 text-white/70 text-xs">
+                      <Upload className="w-3 h-3 mr-1.5" />
+                      {showBulkForm ? 'Hide Bulk Register' : 'Bulk Register (multiple accounts)'}
+                    </Button>
                     {stackSetsCommand && (
                       <div className="space-y-1.5">
                         <p className="text-xs text-white/50">Deploy to all accounts via StackSets:</p>
