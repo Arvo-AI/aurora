@@ -801,12 +801,17 @@ def get_cfn_quickcreate_link(workspace_id):
 
         import urllib.parse
         import time as _time
-        unique_suffix = hex(int(_time.time()))[2:]  # e.g. "67e1a3b4"
+        unique_suffix = hex(int(_time.time()))[2:]
+        role_type = request.args.get("roleType", "ReadOnly")
+        if role_type not in ("ReadOnly", "Admin"):
+            role_type = "ReadOnly"
+        default_role_name = "AuroraAdminRole" if role_type == "Admin" else "AuroraReadOnlyRole"
         params = {
             "stackName": f"aurora-role-{unique_suffix}",
             "param_AuroraAccountId": aurora_account_id,
             "param_ExternalId": external_id,
-            "param_RoleName": "AuroraReadOnlyRole",
+            "param_RoleType": role_type,
+            "param_RoleName": default_role_name,
         }
         if template_url:
             params["templateURL"] = template_url

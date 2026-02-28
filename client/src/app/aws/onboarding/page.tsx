@@ -14,7 +14,9 @@ import {
   Info,
   Download,
   Trash2,
-  Upload
+  Upload,
+  Shield,
+  ShieldAlert
 } from 'lucide-react';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import {
@@ -80,6 +82,42 @@ const formatAWSErrorMessage = (message: string): { title: string; description: s
   };
 };
 
+function RoleTypeToggle({ value, onChange }: { value: 'ReadOnly' | 'Admin'; onChange: (v: 'ReadOnly' | 'Admin') => void }) {
+  return (
+    <div className="flex items-center gap-2">
+      <div className="relative flex bg-white/5 border border-white/10 rounded-lg p-0.5">
+        <div
+          className="absolute top-0.5 bottom-0.5 rounded-md bg-white/10 transition-all duration-300 ease-out"
+          style={{ left: value === 'ReadOnly' ? '2px' : 'calc(50% + 0px)', width: 'calc(50% - 2px)' }}
+        />
+        <button
+          type="button"
+          onClick={() => onChange('ReadOnly')}
+          className={`relative z-10 flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors duration-200 ${
+            value === 'ReadOnly' ? 'text-emerald-400' : 'text-white/30 hover:text-white/50'
+          }`}
+        >
+          <Shield className="w-3 h-3" />
+          Read-Only
+        </button>
+        <button
+          type="button"
+          onClick={() => onChange('Admin')}
+          className={`relative z-10 flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors duration-200 ${
+            value === 'Admin' ? 'text-amber-400' : 'text-white/30 hover:text-white/50'
+          }`}
+        >
+          <ShieldAlert className="w-3 h-3" />
+          Admin
+        </button>
+      </div>
+      <span className={`text-xs transition-colors duration-200 ${value === 'Admin' ? 'text-amber-400/70' : 'text-white/30'}`}>
+        {value === 'Admin' ? 'Full access' : 'Observation only'}
+      </span>
+    </div>
+  );
+}
+
 export default function AWSOnboardingPage() {
   const router = useRouter();
   const { toast } = useToast();
@@ -106,6 +144,7 @@ export default function AWSOnboardingPage() {
   const [addAccountId, setAddAccountId] = useState('');
   const [isAddingAccount, setIsAddingAccount] = useState(false);
   const [disconnectTarget, setDisconnectTarget] = useState<string | 'all' | null>(null);
+  const [roleType, setRoleType] = useState<'ReadOnly' | 'Admin'>('ReadOnly');
   const [quickCreateUrl, setQuickCreateUrl] = useState<string | null>(null);
   const [stackSetsCommand, setStackSetsCommand] = useState<string | null>(null);
   const [stackSetsCopied, setStackSetsCopied] = useState(false);
@@ -363,10 +402,10 @@ export default function AWSOnboardingPage() {
     }
   }, [workspaceId, userId]);
 
-  const fetchQuickCreateData = useCallback(async () => {
+  const fetchQuickCreateData = useCallback(async (roleType = 'ReadOnly') => {
     if (!workspaceId || !userId) return;
     try {
-      const res = await fetch(`${BACKEND_URL}/workspaces/${workspaceId}/aws/cfn-quickcreate`, {
+      const res = await fetch(`${BACKEND_URL}/workspaces/${workspaceId}/aws/cfn-quickcreate?roleType=${roleType}`, {
         credentials: 'include',
         headers: { 'X-User-ID': userId },
       });
@@ -398,13 +437,13 @@ export default function AWSOnboardingPage() {
 
   useEffect(() => {
     if (workspaceId && userId) {
-      fetchQuickCreateData();
+      fetchQuickCreateData(roleType);
       fetchInactiveAccounts();
       if (isConfigured) {
         fetchConnectedAccounts();
       }
     }
-  }, [workspaceId, userId, isConfigured, fetchConnectedAccounts, fetchQuickCreateData, fetchInactiveAccounts]);
+  }, [workspaceId, userId, isConfigured, roleType, fetchConnectedAccounts, fetchQuickCreateData, fetchInactiveAccounts]);
 
   const handleReconnect = async (accountId: string) => {
     if (!workspaceId || !userId) return;
@@ -988,6 +1027,8 @@ make dev`}</pre>
               <div className="space-y-3 bg-white/5 border border-white/10 rounded-lg p-4">
                 <p className="text-sm font-medium text-white/70">Add More Accounts</p>
 
+                <RoleTypeToggle value={roleType} onChange={setRoleType} />
+
                 {/* Step 1: Deploy */}
                 <div className="space-y-1.5">
                   <p className="text-xs text-white/50">1. Deploy the IAM role to the target account</p>
@@ -1110,9 +1151,15 @@ make dev`}</pre>
             <Card className="bg-black border-white/10">
               <CardHeader>
               <CardTitle className="text-white">Connect AWS Account</CardTitle>
-              <CardDescription className="text-white/50">Deploy an IAM role to grant Aurora read-only access</CardDescription>
+              <CardDescription className="text-white/50">Deploy an IAM role to grant Aurora access to your account</CardDescription>
               </CardHeader>
               <CardContent className="space-y-6">
+
+              {/* Role type selector */}
+              <div className="space-y-2">
+                <p className="text-sm text-white/70 font-medium">Access level</p>
+                <RoleTypeToggle value={roleType} onChange={setRoleType} />
+              </div>
 
               {/* Primary: Quick-Create */}
               {quickCreateUrl ? (
@@ -1120,7 +1167,7 @@ make dev`}</pre>
                   <p className="text-sm text-white/70 font-medium">1. Deploy the IAM role</p>
                   <p className="text-xs text-white/40">
                     Click below to open the AWS Console with a pre-filled CloudFormation stack.
-                    It creates a read-only IAM role that trusts Aurora.
+                    It creates {roleType === 'Admin' ? 'an admin' : 'a read-only'} IAM role that trusts Aurora.
                   </p>
                   <a href={quickCreateUrl} target="_blank" rel="noopener noreferrer" className="block">
                     <Button className="w-full bg-[#FF9900] text-black hover:bg-[#FF9900]/90 h-11 font-medium">

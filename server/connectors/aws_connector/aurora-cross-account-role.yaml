@@ -1,9 +1,11 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: >-
-  Creates an IAM role that grants Aurora read-only access to this AWS account.
-  The role trusts the Aurora AWS account and requires an ExternalId to prevent
-  confused-deputy attacks.  Deploy once per account, or use CloudFormation
-  StackSets to deploy across an AWS Organization.
+  Creates an IAM role that grants Aurora access to this AWS account.
+  Choose ReadOnly for safe, observation-only access, or Admin for full
+  management capabilities.  The role trusts the Aurora AWS account and
+  requires an ExternalId to prevent confused-deputy attacks.
+  Deploy once per account, or use CloudFormation StackSets to deploy
+  across an AWS Organization.
 
 Parameters:
   AuroraAccountId:
@@ -20,18 +22,40 @@ Parameters:
     AllowedPattern: '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
     ConstraintDescription: Must be a valid UUID v4.
 
+  RoleType:
+    Type: String
+    Default: ReadOnly
+    AllowedValues:
+      - ReadOnly
+      - Admin
+    Description: >-
+      ReadOnly attaches the AWS-managed ReadOnlyAccess policy.
+      Admin attaches the AWS-managed AdministratorAccess policy.
+
   RoleName:
     Type: String
-    Default: AuroraReadOnlyRole
-    Description: Name for the IAM role created in this account.
-    AllowedPattern: '^[\w+=,.@-]{1,64}$'
-    ConstraintDescription: 1-64 alphanumeric characters, plus +=,.@- allowed.
+    Default: ''
+    Description: >-
+      Optional custom name for the IAM role.  Leave blank to auto-generate
+      based on role type (AuroraReadOnlyRole or AuroraAdminRole).
+    AllowedPattern: '^[\w+=,.@-]{0,64}$'
+    ConstraintDescription: 0-64 alphanumeric characters, plus +=,.@- allowed.
+
+Conditions:
+  IsAdmin: !Equals [!Ref RoleType, 'Admin']
+  HasCustomName: !Not [!Equals [!Ref RoleName, '']]
 
 Resources:
   AuroraRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Ref RoleName
+      RoleName: !If
+        - HasCustomName
+        - !Ref RoleName
+        - !If
+          - IsAdmin
+          - AuroraAdminRole
+          - AuroraReadOnlyRole
       MaxSessionDuration: 3600
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
@@ -44,16 +68,25 @@ Resources:
               StringEquals:
                 'sts:ExternalId': !Ref ExternalId
       ManagedPolicyArns:
-        - 'arn:aws:iam::aws:policy/ReadOnlyAccess'
+        - !If
+          - IsAdmin
+          - 'arn:aws:iam::aws:policy/AdministratorAccess'
+          - 'arn:aws:iam::aws:policy/ReadOnlyAccess'
       Tags:
         - Key: ManagedBy
           Value: Aurora
         - Key: Purpose
-          Value: ReadOnlyAccess for Aurora cloud intelligence platform
+          Value: !If
+            - IsAdmin
+            - Full admin access for Aurora cloud intelligence platform
+            - ReadOnlyAccess for Aurora cloud intelligence platform
 
 Outputs:
   RoleArn:
-    Description: ARN of the Aurora read-only role. Register this in Aurora.
+    Description: ARN of the Aurora role. Register this in Aurora.
     Value: !GetAtt AuroraRole.Arn
     Export:
       Name: !Sub '${AWS::StackName}-RoleArn'
+  RoleType:
+    Description: The access level granted to Aurora.
+    Value: !Ref RoleType
