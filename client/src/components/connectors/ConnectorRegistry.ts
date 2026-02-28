@@ -1,5 +1,5 @@
 import { Github, Server } from "lucide-react";
-import { isSlackEnabled, isOvhEnabled, isConfluenceEnabled, isBitbucketEnabled, isDynatraceEnabled, isThousandEyesEnabled } from "@/lib/feature-flags";
+import { isSlackEnabled, isOvhEnabled, isConfluenceEnabled, isBitbucketEnabled, isDynatraceEnabled, isThousandEyesEnabled, isBigPandaEnabled } from "@/lib/feature-flags";
 import type { ConnectorConfig } from "./types";
 
 class ConnectorRegistry {
@@ -126,6 +126,19 @@ class ConnectorRegistry {
       path: "/pagerduty/auth",
       storageKey: "isPagerDutyConnected",
     });
+
+    if (isBigPandaEnabled()) {
+      this.register({
+        id: "bigpanda",
+        name: "BigPanda",
+        description: "Connect BigPanda for AIOps incident correlation. Receive pre-correlated incident clusters with enriched metadata for improved root cause analysis.",
+        iconPath: "/bigpanda.svg",
+        iconBgColor: "bg-white dark:bg-white",
+        category: "Incident Management",
+        path: "/bigpanda/auth",
+        storageKey: "isBigPandaConnected",
+      });
+    }
 
     if (isConfluenceEnabled()) {
       this.register({
