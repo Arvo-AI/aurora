@@ -97,15 +97,6 @@ if [ -f "$SCRIPT_DIR/demo-incident-coroot.sql" ]; then
     fi
 fi
 
-if [ -f "$SCRIPT_DIR/cloudbees.sql" ]; then
-    echo "       Importing demo incident (CloudBees)..."
-    if psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" < "$SCRIPT_DIR/cloudbees.sql" >/dev/null 2>&1; then
-        echo "       Done"
-    else
-        echo "       WARNING: Demo incident (CloudBees) import had errors"
-    fi
-fi
-
 if [ -f "$SCRIPT_DIR/demo-incident-jenkins-bb.sql" ]; then
     echo "       Importing demo incident (Jenkins+Bitbucket+CloudBees)..."
     if psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" < "$SCRIPT_DIR/demo-incident-jenkins-bb.sql" >/dev/null 2>&1; then
