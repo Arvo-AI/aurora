@@ -742,7 +742,7 @@ def initialize_tables():
                         incident_id VARCHAR(255),
                         incident_title TEXT,
                         incident_status VARCHAR(50),
-                        incident_severity VARCHAR(20),
+                        incident_severity VARCHAR(50),
                         primary_property VARCHAR(255),
                         secondary_property VARCHAR(255),
                         source_system VARCHAR(255),

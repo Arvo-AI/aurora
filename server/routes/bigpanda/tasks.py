@@ -52,8 +52,14 @@ def process_bigpanda_event(
 
         bp_status = incident.get("status", "active")
         event_type = f"incident.{bp_status}"
-        alerts = incident.get("alerts", [])
-        first_alert = alerts[0] if alerts else {}
+        alerts_raw = incident.get("alerts") or []
+        if isinstance(alerts_raw, list):
+            alerts = alerts_raw
+        elif isinstance(alerts_raw, dict):
+            alerts = [alerts_raw]
+        else:
+            alerts = []
+        first_alert = alerts[0] if alerts and isinstance(alerts[0], dict) else {}
 
         incident_title = (
             first_alert.get("description")

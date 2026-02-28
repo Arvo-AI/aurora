@@ -111,7 +111,7 @@ except ImportError as e:
     logging.warning(f"Failed to import Dynatrace tasks: {e}")
 
 try:
-    import routes.bigpanda.tasks
+    import routes.bigpanda.tasks  # noqa: F401
     logging.info("BigPanda tasks imported successfully")
 except ImportError as e:
     logging.warning(f"Failed to import BigPanda tasks: {e}")
