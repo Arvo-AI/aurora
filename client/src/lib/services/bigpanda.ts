@@ -37,11 +37,14 @@ export const bigpandaService = {
   },
 
   async connect(apiToken: string): Promise<BigPandaStatus> {
-    const raw = await jsonFetch<{ success: boolean; connected: boolean; environmentCount?: number }>(
+    const raw = await jsonFetch<{ success: boolean; connected: boolean; error?: string; environmentCount?: number }>(
       `${API_BASE}/connect`,
       { method: 'POST', body: JSON.stringify({ apiToken }) },
     );
-    return { connected: raw.success || raw.connected, environmentCount: raw.environmentCount };
+    if (!raw.success && !raw.connected) {
+      throw new Error(raw.error || 'Connection failed');
+    }
+    return { connected: true, environmentCount: raw.environmentCount };
   },
 
   async getWebhookUrl(): Promise<BigPandaWebhookUrlResponse | null> {

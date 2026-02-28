@@ -10,14 +10,10 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Loader2, ExternalLink, Copy, CheckCircle2 } from "lucide-react";
 import { getUserFriendlyError } from "@/lib/utils";
 
-const CACHE_KEY = "bigpanda_connection_status";
-
-function persistStatus(result: BigPandaStatus | null) {
-  if (result?.connected) {
-    localStorage.setItem(CACHE_KEY, JSON.stringify(result));
+function persistStatus(connected: boolean) {
+  if (connected) {
     localStorage.setItem("isBigPandaConnected", "true");
   } else {
-    localStorage.removeItem(CACHE_KEY);
     localStorage.removeItem("isBigPandaConnected");
   }
   window.dispatchEvent(new CustomEvent("providerStateChanged"));
@@ -33,22 +29,17 @@ export default function BigPandaAuthPage() {
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
-    const cached = localStorage.getItem(CACHE_KEY);
+    const cached = localStorage.getItem("isBigPandaConnected") === "true";
     if (cached) {
-      try {
-        const parsed: BigPandaStatus = JSON.parse(cached);
-        setStatus(parsed);
-        setIsCheckingStatus(false);
-      } catch {
-        localStorage.removeItem(CACHE_KEY);
-      }
+      setStatus({ connected: true });
+      setIsCheckingStatus(false);
     }
 
     bigpandaService.getStatus()
       .then((result) => {
         if (!result) return;
         setStatus(result);
-        persistStatus(result);
+        persistStatus(result.connected);
         if (result.connected) loadWebhookUrl();
       })
       .catch((err) => console.error("Failed to load BigPanda status", err))
@@ -66,7 +57,7 @@ export default function BigPandaAuthPage() {
     try {
       const result = await bigpandaService.connect(apiToken);
       setStatus(result);
-      persistStatus(result);
+      persistStatus(result.connected);
       toast({ title: "Connected", description: "BigPanda connected successfully." });
       loadWebhookUrl();
     } catch (err: unknown) {
@@ -83,7 +74,7 @@ export default function BigPandaAuthPage() {
       await bigpandaService.disconnect();
       setStatus({ connected: false });
       setWebhookInfo(null);
-      persistStatus(null);
+      persistStatus(false);
       toast({ title: "Disconnected", description: "BigPanda disconnected successfully." });
     } catch (err: unknown) {
       toast({ title: "Disconnect failed", description: getUserFriendlyError(err), variant: "destructive" });
