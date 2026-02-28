@@ -5,7 +5,7 @@ import re
 import shlex
 import subprocess
 from utils.terminal.terminal_run import terminal_run
-import time  # Added for performance timing
+import time
 import requests
 import tiktoken
 from typing import Dict, Any, Optional, Tuple
@@ -208,7 +208,16 @@ def setup_azure_environment_isolated(user_id: str, subscription_id: str | None =
         return False, None, None, None, None
 
 
-def setup_aws_environment_isolated(user_id: str, selected_region: str | None = None):
+def _get_region_for_account(user_id: str, account_id: str) -> Optional[str]:
+    """Look up the region for a specific AWS account connection."""
+    from utils.db.connection_utils import get_all_user_aws_connections
+    for conn in get_all_user_aws_connections(user_id):
+        if conn.get("account_id") == account_id:
+            return conn.get("region") or "us-east-1"
+    return None
+
+
+def setup_aws_environment_isolated(user_id: str, selected_region: str | None = None, target_account_id: str | None = None):
     """Set up AWS environment with isolated credentials - NO global state modification."""
     try:
         fn_start = time.perf_counter()
@@ -225,10 +234,25 @@ def setup_aws_environment_isolated(user_id: str, selected_region: str | None = N
             from utils.aws.aws_sts_client import assume_workspace_role
             from utils.aws.aws_session_policies import get_read_only_session_policy
 
-            aws_conn = get_user_aws_connection(user_id)
+            if target_account_id:
+                from utils.db.connection_utils import get_all_user_aws_connections
+                aws_conn = None
+                for c in get_all_user_aws_connections(user_id):
+                    if c.get("account_id") == target_account_id:
+                        aws_conn = c
+                        break
+                if not aws_conn:
+                    logger.error("No AWS connection found for account %s", target_account_id)
+                    return False, None, None, None
+            else:
+                aws_conn = get_user_aws_connection(user_id)
             if not aws_conn or not aws_conn.get('role_arn'):
                 logger.error("User %s does not have an active AWS connection", user_id)
                 return False, None, None, None
+
+            conn_region = aws_conn.get("region")
+            if conn_region and not selected_region:
+                selected_region = conn_region
 
             # Get external_id from workspace (needed for STS AssumeRole)
             ws = get_or_create_workspace(user_id, "default")
@@ -421,92 +445,89 @@ def setup_aws_environment_isolated(user_id: str, selected_region: str | None = N
         return False, None, None, None
 
 
-# OLD GLOBAL GCP FUNCTION REMOVED - Use setup_gcp_environment_isolated() instead  
-def setup_gcp_impersonation_DEPRECATED(user_id: str, selected_project_id: str | None = None, provider_preference: str | None = None):
-    """Set up GCP authentication using OAuth impersonation."""
-    try:
-        fn_start = time.perf_counter()  # Start timing for entire impersonation setup
-        logger.info("Attempting impersonated access...")
-        token_start = time.perf_counter()
-        current_mode = get_mode_from_context()
-        token_resp = generate_contextual_access_token(
-            user_id,
-            selected_project_id=selected_project_id,
-            override_provider=provider_preference,
-            mode=current_mode,
-        )
-        logger.info(f"TIME: generate_contextual_access_token took {time.perf_counter() - token_start:.2f}s")
-        access_token = token_resp["access_token"]
-        project_id = token_resp["project_id"]
-        sa_email = token_resp["service_account_email"]
+def setup_aws_environments_all_accounts(user_id: str):
+    """Assume roles across all connected AWS accounts and return credential dicts.
 
-        # Method 1: Use environment variables that Cloud SDK & gsutil respect
-        os.environ["GOOGLE_OAUTH_ACCESS_TOKEN"] = access_token
-        os.environ["CLOUDSDK_AUTH_ACCESS_TOKEN"] = access_token  # gcloud/gsutil pick this up
-        os.environ["GOOGLE_CLOUD_PROJECT"] = project_id
+    Returns a list of dicts, each containing:
+        - account_id
+        - region
+        - credentials (accessKeyId, secretAccessKey, sessionToken)
+        - isolated_env (ready-to-use env dict for subprocess calls)
 
-        # Ensure all Cloud SDK commands (including gsutil) impersonate the SA.
-        # Setting this env var is honoured by gcloud, gsutil, bq, etc.
-        os.environ["CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT"] = sa_email  # new CLIs
-        os.environ["CLOUDSDK_IMPERSONATE_SERVICE_ACCOUNT"] = sa_email       # legacy CLIs
-        
-        # Method 2: Also try to configure gcloud settings
+    Failed accounts are logged and skipped; the caller receives only the
+    accounts that were successfully assumed.
+    """
+    from utils.db.connection_utils import get_all_user_aws_connections
+    from utils.workspace.workspace_utils import get_or_create_workspace
+    from utils.aws.aws_sts_client import assume_workspace_role
+    from utils.aws.aws_session_policies import get_read_only_session_policy
+
+    ws = get_or_create_workspace(user_id, "default")
+    external_id = ws.get("aws_external_id")
+    if not external_id:
+        logger.error("Workspace %s for user %s missing aws_external_id", ws["id"], user_id)
+        return []
+
+    connections = get_all_user_aws_connections(user_id)
+    if not connections:
+        logger.warning("No active AWS connections for user %s", user_id)
+        return []
+
+    current_mode = get_mode_from_context()
+    default_session_policy = None
+    if ModeAccessController.is_read_only_mode(current_mode):
+        default_session_policy = get_read_only_session_policy()
+
+    account_envs = []
+    for conn in connections:
+        role_arn = conn.get("role_arn")
+        account_id = conn.get("account_id")
+        region = conn.get("region") or "us-east-1"
+        session_policy = default_session_policy
+
+        if not role_arn:
+            logger.warning("Skipping account %s – no role_arn", account_id)
+            continue
+
+        if ModeAccessController.is_read_only_mode(current_mode):
+            ro_arn = conn.get("read_only_role_arn")
+            if ro_arn:
+                role_arn = ro_arn
+                session_policy = None
+
         try:
-            # Set the default project
-            project_cmd = ["gcloud", "config", "set", "project", project_id]
-            config_start = time.perf_counter()
-            proj_result = terminal_run(
-                project_cmd,
-                capture_output=True,
-                text=True,
-                timeout=10
+            creds = assume_workspace_role(
+                role_arn=role_arn,
+                external_id=external_id,
+                workspace_id=ws["id"],
+                region=region,
+                session_policy=session_policy,
             )
-            logger.info(f"TIME: gcloud config set project took {time.perf_counter() - config_start:.2f}s")
-            
-            if proj_result.returncode == 0:
-                logger.info(f"Successfully set default project: {project_id}")
-            else:
-                logger.warning(f"Failed to set default project: {proj_result.stderr}")
-
-            # Configure impersonation property so subsequent CLI calls inherit it.
-            imp_cmd = ["gcloud", "config", "set", "auth/impersonate_service_account", sa_email]
-            imp_start = time.perf_counter()
-            imp_result = terminal_run(
-                imp_cmd,
-                capture_output=True,
-                text=True,
-                timeout=10
-            )
-            logger.info(f"TIME: gcloud config set impersonate_sa took {time.perf_counter() - imp_start:.2f}s")
-            if imp_result.returncode == 0:
-                logger.info(f"Configured gcloud to impersonate {sa_email}")
-            else:
-                logger.warning(f"Failed to configure SA impersonation: {imp_result.stderr}")
-            
-            # Verify the configuration
-            try:
-                auth_start = time.perf_counter()
-                auth_list = terminal_run(
-                    ['gcloud', 'auth', 'list'],
-                    capture_output=True,
-                    text=True,
-                    timeout=10
-                )
-                logger.info(f"TIME: gcloud auth list took {time.perf_counter() - auth_start:.2f}s")
-                logger.info(f"Current auth configuration: {auth_list.stdout}")
-            except Exception as e:
-                logger.warning(f"Failed to verify auth configuration: {e}")
-                
         except Exception as e:
-            logger.warning(f"Failed to configure gcloud settings: {e}")
-        
-        logger.info(f"Successfully set up impersonated access for project: {project_id}")
-        logger.info(f"TIME: setup_gcp_impersonation completed in {time.perf_counter() - fn_start:.2f}s")
-        return True, project_id, "impersonated"
+            logger.error("Failed to assume role for account %s: %s", account_id, e)
+            continue
 
-    except Exception as e:
-        logger.error(f"Failed to generate SA access token: {e}")
-        return False, None, None
+        isolated_env = {
+            "AWS_ACCESS_KEY_ID": creds["accessKeyId"],
+            "AWS_SECRET_ACCESS_KEY": creds["secretAccessKey"],
+            "AWS_SESSION_TOKEN": creds["sessionToken"],
+            "AWS_DEFAULT_REGION": region,
+            "AWS_REGION": region,
+            "PATH": os.environ.get("PATH", ""),
+        }
+
+        account_envs.append({
+            "account_id": account_id,
+            "region": region,
+            "credentials": creds,
+            "isolated_env": isolated_env,
+        })
+
+    logger.info(
+        "Assumed roles for %d / %d accounts for user %s",
+        len(account_envs), len(connections), user_id,
+    )
+    return account_envs
 
 
 def setup_gcp_environment_isolated(user_id: str, selected_project_id: str | None = None, provider_preference: str | None = None):
@@ -1290,7 +1311,123 @@ def get_command_timeout(command: str, user_timeout: int = None) -> int:
     return 60
 
 
-def cloud_exec(provider: str, command: str, user_id: Optional[str] = None, session_id: Optional[str] = None, provider_preference: Optional[str] = None, timeout: Optional[int] = None, output_file: Optional[str] = None) -> str:
+def _cloud_exec_aws_multi_account(
+    user_id: str,
+    connections: list,
+    command: str,
+    provider_preference: Optional[str] = None,
+    timeout: Optional[int] = None,
+    output_file: Optional[str] = None,
+    fn_start: float = 0,
+) -> str:
+    """Execute an AWS CLI command across all connected accounts and merge results.
+
+    Each account gets its own STS credentials; the command runs in parallel
+    via ThreadPoolExecutor.  Results are returned as a JSON object keyed by
+    account_id so the agent can reason about per-account output.
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    current_mode = get_mode_from_context()
+    allowed, read_only_message = ModeAccessController.ensure_cloud_command_allowed(
+        current_mode,
+        is_read_only_command(command),
+        command,
+    )
+    if not allowed:
+        logger.warning(read_only_message)
+        return json.dumps({
+            "success": False,
+            "error": read_only_message,
+            "code": "READ_ONLY_MODE",
+            "multi_account": True,
+            "command": command,
+            "provider": "aws",
+        })
+
+    if not is_read_only_command(command):
+        from utils.cloud.infrastructure_confirmation import wait_for_user_confirmation
+        from .cloud_tools import get_state_context
+        summary_msg = summarize_cloud_command(command)
+        state_context = get_state_context()
+        context_session_id = state_context.session_id if state_context and hasattr(state_context, 'session_id') else None
+        if not wait_for_user_confirmation(
+            user_id=user_id,
+            message=f"[ALL {len(connections)} accounts] {summary_msg}",
+            tool_name="cloud_exec",
+            session_id=context_session_id,
+        ):
+            return json.dumps({
+                "success": False,
+                "error": "User declined multi-account command execution",
+                "multi_account": True,
+                "command": command,
+                "provider": "aws",
+            })
+
+    def _run_on_account(conn: dict) -> dict:
+        account_id = conn.get("account_id", "unknown")
+        region = conn.get("region") or "us-east-1"
+        try:
+            success, _region, auth_method, isolated_env = setup_aws_environment_isolated(
+                user_id, selected_region=region, target_account_id=account_id
+            )
+            if not success:
+                return {"account_id": account_id, "region": region, "success": False,
+                        "error": "Failed to assume role"}
+
+            cmd = command.strip()
+            if not cmd.startswith("aws"):
+                cmd = f"aws {cmd}"
+            if "--region" not in cmd:
+                cmd += f" --region {region}"
+            if "--output" not in cmd and any(
+                kw in cmd for kw in ["list", "describe", "get"]
+            ):
+                cmd += " --output json"
+
+            effective_timeout = get_command_timeout(cmd, timeout)
+            cmd_args = shlex.split(cmd)
+            result = terminal_run(
+                cmd_args, capture_output=True, text=True,
+                timeout=effective_timeout, env=isolated_env,
+            )
+            return {
+                "account_id": account_id,
+                "region": region,
+                "success": result.returncode == 0,
+                "output": result.stdout.strip() if result.returncode == 0 else result.stderr.strip(),
+                "return_code": result.returncode,
+            }
+        except Exception as e:
+            logger.error("Multi-account exec failed for %s: %s", account_id, e)
+            return {"account_id": account_id, "region": region, "success": False,
+                    "error": str(e)[:300]}
+
+    account_results = {}
+    with ThreadPoolExecutor(max_workers=min(len(connections), 10)) as pool:
+        futures = {pool.submit(_run_on_account, c): c["account_id"] for c in connections}
+        for future in as_completed(futures):
+            res = future.result()
+            acct = res.pop("account_id")
+            account_results[acct] = res
+
+    all_success = all(r.get("success") for r in account_results.values())
+    elapsed = time.perf_counter() - fn_start if fn_start else 0
+    logger.info("TIME: cloud_exec AWS multi-account (%d accounts) completed in %.2fs",
+                len(connections), elapsed)
+
+    return json.dumps({
+        "success": all_success,
+        "multi_account": True,
+        "accounts_queried": len(account_results),
+        "command": command,
+        "provider": "aws",
+        "results_by_account": account_results,
+    })
+
+
+def cloud_exec(provider: str, command: str, user_id: Optional[str] = None, session_id: Optional[str] = None, provider_preference: Optional[str] = None, timeout: Optional[int] = None, output_file: Optional[str] = None, account_id: Optional[str] = None) -> str:
     """Run arbitrary command against *provider* (gcloud/kubectl/gsutil for GCP, aws/kubectl for AWS).
 
 CLI is very versatile and can be used to do the following things. It should be priority over IaC tools unless it can't be done or better done with IaC.
@@ -1383,7 +1520,7 @@ Security & Compliance
                 })
             selected_project_id = None
         else:
-            pass
+            selected_project_id = None
         logger.info(f"Provider preference: {provider_preference}")
         
         # Set up ISOLATED environment based on provider - NO GLOBAL STATE!
@@ -1396,8 +1533,26 @@ Security & Compliance
                 return json.dumps({"error": f"Failed to setup Azure environment with {provider_preference} authentication", "final_command": command})
             resource_id = subscription_id
         elif provider.lower() == 'aws':
-            # AWS isolated setup
-            success, region, auth_method, isolated_env = setup_aws_environment_isolated(user_id, selected_project_id)
+            # AWS multi-account: fan out only if no specific account_id given
+            if not account_id:
+                from utils.db.connection_utils import get_all_user_aws_connections
+                all_conns = get_all_user_aws_connections(user_id) if user_id else []
+                if len(all_conns) > 1:
+                    return _cloud_exec_aws_multi_account(
+                        user_id=user_id,
+                        connections=all_conns,
+                        command=original_command,
+                        provider_preference=provider_preference,
+                        timeout=timeout,
+                        output_file=output_file,
+                        fn_start=fn_start,
+                    )
+            # Single account path -- either account_id was given or only 1 connection
+            success, region, auth_method, isolated_env = setup_aws_environment_isolated(
+                user_id,
+                selected_region=_get_region_for_account(user_id, account_id) if account_id else selected_project_id,
+                target_account_id=account_id,
+            )
             if not success:
                 return json.dumps({"error": f"Failed to setup AWS environment with {provider_preference} authentication", "final_command": command})
             resource_id = region

@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -11,10 +11,26 @@ import {
   AlertCircle, 
   Copy,
   Cloud,
-  Info
+  Info,
+  Download,
+  Trash2,
+  Upload,
+  Search,
+  ShieldAlert
 } from 'lucide-react';
 import { Alert, AlertDescription } from '@/components/ui/alert';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { getEnv } from '@/lib/env';
+import { useToast } from '@/hooks/use-toast';
 
 const BACKEND_URL = getEnv('NEXT_PUBLIC_BACKEND_URL');
 
@@ -24,6 +40,21 @@ interface OnboardingData {
   status: 'not_started' | 'fully_configured';
   roleArn?: string;
   auroraAccountId?: string;
+}
+
+interface ConnectedAccount {
+  account_id: string;
+  role_arn: string;
+  read_only_role_arn?: string;
+  region?: string;
+  connection_method?: string;
+  last_verified_at?: string;
+}
+
+interface BulkResult {
+  accountId: string;
+  success: boolean;
+  error?: string;
 }
 
 // Helper function to format AWS error messages for better UX
@@ -51,8 +82,45 @@ const formatAWSErrorMessage = (message: string): { title: string; description: s
   };
 };
 
+function RoleTypeToggle({ value, onChange }: { value: 'ReadOnly' | 'Admin'; onChange: (v: 'ReadOnly' | 'Admin') => void }) {
+  return (
+    <div className="flex items-center gap-3">
+      <div className="relative grid grid-cols-2 bg-white/5 border border-white/10 rounded-lg p-0.5 w-56">
+        <div
+          className="absolute top-0.5 bottom-0.5 w-[calc(50%-2px)] rounded-md bg-white/10 transition-all duration-300 ease-out"
+          style={{ left: value === 'ReadOnly' ? '2px' : 'calc(50% + 2px)' }}
+        />
+        <button
+          type="button"
+          onClick={() => onChange('ReadOnly')}
+          className={`relative z-10 flex items-center justify-center gap-1.5 py-1.5 rounded-md text-xs font-medium transition-colors duration-200 ${
+            value === 'ReadOnly' ? 'text-emerald-400' : 'text-white/30 hover:text-white/50'
+          }`}
+        >
+          <Search className="w-3 h-3" />
+          Read-Only
+        </button>
+        <button
+          type="button"
+          onClick={() => onChange('Admin')}
+          className={`relative z-10 flex items-center justify-center gap-1.5 py-1.5 rounded-md text-xs font-medium transition-colors duration-200 ${
+            value === 'Admin' ? 'text-amber-400' : 'text-white/30 hover:text-white/50'
+          }`}
+        >
+          <ShieldAlert className="w-3 h-3" />
+          Admin
+        </button>
+      </div>
+      <span className={`text-xs transition-colors duration-200 ${value === 'Admin' ? 'text-amber-400/70' : 'text-white/30'}`}>
+        {value === 'Admin' ? 'Full access' : 'Observation only'}
+      </span>
+    </div>
+  );
+}
+
 export default function AWSOnboardingPage() {
   const router = useRouter();
+  const { toast } = useToast();
   const [userId, setUserId] = useState<string | null>(null);
   const [workspaceId, setWorkspaceId] = useState<string | null>(null);
   const [onboardingData, setOnboardingData] = useState<OnboardingData | null>(null);
@@ -60,13 +128,24 @@ export default function AWSOnboardingPage() {
   const [error, setError] = useState<string | null>(null);
   const [isSettingRole, setIsSettingRole] = useState(false);
   const [copySuccess, setCopySuccess] = useState(false);
-  const [policyCopySuccess, setPolicyCopySuccess] = useState(false);
-  const [trustPolicyCopySuccess, setTrustPolicyCopySuccess] = useState(false);
   const [isDisconnecting, setIsDisconnecting] = useState(false);
   const [roleArn, setRoleArn] = useState('');
   const [isConfigured, setIsConfigured] = useState(false);
   const [credentialsConfigured, setCredentialsConfigured] = useState<boolean | null>(null);
-  const [showDocs, setShowDocs] = useState(false);
+  const [connectedAccounts, setConnectedAccounts] = useState<ConnectedAccount[]>([]);
+  const [bulkInput, setBulkInput] = useState('');
+  const [isBulkRegistering, setIsBulkRegistering] = useState(false);
+  const [bulkResults, setBulkResults] = useState<BulkResult[] | null>(null);
+  const [isDownloadingCfn, setIsDownloadingCfn] = useState(false);
+  const [showBulkForm, setShowBulkForm] = useState(false);
+  const [addAccountId, setAddAccountId] = useState('');
+  const [isAddingAccount, setIsAddingAccount] = useState(false);
+  const [disconnectTarget, setDisconnectTarget] = useState<string | 'all' | null>(null);
+  const [roleType, setRoleType] = useState<'ReadOnly' | 'Admin'>('ReadOnly');
+  const [cfnBaseData, setCfnBaseData] = useState<{ auroraAccountId: string; externalId: string; region: string; templateUrl: string } | null>(null);
+  const [stackSetsCommand, setStackSetsCommand] = useState<string | null>(null);
+  const [inactiveAccounts, setInactiveAccounts] = useState<ConnectedAccount[]>([]);
+  const [reconnectingId, setReconnectingId] = useState<string | null>(null);
 
   // Auto-set connected flag when configured
   useEffect(() => {
@@ -88,9 +167,6 @@ export default function AWSOnboardingPage() {
         if (response.ok) {
           const data = await response.json();
           setCredentialsConfigured(data.configured);
-          if (!data.configured) {
-            setShowDocs(true);
-          }
         }
       } catch (err) {
         console.error("Failed to check AWS credentials:", err);
@@ -303,22 +379,285 @@ export default function AWSOnboardingPage() {
     router.push('/connectors');
   };
 
+  const fetchConnectedAccounts = useCallback(async () => {
+    if (!workspaceId || !userId) return;
+    try {
+      const res = await fetch(`${BACKEND_URL}/workspaces/${workspaceId}/aws/accounts`, {
+        credentials: 'include',
+        headers: { 'X-User-ID': userId },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setConnectedAccounts(data.accounts || []);
+      }
+    } catch (err) {
+      console.error('Failed to fetch connected accounts:', err);
+    }
+  }, [workspaceId, userId]);
+
+  const fetchQuickCreateData = useCallback(async (rt: 'ReadOnly' | 'Admin' = 'ReadOnly') => {
+    if (!workspaceId || !userId) return;
+    try {
+      const res = await fetch(`${BACKEND_URL}/workspaces/${workspaceId}/aws/cfn-quickcreate?roleType=${rt}&_t=${Date.now()}`, {
+        credentials: 'include',
+        headers: { 'X-User-ID': userId },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setCfnBaseData({
+          auroraAccountId: data.auroraAccountId,
+          externalId: data.externalId,
+          region: data.region || 'us-east-1',
+          templateUrl: data.templateUrl || '',
+        });
+        setStackSetsCommand(data.stackSetsCommand || null);
+      }
+    } catch (err) {
+      console.error('Failed to fetch quick-create data:', err);
+    }
+  }, [workspaceId, userId]);
+
+  const fetchInactiveAccounts = useCallback(async () => {
+    if (!workspaceId || !userId) return;
+    try {
+      const res = await fetch(`${BACKEND_URL}/workspaces/${workspaceId}/aws/accounts/inactive`, {
+        credentials: 'include',
+        headers: { 'X-User-ID': userId },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setInactiveAccounts(data.accounts || []);
+      }
+    } catch (err) {
+      console.error('Failed to fetch inactive accounts:', err);
+    }
+  }, [workspaceId, userId]);
+
+  const quickCreateUrl = useMemo(() => {
+    if (!cfnBaseData) return null;
+    const { auroraAccountId, externalId, region, templateUrl } = cfnBaseData;
+    const ts = Math.floor(Date.now() / 1000).toString(16);
+    const params = new URLSearchParams({
+      stackName: `aurora-role-${ts}`,
+      param_AuroraAccountId: auroraAccountId,
+      param_ExternalId: externalId,
+      param_RoleType: roleType,
+    });
+    if (templateUrl) params.set('templateURL', templateUrl);
+    return `https://${region}.console.aws.amazon.com/cloudformation/home?region=${region}#/stacks/quickcreate?${params.toString()}`;
+  }, [cfnBaseData, roleType]);
+
+  useEffect(() => {
+    if (workspaceId && userId) {
+      fetchQuickCreateData(roleType);
+      fetchInactiveAccounts();
+      if (isConfigured) {
+        fetchConnectedAccounts();
+      }
+    }
+  }, [workspaceId, userId, isConfigured, roleType, fetchConnectedAccounts, fetchQuickCreateData, fetchInactiveAccounts]);
+
+  const handleReconnect = async (accountId: string) => {
+    if (!workspaceId || !userId) return;
+    setReconnectingId(accountId);
+    setError(null);
+    try {
+      const res = await fetch(`${BACKEND_URL}/workspaces/${workspaceId}/aws/accounts/${accountId}/reconnect`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json', 'X-User-ID': userId },
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        const isRoleGone = res.status === 400 && /role.*deleted|trust policy/i.test(data.error || '');
+        if (isRoleGone) {
+          await fetch(`${BACKEND_URL}/workspaces/${workspaceId}/aws/accounts/${accountId}`, {
+            method: 'DELETE',
+            credentials: 'include',
+            headers: { 'X-User-ID': userId },
+          }).catch(() => {});
+          setInactiveAccounts(prev => prev.filter(a => a.account_id !== accountId));
+          toast({
+            title: 'Role no longer exists',
+            description: `The IAM role for account ${accountId} was deleted. Re-deploy it via the Quick-Create link.`,
+            variant: 'destructive',
+          });
+        } else {
+          toast({
+            title: 'Reconnect failed',
+            description: data.error || 'Temporary error — please try again.',
+            variant: 'destructive',
+          });
+        }
+        return;
+      }
+      setIsConfigured(true);
+      localStorage.setItem('isAWSConnected', 'true');
+      localStorage.setItem('cloudProvider', 'aws');
+      await fetchConnectedAccounts();
+      await fetchInactiveAccounts();
+    } catch (err) {
+      console.error('Reconnect error:', err);
+      setError('Failed to reconnect. Check your network connection and try again.');
+    } finally {
+      setReconnectingId(null);
+    }
+  };
+
+  const handleDownloadCfnTemplate = async () => {
+    if (!workspaceId || !userId) return;
+    setIsDownloadingCfn(true);
+    try {
+      const res = await fetch(`${BACKEND_URL}/workspaces/${workspaceId}/aws/cfn-template?format=raw&roleType=${roleType}`, {
+        credentials: 'include',
+        headers: { 'X-User-ID': userId },
+      });
+      if (!res.ok) throw new Error('Failed to download template');
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'aurora-cross-account-role.yaml';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('CFN download error:', err);
+      setError('Failed to download CloudFormation template.');
+    } finally {
+      setIsDownloadingCfn(false);
+    }
+  };
+
+  const handleBulkRegister = async () => {
+    if (!workspaceId || !userId || !bulkInput.trim()) return;
+    setIsBulkRegistering(true);
+    setBulkResults(null);
+    setError(null);
+
+    try {
+      const lines = bulkInput.trim().split('\n').filter(l => l.trim());
+      const accounts = lines.map(line => {
+        const parts = line.split(',').map(p => p.trim());
+        const accountId = parts[0];
+        const region = parts[1] || 'us-east-1';
+        const roleName = parts[2] || (roleType === 'Admin' ? 'AuroraAdminRole' : 'AuroraReadOnlyRole');
+        return {
+          accountId,
+          roleArn: `arn:aws:iam::${accountId}:role/${roleName}`,
+          region,
+        };
+      });
+
+      const res = await fetch(`${BACKEND_URL}/workspaces/${workspaceId}/aws/accounts/bulk`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-User-ID': userId,
+        },
+        body: JSON.stringify({ accounts }),
+      });
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || `Bulk register failed: ${res.status}`);
+      }
+
+      const data = await res.json();
+      setBulkResults(data.results || []);
+      await fetchConnectedAccounts();
+
+      if (data.succeeded > 0) {
+        setIsConfigured(true);
+        localStorage.setItem('isAWSConnected', 'true');
+        localStorage.setItem('cloudProvider', 'aws');
+      }
+    } catch (err) {
+      console.error('Bulk register error:', err);
+      setError(err instanceof Error ? err.message : 'Bulk registration failed.');
+    } finally {
+      setIsBulkRegistering(false);
+    }
+  };
+
+  const handleDeleteAccount = async (accountId: string) => {
+    if (!workspaceId || !userId) return;
+    try {
+      const res = await fetch(`${BACKEND_URL}/workspaces/${workspaceId}/aws/accounts/${accountId}`, {
+        method: 'DELETE',
+        credentials: 'include',
+        headers: { 'X-User-ID': userId },
+      });
+      if (!res.ok) throw new Error('Delete failed');
+      const accountsRes = await fetch(`${BACKEND_URL}/workspaces/${workspaceId}/aws/accounts`, {
+        credentials: 'include',
+        headers: { 'X-User-ID': userId },
+      });
+      if (accountsRes.ok) {
+        const data = await accountsRes.json();
+        const remaining = data.accounts || [];
+        setConnectedAccounts(remaining);
+        if (remaining.length === 0) {
+          setIsConfigured(false);
+          localStorage.removeItem('isAWSConnected');
+        }
+      }
+      await fetchInactiveAccounts();
+    } catch (err) {
+      console.error('Delete account error:', err);
+      setError(`Failed to disconnect account ${accountId}.`);
+    }
+  };
+
+  const handleAddSingleAccount = async () => {
+    if (!workspaceId || !userId || !addAccountId.trim()) return;
+    setIsAddingAccount(true);
+    try {
+      const arn = addAccountId.trim();
+      const arnMatch = arn.match(/arn:aws:iam::(\d{12}):role\//);
+      if (!arnMatch) {
+        toast({ title: 'Invalid Role ARN', description: 'Expected format: arn:aws:iam::123456789012:role/RoleName', variant: 'destructive' });
+        return;
+      }
+      const accountId = arnMatch[1];
+      if (connectedAccounts.some(a => a.account_id === accountId)) {
+        toast({ title: 'Already connected', description: `Account ${accountId} is already connected.`, variant: 'destructive' });
+        return;
+      }
+      const res = await fetch(`${BACKEND_URL}/workspaces/${workspaceId}/aws/accounts/bulk`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json', 'X-User-ID': userId },
+        body: JSON.stringify({ accounts: [{ accountId, roleArn: arn, region: 'us-east-1' }] }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        toast({ title: 'Registration failed', description: data.error || 'Failed to register account.', variant: 'destructive' });
+        return;
+      }
+      const data = await res.json();
+      const result = data.results?.[0];
+      if (result && !result.success) {
+        toast({ title: 'Role assumption failed', description: result.error || 'Deploy the IAM role first.', variant: 'destructive' });
+        return;
+      }
+      setAddAccountId('');
+      toast({ title: 'Account connected', description: `Account ${accountId} registered successfully.` });
+      await fetchConnectedAccounts();
+    } catch (err) {
+      console.error('Add account error:', err);
+      toast({ title: 'Error', description: 'Failed to register account.', variant: 'destructive' });
+    } finally {
+      setIsAddingAccount(false);
+    }
+  };
+
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text);
     setCopySuccess(true);
     setTimeout(() => setCopySuccess(false), 2000);
-  };
-
-  const copyPolicyToClipboard = (text: string) => {
-    navigator.clipboard.writeText(text);
-    setPolicyCopySuccess(true);
-    setTimeout(() => setPolicyCopySuccess(false), 2000);
-  };
-
-  const copyTrustPolicyToClipboard = (text: string) => {
-    navigator.clipboard.writeText(text);
-    setTrustPolicyCopySuccess(true);
-    setTimeout(() => setTrustPolicyCopySuccess(false), 2000);
   };
 
   if (isLoading) {
@@ -332,8 +671,7 @@ export default function AWSOnboardingPage() {
     );
   }
 
-  // Show documentation if credentials are not configured
-  if (showDocs && credentialsConfigured === false) {
+  if (credentialsConfigured === false) {
     return (
       <div className="min-h-screen bg-black flex items-center justify-center p-4 sm:p-6">
         <Card className="w-full max-w-2xl bg-black border-white/10 overflow-hidden">
@@ -366,7 +704,7 @@ export default function AWSOnboardingPage() {
                   <Button
                     variant="outline"
                     size="icon"
-                    onClick={() => copyPolicyToClipboard(JSON.stringify({
+                    onClick={() => copyToClipboard(JSON.stringify({
                       "Version": "2012-10-17",
                       "Statement": [
                         {
@@ -378,7 +716,7 @@ export default function AWSOnboardingPage() {
                     }, null, 2))}
                     className="absolute top-2 right-2 h-6 w-6 border-white/10 hover:bg-white/5 text-white/70"
                   >
-                    {policyCopySuccess ? <CheckCircle className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                    {copySuccess ? <CheckCircle className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
                   </Button>
                 </div>
               </div>
@@ -414,7 +752,6 @@ make dev`}</pre>
                     .then(data => {
                       setCredentialsConfigured(data.configured);
                       if (data.configured) {
-                        setShowDocs(false);
                         window.location.reload();
                       }
                     });
@@ -566,6 +903,43 @@ make dev`}</pre>
     );
   }
 
+  const trustPolicyJson = JSON.stringify({
+    "Version": "2012-10-17",
+    "Statement": [{
+      "Effect": "Allow",
+      "Principal": { "AWS": `arn:aws:iam::${onboardingData.auroraAccountId}:root` },
+      "Action": "sts:AssumeRole",
+      "Condition": { "StringEquals": { "sts:ExternalId": onboardingData.externalId } }
+    }]
+  }, null, 2);
+
+  const advancedDetails = (
+    <>
+      <div className="space-y-1.5">
+        <label className="text-xs text-white/50">External ID</label>
+        <div className="flex gap-2">
+          <Input value={onboardingData.externalId} readOnly className="font-mono text-xs bg-white/5 text-white border-white/10 focus-visible:ring-white/20" />
+          <Button variant="outline" size="icon" onClick={() => copyToClipboard(onboardingData.externalId)} className="border-white/10 hover:bg-white/5 text-white/70 h-8 w-8">
+            {copySuccess ? <CheckCircle className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+          </Button>
+        </div>
+      </div>
+      <div className="space-y-1.5">
+        <label className="text-xs text-white/50">Trust Policy JSON</label>
+        <div className="relative">
+          <pre className="text-white text-xs whitespace-pre-wrap font-mono bg-black/30 p-3 pr-10 rounded border border-white/10">{trustPolicyJson}</pre>
+          <Button variant="outline" size="icon" onClick={() => copyToClipboard(trustPolicyJson)} className="absolute top-2 right-2 h-6 w-6 border-white/10 hover:bg-white/5 text-white/70">
+            {copySuccess ? <CheckCircle className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+          </Button>
+        </div>
+      </div>
+      <Button onClick={handleDownloadCfnTemplate} disabled={isDownloadingCfn} variant="outline" size="sm" className="border-white/10 hover:bg-white/5 text-white/70 text-xs">
+        {isDownloadingCfn ? <Loader2 className="w-3 h-3 animate-spin mr-1.5" /> : <Download className="w-3 h-3 mr-1.5" />}
+        Download Template YAML
+      </Button>
+    </>
+  );
+
   return (
     <div className="min-h-screen bg-black flex flex-col items-center justify-center p-6">
       <div className="w-full max-w-4xl space-y-8">
@@ -588,21 +962,229 @@ make dev`}</pre>
                     <CardTitle className="flex items-center gap-3 text-white text-2xl">
                       <CheckCircle className="w-7 h-7 text-green-500" /> Setup Complete
                     </CardTitle>
-                    <CardDescription className="text-white/50 mt-2">Your AWS account is now securely connected</CardDescription>
+                    <CardDescription className="text-white/50 mt-2">
+                      {connectedAccounts.length > 1
+                        ? `${connectedAccounts.length} AWS accounts connected`
+                        : 'Your AWS account is now securely connected'}
+                    </CardDescription>
                   </div>
                 </div>
-                <Button variant="ghost" onClick={handleDisconnect} disabled={isDisconnecting} className="text-white/50 hover:text-white hover:bg-white/5">
-                  {isDisconnecting ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Disconnect'}
+                <Button variant="ghost" onClick={() => setDisconnectTarget('all')} disabled={isDisconnecting} className="text-white/50 hover:text-white hover:bg-white/5">
+                  {isDisconnecting ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Disconnect All'}
                 </Button>
               </div>
             </CardHeader>
             <CardContent className="space-y-6">
-              <div className="bg-white/5 border border-white/10 rounded-lg p-6 text-center space-y-2">
-                <p className="text-white/70">Aurora can now access your AWS account using secure STS AssumeRole</p>
-                {onboardingData.roleArn && (
+              {/* Connected Accounts Table */}
+              {connectedAccounts.length > 0 && (
+                <div className="space-y-3">
+                  <p className="text-sm font-medium text-white/70">Connected Accounts</p>
+                  <div className="border border-white/10 rounded-lg overflow-hidden">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="bg-white/5 text-white/50 text-xs">
+                          <th className="text-left px-4 py-2">Account ID</th>
+                          <th className="text-left px-4 py-2">Region</th>
+                          <th className="text-left px-4 py-2">Role</th>
+                          <th className="text-left px-4 py-2">Verified</th>
+                          <th className="px-4 py-2"></th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {connectedAccounts.map((acct) => (
+                          <tr key={acct.account_id} className="border-t border-white/5 text-white/70">
+                            <td className="px-4 py-2 font-mono text-xs">{acct.account_id}</td>
+                            <td className="px-4 py-2 text-xs">{acct.region || 'us-east-1'}</td>
+                            <td className="px-4 py-2 text-xs">
+                              <a
+                                href={`https://console.aws.amazon.com/iam/home?region=${acct.region || 'us-east-1'}#/roles/details/${acct.role_arn.split('/').pop()}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-blue-400 hover:text-blue-300 hover:underline font-mono"
+                                title={acct.role_arn}
+                              >
+                                {acct.role_arn.split('/').pop()}
+                              </a>
+                            </td>
+                            <td className="px-4 py-2 text-xs">{acct.last_verified_at ? new Date(acct.last_verified_at).toLocaleDateString() : '-'}</td>
+                            <td className="px-4 py-2 text-right">
+                              <Button variant="ghost" size="icon" onClick={() => setDisconnectTarget(acct.account_id)} className="h-7 w-7 text-white/30 hover:text-red-400 hover:bg-white/5">
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </Button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {/* Single account display fallback */}
+              {connectedAccounts.length === 0 && onboardingData?.roleArn && (
+                <div className="bg-white/5 border border-white/10 rounded-lg p-6 text-center space-y-2">
+                  <p className="text-white/70">Aurora can now access your AWS account using secure STS AssumeRole</p>
                   <p className="text-white/50 text-sm font-mono mt-2">{onboardingData.roleArn}</p>
-                )}
+                </div>
+              )}
+
+              {/* Recently Disconnected -- Reconnect */}
+              {inactiveAccounts.length > 0 && (
+                <div className="space-y-3">
+                  <p className="text-sm font-medium text-white/50">Recently Disconnected</p>
+                  <p className="text-xs text-white/30">
+                    The IAM roles still exist in these accounts. Reconnect below, or delete the CloudFormation stack in AWS to revoke access.
+                  </p>
+                  <div className="border border-white/5 rounded-lg overflow-hidden">
+                    <table className="w-full text-sm">
+                      <tbody>
+                        {inactiveAccounts.map((acct) => (
+                          <tr key={acct.account_id} className="border-t border-white/5 text-white/40">
+                            <td className="px-4 py-2 font-mono text-xs">{acct.account_id}</td>
+                            <td className="px-4 py-2 text-xs">{acct.region || 'us-east-1'}</td>
+                            <td className="px-4 py-2 text-xs">
+                              {acct.role_arn.split('/').pop()}
+                            </td>
+                            <td className="px-4 py-2 text-right">
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => handleReconnect(acct.account_id)}
+                                disabled={reconnectingId === acct.account_id}
+                                className="border-white/10 hover:bg-white/5 text-white/60 text-xs h-7"
+                              >
+                                {reconnectingId === acct.account_id ? (
+                                  <Loader2 className="w-3 h-3 animate-spin mr-1" />
+                                ) : null}
+                                Reconnect
+                              </Button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {/* Add More Accounts */}
+              <div className="space-y-3 bg-white/5 border border-white/10 rounded-lg p-4">
+                <p className="text-sm font-medium text-white/70">Add More Accounts</p>
+
+                <RoleTypeToggle value={roleType} onChange={setRoleType} />
+
+                {/* Step 1: Deploy */}
+                <div className="space-y-1.5">
+                  <p className="text-xs text-white/50">1. Deploy the IAM role to the target account</p>
+                  {quickCreateUrl && (
+                    <a href={quickCreateUrl} target="_blank" rel="noopener noreferrer" className="block">
+                      <Button variant="outline" size="sm" className="border-white/10 hover:bg-white/5 text-white/70 text-xs w-full justify-start">
+                      <Cloud className="w-3 h-3 mr-1.5" />
+                      Deploy {roleType === 'Admin' ? 'Admin' : 'Read-Only'} Role via AWS Console
+                      </Button>
+                    </a>
+                  )}
+                </div>
+
+                {/* Step 2: Register */}
+                <div className="space-y-1.5">
+                  <p className="text-xs text-white/50">2. Paste the Role ARN from the CloudFormation Outputs tab</p>
+                  <div className="flex gap-2">
+                    <Input
+                      placeholder={`arn:aws:iam::123456789012:role/${roleType === 'Admin' ? 'AuroraAdminRole' : 'AuroraReadOnlyRole'}`}
+                      value={addAccountId}
+                      onChange={(e) => setAddAccountId(e.target.value)}
+                      className="bg-black/50 text-white border-white/10 font-mono text-xs focus-visible:ring-white/20 flex-1"
+                    />
+                    <Button
+                      onClick={handleAddSingleAccount}
+                      disabled={isAddingAccount || !addAccountId.trim()}
+                      size="sm"
+                      className="bg-white text-black hover:bg-white/90 text-xs shrink-0"
+                    >
+                      {isAddingAccount ? <Loader2 className="w-3 h-3 animate-spin" /> : 'Connect'}
+                    </Button>
+                  </div>
+                </div>
+
+                {/* Advanced options */}
+                <details className="group">
+                  <summary className="text-xs text-white/30 cursor-pointer hover:text-white/50 select-none">
+                    Advanced: manual role setup, bulk register, StackSets
+                  </summary>
+                  <div className="mt-3 space-y-3 border-t border-white/5 pt-3">
+                    {advancedDetails}
+
+                    {/* StackSets */}
+                    {stackSetsCommand && (
+                      <div className="space-y-1.5">
+                        <p className="text-xs text-white/50">Deploy to all accounts via StackSets:</p>
+                        <div className="relative">
+                          <pre className="bg-black/50 p-3 pr-10 rounded border border-white/10 text-xs text-white/70 font-mono overflow-x-auto whitespace-pre">{stackSetsCommand}</pre>
+                          <Button
+                            variant="outline"
+                            size="icon"
+                            onClick={() => { navigator.clipboard.writeText(stackSetsCommand); copyToClipboard(stackSetsCommand); }}
+                            className="absolute top-2 right-2 h-6 w-6 border-white/10 hover:bg-white/5 text-white/70"
+                          >
+                            {copySuccess ? <CheckCircle className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                          </Button>
+                        </div>
+                      </div>
+                    )}
+
+                    <Button onClick={() => setShowBulkForm(!showBulkForm)} variant="outline" size="sm" className="border-white/10 hover:bg-white/5 text-white/70 text-xs">
+                      <Upload className="w-3 h-3 mr-1.5" />
+                      {showBulkForm ? 'Hide Bulk Register' : 'Bulk Register'}
+                    </Button>
+                  </div>
+                </details>
               </div>
+
+              {/* Bulk Register Form */}
+              {showBulkForm && (
+                <div className="space-y-4 bg-white/5 border border-white/10 rounded-lg p-4">
+                  <div className="space-y-2">
+                    <p className="text-sm font-medium text-white/70">Bulk Register AWS Accounts</p>
+                    <p className="text-xs text-white/40">
+                      After deploying the CloudFormation template to your accounts, paste account IDs below.
+                      One per line: <code className="bg-black/50 px-1 py-0.5 rounded">ACCOUNT_ID,REGION,ROLE_NAME</code> (region and role name are optional, defaults: us-east-1, AuroraReadOnlyRole)
+                    </p>
+                  </div>
+                  <textarea
+                    value={bulkInput}
+                    onChange={(e) => setBulkInput(e.target.value)}
+                    placeholder={"123456789012,us-east-1\n234567890123,eu-west-1\n345678901234"}
+                    rows={6}
+                    className="w-full bg-black/50 text-white border border-white/10 rounded-lg p-3 font-mono text-xs focus:outline-none focus:ring-1 focus:ring-white/20 placeholder:text-white/20"
+                  />
+                  <Button onClick={handleBulkRegister} disabled={isBulkRegistering || !bulkInput.trim()} className="bg-white text-black hover:bg-white/90">
+                    {isBulkRegistering ? (
+                      <><Loader2 className="w-4 h-4 animate-spin mr-2" /> Registering...</>
+                    ) : (
+                      <><Upload className="w-4 h-4 mr-2" /> Register Accounts</>
+                    )}
+                  </Button>
+
+                  {/* Bulk Results */}
+                  {bulkResults && (
+                    <div className="space-y-2">
+                      <p className="text-xs font-medium text-white/60">
+                        Results: {bulkResults.filter(r => r.success).length} succeeded, {bulkResults.filter(r => !r.success).length} failed
+                      </p>
+                      <div className="max-h-40 overflow-y-auto space-y-1">
+                        {bulkResults.map((r, i) => (
+                          <div key={i} className={`text-xs px-3 py-1.5 rounded ${r.success ? 'bg-green-500/10 text-green-400' : 'bg-red-500/10 text-red-400'}`}>
+                            <span className="font-mono">{r.accountId}</span>
+                            {r.success ? ' - Connected' : ` - ${r.error}`}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
               <Button onClick={handleComplete} className="w-full bg-white text-black hover:bg-white/90 h-11">
                 Back to Connectors
               </Button>
@@ -613,121 +1195,58 @@ make dev`}</pre>
             <Card className="bg-black border-white/10">
               <CardHeader>
               <CardTitle className="text-white">Connect AWS Account</CardTitle>
-              <CardDescription className="text-white/50">Create an IAM role and grant Aurora access</CardDescription>
+              <CardDescription className="text-white/50">Deploy an IAM role to grant Aurora access to your account</CardDescription>
               </CardHeader>
               <CardContent className="space-y-6">
-              {/* External ID Display */}
+
+              {/* Role type selector */}
+              <div className="space-y-2">
+                <p className="text-sm text-white/70 font-medium">Access level</p>
+                <RoleTypeToggle value={roleType} onChange={setRoleType} />
+              </div>
+
+              {/* Primary: Quick-Create */}
+              {quickCreateUrl ? (
                 <div className="space-y-3">
-                <label className="text-sm text-white/70">External ID</label>
-                  <div className="flex gap-2">
-                    <Input
-                      value={onboardingData.externalId}
-                      readOnly
-                      className="font-mono bg-white/5 text-white border-white/10 focus-visible:ring-white/20"
-                    />
-                    <Button
-                      variant="outline"
-                      size="icon"
-                      onClick={() => copyToClipboard(onboardingData.externalId)}
-                      className="border-white/10 hover:bg-white/5 text-white/70"
-                    >
-                      {copySuccess ? <CheckCircle className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                  <p className="text-sm text-white/70 font-medium">1. Deploy the IAM role</p>
+                  <p className="text-xs text-white/40">
+                    Click below to open the AWS Console with a pre-filled CloudFormation stack.
+                    It creates {roleType === 'Admin' ? 'an admin' : 'a read-only'} IAM role that trusts Aurora.
+                  </p>
+                  <a href={quickCreateUrl} target="_blank" rel="noopener noreferrer" className="block">
+                    <Button className="w-full bg-[#FF9900] text-black hover:bg-[#FF9900]/90 h-11 font-medium">
+                      <Cloud className="w-4 h-4 mr-2" /> Deploy {roleType === 'Admin' ? 'Admin' : 'Read-Only'} Role in AWS Console
                     </Button>
-                  </div>
-                <p className="text-xs text-white/40">Used to secure cross-account access. Include this in your IAM role trust policy.</p>
+                  </a>
+                  <p className="text-xs text-white/30 text-center">
+                    Review the stack, check the IAM acknowledgement box, and click Create stack.
+                  </p>
                 </div>
-
-              {/* Setup Instructions */}
-              <div className="space-y-2 bg-white/5 border border-white/10 rounded-lg p-4">
-                <p className="text-xs text-white/60 font-semibold">Setup Instructions:</p>
-
-                <div className="space-y-3 mt-3">
-                  <div>
-                    <p className="text-xs text-white/60 mb-1">1. Create an IAM role in your AWS account with the permissions you want Aurora to have</p>
-                  </div>
-
-                  <div>
-                    <p className="text-xs text-white/60 mb-1">2. Add this trust policy to the role:</p>
-                    <div className="relative mt-2">
-                      <pre className="text-white text-xs whitespace-pre-wrap font-mono bg-black/30 p-3 pr-10 rounded border border-white/10">
-{JSON.stringify({
-    "Version": "2012-10-17",
-    "Statement": [
-        {
-            "Effect": "Allow",
-            "Principal": {
-                "AWS": `arn:aws:iam::${onboardingData.auroraAccountId}:root`
-            },
-            "Action": "sts:AssumeRole",
-            "Condition": {
-                "StringEquals": {
-                    "sts:ExternalId": onboardingData.externalId
-                }
-            }
-        }
-    ]
-}, null, 2)}
-                      </pre>
-                      <Button
-                        variant="outline"
-                        size="icon"
-                        onClick={() => copyTrustPolicyToClipboard(JSON.stringify({
-                          "Version": "2012-10-17",
-                          "Statement": [
-                            {
-                              "Effect": "Allow",
-                              "Principal": {
-                                "AWS": `arn:aws:iam::${onboardingData.auroraAccountId}:root`
-                              },
-                              "Action": "sts:AssumeRole",
-                              "Condition": {
-                                "StringEquals": {
-                                  "sts:ExternalId": onboardingData.externalId
-                                }
-                              }
-                            }
-                          ]
-                        }, null, 2))}
-                        className="absolute top-2 right-2 h-6 w-6 border-white/10 hover:bg-white/5 text-white/70"
-                      >
-                        {trustPolicyCopySuccess ? <CheckCircle className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
-                      </Button>
-                    </div>
-                    <Alert className="bg-yellow-500/10 border-yellow-500/20 mt-2">
-                      <AlertCircle className="h-4 w-4 text-yellow-400" />
-                      <AlertDescription className="text-xs text-yellow-400">
-                        <strong>Important:</strong> After updating the trust policy in AWS, changes can take up to <strong>5 minutes</strong> to propagate. If role assumption fails immediately after updating the trust policy, please wait a few minutes and try again.
-                      </AlertDescription>
-                    </Alert>
-                  </div>
-
-                  <div>
-                    <p className="text-xs text-white/60 mb-1">3. Attach permission policies to the role (Aurora will inherit them when it assumes the role):</p>
-                    <ul className="ml-4 space-y-1 text-xs text-white/40 mt-1">
-                      <li>• Common choice: <span className="text-white/60">PowerUserAccess</span> (full access except IAM)</li>
-                      <li>• Custom policies for your specific needs</li>
-                    </ul>
-                  </div>
-
-                  <Alert className="bg-blue-500/10 border-blue-500/20 mt-3">
-                    <Info className="h-4 w-4 text-blue-400" />
-                    <AlertDescription className="text-xs text-blue-400">
-                      Aurora automatically applies read-only restrictions in Ask mode to prevent accidental modifications
-                    </AlertDescription>
-                  </Alert>
+              ) : (
+                <div className="space-y-3">
+                  <p className="text-sm text-white/70 font-medium">1. Deploy the IAM role</p>
+                  <p className="text-xs text-white/40">
+                    Download the CloudFormation template and deploy it in your AWS account.
+                  </p>
+                  <Button onClick={handleDownloadCfnTemplate} disabled={isDownloadingCfn} className="w-full bg-[#FF9900] text-black hover:bg-[#FF9900]/90 h-11 font-medium">
+                    {isDownloadingCfn ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Download className="w-4 h-4 mr-2" />}
+                    Download CloudFormation Template
+                  </Button>
                 </div>
-        </div>
+              )}
 
-              {/* Role ARN Input */}
+              {/* Step 2: Paste role ARN */}
               <div className="space-y-3">
-                <label className="text-sm text-white/70">IAM Role ARN</label>
+                <p className="text-sm text-white/70 font-medium">2. Paste the Role ARN</p>
+                <p className="text-xs text-white/40">
+                  After the stack is created, copy the role ARN from the CloudFormation Outputs tab.
+                </p>
                 <Input
-                  placeholder="arn:aws:iam::123456789012:role/AuroraRole"
+                  placeholder="arn:aws:iam::123456789012:role/AuroraReadOnlyRole"
                   value={roleArn}
                   onChange={(e: React.ChangeEvent<HTMLInputElement>) => setRoleArn(e.target.value)}
                   className="bg-white/5 text-white border-white/10 focus-visible:ring-white/20 font-mono text-sm"
                 />
-                <p className="text-xs text-white/40">Enter the ARN of the IAM role you created above</p>
               </div>
 
               {/* Error Display */}
@@ -745,7 +1264,7 @@ make dev`}</pre>
                     <Alert className="bg-blue-500/10 border-blue-500/20">
                       <Info className="h-4 w-4 text-blue-400" />
                       <AlertDescription className="text-xs text-blue-400">
-                        <strong>Propagation Delay:</strong> If you just updated the trust policy, AWS changes can take up to <strong>5 minutes</strong> to propagate. Please wait a few minutes and try again before troubleshooting further.
+                        <strong>Propagation Delay:</strong> If you just updated the trust policy, AWS changes can take up to <strong>5 minutes</strong> to propagate. Please wait a few minutes and try again.
                       </AlertDescription>
                     </Alert>
                   )}
@@ -768,10 +1287,52 @@ make dev`}</pre>
                   </>
                 )}
               </Button>
+
+              {/* Advanced: Manual setup */}
+              <details className="group">
+                <summary className="text-xs text-white/30 cursor-pointer hover:text-white/50 select-none">
+                  Advanced: manual role setup or StackSets
+                </summary>
+                <div className="mt-4 space-y-4 border-t border-white/5 pt-4">
+                  {advancedDetails}
+                </div>
+              </details>
+
             </CardContent>
           </Card>
         )}
         </div>
+
+        {/* Disconnect confirmation dialog */}
+        <AlertDialog open={disconnectTarget !== null} onOpenChange={(open) => { if (!open) setDisconnectTarget(null); }}>
+          <AlertDialogContent className="bg-black border-white/10">
+            <AlertDialogHeader>
+              <AlertDialogTitle className="text-white">
+                {disconnectTarget === 'all' ? 'Disconnect all accounts?' : `Disconnect account ${disconnectTarget}?`}
+              </AlertDialogTitle>
+              <AlertDialogDescription className="text-white/50">
+                This removes Aurora&apos;s connection only. The IAM role still exists in {disconnectTarget === 'all' ? 'your AWS accounts' : 'the AWS account'}.
+                To fully revoke access, delete the CloudFormation stack{disconnectTarget === 'all' ? 's (or StackSet)' : ''} in {disconnectTarget === 'all' ? 'those accounts' : 'that account'}.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel className="border-white/10 text-white/70 hover:bg-white/5 hover:text-white">Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                className="bg-red-600 text-white hover:bg-red-700"
+                onClick={() => {
+                  if (disconnectTarget === 'all') {
+                    handleDisconnect();
+                  } else if (disconnectTarget) {
+                    handleDeleteAccount(disconnectTarget);
+                  }
+                  setDisconnectTarget(null);
+                }}
+              >
+                Disconnect
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
     </div>
   );
 }
