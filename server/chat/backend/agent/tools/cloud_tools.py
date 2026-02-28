@@ -98,6 +98,31 @@ from .dynatrace_tool import (
     is_dynatrace_connected,
     QueryDynatraceArgs,
 )
+from .thousandeyes_tool import (
+    thousandeyes_list_tests,
+    thousandeyes_get_test_detail,
+    thousandeyes_get_test_results,
+    thousandeyes_get_alerts,
+    thousandeyes_get_alert_rules,
+    thousandeyes_get_agents,
+    thousandeyes_get_endpoint_agents,
+    thousandeyes_get_internet_insights,
+    thousandeyes_get_dashboards,
+    thousandeyes_get_dashboard_widget,
+    thousandeyes_get_bgp_monitors,
+    is_thousandeyes_connected,
+    ThousandEyesListTestsArgs,
+    ThousandEyesGetTestDetailArgs,
+    ThousandEyesGetTestResultsArgs,
+    ThousandEyesGetAlertsArgs,
+    ThousandEyesGetAlertRulesArgs,
+    ThousandEyesGetAgentsArgs,
+    ThousandEyesGetEndpointAgentsArgs,
+    ThousandEyesGetInternetInsightsArgs,
+    ThousandEyesGetDashboardsArgs,
+    ThousandEyesGetDashboardWidgetArgs,
+    ThousandEyesGetBGPMonitorsArgs,
+)
 
 # Import all context management functions from utils
 from utils.cloud.cloud_utils import (
@@ -1486,6 +1511,62 @@ def get_cloud_tools():
             logging.debug(f"Coroot tools not added - user {user_id} not connected to Coroot")
     except Exception as e:
         logging.warning(f"Failed to add Coroot observability tools (treating as not connected): {e}")
+
+    # Add ThousandEyes network intelligence tools if connected
+    try:
+        if user_id and is_thousandeyes_connected(user_id):
+            _te_tools = [
+                (thousandeyes_list_tests, "thousandeyes_list_tests", ThousandEyesListTestsArgs,
+                 "List all configured ThousandEyes tests (network, HTTP, DNS, BGP, page load, etc.). "
+                 "Optionally filter by test_type. Use this first to discover available tests."),
+                (thousandeyes_get_test_detail, "thousandeyes_get_test_detail", ThousandEyesGetTestDetailArgs,
+                 "Get full configuration details for a single ThousandEyes test including server, interval, "
+                 "protocol, alert rules, and agents assigned. Use after list_tests to drill into a specific test."),
+                (thousandeyes_get_test_results, "thousandeyes_get_test_results", ThousandEyesGetTestResultsArgs,
+                 "Get results for a specific ThousandEyes test. Supports result_type: 'network' (latency, loss, jitter), "
+                 "'http' (response time, availability), 'path-vis' (hop-by-hop trace), 'dns' (resolution), "
+                 "'bgp' (routes), 'page-load' (full waterfall), 'web-transactions' (scripted browser), "
+                 "'ftp', 'api', 'sip' (VoIP), 'voice' (MOS), 'dns-trace', 'dnssec'. Requires a test_id."),
+                (thousandeyes_get_alerts, "thousandeyes_get_alerts", ThousandEyesGetAlertsArgs,
+                 "Get active or recent ThousandEyes alerts. Filter by state ('active'/'cleared') "
+                 "and severity ('major'/'minor'/'info'). Shows alert rules, affected agents, and violation counts."),
+                (thousandeyes_get_alert_rules, "thousandeyes_get_alert_rules", ThousandEyesGetAlertRulesArgs,
+                 "List all ThousandEyes alert rule definitions. Shows rule expressions, thresholds, severity, "
+                 "and which tests each rule applies to. Use to understand why specific alerts fired."),
+                (thousandeyes_get_agents, "thousandeyes_get_agents", ThousandEyesGetAgentsArgs,
+                 "List ThousandEyes cloud and enterprise monitoring agents. Filter by agent_type ('cloud' or 'enterprise'). "
+                 "Shows agent location, state, and IP addresses."),
+                (thousandeyes_get_endpoint_agents, "thousandeyes_get_endpoint_agents", ThousandEyesGetEndpointAgentsArgs,
+                 "List ThousandEyes endpoint agents installed on employee devices (laptops/desktops). "
+                 "Shows device name, OS, platform, location, public IP, and VPN status."),
+                (thousandeyes_get_internet_insights, "thousandeyes_get_internet_insights", ThousandEyesGetInternetInsightsArgs,
+                 "Get Internet Insights outage data from ThousandEyes. Set outage_type to 'network' for ISP/transit "
+                 "outages or 'application' for SaaS/CDN outages. Detects macro-scale internet issues affecting users."),
+                (thousandeyes_get_dashboards, "thousandeyes_get_dashboards", ThousandEyesGetDashboardsArgs,
+                 "List ThousandEyes dashboards, or get a specific dashboard with its widgets by providing dashboard_id. "
+                 "Use to discover monitoring dashboards and their widget layout."),
+                (thousandeyes_get_dashboard_widget, "thousandeyes_get_dashboard_widget", ThousandEyesGetDashboardWidgetArgs,
+                 "Get data for a specific widget within a ThousandEyes dashboard. Requires dashboard_id and widget_id "
+                 "(get these from thousandeyes_get_dashboards). Optionally set a time window."),
+                (thousandeyes_get_bgp_monitors, "thousandeyes_get_bgp_monitors", ThousandEyesGetBGPMonitorsArgs,
+                 "List ThousandEyes BGP monitoring points. Shows monitor name, type, IP, network, and country. "
+                 "Use alongside BGP test results for routing analysis."),
+            ]
+            for _func, _name, _schema, _desc in _te_tools:
+                _ctx = with_user_context(_func)
+                _notif = with_completion_notification(_ctx)
+                _final = wrap_func_with_capture(_notif, _name) if tool_capture else _notif
+                tools.append(StructuredTool.from_function(
+                    func=_final,
+                    name=_name,
+                    description=_desc,
+                    args_schema=_schema,
+                ))
+            logging.info(f"Added {len(_te_tools)} ThousandEyes tools for user {user_id}")
+        else:
+            logging.debug(f"ThousandEyes tools not added - user {user_id} not connected to ThousandEyes")
+    except Exception as e:
+        logging.warning(f"Failed to add ThousandEyes tools (treating as not connected): {e}")
 
     logging.info(f"Created {len(tools)} Aurora native tools")
     

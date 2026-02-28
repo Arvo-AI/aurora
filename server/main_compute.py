@@ -254,6 +254,12 @@ app.register_blueprint(splunk_search_bp, url_prefix="/splunk")
 from routes.coroot import bp as coroot_bp  # noqa: F401
 app.register_blueprint(coroot_bp, url_prefix="/coroot")
 
+# --- ThousandEyes Integration Routes ---
+from utils.flags.feature_flags import is_thousandeyes_enabled
+if is_thousandeyes_enabled():
+    from routes.thousandeyes import bp as thousandeyes_bp  # noqa: F401
+    app.register_blueprint(thousandeyes_bp, url_prefix="/thousandeyes")
+
 # --- Dynatrace Integration Routes ---
 from utils.flags.feature_flags import is_dynatrace_enabled
 if is_dynatrace_enabled():
