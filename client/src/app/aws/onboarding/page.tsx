@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { getEnv } from '@/lib/env';
+import { useToast } from '@/hooks/use-toast';
 
 const BACKEND_URL = getEnv('NEXT_PUBLIC_BACKEND_URL');
 
@@ -71,6 +72,7 @@ const formatAWSErrorMessage = (message: string): { title: string; description: s
 
 export default function AWSOnboardingPage() {
   const router = useRouter();
+  const { toast } = useToast();
   const [userId, setUserId] = useState<string | null>(null);
   const [workspaceId, setWorkspaceId] = useState<string | null>(null);
   const [onboardingData, setOnboardingData] = useState<OnboardingData | null>(null);
@@ -413,7 +415,11 @@ export default function AWSOnboardingPage() {
           headers: { 'X-User-ID': userId },
         }).catch(() => {});
         setInactiveAccounts(prev => prev.filter(a => a.account_id !== accountId));
-        setError('Reconnect failed — the IAM role no longer exists. Re-deploy it via the Quick-Create link to reconnect.');
+        toast({
+          title: 'Role no longer exists',
+          description: `The IAM role for account ${accountId} was deleted. Re-deploy it via the Quick-Create link.`,
+          variant: 'destructive',
+        });
         return;
       }
       setIsConfigured(true);
