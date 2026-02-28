@@ -3,15 +3,16 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useToast } from "@/hooks/use-toast";
-import type { CIProviderConfig, CIProviderStatus, CIWebhookInfo, CIDeploymentEvent } from "@/lib/services/ci-provider";
+import type { CIProviderConfig, CIProviderStatus, CIWebhookInfo, CIDeploymentEvent, CIRcaSettings } from "@/lib/services/ci-provider";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { Switch } from "@/components/ui/switch";
 import {
   Check, ChevronLeft, Copy, ExternalLink, Eye, EyeOff,
-  Loader2, Rocket, ShieldCheck, Webhook,
+  Loader2, Rocket, ShieldCheck, Webhook, Zap,
 } from "lucide-react";
 import { getUserFriendlyError } from "@/lib/utils";
 import { formatTimeAgo, formatDuration } from "@/lib/utils/time-format";
@@ -39,6 +40,8 @@ export default function CIProviderAuthPage({ config }: { config: CIProviderConfi
   const [expandedStep, setExpandedStep] = useState<number | null>(1);
   const [webhookInfo, setWebhookInfo] = useState<CIWebhookInfo | null>(null);
   const [deployments, setDeployments] = useState<CIDeploymentEvent[]>([]);
+  const [rcaSettings, setRcaSettings] = useState<CIRcaSettings | null>(null);
+  const [rcaToggleLoading, setRcaToggleLoading] = useState(false);
   const [copied, setCopied] = useState(false);
 
   const { slug, displayName, service, cacheKey, localStorageConnectedKey } = config;
@@ -91,6 +94,7 @@ export default function CIProviderAuthPage({ config }: { config: CIProviderConfi
     if (status?.connected) {
       service.getWebhookUrl().then(info => { if (info) setWebhookInfo(info); }).catch(() => {});
       service.getDeployments(10).then(data => { if (data) setDeployments(data.deployments); }).catch(() => {});
+      service.getRcaSettings().then(data => { if (data) setRcaSettings(data); }).catch(() => {});
     }
   }, [status?.connected, service]);
 
@@ -175,6 +179,15 @@ export default function CIProviderAuthPage({ config }: { config: CIProviderConfi
     }
   };
 
+  const handleRcaToggle = async (enabled: boolean) => {
+    setRcaToggleLoading(true);
+    const result = await service.updateRcaSettings({ rcaEnabled: enabled });
+    if (result) {
+      setRcaSettings(result);
+    }
+    setRcaToggleLoading(false);
+  };
+
   const isConnected = Boolean(status?.connected);
 
   if (checkingStatus && !status) {
@@ -218,6 +231,9 @@ export default function CIProviderAuthPage({ config }: { config: CIProviderConfi
           status={status}
           webhookInfo={webhookInfo}
           deployments={deployments}
+          rcaSettings={rcaSettings}
+          rcaToggleLoading={rcaToggleLoading}
+          onRcaToggle={handleRcaToggle}
           loading={loading}
           copied={copied}
           onDisconnect={handleDisconnect}
@@ -245,12 +261,15 @@ export default function CIProviderAuthPage({ config }: { config: CIProviderConfi
 }
 
 function ConnectedView({
-  config, status, webhookInfo, deployments, loading, copied, onDisconnect, onCopy,
+  config, status, webhookInfo, deployments, rcaSettings, rcaToggleLoading, onRcaToggle, loading, copied, onDisconnect, onCopy,
 }: {
   config: CIProviderConfig;
   status: CIProviderStatus | null;
   webhookInfo: CIWebhookInfo | null;
   deployments: CIDeploymentEvent[];
+  rcaSettings: CIRcaSettings | null;
+  rcaToggleLoading: boolean;
+  onRcaToggle: (enabled: boolean) => void;
   loading: boolean;
   copied: boolean;
   onDisconnect: () => void;
@@ -312,6 +331,28 @@ function ConnectedView({
           )}
 
           <JobHealthBar status={status} />
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardContent className="pt-6">
+          <div className="flex items-center justify-between">
+            <div className="space-y-1 flex-1">
+              <h4 className="font-medium flex items-center gap-2">
+                <Zap className="h-4 w-4" />
+                Automatic RCA on Deployment Failures
+              </h4>
+              <p className="text-sm text-muted-foreground">
+                Automatically trigger root cause analysis when a {config.displayName} build fails or is unstable
+              </p>
+            </div>
+            <Switch
+              checked={rcaSettings?.rcaEnabled ?? true}
+              onCheckedChange={onRcaToggle}
+              disabled={rcaToggleLoading}
+              className="ml-4"
+            />
+          </div>
         </CardContent>
       </Card>
 

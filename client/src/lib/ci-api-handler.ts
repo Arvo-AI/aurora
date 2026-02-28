@@ -61,8 +61,8 @@ export function createCIGetHandler({ slug, endpoint, label }: RouteConfig) {
   };
 }
 
-export function createCIPostHandler({ slug, endpoint, label }: RouteConfig) {
-  return async function POST(request: NextRequest) {
+function createCIBodyHandler(method: "POST" | "PUT", { slug, endpoint, label }: RouteConfig) {
+  return async function handler(request: NextRequest) {
     try {
       const authResult = await getAuthenticatedUser();
       if (authResult instanceof NextResponse) return authResult;
@@ -78,7 +78,7 @@ export function createCIPostHandler({ slug, endpoint, label }: RouteConfig) {
 
       const apiBaseUrl = getApiBaseUrl();
       const response = await fetchWithTimeout(`${apiBaseUrl}/${slug}/${endpoint}`, {
-        method: "POST",
+        method,
         headers: { ...authHeaders, "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
@@ -99,4 +99,12 @@ export function createCIPostHandler({ slug, endpoint, label }: RouteConfig) {
       return NextResponse.json({ error: `Failed to ${label}` }, { status: 500 });
     }
   };
+}
+
+export function createCIPostHandler(config: RouteConfig) {
+  return createCIBodyHandler("POST", config);
+}
+
+export function createCIPutHandler(config: RouteConfig) {
+  return createCIBodyHandler("PUT", config);
 }

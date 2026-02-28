@@ -87,11 +87,17 @@ async function fetchJson<T>(input: RequestInfo, init?: RequestInit): Promise<T> 
   return response.json();
 }
 
+export interface CIRcaSettings {
+  rcaEnabled: boolean;
+}
+
 export interface CIProviderService {
   getStatus(): Promise<CIProviderStatus | null>;
   connect(payload: CIConnectPayload): Promise<CIProviderStatus>;
   getWebhookUrl(): Promise<CIWebhookInfo | null>;
   getDeployments(limit?: number): Promise<{ deployments: CIDeploymentEvent[]; total: number } | null>;
+  getRcaSettings(): Promise<CIRcaSettings | null>;
+  updateRcaSettings(settings: CIRcaSettings): Promise<CIRcaSettings | null>;
 }
 
 export function createCIProviderService(slug: CIProviderSlug): CIProviderService {
@@ -146,6 +152,27 @@ export function createCIProviderService(slug: CIProviderSlug): CIProviderService
         );
       } catch (error) {
         console.error(`[${slug}Service] Failed to fetch deployments:`, error);
+        return null;
+      }
+    },
+
+    async getRcaSettings(): Promise<CIRcaSettings | null> {
+      try {
+        return await fetchJson<CIRcaSettings>(`${apiBase}/rca-settings`);
+      } catch (error) {
+        console.error(`[${slug}Service] Failed to fetch RCA settings:`, error);
+        return null;
+      }
+    },
+
+    async updateRcaSettings(settings: CIRcaSettings): Promise<CIRcaSettings | null> {
+      try {
+        return await fetchJson<CIRcaSettings>(`${apiBase}/rca-settings`, {
+          method: "PUT",
+          body: JSON.stringify(settings),
+        });
+      } catch (error) {
+        console.error(`[${slug}Service] Failed to update RCA settings:`, error);
         return null;
       }
     },

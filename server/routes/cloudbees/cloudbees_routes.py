@@ -473,10 +473,17 @@ def list_deployments():
                 "durationMs": r[10],
                 "jobName": r[11],
                 "traceId": r[12],
-                "receivedAt": r[13].isoformat() if r[13] else None,
+                "receivedAt": (r[13].isoformat() + "Z") if r[13] else None,
             })
 
         return jsonify({"deployments": deployments, "total": total, "limit": limit, "offset": offset})
     except Exception as exc:
         logger.exception("[CLOUDBEES] Failed to list deployments for user %s", user_id)
         return jsonify({"error": "Failed to list deployments"}), 500
+
+
+# ------------------------------------------------------------------
+# RCA settings: toggle automatic RCA on deployment failures
+# ------------------------------------------------------------------
+from routes.ci_shared import register_rca_settings_routes
+register_rca_settings_routes(cloudbees_bp, "cloudbees", "cloudbees_rca_enabled")

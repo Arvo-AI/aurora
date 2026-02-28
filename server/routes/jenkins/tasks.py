@@ -147,6 +147,18 @@ def process_jenkins_deployment(
                     if result in ("SUCCESS",):
                         return
 
+                    # Check if RCA is enabled for this provider
+                    from utils.auth.stateless_auth import get_user_preference
+                    pref_key = f"{source}_rca_enabled"
+                    rca_enabled = get_user_preference(user_id, pref_key, default=True)
+                    if not rca_enabled:
+                        conn.commit()
+                        logger.info(
+                            "%s Stored deployment event for user %s (RCA disabled, no incident created)",
+                            log_prefix, user_id,
+                        )
+                        return
+
                     severity = _extract_severity(payload)
                     alert_title = f"{source_label} deploy: {service} [{result}]"
 
