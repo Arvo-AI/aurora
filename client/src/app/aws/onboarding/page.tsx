@@ -405,7 +405,7 @@ export default function AWSOnboardingPage() {
   const fetchQuickCreateData = useCallback(async (roleType = 'ReadOnly') => {
     if (!workspaceId || !userId) return;
     try {
-      const res = await fetch(`${BACKEND_URL}/workspaces/${workspaceId}/aws/cfn-quickcreate?roleType=${roleType}`, {
+      const res = await fetch(`${BACKEND_URL}/workspaces/${workspaceId}/aws/cfn-quickcreate?roleType=${roleType}&_t=${Date.now()}`, {
         credentials: 'include',
         headers: { 'X-User-ID': userId },
       });
@@ -1035,8 +1035,8 @@ make dev`}</pre>
                   {quickCreateUrl && (
                     <a href={quickCreateUrl} target="_blank" rel="noopener noreferrer" className="block">
                       <Button variant="outline" size="sm" className="border-white/10 hover:bg-white/5 text-white/70 text-xs w-full justify-start">
-                        <Cloud className="w-3 h-3 mr-1.5" />
-                        Open Quick-Create in AWS Console
+                      <Cloud className="w-3 h-3 mr-1.5" />
+                      Deploy {roleType === 'Admin' ? 'Admin' : 'Read-Only'} Role via AWS Console
                       </Button>
                     </a>
                   )}
@@ -1171,7 +1171,7 @@ make dev`}</pre>
                   </p>
                   <a href={quickCreateUrl} target="_blank" rel="noopener noreferrer" className="block">
                     <Button className="w-full bg-[#FF9900] text-black hover:bg-[#FF9900]/90 h-11 font-medium">
-                      <Cloud className="w-4 h-4 mr-2" /> Open in AWS Console
+                      <Cloud className="w-4 h-4 mr-2" /> Deploy {roleType === 'Admin' ? 'Admin' : 'Read-Only'} Role in AWS Console
                     </Button>
                   </a>
                   <p className="text-xs text-white/30 text-center">
