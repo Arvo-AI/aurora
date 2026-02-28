@@ -95,6 +95,7 @@ jobs:
           BB_OAUTH_CLIENT_SECRET=$(gcloud secrets versions access latest --secret="demo-bb-oauth-client-secret" --project="${{ env.GCP_PROJECT }}")
           BB_ENABLE_BITBUCKET=$(gcloud secrets versions access latest --secret="demo-bb-enable-bitbucket" --project="${{ env.GCP_PROJECT }}")
           ENABLE_DYNATRACE=$(gcloud secrets versions access latest --secret="demo-dynatrace-enable" --project="${{ env.GCP_PROJECT }}")
+          ENABLE_THOUSANDEYES=$(gcloud secrets versions access latest --secret="demo-thousandeyes-enable" --project="${{ env.GCP_PROJECT }}")
 
           echo "::add-mask::$BB_OAUTH_CLIENT_SECRET"
 
@@ -108,6 +109,7 @@ jobs:
           echo "BB_OAUTH_CLIENT_SECRET=$BB_OAUTH_CLIENT_SECRET" >> $GITHUB_ENV
           echo "BB_ENABLE_BITBUCKET=$BB_ENABLE_BITBUCKET" >> $GITHUB_ENV
           echo "ENABLE_DYNATRACE=$ENABLE_DYNATRACE" >> $GITHUB_ENV
+          echo "ENABLE_THOUSANDEYES=$ENABLE_THOUSANDEYES" >> $GITHUB_ENV
 
           echo "Configuration loaded for $VM2_NAME"
 
@@ -157,6 +159,7 @@ jobs:
             grep -q '^BB_OAUTH_CLIENT_ID=' .env && sudo sed -i 's|^BB_OAUTH_CLIENT_ID=.*|BB_OAUTH_CLIENT_ID=${{ env.BB_OAUTH_CLIENT_ID }}|' .env || echo 'BB_OAUTH_CLIENT_ID=${{ env.BB_OAUTH_CLIENT_ID }}' | sudo tee -a .env
             grep -q '^BB_OAUTH_CLIENT_SECRET=' .env && sudo sed -i 's|^BB_OAUTH_CLIENT_SECRET=.*|BB_OAUTH_CLIENT_SECRET=${{ env.BB_OAUTH_CLIENT_SECRET }}|' .env || echo 'BB_OAUTH_CLIENT_SECRET=${{ env.BB_OAUTH_CLIENT_SECRET }}' | sudo tee -a .env
             grep -q '^NEXT_PUBLIC_ENABLE_DYNATRACE=' .env && sudo sed -i 's|^NEXT_PUBLIC_ENABLE_DYNATRACE=.*|NEXT_PUBLIC_ENABLE_DYNATRACE=${{ env.ENABLE_DYNATRACE }}|' .env || echo 'NEXT_PUBLIC_ENABLE_DYNATRACE=${{ env.ENABLE_DYNATRACE }}' | sudo tee -a .env
+            grep -q '^NEXT_PUBLIC_ENABLE_THOUSANDEYES=' .env && sudo sed -i 's|^NEXT_PUBLIC_ENABLE_THOUSANDEYES=.*|NEXT_PUBLIC_ENABLE_THOUSANDEYES=${{ env.ENABLE_THOUSANDEYES }}|' .env || echo 'NEXT_PUBLIC_ENABLE_THOUSANDEYES=${{ env.ENABLE_THOUSANDEYES }}' | sudo tee -a .env
 
             sudo docker compose -f docker-compose.prod-local.yml build frontend aurora-server
             sudo docker compose -f docker-compose.prod-local.yml up -d --remove-orphans
@@ -228,6 +231,7 @@ jobs:
           BB_OAUTH_CLIENT_SECRET=$(gcloud secrets versions access latest --secret="demo-bb-oauth-client-secret" --project="${{ env.GCP_PROJECT }}")
           BB_ENABLE_BITBUCKET=$(gcloud secrets versions access latest --secret="demo-bb-enable-bitbucket" --project="${{ env.GCP_PROJECT }}")
           ENABLE_DYNATRACE=$(gcloud secrets versions access latest --secret="demo-dynatrace-enable" --project="${{ env.GCP_PROJECT }}")
+          ENABLE_THOUSANDEYES=$(gcloud secrets versions access latest --secret="demo-thousandeyes-enable" --project="${{ env.GCP_PROJECT }}")
 
           echo "::add-mask::$BB_OAUTH_CLIENT_SECRET"
 
@@ -241,6 +245,7 @@ jobs:
           echo "BB_OAUTH_CLIENT_SECRET=$BB_OAUTH_CLIENT_SECRET" >> $GITHUB_ENV
           echo "BB_ENABLE_BITBUCKET=$BB_ENABLE_BITBUCKET" >> $GITHUB_ENV
           echo "ENABLE_DYNATRACE=$ENABLE_DYNATRACE" >> $GITHUB_ENV
+          echo "ENABLE_THOUSANDEYES=$ENABLE_THOUSANDEYES" >> $GITHUB_ENV
 
           echo "Configuration loaded for $VM3_NAME"
 
@@ -290,6 +295,7 @@ jobs:
             grep -q '^BB_OAUTH_CLIENT_ID=' .env && sudo sed -i 's|^BB_OAUTH_CLIENT_ID=.*|BB_OAUTH_CLIENT_ID=${{ env.BB_OAUTH_CLIENT_ID }}|' .env || echo 'BB_OAUTH_CLIENT_ID=${{ env.BB_OAUTH_CLIENT_ID }}' | sudo tee -a .env
             grep -q '^BB_OAUTH_CLIENT_SECRET=' .env && sudo sed -i 's|^BB_OAUTH_CLIENT_SECRET=.*|BB_OAUTH_CLIENT_SECRET=${{ env.BB_OAUTH_CLIENT_SECRET }}|' .env || echo 'BB_OAUTH_CLIENT_SECRET=${{ env.BB_OAUTH_CLIENT_SECRET }}' | sudo tee -a .env
             grep -q '^NEXT_PUBLIC_ENABLE_DYNATRACE=' .env && sudo sed -i 's|^NEXT_PUBLIC_ENABLE_DYNATRACE=.*|NEXT_PUBLIC_ENABLE_DYNATRACE=${{ env.ENABLE_DYNATRACE }}|' .env || echo 'NEXT_PUBLIC_ENABLE_DYNATRACE=${{ env.ENABLE_DYNATRACE }}' | sudo tee -a .env
+            grep -q '^NEXT_PUBLIC_ENABLE_THOUSANDEYES=' .env && sudo sed -i 's|^NEXT_PUBLIC_ENABLE_THOUSANDEYES=.*|NEXT_PUBLIC_ENABLE_THOUSANDEYES=${{ env.ENABLE_THOUSANDEYES }}|' .env || echo 'NEXT_PUBLIC_ENABLE_THOUSANDEYES=${{ env.ENABLE_THOUSANDEYES }}' | sudo tee -a .env
 
             sudo docker compose -f docker-compose.prod-local.yml build frontend aurora-server
             sudo docker compose -f docker-compose.prod-local.yml up -d --remove-orphans
