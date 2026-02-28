@@ -28,16 +28,17 @@ def refresh_aws_credentials():
     refreshed = 0
     skipped = 0
 
-    expiring_role_arns = set()
+    expiring_cache_keys = set()
     for key, creds in _credential_cache.items():
         ttl = creds["expiration"] - current_time
         if 0 < ttl <= refresh_window:
-            role_arn_part = key.split(":")[0]
-            expiring_role_arns.add(role_arn_part)
+            expiring_cache_keys.add(key)
 
-    if not expiring_role_arns:
+    if not expiring_cache_keys:
         logger.debug("No AWS credentials need proactive refresh")
         return {"refreshed": 0, "skipped": 0}
+
+    expiring_role_arns = {k.split(":")[0] for k in expiring_cache_keys}
 
     from utils.db.db_utils import connect_to_db_as_admin
 
@@ -46,11 +47,13 @@ def refresh_aws_credentials():
         conn = connect_to_db_as_admin()
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT DISTINCT uc.user_id, uc.role_arn, uc.region, w.aws_external_id, w.id "
+                "SELECT DISTINCT ON (uc.role_arn) "
+                "  uc.user_id, uc.role_arn, uc.region, w.aws_external_id, w.id "
                 "FROM user_connections uc "
                 "JOIN workspaces w ON w.user_id = uc.user_id "
                 "WHERE uc.provider = 'aws' AND uc.status = 'active' "
-                "AND w.aws_external_id IS NOT NULL"
+                "AND w.aws_external_id IS NOT NULL "
+                "ORDER BY uc.role_arn, w.created_at"
             )
             rows = cur.fetchall()
     except Exception as e:

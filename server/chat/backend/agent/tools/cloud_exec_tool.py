@@ -250,6 +250,10 @@ def setup_aws_environment_isolated(user_id: str, selected_region: str | None = N
                 logger.error("User %s does not have an active AWS connection", user_id)
                 return False, None, None, None
 
+            conn_region = aws_conn.get("region")
+            if conn_region and not selected_region:
+                selected_region = conn_region
+
             # Get external_id from workspace (needed for STS AssumeRole)
             ws = get_or_create_workspace(user_id, "default")
             external_id = ws.get("aws_external_id")

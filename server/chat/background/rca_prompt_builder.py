@@ -263,17 +263,17 @@ IMPORTANT: You have multiple AWS accounts connected.
 - Identify which account(s) have the issue based on the results.
 - For ALL subsequent calls, pass account_id='<ACCOUNT_ID>' to target only the relevant account. Example: cloud_exec('aws', 'ec2 describe-instances', account_id='123456789012')
 - Do NOT keep querying all accounts after you know where the problem is.
-- Check caller identity: cloud_tool('aws', 'sts get-caller-identity')
-- Check cluster status: cloud_tool('aws', 'eks describe-cluster --name CLUSTER_NAME')
-- **IMPORTANT**: Get cluster credentials first: cloud_tool('aws', 'eks update-kubeconfig --name CLUSTER_NAME --region REGION')
-- Get pod details: cloud_tool('aws', 'kubectl get pods -n NAMESPACE -o wide')
-- Describe problematic pods: cloud_tool('aws', 'kubectl describe pod POD_NAME -n NAMESPACE')
-- Check pod logs: cloud_tool('aws', 'kubectl logs POD_NAME -n NAMESPACE --since=1h')
-- Check events: cloud_tool('aws', 'kubectl get events -n NAMESPACE --sort-by=.lastTimestamp')
-- Query CloudWatch logs: cloud_tool('aws', 'logs filter-log-events --log-group-name LOG_GROUP --start-time TIMESTAMP')
-- Check EC2 instances: cloud_tool('aws', 'ec2 describe-instances --filters "Name=tag:Name,Values=*"')
-- Check load balancers: cloud_tool('aws', 'elbv2 describe-load-balancers')
-- Check security groups: cloud_tool('aws', 'ec2 describe-security-groups')""")
+- Check caller identity: cloud_tool('aws', 'sts get-caller-identity', account_id='<ACCOUNT_ID>')
+- Check cluster status: cloud_tool('aws', 'eks describe-cluster --name CLUSTER_NAME', account_id='<ACCOUNT_ID>')
+- **IMPORTANT**: Get cluster credentials first: cloud_tool('aws', 'eks update-kubeconfig --name CLUSTER_NAME --region REGION', account_id='<ACCOUNT_ID>')
+- Get pod details: cloud_tool('aws', 'kubectl get pods -n NAMESPACE -o wide', account_id='<ACCOUNT_ID>')
+- Describe problematic pods: cloud_tool('aws', 'kubectl describe pod POD_NAME -n NAMESPACE', account_id='<ACCOUNT_ID>')
+- Check pod logs: cloud_tool('aws', 'kubectl logs POD_NAME -n NAMESPACE --since=1h', account_id='<ACCOUNT_ID>')
+- Check events: cloud_tool('aws', 'kubectl get events -n NAMESPACE --sort-by=.lastTimestamp', account_id='<ACCOUNT_ID>')
+- Query CloudWatch logs: cloud_tool('aws', 'logs filter-log-events --log-group-name LOG_GROUP --start-time TIMESTAMP', account_id='<ACCOUNT_ID>')
+- Check EC2 instances: cloud_tool('aws', 'ec2 describe-instances --filters "Name=tag:Name,Values=*"', account_id='<ACCOUNT_ID>')
+- Check load balancers: cloud_tool('aws', 'elbv2 describe-load-balancers', account_id='<ACCOUNT_ID>')
+- Check security groups: cloud_tool('aws', 'ec2 describe-security-groups', account_id='<ACCOUNT_ID>')""")
 
     # Azure-specific instructions
     if 'azure' in providers_lower:

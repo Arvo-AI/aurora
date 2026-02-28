@@ -118,7 +118,7 @@ def build_provider_context_segment(provider_preference: Optional[Any], selected_
                     "  2. Review the per-account results to identify which account(s) are relevant.\n"
                     "  3. For ALL subsequent calls, pass `account_id='<ACCOUNT_ID>'` to target only the relevant account(s). Example: cloud_exec('aws', 'ec2 describe-instances', account_id='123456789012')\n"
                     "  4. NEVER keep querying all accounts after you've identified the relevant one -- it wastes time and adds noise.\n"
-                    "- Fetch the AWS account ID before writing Terraform: cloud_exec('aws', \"sts get-caller-identity --query 'Account' --output text\"). Store and reuse that output.\n"
+                    "- Fetch the AWS account ID before writing Terraform: cloud_exec('aws', \"sts get-caller-identity --query 'Account' --output text\", account_id='<ACCOUNT_ID>'). Store and reuse that output.\n"
                 )
             elif provider == "azure":
                 parts.append(

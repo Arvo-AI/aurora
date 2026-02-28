@@ -475,18 +475,27 @@ export default function AWSOnboardingPage() {
         headers: { 'Content-Type': 'application/json', 'X-User-ID': userId },
       });
       if (!res.ok) {
-        // Role is gone -- delete the stale entry and remove from the list
-        await fetch(`${BACKEND_URL}/workspaces/${workspaceId}/aws/accounts/${accountId}`, {
-          method: 'DELETE',
-          credentials: 'include',
-          headers: { 'X-User-ID': userId },
-        }).catch(() => {});
-        setInactiveAccounts(prev => prev.filter(a => a.account_id !== accountId));
-        toast({
-          title: 'Role no longer exists',
-          description: `The IAM role for account ${accountId} was deleted. Re-deploy it via the Quick-Create link.`,
-          variant: 'destructive',
-        });
+        const data = await res.json().catch(() => ({}));
+        const isRoleGone = res.status === 400 && /role.*deleted|trust policy/i.test(data.error || '');
+        if (isRoleGone) {
+          await fetch(`${BACKEND_URL}/workspaces/${workspaceId}/aws/accounts/${accountId}`, {
+            method: 'DELETE',
+            credentials: 'include',
+            headers: { 'X-User-ID': userId },
+          }).catch(() => {});
+          setInactiveAccounts(prev => prev.filter(a => a.account_id !== accountId));
+          toast({
+            title: 'Role no longer exists',
+            description: `The IAM role for account ${accountId} was deleted. Re-deploy it via the Quick-Create link.`,
+            variant: 'destructive',
+          });
+        } else {
+          toast({
+            title: 'Reconnect failed',
+            description: data.error || 'Temporary error — please try again.',
+            variant: 'destructive',
+          });
+        }
         return;
       }
       setIsConfigured(true);
@@ -540,7 +549,7 @@ export default function AWSOnboardingPage() {
         const parts = line.split(',').map(p => p.trim());
         const accountId = parts[0];
         const region = parts[1] || 'us-east-1';
-        const roleName = parts[2] || 'AuroraReadOnlyRole';
+        const roleName = parts[2] || (roleType === 'Admin' ? 'AuroraAdminRole' : 'AuroraReadOnlyRole');
         return {
           accountId,
           roleArn: `arn:aws:iam::${accountId}:role/${roleName}`,

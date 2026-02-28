@@ -1,7 +1,7 @@
 # Multi-Account AWS Onboarding Guide
 
 This guide explains how to connect multiple AWS accounts to Aurora using
-cross-account IAM roles and STS AssumeRole.  It is designed for organisations
+cross-account IAM roles and STS AssumeRole.  It is designed for organizations
 with many accounts (e.g. managed via AWS Organizations / Control Tower).
 
 ---

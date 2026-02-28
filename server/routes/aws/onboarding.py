@@ -472,9 +472,12 @@ def bulk_register_aws_accounts(workspace_id):
 
         results = []
         for entry in data["accounts"]:
-            role_arn = entry.get("roleArn", "").strip()
-            account_id = entry.get("accountId", "").strip()
-            region = entry.get("region", "us-east-1").strip()
+            if not isinstance(entry, dict):
+                results.append({"accountId": "unknown", "success": False, "error": "Each entry must be a JSON object"})
+                continue
+            role_arn = (entry.get("roleArn") or "").strip()
+            account_id = (entry.get("accountId") or "").strip()
+            region = (entry.get("region") or "us-east-1").strip()
 
             if not role_arn or not account_id:
                 results.append({"accountId": account_id, "success": False, "error": "roleArn and accountId are required"})

@@ -91,6 +91,10 @@ def _setup_provider_env(provider_name, user_id, credentials):
                 creds = {
                     "_multi_account": True,
                     "_account_envs": account_envs,
+                    "access_key_id": account_envs[0]["credentials"]["accessKeyId"],
+                    "secret_access_key": account_envs[0]["credentials"]["secretAccessKey"],
+                    "session_token": account_envs[0]["credentials"]["sessionToken"],
+                    "region": account_envs[0]["region"],
                 }
                 return None, creds
 

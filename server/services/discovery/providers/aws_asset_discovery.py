@@ -318,6 +318,9 @@ def discover_all_accounts(user_id, account_envs):
         result["errors"] = [f"[{account_id}] {err}" for err in result.get("errors", [])]
         return result
 
+    if not account_envs:
+        return {"nodes": [], "relationships": [], "errors": []}
+
     max_workers = min(len(account_envs), 10)
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
         futures = {pool.submit(_discover_one, acct): acct["account_id"] for acct in account_envs}

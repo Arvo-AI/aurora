@@ -135,6 +135,12 @@ try:
 except ImportError as e:
     logging.warning(f"Failed to import discovery tasks: {e}")
 
+try:
+    import utils.aws.credential_refresh  # noqa: F401
+    logging.info("AWS credential refresh task imported successfully")
+except ImportError as e:
+    logging.warning(f"Failed to import AWS credential refresh task: {e}")
+
 # Log the number of registered tasks for debugging
 if hasattr(celery_app, 'tasks'):
     non_celery_tasks = [t for t in celery_app.tasks.keys() if not t.startswith('celery.')]
