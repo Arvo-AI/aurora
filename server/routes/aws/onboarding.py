@@ -800,9 +800,7 @@ def get_cfn_quickcreate_link(workspace_id):
         template_url = request.args.get("templateUrl") or os.getenv("AWS_CFN_TEMPLATE_URL", "")
 
         import urllib.parse
-        short_id = external_id[:8]
         params = {
-            "stackName": f"aurora-role-{short_id}",
             "param_AuroraAccountId": aurora_account_id,
             "param_ExternalId": external_id,
             "param_RoleName": "AuroraReadOnlyRole",

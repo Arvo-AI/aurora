@@ -265,7 +265,7 @@ AWS accounts.
 | Symptom | Cause | Fix |
 |---|---|---|
 | Quick-Create link says "templateURL is required" | `AWS_CFN_TEMPLATE_URL` not set, or template not hosted on S3 | Follow the "Hosting the CloudFormation Template" section above to upload to S3 and set the env var |
-| Quick-Create says "stack already exists" | The role was already deployed to this account | The role is already there -- just register the account in Aurora (Bulk Register or paste the ARN). To redeploy, delete the existing stack first or change the stack name. |
+| Quick-Create says role already exists | The `AuroraReadOnlyRole` IAM role is already in that account (from a previous deploy) | Either use the existing role (just register the account in Aurora), or delete the old CloudFormation stack first and re-deploy |
 | "Access denied" on bulk register | Role not yet created, or External ID mismatch | Verify the CFN stack deployed successfully and uses the correct External ID |
 | Some accounts fail, others succeed | IAM role propagation delay | Wait 5 minutes and retry the failed accounts |
 | Discovery finds no resources | Resource Explorer not enabled | Run `aws resource-explorer-2 create-index --type AGGREGATOR` in your primary region |
