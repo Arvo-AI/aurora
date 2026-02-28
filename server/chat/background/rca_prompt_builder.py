@@ -493,6 +493,8 @@ def build_rca_prompt(
         entity = alert_details.get('impacted_entity', 'unknown')
         impact = alert_details.get('impact', 'unknown')
         labels_str = f"entity={entity}, impact={impact}"
+    elif source == 'bigpanda':
+        labels_str = ", ".join(f"{k}={v}" for k, v in labels.items()) if labels else "none"
     else:
         labels_str = str(labels)
 
@@ -1062,3 +1064,50 @@ def build_cloudbees_rca_prompt(
         alert_details['labels']['trace_id'] = payload['trace_id']
 
     return build_rca_prompt('cloudbees', alert_details, providers, user_id)
+
+
+def build_bigpanda_rca_prompt(
+    incident: Dict[str, Any],
+    alerts: list,
+    providers: Optional[List[str]] = None,
+    user_id: Optional[str] = None,
+) -> str:
+    """Build RCA prompt from BigPanda incident payload."""
+    first_alert = alerts[0] if alerts else {}
+    title = (
+        first_alert.get("description")
+        or first_alert.get("condition_name")
+        or f"BigPanda Incident {incident.get('id', 'unknown')}"
+    )
+    service = str(
+        first_alert.get("primary_property")
+        or first_alert.get("source_system")
+        or "unknown"
+    )
+    bp_status = incident.get("status", "active")
+
+    message_parts = [f"Child alerts: {len(alerts)}"]
+    if envs := incident.get("environments"):
+        message_parts.append(f"Environments: {envs}")
+    if tags := incident.get("incident_tags"):
+        message_parts.append(f"Tags: {tags}")
+    if alerts:
+        summaries = []
+        for a in alerts[:5]:
+            desc = a.get("description") or a.get("condition_name") or "no description"
+            src = a.get("source_system") or "unknown"
+            summaries.append(f"[{src}] {desc}")
+        message_parts.append("Top alerts: " + "; ".join(summaries))
+
+    alert_details = {
+        'title': title,
+        'status': bp_status,
+        'message': ". ".join(message_parts),
+        'labels': {
+            'service': service,
+            'severity': incident.get("severity", "unknown"),
+            'child_alert_count': str(len(alerts)),
+        },
+    }
+
+    return build_rca_prompt('bigpanda', alert_details, providers, user_id)
