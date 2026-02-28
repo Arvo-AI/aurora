@@ -406,8 +406,14 @@ export default function AWSOnboardingPage() {
         headers: { 'Content-Type': 'application/json', 'X-User-ID': userId },
       });
       if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        setError(data.error || 'Reconnect failed. The IAM role may need to be redeployed.');
+        // Role is gone -- delete the stale entry and remove from the list
+        await fetch(`${BACKEND_URL}/workspaces/${workspaceId}/aws/accounts/${accountId}`, {
+          method: 'DELETE',
+          credentials: 'include',
+          headers: { 'X-User-ID': userId },
+        }).catch(() => {});
+        setInactiveAccounts(prev => prev.filter(a => a.account_id !== accountId));
+        setError('Reconnect failed — the IAM role no longer exists. Re-deploy it via the Quick-Create link to reconnect.');
         return;
       }
       setIsConfigured(true);
