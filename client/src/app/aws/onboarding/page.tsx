@@ -128,13 +128,10 @@ export default function AWSOnboardingPage() {
   const [error, setError] = useState<string | null>(null);
   const [isSettingRole, setIsSettingRole] = useState(false);
   const [copySuccess, setCopySuccess] = useState(false);
-  const [policyCopySuccess, setPolicyCopySuccess] = useState(false);
-  const [trustPolicyCopySuccess, setTrustPolicyCopySuccess] = useState(false);
   const [isDisconnecting, setIsDisconnecting] = useState(false);
   const [roleArn, setRoleArn] = useState('');
   const [isConfigured, setIsConfigured] = useState(false);
   const [credentialsConfigured, setCredentialsConfigured] = useState<boolean | null>(null);
-  const [showDocs, setShowDocs] = useState(false);
   const [connectedAccounts, setConnectedAccounts] = useState<ConnectedAccount[]>([]);
   const [bulkInput, setBulkInput] = useState('');
   const [isBulkRegistering, setIsBulkRegistering] = useState(false);
@@ -147,7 +144,6 @@ export default function AWSOnboardingPage() {
   const [roleType, setRoleType] = useState<'ReadOnly' | 'Admin'>('ReadOnly');
   const [cfnBaseData, setCfnBaseData] = useState<{ auroraAccountId: string; externalId: string; region: string; templateUrl: string } | null>(null);
   const [stackSetsCommand, setStackSetsCommand] = useState<string | null>(null);
-  const [stackSetsCopied, setStackSetsCopied] = useState(false);
   const [inactiveAccounts, setInactiveAccounts] = useState<ConnectedAccount[]>([]);
   const [reconnectingId, setReconnectingId] = useState<string | null>(null);
 
@@ -171,9 +167,6 @@ export default function AWSOnboardingPage() {
         if (response.ok) {
           const data = await response.json();
           setCredentialsConfigured(data.configured);
-          if (!data.configured) {
-            setShowDocs(true);
-          }
         }
       } catch (err) {
         console.error("Failed to check AWS credentials:", err);
@@ -667,18 +660,6 @@ export default function AWSOnboardingPage() {
     setTimeout(() => setCopySuccess(false), 2000);
   };
 
-  const copyPolicyToClipboard = (text: string) => {
-    navigator.clipboard.writeText(text);
-    setPolicyCopySuccess(true);
-    setTimeout(() => setPolicyCopySuccess(false), 2000);
-  };
-
-  const copyTrustPolicyToClipboard = (text: string) => {
-    navigator.clipboard.writeText(text);
-    setTrustPolicyCopySuccess(true);
-    setTimeout(() => setTrustPolicyCopySuccess(false), 2000);
-  };
-
   if (isLoading) {
     return (
       <div className="min-h-screen bg-black flex items-center justify-center">
@@ -690,8 +671,7 @@ export default function AWSOnboardingPage() {
     );
   }
 
-  // Show documentation if credentials are not configured
-  if (showDocs && credentialsConfigured === false) {
+  if (credentialsConfigured === false) {
     return (
       <div className="min-h-screen bg-black flex items-center justify-center p-4 sm:p-6">
         <Card className="w-full max-w-2xl bg-black border-white/10 overflow-hidden">
@@ -724,7 +704,7 @@ export default function AWSOnboardingPage() {
                   <Button
                     variant="outline"
                     size="icon"
-                    onClick={() => copyPolicyToClipboard(JSON.stringify({
+                    onClick={() => copyToClipboard(JSON.stringify({
                       "Version": "2012-10-17",
                       "Statement": [
                         {
@@ -736,7 +716,7 @@ export default function AWSOnboardingPage() {
                     }, null, 2))}
                     className="absolute top-2 right-2 h-6 w-6 border-white/10 hover:bg-white/5 text-white/70"
                   >
-                    {policyCopySuccess ? <CheckCircle className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                    {copySuccess ? <CheckCircle className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
                   </Button>
                 </div>
               </div>
@@ -772,7 +752,6 @@ make dev`}</pre>
                     .then(data => {
                       setCredentialsConfigured(data.configured);
                       if (data.configured) {
-                        setShowDocs(false);
                         window.location.reload();
                       }
                     });
@@ -923,6 +902,43 @@ make dev`}</pre>
       </div>
     );
   }
+
+  const trustPolicyJson = JSON.stringify({
+    "Version": "2012-10-17",
+    "Statement": [{
+      "Effect": "Allow",
+      "Principal": { "AWS": `arn:aws:iam::${onboardingData.auroraAccountId}:root` },
+      "Action": "sts:AssumeRole",
+      "Condition": { "StringEquals": { "sts:ExternalId": onboardingData.externalId } }
+    }]
+  }, null, 2);
+
+  const advancedDetails = (
+    <>
+      <div className="space-y-1.5">
+        <label className="text-xs text-white/50">External ID</label>
+        <div className="flex gap-2">
+          <Input value={onboardingData.externalId} readOnly className="font-mono text-xs bg-white/5 text-white border-white/10 focus-visible:ring-white/20" />
+          <Button variant="outline" size="icon" onClick={() => copyToClipboard(onboardingData.externalId)} className="border-white/10 hover:bg-white/5 text-white/70 h-8 w-8">
+            {copySuccess ? <CheckCircle className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+          </Button>
+        </div>
+      </div>
+      <div className="space-y-1.5">
+        <label className="text-xs text-white/50">Trust Policy JSON</label>
+        <div className="relative">
+          <pre className="text-white text-xs whitespace-pre-wrap font-mono bg-black/30 p-3 pr-10 rounded border border-white/10">{trustPolicyJson}</pre>
+          <Button variant="outline" size="icon" onClick={() => copyToClipboard(trustPolicyJson)} className="absolute top-2 right-2 h-6 w-6 border-white/10 hover:bg-white/5 text-white/70">
+            {copySuccess ? <CheckCircle className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+          </Button>
+        </div>
+      </div>
+      <Button onClick={handleDownloadCfnTemplate} disabled={isDownloadingCfn} variant="outline" size="sm" className="border-white/10 hover:bg-white/5 text-white/70 text-xs">
+        {isDownloadingCfn ? <Loader2 className="w-3 h-3 animate-spin mr-1.5" /> : <Download className="w-3 h-3 mr-1.5" />}
+        Download Template YAML
+      </Button>
+    </>
+  );
 
   return (
     <div className="min-h-screen bg-black flex flex-col items-center justify-center p-6">
@@ -1097,71 +1113,7 @@ make dev`}</pre>
                     Advanced: manual role setup, bulk register, StackSets
                   </summary>
                   <div className="mt-3 space-y-3 border-t border-white/5 pt-3">
-                    {/* Manual: External ID */}
-                    {onboardingData && (
-                      <>
-                        <div className="space-y-1.5">
-                          <label className="text-xs text-white/50">External ID</label>
-                          <div className="flex gap-2">
-                            <Input
-                              value={onboardingData.externalId}
-                              readOnly
-                              className="font-mono text-xs bg-white/5 text-white border-white/10 focus-visible:ring-white/20"
-                            />
-                            <Button
-                              variant="outline"
-                              size="icon"
-                              onClick={() => copyToClipboard(onboardingData.externalId)}
-                              className="border-white/10 hover:bg-white/5 text-white/70 h-8 w-8"
-                            >
-                              {copySuccess ? <CheckCircle className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
-                            </Button>
-                          </div>
-                        </div>
-
-                        {/* Manual: Trust Policy */}
-                        <div className="space-y-1.5">
-                          <label className="text-xs text-white/50">Trust Policy JSON</label>
-                          <div className="relative">
-                            <pre className="text-white text-xs whitespace-pre-wrap font-mono bg-black/30 p-3 pr-10 rounded border border-white/10">
-{JSON.stringify({
-    "Version": "2012-10-17",
-    "Statement": [
-        {
-            "Effect": "Allow",
-            "Principal": {
-                "AWS": `arn:aws:iam::${onboardingData.auroraAccountId}:root`
-            },
-            "Action": "sts:AssumeRole",
-            "Condition": {
-                "StringEquals": {
-                    "sts:ExternalId": onboardingData.externalId
-                }
-            }
-        }
-    ]
-}, null, 2)}
-                            </pre>
-                            <Button
-                              variant="outline"
-                              size="icon"
-                              onClick={() => copyTrustPolicyToClipboard(JSON.stringify({
-                                "Version": "2012-10-17",
-                                "Statement": [{
-                                  "Effect": "Allow",
-                                  "Principal": { "AWS": `arn:aws:iam::${onboardingData.auroraAccountId}:root` },
-                                  "Action": "sts:AssumeRole",
-                                  "Condition": { "StringEquals": { "sts:ExternalId": onboardingData.externalId } }
-                                }]
-                              }, null, 2))}
-                              className="absolute top-2 right-2 h-6 w-6 border-white/10 hover:bg-white/5 text-white/70"
-                            >
-                              {trustPolicyCopySuccess ? <CheckCircle className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
-                            </Button>
-                          </div>
-                        </div>
-                      </>
-                    )}
+                    {advancedDetails}
 
                     {/* StackSets */}
                     {stackSetsCommand && (
@@ -1172,26 +1124,19 @@ make dev`}</pre>
                           <Button
                             variant="outline"
                             size="icon"
-                            onClick={() => { navigator.clipboard.writeText(stackSetsCommand); setStackSetsCopied(true); setTimeout(() => setStackSetsCopied(false), 2000); }}
+                            onClick={() => { navigator.clipboard.writeText(stackSetsCommand); copyToClipboard(stackSetsCommand); }}
                             className="absolute top-2 right-2 h-6 w-6 border-white/10 hover:bg-white/5 text-white/70"
                           >
-                            {stackSetsCopied ? <CheckCircle className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                            {copySuccess ? <CheckCircle className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
                           </Button>
                         </div>
                       </div>
                     )}
 
-                    {/* Bulk register & download */}
-                    <div className="flex gap-2">
-                      <Button onClick={() => setShowBulkForm(!showBulkForm)} variant="outline" size="sm" className="border-white/10 hover:bg-white/5 text-white/70 text-xs">
-                        <Upload className="w-3 h-3 mr-1.5" />
-                        {showBulkForm ? 'Hide Bulk Register' : 'Bulk Register'}
-                      </Button>
-                      <Button onClick={handleDownloadCfnTemplate} disabled={isDownloadingCfn} variant="outline" size="sm" className="border-white/10 hover:bg-white/5 text-white/70 text-xs">
-                        {isDownloadingCfn ? <Loader2 className="w-3 h-3 animate-spin mr-1.5" /> : <Download className="w-3 h-3 mr-1.5" />}
-                        Download Template
-                      </Button>
-                    </div>
+                    <Button onClick={() => setShowBulkForm(!showBulkForm)} variant="outline" size="sm" className="border-white/10 hover:bg-white/5 text-white/70 text-xs">
+                      <Upload className="w-3 h-3 mr-1.5" />
+                      {showBulkForm ? 'Hide Bulk Register' : 'Bulk Register'}
+                    </Button>
                   </div>
                 </details>
               </div>
@@ -1349,73 +1294,7 @@ make dev`}</pre>
                   Advanced: manual role setup or StackSets
                 </summary>
                 <div className="mt-4 space-y-4 border-t border-white/5 pt-4">
-                  {/* External ID */}
-                  <div className="space-y-2">
-                    <label className="text-xs text-white/50">External ID</label>
-                    <div className="flex gap-2">
-                      <Input
-                        value={onboardingData.externalId}
-                        readOnly
-                        className="font-mono text-xs bg-white/5 text-white border-white/10 focus-visible:ring-white/20"
-                      />
-                      <Button
-                        variant="outline"
-                        size="icon"
-                        onClick={() => copyToClipboard(onboardingData.externalId)}
-                        className="border-white/10 hover:bg-white/5 text-white/70"
-                      >
-                        {copySuccess ? <CheckCircle className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
-                      </Button>
-                    </div>
-                  </div>
-
-                  {/* Trust policy */}
-                  <div className="space-y-2">
-                    <label className="text-xs text-white/50">Trust Policy JSON</label>
-                    <div className="relative">
-                      <pre className="text-white text-xs whitespace-pre-wrap font-mono bg-black/30 p-3 pr-10 rounded border border-white/10">
-{JSON.stringify({
-    "Version": "2012-10-17",
-    "Statement": [
-        {
-            "Effect": "Allow",
-            "Principal": {
-                "AWS": `arn:aws:iam::${onboardingData.auroraAccountId}:root`
-            },
-            "Action": "sts:AssumeRole",
-            "Condition": {
-                "StringEquals": {
-                    "sts:ExternalId": onboardingData.externalId
-                }
-            }
-        }
-    ]
-}, null, 2)}
-                      </pre>
-                      <Button
-                        variant="outline"
-                        size="icon"
-                        onClick={() => copyTrustPolicyToClipboard(JSON.stringify({
-                          "Version": "2012-10-17",
-                          "Statement": [{
-                            "Effect": "Allow",
-                            "Principal": { "AWS": `arn:aws:iam::${onboardingData.auroraAccountId}:root` },
-                            "Action": "sts:AssumeRole",
-                            "Condition": { "StringEquals": { "sts:ExternalId": onboardingData.externalId } }
-                          }]
-                        }, null, 2))}
-                        className="absolute top-2 right-2 h-6 w-6 border-white/10 hover:bg-white/5 text-white/70"
-                      >
-                        {trustPolicyCopySuccess ? <CheckCircle className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
-                      </Button>
-                    </div>
-                  </div>
-
-                  {/* Download template */}
-                  <Button onClick={handleDownloadCfnTemplate} disabled={isDownloadingCfn} variant="outline" size="sm" className="border-white/10 hover:bg-white/5 text-white/70 text-xs">
-                    {isDownloadingCfn ? <Loader2 className="w-3 h-3 animate-spin mr-1.5" /> : <Download className="w-3 h-3 mr-1.5" />}
-                    Download Template YAML
-                  </Button>
+                  {advancedDetails}
                 </div>
               </details>
 
