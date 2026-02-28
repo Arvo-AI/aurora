@@ -554,17 +554,16 @@ export default function AWSOnboardingPage() {
   const handleAddSingleAccount = async () => {
     if (!workspaceId || !userId || !addAccountId.trim()) return;
     setIsAddingAccount(true);
-    setError(null);
     try {
       const arn = addAccountId.trim();
       const arnMatch = arn.match(/arn:aws:iam::(\d{12}):role\//);
       if (!arnMatch) {
-        setError('Invalid Role ARN. Expected format: arn:aws:iam::123456789012:role/RoleName');
+        toast({ title: 'Invalid Role ARN', description: 'Expected format: arn:aws:iam::123456789012:role/RoleName', variant: 'destructive' });
         return;
       }
       const accountId = arnMatch[1];
       if (connectedAccounts.some(a => a.account_id === accountId)) {
-        setError(`Account ${accountId} is already connected.`);
+        toast({ title: 'Already connected', description: `Account ${accountId} is already connected.`, variant: 'destructive' });
         return;
       }
       const res = await fetch(`${BACKEND_URL}/workspaces/${workspaceId}/aws/accounts/bulk`, {
@@ -575,13 +574,13 @@ export default function AWSOnboardingPage() {
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
-        setError(data.error || 'Failed to register account.');
+        toast({ title: 'Registration failed', description: data.error || 'Failed to register account.', variant: 'destructive' });
         return;
       }
       const data = await res.json();
       const result = data.results?.[0];
       if (result && !result.success) {
-        setError(result.error || 'Role assumption failed. Deploy the IAM role first.');
+        toast({ title: 'Role assumption failed', description: result.error || 'Deploy the IAM role first.', variant: 'destructive' });
         return;
       }
       setAddAccountId('');
@@ -589,7 +588,7 @@ export default function AWSOnboardingPage() {
       await fetchConnectedAccounts();
     } catch (err) {
       console.error('Add account error:', err);
-      setError('Failed to register account.');
+      toast({ title: 'Error', description: 'Failed to register account.', variant: 'destructive' });
     } finally {
       setIsAddingAccount(false);
     }
