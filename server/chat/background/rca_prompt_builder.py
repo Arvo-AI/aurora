@@ -424,7 +424,7 @@ def _get_recent_jenkins_deployments(user_id: str, service: str = "", lookback_mi
 
                 if service and service != "unknown":
                     conditions.append("service = %s")
-                    params.insert(1, service)
+                    params.append(service)
 
                 if provider:
                     conditions.append("provider = %s")

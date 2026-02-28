@@ -29,7 +29,7 @@ def _get_stored_cloudbees_credentials(user_id: str) -> Optional[Dict[str, Any]]:
     try:
         return get_token_data(user_id, CLOUDBEES_PROVIDER)
     except Exception as exc:
-        logger.error("Failed to retrieve CloudBees credentials for user %s: %s", user_id, exc)
+        logger.error("Failed to retrieve CloudBees credentials for user %s", user_id)
         return None
 
 
@@ -78,7 +78,7 @@ def connect():
     client = JenkinsClient(base_url=base_url, username=username, api_token=api_token)
     success, server_data, error = client.get_server_info()
     if not success:
-        logger.warning("[CLOUDBEES] Credential validation failed for user %s: %s", user_id, error)
+        logger.warning("[CLOUDBEES] Credential validation failed for user %s", user_id)
         safe_errors = {
             "Invalid credentials. Check your username and API token.",
             "Forbidden. Insufficient permissions.",
@@ -240,7 +240,7 @@ def disconnect():
         logger.info("[CLOUDBEES] Disconnected user %s (deleted %d token rows)", user_id, deleted)
         return jsonify({"success": True, "message": "CloudBees CI disconnected successfully"})
     except Exception as exc:
-        logger.exception("[CLOUDBEES] Failed to disconnect user %s: %s", user_id, exc)
+        logger.exception("[CLOUDBEES] Failed to disconnect user %s", user_id)
         return jsonify({"error": "Failed to disconnect CloudBees CI"}), 500
 
 

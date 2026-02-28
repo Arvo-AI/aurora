@@ -16,6 +16,16 @@ import {
 import { getUserFriendlyError } from "@/lib/utils";
 import { formatTimeAgo, formatDuration } from "@/lib/utils/time-format";
 
+const toSafeExternalUrl = (value?: string): string | null => {
+  if (!value) return null;
+  try {
+    const u = new URL(value);
+    return u.protocol === "http:" || u.protocol === "https:" ? u.toString() : null;
+  } catch {
+    return null;
+  }
+};
+
 export default function CIProviderAuthPage({ config }: { config: CIProviderConfig }) {
   const router = useRouter();
   const { toast } = useToast();
@@ -40,14 +50,18 @@ export default function CIProviderAuthPage({ config }: { config: CIProviderConfi
   const loadStatus = async () => {
     setCheckingStatus(true);
     try {
-      const cached = localStorage.getItem(cacheKey);
-      if (cached) {
-        const parsed = JSON.parse(cached);
-        setStatus(parsed);
-        if (parsed?.connected) {
-          setBaseUrl(parsed.baseUrl ?? "");
-          setUsername(parsed.username ?? "");
+      try {
+        const cached = localStorage.getItem(cacheKey);
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          setStatus(parsed);
+          if (parsed?.connected) {
+            setBaseUrl(parsed.baseUrl ?? "");
+            setUsername(parsed.username ?? "");
+          }
         }
+      } catch {
+        localStorage.removeItem(cacheKey);
       }
 
       const result = await service.getStatus();
@@ -255,13 +269,16 @@ function ConnectedView({
                 {status?.server?.mode ? ` \u00b7 ${status.server.mode.charAt(0).toUpperCase()}${status.server.mode.slice(1).toLowerCase()}` : ""}
               </p>
             </div>
-            {status?.baseUrl && (
-              <a href={status.baseUrl} target="_blank" rel="noopener noreferrer"
-                className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors shrink-0">
-                Open Dashboard
-                <ExternalLink className="h-3 w-3" />
-              </a>
-            )}
+            {(() => {
+              const safeUrl = toSafeExternalUrl(status?.baseUrl);
+              return safeUrl ? (
+                <a href={safeUrl} target="_blank" rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors shrink-0">
+                  Open Dashboard
+                  <ExternalLink className="h-3 w-3" />
+                </a>
+              ) : null;
+            })()}
           </div>
 
           {status?.summary && (
@@ -459,13 +476,16 @@ function DeploymentsCard({ config, deployments }: { config: CIProviderConfig; de
                     {dep.deployer && dep.deployer !== "automated" && (<><span>&bull;</span><span>by {dep.deployer}</span></>)}
                   </div>
                 </div>
-                {dep.buildUrl && (
-                  <a href={dep.buildUrl} target="_blank" rel="noopener noreferrer"
-                    className="ml-3 p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted rounded transition-colors shrink-0"
-                    title={`View in ${config.displayName}`}>
-                    <ExternalLink className="h-4 w-4" />
-                  </a>
-                )}
+                {(() => {
+                  const safeBuildUrl = toSafeExternalUrl(dep.buildUrl);
+                  return safeBuildUrl ? (
+                    <a href={safeBuildUrl} target="_blank" rel="noopener noreferrer"
+                      className="ml-3 p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted rounded transition-colors shrink-0"
+                      title={`View in ${config.displayName}`}>
+                      <ExternalLink className="h-4 w-4" />
+                    </a>
+                  ) : null;
+                })()}
               </div>
             );
           })}
@@ -572,7 +592,8 @@ function SetupView({
                         onChange={(e) => setApiToken(e.target.value)} placeholder="11xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
                         required disabled={loading} className="h-10 pr-10" />
                       <button type="button" onClick={() => setShowToken(!showToken)}
-                        className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors" tabIndex={-1}>
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                        aria-label={showToken ? "Hide token" : "Show token"}>
                         {showToken ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                       </button>
                     </div>

@@ -1191,6 +1191,20 @@ def initialize_tables():
                 logging.warning(f"Error adding alert_metadata column to incidents: {e}")
                 conn.rollback()
 
+            # Migration: Add provider column to jenkins_deployment_events for multi-CI support
+            try:
+                cursor.execute(
+                    """
+                    ALTER TABLE jenkins_deployment_events
+                    ADD COLUMN IF NOT EXISTS provider VARCHAR(50) DEFAULT 'jenkins';
+                    """
+                )
+                logging.info("Added provider column to jenkins_deployment_events table (if not exists).")
+                conn.commit()
+            except Exception as e:
+                logging.warning(f"Error adding provider column to jenkins_deployment_events: {e}")
+                conn.rollback()
+
             try:
                 cursor.execute(
                     """

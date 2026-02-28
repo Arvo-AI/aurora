@@ -44,9 +44,10 @@ export function createCIGetHandler({ slug, endpoint, label }: RouteConfig) {
       );
 
       if (!response.ok) {
-        const text = await response.text();
+        await response.text();
+        console.error(`[api/${slug}/${endpoint}] Backend error: ${response.status}`);
         return NextResponse.json(
-          { error: text || `Failed to fetch ${label}` },
+          { error: `Failed to fetch ${label}` },
           { status: response.status }
         );
       }
@@ -83,9 +84,10 @@ export function createCIPostHandler({ slug, endpoint, label }: RouteConfig) {
       });
 
       if (!response.ok) {
-        const text = await response.text();
+        await response.text();
+        console.error(`[api/${slug}/${endpoint}] Backend error: ${response.status}`);
         return NextResponse.json(
-          { error: text || `Failed to ${label}` },
+          { error: `Failed to ${label}` },
           { status: response.status }
         );
       }

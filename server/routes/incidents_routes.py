@@ -468,16 +468,13 @@ def get_incident(incident_id: str):
                         if alert_row and alert_row[0] is not None:
                             raw_payload = alert_row[0]
                             logger.debug(
-                                "[INCIDENTS] Found %s payload: type=%s, has_data=%s",
+                                "[INCIDENTS] Found %s payload for alert",
                                 source_type,
-                                type(raw_payload).__name__,
-                                bool(raw_payload),
                             )
                     except (ValueError, TypeError):
                         logger.debug(
-                            "[INCIDENTS] Skipping payload fetch for %s alert_id: %s",
+                            "[INCIDENTS] Skipping payload fetch for %s alert (invalid ID)",
                             source_type,
-                            source_alert_id,
                         )
                 elif source_type == "dynatrace":
                     try:
