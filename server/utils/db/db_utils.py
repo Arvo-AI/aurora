@@ -303,7 +303,9 @@ def initialize_tables():
                         provider VARCHAR(50) NOT NULL,
                         account_id VARCHAR(255) NOT NULL,
                         role_arn VARCHAR(512),
+                        read_only_role_arn VARCHAR(512),
                         connection_method VARCHAR(50),
+                        region VARCHAR(50),
                         status VARCHAR(20) DEFAULT 'active', -- active | not_connected | error
                         last_verified_at TIMESTAMP,
                         UNIQUE(user_id, provider, account_id)
@@ -995,6 +997,21 @@ def initialize_tables():
             except Exception as e:
                 logging.warning(
                     f"Error ensuring read_only_role_arn column in user_connections: {e}"
+                )
+                conn.rollback()
+
+            # Add region column to user_connections for multi-account support
+            try:
+                cursor.execute(
+                    "ALTER TABLE user_connections ADD COLUMN IF NOT EXISTS region VARCHAR(50);"
+                )
+                conn.commit()
+                logging.info(
+                    "Ensured region column exists on user_connections table."
+                )
+            except Exception as e:
+                logging.warning(
+                    f"Error ensuring region column in user_connections: {e}"
                 )
                 conn.rollback()
 

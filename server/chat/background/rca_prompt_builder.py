@@ -257,18 +257,21 @@ def _build_provider_investigation_section(providers: List[str], user_id: Optiona
     # AWS-specific instructions
     if 'aws' in providers_lower:
         sections.append("""
-## AWS/EKS Investigation:
+## AWS/EKS Investigation (MULTI-ACCOUNT):
+IMPORTANT: You have multiple AWS accounts connected.
+- Your FIRST cloud_exec('aws', ...) call (without account_id) fans out to ALL accounts. Check `results_by_account` in the response.
+- Identify which account(s) have the issue based on the results.
+- For ALL subsequent calls, pass account_id='<ACCOUNT_ID>' to target only the relevant account. Example: cloud_exec('aws', 'ec2 describe-instances', account_id='123456789012')
+- Do NOT keep querying all accounts after you know where the problem is.
+- Check caller identity: cloud_tool('aws', 'sts get-caller-identity')
 - Check cluster status: cloud_tool('aws', 'eks describe-cluster --name CLUSTER_NAME')
 - **IMPORTANT**: Get cluster credentials first: cloud_tool('aws', 'eks update-kubeconfig --name CLUSTER_NAME --region REGION')
 - Get pod details: cloud_tool('aws', 'kubectl get pods -n NAMESPACE -o wide')
 - Describe problematic pods: cloud_tool('aws', 'kubectl describe pod POD_NAME -n NAMESPACE')
 - Check pod logs: cloud_tool('aws', 'kubectl logs POD_NAME -n NAMESPACE --since=1h')
-- Check pod metrics: cloud_tool('aws', 'kubectl top pod POD_NAME -n NAMESPACE')
 - Check events: cloud_tool('aws', 'kubectl get events -n NAMESPACE --sort-by=.lastTimestamp')
-- Check node health: cloud_tool('aws', 'kubectl describe node NODE_NAME')
 - Query CloudWatch logs: cloud_tool('aws', 'logs filter-log-events --log-group-name LOG_GROUP --start-time TIMESTAMP')
 - Check EC2 instances: cloud_tool('aws', 'ec2 describe-instances --filters "Name=tag:Name,Values=*"')
-- Check CloudWatch metrics: cloud_tool('aws', 'cloudwatch get-metric-statistics --namespace AWS/EC2 --metric-name CPUUtilization')
 - Check load balancers: cloud_tool('aws', 'elbv2 describe-load-balancers')
 - Check security groups: cloud_tool('aws', 'ec2 describe-security-groups')""")
 

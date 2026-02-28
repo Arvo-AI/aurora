@@ -60,6 +60,7 @@ def _setup_provider_env(provider_name, user_id, credentials):
     from chat.backend.agent.tools.cloud_exec_tool import (
         setup_gcp_environment_isolated,
         setup_aws_environment_isolated,
+        setup_aws_environments_all_accounts,
         setup_azure_environment_isolated,
         setup_ovh_environment_isolated,
         setup_scaleway_environment_isolated,
@@ -83,16 +84,37 @@ def _setup_provider_env(provider_name, user_id, credentials):
                 return env, credentials  # credentials already has project_ids
 
         elif provider_name == "aws":
+            # Try multi-account first; fall back to single-account
+            account_envs = setup_aws_environments_all_accounts(user_id)
+            if account_envs and len(account_envs) > 1:
+                # Signal the caller to use multi-account fan-out
+                creds = {
+                    "_multi_account": True,
+                    "_account_envs": account_envs,
+                }
+                return None, creds
+
+            # Single account (or first of multi)
+            if account_envs:
+                acct = account_envs[0]
+                creds = {
+                    "access_key_id": acct["credentials"]["accessKeyId"],
+                    "secret_access_key": acct["credentials"]["secretAccessKey"],
+                    "session_token": acct["credentials"]["sessionToken"],
+                    "region": acct["region"],
+                }
+                return None, creds
+
+            # Legacy fallback
             success, _region, _auth_type, env = setup_aws_environment_isolated(user_id)
             if success and env:
-                # Build credentials dict from env so aws_asset_discovery._build_env works
                 creds = {
                     "access_key_id": env.get("AWS_ACCESS_KEY_ID", ""),
                     "secret_access_key": env.get("AWS_SECRET_ACCESS_KEY", ""),
                     "session_token": env.get("AWS_SESSION_TOKEN"),
                     "region": env.get("AWS_DEFAULT_REGION", "us-east-1"),
                 }
-                return None, creds  # AWS provider builds its own env from credentials
+                return None, creds
 
         elif provider_name == "azure":
             subscription_id = credentials.get("subscription_id")
@@ -180,7 +202,14 @@ def run_discovery_for_user(user_id, connected_providers):
                 logger.warning(f"[Discovery] Unknown provider: {provider_name}")
                 continue
             env, creds = provider_envs.get(provider_name, (None, credentials))
-            futures[executor.submit(module.discover, user_id, creds, env)] = provider_name
+
+            # Multi-account AWS: fan out via discover_all_accounts
+            if provider_name == "aws" and isinstance(creds, dict) and creds.get("_multi_account"):
+                from services.discovery.providers.aws_asset_discovery import discover_all_accounts
+                account_envs = creds["_account_envs"]
+                futures[executor.submit(discover_all_accounts, user_id, account_envs)] = provider_name
+            else:
+                futures[executor.submit(module.discover, user_id, creds, env)] = provider_name
 
         for future in as_completed(futures):
             provider_name = futures[future]

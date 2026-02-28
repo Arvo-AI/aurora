@@ -11,7 +11,10 @@ import {
   AlertCircle, 
   Copy,
   Cloud,
-  Info
+  Info,
+  Download,
+  Trash2,
+  Upload
 } from 'lucide-react';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { getEnv } from '@/lib/env';
@@ -24,6 +27,21 @@ interface OnboardingData {
   status: 'not_started' | 'fully_configured';
   roleArn?: string;
   auroraAccountId?: string;
+}
+
+interface ConnectedAccount {
+  account_id: string;
+  role_arn: string;
+  read_only_role_arn?: string;
+  region?: string;
+  connection_method?: string;
+  last_verified_at?: string;
+}
+
+interface BulkResult {
+  accountId: string;
+  success: boolean;
+  error?: string;
 }
 
 // Helper function to format AWS error messages for better UX
@@ -67,6 +85,17 @@ export default function AWSOnboardingPage() {
   const [isConfigured, setIsConfigured] = useState(false);
   const [credentialsConfigured, setCredentialsConfigured] = useState<boolean | null>(null);
   const [showDocs, setShowDocs] = useState(false);
+  const [connectedAccounts, setConnectedAccounts] = useState<ConnectedAccount[]>([]);
+  const [bulkInput, setBulkInput] = useState('');
+  const [isBulkRegistering, setIsBulkRegistering] = useState(false);
+  const [bulkResults, setBulkResults] = useState<BulkResult[] | null>(null);
+  const [isDownloadingCfn, setIsDownloadingCfn] = useState(false);
+  const [showBulkForm, setShowBulkForm] = useState(false);
+  const [quickCreateUrl, setQuickCreateUrl] = useState<string | null>(null);
+  const [stackSetsCommand, setStackSetsCommand] = useState<string | null>(null);
+  const [stackSetsCopied, setStackSetsCopied] = useState(false);
+  const [inactiveAccounts, setInactiveAccounts] = useState<ConnectedAccount[]>([]);
+  const [reconnectingId, setReconnectingId] = useState<string | null>(null);
 
   // Auto-set connected flag when configured
   useEffect(() => {
@@ -301,6 +330,186 @@ export default function AWSOnboardingPage() {
 
   const handleComplete = () => {
     router.push('/connectors');
+  };
+
+  const fetchConnectedAccounts = useCallback(async () => {
+    if (!workspaceId || !userId) return;
+    try {
+      const res = await fetch(`${BACKEND_URL}/workspaces/${workspaceId}/aws/accounts`, {
+        credentials: 'include',
+        headers: { 'X-User-ID': userId },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setConnectedAccounts(data.accounts || []);
+      }
+    } catch (err) {
+      console.error('Failed to fetch connected accounts:', err);
+    }
+  }, [workspaceId, userId]);
+
+  const fetchQuickCreateData = useCallback(async () => {
+    if (!workspaceId || !userId) return;
+    try {
+      const res = await fetch(`${BACKEND_URL}/workspaces/${workspaceId}/aws/cfn-quickcreate`, {
+        credentials: 'include',
+        headers: { 'X-User-ID': userId },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setQuickCreateUrl(data.quickCreateUrl || null);
+        setStackSetsCommand(data.stackSetsCommand || null);
+      }
+    } catch (err) {
+      console.error('Failed to fetch quick-create data:', err);
+    }
+  }, [workspaceId, userId]);
+
+  const fetchInactiveAccounts = useCallback(async () => {
+    if (!workspaceId || !userId) return;
+    try {
+      const res = await fetch(`${BACKEND_URL}/workspaces/${workspaceId}/aws/accounts/inactive`, {
+        credentials: 'include',
+        headers: { 'X-User-ID': userId },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setInactiveAccounts(data.accounts || []);
+      }
+    } catch (err) {
+      console.error('Failed to fetch inactive accounts:', err);
+    }
+  }, [workspaceId, userId]);
+
+  useEffect(() => {
+    if (workspaceId && userId) {
+      fetchQuickCreateData();
+      fetchInactiveAccounts();
+      if (isConfigured) {
+        fetchConnectedAccounts();
+      }
+    }
+  }, [workspaceId, userId, isConfigured, fetchConnectedAccounts, fetchQuickCreateData, fetchInactiveAccounts]);
+
+  const handleReconnect = async (accountId: string) => {
+    if (!workspaceId || !userId) return;
+    setReconnectingId(accountId);
+    setError(null);
+    try {
+      const res = await fetch(`${BACKEND_URL}/workspaces/${workspaceId}/aws/accounts/${accountId}/reconnect`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json', 'X-User-ID': userId },
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || 'Reconnect failed');
+      }
+      setIsConfigured(true);
+      localStorage.setItem('isAWSConnected', 'true');
+      localStorage.setItem('cloudProvider', 'aws');
+      await fetchConnectedAccounts();
+      await fetchInactiveAccounts();
+    } catch (err) {
+      console.error('Reconnect error:', err);
+      setError(err instanceof Error ? err.message : 'Failed to reconnect.');
+    } finally {
+      setReconnectingId(null);
+    }
+  };
+
+  const handleDownloadCfnTemplate = async () => {
+    if (!workspaceId || !userId) return;
+    setIsDownloadingCfn(true);
+    try {
+      const res = await fetch(`${BACKEND_URL}/workspaces/${workspaceId}/aws/cfn-template?format=raw`, {
+        credentials: 'include',
+        headers: { 'X-User-ID': userId },
+      });
+      if (!res.ok) throw new Error('Failed to download template');
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'aurora-cross-account-role.yaml';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('CFN download error:', err);
+      setError('Failed to download CloudFormation template.');
+    } finally {
+      setIsDownloadingCfn(false);
+    }
+  };
+
+  const handleBulkRegister = async () => {
+    if (!workspaceId || !userId || !bulkInput.trim()) return;
+    setIsBulkRegistering(true);
+    setBulkResults(null);
+    setError(null);
+
+    try {
+      const lines = bulkInput.trim().split('\n').filter(l => l.trim());
+      const accounts = lines.map(line => {
+        const parts = line.split(',').map(p => p.trim());
+        const accountId = parts[0];
+        const region = parts[1] || 'us-east-1';
+        const roleName = parts[2] || 'AuroraReadOnlyRole';
+        return {
+          accountId,
+          roleArn: `arn:aws:iam::${accountId}:role/${roleName}`,
+          region,
+        };
+      });
+
+      const res = await fetch(`${BACKEND_URL}/workspaces/${workspaceId}/aws/accounts/bulk`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-User-ID': userId,
+        },
+        body: JSON.stringify({ accounts }),
+      });
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || `Bulk register failed: ${res.status}`);
+      }
+
+      const data = await res.json();
+      setBulkResults(data.results || []);
+      await fetchConnectedAccounts();
+
+      if (data.succeeded > 0) {
+        setIsConfigured(true);
+        localStorage.setItem('isAWSConnected', 'true');
+        localStorage.setItem('cloudProvider', 'aws');
+      }
+    } catch (err) {
+      console.error('Bulk register error:', err);
+      setError(err instanceof Error ? err.message : 'Bulk registration failed.');
+    } finally {
+      setIsBulkRegistering(false);
+    }
+  };
+
+  const handleDeleteAccount = async (accountId: string) => {
+    if (!workspaceId || !userId) return;
+    try {
+      const res = await fetch(`${BACKEND_URL}/workspaces/${workspaceId}/aws/accounts/${accountId}`, {
+        method: 'DELETE',
+        credentials: 'include',
+        headers: { 'X-User-ID': userId },
+      });
+      if (!res.ok) throw new Error('Delete failed');
+      await fetchConnectedAccounts();
+    } catch (err) {
+      console.error('Delete account error:', err);
+      setError(`Failed to disconnect account ${accountId}.`);
+    }
   };
 
   const copyToClipboard = (text: string) => {
@@ -588,21 +797,213 @@ make dev`}</pre>
                     <CardTitle className="flex items-center gap-3 text-white text-2xl">
                       <CheckCircle className="w-7 h-7 text-green-500" /> Setup Complete
                     </CardTitle>
-                    <CardDescription className="text-white/50 mt-2">Your AWS account is now securely connected</CardDescription>
+                    <CardDescription className="text-white/50 mt-2">
+                      {connectedAccounts.length > 1
+                        ? `${connectedAccounts.length} AWS accounts connected`
+                        : 'Your AWS account is now securely connected'}
+                    </CardDescription>
                   </div>
                 </div>
                 <Button variant="ghost" onClick={handleDisconnect} disabled={isDisconnecting} className="text-white/50 hover:text-white hover:bg-white/5">
-                  {isDisconnecting ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Disconnect'}
+                  {isDisconnecting ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Disconnect All'}
                 </Button>
               </div>
             </CardHeader>
             <CardContent className="space-y-6">
-              <div className="bg-white/5 border border-white/10 rounded-lg p-6 text-center space-y-2">
-                <p className="text-white/70">Aurora can now access your AWS account using secure STS AssumeRole</p>
-                {onboardingData.roleArn && (
+              {/* Connected Accounts Table */}
+              {connectedAccounts.length > 0 && (
+                <div className="space-y-3">
+                  <p className="text-sm font-medium text-white/70">Connected Accounts</p>
+                  <div className="border border-white/10 rounded-lg overflow-hidden">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="bg-white/5 text-white/50 text-xs">
+                          <th className="text-left px-4 py-2">Account ID</th>
+                          <th className="text-left px-4 py-2">Region</th>
+                          <th className="text-left px-4 py-2">Role</th>
+                          <th className="text-left px-4 py-2">Verified</th>
+                          <th className="px-4 py-2"></th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {connectedAccounts.map((acct) => (
+                          <tr key={acct.account_id} className="border-t border-white/5 text-white/70">
+                            <td className="px-4 py-2 font-mono text-xs">{acct.account_id}</td>
+                            <td className="px-4 py-2 text-xs">{acct.region || 'us-east-1'}</td>
+                            <td className="px-4 py-2 text-xs">
+                              <a
+                                href={`https://console.aws.amazon.com/iam/home?region=${acct.region || 'us-east-1'}#/roles/details/${acct.role_arn.split('/').pop()}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-blue-400 hover:text-blue-300 hover:underline font-mono"
+                                title={acct.role_arn}
+                              >
+                                {acct.role_arn.split('/').pop()}
+                              </a>
+                            </td>
+                            <td className="px-4 py-2 text-xs">{acct.last_verified_at ? new Date(acct.last_verified_at).toLocaleDateString() : '-'}</td>
+                            <td className="px-4 py-2 text-right">
+                              <Button variant="ghost" size="icon" onClick={() => handleDeleteAccount(acct.account_id)} className="h-7 w-7 text-white/30 hover:text-red-400 hover:bg-white/5">
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </Button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {/* Single account display fallback */}
+              {connectedAccounts.length === 0 && onboardingData?.roleArn && (
+                <div className="bg-white/5 border border-white/10 rounded-lg p-6 text-center space-y-2">
+                  <p className="text-white/70">Aurora can now access your AWS account using secure STS AssumeRole</p>
                   <p className="text-white/50 text-sm font-mono mt-2">{onboardingData.roleArn}</p>
-                )}
+                </div>
+              )}
+
+              {/* Recently Disconnected -- Reconnect */}
+              {inactiveAccounts.length > 0 && (
+                <div className="space-y-3">
+                  <p className="text-sm font-medium text-white/50">Recently Disconnected</p>
+                  <div className="border border-white/5 rounded-lg overflow-hidden">
+                    <table className="w-full text-sm">
+                      <tbody>
+                        {inactiveAccounts.map((acct) => (
+                          <tr key={acct.account_id} className="border-t border-white/5 text-white/40">
+                            <td className="px-4 py-2 font-mono text-xs">{acct.account_id}</td>
+                            <td className="px-4 py-2 text-xs">{acct.region || 'us-east-1'}</td>
+                            <td className="px-4 py-2 text-xs">
+                              {acct.role_arn.split('/').pop()}
+                            </td>
+                            <td className="px-4 py-2 text-right">
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => handleReconnect(acct.account_id)}
+                                disabled={reconnectingId === acct.account_id}
+                                className="border-white/10 hover:bg-white/5 text-white/60 text-xs h-7"
+                              >
+                                {reconnectingId === acct.account_id ? (
+                                  <Loader2 className="w-3 h-3 animate-spin mr-1" />
+                                ) : null}
+                                Reconnect
+                              </Button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {/* Deploy to More Accounts */}
+              <div className="space-y-4 bg-white/5 border border-white/10 rounded-lg p-4">
+                <p className="text-sm font-medium text-white/70">Add More Accounts</p>
+                <p className="text-xs text-white/40">
+                  Deploy the Aurora IAM role to each AWS account you want to connect.
+                  Aurora never needs admin access to your accounts -- your AWS admin handles the deployment.
+                </p>
+
+                <div className="space-y-3">
+                  {/* Quick-Create Link */}
+                  {quickCreateUrl && (
+                    <div className="space-y-1.5">
+                      <p className="text-xs text-white/60 font-medium">Option 1: Quick-Create Link (one account at a time)</p>
+                      <p className="text-xs text-white/40">Log into the target AWS account, then open this link:</p>
+                      <div className="flex gap-2">
+                        <Input value={quickCreateUrl} readOnly className="font-mono text-xs bg-black/50 text-white border-white/10 focus-visible:ring-white/20" />
+                        <Button variant="outline" size="icon" onClick={() => { navigator.clipboard.writeText(quickCreateUrl); }} className="border-white/10 hover:bg-white/5 text-white/70 shrink-0">
+                          <Copy className="w-4 h-4" />
+                        </Button>
+                        <a href={quickCreateUrl} target="_blank" rel="noopener noreferrer">
+                          <Button variant="outline" className="border-white/10 hover:bg-white/5 text-white/70 shrink-0 text-xs">
+                            Open
+                          </Button>
+                        </a>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* StackSets for orgs */}
+                  {stackSetsCommand && (
+                    <div className="space-y-1.5">
+                      <p className="text-xs text-white/60 font-medium">Option 2: StackSets (all accounts in your AWS Organization)</p>
+                      <p className="text-xs text-white/40">Run from your AWS Organizations management account:</p>
+                      <div className="relative">
+                        <pre className="bg-black/50 p-3 pr-10 rounded border border-white/10 text-xs text-white/70 font-mono overflow-x-auto whitespace-pre">{stackSetsCommand}</pre>
+                        <Button
+                          variant="outline"
+                          size="icon"
+                          onClick={() => { navigator.clipboard.writeText(stackSetsCommand); setStackSetsCopied(true); setTimeout(() => setStackSetsCopied(false), 2000); }}
+                          className="absolute top-2 right-2 h-6 w-6 border-white/10 hover:bg-white/5 text-white/70"
+                        >
+                          {stackSetsCopied ? <CheckCircle className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Download template + Bulk register */}
+                  <div className="flex flex-wrap gap-3 pt-2 border-t border-white/5">
+                    <Button onClick={handleDownloadCfnTemplate} disabled={isDownloadingCfn} variant="outline" size="sm" className="border-white/10 hover:bg-white/5 text-white/70 text-xs">
+                      {isDownloadingCfn ? <Loader2 className="w-3 h-3 animate-spin mr-1.5" /> : <Download className="w-3 h-3 mr-1.5" />}
+                      Download Template YAML
+                    </Button>
+                    <Button onClick={() => setShowBulkForm(!showBulkForm)} variant="outline" size="sm" className="border-white/10 hover:bg-white/5 text-white/70 text-xs">
+                      <Upload className="w-3 h-3 mr-1.5" />
+                      {showBulkForm ? 'Hide Bulk Register' : 'Bulk Register Accounts'}
+                    </Button>
+                  </div>
+                </div>
               </div>
+
+              {/* Bulk Register Form */}
+              {showBulkForm && (
+                <div className="space-y-4 bg-white/5 border border-white/10 rounded-lg p-4">
+                  <div className="space-y-2">
+                    <p className="text-sm font-medium text-white/70">Bulk Register AWS Accounts</p>
+                    <p className="text-xs text-white/40">
+                      After deploying the CloudFormation template to your accounts, paste account IDs below.
+                      One per line: <code className="bg-black/50 px-1 py-0.5 rounded">ACCOUNT_ID,REGION,ROLE_NAME</code> (region and role name are optional, defaults: us-east-1, AuroraReadOnlyRole)
+                    </p>
+                  </div>
+                  <textarea
+                    value={bulkInput}
+                    onChange={(e) => setBulkInput(e.target.value)}
+                    placeholder={"123456789012,us-east-1\n234567890123,eu-west-1\n345678901234"}
+                    rows={6}
+                    className="w-full bg-black/50 text-white border border-white/10 rounded-lg p-3 font-mono text-xs focus:outline-none focus:ring-1 focus:ring-white/20 placeholder:text-white/20"
+                  />
+                  <Button onClick={handleBulkRegister} disabled={isBulkRegistering || !bulkInput.trim()} className="bg-white text-black hover:bg-white/90">
+                    {isBulkRegistering ? (
+                      <><Loader2 className="w-4 h-4 animate-spin mr-2" /> Registering...</>
+                    ) : (
+                      <><Upload className="w-4 h-4 mr-2" /> Register Accounts</>
+                    )}
+                  </Button>
+
+                  {/* Bulk Results */}
+                  {bulkResults && (
+                    <div className="space-y-2">
+                      <p className="text-xs font-medium text-white/60">
+                        Results: {bulkResults.filter(r => r.success).length} succeeded, {bulkResults.filter(r => !r.success).length} failed
+                      </p>
+                      <div className="max-h-40 overflow-y-auto space-y-1">
+                        {bulkResults.map((r, i) => (
+                          <div key={i} className={`text-xs px-3 py-1.5 rounded ${r.success ? 'bg-green-500/10 text-green-400' : 'bg-red-500/10 text-red-400'}`}>
+                            <span className="font-mono">{r.accountId}</span>
+                            {r.success ? ' - Connected' : ` - ${r.error}`}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
               <Button onClick={handleComplete} className="w-full bg-white text-black hover:bg-white/90 h-11">
                 Back to Connectors
               </Button>
@@ -715,6 +1116,30 @@ make dev`}</pre>
                       Aurora automatically applies read-only restrictions in Ask mode to prevent accidental modifications
                     </AlertDescription>
                   </Alert>
+
+                  <div className="mt-3 pt-3 border-t border-white/10">
+                    <p className="text-xs text-white/60 mb-2">Have multiple AWS accounts? Deploy the role using one of these methods:</p>
+                    <div className="space-y-2">
+                      {quickCreateUrl && (
+                        <div className="flex items-center gap-2">
+                          <a href={quickCreateUrl} target="_blank" rel="noopener noreferrer">
+                            <Button variant="outline" size="sm" className="border-white/10 hover:bg-white/5 text-white/70 text-xs">
+                              <Cloud className="w-3 h-3 mr-1.5" />
+                              Open Quick-Create in AWS Console
+                            </Button>
+                          </a>
+                          <Button variant="outline" size="sm" onClick={() => { if (quickCreateUrl) navigator.clipboard.writeText(quickCreateUrl); }} className="border-white/10 hover:bg-white/5 text-white/70 text-xs">
+                            <Copy className="w-3 h-3 mr-1.5" />
+                            Copy Link
+                          </Button>
+                        </div>
+                      )}
+                      <Button onClick={handleDownloadCfnTemplate} disabled={isDownloadingCfn} variant="outline" size="sm" className="border-white/10 hover:bg-white/5 text-white/70 text-xs">
+                        {isDownloadingCfn ? <Loader2 className="w-3 h-3 animate-spin mr-1.5" /> : <Download className="w-3 h-3 mr-1.5" />}
+                        Download Template for StackSets / CLI
+                      </Button>
+                    </div>
+                  </div>
                 </div>
         </div>
 

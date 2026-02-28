@@ -60,6 +60,7 @@ celery_app.conf.update(
         'chat.background.postmortem_generator',
         'routes.knowledge_base.tasks',
         'services.discovery.tasks',
+        'utils.aws.credential_refresh',
     ],
     # Periodic task schedule
     beat_schedule={
@@ -82,6 +83,10 @@ celery_app.conf.update(
         'mark-stale-services': {
             'task': 'services.discovery.tasks.mark_stale_services',
             'schedule': 86400.0,  # Daily (24 hours)
+        },
+        'refresh-aws-credentials': {
+            'task': 'utils.aws.credential_refresh.refresh_aws_credentials',
+            'schedule': 600.0,  # Every 10 minutes
         },
     },
     beat_schedule_filename='celerybeat-schedule',

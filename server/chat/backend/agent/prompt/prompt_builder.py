@@ -113,6 +113,11 @@ def build_provider_context_segment(provider_preference: Optional[Any], selected_
                 )
             elif provider == "aws":
                 parts.append(
+                    "- **MULTI-ACCOUNT AWS**: You have multiple AWS accounts connected.\n"
+                    "  1. Your FIRST cloud_exec('aws', ...) call (without account_id) automatically queries ALL accounts in parallel and returns `results_by_account`.\n"
+                    "  2. Review the per-account results to identify which account(s) are relevant.\n"
+                    "  3. For ALL subsequent calls, pass `account_id='<ACCOUNT_ID>'` to target only the relevant account(s). Example: cloud_exec('aws', 'ec2 describe-instances', account_id='123456789012')\n"
+                    "  4. NEVER keep querying all accounts after you've identified the relevant one -- it wastes time and adds noise.\n"
                     "- Fetch the AWS account ID before writing Terraform: cloud_exec('aws', \"sts get-caller-identity --query 'Account' --output text\"). Store and reuse that output.\n"
                 )
             elif provider == "azure":
@@ -1476,7 +1481,10 @@ def build_background_mode_segment(state: Optional[Any]) -> str:
     if 'gcp' in providers_lower:
         parts.append("GCP: kubectl get pods -n NS, kubectl describe pod POD -n NS, kubectl logs POD -n NS, gcloud logging read")
     if 'aws' in providers_lower:
-        parts.append("AWS: kubectl get pods, aws logs filter-log-events, eks describe-cluster")
+        parts.append("AWS (MULTI-ACCOUNT): Your first cloud_exec('aws', ...) call fans out to ALL connected accounts. "
+                      "Check results_by_account to find the affected account. Then pass account_id='<ID>' on all "
+                      "subsequent calls to target only that account. "
+                      "Commands: kubectl get pods, aws logs filter-log-events, eks describe-cluster, ec2 describe-instances")
     if 'azure' in providers_lower:
         parts.append("Azure: kubectl get pods, az monitor log-analytics query, aks show")
     if 'ovh' in providers_lower:

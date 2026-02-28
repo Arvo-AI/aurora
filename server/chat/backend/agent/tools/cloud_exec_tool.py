@@ -208,7 +208,16 @@ def setup_azure_environment_isolated(user_id: str, subscription_id: str | None =
         return False, None, None, None, None
 
 
-def setup_aws_environment_isolated(user_id: str, selected_region: str | None = None):
+def _get_region_for_account(user_id: str, account_id: str) -> Optional[str]:
+    """Look up the region for a specific AWS account connection."""
+    from utils.db.connection_utils import get_all_user_aws_connections
+    for conn in get_all_user_aws_connections(user_id):
+        if conn.get("account_id") == account_id:
+            return conn.get("region") or "us-east-1"
+    return None
+
+
+def setup_aws_environment_isolated(user_id: str, selected_region: str | None = None, target_account_id: str | None = None):
     """Set up AWS environment with isolated credentials - NO global state modification."""
     try:
         fn_start = time.perf_counter()
@@ -225,7 +234,18 @@ def setup_aws_environment_isolated(user_id: str, selected_region: str | None = N
             from utils.aws.aws_sts_client import assume_workspace_role
             from utils.aws.aws_session_policies import get_read_only_session_policy
 
-            aws_conn = get_user_aws_connection(user_id)
+            if target_account_id:
+                from utils.db.connection_utils import get_all_user_aws_connections
+                aws_conn = None
+                for c in get_all_user_aws_connections(user_id):
+                    if c.get("account_id") == target_account_id:
+                        aws_conn = c
+                        break
+                if not aws_conn:
+                    logger.error("No AWS connection found for account %s", target_account_id)
+                    return False, None, None, None
+            else:
+                aws_conn = get_user_aws_connection(user_id)
             if not aws_conn or not aws_conn.get('role_arn'):
                 logger.error("User %s does not have an active AWS connection", user_id)
                 return False, None, None, None
@@ -419,6 +439,90 @@ def setup_aws_environment_isolated(user_id: str, selected_region: str | None = N
     except Exception as e:
         logger.error(f"Failed to setup AWS environment: {e}")
         return False, None, None, None
+
+
+def setup_aws_environments_all_accounts(user_id: str):
+    """Assume roles across all connected AWS accounts and return credential dicts.
+
+    Returns a list of dicts, each containing:
+        - account_id
+        - region
+        - credentials (accessKeyId, secretAccessKey, sessionToken)
+        - isolated_env (ready-to-use env dict for subprocess calls)
+
+    Failed accounts are logged and skipped; the caller receives only the
+    accounts that were successfully assumed.
+    """
+    from utils.db.connection_utils import get_all_user_aws_connections
+    from utils.workspace.workspace_utils import get_or_create_workspace
+    from utils.aws.aws_sts_client import assume_workspace_role
+    from utils.aws.aws_session_policies import get_read_only_session_policy
+
+    ws = get_or_create_workspace(user_id, "default")
+    external_id = ws.get("aws_external_id")
+    if not external_id:
+        logger.error("Workspace %s for user %s missing aws_external_id", ws["id"], user_id)
+        return []
+
+    connections = get_all_user_aws_connections(user_id)
+    if not connections:
+        logger.warning("No active AWS connections for user %s", user_id)
+        return []
+
+    current_mode = get_mode_from_context()
+    session_policy = None
+    if ModeAccessController.is_read_only_mode(current_mode):
+        session_policy = get_read_only_session_policy()
+
+    account_envs = []
+    for conn in connections:
+        role_arn = conn.get("role_arn")
+        account_id = conn.get("account_id")
+        region = conn.get("region") or "us-east-1"
+
+        if not role_arn:
+            logger.warning("Skipping account %s – no role_arn", account_id)
+            continue
+
+        if ModeAccessController.is_read_only_mode(current_mode):
+            ro_arn = conn.get("read_only_role_arn")
+            if ro_arn:
+                role_arn = ro_arn
+                session_policy = None
+
+        try:
+            creds = assume_workspace_role(
+                role_arn=role_arn,
+                external_id=external_id,
+                workspace_id=ws["id"],
+                region=region,
+                session_policy=session_policy,
+            )
+        except Exception as e:
+            logger.error("Failed to assume role for account %s: %s", account_id, e)
+            continue
+
+        isolated_env = {
+            "AWS_ACCESS_KEY_ID": creds["accessKeyId"],
+            "AWS_SECRET_ACCESS_KEY": creds["secretAccessKey"],
+            "AWS_SESSION_TOKEN": creds["sessionToken"],
+            "AWS_DEFAULT_REGION": region,
+            "AWS_REGION": region,
+            "PATH": os.environ.get("PATH", ""),
+        }
+
+        account_envs.append({
+            "account_id": account_id,
+            "region": region,
+            "credentials": creds,
+            "isolated_env": isolated_env,
+        })
+
+    logger.info(
+        "Assumed roles for %d / %d accounts for user %s",
+        len(account_envs), len(connections), user_id,
+    )
+    return account_envs
 
 
 # OLD GLOBAL GCP FUNCTION REMOVED - Use setup_gcp_environment_isolated() instead  
@@ -1290,7 +1394,86 @@ def get_command_timeout(command: str, user_timeout: int = None) -> int:
     return 60
 
 
-def cloud_exec(provider: str, command: str, user_id: Optional[str] = None, session_id: Optional[str] = None, provider_preference: Optional[str] = None, timeout: Optional[int] = None, output_file: Optional[str] = None) -> str:
+def _cloud_exec_aws_multi_account(
+    user_id: str,
+    connections: list,
+    command: str,
+    provider_preference: Optional[str] = None,
+    timeout: Optional[int] = None,
+    output_file: Optional[str] = None,
+    fn_start: float = 0,
+) -> str:
+    """Execute an AWS CLI command across all connected accounts and merge results.
+
+    Each account gets its own STS credentials; the command runs in parallel
+    via ThreadPoolExecutor.  Results are returned as a JSON object keyed by
+    account_id so the agent can reason about per-account output.
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    def _run_on_account(conn: dict) -> dict:
+        account_id = conn.get("account_id", "unknown")
+        region = conn.get("region") or "us-east-1"
+        try:
+            success, _region, auth_method, isolated_env = setup_aws_environment_isolated(
+                user_id, selected_region=region, target_account_id=account_id
+            )
+            if not success:
+                return {"account_id": account_id, "region": region, "success": False,
+                        "error": "Failed to assume role"}
+
+            cmd = command.strip()
+            if not cmd.startswith("aws"):
+                cmd = f"aws {cmd}"
+            if "--region" not in cmd:
+                cmd += f" --region {region}"
+            if "--output" not in cmd and any(
+                kw in cmd for kw in ["list", "describe", "get"]
+            ):
+                cmd += " --output json"
+
+            effective_timeout = get_command_timeout(cmd, timeout)
+            cmd_args = shlex.split(cmd)
+            result = terminal_run(
+                cmd_args, capture_output=True, text=True,
+                timeout=effective_timeout, env=isolated_env,
+            )
+            return {
+                "account_id": account_id,
+                "region": region,
+                "success": result.returncode == 0,
+                "output": result.stdout.strip() if result.returncode == 0 else result.stderr.strip(),
+                "return_code": result.returncode,
+            }
+        except Exception as e:
+            logger.error("Multi-account exec failed for %s: %s", account_id, e)
+            return {"account_id": account_id, "region": region, "success": False,
+                    "error": str(e)[:300]}
+
+    account_results = {}
+    with ThreadPoolExecutor(max_workers=min(len(connections), 10)) as pool:
+        futures = {pool.submit(_run_on_account, c): c["account_id"] for c in connections}
+        for future in as_completed(futures):
+            res = future.result()
+            acct = res.pop("account_id")
+            account_results[acct] = res
+
+    all_success = all(r.get("success") for r in account_results.values())
+    elapsed = time.perf_counter() - fn_start if fn_start else 0
+    logger.info("TIME: cloud_exec AWS multi-account (%d accounts) completed in %.2fs",
+                len(connections), elapsed)
+
+    return json.dumps({
+        "success": all_success,
+        "multi_account": True,
+        "accounts_queried": len(account_results),
+        "command": command,
+        "provider": "aws",
+        "results_by_account": account_results,
+    })
+
+
+def cloud_exec(provider: str, command: str, user_id: Optional[str] = None, session_id: Optional[str] = None, provider_preference: Optional[str] = None, timeout: Optional[int] = None, output_file: Optional[str] = None, account_id: Optional[str] = None) -> str:
     """Run arbitrary command against *provider* (gcloud/kubectl/gsutil for GCP, aws/kubectl for AWS).
 
 CLI is very versatile and can be used to do the following things. It should be priority over IaC tools unless it can't be done or better done with IaC.
@@ -1396,8 +1579,26 @@ Security & Compliance
                 return json.dumps({"error": f"Failed to setup Azure environment with {provider_preference} authentication", "final_command": command})
             resource_id = subscription_id
         elif provider.lower() == 'aws':
-            # AWS isolated setup
-            success, region, auth_method, isolated_env = setup_aws_environment_isolated(user_id, selected_project_id)
+            # AWS multi-account: fan out only if no specific account_id given
+            if not account_id:
+                from utils.db.connection_utils import get_all_user_aws_connections
+                all_conns = get_all_user_aws_connections(user_id) if user_id else []
+                if len(all_conns) > 1:
+                    return _cloud_exec_aws_multi_account(
+                        user_id=user_id,
+                        connections=all_conns,
+                        command=original_command,
+                        provider_preference=provider_preference,
+                        timeout=timeout,
+                        output_file=output_file,
+                        fn_start=fn_start,
+                    )
+            # Single account path -- either account_id was given or only 1 connection
+            success, region, auth_method, isolated_env = setup_aws_environment_isolated(
+                user_id,
+                selected_region=_get_region_for_account(user_id, account_id) if account_id else selected_project_id,
+                target_account_id=account_id,
+            )
             if not success:
                 return json.dumps({"error": f"Failed to setup AWS environment with {provider_preference} authentication", "final_command": command})
             resource_id = region

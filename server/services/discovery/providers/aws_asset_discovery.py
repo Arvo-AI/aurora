@@ -286,3 +286,58 @@ def discover(user_id, credentials, env=None):
         "relationships": [],  # Phase 1: no relationship inference from Resource Explorer
         "errors": errors,
     }
+
+
+def discover_all_accounts(user_id, account_envs):
+    """Fan-out discovery across multiple AWS accounts and merge results.
+
+    Args:
+        user_id: The Aurora user ID.
+        account_envs: List of dicts from setup_aws_environments_all_accounts(),
+            each with keys: account_id, region, credentials, isolated_env.
+
+    Returns:
+        Merged dict with nodes, relationships, and errors across all accounts.
+    """
+    import concurrent.futures
+
+    merged_nodes = []
+    merged_errors = []
+
+    def _discover_one(acct):
+        creds = {
+            "access_key_id": acct["credentials"]["accessKeyId"],
+            "secret_access_key": acct["credentials"]["secretAccessKey"],
+            "session_token": acct["credentials"]["sessionToken"],
+            "region": acct["region"],
+        }
+        result = discover(user_id, creds)
+        account_id = acct["account_id"]
+        for node in result.get("nodes", []):
+            node["aws_account_id"] = account_id
+        result["errors"] = [f"[{account_id}] {err}" for err in result.get("errors", [])]
+        return result
+
+    max_workers = min(len(account_envs), 10)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = {pool.submit(_discover_one, acct): acct["account_id"] for acct in account_envs}
+        for future in concurrent.futures.as_completed(futures):
+            account_id = futures[future]
+            try:
+                result = future.result()
+                merged_nodes.extend(result.get("nodes", []))
+                merged_errors.extend(result.get("errors", []))
+            except Exception as e:
+                logger.error("Discovery failed for account %s: %s", account_id, e)
+                merged_errors.append(f"[{account_id}] Discovery failed: {e}")
+
+    logger.info(
+        "Multi-account AWS discovery complete for user %s: %d nodes across %d accounts, %d errors",
+        user_id, len(merged_nodes), len(account_envs), len(merged_errors),
+    )
+
+    return {
+        "nodes": merged_nodes,
+        "relationships": [],
+        "errors": merged_errors,
+    }
