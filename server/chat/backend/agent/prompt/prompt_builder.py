@@ -1618,6 +1618,48 @@ def build_background_mode_segment(state: Optional[Any]) -> str:
             "application logs and cloud provider metrics cannot capture.",
         ])
 
+    # Jenkins CI/CD (if connected)
+    if integrations.get('jenkins'):
+        parts.extend([
+            "",
+            "JENKINS CI/CD INVESTIGATION:",
+            "Jenkins is connected. Use the `jenkins_rca` tool for CI/CD investigation.",
+            "Actions: recent_deployments, build_detail, pipeline_stages, stage_log,",
+            "  build_logs, test_results, blue_ocean_run, blue_ocean_steps, trace_context",
+            "",
+            "INVESTIGATION FLOW:",
+            "1. jenkins_rca(action='recent_deployments', service='SERVICE') — Check for recent deploys",
+            "2. jenkins_rca(action='build_detail', job_path='JOB', build_number=N) — Build details + commits",
+            "3. jenkins_rca(action='pipeline_stages', job_path='JOB', build_number=N) — Stage breakdown",
+            "4. jenkins_rca(action='build_logs', job_path='JOB', build_number=N) — Console output",
+            "5. jenkins_rca(action='test_results', job_path='JOB', build_number=N) — Test failures",
+            "6. jenkins_rca(action='trace_context', deployment_event_id=ID) — OTel trace correlation",
+            "",
+            "Recent deployments are a leading indicator of root cause.",
+            "Always check if a deployment occurred shortly before the alert fired.",
+        ])
+
+    # CloudBees CI (if connected)
+    if integrations.get('cloudbees'):
+        parts.extend([
+            "",
+            "CLOUDBEES CI/CD INVESTIGATION:",
+            "CloudBees CI is connected. Use the `cloudbees_rca` tool for CI/CD investigation.",
+            "Actions: recent_deployments, build_detail, pipeline_stages, stage_log,",
+            "  build_logs, test_results, blue_ocean_run, blue_ocean_steps, trace_context",
+            "",
+            "INVESTIGATION FLOW:",
+            "1. cloudbees_rca(action='recent_deployments', service='SERVICE') — Check for recent deploys",
+            "2. cloudbees_rca(action='build_detail', job_path='JOB', build_number=N) — Build details + commits",
+            "3. cloudbees_rca(action='pipeline_stages', job_path='JOB', build_number=N) — Stage breakdown",
+            "4. cloudbees_rca(action='build_logs', job_path='JOB', build_number=N) — Console output",
+            "5. cloudbees_rca(action='test_results', job_path='JOB', build_number=N) — Test failures",
+            "6. cloudbees_rca(action='trace_context', deployment_event_id=ID) — OTel trace correlation",
+            "",
+            "Recent deployments are a leading indicator of root cause.",
+            "Always check if a deployment occurred shortly before the alert fired.",
+        ])
+
     # Knowledge Base search (always available for authenticated users)
     parts.extend([
         "",

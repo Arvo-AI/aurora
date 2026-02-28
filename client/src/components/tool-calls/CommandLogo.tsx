@@ -132,6 +132,14 @@ const logos = {
       onError={(e) => console.error('Failed to load Jenkins logo:', e)}
     />
   ),
+  cloudbees: (
+    <img
+      src="/cloudbees.svg"
+      className="w-4 h-4 min-w-4 min-h-4 object-contain"
+      alt="CloudBees"
+      onError={(e) => console.error('Failed to load CloudBees logo:', e)}
+    />
+  ),
   coroot: (
     <img
       src="/coroot.svg"
@@ -233,6 +241,11 @@ const getLogoForCommand = (command: string | any, toolName: string, provider?: s
   // Splunk tools
   if (tool.includes('splunk') || tool === 'search_splunk' || tool === 'list_splunk_indexes' || tool === 'list_splunk_sourcetypes') {
     return 'splunk'
+  }
+
+  // CloudBees tools
+  if (tool.includes('cloudbees')) {
+    return 'cloudbees'
   }
 
   // Jenkins tools

@@ -224,6 +224,10 @@ from routes.jenkins import bp as jenkins_bp  # noqa: F401
 import routes.jenkins.tasks  # noqa: F401
 app.register_blueprint(jenkins_bp, url_prefix="/jenkins")
 
+# --- CloudBees CI Integration Routes (reuses Jenkins connector) ---
+from routes.cloudbees import bp as cloudbees_bp  # noqa: F401
+app.register_blueprint(cloudbees_bp, url_prefix="/cloudbees")
+
 # --- Grafana Integration Routes ---
 from routes.grafana import bp as grafana_bp  # noqa: F401
 # Import Grafana tasks for Celery registration

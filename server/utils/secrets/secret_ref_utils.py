@@ -56,6 +56,7 @@ SUPPORTED_SECRET_PROVIDERS: Set[str] = {
     "thousandeyes", # ThousandEyes connector tokens
     "aurora",   # Aurora-managed SSH keys
     "jenkins",  # Jenkins CI/CD connector tokens
+    "cloudbees", # CloudBees CI connector tokens
 }
 
 
