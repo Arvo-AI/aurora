@@ -75,8 +75,10 @@ class DynatraceClient:
             raise DynatraceAPIError("Unable to reach Dynatrace") from exc
 
     def validate_connection(self) -> dict[str, Any]:
-        # /api/v1/time works across all Dynatrace domains (apps, live, managed)
-        return self._request("GET", "/api/v1/time").json()
+        # /api/v2/apiTokens/lookup validates the token itself and works regardless of
+        # other scopes; /api/v1/time returns 406 on some tenants due to strict header enforcement
+        api_token = self.headers["Authorization"].removeprefix("Api-Token ")
+        return self._request("POST", "/api/v2/apiTokens/lookup", json={"token": api_token}).json()
 
     def get_cluster_version(self) -> str | None:
         try:
