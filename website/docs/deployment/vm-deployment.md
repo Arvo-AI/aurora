@@ -147,7 +147,7 @@ After the stack is running, the `vault-init` sidecar initializes Vault and gener
 
 ```bash
 # Wait ~30 seconds for vault-init to finish, then:
-VAULT_TOKEN=$(docker exec aurora-vault cat /vault/init/keys.json | jq -r '.root_token') \
+VAULT_TOKEN=$(docker compose -f docker-compose.prod-local.yml exec -T vault cat /vault/init/keys.json | jq -r '.root_token') \
   && sed -i "s|^VAULT_TOKEN=.*|VAULT_TOKEN=$VAULT_TOKEN|" .env
 
 # Verify it was written
@@ -157,7 +157,7 @@ grep VAULT_TOKEN .env
 If the command fails (container not ready yet), wait and retry. Check vault-init status with:
 
 ```bash
-docker logs aurora-vault-init
+docker compose -f docker-compose.prod-local.yml logs vault-init
 ```
 
 ## 8. Restart to Apply Vault Token
@@ -211,7 +211,7 @@ sudo firewall-cmd --reload
 
 Open in your browser:
 
-```
+```text
 http://YOUR_VM_IP:3000
 ```
 
@@ -286,7 +286,7 @@ sudo resize2fs /dev/sda1
 The `vault-init` sidecar auto-unseals on startup using keys stored in a persistent Docker volume. If it didn't work:
 
 ```bash
-docker restart aurora-vault-init
+docker compose -f docker-compose.prod-local.yml restart vault-init
 ```
 
 ### "Connection Timed Out" in Browser
@@ -312,8 +312,8 @@ To avoid this, reserve a static/elastic IP through your cloud provider.
 Check logs for the failing container:
 
 ```bash
-docker logs aurora-server --tail 50
-docker logs aurora-celery_worker-1 --tail 50
+docker compose -f docker-compose.prod-local.yml logs --tail=50 aurora-server
+docker compose -f docker-compose.prod-local.yml logs --tail=50 celery_worker
 ```
 
 Common causes: missing env vars, Vault not ready, database not initialized.
