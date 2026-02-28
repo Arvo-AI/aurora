@@ -91,6 +91,11 @@ export default function AWSOnboardingPage() {
   const [bulkResults, setBulkResults] = useState<BulkResult[] | null>(null);
   const [isDownloadingCfn, setIsDownloadingCfn] = useState(false);
   const [showBulkForm, setShowBulkForm] = useState(false);
+  const [quickCreateUrl, setQuickCreateUrl] = useState<string | null>(null);
+  const [stackSetsCommand, setStackSetsCommand] = useState<string | null>(null);
+  const [stackSetsCopied, setStackSetsCopied] = useState(false);
+  const [inactiveAccounts, setInactiveAccounts] = useState<ConnectedAccount[]>([]);
+  const [reconnectingId, setReconnectingId] = useState<string | null>(null);
 
   // Auto-set connected flag when configured
   useEffect(() => {
@@ -343,11 +348,75 @@ export default function AWSOnboardingPage() {
     }
   }, [workspaceId, userId]);
 
-  useEffect(() => {
-    if (workspaceId && userId && isConfigured) {
-      fetchConnectedAccounts();
+  const fetchQuickCreateData = useCallback(async () => {
+    if (!workspaceId || !userId) return;
+    try {
+      const res = await fetch(`${BACKEND_URL}/workspaces/${workspaceId}/aws/cfn-quickcreate`, {
+        credentials: 'include',
+        headers: { 'X-User-ID': userId },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setQuickCreateUrl(data.quickCreateUrl || null);
+        setStackSetsCommand(data.stackSetsCommand || null);
+      }
+    } catch (err) {
+      console.error('Failed to fetch quick-create data:', err);
     }
-  }, [workspaceId, userId, isConfigured, fetchConnectedAccounts]);
+  }, [workspaceId, userId]);
+
+  const fetchInactiveAccounts = useCallback(async () => {
+    if (!workspaceId || !userId) return;
+    try {
+      const res = await fetch(`${BACKEND_URL}/workspaces/${workspaceId}/aws/accounts/inactive`, {
+        credentials: 'include',
+        headers: { 'X-User-ID': userId },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setInactiveAccounts(data.accounts || []);
+      }
+    } catch (err) {
+      console.error('Failed to fetch inactive accounts:', err);
+    }
+  }, [workspaceId, userId]);
+
+  useEffect(() => {
+    if (workspaceId && userId) {
+      fetchQuickCreateData();
+      fetchInactiveAccounts();
+      if (isConfigured) {
+        fetchConnectedAccounts();
+      }
+    }
+  }, [workspaceId, userId, isConfigured, fetchConnectedAccounts, fetchQuickCreateData, fetchInactiveAccounts]);
+
+  const handleReconnect = async (accountId: string) => {
+    if (!workspaceId || !userId) return;
+    setReconnectingId(accountId);
+    setError(null);
+    try {
+      const res = await fetch(`${BACKEND_URL}/workspaces/${workspaceId}/aws/accounts/${accountId}/reconnect`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json', 'X-User-ID': userId },
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || 'Reconnect failed');
+      }
+      setIsConfigured(true);
+      localStorage.setItem('isAWSConnected', 'true');
+      localStorage.setItem('cloudProvider', 'aws');
+      await fetchConnectedAccounts();
+      await fetchInactiveAccounts();
+    } catch (err) {
+      console.error('Reconnect error:', err);
+      setError(err instanceof Error ? err.message : 'Failed to reconnect.');
+    } finally {
+      setReconnectingId(null);
+    }
+  };
 
   const handleDownloadCfnTemplate = async () => {
     if (!workspaceId || !userId) return;
@@ -751,7 +820,7 @@ make dev`}</pre>
                         <tr className="bg-white/5 text-white/50 text-xs">
                           <th className="text-left px-4 py-2">Account ID</th>
                           <th className="text-left px-4 py-2">Region</th>
-                          <th className="text-left px-4 py-2">Role ARN</th>
+                          <th className="text-left px-4 py-2">Role</th>
                           <th className="text-left px-4 py-2">Verified</th>
                           <th className="px-4 py-2"></th>
                         </tr>
@@ -761,7 +830,17 @@ make dev`}</pre>
                           <tr key={acct.account_id} className="border-t border-white/5 text-white/70">
                             <td className="px-4 py-2 font-mono text-xs">{acct.account_id}</td>
                             <td className="px-4 py-2 text-xs">{acct.region || 'us-east-1'}</td>
-                            <td className="px-4 py-2 font-mono text-xs truncate max-w-[200px]" title={acct.role_arn}>{acct.role_arn}</td>
+                            <td className="px-4 py-2 text-xs">
+                              <a
+                                href={`https://console.aws.amazon.com/iam/home?region=${acct.region || 'us-east-1'}#/roles/details/${acct.role_arn.split('/').pop()}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-blue-400 hover:text-blue-300 hover:underline font-mono"
+                                title={acct.role_arn}
+                              >
+                                {acct.role_arn.split('/').pop()}
+                              </a>
+                            </td>
                             <td className="px-4 py-2 text-xs">{acct.last_verified_at ? new Date(acct.last_verified_at).toLocaleDateString() : '-'}</td>
                             <td className="px-4 py-2 text-right">
                               <Button variant="ghost" size="icon" onClick={() => handleDeleteAccount(acct.account_id)} className="h-7 w-7 text-white/30 hover:text-red-400 hover:bg-white/5">
@@ -784,16 +863,101 @@ make dev`}</pre>
                 </div>
               )}
 
-              {/* Multi-Account Actions */}
-              <div className="flex flex-wrap gap-3">
-                <Button onClick={handleDownloadCfnTemplate} disabled={isDownloadingCfn} variant="outline" className="border-white/10 hover:bg-white/5 text-white/70">
-                  {isDownloadingCfn ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Download className="w-4 h-4 mr-2" />}
-                  Download CloudFormation Template
-                </Button>
-                <Button onClick={() => setShowBulkForm(!showBulkForm)} variant="outline" className="border-white/10 hover:bg-white/5 text-white/70">
-                  <Upload className="w-4 h-4 mr-2" />
-                  {showBulkForm ? 'Hide Bulk Register' : 'Bulk Register Accounts'}
-                </Button>
+              {/* Recently Disconnected -- Reconnect */}
+              {inactiveAccounts.length > 0 && (
+                <div className="space-y-3">
+                  <p className="text-sm font-medium text-white/50">Recently Disconnected</p>
+                  <div className="border border-white/5 rounded-lg overflow-hidden">
+                    <table className="w-full text-sm">
+                      <tbody>
+                        {inactiveAccounts.map((acct) => (
+                          <tr key={acct.account_id} className="border-t border-white/5 text-white/40">
+                            <td className="px-4 py-2 font-mono text-xs">{acct.account_id}</td>
+                            <td className="px-4 py-2 text-xs">{acct.region || 'us-east-1'}</td>
+                            <td className="px-4 py-2 text-xs">
+                              {acct.role_arn.split('/').pop()}
+                            </td>
+                            <td className="px-4 py-2 text-right">
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => handleReconnect(acct.account_id)}
+                                disabled={reconnectingId === acct.account_id}
+                                className="border-white/10 hover:bg-white/5 text-white/60 text-xs h-7"
+                              >
+                                {reconnectingId === acct.account_id ? (
+                                  <Loader2 className="w-3 h-3 animate-spin mr-1" />
+                                ) : null}
+                                Reconnect
+                              </Button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {/* Deploy to More Accounts */}
+              <div className="space-y-4 bg-white/5 border border-white/10 rounded-lg p-4">
+                <p className="text-sm font-medium text-white/70">Add More Accounts</p>
+                <p className="text-xs text-white/40">
+                  Deploy the Aurora IAM role to each AWS account you want to connect.
+                  Aurora never needs admin access to your accounts -- your AWS admin handles the deployment.
+                </p>
+
+                <div className="space-y-3">
+                  {/* Quick-Create Link */}
+                  {quickCreateUrl && (
+                    <div className="space-y-1.5">
+                      <p className="text-xs text-white/60 font-medium">Option 1: Quick-Create Link (one account at a time)</p>
+                      <p className="text-xs text-white/40">Log into the target AWS account, then open this link:</p>
+                      <div className="flex gap-2">
+                        <Input value={quickCreateUrl} readOnly className="font-mono text-xs bg-black/50 text-white border-white/10 focus-visible:ring-white/20" />
+                        <Button variant="outline" size="icon" onClick={() => { navigator.clipboard.writeText(quickCreateUrl); }} className="border-white/10 hover:bg-white/5 text-white/70 shrink-0">
+                          <Copy className="w-4 h-4" />
+                        </Button>
+                        <a href={quickCreateUrl} target="_blank" rel="noopener noreferrer">
+                          <Button variant="outline" className="border-white/10 hover:bg-white/5 text-white/70 shrink-0 text-xs">
+                            Open
+                          </Button>
+                        </a>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* StackSets for orgs */}
+                  {stackSetsCommand && (
+                    <div className="space-y-1.5">
+                      <p className="text-xs text-white/60 font-medium">Option 2: StackSets (all accounts in your AWS Organization)</p>
+                      <p className="text-xs text-white/40">Run from your AWS Organizations management account:</p>
+                      <div className="relative">
+                        <pre className="bg-black/50 p-3 pr-10 rounded border border-white/10 text-xs text-white/70 font-mono overflow-x-auto whitespace-pre">{stackSetsCommand}</pre>
+                        <Button
+                          variant="outline"
+                          size="icon"
+                          onClick={() => { navigator.clipboard.writeText(stackSetsCommand); setStackSetsCopied(true); setTimeout(() => setStackSetsCopied(false), 2000); }}
+                          className="absolute top-2 right-2 h-6 w-6 border-white/10 hover:bg-white/5 text-white/70"
+                        >
+                          {stackSetsCopied ? <CheckCircle className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Download template + Bulk register */}
+                  <div className="flex flex-wrap gap-3 pt-2 border-t border-white/5">
+                    <Button onClick={handleDownloadCfnTemplate} disabled={isDownloadingCfn} variant="outline" size="sm" className="border-white/10 hover:bg-white/5 text-white/70 text-xs">
+                      {isDownloadingCfn ? <Loader2 className="w-3 h-3 animate-spin mr-1.5" /> : <Download className="w-3 h-3 mr-1.5" />}
+                      Download Template YAML
+                    </Button>
+                    <Button onClick={() => setShowBulkForm(!showBulkForm)} variant="outline" size="sm" className="border-white/10 hover:bg-white/5 text-white/70 text-xs">
+                      <Upload className="w-3 h-3 mr-1.5" />
+                      {showBulkForm ? 'Hide Bulk Register' : 'Bulk Register Accounts'}
+                    </Button>
+                  </div>
+                </div>
               </div>
 
               {/* Bulk Register Form */}
@@ -954,11 +1118,27 @@ make dev`}</pre>
                   </Alert>
 
                   <div className="mt-3 pt-3 border-t border-white/10">
-                    <p className="text-xs text-white/60 mb-2">Have multiple AWS accounts? Use a CloudFormation template instead:</p>
-                    <Button onClick={handleDownloadCfnTemplate} disabled={isDownloadingCfn} variant="outline" size="sm" className="border-white/10 hover:bg-white/5 text-white/70 text-xs">
-                      {isDownloadingCfn ? <Loader2 className="w-3 h-3 animate-spin mr-1.5" /> : <Download className="w-3 h-3 mr-1.5" />}
-                      Download CloudFormation Template
-                    </Button>
+                    <p className="text-xs text-white/60 mb-2">Have multiple AWS accounts? Deploy the role using one of these methods:</p>
+                    <div className="space-y-2">
+                      {quickCreateUrl && (
+                        <div className="flex items-center gap-2">
+                          <a href={quickCreateUrl} target="_blank" rel="noopener noreferrer">
+                            <Button variant="outline" size="sm" className="border-white/10 hover:bg-white/5 text-white/70 text-xs">
+                              <Cloud className="w-3 h-3 mr-1.5" />
+                              Open Quick-Create in AWS Console
+                            </Button>
+                          </a>
+                          <Button variant="outline" size="sm" onClick={() => { if (quickCreateUrl) navigator.clipboard.writeText(quickCreateUrl); }} className="border-white/10 hover:bg-white/5 text-white/70 text-xs">
+                            <Copy className="w-3 h-3 mr-1.5" />
+                            Copy Link
+                          </Button>
+                        </div>
+                      )}
+                      <Button onClick={handleDownloadCfnTemplate} disabled={isDownloadingCfn} variant="outline" size="sm" className="border-white/10 hover:bg-white/5 text-white/70 text-xs">
+                        {isDownloadingCfn ? <Loader2 className="w-3 h-3 animate-spin mr-1.5" /> : <Download className="w-3 h-3 mr-1.5" />}
+                        Download Template for StackSets / CLI
+                      </Button>
+                    </div>
                   </div>
                 </div>
         </div>
