@@ -407,7 +407,8 @@ export default function AWSOnboardingPage() {
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
-        throw new Error(data.error || 'Reconnect failed');
+        setError(data.error || 'Reconnect failed. The IAM role may need to be redeployed.');
+        return;
       }
       setIsConfigured(true);
       localStorage.setItem('isAWSConnected', 'true');
@@ -416,7 +417,7 @@ export default function AWSOnboardingPage() {
       await fetchInactiveAccounts();
     } catch (err) {
       console.error('Reconnect error:', err);
-      setError(err instanceof Error ? err.message : 'Failed to reconnect.');
+      setError('Failed to reconnect. Check your network connection and try again.');
     } finally {
       setReconnectingId(null);
     }
