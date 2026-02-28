@@ -91,7 +91,9 @@ class BigPandaClient:
         status: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Fetch incidents from Incidents V2 API."""
-        params: Dict[str, Any] = {"limit": min(limit, 100), "offset": offset}
+        limit = max(1, min(limit, 100))
+        offset = max(0, offset)
+        params: Dict[str, Any] = {"limit": limit, "offset": offset}
         if status:
             params["status"] = status
         return self._request("GET", "/resources/v2.0/incidents", params=params).json()
