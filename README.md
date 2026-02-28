@@ -2,6 +2,8 @@
 
 Aurora is an automated root cause analysis investigation tool that uses agents to help Site Reliability Engineers resolve incidents.
 
+**[Documentation](https://arvo-ai.github.io/aurora/)** — full guides for deployment, configuration, and connectors.
+
 ## Quick Start
 
 Get Aurora running locally for testing and evaluation:

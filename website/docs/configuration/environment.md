@@ -191,8 +191,20 @@ At least one LLM provider API key is required.
 | `OPENAI_API_KEY` | - | OpenAI API key |
 | `ANTHROPIC_API_KEY` | - | Anthropic API key |
 | `GOOGLE_AI_API_KEY` | - | Google AI API key |
-| `LLM_PROVIDER_MODE` | `openrouter` | Default LLM provider |
+| `LLM_PROVIDER_MODE` | `openrouter` | Provider routing mode (see below) |
 | `AGENT_RECURSION_LIMIT` | `240` | Max agent reasoning steps |
+
+### LLM_PROVIDER_MODE
+
+Controls how Aurora routes LLM requests. Three modes are available:
+
+| Mode | Description | Required key |
+|------|-------------|--------------|
+| `openrouter` | All requests go through OpenRouter. One key gives access to models from Anthropic, OpenAI, Google, and others. | `OPENROUTER_API_KEY` |
+| `direct` | Requests go directly to each provider's API based on the model prefix (e.g. `anthropic/...` → Anthropic API). No OpenRouter account needed, but you need a separate API key for each provider you use. | Provider-specific key(s) |
+| `auto` | Same behaviour as `direct`. | Provider-specific key(s) |
+
+`openrouter` is recommended for most deployments — a single key, broadest model selection, and no need to manage multiple provider accounts.
 
 ```bash
 # Use one of these
@@ -201,7 +213,7 @@ OPENAI_API_KEY=sk-your-key
 ANTHROPIC_API_KEY=sk-ant-your-key
 GOOGLE_AI_API_KEY=your-key
 
-LLM_PROVIDER_MODE=openrouter
+LLM_PROVIDER_MODE=openrouter   # or: direct
 AGENT_RECURSION_LIMIT=240
 ```
 
