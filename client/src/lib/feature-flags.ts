@@ -36,3 +36,7 @@ export const isDynatraceEnabled = () => {
 export const isBigPandaEnabled = () => {
   return getEnv('NEXT_PUBLIC_ENABLE_BIGPANDA') === 'true';
 };
+
+export const isThousandEyesEnabled = () => {
+  return getEnv('NEXT_PUBLIC_ENABLE_THOUSANDEYES') === 'true';
+};

@@ -124,6 +124,14 @@ const logos = {
       onError={(e) => console.error('Failed to load Splunk logo:', e)}
     />
   ),
+  jenkins: (
+    <img
+      src="/jenkins.svg"
+      className="w-4 h-4 min-w-4 min-h-4 object-contain"
+      alt="Jenkins"
+      onError={(e) => console.error('Failed to load Jenkins logo:', e)}
+    />
+  ),
   coroot: (
     <img
       src="/coroot.svg"
@@ -138,6 +146,22 @@ const logos = {
       className="w-4 h-4 min-w-4 min-h-4 object-contain scale-[2.2]"
       alt="Dynatrace"
       onError={(e) => console.error('Failed to load Dynatrace logo:', e)}
+    />
+  ),
+  thousandeyes: (
+    <img
+      src="/thousandeyes.svg"
+      className="w-4 h-4 min-w-4 min-h-4 object-contain"
+      alt="ThousandEyes"
+      onError={(e) => console.error('Failed to load ThousandEyes logo:', e)}
+    />
+  ),
+  bitbucket: (
+    <img
+      src="/bitbucket.svg"
+      className="w-4 h-4 min-w-4 min-h-4 object-contain"
+      alt="Bitbucket"
+      onError={(e) => console.error('Failed to load Bitbucket logo:', e)}
     />
   ),
   web: (
@@ -211,6 +235,11 @@ const getLogoForCommand = (command: string | any, toolName: string, provider?: s
     return 'splunk'
   }
 
+  // Jenkins tools
+  if (tool.includes('jenkins')) {
+    return 'jenkins'
+  }
+
   // Coroot tools
   if (tool.includes('coroot')) {
     return 'coroot'
@@ -218,6 +247,16 @@ const getLogoForCommand = (command: string | any, toolName: string, provider?: s
 
   if (tool.includes('dynatrace') || tool === 'query_dynatrace') {
     return 'dynatrace'
+  }
+
+  // ThousandEyes tools
+  if (tool.includes('thousandeyes')) {
+    return 'thousandeyes'
+  }
+
+  // Bitbucket tools
+  if (tool.startsWith('bitbucket_')) {
+    return 'bitbucket'
   }
 
   // IAC tools
