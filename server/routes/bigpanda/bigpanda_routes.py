@@ -143,7 +143,11 @@ def webhook(user_id: str):
         logger.warning("[BIGPANDA] Webhook rejected: invalid or unconfigured user_id %s", user_id[:50])
         return jsonify({"error": "Invalid webhook configuration"}), 403
 
-    creds = get_token_data(user_id, "bigpanda")
+    try:
+        creds = get_token_data(user_id, "bigpanda")
+    except Exception as exc:
+        logger.error("[BIGPANDA] Failed to retrieve credentials for webhook user %s: %s", user_id, exc)
+        return jsonify({"error": "Internal error processing webhook"}), 500
     if not creds:
         logger.warning("[BIGPANDA] Webhook received for user %s with no connection", user_id)
         return jsonify({"error": "BigPanda not connected for this user"}), 404
