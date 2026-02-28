@@ -1085,13 +1085,76 @@ make dev`}</pre>
                 {/* Advanced options */}
                 <details className="group">
                   <summary className="text-xs text-white/30 cursor-pointer hover:text-white/50 select-none">
-                    More options: bulk register, StackSets, download template
+                    Advanced: manual role setup, bulk register, StackSets
                   </summary>
                   <div className="mt-3 space-y-3 border-t border-white/5 pt-3">
-                    <Button onClick={() => setShowBulkForm(!showBulkForm)} variant="outline" size="sm" className="border-white/10 hover:bg-white/5 text-white/70 text-xs">
-                      <Upload className="w-3 h-3 mr-1.5" />
-                      {showBulkForm ? 'Hide Bulk Register' : 'Bulk Register (multiple accounts)'}
-                    </Button>
+                    {/* Manual: External ID */}
+                    {onboardingData && (
+                      <>
+                        <div className="space-y-1.5">
+                          <label className="text-xs text-white/50">External ID</label>
+                          <div className="flex gap-2">
+                            <Input
+                              value={onboardingData.externalId}
+                              readOnly
+                              className="font-mono text-xs bg-white/5 text-white border-white/10 focus-visible:ring-white/20"
+                            />
+                            <Button
+                              variant="outline"
+                              size="icon"
+                              onClick={() => copyToClipboard(onboardingData.externalId)}
+                              className="border-white/10 hover:bg-white/5 text-white/70 h-8 w-8"
+                            >
+                              {copySuccess ? <CheckCircle className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                            </Button>
+                          </div>
+                        </div>
+
+                        {/* Manual: Trust Policy */}
+                        <div className="space-y-1.5">
+                          <label className="text-xs text-white/50">Trust Policy JSON</label>
+                          <div className="relative">
+                            <pre className="text-white text-xs whitespace-pre-wrap font-mono bg-black/30 p-3 pr-10 rounded border border-white/10">
+{JSON.stringify({
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Principal": {
+                "AWS": `arn:aws:iam::${onboardingData.auroraAccountId}:root`
+            },
+            "Action": "sts:AssumeRole",
+            "Condition": {
+                "StringEquals": {
+                    "sts:ExternalId": onboardingData.externalId
+                }
+            }
+        }
+    ]
+}, null, 2)}
+                            </pre>
+                            <Button
+                              variant="outline"
+                              size="icon"
+                              onClick={() => copyTrustPolicyToClipboard(JSON.stringify({
+                                "Version": "2012-10-17",
+                                "Statement": [{
+                                  "Effect": "Allow",
+                                  "Principal": { "AWS": `arn:aws:iam::${onboardingData.auroraAccountId}:root` },
+                                  "Action": "sts:AssumeRole",
+                                  "Condition": { "StringEquals": { "sts:ExternalId": onboardingData.externalId } }
+                                }]
+                              }, null, 2))}
+                              className="absolute top-2 right-2 h-6 w-6 border-white/10 hover:bg-white/5 text-white/70"
+                            >
+                              {trustPolicyCopySuccess ? <CheckCircle className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                            </Button>
+                          </div>
+                        </div>
+                      </>
+                    )}
+
+                    {/* StackSets */}
                     {stackSetsCommand && (
                       <div className="space-y-1.5">
                         <p className="text-xs text-white/50">Deploy to all accounts via StackSets:</p>
@@ -1108,10 +1171,18 @@ make dev`}</pre>
                         </div>
                       </div>
                     )}
-                    <Button onClick={handleDownloadCfnTemplate} disabled={isDownloadingCfn} variant="outline" size="sm" className="border-white/10 hover:bg-white/5 text-white/70 text-xs">
-                      {isDownloadingCfn ? <Loader2 className="w-3 h-3 animate-spin mr-1.5" /> : <Download className="w-3 h-3 mr-1.5" />}
-                      Download Template YAML
-                    </Button>
+
+                    {/* Bulk register & download */}
+                    <div className="flex gap-2">
+                      <Button onClick={() => setShowBulkForm(!showBulkForm)} variant="outline" size="sm" className="border-white/10 hover:bg-white/5 text-white/70 text-xs">
+                        <Upload className="w-3 h-3 mr-1.5" />
+                        {showBulkForm ? 'Hide Bulk Register' : 'Bulk Register'}
+                      </Button>
+                      <Button onClick={handleDownloadCfnTemplate} disabled={isDownloadingCfn} variant="outline" size="sm" className="border-white/10 hover:bg-white/5 text-white/70 text-xs">
+                        {isDownloadingCfn ? <Loader2 className="w-3 h-3 animate-spin mr-1.5" /> : <Download className="w-3 h-3 mr-1.5" />}
+                        Download Template
+                      </Button>
+                    </div>
                   </div>
                 </details>
               </div>
