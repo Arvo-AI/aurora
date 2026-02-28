@@ -29,6 +29,7 @@ from .github_commit_tool import github_commit, GitHubCommitArgs
 from .github_rca_tool import github_rca, GitHubRCAArgs
 from .github_fix_tool import github_fix, GitHubFixArgs
 from .jenkins_rca_tool import jenkins_rca, JenkinsRCAArgs
+from .cloudbees_rca_tool import cloudbees_rca, CloudBeesRCAArgs
 
 # Visualization trigger caching
 from cachetools import TTLCache
@@ -96,6 +97,31 @@ from .dynatrace_tool import (
     query_dynatrace,
     is_dynatrace_connected,
     QueryDynatraceArgs,
+)
+from .thousandeyes_tool import (
+    thousandeyes_list_tests,
+    thousandeyes_get_test_detail,
+    thousandeyes_get_test_results,
+    thousandeyes_get_alerts,
+    thousandeyes_get_alert_rules,
+    thousandeyes_get_agents,
+    thousandeyes_get_endpoint_agents,
+    thousandeyes_get_internet_insights,
+    thousandeyes_get_dashboards,
+    thousandeyes_get_dashboard_widget,
+    thousandeyes_get_bgp_monitors,
+    is_thousandeyes_connected,
+    ThousandEyesListTestsArgs,
+    ThousandEyesGetTestDetailArgs,
+    ThousandEyesGetTestResultsArgs,
+    ThousandEyesGetAlertsArgs,
+    ThousandEyesGetAlertRulesArgs,
+    ThousandEyesGetAgentsArgs,
+    ThousandEyesGetEndpointAgentsArgs,
+    ThousandEyesGetInternetInsightsArgs,
+    ThousandEyesGetDashboardsArgs,
+    ThousandEyesGetDashboardWidgetArgs,
+    ThousandEyesGetBGPMonitorsArgs,
 )
 
 # Import all context management functions from utils
@@ -1087,6 +1113,7 @@ def get_cloud_tools():
         (github_rca, "github_rca"),
         (github_fix, "github_fix"),
         (jenkins_rca, "jenkins_rca"),
+        (cloudbees_rca, "cloudbees_rca"),
         (github_apply_fix, "github_apply_fix"),
         (cloud_exec_wrapper, "cloud_exec"),
         (terminal_exec, "terminal_exec"),
@@ -1178,6 +1205,28 @@ def get_cloud_tools():
                     "pipeline_name+run_number for Blue Ocean. service is optional for recent_deployments."
                 ),
                 args_schema=JenkinsRCAArgs
+            )
+        elif name == 'cloudbees_rca':
+            tool = StructuredTool.from_function(
+                func=final_func,
+                name=name,
+                description=(
+                    "Unified CloudBees CI investigation tool for Root Cause Analysis. "
+                    "CloudBees CI uses the same APIs as Jenkins: Core REST API, Pipeline REST API (wfapi), and Blue Ocean REST API. "
+                    "Actions: "
+                    "'recent_deployments' (query stored deployment events; optional service filter and time_window_hours), "
+                    "'build_detail' (Core API: SCM revision, changeSets, build causes, parameters), "
+                    "'pipeline_stages' (wfapi: stage-level breakdown with status and timing), "
+                    "'stage_log' (wfapi: per-stage log output for a specific node_id), "
+                    "'build_logs' (Core API: console output, truncated to ~1MB), "
+                    "'test_results' (Core API: test report with failure details), "
+                    "'blue_ocean_run' (Blue Ocean API: run data with changeSet and commit info), "
+                    "'blue_ocean_steps' (Blue Ocean API: step-level detail for a pipeline node), "
+                    "'trace_context' (extract OTel W3C Trace Context; params: deployment_event_id or job_path+build_number). "
+                    "Required params vary by action: job_path+build_number for Core/wfapi, "
+                    "pipeline_name+run_number for Blue Ocean. service is optional for recent_deployments."
+                ),
+                args_schema=CloudBeesRCAArgs
             )
         elif name == 'github_apply_fix':
             tool = StructuredTool.from_function(
@@ -1462,6 +1511,62 @@ def get_cloud_tools():
             logging.debug(f"Coroot tools not added - user {user_id} not connected to Coroot")
     except Exception as e:
         logging.warning(f"Failed to add Coroot observability tools (treating as not connected): {e}")
+
+    # Add ThousandEyes network intelligence tools if connected
+    try:
+        if user_id and is_thousandeyes_connected(user_id):
+            _te_tools = [
+                (thousandeyes_list_tests, "thousandeyes_list_tests", ThousandEyesListTestsArgs,
+                 "List all configured ThousandEyes tests (network, HTTP, DNS, BGP, page load, etc.). "
+                 "Optionally filter by test_type. Use this first to discover available tests."),
+                (thousandeyes_get_test_detail, "thousandeyes_get_test_detail", ThousandEyesGetTestDetailArgs,
+                 "Get full configuration details for a single ThousandEyes test including server, interval, "
+                 "protocol, alert rules, and agents assigned. Use after list_tests to drill into a specific test."),
+                (thousandeyes_get_test_results, "thousandeyes_get_test_results", ThousandEyesGetTestResultsArgs,
+                 "Get results for a specific ThousandEyes test. Supports result_type: 'network' (latency, loss, jitter), "
+                 "'http' (response time, availability), 'path-vis' (hop-by-hop trace), 'dns' (resolution), "
+                 "'bgp' (routes), 'page-load' (full waterfall), 'web-transactions' (scripted browser), "
+                 "'ftp', 'api', 'sip' (VoIP), 'voice' (MOS), 'dns-trace', 'dnssec'. Requires a test_id."),
+                (thousandeyes_get_alerts, "thousandeyes_get_alerts", ThousandEyesGetAlertsArgs,
+                 "Get active or recent ThousandEyes alerts. Filter by state ('active'/'cleared') "
+                 "and severity ('major'/'minor'/'info'). Shows alert rules, affected agents, and violation counts."),
+                (thousandeyes_get_alert_rules, "thousandeyes_get_alert_rules", ThousandEyesGetAlertRulesArgs,
+                 "List all ThousandEyes alert rule definitions. Shows rule expressions, thresholds, severity, "
+                 "and which tests each rule applies to. Use to understand why specific alerts fired."),
+                (thousandeyes_get_agents, "thousandeyes_get_agents", ThousandEyesGetAgentsArgs,
+                 "List ThousandEyes cloud and enterprise monitoring agents. Filter by agent_type ('cloud' or 'enterprise'). "
+                 "Shows agent location, state, and IP addresses."),
+                (thousandeyes_get_endpoint_agents, "thousandeyes_get_endpoint_agents", ThousandEyesGetEndpointAgentsArgs,
+                 "List ThousandEyes endpoint agents installed on employee devices (laptops/desktops). "
+                 "Shows device name, OS, platform, location, public IP, and VPN status."),
+                (thousandeyes_get_internet_insights, "thousandeyes_get_internet_insights", ThousandEyesGetInternetInsightsArgs,
+                 "Get Internet Insights outage data from ThousandEyes. Set outage_type to 'network' for ISP/transit "
+                 "outages or 'application' for SaaS/CDN outages. Detects macro-scale internet issues affecting users."),
+                (thousandeyes_get_dashboards, "thousandeyes_get_dashboards", ThousandEyesGetDashboardsArgs,
+                 "List ThousandEyes dashboards, or get a specific dashboard with its widgets by providing dashboard_id. "
+                 "Use to discover monitoring dashboards and their widget layout."),
+                (thousandeyes_get_dashboard_widget, "thousandeyes_get_dashboard_widget", ThousandEyesGetDashboardWidgetArgs,
+                 "Get data for a specific widget within a ThousandEyes dashboard. Requires dashboard_id and widget_id "
+                 "(get these from thousandeyes_get_dashboards). Optionally set a time window."),
+                (thousandeyes_get_bgp_monitors, "thousandeyes_get_bgp_monitors", ThousandEyesGetBGPMonitorsArgs,
+                 "List ThousandEyes BGP monitoring points. Shows monitor name, type, IP, network, and country. "
+                 "Use alongside BGP test results for routing analysis."),
+            ]
+            for _func, _name, _schema, _desc in _te_tools:
+                _ctx = with_user_context(_func)
+                _notif = with_completion_notification(_ctx)
+                _final = wrap_func_with_capture(_notif, _name) if tool_capture else _notif
+                tools.append(StructuredTool.from_function(
+                    func=_final,
+                    name=_name,
+                    description=_desc,
+                    args_schema=_schema,
+                ))
+            logging.info(f"Added {len(_te_tools)} ThousandEyes tools for user {user_id}")
+        else:
+            logging.debug(f"ThousandEyes tools not added - user {user_id} not connected to ThousandEyes")
+    except Exception as e:
+        logging.warning(f"Failed to add ThousandEyes tools (treating as not connected): {e}")
 
     logging.info(f"Created {len(tools)} Aurora native tools")
     

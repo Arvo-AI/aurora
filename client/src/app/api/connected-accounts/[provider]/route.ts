@@ -24,7 +24,7 @@ export async function DELETE(
     const { provider } = await context.params
 
     // Validate provider
-    if (!['gcp', 'azure', 'aws', 'github', 'grafana', 'datadog', 'netdata', 'ovh', 'scaleway', 'tailscale', 'slack', 'splunk', 'dynatrace', 'confluence', 'coroot', 'jenkins'].includes(provider)) {
+    if (!['gcp', 'azure', 'aws', 'github', 'grafana', 'datadog', 'netdata', 'ovh', 'scaleway', 'tailscale', 'slack', 'splunk', 'dynatrace', 'confluence', 'coroot', 'thousandeyes', 'jenkins', 'cloudbees'].includes(provider)) {
       return NextResponse.json(
         { error: 'Invalid provider' },
         { status: 400 }
@@ -271,6 +271,30 @@ export async function DELETE(
       return NextResponse.json(data)
     }
 
+    // Special handling for CloudBees
+    if (provider === 'cloudbees') {
+      const response = await fetch(`${API_BASE_URL}/cloudbees/disconnect`, {
+        method: 'DELETE',
+        headers: authHeaders,
+      })
+
+      if (!response.ok) {
+        const errorText = await response.text()
+        console.error('Backend error disconnecting CloudBees', {
+          status: response.status,
+          statusText: response.statusText,
+          bodyLength: errorText.length,
+        })
+        return NextResponse.json(
+          { error: 'Failed to disconnect CloudBees' },
+          { status: response.status }
+        )
+      }
+
+      const data = await response.json()
+      return NextResponse.json(data)
+    }
+
     // Special handling for Coroot
     if (provider === 'coroot') {
       const response = await fetch(`${API_BASE_URL}/coroot/disconnect`, {
@@ -283,6 +307,25 @@ export async function DELETE(
         console.error('Backend error disconnecting Coroot:', errorText)
         return NextResponse.json(
           { error: 'Failed to disconnect Coroot' },
+          { status: response.status }
+        )
+      }
+
+      const data = await response.json()
+      return NextResponse.json(data)
+    }
+
+    // Special handling for ThousandEyes
+    if (provider === 'thousandeyes') {
+      const response = await fetch(`${API_BASE_URL}/thousandeyes/disconnect`, {
+        method: 'DELETE',
+        headers: authHeaders,
+      })
+
+      if (!response.ok) {
+        console.error('Backend error disconnecting ThousandEyes: status=%d', response.status)
+        return NextResponse.json(
+          { error: 'Failed to disconnect ThousandEyes' },
           { status: response.status }
         )
       }

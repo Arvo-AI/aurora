@@ -78,6 +78,9 @@ def _build_source_url(source_type: str, user_id: str) -> str:
             creds = get_token_data(user_id, "dynatrace") if not client_id else None
             env_url = (creds or {}).get("environment_url", "") if not client_id else client_id
             return env_url or ""
+        elif source_type in ("jenkins", "cloudbees"):
+            creds = get_token_data(user_id, source_type)
+            return (creds or {}).get("base_url", "")
     except Exception as e:
         logger.error(f"[INCIDENTS] Failed to build source URL for {source_type}: {e}")
     return ""
@@ -349,10 +352,8 @@ def get_incident(incident_id: str):
                 # to allow any user to see the source payload
 
                 logger.debug(
-                    "[INCIDENTS] Fetching raw payload for incident %s: source_type=%s, source_alert_id=%s",
+                    "[INCIDENTS] Fetching raw payload for incident %s",
                     incident_id,
-                    source_type,
-                    source_alert_id,
                 )
 
                 if source_type == "netdata":
@@ -482,7 +483,7 @@ def get_incident(incident_id: str):
                             "[INCIDENTS] Skipping payload fetch for splunk alert_id: %s",
                             source_alert_id,
                         )
-                elif source_type == "jenkins":
+                elif source_type == "jenkins" or source_type == "cloudbees":
                     try:
                         alert_id_int = int(source_alert_id)
                         cursor.execute(
@@ -492,16 +493,9 @@ def get_incident(incident_id: str):
                         alert_row = cursor.fetchone()
                         if alert_row and alert_row[0] is not None:
                             raw_payload = alert_row[0]
-                            logger.debug(
-                                "[INCIDENTS] Found Jenkins payload: type=%s, has_data=%s",
-                                type(raw_payload).__name__,
-                                bool(raw_payload),
-                            )
+                            logger.debug("[INCIDENTS] Found jenkins/cloudbees payload for alert")
                     except (ValueError, TypeError):
-                        logger.debug(
-                            "[INCIDENTS] Skipping payload fetch for jenkins alert_id: %s",
-                            source_alert_id,
-                        )
+                        logger.debug("[INCIDENTS] Skipping payload fetch for jenkins/cloudbees alert (invalid ID)")
                 elif source_type == "dynatrace":
                     try:
                         alert_id_int = int(source_alert_id)
@@ -512,11 +506,7 @@ def get_incident(incident_id: str):
                         alert_row = cursor.fetchone()
                         if alert_row and alert_row[0] is not None:
                             raw_payload = alert_row[0]
-                            logger.debug(
-                                "[INCIDENTS] Found Dynatrace payload: type=%s, has_data=%s",
-                                type(raw_payload).__name__,
-                                bool(raw_payload),
-                            )
+                            logger.debug("[INCIDENTS] Found Dynatrace payload for alert")
                     except (ValueError, TypeError):
                         logger.debug("[INCIDENTS] Skipping payload fetch for dynatrace alert (non-integer id)")
                 elif source_type == "coroot":
@@ -530,9 +520,8 @@ def get_incident(incident_id: str):
                 # Log warning if no payload found for any source type
                 if not raw_payload:
                     logger.warning(
-                        "[INCIDENTS] No payload found for incident %s (source_type=%s)",
+                        "[INCIDENTS] No payload found for incident %s",
                         incident_id,
-                        source_type,
                     )
 
                 # Add raw payload to alert object (sourceUrl already set by _format_incident_response)
@@ -557,10 +546,9 @@ def get_incident(incident_id: str):
                 incident["alert"]["triggeredAt"] = incident["startedAt"]
 
                 logger.debug(
-                    "[INCIDENTS] Incident %s: rawPayload length=%d, sourceUrl=%s",
+                    "[INCIDENTS] Incident %s: rawPayload length=%d",
                     incident_id,
                     len(incident["alert"]["rawPayload"]),
-                    incident["alert"].get("sourceUrl", ""),
                 )
 
                 cursor.execute(

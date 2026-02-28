@@ -79,7 +79,7 @@ def jenkins_rca(
         return json.dumps({"error": "No user context. Run this from an authenticated session."})
 
     if action == "recent_deployments":
-        return _action_recent_deployments(user_id, service, time_window_hours)
+        return _action_recent_deployments(user_id, service, time_window_hours, provider="jenkins")
     elif action == "trace_context":
         return _action_trace_context(user_id, deployment_event_id, job_path, build_number)
 
@@ -109,34 +109,34 @@ def jenkins_rca(
 # Action implementations
 # ------------------------------------------------------------------
 
-def _action_recent_deployments(user_id: str, service: Optional[str], hours: int) -> str:
+def _action_recent_deployments(user_id: str, service: Optional[str], hours: int, provider: Optional[str] = None) -> str:
     """Query stored deployment events for temporal correlation."""
     try:
         from utils.db.connection_pool import db_pool
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                base_where = "user_id = %s"
+                params: list = [user_id]
+
+                if provider:
+                    base_where += " AND provider = %s"
+                    params.append(provider)
                 if service:
-                    cursor.execute(
-                        """SELECT id, service, environment, result, build_number, build_url,
-                                  commit_sha, branch, repository, deployer, duration_ms,
-                                  job_name, trace_id, received_at
-                           FROM jenkins_deployment_events
-                           WHERE user_id = %s AND service = %s
-                                 AND received_at >= NOW() - make_interval(hours => %s)
-                           ORDER BY received_at DESC LIMIT 20""",
-                        (user_id, service, hours),
-                    )
-                else:
-                    cursor.execute(
-                        """SELECT id, service, environment, result, build_number, build_url,
-                                  commit_sha, branch, repository, deployer, duration_ms,
-                                  job_name, trace_id, received_at
-                           FROM jenkins_deployment_events
-                           WHERE user_id = %s
-                                 AND received_at >= NOW() - make_interval(hours => %s)
-                           ORDER BY received_at DESC LIMIT 20""",
-                        (user_id, hours),
-                    )
+                    base_where += " AND service = %s"
+                    params.append(service)
+
+                base_where += " AND received_at >= NOW() - make_interval(hours => %s)"
+                params.append(hours)
+
+                cursor.execute(
+                    f"""SELECT id, service, environment, result, build_number, build_url,
+                              commit_sha, branch, repository, deployer, duration_ms,
+                              job_name, trace_id, received_at
+                       FROM jenkins_deployment_events
+                       WHERE {base_where}
+                       ORDER BY received_at DESC LIMIT 20""",
+                    tuple(params),
+                )
                 rows = cursor.fetchall()
 
         if not rows:
@@ -149,7 +149,7 @@ def _action_recent_deployments(user_id: str, service: Optional[str], hours: int)
                 "build_number": r[4], "build_url": r[5], "commit_sha": r[6],
                 "branch": r[7], "repository": r[8], "deployer": r[9],
                 "duration_ms": r[10], "job_name": r[11], "trace_id": r[12],
-                "received_at": r[13].isoformat() if r[13] else None,
+                "webhook_received_at": r[13].isoformat() if r[13] else None,
             })
         return json.dumps({"deployments": deployments, "count": len(deployments)}, default=str)
     except Exception:

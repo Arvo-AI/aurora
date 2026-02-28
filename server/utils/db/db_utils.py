@@ -732,7 +732,8 @@ def initialize_tables():
                         span_id VARCHAR(32),
                         payload JSONB NOT NULL,
                         received_at TIMESTAMP NOT NULL,
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        provider VARCHAR(50) DEFAULT 'jenkins'
                     );
 
                     CREATE INDEX IF NOT EXISTS idx_jenkins_deploy_user ON jenkins_deployment_events(user_id, received_at DESC);
@@ -1188,6 +1189,20 @@ def initialize_tables():
                 conn.commit()
             except Exception as e:
                 logging.warning(f"Error adding alert_metadata column to incidents: {e}")
+                conn.rollback()
+
+            # Migration: Add provider column to jenkins_deployment_events for multi-CI support
+            try:
+                cursor.execute(
+                    """
+                    ALTER TABLE jenkins_deployment_events
+                    ADD COLUMN IF NOT EXISTS provider VARCHAR(50) DEFAULT 'jenkins';
+                    """
+                )
+                logging.info("Added provider column to jenkins_deployment_events table (if not exists).")
+                conn.commit()
+            except Exception as e:
+                logging.warning(f"Error adding provider column to jenkins_deployment_events: {e}")
                 conn.rollback()
 
             try:

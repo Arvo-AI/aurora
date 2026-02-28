@@ -1,5 +1,3 @@
-import hmac
-import hashlib
 import logging
 import os
 import secrets
@@ -10,6 +8,7 @@ from flask import Blueprint, jsonify, request
 from connectors.jenkins_connector.api_client import JenkinsClient
 from utils.db.connection_pool import db_pool
 from utils.web.cors_utils import create_cors_response
+from utils.web.webhook_signature import SIGNATURE_HEADER, verify_webhook_signature
 from utils.auth.stateless_auth import get_user_id_from_request
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 
@@ -50,6 +49,11 @@ def connect():
 
     user_id = get_user_id_from_request()
     base_url = data.get("baseUrl", "").strip().rstrip("/")
+    # Strip common Jenkins redirect paths that users may accidentally copy
+    for suffix in ("/loginError", "/login", "/manage", "/configure", "/view/all"):
+        if base_url.lower().endswith(suffix.lower()):
+            base_url = base_url[: -len(suffix)]
+            break
     username = data.get("username", "").strip()
     api_token = data.get("apiToken") or data.get("token")
 
@@ -246,12 +250,6 @@ def _get_webhook_secret(user_id: str) -> Optional[str]:
     return creds.get("webhook_secret")
 
 
-def _verify_webhook_signature(payload_bytes: bytes, signature: str, secret: str) -> bool:
-    """Validate X-Aurora-Signature HMAC-SHA256 header."""
-    expected = hmac.new(secret.encode(), payload_bytes, hashlib.sha256).hexdigest()
-    return hmac.compare_digest(expected, signature)
-
-
 def _verify_webhook_user(user_id: str) -> bool:
     """Verify the user_id exists in the database to prevent arbitrary data injection."""
     if not user_id or len(user_id) > 255:
@@ -287,13 +285,13 @@ def deployment_webhook(user_id: str):
         return jsonify({"error": "Invalid webhook configuration"}), 403
 
     webhook_secret = _get_webhook_secret(user_id)
-    signature = request.headers.get("X-Aurora-Signature", "")
+    signature = request.headers.get(SIGNATURE_HEADER, "")
 
     if webhook_secret:
         if not signature:
-            logger.warning("[JENKINS] Webhook rejected: missing X-Aurora-Signature for user %s", user_id[:50])
-            return jsonify({"error": "Missing X-Aurora-Signature header"}), 401
-        if not _verify_webhook_signature(request.get_data(), signature, webhook_secret):
+            logger.warning("[JENKINS] Webhook rejected: missing %s for user %s", SIGNATURE_HEADER, user_id[:50])
+            return jsonify({"error": f"Missing {SIGNATURE_HEADER} header"}), 401
+        if not verify_webhook_signature(request.get_data(), signature, webhook_secret):
             logger.warning("[JENKINS] Webhook rejected: invalid signature for user %s", user_id[:50])
             return jsonify({"error": "Invalid webhook signature"}), 401
 
@@ -351,7 +349,7 @@ def get_webhook_url():
         url: "{webhook_url}",
         httpMode: 'POST',
         contentType: 'APPLICATION_JSON',
-        customHeaders: [[name: 'X-Aurora-Signature', value: sig]],
+        customHeaders: [[name: '{SIGNATURE_HEADER}', value: sig]],
         requestBody: payload
       )
     }}
@@ -369,7 +367,7 @@ def get_webhook_url():
         url: "{webhook_url}",
         httpMode: 'POST',
         contentType: 'APPLICATION_JSON',
-        customHeaders: [[name: 'X-Aurora-Signature', value: sig]],
+        customHeaders: [[name: '{SIGNATURE_HEADER}', value: sig]],
         requestBody: payload
       )
     }}
@@ -378,12 +376,15 @@ def get_webhook_url():
 
     jenkinsfile_curl = f'''post {{
   always {{
+    script {{
+      env.BUILD_RESULT = currentBuild.currentResult ?: 'UNKNOWN'
+    }}
     sh \'\'\'
       PAYLOAD='{{"service":"\'\"$JOB_NAME\"\'","result":"\'\"$BUILD_RESULT\"\'","build_number":\'$BUILD_NUMBER\',"build_url":"\'\"$BUILD_URL\"\'","git":{{"commit_sha":"\'\"$GIT_COMMIT\"\'","branch":"\'\"$GIT_BRANCH\"\'"}}}}'
       SIG=$(echo -n "$PAYLOAD" | openssl dgst -sha256 -hmac "{webhook_secret}" | awk \'{{print $2}}\')
       curl -sS -X POST "{webhook_url}" \\
         -H "Content-Type: application/json" \\
-        -H "X-Aurora-Signature: $SIG" \\
+        -H "{SIGNATURE_HEADER}: $SIG" \\
         -d "$PAYLOAD"
     \'\'\'
   }}
@@ -470,10 +471,17 @@ def list_deployments():
                 "durationMs": r[10],
                 "jobName": r[11],
                 "traceId": r[12],
-                "receivedAt": r[13].isoformat() if r[13] else None,
+                "receivedAt": (r[13].isoformat() + "Z") if r[13] else None,
             })
 
         return jsonify({"deployments": deployments, "total": total, "limit": limit, "offset": offset})
     except Exception as exc:
         logger.exception("[JENKINS] Failed to list deployments for user %s", user_id)
         return jsonify({"error": "Failed to list deployments"}), 500
+
+
+# ------------------------------------------------------------------
+# RCA settings: toggle automatic RCA on deployment failures
+# ------------------------------------------------------------------
+from routes.ci_shared import register_rca_settings_routes
+register_rca_settings_routes(jenkins_bp, "jenkins", "jenkins_rca_enabled")
