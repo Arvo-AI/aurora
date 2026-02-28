@@ -294,6 +294,10 @@ export default function AWSOnboardingPage() {
 
   const handleDisconnect = async () => {
     if (!workspaceId || !userId) return;
+    const confirmed = window.confirm(
+      'Disconnect all AWS accounts?\n\nThis removes Aurora\'s connections only. The IAM roles still exist in your AWS accounts. To fully revoke access, delete the CloudFormation stacks (or StackSet) in those accounts.'
+    );
+    if (!confirmed) return;
     setIsDisconnecting(true);
     try {
       const response = await fetch(
@@ -498,6 +502,10 @@ export default function AWSOnboardingPage() {
 
   const handleDeleteAccount = async (accountId: string) => {
     if (!workspaceId || !userId) return;
+    const confirmed = window.confirm(
+      `Disconnect account ${accountId}?\n\nThis removes Aurora's connection only. The IAM role still exists in your AWS account. To fully revoke access, delete the CloudFormation stack in that account.`
+    );
+    if (!confirmed) return;
     try {
       const res = await fetch(`${BACKEND_URL}/workspaces/${workspaceId}/aws/accounts/${accountId}`, {
         method: 'DELETE',
@@ -880,6 +888,9 @@ make dev`}</pre>
               {inactiveAccounts.length > 0 && (
                 <div className="space-y-3">
                   <p className="text-sm font-medium text-white/50">Recently Disconnected</p>
+                  <p className="text-xs text-white/30">
+                    The IAM roles still exist in these accounts. Reconnect below, or delete the CloudFormation stack in AWS to revoke access.
+                  </p>
                   <div className="border border-white/5 rounded-lg overflow-hidden">
                     <table className="w-full text-sm">
                       <tbody>
