@@ -5,6 +5,11 @@ const API_BASE_URL = process.env.BACKEND_URL;
 
 export async function POST(request: NextRequest) {
   try {
+    if (!API_BASE_URL) {
+      console.error('[api/bigpanda/connect] BACKEND_URL environment variable is not configured');
+      return NextResponse.json({ error: 'Server configuration error' }, { status: 500 });
+    }
+
     const authResult = await getAuthenticatedUser();
     if (authResult instanceof NextResponse) return authResult;
 

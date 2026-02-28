@@ -47,8 +47,12 @@ export default function BigPandaAuthPage() {
   }, []);
 
   const loadWebhookUrl = async () => {
-    const info = await bigpandaService.getWebhookUrl();
-    if (info) setWebhookInfo(info);
+    try {
+      const info = await bigpandaService.getWebhookUrl();
+      if (info) setWebhookInfo(info);
+    } catch (err) {
+      console.error("Failed to load webhook URL", err);
+    }
   };
 
   const handleConnect = async (e: React.FormEvent<HTMLFormElement>) => {
@@ -59,7 +63,7 @@ export default function BigPandaAuthPage() {
       setStatus(result);
       persistStatus(result.connected);
       toast({ title: "Connected", description: "BigPanda connected successfully." });
-      loadWebhookUrl();
+      await loadWebhookUrl();
     } catch (err: unknown) {
       toast({ title: "Connection failed", description: getUserFriendlyError(err), variant: "destructive" });
     } finally {
@@ -83,11 +87,15 @@ export default function BigPandaAuthPage() {
     }
   };
 
-  const handleCopyWebhookUrl = () => {
+  const handleCopyWebhookUrl = async () => {
     if (!webhookInfo?.webhookUrl) return;
-    navigator.clipboard.writeText(webhookInfo.webhookUrl);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    try {
+      await navigator.clipboard.writeText(webhookInfo.webhookUrl);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      toast({ title: "Copy failed", description: "Unable to copy to clipboard", variant: "destructive" });
+    }
   };
 
   const pageHeader = (

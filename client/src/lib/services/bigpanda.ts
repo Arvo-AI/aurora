@@ -23,7 +23,7 @@ async function jsonFetch<T>(input: RequestInfo, init?: RequestInit): Promise<T> 
     throw new Error(parsed?.error || response.statusText || `Request failed (${response.status})`);
   }
 
-  return await response.json().catch(() => null as T);
+  return await response.json();
 }
 
 export const bigpandaService = {
@@ -58,7 +58,7 @@ export const bigpandaService = {
 
   async disconnect(): Promise<void> {
     const response = await fetch('/api/connected-accounts/bigpanda', { method: 'DELETE', credentials: 'include' });
-    if (!response.ok && response.status !== 204) {
+    if (!response.ok) {
       throw new Error(await response.text() || 'Failed to disconnect');
     }
   },

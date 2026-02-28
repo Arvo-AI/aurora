@@ -881,6 +881,7 @@ def initialize_tables():
             rls_tables.append("netdata_alerts")
             rls_tables.append("netdata_verification_tokens")
             rls_tables.append("splunk_alerts")
+            rls_tables.append("bigpanda_events")
 
             # Add incidents table
             # Note: incident_suggestions and incident_thoughts are child tables with CASCADE DELETE
