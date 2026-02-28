@@ -1,10 +1,11 @@
 """
 AWS Onboarding Routes
 Manual AWS onboarding via IAM role ARN with STS AssumeRole.
+Supports single-account and multi-account (bulk) onboarding.
 """
 import logging
 import os
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, Response
 from utils.web.cors_utils import create_cors_response
 from utils.auth.stateless_auth import get_user_id_from_request
 from utils.workspace.workspace_utils import (
@@ -397,4 +398,234 @@ def workspace_cleanup(workspace_id):
 
     except Exception as e:
         logger.error(f"Failed workspace cleanup for {workspace_id}: {e}")
+        return jsonify({"error": "Internal server error"}), 500
+
+
+# ---------------------------------------------------------------------------
+# Multi-account endpoints
+# ---------------------------------------------------------------------------
+
+
+@onboarding_bp.route('/workspaces/<workspace_id>/aws/accounts', methods=['GET', 'OPTIONS'])
+def list_aws_accounts(workspace_id):
+    """Return all active AWS accounts connected to this workspace's owner."""
+    if request.method == 'OPTIONS':
+        return create_cors_response()
+
+    try:
+        user_id = get_authenticated_user_id()
+        if not user_id:
+            return jsonify({"error": "Unauthorized"}), 401
+
+        workspace = get_workspace_by_id(workspace_id)
+        if not workspace or workspace['user_id'] != user_id:
+            return jsonify({"error": "Access denied"}), 403
+
+        from utils.db.connection_utils import get_all_user_aws_connections
+        accounts = get_all_user_aws_connections(user_id)
+        return jsonify({"accounts": accounts})
+
+    except Exception as e:
+        logger.error("Failed to list AWS accounts for workspace %s: %s", workspace_id, e)
+        return jsonify({"error": "Internal server error"}), 500
+
+
+@onboarding_bp.route('/workspaces/<workspace_id>/aws/accounts/bulk', methods=['POST', 'OPTIONS'])
+def bulk_register_aws_accounts(workspace_id):
+    """Register multiple AWS accounts at once.
+
+    Expected payload::
+
+        {
+            "accounts": [
+                {"accountId": "123456789012", "roleArn": "arn:aws:iam::123456789012:role/AuroraReadOnlyRole", "region": "us-east-1"},
+                ...
+            ]
+        }
+
+    Each account is validated independently via STS AssumeRole.
+    Returns per-account success/failure so partially-successful bulk imports
+    are surfaced clearly to the caller.
+    """
+    if request.method == 'OPTIONS':
+        return create_cors_response()
+
+    try:
+        user_id = get_authenticated_user_id()
+        if not user_id:
+            return jsonify({"error": "Unauthorized"}), 401
+
+        workspace = get_workspace_by_id(workspace_id)
+        if not workspace or workspace['user_id'] != user_id:
+            return jsonify({"error": "Access denied"}), 403
+
+        data = request.get_json()
+        if not data or not isinstance(data.get("accounts"), list):
+            return jsonify({"error": "Payload must contain an 'accounts' array"}), 400
+
+        external_id = workspace.get("aws_external_id")
+        if not external_id:
+            return jsonify({"error": "Workspace missing aws_external_id"}), 500
+
+        from utils.aws.aws_sts_client import assume_workspace_role
+        from utils.db.connection_utils import save_connection_metadata, extract_account_id_from_arn
+
+        results = []
+        for entry in data["accounts"]:
+            role_arn = entry.get("roleArn", "").strip()
+            account_id = entry.get("accountId", "").strip()
+            region = entry.get("region", "us-east-1").strip()
+
+            if not role_arn or not account_id:
+                results.append({"accountId": account_id, "success": False, "error": "roleArn and accountId are required"})
+                continue
+
+            if not role_arn.startswith("arn:aws:iam::"):
+                results.append({"accountId": account_id, "success": False, "error": "Invalid role ARN format"})
+                continue
+
+            arn_account = extract_account_id_from_arn(role_arn)
+            if arn_account and arn_account != account_id:
+                results.append({"accountId": account_id, "success": False, "error": f"accountId does not match role ARN (ARN has {arn_account})"})
+                continue
+
+            try:
+                assume_workspace_role(
+                    role_arn=role_arn,
+                    external_id=external_id,
+                    workspace_id=workspace_id,
+                    duration_seconds=900,
+                    region=region,
+                )
+            except Exception as assume_err:
+                results.append({"accountId": account_id, "success": False, "error": str(assume_err)[:300]})
+                continue
+
+            saved = save_connection_metadata(
+                user_id,
+                "aws",
+                account_id,
+                role_arn=role_arn,
+                connection_method="sts_assume_role",
+                region=region,
+                status="active",
+            )
+            if saved:
+                results.append({"accountId": account_id, "success": True})
+            else:
+                results.append({"accountId": account_id, "success": False, "error": "Database save failed"})
+
+        succeeded = sum(1 for r in results if r["success"])
+        failed = len(results) - succeeded
+        logger.info(
+            "Bulk register for workspace %s: %d succeeded, %d failed out of %d",
+            workspace_id, succeeded, failed, len(results),
+        )
+
+        return jsonify({"results": results, "succeeded": succeeded, "failed": failed})
+
+    except Exception as e:
+        logger.error("Bulk register failed for workspace %s: %s", workspace_id, e)
+        return jsonify({"error": "Internal server error"}), 500
+
+
+@onboarding_bp.route('/workspaces/<workspace_id>/aws/accounts/<account_id>', methods=['DELETE', 'OPTIONS'])
+def delete_aws_account(workspace_id, account_id):
+    """Disconnect a single AWS account from the workspace."""
+    if request.method == 'OPTIONS':
+        return create_cors_response()
+
+    try:
+        user_id = get_authenticated_user_id()
+        if not user_id:
+            return jsonify({"error": "Unauthorized"}), 401
+
+        workspace = get_workspace_by_id(workspace_id)
+        if not workspace or workspace['user_id'] != user_id:
+            return jsonify({"error": "Access denied"}), 403
+
+        from utils.db.connection_utils import delete_connection_secret
+        success = delete_connection_secret(user_id, "aws", account_id)
+        if success:
+            return jsonify({"success": True, "message": f"Account {account_id} disconnected."})
+        else:
+            return jsonify({"error": "Account not found or already disconnected"}), 404
+
+    except Exception as e:
+        logger.error("Failed to delete AWS account %s for workspace %s: %s", account_id, workspace_id, e)
+        return jsonify({"error": "Internal server error"}), 500
+
+
+# ---------------------------------------------------------------------------
+# CloudFormation template endpoint
+# ---------------------------------------------------------------------------
+
+
+@onboarding_bp.route('/workspaces/<workspace_id>/aws/cfn-template', methods=['GET', 'OPTIONS'])
+def get_cfn_template(workspace_id):
+    """Return the CloudFormation template with ExternalId and Aurora account ID pre-filled.
+
+    Query params:
+        format: 'raw' returns plain YAML (default), 'json' returns JSON wrapper
+    """
+    if request.method == 'OPTIONS':
+        return create_cors_response()
+
+    try:
+        user_id = get_authenticated_user_id()
+        if not user_id:
+            return jsonify({"error": "Unauthorized"}), 401
+
+        workspace = get_workspace_by_id(workspace_id)
+        if not workspace or workspace['user_id'] != user_id:
+            return jsonify({"error": "Access denied"}), 403
+
+        external_id = workspace.get("aws_external_id")
+        if not external_id:
+            return jsonify({"error": "Workspace missing aws_external_id"}), 500
+
+        from utils.aws.aws_sts_client import get_aurora_account_id
+        aurora_account_id = get_aurora_account_id()
+        if not aurora_account_id:
+            return jsonify({"error": "Cannot determine Aurora AWS account ID"}), 500
+
+        template_path = os.path.join(
+            os.path.dirname(__file__),
+            "..", "..", "connectors", "aws_connector", "aurora-cross-account-role.yaml",
+        )
+        template_path = os.path.normpath(template_path)
+
+        with open(template_path, "r") as f:
+            template_body = f.read()
+
+        # Replace default parameter values so the downloaded template is ready to deploy
+        template_body = template_body.replace(
+            "Type: String\n    Description: The 12-digit AWS account ID where Aurora is hosted.",
+            f"Type: String\n    Default: '{aurora_account_id}'\n    Description: The 12-digit AWS account ID where Aurora is hosted.",
+        )
+        template_body = template_body.replace(
+            "Type: String\n    Description: >-\n"
+            "      Unique external ID generated by Aurora for your tenant.\n"
+            "      Find this on the Aurora AWS onboarding page.",
+            f"Type: String\n    Default: '{external_id}'\n    Description: >-\n"
+            f"      Unique external ID generated by Aurora for your tenant.\n"
+            f"      Find this on the Aurora AWS onboarding page.",
+        )
+
+        output_format = request.args.get("format", "raw")
+        if output_format == "json":
+            return jsonify({
+                "template": template_body,
+                "auroraAccountId": aurora_account_id,
+                "externalId": external_id,
+            })
+
+        return Response(
+            template_body,
+            mimetype="application/x-yaml",
+            headers={"Content-Disposition": "attachment; filename=aurora-cross-account-role.yaml"},
+        )
+
+    except Exception as e:
+        logger.error("Failed to generate CFN template for workspace %s: %s", workspace_id, e)
         return jsonify({"error": "Internal server error"}), 500

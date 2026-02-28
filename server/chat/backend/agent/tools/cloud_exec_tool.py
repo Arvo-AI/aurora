@@ -421,6 +421,90 @@ def setup_aws_environment_isolated(user_id: str, selected_region: str | None = N
         return False, None, None, None
 
 
+def setup_aws_environments_all_accounts(user_id: str):
+    """Assume roles across all connected AWS accounts and return credential dicts.
+
+    Returns a list of dicts, each containing:
+        - account_id
+        - region
+        - credentials (accessKeyId, secretAccessKey, sessionToken)
+        - isolated_env (ready-to-use env dict for subprocess calls)
+
+    Failed accounts are logged and skipped; the caller receives only the
+    accounts that were successfully assumed.
+    """
+    from utils.db.connection_utils import get_all_user_aws_connections
+    from utils.workspace.workspace_utils import get_or_create_workspace
+    from utils.aws.aws_sts_client import assume_workspace_role
+    from utils.aws.aws_session_policies import get_read_only_session_policy
+
+    ws = get_or_create_workspace(user_id, "default")
+    external_id = ws.get("aws_external_id")
+    if not external_id:
+        logger.error("Workspace %s for user %s missing aws_external_id", ws["id"], user_id)
+        return []
+
+    connections = get_all_user_aws_connections(user_id)
+    if not connections:
+        logger.warning("No active AWS connections for user %s", user_id)
+        return []
+
+    current_mode = get_mode_from_context()
+    session_policy = None
+    if ModeAccessController.is_read_only_mode(current_mode):
+        session_policy = get_read_only_session_policy()
+
+    account_envs = []
+    for conn in connections:
+        role_arn = conn.get("role_arn")
+        account_id = conn.get("account_id")
+        region = conn.get("region") or "us-east-1"
+
+        if not role_arn:
+            logger.warning("Skipping account %s – no role_arn", account_id)
+            continue
+
+        if ModeAccessController.is_read_only_mode(current_mode):
+            ro_arn = conn.get("read_only_role_arn")
+            if ro_arn:
+                role_arn = ro_arn
+                session_policy = None
+
+        try:
+            creds = assume_workspace_role(
+                role_arn=role_arn,
+                external_id=external_id,
+                workspace_id=ws["id"],
+                region=region,
+                session_policy=session_policy,
+            )
+        except Exception as e:
+            logger.error("Failed to assume role for account %s: %s", account_id, e)
+            continue
+
+        isolated_env = {
+            "AWS_ACCESS_KEY_ID": creds["accessKeyId"],
+            "AWS_SECRET_ACCESS_KEY": creds["secretAccessKey"],
+            "AWS_SESSION_TOKEN": creds["sessionToken"],
+            "AWS_DEFAULT_REGION": region,
+            "AWS_REGION": region,
+            "PATH": os.environ.get("PATH", ""),
+        }
+
+        account_envs.append({
+            "account_id": account_id,
+            "region": region,
+            "credentials": creds,
+            "isolated_env": isolated_env,
+        })
+
+    logger.info(
+        "Assumed roles for %d / %d accounts for user %s",
+        len(account_envs), len(connections), user_id,
+    )
+    return account_envs
+
+
 # OLD GLOBAL GCP FUNCTION REMOVED - Use setup_gcp_environment_isolated() instead  
 def setup_gcp_impersonation_DEPRECATED(user_id: str, selected_project_id: str | None = None, provider_preference: str | None = None):
     """Set up GCP authentication using OAuth impersonation."""
