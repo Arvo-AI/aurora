@@ -13,7 +13,7 @@ call `sts:AssumeRole`.  For every customer account it accesses, Aurora assumes
 an IAM role **inside that account** using a unique **External ID** to prevent
 confused-deputy attacks.
 
-```
+```text
 Aurora base credentials (sts:AssumeRole only)
   └─> sts:AssumeRole(RoleArn, ExternalId)
         └─> Temporary read-only credentials (1-hour sessions)
@@ -85,7 +85,7 @@ aws s3api put-bucket-policy \
 
 4. **Set the env var** in `.env`:
 
-```
+```env
 AWS_CFN_TEMPLATE_URL=https://aurora-cfn-templates-<YOUR_AURORA_ACCOUNT_ID>.s3.<YOUR_REGION>.amazonaws.com/aurora-cross-account-role.yaml
 ```
 
@@ -183,7 +183,7 @@ After the roles are created in your AWS accounts:
 2. Click **Bulk Register Accounts**.
 3. Paste your account IDs, one per line:
 
-```
+```text
 123456789012,us-east-1
 234567890123,eu-west-1
 345678901234,us-west-2

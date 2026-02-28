@@ -28,11 +28,14 @@ def refresh_aws_credentials():
     refreshed = 0
     skipped = 0
 
-    has_expiring = any(
-        0 < creds["expiration"] - current_time <= refresh_window
-        for creds in _credential_cache.values()
-    )
-    if not has_expiring:
+    expiring_role_arns = set()
+    for key, creds in _credential_cache.items():
+        ttl = creds["expiration"] - current_time
+        if 0 < ttl <= refresh_window:
+            role_arn_part = key.split(":")[0]
+            expiring_role_arns.add(role_arn_part)
+
+    if not expiring_role_arns:
         logger.debug("No AWS credentials need proactive refresh")
         return {"refreshed": 0, "skipped": 0}
 
@@ -58,6 +61,8 @@ def refresh_aws_credentials():
             conn.close()
 
     for _user_id, role_arn, region, external_id, workspace_id in rows:
+        if role_arn not in expiring_role_arns:
+            continue
         region = region or "us-east-1"
         try:
             assume_workspace_role(

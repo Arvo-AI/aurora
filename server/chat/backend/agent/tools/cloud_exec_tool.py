@@ -470,15 +470,16 @@ def setup_aws_environments_all_accounts(user_id: str):
         return []
 
     current_mode = get_mode_from_context()
-    session_policy = None
+    default_session_policy = None
     if ModeAccessController.is_read_only_mode(current_mode):
-        session_policy = get_read_only_session_policy()
+        default_session_policy = get_read_only_session_policy()
 
     account_envs = []
     for conn in connections:
         role_arn = conn.get("role_arn")
         account_id = conn.get("account_id")
         region = conn.get("region") or "us-east-1"
+        session_policy = default_session_policy
 
         if not role_arn:
             logger.warning("Skipping account %s – no role_arn", account_id)
@@ -1411,6 +1412,43 @@ def _cloud_exec_aws_multi_account(
     """
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
+    current_mode = get_mode_from_context()
+    allowed, read_only_message = ModeAccessController.ensure_cloud_command_allowed(
+        current_mode,
+        is_read_only_command(command),
+        command,
+    )
+    if not allowed:
+        logger.warning(read_only_message)
+        return json.dumps({
+            "success": False,
+            "error": read_only_message,
+            "code": "READ_ONLY_MODE",
+            "multi_account": True,
+            "command": command,
+            "provider": "aws",
+        })
+
+    if not is_read_only_command(command):
+        from utils.cloud.infrastructure_confirmation import wait_for_user_confirmation
+        from .cloud_tools import get_state_context
+        summary_msg = summarize_cloud_command(command)
+        state_context = get_state_context()
+        context_session_id = state_context.session_id if state_context and hasattr(state_context, 'session_id') else None
+        if not wait_for_user_confirmation(
+            user_id=user_id,
+            message=f"[ALL {len(connections)} accounts] {summary_msg}",
+            tool_name="cloud_exec",
+            session_id=context_session_id,
+        ):
+            return json.dumps({
+                "success": False,
+                "error": "User declined multi-account command execution",
+                "multi_account": True,
+                "command": command,
+                "provider": "aws",
+            })
+
     def _run_on_account(conn: dict) -> dict:
         account_id = conn.get("account_id", "unknown")
         region = conn.get("region") or "us-east-1"
@@ -1566,7 +1604,7 @@ Security & Compliance
                 })
             selected_project_id = None
         else:
-            pass
+            selected_project_id = None
         logger.info(f"Provider preference: {provider_preference}")
         
         # Set up ISOLATED environment based on provider - NO GLOBAL STATE!

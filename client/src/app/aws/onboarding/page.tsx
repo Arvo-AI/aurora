@@ -505,7 +505,20 @@ export default function AWSOnboardingPage() {
         headers: { 'X-User-ID': userId },
       });
       if (!res.ok) throw new Error('Delete failed');
-      await fetchConnectedAccounts();
+      const accountsRes = await fetch(`${BACKEND_URL}/workspaces/${workspaceId}/aws/accounts`, {
+        credentials: 'include',
+        headers: { 'X-User-ID': userId },
+      });
+      if (accountsRes.ok) {
+        const data = await accountsRes.json();
+        const remaining = data.accounts || [];
+        setConnectedAccounts(remaining);
+        if (remaining.length === 0) {
+          setIsConfigured(false);
+          localStorage.removeItem('isAWSConnected');
+        }
+      }
+      await fetchInactiveAccounts();
     } catch (err) {
       console.error('Delete account error:', err);
       setError(`Failed to disconnect account ${accountId}.`);

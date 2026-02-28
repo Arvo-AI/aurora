@@ -36,7 +36,7 @@ def save_connection_metadata(
             role_arn = EXCLUDED.role_arn,
             read_only_role_arn = EXCLUDED.read_only_role_arn,
             connection_method = EXCLUDED.connection_method,
-            region = EXCLUDED.region,
+            region = COALESCE(EXCLUDED.region, user_connections.region),
             status = EXCLUDED.status,
             last_verified_at = EXCLUDED.last_verified_at;
     """

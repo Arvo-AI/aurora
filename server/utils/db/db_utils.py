@@ -1010,10 +1010,11 @@ def initialize_tables():
                     "Ensured region column exists on user_connections table."
                 )
             except Exception as e:
-                logging.warning(
-                    f"Error ensuring region column in user_connections: {e}"
+                logging.error(
+                    "FATAL: Failed to ensure region column in user_connections: %s", e
                 )
                 conn.rollback()
+                raise
 
             # Add stateless migration columns to user_tokens if they don't exist
             try:

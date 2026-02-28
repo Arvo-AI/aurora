@@ -498,7 +498,8 @@ def bulk_register_aws_accounts(workspace_id):
                     region=region,
                 )
             except Exception as assume_err:
-                results.append({"accountId": account_id, "success": False, "error": str(assume_err)[:300]})
+                logger.warning("Role assumption failed for account %s: %s", account_id, assume_err)
+                results.append({"accountId": account_id, "success": False, "error": "Role assumption failed. Check the role ARN and trust policy."})
                 continue
 
             saved = save_connection_metadata(
@@ -657,19 +658,21 @@ def reconnect_aws_account(workspace_id, account_id):
                 region=region,
             )
         except Exception as e:
+            logger.warning("Role assumption failed for reconnect of account %s: %s", account_id, e)
             return jsonify({
-                "error": "Role assumption failed -- the IAM role may have been deleted",
-                "details": str(e)[:300],
+                "error": "Role assumption failed -- the IAM role may have been deleted or the trust policy changed",
             }), 400
 
         from utils.db.connection_utils import save_connection_metadata
-        save_connection_metadata(
+        saved = save_connection_metadata(
             user_id, "aws", account_id,
             role_arn=role_arn,
             connection_method="sts_assume_role",
             region=region,
             status="active",
         )
+        if not saved:
+            return jsonify({"error": "Failed to persist reconnection"}), 500
 
         return jsonify({"success": True, "message": f"Account {account_id} reconnected."})
 
