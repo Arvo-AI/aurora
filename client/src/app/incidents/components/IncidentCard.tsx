@@ -305,7 +305,7 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
                 alt={alert.source}
                 width={20}
                 height={20}
-                className={`object-contain${alert.source === 'dynatrace' ? ' scale-[2.2]' : ''}`}
+                className={`object-contain${alert.source === 'dynatrace' ? ' scale-[2.2]' : ''}${alert.source === 'bigpanda' ? ' bg-white rounded-sm p-0.5' : ''}`}
               />
               {isSafeUrl(alert.sourceUrl) ? (
                 <a 

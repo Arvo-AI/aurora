@@ -32,7 +32,7 @@ function RecentAlertCard({
             alt={incident.sourceType}
             width={16}
             height={16}
-            className={`object-contain${incident.sourceType === 'dynatrace' ? ' scale-[2.2]' : ''}`}
+            className={`object-contain${incident.sourceType === 'dynatrace' ? ' scale-[2.2]' : ''}${incident.sourceType === 'bigpanda' ? ' bg-white rounded-sm p-0.5' : ''}`}
           />
         </div>
         
