@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -145,7 +145,7 @@ export default function AWSOnboardingPage() {
   const [isAddingAccount, setIsAddingAccount] = useState(false);
   const [disconnectTarget, setDisconnectTarget] = useState<string | 'all' | null>(null);
   const [roleType, setRoleType] = useState<'ReadOnly' | 'Admin'>('ReadOnly');
-  const [quickCreateUrl, setQuickCreateUrl] = useState<string | null>(null);
+  const [cfnBaseData, setCfnBaseData] = useState<{ auroraAccountId: string; externalId: string; region: string; templateUrl: string } | null>(null);
   const [stackSetsCommand, setStackSetsCommand] = useState<string | null>(null);
   const [stackSetsCopied, setStackSetsCopied] = useState(false);
   const [inactiveAccounts, setInactiveAccounts] = useState<ConnectedAccount[]>([]);
@@ -402,16 +402,21 @@ export default function AWSOnboardingPage() {
     }
   }, [workspaceId, userId]);
 
-  const fetchQuickCreateData = useCallback(async (roleType = 'ReadOnly') => {
+  const fetchQuickCreateData = useCallback(async (rt: 'ReadOnly' | 'Admin' = 'ReadOnly') => {
     if (!workspaceId || !userId) return;
     try {
-      const res = await fetch(`${BACKEND_URL}/workspaces/${workspaceId}/aws/cfn-quickcreate?roleType=${roleType}&_t=${Date.now()}`, {
+      const res = await fetch(`${BACKEND_URL}/workspaces/${workspaceId}/aws/cfn-quickcreate?roleType=${rt}&_t=${Date.now()}`, {
         credentials: 'include',
         headers: { 'X-User-ID': userId },
       });
       if (res.ok) {
         const data = await res.json();
-        setQuickCreateUrl(data.quickCreateUrl || null);
+        setCfnBaseData({
+          auroraAccountId: data.auroraAccountId,
+          externalId: data.externalId,
+          region: data.region || 'us-east-1',
+          templateUrl: data.templateUrl || '',
+        });
         setStackSetsCommand(data.stackSetsCommand || null);
       }
     } catch (err) {
@@ -434,6 +439,20 @@ export default function AWSOnboardingPage() {
       console.error('Failed to fetch inactive accounts:', err);
     }
   }, [workspaceId, userId]);
+
+  const quickCreateUrl = useMemo(() => {
+    if (!cfnBaseData) return null;
+    const { auroraAccountId, externalId, region, templateUrl } = cfnBaseData;
+    const ts = Math.floor(Date.now() / 1000).toString(16);
+    const params = new URLSearchParams({
+      stackName: `aurora-role-${ts}`,
+      param_AuroraAccountId: auroraAccountId,
+      param_ExternalId: externalId,
+      param_RoleType: roleType,
+    });
+    if (templateUrl) params.set('templateURL', templateUrl);
+    return `https://${region}.console.aws.amazon.com/cloudformation/home?region=${region}#/stacks/quickcreate?${params.toString()}`;
+  }, [cfnBaseData, roleType]);
 
   useEffect(() => {
     if (workspaceId && userId) {
@@ -487,7 +506,7 @@ export default function AWSOnboardingPage() {
     if (!workspaceId || !userId) return;
     setIsDownloadingCfn(true);
     try {
-      const res = await fetch(`${BACKEND_URL}/workspaces/${workspaceId}/aws/cfn-template?format=raw`, {
+      const res = await fetch(`${BACKEND_URL}/workspaces/${workspaceId}/aws/cfn-template?format=raw&roleType=${roleType}`, {
         credentials: 'include',
         headers: { 'X-User-ID': userId },
       });

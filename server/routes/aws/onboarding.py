@@ -737,6 +737,15 @@ def get_cfn_template(workspace_id):
             f"      Find this on the Aurora AWS onboarding page.",
         )
 
+        role_type = request.args.get("roleType", "ReadOnly")
+        if role_type == "Admin":
+            template_body = template_body.replace(
+                "Default: ReadOnly\n    AllowedValues:",
+                "Default: Admin\n    AllowedValues:",
+            )
+
+        filename = f"aurora-{'admin' if role_type == 'Admin' else 'readonly'}-role.yaml"
+
         output_format = request.args.get("format", "raw")
         if output_format == "json":
             return jsonify({
@@ -748,7 +757,7 @@ def get_cfn_template(workspace_id):
         return Response(
             template_body,
             mimetype="application/x-yaml",
-            headers={"Content-Disposition": "attachment; filename=aurora-cross-account-role.yaml"},
+            headers={"Content-Disposition": f"attachment; filename={filename}"},
         )
 
     except Exception as e:
@@ -805,13 +814,11 @@ def get_cfn_quickcreate_link(workspace_id):
         role_type = request.args.get("roleType", "ReadOnly")
         if role_type not in ("ReadOnly", "Admin"):
             role_type = "ReadOnly"
-        default_role_name = "AuroraAdminRole" if role_type == "Admin" else "AuroraReadOnlyRole"
         params = {
             "stackName": f"aurora-role-{unique_suffix}",
             "param_AuroraAccountId": aurora_account_id,
             "param_ExternalId": external_id,
             "param_RoleType": role_type,
-            "param_RoleName": default_role_name,
         }
         if template_url:
             params["templateURL"] = template_url
@@ -827,6 +834,7 @@ def get_cfn_quickcreate_link(workspace_id):
             f"  --parameters \\\n"
             f"      ParameterKey=AuroraAccountId,ParameterValue={aurora_account_id} \\\n"
             f"      ParameterKey=ExternalId,ParameterValue={external_id} \\\n"
+            f"      ParameterKey=RoleType,ParameterValue={role_type} \\\n"
             f"  --capabilities CAPABILITY_NAMED_IAM \\\n"
             f"  --permission-model SERVICE_MANAGED \\\n"
             f"  --auto-deployment Enabled=true,RetainStacksOnAccountRemoval=false\n\n"
@@ -842,6 +850,7 @@ def get_cfn_quickcreate_link(workspace_id):
             "auroraAccountId": aurora_account_id,
             "externalId": external_id,
             "region": region,
+            "templateUrl": template_url,
             "stackSetsCommand": stacksets_command,
             "note": (
                 "Quick-Create link: log into the target AWS account and open this URL. "

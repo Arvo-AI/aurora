@@ -1,11 +1,9 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: >-
   Creates an IAM role that grants Aurora access to this AWS account.
-  Choose ReadOnly for safe, observation-only access, or Admin for full
-  management capabilities.  The role trusts the Aurora AWS account and
-  requires an ExternalId to prevent confused-deputy attacks.
-  Deploy once per account, or use CloudFormation StackSets to deploy
-  across an AWS Organization.
+  The role trusts the Aurora AWS account and requires an ExternalId
+  to prevent confused-deputy attacks.  Deploy once per account, or use
+  CloudFormation StackSets to deploy across an AWS Organization.
 
 Parameters:
   AuroraAccountId:
@@ -32,30 +30,17 @@ Parameters:
       ReadOnly attaches the AWS-managed ReadOnlyAccess policy.
       Admin attaches the AWS-managed AdministratorAccess policy.
 
-  RoleName:
-    Type: String
-    Default: ''
-    Description: >-
-      Optional custom name for the IAM role.  Leave blank to auto-generate
-      based on role type (AuroraReadOnlyRole or AuroraAdminRole).
-    AllowedPattern: '^[\w+=,.@-]{0,64}$'
-    ConstraintDescription: 0-64 alphanumeric characters, plus +=,.@- allowed.
-
 Conditions:
   IsAdmin: !Equals [!Ref RoleType, 'Admin']
-  HasCustomName: !Not [!Equals [!Ref RoleName, '']]
 
 Resources:
   AuroraRole:
     Type: AWS::IAM::Role
     Properties:
       RoleName: !If
-        - HasCustomName
-        - !Ref RoleName
-        - !If
-          - IsAdmin
-          - AuroraAdminRole
-          - AuroraReadOnlyRole
+        - IsAdmin
+        - AuroraAdminRole
+        - AuroraReadOnlyRole
       MaxSessionDuration: 3600
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
@@ -75,11 +60,8 @@ Resources:
       Tags:
         - Key: ManagedBy
           Value: Aurora
-        - Key: Purpose
-          Value: !If
-            - IsAdmin
-            - Full admin access for Aurora cloud intelligence platform
-            - ReadOnlyAccess for Aurora cloud intelligence platform
+        - Key: RoleType
+          Value: !Ref RoleType
 
 Outputs:
   RoleArn:
