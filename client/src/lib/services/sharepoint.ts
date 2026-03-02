@@ -55,12 +55,14 @@ async function parseJsonResponse<T>(response: Response): Promise<T | null> {
 }
 
 async function handleJsonFetch<T>(input: RequestInfo, init?: RequestInit): Promise<T | null> {
+  const headers = new Headers(init?.headers);
+  if (!headers.has('Content-Type')) {
+    headers.set('Content-Type', 'application/json');
+  }
+
   const response = await fetch(input, {
     ...init,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(init?.headers ?? {}),
-    },
+    headers,
     cache: 'no-store',
   });
 

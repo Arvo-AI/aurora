@@ -18,11 +18,15 @@ export async function POST(request: NextRequest) {
 
     const { headers: authHeaders } = authResult;
 
-    let payload;
+    let payload: { driveId?: string; itemId?: string };
     try {
       payload = await request.json();
     } catch {
       return NextResponse.json({ error: 'Invalid JSON payload' }, { status: 400 });
+    }
+
+    if (!payload?.driveId || !payload?.itemId) {
+      return NextResponse.json({ error: 'driveId and itemId are required' }, { status: 400 });
     }
 
     const controller = new AbortController();
@@ -45,8 +49,8 @@ export async function POST(request: NextRequest) {
     }
 
     if (!response.ok) {
-      const text = await response.text();
-      console.error('[api/sharepoint/fetch-document] Backend error:', text);
+      // avoid logging raw backend response body
+      console.error('[api/sharepoint/fetch-document] Backend error: status=%d', response.status);
       return NextResponse.json({ error: 'Failed to fetch SharePoint document' }, { status: response.status });
     }
 

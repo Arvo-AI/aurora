@@ -26,10 +26,10 @@ export default function SharePointCallbackPage() {
     const state = searchParams.get("state");
 
     const clearSessionMarker = () => {
-      if (typeof window === "undefined" || !code) {
+      if (typeof window === "undefined" || !state) {
         return;
       }
-      window.sessionStorage.removeItem(`sharepointOauthCode:${code}`);
+      window.sessionStorage.removeItem(`sharepointOauth:${state}`);
     };
 
     const parseSessionMarker = (value: string | null) => {
@@ -84,8 +84,8 @@ export default function SharePointCallbackPage() {
       };
     }
 
-    // After early returns, code is guaranteed to be non-null
-    const sessionKey = `sharepointOauthCode:${code}`;
+    // After early returns, state is guaranteed to be non-null
+    const sessionKey = `sharepointOauth:${state}`;
 
     if (typeof window !== "undefined") {
       const cached = parseSessionMarker(window.sessionStorage.getItem(sessionKey));

@@ -259,8 +259,7 @@ export async function DELETE(
       })
 
       if (!response.ok) {
-        const errorText = await response.text()
-        console.error('Backend error disconnecting SharePoint:', errorText)
+        console.error('Backend error disconnecting SharePoint: status=%d', response.status)
         return NextResponse.json(
           { error: 'Failed to disconnect SharePoint' },
           { status: response.status }

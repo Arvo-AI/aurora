@@ -45,8 +45,8 @@ export async function POST(request: NextRequest) {
     }
 
     if (!response.ok) {
-      const text = await response.text();
-      console.error('[api/sharepoint/connect] Backend error:', text);
+      // avoid logging raw backend response body
+      console.error('[api/sharepoint/connect] Backend error: status=%d', response.status);
       return NextResponse.json({ error: 'Failed to connect SharePoint' }, { status: response.status });
     }
 
