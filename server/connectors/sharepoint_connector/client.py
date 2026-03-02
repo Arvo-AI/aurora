@@ -365,7 +365,7 @@ class SharePointClient:
             raise ValueError("page_id is required")
         resp = self._request(
             "GET",
-            f"/sites/{sid}/pages/{page_id}",
+            f"/sites/{sid}/pages/{page_id}/microsoft.graph.sitePage",
             params={"$expand": "canvasLayout"},
         )
         return resp.json()
