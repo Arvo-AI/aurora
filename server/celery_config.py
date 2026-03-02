@@ -136,7 +136,7 @@ except ImportError as e:
     logging.warning(f"Failed to import discovery tasks: {e}")
 
 try:
-    import utils.aws.credential_refresh  # noqa: F401
+    import utils.aws.credential_refresh
     logging.info("AWS credential refresh task imported successfully")
 except ImportError as e:
     logging.warning(f"Failed to import AWS credential refresh task: {e}")
