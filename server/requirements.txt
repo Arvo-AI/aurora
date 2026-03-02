@@ -33,7 +33,8 @@ langchain_community==0.3.31
 langchain_core==1.2.11
 langchain_openai==1.1.7
 langchain-anthropic>=0.3.0
-langchain-google-genai>=2.0.0
+langchain-google-genai>=4.0.0
+langchain-ollama>=0.3.0
 langgraph==1.0.6
 MarkupSafe==3.0.2
 msal==1.24.0
