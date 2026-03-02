@@ -262,21 +262,11 @@ def search():
     except requests.HTTPError as exc:
         status_code = exc.response.status_code if exc.response else None
         if status_code == 401:
-            refreshed = _refresh_sharepoint_credentials(user_id, creds)
-            if refreshed:
-                try:
-                    svc = SharePointSearchService(user_id)
-                    results = svc.search(query=query, site_id=site_id, max_results=max_results)
-                except Exception as retry_exc:
-                    logger.exception("[SHAREPOINT] Search retry failed for user %s: %s", user_id, retry_exc)
-                    return jsonify({"error": "Failed to search SharePoint"}), 502
-            else:
-                return jsonify({"error": "SharePoint credentials expired"}), 401
-        else:
-            logger.exception("[SHAREPOINT] Search failed for user %s: %s", user_id, exc)
-            return jsonify({"error": "Failed to search SharePoint"}), 502
-    except Exception as exc:
-        logger.exception("[SHAREPOINT] Search failed for user %s: %s", user_id, exc)
+            return jsonify({"error": "SharePoint credentials expired"}), 401
+        logger.exception("[SHAREPOINT] Search failed for user %s", user_id)
+        return jsonify({"error": "Failed to search SharePoint"}), 502
+    except Exception:
+        logger.exception("[SHAREPOINT] Search failed for user %s", user_id)
         return jsonify({"error": "Failed to search SharePoint"}), 502
 
     return jsonify({"results": results, "count": len(results)})
@@ -316,21 +306,11 @@ def fetch_page():
     except requests.HTTPError as exc:
         status_code = exc.response.status_code if exc.response else None
         if status_code == 401:
-            refreshed = _refresh_sharepoint_credentials(user_id, creds)
-            if refreshed:
-                try:
-                    svc = SharePointSearchService(user_id)
-                    result = svc.fetch_page_markdown(site_id=site_id, page_id=page_id)
-                except Exception as retry_exc:
-                    logger.exception("[SHAREPOINT] Fetch page retry failed for user %s: %s", user_id, retry_exc)
-                    return jsonify({"error": "Failed to fetch SharePoint page"}), 502
-            else:
-                return jsonify({"error": "SharePoint credentials expired"}), 401
-        else:
-            logger.exception("[SHAREPOINT] Fetch page failed for user %s: %s", user_id, exc)
-            return jsonify({"error": "Failed to fetch SharePoint page"}), 502
-    except Exception as exc:
-        logger.exception("[SHAREPOINT] Fetch page failed for user %s: %s", user_id, exc)
+            return jsonify({"error": "SharePoint credentials expired"}), 401
+        logger.exception("[SHAREPOINT] Fetch page failed for user %s", user_id)
+        return jsonify({"error": "Failed to fetch SharePoint page"}), 502
+    except Exception:
+        logger.exception("[SHAREPOINT] Fetch page failed for user %s", user_id)
         return jsonify({"error": "Failed to fetch SharePoint page"}), 502
 
     return jsonify(result)
@@ -370,21 +350,11 @@ def fetch_document():
     except requests.HTTPError as exc:
         status_code = exc.response.status_code if exc.response else None
         if status_code == 401:
-            refreshed = _refresh_sharepoint_credentials(user_id, creds)
-            if refreshed:
-                try:
-                    svc = SharePointSearchService(user_id)
-                    result = svc.fetch_document_text(drive_id=drive_id, item_id=item_id)
-                except Exception as retry_exc:
-                    logger.exception("[SHAREPOINT] Fetch document retry failed for user %s: %s", user_id, retry_exc)
-                    return jsonify({"error": "Failed to fetch SharePoint document"}), 502
-            else:
-                return jsonify({"error": "SharePoint credentials expired"}), 401
-        else:
-            logger.exception("[SHAREPOINT] Fetch document failed for user %s: %s", user_id, exc)
-            return jsonify({"error": "Failed to fetch SharePoint document"}), 502
-    except Exception as exc:
-        logger.exception("[SHAREPOINT] Fetch document failed for user %s: %s", user_id, exc)
+            return jsonify({"error": "SharePoint credentials expired"}), 401
+        logger.exception("[SHAREPOINT] Fetch document failed for user %s", user_id)
+        return jsonify({"error": "Failed to fetch SharePoint document"}), 502
+    except Exception:
+        logger.exception("[SHAREPOINT] Fetch document failed for user %s", user_id)
         return jsonify({"error": "Failed to fetch SharePoint document"}), 502
 
     return jsonify(result)
@@ -426,21 +396,11 @@ def create_page():
     except requests.HTTPError as exc:
         status_code = exc.response.status_code if exc.response else None
         if status_code == 401:
-            refreshed = _refresh_sharepoint_credentials(user_id, creds)
-            if refreshed:
-                try:
-                    svc = SharePointSearchService(user_id)
-                    result = svc.create_page(title=title, markdown_content=content, site_id=site_id)
-                except Exception as retry_exc:
-                    logger.exception("[SHAREPOINT] Create page retry failed for user %s: %s", user_id, retry_exc)
-                    return jsonify({"error": "Failed to create SharePoint page"}), 502
-            else:
-                return jsonify({"error": "SharePoint credentials expired"}), 401
-        else:
-            logger.exception("[SHAREPOINT] Create page failed for user %s: %s", user_id, exc)
-            return jsonify({"error": "Failed to create SharePoint page"}), 502
-    except Exception as exc:
-        logger.exception("[SHAREPOINT] Create page failed for user %s: %s", user_id, exc)
+            return jsonify({"error": "SharePoint credentials expired"}), 401
+        logger.exception("[SHAREPOINT] Create page failed for user %s", user_id)
+        return jsonify({"error": "Failed to create SharePoint page"}), 502
+    except Exception:
+        logger.exception("[SHAREPOINT] Create page failed for user %s", user_id)
         return jsonify({"error": "Failed to create SharePoint page"}), 502
 
     return jsonify(result)

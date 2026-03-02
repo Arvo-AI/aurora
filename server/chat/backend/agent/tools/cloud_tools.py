@@ -1459,8 +1459,9 @@ def get_cloud_tools():
     # Add SharePoint search tools if enabled
     try:
         from utils.flags.feature_flags import is_sharepoint_enabled
+        from utils.secrets.secret_ref_utils import has_user_credentials
 
-        if is_sharepoint_enabled() and user_id:
+        if is_sharepoint_enabled() and user_id and has_user_credentials(user_id, "sharepoint"):
             _sharepoint_tools = [
                 (sharepoint_search, "sharepoint_search", SharePointSearchArgs,
                  "Search SharePoint for pages, documents, and list items matching a query. "

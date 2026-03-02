@@ -230,6 +230,7 @@ class SharePointClient:
         current_path = path
         current_params = params
 
+        next_link: Optional[str] = None
         for _ in range(max_pages):
             resp = self._request("GET", current_path, params=current_params)
             data = resp.json()
@@ -243,13 +244,16 @@ class SharePointClient:
             if next_link.startswith(GRAPH_API_BASE):
                 current_path = next_link[len(GRAPH_API_BASE):]
             else:
-                logger.warning(
-                    "Unexpected nextLink format (expected base %s): %s",
-                    GRAPH_API_BASE,
-                    next_link,
-                )
+                logger.warning("Unexpected nextLink format; stopping pagination")
                 break
             current_params = None  # params are baked into the nextLink
+
+        if next_link:
+            logger.warning(
+                "Pagination truncated at max_pages=%s; returning %s partial results",
+                max_pages,
+                len(results),
+            )
 
         return results
 
@@ -298,7 +302,8 @@ class SharePointClient:
         if folder_path == "root":
             path = f"/drives/{drive_id}/root/children"
         else:
-            path = f"/drives/{drive_id}/root:/{folder_path}:/children"
+            normalized = folder_path.removeprefix("root:").lstrip("/")
+            path = f"/drives/{drive_id}/root:/{normalized}:/children"
         return self._paginate(path)
 
     def get_drive_item(self, drive_id: str, item_id: str) -> Dict[str, Any]:

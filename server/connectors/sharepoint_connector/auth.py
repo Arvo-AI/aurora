@@ -23,16 +23,13 @@ SCOPES = (
     "offline_access openid profile email"
 )
 
-FRONTEND_URL = os.getenv("FRONTEND_URL", "")
-REDIRECT_URI = f"{FRONTEND_URL}/sharepoint/callback"
-
-
 def _get_oauth_config() -> Dict[str, str]:
+    frontend_url = os.getenv("FRONTEND_URL", "")
     return {
         "client_id": os.getenv("SHAREPOINT_CLIENT_ID", ""),
         "client_secret": os.getenv("SHAREPOINT_CLIENT_SECRET", ""),
         "tenant_id": os.getenv("SHAREPOINT_TENANT_ID", "common"),
-        "redirect_uri": REDIRECT_URI,
+        "redirect_uri": f"{frontend_url}/sharepoint/callback",
         "scopes": SCOPES,
     }
 
@@ -40,7 +37,7 @@ def _get_oauth_config() -> Dict[str, str]:
 def _validate_oauth_config() -> Dict[str, str]:
     config = _get_oauth_config()
     missing = [key for key in ("client_id", "client_secret") if not config[key]]
-    if not FRONTEND_URL:
+    if not os.getenv("FRONTEND_URL"):
         missing.append("FRONTEND_URL")
     if missing:
         raise ValueError(

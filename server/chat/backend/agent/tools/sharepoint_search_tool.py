@@ -76,7 +76,7 @@ def sharepoint_search(
         )
     except Exception as exc:
         logger.exception(
-            "SharePoint search failed for user %s: %s", user_id, exc
+            "SharePoint search failed: %s", type(exc).__name__
         )
         raise ValueError(
             "Failed to search SharePoint; check connection and permissions"
@@ -104,7 +104,7 @@ def sharepoint_fetch_page(
         svc = SharePointSearchService(user_id)
         result = svc.fetch_page_markdown(site_id=site_id, page_id=page_id, max_length=max_length)
     except Exception as exc:
-        logger.exception("SharePoint page fetch failed for user %s: %s", user_id, exc)
+        logger.exception("SharePoint page fetch failed: %s", type(exc).__name__)
         raise ValueError(
             "Failed to fetch SharePoint page; check connection and permissions"
         ) from exc
@@ -128,7 +128,7 @@ def sharepoint_fetch_document(
         svc = SharePointSearchService(user_id)
         result = svc.fetch_document_text(drive_id=drive_id, item_id=item_id, max_length=max_length)
     except Exception as exc:
-        logger.exception("SharePoint document fetch failed for user %s: %s", user_id, exc)
+        logger.exception("SharePoint document fetch failed: %s", type(exc).__name__)
         raise ValueError(
             "Failed to fetch SharePoint document; check connection and permissions"
         ) from exc
@@ -152,7 +152,7 @@ def sharepoint_create_page(
         svc = SharePointSearchService(user_id)
         result = svc.create_page(title=title, markdown_content=content, site_id=site_id)
     except Exception as exc:
-        logger.exception("SharePoint page creation failed for user %s: %s", user_id, exc)
+        logger.exception("SharePoint page creation failed: %s", type(exc).__name__)
         raise ValueError(
             "Failed to create SharePoint page; check connection and permissions"
         ) from exc

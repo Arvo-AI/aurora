@@ -1563,14 +1563,12 @@ def build_background_mode_segment(state: Optional[Any]) -> str:
         parts.extend([
             "",
             "SHAREPOINT INVESTIGATION:",
-            "Use SharePoint tools to search documents, pages, and create content via Microsoft Graph API:",
+            "Use SharePoint tools to search documents and pages via Microsoft Graph API:",
             "- sharepoint_search(query='error keywords', site_id='optional-site-id') - Search across SharePoint for pages, documents, and list items",
             "- sharepoint_fetch_page(site_id='site-id', page_id='page-id') - Read full page content as markdown",
             "- sharepoint_fetch_document(drive_id='drive-id', item_id='item-id') - Extract text from Word docs, PDFs, etc.",
-            "- sharepoint_create_page(title='Page Title', content='<html>content</html>') - Publish new pages (incident reports, postmortems)",
             "",
             "Workflow: search first to find relevant documents and pages, then fetch content for detailed review.",
-            "Use create_page to publish findings, incident reports, or runbooks back to SharePoint.",
         ])
 
     # Coroot observability (if connected)

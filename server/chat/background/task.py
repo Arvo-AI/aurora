@@ -211,11 +211,13 @@ def _get_connected_integrations(user_id: str) -> Dict[str, bool]:
         logger.debug(f"[BackgroundChat] Error checking Confluence: {e}")
 
     try:
-        from utils.auth.token_management import get_token_data
-        sharepoint_creds = get_token_data(user_id, "sharepoint")
-        integrations['sharepoint'] = bool(
-            sharepoint_creds and sharepoint_creds.get("access_token")
-        )
+        from utils.flags.feature_flags import is_sharepoint_enabled
+        if is_sharepoint_enabled():
+            from utils.auth.token_management import get_token_data
+            sharepoint_creds = get_token_data(user_id, "sharepoint")
+            integrations['sharepoint'] = bool(
+                sharepoint_creds and sharepoint_creds.get("access_token")
+            )
     except Exception as e:
         logger.debug(f"[BackgroundChat] Error checking SharePoint: {e}")
 
