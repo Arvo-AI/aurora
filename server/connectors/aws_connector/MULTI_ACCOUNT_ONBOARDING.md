@@ -60,14 +60,15 @@ aws s3 cp server/connectors/aws_connector/aurora-cross-account-role.yaml \
   s3://aurora-cfn-templates-<YOUR_AURORA_ACCOUNT_ID>/aurora-cross-account-role.yaml
 ```
 
-3. **Make it publicly readable** (the template contains no secrets -- it only
-   has parameter placeholders):
+3. **Make the template publicly readable** (the template contains no secrets --
+   it only has parameter placeholders). The bucket policy is scoped to a single
+   object so no other files in the bucket are exposed:
 
 ```bash
 aws s3api put-public-access-block \
   --bucket aurora-cfn-templates-<YOUR_AURORA_ACCOUNT_ID> \
   --public-access-block-configuration \
-      BlockPublicAcls=false,IgnorePublicAcls=false,BlockPublicPolicy=false,RestrictPublicBuckets=false
+      BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=false,RestrictPublicBuckets=false
 
 aws s3api put-bucket-policy \
   --bucket aurora-cfn-templates-<YOUR_AURORA_ACCOUNT_ID> \

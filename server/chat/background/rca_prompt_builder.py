@@ -257,9 +257,8 @@ def _build_provider_investigation_section(providers: List[str], user_id: Optiona
     # AWS-specific instructions
     if 'aws' in providers_lower:
         sections.append("""
-## AWS/EKS Investigation (MULTI-ACCOUNT):
-IMPORTANT: You have multiple AWS accounts connected.
-- Your FIRST cloud_exec('aws', ...) call (without account_id) fans out to ALL accounts. Check `results_by_account` in the response.
+## AWS/EKS Investigation:
+IMPORTANT: If multiple AWS accounts are connected, your FIRST cloud_exec('aws', ...) call (without account_id) fans out to ALL accounts. Check `results_by_account` in the response.
 - Identify which account(s) have the issue based on the results.
 - For ALL subsequent calls, pass account_id='<ACCOUNT_ID>' to target only the relevant account. Example: cloud_exec('aws', 'ec2 describe-instances', account_id='123456789012')
 - Do NOT keep querying all accounts after you know where the problem is.
