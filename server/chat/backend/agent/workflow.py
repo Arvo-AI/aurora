@@ -767,8 +767,13 @@ class Workflow:
                     chunk_obj = chunk_data.get("chunk")
                     if chunk_obj and hasattr(chunk_obj, 'content') and chunk_obj.content:
                         # Extract text content (handles Gemini thinking model list format)
-                        content = _extract_text_from_content(chunk_obj.content)
-                        
+                        # include_thinking=True so reasoning flows to save_incident_thought() for RCA
+                        content = _extract_text_from_content(chunk_obj.content, include_thinking=True)
+
+                        # Also check for Ollama reasoning content (DeepSeek-R1 etc.)
+                        if not content and hasattr(chunk_obj, 'additional_kwargs'):
+                            content = chunk_obj.additional_kwargs.get("reasoning_content", "")
+
                         # Only yield if we have actual text content
                         if content:
                             yield ("token", content)
@@ -943,7 +948,8 @@ class Workflow:
                     chunk_builders[msg.id] = builder
 
                 # Accumulate content (handles Gemini thinking model list format)
-                msg_content = _extract_text_from_content(msg.content or "")
+                # include_thinking=True so reasoning is preserved in the saved message
+                msg_content = _extract_text_from_content(msg.content or "", include_thinking=True)
                 builder["content"] += msg_content
 
                 # Process tool calls
