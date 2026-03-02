@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 from urllib.parse import urlencode
 
 import requests
@@ -96,10 +96,7 @@ def exchange_code_for_token(code: str) -> Dict[str, Any]:
     token_data = response.json()
 
     if not token_data.get("access_token"):
-        logger.error(
-            "SharePoint OAuth response missing access_token. Keys: %s",
-            list(token_data.keys()),
-        )
+        logger.error("SharePoint OAuth response missing access_token")
         raise ValueError("SharePoint OAuth failed: missing access_token")
 
     expires_in = token_data.get("expires_in")
@@ -142,10 +139,7 @@ def refresh_access_token(refresh_token: str) -> Dict[str, Any]:
 
     access_token = token_data.get("access_token")
     if not access_token:
-        logger.error(
-            "SharePoint OAuth refresh missing access_token. Keys: %s",
-            list(token_data.keys()),
-        )
+        logger.error("SharePoint OAuth refresh missing access_token")
         raise ValueError("SharePoint OAuth refresh failed: missing access_token")
 
     expires_in = token_data.get("expires_in")

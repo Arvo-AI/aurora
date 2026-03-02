@@ -15,7 +15,6 @@ from connectors.sharepoint_connector.client import (
 )
 from connectors.sharepoint_connector.content_parser import (
     extract_document_text,
-    parse_sharepoint_page,
     sharepoint_page_to_markdown,
 )
 from utils.auth.token_management import get_token_data, store_tokens_in_db
@@ -216,11 +215,7 @@ class SharePointSearchService:
                 try:
                     client.publish_page(site_id=sid, page_id=page_id)
                 except Exception as exc:
-                    logger.warning(
-                        "Created page %s but failed to publish: %s",
-                        page_id,
-                        exc,
-                    )
+                    logger.warning("Created page but failed to publish: %s", type(exc).__name__)
             return page
 
         return self._retry_with_refresh(_do_create)

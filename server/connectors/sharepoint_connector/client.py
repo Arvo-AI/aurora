@@ -186,9 +186,7 @@ class SharePointClient:
                     wait_seconds = 5
                 wait_seconds = min(wait_seconds, 60)
                 logger.warning(
-                    "SharePoint Graph API %s %s returned %s; retrying after %ss",
-                    method,
-                    path,
+                    "SharePoint Graph API returned %s; retrying after %ss",
                     response.status_code,
                     wait_seconds,
                 )
@@ -207,9 +205,7 @@ class SharePointClient:
             return response
         except requests.RequestException as exc:
             logger.error(
-                "SharePoint Graph API request failed: %s %s (%s)",
-                method,
-                path,
+                "SharePoint Graph API request failed: %s",
                 type(exc).__name__,
             )
             raise
@@ -404,7 +400,7 @@ class SharePointClient:
 
         resp = self._request("POST", f"/sites/{sid}/pages", json_body=body)
         result = resp.json()
-        logger.info("Created SharePoint page '%s' in site %s", title, sid)
+        logger.info("Created SharePoint page in site")
         return result
 
     def publish_page(
@@ -422,7 +418,7 @@ class SharePointClient:
         if not page_id:
             raise ValueError("page_id is required")
         self._request("POST", f"/sites/{sid}/pages/{page_id}/publish")
-        logger.info("Published SharePoint page %s in site %s", page_id, sid)
+        logger.info("Published SharePoint page")
 
     # ------------------------------------------------------------------
     # Search

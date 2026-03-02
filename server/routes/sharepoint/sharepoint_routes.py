@@ -98,12 +98,7 @@ def connect():
     if not state_data:
         return jsonify({"error": "Invalid or expired OAuth state"}), 400
     if state_data.get("user_id") != user_id or state_data.get("endpoint") != "sharepoint":
-        logger.warning(
-            "[SHAREPOINT] OAuth state mismatch for user %s (state user %s, endpoint %s)",
-            user_id,
-            state_data.get("user_id"),
-            state_data.get("endpoint"),
-        )
+        logger.warning("[SHAREPOINT] OAuth state mismatch for user %s", user_id)
         return jsonify({"error": "OAuth state mismatch"}), 400
 
     try:
