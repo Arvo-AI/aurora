@@ -10,8 +10,8 @@ from routes.grafana.tasks import process_grafana_alert
 from utils.db.connection_pool import db_pool
 from utils.web.cors_utils import create_cors_response
 from utils.logging.secure_logging import mask_credential_value
-from utils.auth.stateless_auth import get_user_id_from_request
 from utils.auth.token_management import get_token_data, store_tokens_in_db
+from utils.auth.rbac_decorators import require_permission
 GRAFANA_TIMEOUT = 15
 
 logger = logging.getLogger(__name__)
@@ -88,23 +88,17 @@ def _get_stored_grafana_credentials(user_id: str) -> Optional[Dict[str, Any]]:
 
 
 @grafana_bp.route("/connect", methods=["POST", "OPTIONS"])
-def connect():
+@require_permission("connectors", "write")
+def connect(user_id):
     """Store Grafana API token and validate connectivity."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
     try:
         data = request.get_json(force=True, silent=True) or {}
     except Exception:
         data = {}
 
-    user_id = data.get("userId") or get_user_id_from_request()
     api_token = data.get("apiToken") or data.get("token")
     raw_base_url = data.get("baseUrl")
     stack_slug = data.get("stackSlug")
-
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
 
     if not api_token or not isinstance(api_token, str):
         return jsonify({"error": "Grafana API token is required"}), 400
@@ -158,14 +152,8 @@ def connect():
 
 
 @grafana_bp.route("/status", methods=["GET", "OPTIONS"])
-def status():
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
-
+@require_permission("connectors", "read")
+def status(user_id):
     creds = _get_stored_grafana_credentials(user_id)
     if not creds:
         return jsonify({"connected": False})
@@ -196,15 +184,9 @@ def status():
 
 
 @grafana_bp.route("/disconnect", methods=["POST", "DELETE", "OPTIONS"])
-def disconnect():
+@require_permission("connectors", "write")
+def disconnect(user_id):
     """Disconnect Grafana by removing stored credentials."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
-
     try:
         with db_pool.get_admin_connection() as conn:
             cursor = conn.cursor()
@@ -260,15 +242,9 @@ def alert_webhook(user_id: str):
 
 
 @grafana_bp.route("/alerts", methods=["GET", "OPTIONS"])
-def get_alerts():
+@require_permission("connectors", "read")
+def get_alerts(user_id):
     """Fetch Grafana alerts for the authenticated user."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
-
     limit = request.args.get("limit", 50, type=int)
     offset = request.args.get("offset", 0, type=int)
     state_filter = request.args.get("state")  # Optional: filter by alert state
@@ -344,15 +320,9 @@ def get_alerts():
 
 
 @grafana_bp.route("/alerts/webhook-url", methods=["GET", "OPTIONS"])
-def get_webhook_url():
+@require_permission("connectors", "read")
+def get_webhook_url(user_id):
     """Get the webhook URL that should be configured in Grafana."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
-
     # Use ngrok URL for development if available, otherwise use backend URL
     ngrok_url = os.getenv("NGROK_URL", "").rstrip("/")
     backend_url = os.getenv("NEXT_PUBLIC_BACKEND_URL", "").rstrip("/")

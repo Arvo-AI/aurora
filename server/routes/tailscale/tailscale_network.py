@@ -10,6 +10,7 @@ Provides endpoints for:
 import logging
 from flask import request, jsonify, g
 from routes.tailscale import tailscale_bp, require_tailscale
+from utils.auth.rbac_decorators import require_permission
 from utils.web.limiter_ext import limiter
 
 logger = logging.getLogger(__name__)
@@ -21,8 +22,9 @@ logger = logging.getLogger(__name__)
 
 @tailscale_bp.route('/tailscale/dns', methods=['GET'])
 @limiter.limit("30 per minute")
+@require_permission("connectors", "read")
 @require_tailscale
-def get_dns_config():
+def get_dns_config(user_id):
     """
     Get full DNS configuration (nameservers, preferences, search paths).
 
@@ -74,8 +76,9 @@ def get_dns_config():
 
 @tailscale_bp.route('/tailscale/dns/nameservers', methods=['GET', 'POST'])
 @limiter.limit("30 per minute")
+@require_permission("connectors", "write")
 @require_tailscale
-def dns_nameservers():
+def dns_nameservers(user_id):
     """
     Get or set DNS nameservers.
 
@@ -121,8 +124,9 @@ def dns_nameservers():
 
 @tailscale_bp.route('/tailscale/dns/preferences', methods=['GET', 'POST'])
 @limiter.limit("30 per minute")
+@require_permission("connectors", "write")
 @require_tailscale
-def dns_preferences():
+def dns_preferences(user_id):
     """
     Get or set DNS preferences (MagicDNS).
 
@@ -165,8 +169,9 @@ def dns_preferences():
 
 @tailscale_bp.route('/tailscale/dns/searchpaths', methods=['GET', 'POST'])
 @limiter.limit("30 per minute")
+@require_permission("connectors", "write")
 @require_tailscale
-def dns_searchpaths():
+def dns_searchpaths(user_id):
     """
     Get or set DNS search paths.
 
@@ -216,8 +221,9 @@ def dns_searchpaths():
 
 @tailscale_bp.route('/tailscale/routes', methods=['GET'])
 @limiter.limit("30 per minute")
+@require_permission("connectors", "read")
 @require_tailscale
-def get_routes():
+def get_routes(user_id):
     """
     Get all subnet routes in the tailnet.
 
@@ -255,8 +261,9 @@ def get_routes():
 
 @tailscale_bp.route('/tailscale/auth-keys', methods=['GET', 'POST'])
 @limiter.limit("30 per minute")
+@require_permission("connectors", "write")
 @require_tailscale
-def auth_keys():
+def auth_keys(user_id):
     """
     List or create auth keys.
 
@@ -319,8 +326,9 @@ def auth_keys():
 
 @tailscale_bp.route('/tailscale/auth-keys/<key_id>', methods=['GET', 'DELETE'])
 @limiter.limit("30 per minute")
+@require_permission("connectors", "write")
 @require_tailscale
-def auth_key_detail(key_id: str):
+def auth_key_detail(user_id, key_id: str):
     """
     Get or delete a specific auth key.
 
@@ -362,8 +370,9 @@ def auth_key_detail(key_id: str):
 
 @tailscale_bp.route('/tailscale/settings', methods=['GET'])
 @limiter.limit("30 per minute")
+@require_permission("connectors", "read")
 @require_tailscale
-def tailnet_settings():
+def tailnet_settings(user_id):
     """
     Get tailnet-wide settings.
 

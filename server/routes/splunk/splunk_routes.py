@@ -12,11 +12,11 @@ from utils.db.connection_pool import db_pool
 from utils.web.cors_utils import create_cors_response
 from utils.logging.secure_logging import mask_credential_value
 from utils.auth.stateless_auth import (
-    get_user_id_from_request,
     get_user_preference,
     store_user_preference,
 )
 from utils.auth.token_management import get_token_data, store_tokens_in_db
+from utils.auth.rbac_decorators import require_permission
 SPLUNK_TIMEOUT = 15
 
 logger = logging.getLogger(__name__)
@@ -122,15 +122,9 @@ def _get_stored_splunk_credentials(user_id: str) -> Optional[Dict[str, Any]]:
 
 
 @splunk_bp.route("/connect", methods=["POST", "OPTIONS"])
-def connect():
+@require_permission("connectors", "write")
+def connect(user_id):
     """Store Splunk API token and validate connectivity."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
-
     try:
         data = request.get_json(force=True, silent=True) or {}
     except Exception:
@@ -199,15 +193,9 @@ def connect():
 
 
 @splunk_bp.route("/status", methods=["GET", "OPTIONS"])
-def status():
+@require_permission("connectors", "read")
+def status(user_id):
     """Check Splunk connection status."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
-
     creds = _get_stored_splunk_credentials(user_id)
     if not creds:
         return jsonify({"connected": False})
@@ -244,15 +232,9 @@ def status():
 
 
 @splunk_bp.route("/disconnect", methods=["POST", "DELETE", "OPTIONS"])
-def disconnect():
+@require_permission("connectors", "write")
+def disconnect(user_id):
     """Disconnect Splunk by removing stored credentials."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
-
     try:
         with db_pool.get_admin_connection() as conn:
             cursor = conn.cursor()
@@ -315,15 +297,9 @@ def alert_webhook(user_id: str):
 
 
 @splunk_bp.route("/alerts", methods=["GET", "OPTIONS"])
-def get_alerts():
+@require_permission("connectors", "read")
+def get_alerts(user_id):
     """Fetch Splunk alerts for the authenticated user."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
-
     limit = request.args.get("limit", 50, type=int)
     offset = request.args.get("offset", 0, type=int)
     state_filter = request.args.get("state")
@@ -399,15 +375,9 @@ def get_alerts():
 
 
 @splunk_bp.route("/alerts/webhook-url", methods=["GET", "OPTIONS"])
-def get_webhook_url():
+@require_permission("connectors", "read")
+def get_webhook_url(user_id):
     """Get the webhook URL that should be configured in Splunk."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
-
     # Use ngrok URL for development if available, otherwise use backend URL
     ngrok_url = os.getenv("NGROK_URL", "").rstrip("/")
     backend_url = os.getenv("NEXT_PUBLIC_BACKEND_URL", "").rstrip("/")
@@ -435,15 +405,9 @@ def get_webhook_url():
 
 
 @splunk_bp.route("/rca-settings", methods=["GET", "OPTIONS"])
-def get_rca_settings():
+@require_permission("connectors", "read")
+def get_rca_settings(user_id):
     """Get Splunk RCA settings for the authenticated user."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
-
     rca_enabled = get_user_preference(user_id, "splunk_rca_enabled", default=False)
 
     return jsonify({
@@ -452,15 +416,9 @@ def get_rca_settings():
 
 
 @splunk_bp.route("/rca-settings", methods=["PUT", "OPTIONS"])
-def update_rca_settings():
+@require_permission("connectors", "write")
+def update_rca_settings(user_id):
     """Update Splunk RCA settings for the authenticated user."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
-
     try:
         data = request.get_json(force=True, silent=True) or {}
     except Exception:

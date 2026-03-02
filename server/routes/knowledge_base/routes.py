@@ -16,7 +16,7 @@ from werkzeug.utils import secure_filename
 
 from utils.db.connection_pool import db_pool
 from utils.web.cors_utils import create_cors_response
-from utils.auth.stateless_auth import get_user_id_from_request
+from utils.auth.rbac_decorators import require_permission
 
 logger = logging.getLogger(__name__)
 
@@ -63,14 +63,11 @@ def serialize_document(row: tuple) -> dict[str, Any]:
 # =============================================================================
 
 @knowledge_base_bp.route("/memory", methods=["GET", "OPTIONS"])
-def get_memory():
+@require_permission("knowledge_base", "read")
+def get_memory(user_id):
     """Get user's knowledge base memory content."""
     if request.method == "OPTIONS":
         return create_cors_response()
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "Authentication required"}), 401
 
     try:
         with db_pool.get_user_connection() as conn:
@@ -105,14 +102,11 @@ def get_memory():
 
 
 @knowledge_base_bp.route("/memory", methods=["PUT", "OPTIONS"])
-def update_memory():
+@require_permission("knowledge_base", "write")
+def update_memory(user_id):
     """Update user's knowledge base memory content."""
     if request.method == "OPTIONS":
         return create_cors_response()
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "Authentication required"}), 401
 
     try:
         data = request.get_json(force=True, silent=True) or {}
@@ -165,14 +159,11 @@ def update_memory():
 # =============================================================================
 
 @knowledge_base_bp.route("/documents", methods=["GET", "OPTIONS"])
-def list_documents():
+@require_permission("knowledge_base", "read")
+def list_documents(user_id):
     """List all documents for the user."""
     if request.method == "OPTIONS":
         return create_cors_response()
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "Authentication required"}), 401
 
     try:
         with db_pool.get_user_connection() as conn:
@@ -209,14 +200,11 @@ def list_documents():
 
 
 @knowledge_base_bp.route("/upload", methods=["POST", "OPTIONS"])
-def upload_document():
+@require_permission("knowledge_base", "write")
+def upload_document(user_id):
     """Upload a new document for processing."""
     if request.method == "OPTIONS":
         return create_cors_response()
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "Authentication required"}), 401
 
     # Check if file is in request
     if 'file' not in request.files:
@@ -376,14 +364,11 @@ def upload_document():
 
 
 @knowledge_base_bp.route("/documents/<doc_id>", methods=["GET", "OPTIONS"])
-def get_document(doc_id: str):
+@require_permission("knowledge_base", "read")
+def get_document(user_id, doc_id: str):
     """Get a specific document's details."""
     if request.method == "OPTIONS":
         return create_cors_response()
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "Authentication required"}), 401
 
     try:
         with db_pool.get_user_connection() as conn:
@@ -413,14 +398,11 @@ def get_document(doc_id: str):
 
 
 @knowledge_base_bp.route("/documents/<doc_id>", methods=["DELETE", "OPTIONS"])
-def delete_document(doc_id: str):
+@require_permission("knowledge_base", "write")
+def delete_document(user_id, doc_id: str):
     """Delete a document and its chunks."""
     if request.method == "OPTIONS":
         return create_cors_response()
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "Authentication required"}), 401
 
     try:
         with db_pool.get_user_connection() as conn:
@@ -481,14 +463,11 @@ def delete_document(doc_id: str):
 
 
 @knowledge_base_bp.route("/search", methods=["POST", "OPTIONS"])
-def search_documents():
+@require_permission("knowledge_base", "read")
+def search_documents(user_id):
     """Search the knowledge base (for direct API usage, not agent tool)."""
     if request.method == "OPTIONS":
         return create_cors_response()
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "Authentication required"}), 401
 
     try:
         data = request.get_json(force=True, silent=True) or {}

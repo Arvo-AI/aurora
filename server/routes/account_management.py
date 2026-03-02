@@ -2,7 +2,7 @@
 import logging
 from flask import Blueprint, request, jsonify, session
 from utils.web.cors_utils import create_cors_response
-from utils.auth.stateless_auth import get_user_id_from_request
+from utils.auth.rbac_decorators import require_auth_only
 from utils.db.db_utils import connect_to_db_as_admin, connect_to_db_as_user
 from utils.auth.token_management import get_token_data
 from utils.secrets.secret_ref_utils import delete_user_secret, SUPPORTED_SECRET_PROVIDERS
@@ -12,22 +12,18 @@ import os
 account_management_bp = Blueprint("account_management", __name__)
 
 
-@account_management_bp.route("/api/connected-accounts/<user_id>", methods=["GET", "OPTIONS"])
-def get_connected_accounts(user_id):
+@account_management_bp.route("/api/connected-accounts/<target_user_id>", methods=["OPTIONS"])
+def get_connected_accounts_options(target_user_id):
+    return create_cors_response()
+
+
+@account_management_bp.route("/api/connected-accounts/<target_user_id>", methods=["GET"])
+@require_auth_only
+def get_connected_accounts(user_id, target_user_id):
     """Get connected account information for a user."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-    
     try:
-        # Get authenticated user identity from X-User-ID header
-        authenticated_user_id = get_user_id_from_request()
-        
-        if not authenticated_user_id:
-            logging.warning("No authenticated user found for connected accounts request")
-            return jsonify({"error": "Unauthorized"}), 401
-        
-        if authenticated_user_id != user_id:
-            logging.warning(f"SECURITY: User {authenticated_user_id} attempted to access connected accounts for {user_id}")
+        if user_id != target_user_id:
+            logging.warning(f"SECURITY: User {user_id} attempted to access connected accounts for {target_user_id}")
             return jsonify({"error": "Unauthorized access to user data"}), 403
         
         # Connect to the database
@@ -125,22 +121,18 @@ def get_connected_accounts(user_id):
         return jsonify({"error": "Failed to get connected accounts"}), 500
 
 
-@account_management_bp.route("/api/connected-accounts/<user_id>/<provider>", methods=["DELETE", "OPTIONS"])
-def delete_connected_account(user_id, provider):
-    """Delete stored credentials for *provider* so tools can no longer use them."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
+@account_management_bp.route("/api/connected-accounts/<target_user_id>/<provider>", methods=["OPTIONS"])
+def delete_connected_account_options(target_user_id, provider):
+    return create_cors_response()
 
+
+@account_management_bp.route("/api/connected-accounts/<target_user_id>/<provider>", methods=["DELETE"])
+@require_auth_only
+def delete_connected_account(user_id, target_user_id, provider):
+    """Delete stored credentials for *provider* so tools can no longer use them."""
     try:
-        # Get authenticated user identity from X-User-ID header
-        authenticated_user_id = get_user_id_from_request()
-        
-        if not authenticated_user_id:
-            logging.warning("No authenticated user found for delete connected account request")
-            return jsonify({"error": "Unauthorized"}), 401
-        
-        if authenticated_user_id != user_id:
-            logging.warning(f"SECURITY: User {authenticated_user_id} attempted to delete connected account for {user_id}")
+        if user_id != target_user_id:
+            logging.warning(f"SECURITY: User {user_id} attempted to delete connected account for {target_user_id}")
             return jsonify({"error": "Unauthorized access to user data"}), 403
         
         # Get secret_ref BEFORE deleting to clear cache properly
@@ -285,21 +277,16 @@ def delete_connected_account(user_id, provider):
         return jsonify({"error": "Failed to delete connected account"}), 500
 
 
-@account_management_bp.route("/api/getUserId", methods=["GET", "OPTIONS"])
-def get_user_id():
+@account_management_bp.route("/api/getUserId", methods=["OPTIONS"])
+def get_user_id_options():
+    return create_cors_response()
+
+
+@account_management_bp.route("/api/getUserId", methods=["GET"])
+@require_auth_only
+def get_user_id(user_id):
     """Get the current user ID from session or request."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-    
     try:
-        # Get user_id from multiple sources: stateless auth (GCP) or session (AWS) or query parameter
-        user_id = get_user_id_from_request()
-        
-        # If no user_id found, return error instead of generating fallback
-        if not user_id:
-            logging.warning("No user ID found in request - user should authenticate via Auth.js")
-            return jsonify({"error": "No user ID found. Please authenticate via Auth.js."}), 401
-        
         return jsonify({"userId": user_id}), 200
         
     except Exception as e:
@@ -307,49 +294,36 @@ def get_user_id():
         return jsonify({"error": "Failed to get user ID"}), 500
 
 
-@account_management_bp.route("/user_tokens", methods=["GET", "OPTIONS"])
-def get_user_tokens():
-    """Fetch user tokens from user_tokens table."""
-    if request.method == 'OPTIONS':
-        return create_cors_response()
+@account_management_bp.route("/user_tokens", methods=["OPTIONS"])
+def get_user_tokens_options():
+    return create_cors_response()
 
+
+@account_management_bp.route("/user_tokens", methods=["GET"])
+@require_auth_only
+def get_user_tokens(user_id):
+    """Fetch user tokens from user_tokens table."""
     conn = None
     cursor = None
     try:
-        # Debug-level request details
         logging.debug(f"get_user_tokens called - method: {request.method}")
         
-        # SECURITY FIX: Validate user authentication properly
-        user_id_from_request = get_user_id_from_request()
         user_id_from_args = request.args.get("user_id")
         
         logging.debug(
-            "get_user_tokens - user_id from request: %s, from args: %s",
-            user_id_from_request,
+            "get_user_tokens - user_id from auth: %s, from args: %s",
+            user_id,
             user_id_from_args,
         )
         
-        # SECURITY: Unified authentication using get_user_id_from_request()
-        authenticated_user_id = user_id_from_request
-
-        if authenticated_user_id:
-            logging.debug("Authenticated user: %s", authenticated_user_id)
-            # SECURITY: Clear any old Flask sessions when authenticated user is present
-            if session:
-                session.clear()
-                logging.debug("Cleared Flask session for authenticated user %s", authenticated_user_id)
-            
-            # SECURITY: Validate that requested user_id matches authenticated user
-            if user_id_from_args and user_id_from_args != authenticated_user_id:
-                logging.warning(f"SECURITY: User {authenticated_user_id} attempted to access data for {user_id_from_args}")
-                return jsonify({"error": "Unauthorized access to user data"}), 403
+        if session:
+            session.clear()
+            logging.debug("Cleared Flask session for authenticated user %s", user_id)
         
-        # Final validation: we must have an authenticated user
-        if not authenticated_user_id:
-            logging.warning("No authenticated user found, returning empty array")
-            return jsonify([]), 200
+        if user_id_from_args and user_id_from_args != user_id:
+            logging.warning(f"SECURITY: User {user_id} attempted to access data for {user_id_from_args}")
+            return jsonify({"error": "Unauthorized access to user data"}), 403
         
-        user_id = authenticated_user_id
         logging.debug("Final authenticated user_id: %s", user_id)
         
         conn = connect_to_db_as_user()

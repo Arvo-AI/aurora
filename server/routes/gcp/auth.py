@@ -6,7 +6,7 @@ from connectors.gcp_connector.auth.oauth import (
 )
 from utils.auth.token_management import store_tokens_in_db
 from connectors.gcp_connector.gcp_post_auth_tasks import gcp_post_auth_setup_task
-from utils.auth.stateless_auth import get_user_id_from_request
+from utils.auth.rbac_decorators import require_permission, require_auth_only
 from utils.db.db_utils import connect_to_db_as_admin
 from utils.secrets.secret_cache import clear_secret_cache
 from time import time
@@ -100,7 +100,8 @@ def callback():
 
 
 @gcp_auth_bp.route("/gcp/setup/status/<task_id>", methods=["GET"])
-def get_gcp_setup_status(task_id):
+@require_permission("connectors", "read")
+def get_gcp_setup_status(user_id, task_id):
     """Return status of the async GCP post-auth setup task."""
     try:
         from connectors.gcp_connector.gcp_post_auth_tasks import gcp_post_auth_setup_task
@@ -146,12 +147,9 @@ def get_gcp_setup_status(task_id):
 
 
 @gcp_auth_bp.route("/api/gcp/force-disconnect", methods=["POST"])
-def force_disconnect_gcp():
+@require_permission("connectors", "write")
+def force_disconnect_gcp(user_id):
     """Force disconnect GCP by deleting user tokens and clearing cache."""
-    user_id = get_user_id_from_request(request)
-    if not user_id:
-        return jsonify({"error": "User ID not found"}), 401
-    
     logging.info(f"Force disconnecting GCP for user {user_id}")
     
     conn = None
@@ -225,19 +223,12 @@ def force_disconnect_gcp():
 
 
 @gcp_auth_bp.route("/gcp/post-auth-retry", methods=["POST"])
-def post_auth_retry():
+@require_permission("connectors", "write")
+def post_auth_retry(user_id):
     """Retry post-auth setup with selected projects."""
     try:
-        # Authenticate user from session/token - DO NOT trust request body user_id
-        authenticated_user_id = get_user_id_from_request()
-        if not authenticated_user_id:
-            return jsonify({"error": "Unauthorized - authentication required"}), 401
-        
         data = request.get_json()
         selected_project_ids = data.get("selected_project_ids", [])
-        
-        # Use authenticated user ID instead of trusting request body
-        user_id = authenticated_user_id
         
         # Validate selected_project_ids is a list
         if not isinstance(selected_project_ids, list):

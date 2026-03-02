@@ -9,8 +9,8 @@ from connectors.jenkins_connector.api_client import JenkinsClient
 from utils.db.connection_pool import db_pool
 from utils.web.cors_utils import create_cors_response
 from utils.web.webhook_signature import SIGNATURE_HEADER, verify_webhook_signature
-from utils.auth.stateless_auth import get_user_id_from_request
 from utils.auth.token_management import get_token_data, store_tokens_in_db
+from utils.auth.rbac_decorators import require_permission
 
 logger = logging.getLogger(__name__)
 
@@ -37,17 +37,14 @@ def _build_client(creds: Dict[str, Any]) -> Optional[JenkinsClient]:
 
 
 @jenkins_bp.route("/connect", methods=["POST", "OPTIONS"])
-def connect():
+@require_permission("connectors", "write")
+def connect(user_id):
     """Validate and store Jenkins credentials."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
     try:
         data = request.get_json(force=True, silent=True) or {}
     except Exception:
         data = {}
 
-    user_id = get_user_id_from_request()
     base_url = data.get("baseUrl", "").strip().rstrip("/")
     # Strip common Jenkins redirect paths that users may accidentally copy
     for suffix in ("/loginError", "/login", "/manage", "/configure", "/view/all"):
@@ -57,8 +54,6 @@ def connect():
     username = data.get("username", "").strip()
     api_token = data.get("apiToken") or data.get("token")
 
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
     if not base_url:
         return jsonify({"error": "Jenkins URL is required"}), 400
     if not username:
@@ -110,15 +105,9 @@ def connect():
 
 
 @jenkins_bp.route("/status", methods=["GET", "OPTIONS"])
-def status():
+@require_permission("connectors", "read")
+def status(user_id):
     """Check whether Jenkins is connected and return summary dashboard data."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
-
     creds = _get_stored_jenkins_credentials(user_id)
     if not creds:
         return jsonify({"connected": False})
@@ -212,15 +201,9 @@ def status():
 
 
 @jenkins_bp.route("/disconnect", methods=["POST", "DELETE", "OPTIONS"])
-def disconnect():
+@require_permission("connectors", "write")
+def disconnect(user_id):
     """Disconnect Jenkins by removing stored credentials."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
-
     try:
         with db_pool.get_admin_connection() as conn:
             cursor = conn.cursor()
@@ -318,15 +301,9 @@ def deployment_webhook(user_id: str):
 
 
 @jenkins_bp.route("/webhook-url", methods=["GET", "OPTIONS"])
-def get_webhook_url():
+@require_permission("connectors", "read")
+def get_webhook_url(user_id):
     """Return the webhook URL and Jenkinsfile snippets for the authenticated user."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
-
     backend_url = os.getenv("NEXT_PUBLIC_BACKEND_URL", "").rstrip("/")
     if not backend_url:
         backend_url = request.host_url.rstrip("/")
@@ -405,15 +382,9 @@ def get_webhook_url():
 
 
 @jenkins_bp.route("/deployments", methods=["GET", "OPTIONS"])
-def list_deployments():
+@require_permission("connectors", "read")
+def list_deployments(user_id):
     """List recent Jenkins deployment events for the authenticated user."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
-
     limit = min(max(request.args.get("limit", 20, type=int), 1), 100)  # Clamp to 1-100
     offset = max(request.args.get("offset", 0, type=int), 0)  # Ensure non-negative
     service_filter = request.args.get("service")

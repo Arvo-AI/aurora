@@ -1538,6 +1538,18 @@ def initialize_tables():
                 policies = cursor.fetchall()
                 logging.info(f"RLS policies for table '{table_name}': {policies}")
 
+            # Migration: Add role column to users table for RBAC
+            try:
+                cursor.execute(
+                    "ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(50) DEFAULT 'viewer';"
+                )
+                logging.info(
+                    "Added role column to users table (if not exists)."
+                )
+            except Exception as e:
+                logging.warning(f"Error adding role column to users: {e}")
+                conn.rollback()
+
             conn.commit()
             logging.info("Database tables initialized successfully.")
             cursor.close()

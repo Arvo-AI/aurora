@@ -21,10 +21,10 @@ from flask import request, jsonify
 
 from routes.scaleway import scaleway_bp
 from utils.auth.stateless_auth import (
-    get_user_id_from_request,
     store_user_preference,
     get_user_preference,
 )
+from utils.auth.rbac_decorators import require_permission
 from utils.auth.token_management import store_tokens_in_db, get_token_data
 from utils.secrets.secret_ref_utils import has_user_credentials, delete_user_secret
 from utils.db.connection_utils import set_connection_status
@@ -66,7 +66,8 @@ UUID_PATTERN = re.compile(r'^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-
 
 @scaleway_bp.route('/scaleway/connect', methods=['POST', 'OPTIONS'])
 @limiter.limit("5 per minute")
-def scaleway_connect():
+@require_permission("connectors", "write")
+def scaleway_connect(user_id):
     """
     Connect Scaleway account by validating and storing credentials.
     
@@ -82,10 +83,6 @@ def scaleway_connect():
         return create_cors_response()
     
     try:
-        user_id = get_user_id_from_request()
-        if not user_id:
-            return jsonify({"error": "Missing user_id"}), 401
-        
         data = request.get_json() or {}
         access_key = data.get('accessKey') or data.get('access_key')
         secret_key = data.get('secretKey') or data.get('secret_key')
@@ -163,7 +160,8 @@ def scaleway_connect():
 
 @scaleway_bp.route('/scaleway/projects', methods=['GET', 'POST', 'OPTIONS'])
 @limiter.limit("30 per minute")
-def scaleway_projects():
+@require_permission("connectors", "write")
+def scaleway_projects(user_id):
     """
     Fetch or save Scaleway projects.
     
@@ -183,9 +181,6 @@ def scaleway_projects():
         return create_cors_response()
     
     try:
-        user_id = get_user_id_from_request()
-        if not user_id:
-            return jsonify({"error": "Missing user_id"}), 401
         
         # Get stored credentials
         token_data = get_token_data(user_id, "scaleway")
@@ -250,15 +245,13 @@ def scaleway_projects():
 
 @scaleway_bp.route('/scaleway/status', methods=['GET', 'OPTIONS'])
 @limiter.limit("60 per minute")
-def scaleway_status():
+@require_permission("connectors", "read")
+def scaleway_status(user_id):
     """Check Scaleway connection status and validate credentials with API call."""
     if request.method == 'OPTIONS':
         return create_cors_response()
     
     try:
-        user_id = get_user_id_from_request()
-        if not user_id:
-            return jsonify({"connected": False, "provider": "scaleway"}), 200
         
         has_creds = has_user_credentials(user_id, "scaleway")
         if not has_creds:
@@ -299,15 +292,13 @@ def scaleway_status():
 
 @scaleway_bp.route('/scaleway/disconnect', methods=['POST', 'OPTIONS'])
 @limiter.limit("10 per minute")
-def scaleway_disconnect():
+@require_permission("connectors", "write")
+def scaleway_disconnect(user_id):
     """Disconnect Scaleway account."""
     if request.method == 'OPTIONS':
         return create_cors_response()
     
     try:
-        user_id = get_user_id_from_request()
-        if not user_id:
-            return jsonify({"error": "Missing user_id"}), 401
         
         # Get access_key before deleting for status update
         token_data = get_token_data(user_id, "scaleway")
@@ -331,15 +322,13 @@ def scaleway_disconnect():
 
 @scaleway_bp.route('/scaleway/root-project', methods=['GET', 'POST', 'OPTIONS'])
 @limiter.limit("30 per minute")
-def scaleway_root_project():
+@require_permission("connectors", "write")
+def scaleway_root_project(user_id):
     """Get or set the root project for Scaleway."""
     if request.method == 'OPTIONS':
         return create_cors_response()
     
     try:
-        user_id = get_user_id_from_request()
-        if not user_id:
-            return jsonify({"error": "Missing user_id"}), 401
         
         if request.method == 'POST':
             data = request.get_json()
@@ -379,7 +368,8 @@ def scaleway_root_project():
 
 @scaleway_bp.route('/scaleway/instances', methods=['GET', 'OPTIONS'])
 @limiter.limit("30 per minute")
-def scaleway_instances():
+@require_permission("connectors", "read")
+def scaleway_instances(user_id):
     """
     GET /scaleway_api/scaleway/instances - Fetch all Scaleway instances
     
@@ -401,10 +391,6 @@ def scaleway_instances():
         return create_cors_response()
     
     try:
-        user_id = get_user_id_from_request()
-        if not user_id:
-            return jsonify({"error": "Missing user_id"}), 401
-        
         logger.info(f"Fetching Scaleway instances for user: {user_id}")
         
         token_data = get_token_data(user_id, "scaleway")
@@ -502,7 +488,8 @@ def scaleway_instances():
 
 @scaleway_bp.route('/scaleway/instances/<server_id>/ssh-keys', methods=['POST', 'DELETE', 'OPTIONS'])
 @limiter.limit("10 per minute")
-def save_scaleway_ssh_keys(server_id):
+@require_permission("connectors", "write")
+def save_scaleway_ssh_keys(user_id, server_id):
     """
     Save SSH private key for a Scaleway server
     
@@ -523,9 +510,6 @@ def save_scaleway_ssh_keys(server_id):
         return create_cors_response()
     
     try:
-        user_id = get_user_id_from_request()
-        if not user_id:
-            return jsonify({"error": "Missing user_id"}), 401
         
         # Validate server_id format
         if not UUID_PATTERN.match(server_id):

@@ -9,8 +9,8 @@ from flask import Blueprint, jsonify, request
 from routes.netdata.tasks import process_netdata_alert
 from utils.db.connection_pool import db_pool
 from utils.web.cors_utils import create_cors_response
-from utils.auth.stateless_auth import get_user_id_from_request
 from utils.auth.token_management import get_token_data, store_tokens_in_db
+from utils.auth.rbac_decorators import require_permission
 
 logger = logging.getLogger(__name__)
 
@@ -27,24 +27,17 @@ def _get_stored_netdata_credentials(user_id: str) -> Optional[Dict[str, Any]]:
 
 
 @netdata_bp.route("/connect", methods=["POST", "OPTIONS"])
-def connect():
+@require_permission("connectors", "write")
+def connect(user_id):
     """Store Netdata API token and space info."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
     try:
         data = request.get_json(force=True, silent=True) or {}
     except Exception:
         data = {}
 
-    # Always use authenticated user ID - never trust userId from request body
-    user_id = get_user_id_from_request()
     api_token = data.get("apiToken") or data.get("token")
     space_url = data.get("spaceUrl") or data.get("baseUrl")
     space_name = data.get("spaceName")
-
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
 
     if not api_token or not isinstance(api_token, str):
         return jsonify({"error": "Netdata API token is required"}), 400
@@ -73,17 +66,10 @@ def connect():
 
 
 @netdata_bp.route("/status", methods=["GET", "OPTIONS"])
-def status():
+@require_permission("connectors", "read")
+def status(user_id):
     """Check Netdata connection status."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
-    user_id = get_user_id_from_request()
     logger.info(f"[NETDATA] Status check for user: {user_id}")
-    
-    if not user_id:
-        logger.warning("[NETDATA] Status check: No user ID found")
-        return jsonify({"error": "User authentication required"}), 401
 
     creds = _get_stored_netdata_credentials(user_id)
     logger.info(f"[NETDATA] Retrieved credentials: {bool(creds)}")
@@ -106,15 +92,9 @@ def status():
 
 
 @netdata_bp.route("/disconnect", methods=["POST", "DELETE", "OPTIONS"])
-def disconnect():
+@require_permission("connectors", "write")
+def disconnect(user_id):
     """Disconnect Netdata by removing stored credentials."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
-
     try:
         with db_pool.get_admin_connection() as conn:
             cursor = conn.cursor()
@@ -199,15 +179,9 @@ def alert_webhook(user_id: str):
 
 
 @netdata_bp.route("/alerts", methods=["GET", "OPTIONS"])
-def get_alerts():
+@require_permission("connectors", "read")
+def get_alerts(user_id):
     """Fetch stored Netdata alerts for user."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
-
     limit = request.args.get("limit", 50, type=int)
     offset = request.args.get("offset", 0, type=int)
     status_filter = request.args.get("status")
@@ -284,15 +258,9 @@ def get_alerts():
 
 
 @netdata_bp.route("/alerts/webhook-url", methods=["GET", "OPTIONS"])
-def get_webhook_url():
+@require_permission("connectors", "read")
+def get_webhook_url(user_id):
     """Get the webhook URL and verification token for Netdata configuration."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
-
     # Use ngrok URL for development if available, otherwise use backend URL
     ngrok_url = os.getenv("NGROK_URL", "").rstrip("/")
     backend_url = os.getenv("NEXT_PUBLIC_BACKEND_URL", "").rstrip("/")

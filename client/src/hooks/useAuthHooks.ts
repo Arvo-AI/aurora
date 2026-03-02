@@ -20,6 +20,7 @@ export function useUser() {
     fullName: session.user.name || null,
     firstName: session.user.name?.split(' ')[0] || null,
     imageUrl: session.user.image || null,
+    role: session.user.role || "viewer",
   } : null;
 
   return {
@@ -39,5 +40,6 @@ export function useAuth() {
     isLoaded: status !== "loading",
     isSignedIn: !!session?.user,
     userId: session?.user?.id || null,
+    role: session?.user?.role || null,
   };
 }

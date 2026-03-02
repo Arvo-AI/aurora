@@ -4,7 +4,7 @@ from typing import Any, Dict, List, Optional
 from flask import Blueprint, jsonify, request
 
 from chat.backend.agent.tools.iac.iac_write_tool import get_terraform_directory
-from utils.auth.stateless_auth import get_user_id_from_request
+from utils.auth.rbac_decorators import require_permission
 from utils.storage.storage import get_storage_manager
 
 logger = logging.getLogger(__name__)
@@ -69,11 +69,8 @@ def _read_storage_file(user_id: str, session_id: str, filename: str) -> Optional
 
 
 @terraform_workspace_bp.route("/workspace/files", methods=["GET"])
-def list_workspace_files():
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "Authentication required"}), 401
-
+@require_permission("connectors", "read")
+def list_workspace_files(user_id):
     session_id = request.args.get("session_id")
     if not session_id:
         return jsonify({"error": "Missing session_id"}), 400
@@ -89,11 +86,8 @@ def list_workspace_files():
 
 
 @terraform_workspace_bp.route("/workspace/file", methods=["GET"])
-def read_workspace_file():
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "Authentication required"}), 401
-
+@require_permission("connectors", "read")
+def read_workspace_file(user_id):
     session_id = request.args.get("session_id")
     path_param = request.args.get("path")
 

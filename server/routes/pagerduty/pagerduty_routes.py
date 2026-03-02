@@ -13,8 +13,8 @@ from flask import Blueprint, jsonify, request, redirect
 from utils.db.connection_pool import db_pool
 from utils.web.cors_utils import create_cors_response
 from utils.flags.feature_flags import is_pagerduty_oauth_enabled
-from utils.auth.stateless_auth import get_user_id_from_request
 from utils.auth.token_management import get_token_data, store_tokens_in_db
+from utils.auth.rbac_decorators import require_permission, require_auth_only
 from routes.pagerduty.oauth_utils import get_auth_url, exchange_code_for_token, refresh_token_if_needed
 from routes.pagerduty.pagerduty_helpers import PagerDutyClient, PagerDutyAPIError, validate_token, error_response
 
@@ -53,14 +53,11 @@ def _validate_v3_webhook(payload: dict) -> tuple[bool, str]:
 
 
 @pagerduty_bp.route("", methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"])
-def pagerduty_api():
+@require_auth_only
+def pagerduty_api(user_id):
     """Unified PagerDuty endpoint."""
     if request.method == "OPTIONS":
         return create_cors_response()
-    
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "Authentication required"}), 401
     
     if request.method == "GET":
         creds = get_token_data(user_id, "pagerduty")
@@ -132,17 +129,14 @@ def pagerduty_api():
 
 
 @pagerduty_bp.route("/oauth/login", methods=["POST", "OPTIONS"])
-def oauth_login():
+@require_permission("connectors", "write")
+def oauth_login(user_id):
     """Initiate OAuth flow."""
     if request.method == "OPTIONS":
         return create_cors_response()
     
     if not is_pagerduty_oauth_enabled():
         return jsonify({"error": "PagerDuty OAuth is not enabled"}), 403
-    
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "Authentication required"}), 401
     
     try:
         oauth_url = get_auth_url(state=urllib.parse.quote(user_id))
@@ -200,14 +194,11 @@ def oauth_callback():
 
 
 @pagerduty_bp.route("/webhook-url", methods=["GET", "OPTIONS"])
-def get_webhook_url():
+@require_permission("connectors", "read")
+def get_webhook_url(user_id):
     """Get the webhook URL that should be configured in PagerDuty."""
     if request.method == "OPTIONS":
         return create_cors_response()
-    
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
     
     # Use ngrok URL for development if available, otherwise use backend URL
     ngrok_url = os.getenv("NGROK_URL", "").rstrip("/")

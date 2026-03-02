@@ -18,7 +18,7 @@ import logging
 import json
 from flask import request, jsonify
 from routes.tailscale import tailscale_bp
-from utils.auth.stateless_auth import get_user_id_from_request
+from utils.auth.rbac_decorators import require_permission
 from utils.auth.token_management import store_tokens_in_db, get_token_data
 from utils.secrets.secret_ref_utils import has_user_credentials, delete_user_secret
 from utils.db.connection_utils import set_connection_status
@@ -38,7 +38,8 @@ logger = logging.getLogger(__name__)
 
 @tailscale_bp.route('/tailscale/connect', methods=['POST'])
 @limiter.limit("10 per minute;50 per hour")
-def tailscale_connect():
+@require_permission("connectors", "write")
+def tailscale_connect(user_id):
     """
     Connect Tailscale account using OAuth client credentials.
 
@@ -50,10 +51,6 @@ def tailscale_connect():
     }
     """
     try:
-        user_id = get_user_id_from_request()
-        if not user_id:
-            return jsonify({"error": "Missing user_id"}), 401
-
         data = request.get_json() or {}
         client_id = data.get('clientId') or data.get('client_id')
         client_secret = data.get('clientSecret') or data.get('client_secret')
@@ -134,7 +131,8 @@ def tailscale_connect():
 
 @tailscale_bp.route('/tailscale/tailnets', methods=['GET', 'POST'])
 @limiter.limit("30 per minute")
-def tailscale_tailnets():
+@require_permission("connectors", "write")
+def tailscale_tailnets(user_id):
     """
     Fetch or save Tailscale tailnets (equivalent to projects).
 
@@ -151,9 +149,6 @@ def tailscale_tailnets():
     }
     """
     try:
-        user_id = get_user_id_from_request()
-        if not user_id:
-            return jsonify({"error": "Missing user_id"}), 401
 
         # Get stored credentials
         token_data = get_token_data(user_id, "tailscale")
@@ -253,12 +248,10 @@ def tailscale_tailnets():
 
 @tailscale_bp.route('/tailscale/status', methods=['GET'])
 @limiter.limit("60 per minute")
-def tailscale_status():
+@require_permission("connectors", "read")
+def tailscale_status(user_id):
     """Check Tailscale connection status."""
     try:
-        user_id = get_user_id_from_request()
-        if not user_id:
-            return jsonify({"connected": False}), 200
 
         has_creds = has_user_credentials(user_id, "tailscale")
 
@@ -283,12 +276,10 @@ def tailscale_status():
 
 @tailscale_bp.route('/tailscale/disconnect', methods=['POST'])
 @limiter.limit("10 per minute")
-def tailscale_disconnect():
+@require_permission("connectors", "write")
+def tailscale_disconnect(user_id):
     """Disconnect Tailscale account."""
     try:
-        user_id = get_user_id_from_request()
-        if not user_id:
-            return jsonify({"error": "Missing user_id"}), 401
 
         # Get client_id before deleting for status update
         token_data = get_token_data(user_id, "tailscale")
@@ -325,7 +316,8 @@ def tailscale_disconnect():
 
 @tailscale_bp.route('/tailscale/ssh-setup', methods=['GET'])
 @limiter.limit("30 per minute")
-def tailscale_ssh_setup():
+@require_permission("connectors", "read")
+def tailscale_ssh_setup(user_id):
     """
     Get SSH setup instructions and public key for Aurora SSH access.
 
@@ -333,9 +325,6 @@ def tailscale_ssh_setup():
     along with step-by-step instructions.
     """
     try:
-        user_id = get_user_id_from_request()
-        if not user_id:
-            return jsonify({"error": "Missing user_id"}), 401
 
         # Get stored token data
         token_data = get_token_data(user_id, "tailscale")
@@ -386,12 +375,10 @@ def tailscale_ssh_setup():
 
 @tailscale_bp.route('/tailscale/root-tailnet', methods=['GET', 'POST'])
 @limiter.limit("30 per minute")
-def tailscale_root_tailnet():
+@require_permission("connectors", "write")
+def tailscale_root_tailnet(user_id):
     """Get or set the root tailnet for Tailscale."""
     try:
-        user_id = get_user_id_from_request()
-        if not user_id:
-            return jsonify({"error": "Missing user_id"}), 401
 
         from utils.db.db_utils import connect_to_db_as_admin
         conn = connect_to_db_as_admin()
@@ -448,16 +435,14 @@ def tailscale_root_tailnet():
 
 @tailscale_bp.route('/tailscale/refresh-token', methods=['POST'])
 @limiter.limit("10 per minute")
-def tailscale_refresh_token():
+@require_permission("connectors", "write")
+def tailscale_refresh_token(user_id):
     """
     Refresh Tailscale OAuth token.
 
     This refreshes the access token using stored client credentials.
     """
     try:
-        user_id = get_user_id_from_request()
-        if not user_id:
-            return jsonify({"error": "Missing user_id"}), 401
 
         token_data = get_token_data(user_id, "tailscale")
         if not token_data:

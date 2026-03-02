@@ -13,8 +13,8 @@ from connectors.confluence_connector.client import (
     ConfluenceClient,
     markdown_to_confluence_storage,
 )
-from utils.auth.stateless_auth import get_user_id_from_request
 from utils.auth.token_management import get_token_data, store_tokens_in_db
+from utils.auth.rbac_decorators import require_permission
 from connectors.confluence_connector.auth import refresh_access_token
 from utils.db.connection_pool import db_pool
 
@@ -75,11 +75,8 @@ def _refresh_confluence_credentials(user_id: str, creds: Dict[str, Any]) -> Opti
 
 
 @postmortem_bp.route("/api/incidents/<incident_id>/postmortem", methods=["GET"])
-def get_postmortem(incident_id):
-    """Fetch the postmortem for an incident."""
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
+@require_permission("postmortems", "read")
+def get_postmortem(user_id, incident_id):
 
     if not _validate_uuid(incident_id):
         return jsonify({"error": "Invalid incident ID"}), 400
@@ -124,11 +121,8 @@ def get_postmortem(incident_id):
 
 
 @postmortem_bp.route("/api/incidents/<incident_id>/postmortem", methods=["PATCH"])
-def update_postmortem(incident_id):
-    """Update postmortem content."""
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
+@require_permission("postmortems", "write")
+def update_postmortem(user_id, incident_id):
 
     if not _validate_uuid(incident_id):
         return jsonify({"error": "Invalid incident ID"}), 400
@@ -178,11 +172,8 @@ def update_postmortem(incident_id):
 @postmortem_bp.route(
     "/api/incidents/<incident_id>/postmortem/export/confluence", methods=["POST"]
 )
-def export_to_confluence(incident_id):
-    """Export postmortem to Confluence."""
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
+@require_permission("postmortems", "write")
+def export_to_confluence(user_id, incident_id):
 
     if not _validate_uuid(incident_id):
         return jsonify({"error": "Invalid incident ID"}), 400
@@ -327,11 +318,8 @@ def export_to_confluence(incident_id):
 
 
 @postmortem_bp.route("/api/postmortems", methods=["GET"])
-def list_postmortems():
-    """Fetch postmortems for the authenticated user with pagination."""
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
+@require_permission("postmortems", "read")
+def list_postmortems(user_id):
 
     try:
         limit = min(int(request.args.get("limit", 50)), 100)

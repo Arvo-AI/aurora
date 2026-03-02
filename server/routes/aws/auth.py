@@ -7,7 +7,7 @@ import flask
 import boto3
 from botocore.exceptions import ClientError
 from utils.web.cors_utils import create_cors_response
-from utils.auth.stateless_auth import get_user_id_from_request
+from utils.auth.rbac_decorators import require_auth_only
 from utils.logging.secure_logging import mask_credential_value
 from utils.workspace.workspace_utils import (
     get_or_create_workspace,
@@ -18,20 +18,16 @@ from utils.workspace.workspace_utils import (
 auth_bp = Blueprint("aws_auth_bp", __name__)
 
 @auth_bp.route('/get-credentials', methods=['POST', 'OPTIONS'])
-def aws_get_credentials():
+@require_auth_only
+def aws_get_credentials(user_id):
     """Retrieve AWS credentials stored for the user."""
-    if request.method == 'OPTIONS':
-        return create_cors_response()
-
     try:
         data = request.get_json()
-        user_id = data.get("userId")
-        if not user_id:
+        requested_user_id = data.get("userId")
+        if not requested_user_id:
             return jsonify({"error": "Missing userId"}), 400
 
-        # Authorize caller
-        authenticated_user_id = get_user_id_from_request()
-        if not authenticated_user_id or authenticated_user_id != user_id:
+        if user_id != requested_user_id:
             logging.warning("Unauthorized access to AWS creds")
             return jsonify({"error": "Unauthorized"}), 401
 

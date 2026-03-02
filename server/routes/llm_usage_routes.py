@@ -1,7 +1,7 @@
 """LLM usage tracking API routes."""
 import logging
 from flask import Blueprint, request, jsonify
-from utils.auth.stateless_auth import get_user_id_from_request
+from utils.auth.rbac_decorators import require_permission
 from utils.web.cors_utils import create_cors_response
 from utils.db.connection_pool import db_pool
 
@@ -10,17 +10,15 @@ logger = logging.getLogger(__name__)
 
 llm_usage_bp = Blueprint('llm_usage', __name__)
 
-@llm_usage_bp.route('/api/llm-usage/models', methods=['GET', 'OPTIONS'])
-def get_available_models():
+@llm_usage_bp.route('/api/llm-usage/models', methods=['OPTIONS'])
+def get_available_models_options():
+    return create_cors_response()
+
+
+@llm_usage_bp.route('/api/llm-usage/models', methods=['GET'])
+@require_permission("llm_usage", "read")
+def get_available_models(user_id):
     """Get list of models used by the user."""
-    if request.method == 'OPTIONS':
-        return create_cors_response()
-    
-    user_id = get_user_id_from_request()
-    if not user_id:
-        logger.warning("Missing user_id in available models request")
-        return jsonify({"error": "Missing user_id"}), 400
-    
     try:
         with db_pool.get_user_connection() as conn:
             cursor = conn.cursor()

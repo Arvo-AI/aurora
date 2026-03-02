@@ -28,6 +28,7 @@ export default auth((req) => {
     nextUrl.pathname.startsWith(route)
   )
   const isApiRoute = nextUrl.pathname.startsWith('/api/')
+  const isAdminRoute = nextUrl.pathname.startsWith('/admin')
 
   // If user is logged in and tries to access auth pages, redirect to home
   if (isAuthRoute && isLoggedIn) {
@@ -49,6 +50,17 @@ export default auth((req) => {
     const signInUrl = new URL("/sign-in", nextUrl)
     signInUrl.searchParams.set("callbackUrl", callbackUrl)
     return NextResponse.redirect(signInUrl)
+  }
+
+  // Gate admin routes to admin role only
+  if (isAdminRoute && isLoggedIn) {
+    const role = req.auth?.user?.role
+    if (role !== 'admin') {
+      if (isApiRoute) {
+        return NextResponse.json({ error: "Forbidden" }, { status: 403 })
+      }
+      return NextResponse.redirect(new URL("/", nextUrl))
+    }
   }
 
   return NextResponse.next()

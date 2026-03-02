@@ -15,10 +15,10 @@ from flask import request, jsonify
 from routes.ovh import ovh_bp
 from routes.ovh.oauth2_auth_code_flow import get_valid_access_token
 from utils.auth.stateless_auth import (
-    get_user_id_from_request,
     store_user_preference,
     get_user_preference,
 )
+from utils.auth.rbac_decorators import require_permission
 from utils.web.limiter_ext import limiter
 from config.rate_limiting import OVH_READ_LIMITS
 from utils.secrets.secret_ref_utils import has_user_credentials, delete_user_secret
@@ -46,7 +46,8 @@ OVH_API_ENDPOINTS = {
 
 @ovh_bp.route('/ovh/projects', methods=['GET', 'POST', 'OPTIONS'])
 @limiter.limit(OVH_READ_LIMITS)
-def ovh_projects():
+@require_permission("connectors", "write")
+def ovh_projects(user_id):
     """
     GET /ovh_api/ovh/projects - Fetch list of OVH cloud projects
     POST /ovh_api/ovh/projects - Save project enabled/disabled preferences
@@ -70,10 +71,6 @@ def ovh_projects():
     # Handle POST - save project preferences
     if request.method == 'POST':
         try:
-            user_id = get_user_id_from_request()
-            if not user_id:
-                return jsonify({"error": "Missing user_id"}), 401
-            
             data = request.get_json() or {}
             projects = data.get('projects', [])
             
@@ -103,12 +100,6 @@ def ovh_projects():
             return jsonify({"error": "Failed to save project preferences"}), 500
     
     try:
-        # Get user ID from request
-        user_id = get_user_id_from_request()
-        if not user_id:
-            logger.warning("Projects fetch attempt without user_id")
-            return jsonify({"error": "Missing user_id"}), 401
-
         logger.info(f"Fetching OVH projects for user: {user_id} (from header: {request.headers.get('X-User-ID')})")
 
         # Get valid token data (auto-refreshes if expired)
@@ -223,7 +214,8 @@ def ovh_projects():
 
 @ovh_bp.route('/ovh/instances', methods=['GET', 'OPTIONS'])
 @limiter.limit(OVH_READ_LIMITS)
-def ovh_instances():
+@require_permission("connectors", "read")
+def ovh_instances(user_id):
     """
     GET /ovh_api/ovh/instances - Fetch all OVH instances across user's projects
     
@@ -246,10 +238,6 @@ def ovh_instances():
         return create_cors_response()
     
     try:
-        user_id = get_user_id_from_request()
-        if not user_id:
-            return jsonify({"error": "Missing user_id"}), 401
-        
         logger.info(f"Fetching OVH instances for user: {user_id}")
         
         # Get valid token data
@@ -352,7 +340,8 @@ def ovh_instances():
 
 @ovh_bp.route('/ovh/instances/<instance_id>/ssh-keys', methods=['POST', 'DELETE'])
 @limiter.limit(OVH_READ_LIMITS)
-def save_ovh_ssh_keys(instance_id):
+@require_permission("connectors", "write")
+def save_ovh_ssh_keys(user_id, instance_id):
     """
     Save SSH private key for an OVH instance
     
@@ -369,10 +358,6 @@ def save_ovh_ssh_keys(instance_id):
         "message": "SSH key saved successfully"
     }
     """
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "Missing user_id"}), 401
-    
     # Handle DELETE request
     if request.method == 'DELETE':
         success, status_code, message = delete_ssh_credentials(user_id, instance_id, 'ovh')
@@ -511,7 +496,8 @@ def save_ovh_ssh_keys(instance_id):
 
 @ovh_bp.route('/ovh/root-project', methods=['GET', 'POST', 'OPTIONS'])
 @limiter.limit(OVH_READ_LIMITS)
-def ovh_root_project():
+@require_permission("connectors", "write")
+def ovh_root_project(user_id):
     """
     GET /ovh_api/ovh/root-project - Get current root project
     POST /ovh_api/ovh/root-project - Set root project
@@ -523,9 +509,6 @@ def ovh_root_project():
         return create_cors_response()
     
     try:
-        user_id = get_user_id_from_request()
-        if not user_id:
-            return jsonify({"error": "Missing user_id"}), 401
         
         if request.method == 'GET':
             root_project = get_user_preference(user_id, 'ovh_root_project')
@@ -564,7 +547,8 @@ def ovh_root_project():
 
 @ovh_bp.route('/ovh/onboarding/validate', methods=['GET'])
 @limiter.limit(OVH_READ_LIMITS)
-def ovh_validate_access():
+@require_permission("connectors", "read")
+def ovh_validate_access(user_id):
     """
     GET /ovh_api/ovh/onboarding/validate
 
@@ -580,12 +564,6 @@ def ovh_validate_access():
     }
     """
     try:
-        # Get user ID from request
-        user_id = get_user_id_from_request()
-        if not user_id:
-            logger.warning("Permission validation attempt without user_id")
-            return jsonify({"error": "Missing user_id"}), 401
-
         logger.info(f"Validating OVH access for user: {user_id}")
 
         # Get valid token data (auto-refreshes if expired)
@@ -658,7 +636,8 @@ def ovh_validate_access():
 
 @ovh_bp.route('/ovh/onboarding/grant-access', methods=['POST'])
 @limiter.limit("5 per minute;20 per hour")
-def ovh_grant_access():
+@require_permission("connectors", "write")
+def ovh_grant_access(user_id):
     """
     POST /ovh_api/ovh/onboarding/grant-access
 
@@ -688,12 +667,6 @@ def ovh_grant_access():
     }
     """
     try:
-        # Get user ID from request
-        user_id = get_user_id_from_request()
-        if not user_id:
-            logger.warning("Grant access attempt without user_id")
-            return jsonify({"error": "Missing user_id"}), 401
-
         # Get request data
         data = request.get_json()
         project_id = data.get('projectId')
@@ -770,7 +743,8 @@ def ovh_grant_access():
 
 @ovh_bp.route('/ovh/status', methods=['GET', 'OPTIONS'])
 @limiter.limit(OVH_READ_LIMITS)
-def ovh_connection_status():
+@require_permission("connectors", "read")
+def ovh_connection_status(user_id):
     """
     GET /ovh_api/ovh/status
 
@@ -788,9 +762,6 @@ def ovh_connection_status():
         return create_cors_response()
     
     try:
-        user_id = get_user_id_from_request()
-        if not user_id:
-            return jsonify({"error": "Missing user_id"}), 401
 
         # Check if user has OVH credentials stored
         has_creds = has_user_credentials(user_id, 'ovh')
@@ -867,7 +838,8 @@ def ovh_connection_status():
 
 @ovh_bp.route('/ovh/disconnect', methods=['POST', 'OPTIONS'])
 @limiter.limit("5 per minute;20 per hour")
-def ovh_disconnect():
+@require_permission("connectors", "write")
+def ovh_disconnect(user_id):
     """
     POST /ovh_api/ovh/disconnect
 
@@ -884,10 +856,6 @@ def ovh_disconnect():
         return create_cors_response()
     
     try:
-        user_id = get_user_id_from_request()
-        if not user_id:
-            return jsonify({"error": "Missing user_id"}), 401
-
         logger.info(f"Disconnecting OVH account for user: {user_id}")
 
         # Get token data to find account_id before deleting

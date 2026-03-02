@@ -20,6 +20,7 @@ export async function getAuthenticatedUser(): Promise<AuthResult | NextResponse>
     userId: session.userId,
     headers: {
       'X-User-ID': session.userId,
+      'X-User-Role': session.user?.role || 'viewer',
     }
   }
 }

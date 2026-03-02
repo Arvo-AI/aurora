@@ -6,7 +6,7 @@ import logging
 import os
 from flask import Blueprint, request, jsonify
 from utils.web.cors_utils import create_cors_response
-from utils.auth.stateless_auth import get_user_id_from_request
+from utils.auth.rbac_decorators import require_permission, require_auth_only
 from utils.workspace.workspace_utils import (
     get_or_create_workspace,
     get_workspace_by_id,
@@ -20,13 +20,9 @@ logger = logging.getLogger(__name__)
 onboarding_bp = Blueprint("aws_onboarding_bp", __name__)
 
 
-def get_authenticated_user_id():
-    """Get authenticated user ID from X-User-ID header."""
-    return get_user_id_from_request()
-
-
 @onboarding_bp.route('/aws/env/check', methods=['GET', 'OPTIONS'])
-def check_aws_environment():
+@require_permission("connectors", "read")
+def check_aws_environment(user_id):
     """
     Check if Aurora has AWS environment configured (AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY).
     
@@ -71,7 +67,8 @@ def check_aws_environment():
 
 
 @onboarding_bp.route('/workspaces/<workspace_id>/aws/links', methods=['GET', 'OPTIONS'])
-def get_aws_onboarding_links(workspace_id):
+@require_permission("connectors", "read")
+def get_aws_onboarding_links(user_id, workspace_id):
     """
     Get AWS onboarding information for a workspace (external ID and status).
     
@@ -81,10 +78,6 @@ def get_aws_onboarding_links(workspace_id):
         return create_cors_response()
     
     try:
-        user_id = get_authenticated_user_id()
-        if not user_id:
-            return jsonify({"error": "Unauthorized"}), 401
-        
         # Get workspace
         workspace = get_workspace_by_id(workspace_id)
         if not workspace:
@@ -124,7 +117,8 @@ def get_aws_onboarding_links(workspace_id):
 
 
 @onboarding_bp.route('/workspaces/<workspace_id>/aws/role', methods=['POST', 'OPTIONS'])
-def set_aws_role(workspace_id):
+@require_permission("connectors", "write")
+def set_aws_role(user_id, workspace_id):
     """
     Manually set the AWS role ARN for a workspace.
     
@@ -138,10 +132,6 @@ def set_aws_role(workspace_id):
         return create_cors_response()
     
     try:
-        user_id = get_authenticated_user_id()
-        if not user_id:
-            return jsonify({"error": "Unauthorized"}), 401
-        
         # Get workspace and verify ownership
         workspace = get_workspace_by_id(workspace_id)
         if not workspace:
@@ -250,7 +240,8 @@ def set_aws_role(workspace_id):
 
 
 @onboarding_bp.route('/workspaces/<workspace_id>/aws/status', methods=['GET', 'OPTIONS'])
-def get_aws_onboarding_status(workspace_id):
+@require_permission("connectors", "read")
+def get_aws_onboarding_status(user_id, workspace_id):
     """
     Get current AWS onboarding status for a workspace.
     """
@@ -258,10 +249,6 @@ def get_aws_onboarding_status(workspace_id):
         return create_cors_response()
     
     try:
-        user_id = get_authenticated_user_id()
-        if not user_id:
-            return jsonify({"error": "Unauthorized"}), 401
-        
         # Get workspace and verify ownership
         workspace = get_workspace_by_id(workspace_id)
         if not workspace:
@@ -293,7 +280,8 @@ def get_aws_onboarding_status(workspace_id):
 
 
 @onboarding_bp.route('/users/<user_id>/workspaces', methods=['GET', 'POST', 'OPTIONS'])
-def manage_user_workspaces(user_id):
+@require_permission("connectors", "read")
+def manage_user_workspaces(authenticated_user_id, user_id):
     """
     Get user workspaces (GET) or create new workspace (POST).
     """
@@ -301,10 +289,6 @@ def manage_user_workspaces(user_id):
         return create_cors_response()
     
     try:
-        authenticated_user_id = get_authenticated_user_id()
-        if not authenticated_user_id:
-            return jsonify({"error": "Unauthorized"}), 401
-        
         # Check if user can access this user's workspaces
         if authenticated_user_id != user_id:
             return jsonify({"error": "Access denied"}), 403
@@ -329,7 +313,8 @@ def manage_user_workspaces(user_id):
 
 
 @onboarding_bp.route('/workspaces/<workspace_id>/aws/cleanup', methods=['POST', 'OPTIONS'])
-def workspace_cleanup(workspace_id):
+@require_permission("connectors", "write")
+def workspace_cleanup(user_id, workspace_id):
     """Disconnect AWS connection by removing it from user_connections (single source of truth).
     
     This endpoint now properly disconnects AWS by removing the connection from user_connections.
@@ -339,10 +324,6 @@ def workspace_cleanup(workspace_id):
         return create_cors_response()
 
     try:
-        user_id = get_authenticated_user_id()
-        if not user_id:
-            return jsonify({"error": "Unauthorized"}), 401
-
         # Verify workspace ownership
         workspace = get_workspace_by_id(workspace_id)
         if not workspace or workspace['user_id'] != user_id:

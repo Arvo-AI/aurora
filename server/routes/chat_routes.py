@@ -5,7 +5,7 @@ from flask import Blueprint, request, jsonify, session
 from datetime import datetime
 from utils.db.db_utils import connect_to_db_as_user
 from utils.web.cors_utils import create_cors_response
-from utils.auth.stateless_auth import get_user_id_from_request
+from utils.auth.rbac_decorators import require_permission
 from utils.web.limiter_ext import limiter
 
 
@@ -44,16 +44,11 @@ def generate_chat_title(messages):
 
 @chat_bp.route('/sessions', methods=['GET'])
 @limiter.exempt
-def get_chat_sessions():
+@require_permission("chat", "read")
+def get_chat_sessions(user_id):
     """Get all chat sessions for a user."""
     
     try:
-        # Get authenticated user from X-User-ID header
-        user_id = get_user_id_from_request()
-        
-        if not user_id:
-            return jsonify({'error': 'Authentication required'}), 401
-
         conn = connect_to_db_as_user()
         cursor = conn.cursor()
         
@@ -99,15 +94,10 @@ def get_chat_sessions():
             conn.close()
 
 @chat_bp.route('/sessions', methods=['POST'])
-def create_chat_session():
+@require_permission("chat", "write")
+def create_chat_session(user_id):
     """Create a new chat session."""
     try:
-        # Get authenticated user from X-User-ID header
-        user_id = get_user_id_from_request()
-        
-        if not user_id:
-            return jsonify({'error': 'Authentication required'}), 401
-            
         data = request.get_json()
         title = data.get('title')
         messages = data.get('messages', [])
@@ -164,15 +154,10 @@ def create_chat_session():
 
 @chat_bp.route('/sessions/<session_id>', methods=['GET'])
 @limiter.exempt
-def get_chat_session(session_id):
+@require_permission("chat", "read")
+def get_chat_session(user_id, session_id):
     """Get a specific chat session."""
     try:
-        # Get authenticated user from X-User-ID header
-        user_id = get_user_id_from_request()
-        
-        if not user_id:
-            return jsonify({'error': 'Authentication required'}), 401
-
         conn = connect_to_db_as_user()
         cursor = conn.cursor()
         
@@ -272,15 +257,10 @@ def get_chat_session(session_id):
             conn.close()
 
 @chat_bp.route('/sessions/<session_id>', methods=['PUT'])
-def update_chat_session(session_id):
+@require_permission("chat", "write")
+def update_chat_session(user_id, session_id):
     """Update a chat session."""
     try:
-        # Get authenticated user from X-User-ID header
-        user_id = get_user_id_from_request()
-        
-        if not user_id:
-            return jsonify({'error': 'Authentication required'}), 401
-            
         data = request.get_json()
         title = data.get('title')
         messages = data.get('messages')
@@ -389,14 +369,10 @@ def update_chat_session(session_id):
             conn.close()
 
 @chat_bp.route('/sessions/<session_id>', methods=['DELETE'])
-def delete_chat_session(session_id):
+@require_permission("chat", "write")
+def delete_chat_session(user_id, session_id):
     """Delete a chat session (soft delete)."""
     try:
-        # Get authenticated user from X-User-ID header
-        user_id = get_user_id_from_request()
-        
-        if not user_id:
-            return jsonify({'error': 'Authentication required'}), 401
         logging.info(f"Deleting chat session {session_id} for user {user_id}")
         conn = connect_to_db_as_user()
         cursor = conn.cursor()
@@ -446,13 +422,10 @@ def delete_chat_session(session_id):
             conn.close() 
 
 @chat_bp.route('/sessions/bulk-delete', methods=['DELETE'])
-def delete_all_chat_sessions():
+@require_permission("chat", "write")
+def delete_all_chat_sessions(user_id):
     """Delete all chat sessions for a user (soft delete)."""
     try:
-        user_id = get_user_id_from_request()
-        if not user_id:
-            return jsonify({'error': 'Authentication required'}), 401
-
         current_session_id = request.args.get('current_session_id')
         logging.info(f"Bulk delete request - current_session_id: {current_session_id}")
 

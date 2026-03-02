@@ -5,12 +5,12 @@ API endpoints for managing GCP root project selection.
 import logging
 from flask import Blueprint, request, jsonify
 from utils.auth.stateless_auth import (
-    get_user_id_from_request,
     store_user_preference,
     get_user_preference,
     get_credentials_from_db,
     create_cors_response
 )
+from utils.auth.rbac_decorators import require_auth_only
 from connectors.gcp_connector.auth.oauth import get_credentials
 from connectors.gcp_connector.gcp.projects import check_billing_enabled
 from routes.gcp.root_project_tasks import setup_root_project_async
@@ -22,20 +22,12 @@ logger = logging.getLogger(__name__)
 root_project_bp = Blueprint('root_project', __name__)
 
 @root_project_bp.route('/api/gcp/root-project', methods=['GET', 'OPTIONS'])
-def get_root_project():
+@require_auth_only
+def get_root_project(user_id):
     """Get the currently selected root project for the user."""
-    if request.method == 'OPTIONS':
-        return create_cors_response()
-
     try:
-        user_id = get_user_id_from_request()
-        if not user_id:
-            return jsonify({"error": "Missing user ID"}), 400
-
-        # Get stored preference
         root_project = get_user_preference(user_id, 'gcp_root_project')
 
-        # Get current service account info if available
         sa_info = get_user_preference(user_id, 'gcp_service_accounts')
 
         return jsonify({
@@ -47,12 +39,10 @@ def get_root_project():
         return jsonify({"error": "Failed to get root project"}), 500
 
 @root_project_bp.route('/api/gcp/root-project', methods=['POST'])
-def set_root_project():
+@require_auth_only
+def set_root_project(user_id):
     """Set the root project for service account creation."""
     try:
-        user_id = get_user_id_from_request()
-        if not user_id:
-            return jsonify({"error": "Missing user ID"}), 400
 
         data = request.get_json()
         project_id = data.get('project_id')

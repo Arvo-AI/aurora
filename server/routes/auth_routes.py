@@ -69,14 +69,35 @@ def register():
                     (email, password_hash.decode('utf-8'), name)
                 )
                 user = cursor.fetchone()
+                user_id, user_email, user_name = user[0], user[1], user[2]
+
+                # Auto-promote the very first user to admin
+                cursor.execute("SELECT COUNT(*) FROM users")
+                user_count = cursor.fetchone()[0]
+                role = "admin" if user_count == 1 else "viewer"
+
+                cursor.execute(
+                    "UPDATE users SET role = %s WHERE id = %s",
+                    (role, user_id)
+                )
                 conn.commit()
+
+                # Register the user-role mapping in Casbin
+                try:
+                    from utils.auth.enforcer import get_enforcer
+                    enforcer = get_enforcer()
+                    enforcer.add_grouping_policy(user_id, role)
+                    enforcer.save_policy()
+                except Exception as casbin_err:
+                    logging.warning(f"Failed to assign Casbin role for {user_id}: {casbin_err}")
                 
-                logging.info(f"New user registered: {email}")
+                logging.info(f"New user registered: {email} (role={role})")
                 
                 return jsonify({
-                    "id": user[0],
-                    "email": user[1],
-                    "name": user[2]
+                    "id": user_id,
+                    "email": user_email,
+                    "name": user_name,
+                    "role": role
                 }), 201
         finally:
             conn.close()
@@ -108,7 +129,7 @@ def login():
         try:
             with conn.cursor() as cursor:
                 cursor.execute(
-                    "SELECT id, email, name, password_hash FROM users WHERE email = %s",
+                    "SELECT id, email, name, password_hash, role FROM users WHERE email = %s",
                     (email,)
                 )
                 user = cursor.fetchone()
@@ -116,7 +137,7 @@ def login():
                 # Always perform password check to prevent timing attacks
                 # Use dummy hash if user doesn't exist
                 if user:
-                    user_id, user_email, user_name, password_hash = user
+                    user_id, user_email, user_name, password_hash, user_role = user
                 else:
                     # Dummy hash to maintain consistent timing
                     password_hash = bcrypt.hashpw(b'dummy', bcrypt.gensalt()).decode('utf-8')
@@ -132,7 +153,8 @@ def login():
                 return jsonify({
                     "id": user_id,
                     "email": user_email,
-                    "name": user_name
+                    "name": user_name,
+                    "role": user_role or "viewer"
                 }), 200
         finally:
             conn.close()

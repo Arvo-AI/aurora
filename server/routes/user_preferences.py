@@ -2,12 +2,12 @@
 import logging
 from flask import Blueprint, request, jsonify
 from utils.auth.stateless_auth import (
-    get_user_id_from_request, 
     store_user_preference, 
     get_user_preference,
     get_credentials_from_db,
     create_cors_response
 )
+from utils.auth.rbac_decorators import require_permission
 import json
 
 # Configure logging
@@ -15,51 +15,50 @@ logger = logging.getLogger(__name__)
 
 user_preferences_bp = Blueprint('user_preferences', __name__)
 
-@user_preferences_bp.route('/api/user-preferences', methods=['GET', 'POST', 'OPTIONS'])
-def handle_user_preferences():
-    """Handle user preferences storage and retrieval."""
-    if request.method == 'OPTIONS':
-        return create_cors_response()
-    
-    user_id = get_user_id_from_request()
-    if not user_id:
-        logger.warning("Missing user_id in user preferences request")
-        return jsonify({"error": "Missing user_id"}), 400
-    
-    if request.method == 'POST':
-        data = request.get_json()
-        key = data.get('key')
-        value = data.get('value')
-        
-        if not key:
-            logger.warning(f"Missing preference key for user {user_id}")
-            return jsonify({"error": "Missing preference key"}), 400
-        
-        store_user_preference(user_id, key, value)
-        logger.info(f"Stored preference {key} for user {user_id}")
-        return jsonify({"status": "success"})
-    
-    else:  # GET
-        key = request.args.get('key')
-        if not key:
-            logger.warning(f"Missing preference key for user {user_id}")
-            return jsonify({"error": "Missing preference key"}), 400
-        
-        value = get_user_preference(user_id, key)
-        logger.debug(f"Retrieved preference {key} for user {user_id}")
-        return jsonify({"value": value})
+@user_preferences_bp.route('/api/user-preferences', methods=['OPTIONS'])
+def handle_user_preferences_options():
+    return create_cors_response()
 
-@user_preferences_bp.route('/api/clear-session', methods=['POST', 'OPTIONS'])
-def clear_session():
+
+@user_preferences_bp.route('/api/user-preferences', methods=['GET'])
+@require_permission("user_preferences", "read")
+def get_user_preferences(user_id):
+    """Handle user preferences retrieval."""
+    key = request.args.get('key')
+    if not key:
+        logger.warning(f"Missing preference key for user {user_id}")
+        return jsonify({"error": "Missing preference key"}), 400
+    
+    value = get_user_preference(user_id, key)
+    logger.debug(f"Retrieved preference {key} for user {user_id}")
+    return jsonify({"value": value})
+
+
+@user_preferences_bp.route('/api/user-preferences', methods=['POST'])
+@require_permission("user_preferences", "write")
+def set_user_preferences(user_id):
+    """Handle user preferences storage."""
+    data = request.get_json()
+    key = data.get('key')
+    value = data.get('value')
+    
+    if not key:
+        logger.warning(f"Missing preference key for user {user_id}")
+        return jsonify({"error": "Missing preference key"}), 400
+    
+    store_user_preference(user_id, key, value)
+    logger.info(f"Stored preference {key} for user {user_id}")
+    return jsonify({"status": "success"})
+
+@user_preferences_bp.route('/api/clear-session', methods=['OPTIONS'])
+def clear_session_options():
+    return create_cors_response()
+
+
+@user_preferences_bp.route('/api/clear-session', methods=['POST'])
+@require_permission("user_preferences", "write")
+def clear_session(user_id):
     """Clear all user session data from database."""
-    if request.method == 'OPTIONS':
-        return create_cors_response()
-    
-    user_id = get_user_id_from_request()
-    if not user_id:
-        logger.warning("Missing user_id in clear session request")
-        return jsonify({"error": "Missing user_id"}), 400
-    
     try:
         from utils.db.db_utils import connect_to_db_as_user
         conn = connect_to_db_as_user()
@@ -86,17 +85,15 @@ def clear_session():
         if 'conn' in locals() and conn:
             conn.close()
 
-@user_preferences_bp.route('/api/credentials/<provider>', methods=['GET', 'OPTIONS'])
-def get_credentials(provider):
+@user_preferences_bp.route('/api/credentials/<provider>', methods=['OPTIONS'])
+def get_credentials_options(provider):
+    return create_cors_response()
+
+
+@user_preferences_bp.route('/api/credentials/<provider>', methods=['GET'])
+@require_permission("user_preferences", "read")
+def get_credentials(user_id, provider):
     """Get provider credentials from database."""
-    if request.method == 'OPTIONS':
-        return create_cors_response()
-    
-    user_id = get_user_id_from_request()
-    if not user_id:
-        logger.warning(f"Missing user_id in get credentials request for {provider}")
-        return jsonify({"error": "Missing user_id"}), 400
-    
     credentials = get_credentials_from_db(user_id, provider)
     if credentials:
         logger.info(f"Retrieved {provider} credentials for user {user_id}")
@@ -105,105 +102,97 @@ def get_credentials(provider):
         logger.warning(f"No {provider} credentials found for user {user_id}")
         return jsonify({"error": f"No {provider} credentials found"}), 404
 
-@user_preferences_bp.route('/api/user-preferences/batch', methods=['GET', 'POST', 'OPTIONS'])
-def handle_batch_preferences():
-    """Handle batch operations for user preferences."""
-    if request.method == 'OPTIONS':
-        return create_cors_response()
+@user_preferences_bp.route('/api/user-preferences/batch', methods=['OPTIONS'])
+def handle_batch_preferences_options():
+    return create_cors_response()
+
+
+@user_preferences_bp.route('/api/user-preferences/batch', methods=['GET'])
+@require_permission("user_preferences", "read")
+def get_batch_preferences(user_id):
+    """Handle batch retrieval of user preferences."""
+    keys = request.args.getlist('keys')
     
-    user_id = get_user_id_from_request()
-    if not user_id:
-        logger.warning("Missing user_id in batch preferences request")
-        return jsonify({"error": "Missing user_id"}), 400
+    if not keys:
+        return jsonify({"error": "No keys specified"}), 400
     
-    if request.method == 'POST':
-        # Store multiple preferences at once
-        data = request.get_json()
-        preferences = data.get('preferences', {})
+    try:
+        from utils.db.db_utils import connect_to_db_as_user
+        conn = connect_to_db_as_user()
+        cursor = conn.cursor()
+        cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
+        conn.commit()
         
-        if not isinstance(preferences, dict):
-            return jsonify({"error": "preferences must be a dictionary"}), 400
+        placeholders = ','.join(['%s'] * len(keys))
+        cursor.execute(
+            f"SELECT preference_key, preference_value FROM user_preferences WHERE user_id = %s AND preference_key IN ({placeholders})",
+            [user_id] + keys
+        )
+        results = cursor.fetchall()
         
-        try:
-            for key, value in preferences.items():
-                store_user_preference(user_id, key, value)
-            
-            logger.info(f"Stored {len(preferences)} preferences for user {user_id}")
-            return jsonify({"status": "success", "count": len(preferences)})
-        except Exception as e:
-            logger.error(f"Error storing batch preferences for user {user_id}: {e}")
-            return jsonify({"error": "Failed to store preferences"}), 500
-    
-    else:  # GET
-        # Retrieve multiple preferences at once
-        keys = request.args.getlist('keys')
-        
-        if not keys:
-            return jsonify({"error": "No keys specified"}), 400
-        
-        try:
-            from utils.db.db_utils import connect_to_db_as_user
-            conn = connect_to_db_as_user()
-            cursor = conn.cursor()
-            cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
-            conn.commit()
-            
-            # Build query for multiple keys
-            placeholders = ','.join(['%s'] * len(keys))
-            cursor.execute(
-                f"SELECT preference_key, preference_value FROM user_preferences WHERE user_id = %s AND preference_key IN ({placeholders})",
-                [user_id] + keys
-            )
-            results = cursor.fetchall()
-            
-            # Build response dictionary
-            preferences = {}
-            for key, value in results:
-                # Handle JSONB values that are already decoded by PostgreSQL
-                if value is not None:
-                    if isinstance(value, str):
-                        try:
-                            preferences[key] = json.loads(value)
-                        except json.JSONDecodeError:
-                            preferences[key] = value
-                    else:
-                        # Value is already a Python object (from JSONB)
+        preferences = {}
+        for key, value in results:
+            if value is not None:
+                if isinstance(value, str):
+                    try:
+                        preferences[key] = json.loads(value)
+                    except json.JSONDecodeError:
                         preferences[key] = value
                 else:
-                    preferences[key] = None
-            
-            # Add missing keys with None values
-            for key in keys:
-                if key not in preferences:
-                    preferences[key] = None
-            
-            logger.debug(f"Retrieved {len(preferences)} preferences for user {user_id}")
-            return jsonify({"preferences": preferences})
-            
-        except Exception as e:
-            logger.error(f"Error retrieving batch preferences for user {user_id}: {e}")
-            return jsonify({"error": "Failed to retrieve preferences"}), 500
-        finally:
-            if 'cursor' in locals() and cursor:
-                cursor.close()
-            if 'conn' in locals() and conn:
-                conn.close()
+                    preferences[key] = value
+            else:
+                preferences[key] = None
+        
+        for key in keys:
+            if key not in preferences:
+                preferences[key] = None
+        
+        logger.debug(f"Retrieved {len(preferences)} preferences for user {user_id}")
+        return jsonify({"preferences": preferences})
+        
+    except Exception as e:
+        logger.error(f"Error retrieving batch preferences for user {user_id}: {e}")
+        return jsonify({"error": "Failed to retrieve preferences"}), 500
+    finally:
+        if 'cursor' in locals() and cursor:
+            cursor.close()
+        if 'conn' in locals() and conn:
+            conn.close()
 
-@user_preferences_bp.route('/api/terraform/clear-state', methods=['POST', 'OPTIONS'])
-def clear_terraform_state():
+
+@user_preferences_bp.route('/api/user-preferences/batch', methods=['POST'])
+@require_permission("user_preferences", "write")
+def set_batch_preferences(user_id):
+    """Handle batch storage of user preferences."""
+    data = request.get_json()
+    preferences = data.get('preferences', {})
+    
+    if not isinstance(preferences, dict):
+        return jsonify({"error": "preferences must be a dictionary"}), 400
+    
+    try:
+        for key, value in preferences.items():
+            store_user_preference(user_id, key, value)
+        
+        logger.info(f"Stored {len(preferences)} preferences for user {user_id}")
+        return jsonify({"status": "success", "count": len(preferences)})
+    except Exception as e:
+        logger.error(f"Error storing batch preferences for user {user_id}: {e}")
+        return jsonify({"error": "Failed to store preferences"}), 500
+
+@user_preferences_bp.route('/api/terraform/clear-state', methods=['OPTIONS'])
+def clear_terraform_state_options():
+    return create_cors_response()
+
+
+@user_preferences_bp.route('/api/terraform/clear-state', methods=['POST'])
+@require_permission("user_preferences", "write")
+def clear_terraform_state(user_id):
     """
     Clear Terraform state files for the current user.
     This removes terraform.tfstate, .terraform.lock.hcl, and .terraform directory.
     """
-    if request.method == 'OPTIONS':
-        return create_cors_response()
-    
     try:
-        user_id = get_user_id_from_request()
-        if not user_id:
-            logger.warning("Missing user_id in clear terraform state request")
-            return jsonify({"error": "Missing user_id"}), 400
-        
         logger.info(f"Clearing Terraform state for user {user_id}")
         
         # Import the required functions

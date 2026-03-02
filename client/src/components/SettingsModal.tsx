@@ -3,12 +3,13 @@
 import React, { useState } from 'react';
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog";
-import { Settings, User, BookOpen, FileText } from "lucide-react";
+import { Settings, User, BookOpen, FileText, Shield } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { GeneralSettings } from "@/components/GeneralSettings";
 import { ProfileSettings } from "@/components/ProfileSettings";
 import { KnowledgeBaseSettings } from "@/components/KnowledgeBaseSettings";
 import { PostmortemsSettings } from "@/components/PostmortemsSettings";
+import { useUser } from "@/hooks/useAuthHooks";
 
 
 interface SettingsModalProps {
@@ -16,10 +17,12 @@ interface SettingsModalProps {
   onClose: () => void;
 }
 
-type SettingsTab = 'general' | 'profile' | 'knowledge-base' | 'postmortems';
+type SettingsTab = 'general' | 'profile' | 'knowledge-base' | 'postmortems' | 'admin';
 
 export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
   const [activeTab, setActiveTab] = useState<SettingsTab>('general');
+  const { user } = useUser();
+  const isAdmin = user?.role === 'admin';
 
   const tabs = [
     {
@@ -45,7 +48,13 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
       label: 'Postmortems',
       icon: FileText,
       description: 'View generated postmortems'
-    }
+    },
+    ...(isAdmin ? [{
+      id: 'admin' as SettingsTab,
+      label: 'User Management',
+      icon: Shield,
+      description: 'Manage users and roles'
+    }] : [])
   ];
 
   const renderContent = () => {
@@ -83,6 +92,14 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
         return (
           <div className="h-full overflow-y-auto">
             <PostmortemsSettings />
+          </div>
+        );
+
+      case 'admin':
+        return (
+          <div className="p-6 h-full overflow-y-auto flex flex-col min-h-0">
+            <h2 className="text-2xl font-bold mb-2 flex-shrink-0">User Management</h2>
+            <p className="text-sm text-muted-foreground mb-6">Manage users and their roles. Visit the <a href="/admin" className="underline text-primary">Admin panel</a> for full management.</p>
           </div>
         );
 

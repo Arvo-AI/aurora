@@ -11,6 +11,7 @@ Provides endpoints for:
 import logging
 from flask import request, jsonify, g
 from routes.tailscale import tailscale_bp, require_tailscale
+from utils.auth.rbac_decorators import require_permission
 from utils.web.limiter_ext import limiter
 
 logger = logging.getLogger(__name__)
@@ -18,8 +19,9 @@ logger = logging.getLogger(__name__)
 
 @tailscale_bp.route('/tailscale/acl', methods=['GET', 'PUT'])
 @limiter.limit("30 per minute")
+@require_permission("connectors", "write")
 @require_tailscale
-def acl_policy():
+def acl_policy(user_id):
     """
     Get or update the ACL policy.
 
@@ -72,8 +74,9 @@ def acl_policy():
 
 @tailscale_bp.route('/tailscale/acl/preview', methods=['POST'])
 @limiter.limit("15 per minute")
+@require_permission("connectors", "read")
 @require_tailscale
-def preview_acl():
+def preview_acl(user_id):
     """
     Preview ACL changes without applying.
 
@@ -109,8 +112,9 @@ def preview_acl():
 
 @tailscale_bp.route('/tailscale/acl/validate', methods=['POST'])
 @limiter.limit("30 per minute")
+@require_permission("connectors", "read")
 @require_tailscale
-def validate_acl():
+def validate_acl(user_id):
     """
     Validate ACL syntax without applying.
 

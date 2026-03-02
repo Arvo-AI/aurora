@@ -5,6 +5,7 @@ import logging
 import requests
 from flask import Blueprint, jsonify, request
 from utils.auth.stateless_auth import get_credentials_from_db
+from utils.auth.rbac_decorators import require_permission
 
 github_user_repos_bp = Blueprint('github_user_repos', __name__)
 logger = logging.getLogger(__name__)
@@ -18,25 +19,17 @@ def create_cors_response(data=None, status=200):
     response.headers['Access-Control-Allow-Headers'] = 'Content-Type, X-User-ID, Authorization'
     return response
 
-def get_user_id_from_request():
-    """Extract user ID from request headers"""
-    return request.headers.get('X-User-ID') or request.headers.get('X-User-ID')
-
 @github_user_repos_bp.route("/user-repos", methods=["GET", "OPTIONS"])
-def get_user_repos():
+@require_permission("connectors", "read")
+def get_user_repos(user_id):
     """Fetch repositories for a user using their stored GitHub credentials"""
     if request.method == 'OPTIONS':
         return create_cors_response()
     
     try:
-        user_id = get_user_id_from_request()
-        if not user_id:
-            return create_cors_response({"error": "User ID required"}, 400)
-        
         # Get stored GitHub credentials for this user
         github_creds = get_credentials_from_db(user_id, "github")
         if not github_creds or not github_creds.get("access_token"):
-            # This should return 401 instead of 200 btw
             return create_cors_response({"error": "No GitHub credentials found", "repos": []}, 200)
         
         token = github_creds["access_token"]
@@ -111,20 +104,16 @@ def get_user_repos():
         return create_cors_response({"error": "Failed to fetch repositories", "repos": []}, 500)
 
 @github_user_repos_bp.route("/user-branches/<path:repo_full_name>", methods=["GET", "OPTIONS"])
-def get_user_branches(repo_full_name):
+@require_permission("connectors", "read")
+def get_user_branches(user_id, repo_full_name):
     """Fetch branches for a repository using stored GitHub credentials"""
     if request.method == 'OPTIONS':
         return create_cors_response()
     
     try:
-        user_id = get_user_id_from_request()
-        if not user_id:
-            return create_cors_response({"error": "User ID required"}, 400)
-        
         # Get stored GitHub credentials for this user
         github_creds = get_credentials_from_db(user_id, "github")
         if not github_creds or not github_creds.get("access_token"):
-            # This should return 401 instead of 200 btw
             return create_cors_response({"error": "No GitHub credentials found", "branches": []}, 200)
         
         token = github_creds["access_token"]

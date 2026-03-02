@@ -3,7 +3,7 @@ import logging
 import json
 import queue
 from flask import Blueprint, Response
-from utils.auth.stateless_auth import get_user_id_from_request
+from utils.auth.rbac_decorators import require_permission
 
 logger = logging.getLogger(__name__)
 
@@ -29,11 +29,9 @@ def broadcast_incident_update_to_user_connections(user_id: str, incident_data: d
 
 
 @incidents_sse_bp.route('/api/incidents/stream', methods=['GET'])
-def incident_stream():
+@require_permission("incidents", "read")
+def incident_stream(user_id):
     """SSE endpoint that streams real-time incident updates to the client."""
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return Response("Unauthorized", status=401)
     
     def generate_sse_events():
         # Create a message queue for this connection
