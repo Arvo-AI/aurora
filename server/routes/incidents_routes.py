@@ -509,6 +509,23 @@ def get_incident(incident_id: str):
                             logger.debug("[INCIDENTS] Found Dynatrace payload for alert")
                     except (ValueError, TypeError):
                         logger.debug("[INCIDENTS] Skipping payload fetch for dynatrace alert (non-integer id)")
+                elif source_type == "bigpanda":
+                    try:
+                        alert_id_int = int(source_alert_id)
+                        cursor.execute(
+                            """SELECT payload FROM bigpanda_events WHERE id = %s
+                               AND (user_id = %s OR EXISTS (
+                                   SELECT 1 FROM incidents WHERE id = %s
+                                   AND (alert_metadata->>'is_demo')::boolean = true
+                               ))""",
+                            (alert_id_int, user_id, incident_id),
+                        )
+                        alert_row = cursor.fetchone()
+                        if alert_row and alert_row[0] is not None:
+                            raw_payload = alert_row[0]
+                            logger.debug("[INCIDENTS] Found BigPanda payload for alert")
+                    except (ValueError, TypeError):
+                        logger.debug("[INCIDENTS] Skipping payload fetch for bigpanda alert (non-integer id)")
                 elif source_type == "coroot":
                     # Coroot stores the raw webhook payload inside alert_metadata under 'raw_payload'
                     alert_metadata = incident.get("alert", {}).get("metadata", {})
