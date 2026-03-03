@@ -253,10 +253,18 @@ export async function DELETE(
 
     // Special handling for SharePoint
     if (provider === 'sharepoint') {
-      const response = await fetch(`${API_BASE_URL}/sharepoint/disconnect`, {
-        method: 'DELETE',
-        headers: authHeaders,
-      })
+      const controller = new AbortController()
+      const timeoutId = setTimeout(() => controller.abort(), 20000)
+      let response: Response
+      try {
+        response = await fetch(`${API_BASE_URL}/sharepoint/disconnect`, {
+          method: 'DELETE',
+          headers: authHeaders,
+          signal: controller.signal,
+        })
+      } finally {
+        clearTimeout(timeoutId)
+      }
 
       if (!response.ok) {
         console.error('Backend error disconnecting SharePoint: status=%d', response.status)
