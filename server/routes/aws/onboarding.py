@@ -442,6 +442,12 @@ def bulk_register_aws_accounts(workspace_id):
         if not data or not isinstance(data.get("accounts"), list):
             return jsonify({"error": "Payload must contain an 'accounts' array"}), 400
 
+        MAX_BULK_ACCOUNTS = 50
+        if len(data["accounts"]) > MAX_BULK_ACCOUNTS:
+            return jsonify({
+                "error": f"Too many accounts. Maximum {MAX_BULK_ACCOUNTS} per bulk request to avoid STS rate limits."
+            }), 400
+
         external_id = workspace.get("aws_external_id")
         if not external_id:
             return jsonify({"error": "Workspace missing aws_external_id"}), 500
@@ -491,6 +497,7 @@ def bulk_register_aws_accounts(workspace_id):
                 role_arn=role_arn,
                 connection_method="sts_assume_role",
                 region=region,
+                workspace_id=workspace_id,
                 status="active",
             )
             if saved:
@@ -558,30 +565,8 @@ def list_inactive_aws_accounts(workspace_id):
         if not workspace or workspace['user_id'] != user_id:
             return jsonify({"error": "Access denied"}), 403
 
-        from utils.db.db_utils import connect_to_db_as_admin
-        conn = connect_to_db_as_admin()
-        try:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "SELECT account_id, role_arn, region, last_verified_at "
-                    "FROM user_connections "
-                    "WHERE user_id = %s AND provider = 'aws' AND status = 'inactive' "
-                    "ORDER BY last_verified_at DESC",
-                    (user_id,),
-                )
-                rows = cur.fetchall()
-        finally:
-            conn.close()
-
-        accounts = [
-            {
-                "account_id": r[0],
-                "role_arn": r[1],
-                "region": r[2],
-                "disconnected_at": r[3].isoformat() if r[3] else None,
-            }
-            for r in rows
-        ]
+        from utils.db.connection_utils import get_inactive_aws_connections
+        accounts = get_inactive_aws_connections(user_id)
         return jsonify({"accounts": accounts})
 
     except Exception as e:
@@ -612,23 +597,14 @@ def reconnect_aws_account(workspace_id, account_id):
         if not external_id:
             return jsonify({"error": "Workspace missing aws_external_id"}), 500
 
-        from utils.db.db_utils import connect_to_db_as_admin
-        conn = connect_to_db_as_admin()
-        try:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "SELECT role_arn, region FROM user_connections "
-                    "WHERE user_id = %s AND provider = 'aws' AND account_id = %s AND status = 'inactive'",
-                    (user_id, account_id),
-                )
-                row = cur.fetchone()
-        finally:
-            conn.close()
+        from utils.db.connection_utils import get_inactive_aws_connection
+        inactive_conn = get_inactive_aws_connection(user_id, account_id)
 
-        if not row:
+        if not inactive_conn:
             return jsonify({"error": "No inactive connection found for this account"}), 404
 
-        role_arn, region = row[0], row[1] or "us-east-1"
+        role_arn = inactive_conn["role_arn"]
+        region = inactive_conn["region"] or "us-east-1"
 
         from utils.aws.aws_sts_client import assume_workspace_role
         try:
@@ -651,6 +627,7 @@ def reconnect_aws_account(workspace_id, account_id):
             role_arn=role_arn,
             connection_method="sts_assume_role",
             region=region,
+            workspace_id=workspace_id,
             status="active",
         )
         if not saved:
@@ -696,6 +673,37 @@ def get_cfn_template(workspace_id):
         if not aurora_account_id:
             return jsonify({"error": "Cannot determine Aurora AWS account ID"}), 500
 
+        import yaml
+
+        class _CfnTag:
+            """Wrapper to preserve CloudFormation intrinsic function tags during round-trip."""
+            def __init__(self, tag, value):
+                self.tag = tag
+                self.value = value
+
+        def _cfn_constructor(loader, tag_suffix, node):
+            if isinstance(node, yaml.ScalarNode):
+                return _CfnTag(tag_suffix, loader.construct_scalar(node))
+            elif isinstance(node, yaml.SequenceNode):
+                return _CfnTag(tag_suffix, loader.construct_sequence(node))
+            elif isinstance(node, yaml.MappingNode):
+                return _CfnTag(tag_suffix, loader.construct_mapping(node))
+            return _CfnTag(tag_suffix, None)
+
+        def _cfn_representer(dumper, data):
+            tag = "!" + data.tag
+            if isinstance(data.value, list):
+                return dumper.represent_sequence(tag, data.value)
+            elif isinstance(data.value, dict):
+                return dumper.represent_mapping(tag, data.value)
+            return dumper.represent_scalar(tag, data.value)
+
+        CfnLoader = type("CfnLoader", (yaml.SafeLoader,), {})
+        CfnLoader.add_multi_constructor("!", _cfn_constructor)
+
+        CfnDumper = type("CfnDumper", (yaml.Dumper,), {})
+        CfnDumper.add_representer(_CfnTag, _cfn_representer)
+
         template_path = os.path.join(
             os.path.dirname(__file__),
             "..", "..", "connectors", "aws_connector", "aurora-cross-account-role.yaml",
@@ -703,27 +711,19 @@ def get_cfn_template(workspace_id):
         template_path = os.path.normpath(template_path)
 
         with open(template_path, "r") as f:
-            template_body = f.read()
+            template = yaml.load(f, Loader=CfnLoader)
 
-        template_body = template_body.replace(
-            "Type: String\n    Description: The 12-digit AWS account ID where Aurora is hosted.",
-            f"Type: String\n    Default: '{aurora_account_id}'\n    Description: The 12-digit AWS account ID where Aurora is hosted.",
-        )
-        template_body = template_body.replace(
-            "Type: String\n    Description: >-\n"
-            "      Unique external ID generated by Aurora for your tenant.\n"
-            "      Find this on the Aurora AWS onboarding page.",
-            f"Type: String\n    Default: '{external_id}'\n    Description: >-\n"
-            f"      Unique external ID generated by Aurora for your tenant.\n"
-            f"      Find this on the Aurora AWS onboarding page.",
-        )
+        params = template.get("Parameters", {})
+        if "AuroraAccountId" in params:
+            params["AuroraAccountId"]["Default"] = aurora_account_id
+        if "ExternalId" in params:
+            params["ExternalId"]["Default"] = external_id
 
         role_type = request.args.get("roleType", "ReadOnly")
-        if role_type == "Admin":
-            template_body = template_body.replace(
-                "Default: ReadOnly\n    AllowedValues:",
-                "Default: Admin\n    AllowedValues:",
-            )
+        if role_type == "Admin" and "RoleType" in params:
+            params["RoleType"]["Default"] = "Admin"
+
+        template_body = yaml.dump(template, Dumper=CfnDumper, default_flow_style=False, sort_keys=False)
 
         filename = f"aurora-{'admin' if role_type == 'Admin' else 'readonly'}-role.yaml"
 
@@ -788,6 +788,11 @@ def get_cfn_quickcreate_link(workspace_id):
         # Quick-Create requires the template to be at a public HTTPS URL.
         # Configure AWS_CFN_TEMPLATE_URL in .env pointing to the S3-hosted template.
         template_url = request.args.get("templateUrl") or os.getenv("AWS_CFN_TEMPLATE_URL", "")
+        if not template_url:
+            logger.warning(
+                "AWS_CFN_TEMPLATE_URL is not configured. Quick-Create links will not include "
+                "a template URL — users must upload the template manually or set this env var."
+            )
 
         import urllib.parse
         import time as _time

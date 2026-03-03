@@ -1016,6 +1016,23 @@ def initialize_tables():
                 conn.rollback()
                 raise
 
+            # Add workspace_id to user_connections so credential refresh can
+            # look up the external_id without a fragile JOIN through workspaces.
+            try:
+                cursor.execute(
+                    "ALTER TABLE user_connections ADD COLUMN IF NOT EXISTS workspace_id VARCHAR(255);"
+                )
+                conn.commit()
+                logging.info(
+                    "Ensured workspace_id column exists on user_connections table."
+                )
+            except Exception as e:
+                logging.error(
+                    "FATAL: Failed to ensure workspace_id column in user_connections: %s", e
+                )
+                conn.rollback()
+                raise
+
             # Add stateless migration columns to user_tokens if they don't exist
             try:
                 cursor.execute("""

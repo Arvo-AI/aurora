@@ -127,7 +127,7 @@ export default function AWSOnboardingPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isSettingRole, setIsSettingRole] = useState(false);
-  const [copySuccess, setCopySuccess] = useState(false);
+  const [copySuccess, setCopySuccess] = useState<Record<string, boolean>>({});
   const [isDisconnecting, setIsDisconnecting] = useState(false);
   const [roleArn, setRoleArn] = useState('');
   const [isConfigured, setIsConfigured] = useState(false);
@@ -591,20 +591,13 @@ export default function AWSOnboardingPage() {
         headers: { 'X-User-ID': userId },
       });
       if (!res.ok) throw new Error('Delete failed');
-      const accountsRes = await fetch(`${BACKEND_URL}/workspaces/${workspaceId}/aws/accounts`, {
-        credentials: 'include',
-        headers: { 'X-User-ID': userId },
-      });
-      if (accountsRes.ok) {
-        const data = await accountsRes.json();
-        const remaining = data.accounts || [];
-        setConnectedAccounts(remaining);
-        if (remaining.length === 0) {
-          setIsConfigured(false);
-          localStorage.removeItem('isAWSConnected');
-        }
+      await Promise.all([fetchConnectedAccounts(), fetchInactiveAccounts()]);
+      if (connectedAccounts.length <= 1) {
+        setIsConfigured(false);
+        localStorage.removeItem('isAWSConnected');
+        localStorage.removeItem('cloudProvider');
+        localStorage.removeItem('isAWSFetched');
       }
-      await fetchInactiveAccounts();
     } catch (err) {
       console.error('Delete account error:', err);
       setError(`Failed to disconnect account ${accountId}.`);
@@ -654,10 +647,10 @@ export default function AWSOnboardingPage() {
     }
   };
 
-  const copyToClipboard = (text: string) => {
+  const copyToClipboard = (text: string, key: string = 'default') => {
     navigator.clipboard.writeText(text);
-    setCopySuccess(true);
-    setTimeout(() => setCopySuccess(false), 2000);
+    setCopySuccess(prev => ({ ...prev, [key]: true }));
+    setTimeout(() => setCopySuccess(prev => ({ ...prev, [key]: false })), 2000);
   };
 
   if (isLoading) {
@@ -713,10 +706,10 @@ export default function AWSOnboardingPage() {
                           "Resource": "*"
                         }
                       ]
-                    }, null, 2))}
+                    }, null, 2), 'iamPolicy')}
                     className="absolute top-2 right-2 h-6 w-6 border-white/10 hover:bg-white/5 text-white/70"
                   >
-                    {copySuccess ? <CheckCircle className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                    {copySuccess['iamPolicy'] ? <CheckCircle className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
                   </Button>
                 </div>
               </div>
@@ -919,8 +912,8 @@ make dev`}</pre>
         <label className="text-xs text-white/50">External ID</label>
         <div className="flex gap-2">
           <Input value={onboardingData.externalId} readOnly className="font-mono text-xs bg-white/5 text-white border-white/10 focus-visible:ring-white/20" />
-          <Button variant="outline" size="icon" onClick={() => copyToClipboard(onboardingData.externalId)} className="border-white/10 hover:bg-white/5 text-white/70 h-8 w-8">
-            {copySuccess ? <CheckCircle className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+          <Button variant="outline" size="icon" onClick={() => copyToClipboard(onboardingData.externalId, 'externalId')} className="border-white/10 hover:bg-white/5 text-white/70 h-8 w-8">
+            {copySuccess['externalId'] ? <CheckCircle className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
           </Button>
         </div>
       </div>
@@ -928,8 +921,8 @@ make dev`}</pre>
         <label className="text-xs text-white/50">Trust Policy JSON</label>
         <div className="relative">
           <pre className="text-white text-xs whitespace-pre-wrap font-mono bg-black/30 p-3 pr-10 rounded border border-white/10">{trustPolicyJson}</pre>
-          <Button variant="outline" size="icon" onClick={() => copyToClipboard(trustPolicyJson)} className="absolute top-2 right-2 h-6 w-6 border-white/10 hover:bg-white/5 text-white/70">
-            {copySuccess ? <CheckCircle className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+          <Button variant="outline" size="icon" onClick={() => copyToClipboard(trustPolicyJson, 'trustPolicy')} className="absolute top-2 right-2 h-6 w-6 border-white/10 hover:bg-white/5 text-white/70">
+            {copySuccess['trustPolicy'] ? <CheckCircle className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
           </Button>
         </div>
       </div>
@@ -1124,10 +1117,10 @@ make dev`}</pre>
                           <Button
                             variant="outline"
                             size="icon"
-                            onClick={() => { navigator.clipboard.writeText(stackSetsCommand); copyToClipboard(stackSetsCommand); }}
+                            onClick={() => copyToClipboard(stackSetsCommand, 'stackSets')}
                             className="absolute top-2 right-2 h-6 w-6 border-white/10 hover:bg-white/5 text-white/70"
                           >
-                            {copySuccess ? <CheckCircle className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                            {copySuccess['stackSets'] ? <CheckCircle className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
                           </Button>
                         </div>
                       </div>
@@ -1148,7 +1141,7 @@ make dev`}</pre>
                     <p className="text-sm font-medium text-white/70">Bulk Register AWS Accounts</p>
                     <p className="text-xs text-white/40">
                       After deploying the CloudFormation template to your accounts, paste account IDs below.
-                      One per line: <code className="bg-black/50 px-1 py-0.5 rounded">ACCOUNT_ID,REGION,ROLE_NAME</code> (region and role name are optional, defaults: us-east-1, AuroraReadOnlyRole)
+                      One per line: <code className="bg-black/50 px-1 py-0.5 rounded">ACCOUNT_ID,REGION,ROLE_NAME</code> (region defaults to us-east-1 if omitted; specify the region where you deployed the stack)
                     </p>
                   </div>
                   <textarea

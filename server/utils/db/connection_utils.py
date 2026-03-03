@@ -19,6 +19,7 @@ def save_connection_metadata(
     read_only_role_arn: Optional[str] = None,
     connection_method: Optional[str] = None,
     region: Optional[str] = None,
+    workspace_id: Optional[str] = None,
     status: str = "active",
 ) -> bool:
     """Insert or update a row in user_connections.
@@ -29,14 +30,15 @@ def save_connection_metadata(
     sql = """
         INSERT INTO user_connections (
             user_id, provider, account_id, role_arn, read_only_role_arn,
-            connection_method, region, status, last_verified_at
-        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            connection_method, region, workspace_id, status, last_verified_at
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         ON CONFLICT (user_id, provider, account_id)
         DO UPDATE SET
             role_arn = EXCLUDED.role_arn,
             read_only_role_arn = EXCLUDED.read_only_role_arn,
             connection_method = EXCLUDED.connection_method,
             region = COALESCE(EXCLUDED.region, user_connections.region),
+            workspace_id = COALESCE(EXCLUDED.workspace_id, user_connections.workspace_id),
             status = EXCLUDED.status,
             last_verified_at = EXCLUDED.last_verified_at;
     """
@@ -54,6 +56,7 @@ def save_connection_metadata(
                     read_only_role_arn,
                     connection_method,
                     region,
+                    workspace_id,
                     status,
                     datetime.utcnow(),
                 ),
@@ -331,6 +334,66 @@ def delete_connection_secret(
         if conn:
             conn.rollback()
         return False
+    finally:
+        if conn:
+            conn.close()
+
+
+def get_inactive_aws_connections(user_id: str) -> List[Dict]:
+    """Return inactive AWS connections for a user."""
+    sql = """
+        SELECT account_id, role_arn, region, last_verified_at
+        FROM user_connections
+        WHERE user_id = %s AND provider = 'aws' AND status = 'inactive'
+        ORDER BY last_verified_at DESC;
+    """
+    conn = None
+    try:
+        conn = connect_to_db_as_user()
+        with conn.cursor() as cur:
+            cur.execute("SET myapp.current_user_id = %s;", (user_id,))
+            conn.commit()
+            cur.execute(sql, (user_id,))
+            rows = cur.fetchall()
+        return [
+            {
+                "account_id": r[0],
+                "role_arn": r[1],
+                "region": r[2],
+                "disconnected_at": r[3].isoformat() if r[3] else None,
+            }
+            for r in rows
+        ]
+    except Exception as e:
+        logger.error("Error listing inactive AWS connections for user %s: %s", user_id, e)
+        return []
+    finally:
+        if conn:
+            conn.close()
+
+
+def get_inactive_aws_connection(user_id: str, account_id: str) -> Optional[Dict]:
+    """Get a specific inactive AWS connection by account_id."""
+    sql = """
+        SELECT role_arn, region
+        FROM user_connections
+        WHERE user_id = %s AND provider = 'aws' AND account_id = %s AND status = 'inactive'
+        LIMIT 1;
+    """
+    conn = None
+    try:
+        conn = connect_to_db_as_user()
+        with conn.cursor() as cur:
+            cur.execute("SET myapp.current_user_id = %s;", (user_id,))
+            conn.commit()
+            cur.execute(sql, (user_id, account_id))
+            row = cur.fetchone()
+        if row:
+            return {"role_arn": row[0], "region": row[1]}
+        return None
+    except Exception as e:
+        logger.error("Error getting inactive AWS connection for user %s account %s: %s", user_id, account_id, e)
+        return None
     finally:
         if conn:
             conn.close()

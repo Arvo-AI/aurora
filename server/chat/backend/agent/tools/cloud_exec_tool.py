@@ -213,7 +213,14 @@ def _get_region_for_account(user_id: str, account_id: str) -> Optional[str]:
     from utils.db.connection_utils import get_all_user_aws_connections
     for conn in get_all_user_aws_connections(user_id):
         if conn.get("account_id") == account_id:
-            return conn.get("region") or "us-east-1"
+            region = conn.get("region")
+            if not region:
+                logger.warning(
+                    "No region stored for account %s (user %s), falling back to us-east-1",
+                    account_id, user_id,
+                )
+                return "us-east-1"
+            return region
     return None
 
 
