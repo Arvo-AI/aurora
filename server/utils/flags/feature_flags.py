@@ -41,3 +41,8 @@ def is_bigpanda_enabled() -> bool:
 def is_thousandeyes_enabled() -> bool:
     """Check if ThousandEyes integration is enabled via environment variable."""
     return os.getenv("NEXT_PUBLIC_ENABLE_THOUSANDEYES", "false").lower() == "true"
+
+
+def is_sharepoint_enabled() -> bool:
+    """Check if SharePoint integration is enabled via environment variable."""
+    return os.getenv("NEXT_PUBLIC_ENABLE_SHAREPOINT", "false").lower() == "true"

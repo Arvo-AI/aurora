@@ -53,6 +53,16 @@ from .confluence_search_tool import (
     ConfluenceSearchRunbookArgs,
     ConfluenceFetchPageArgs,
 )
+from .sharepoint_search_tool import (
+    sharepoint_search,
+    sharepoint_fetch_page,
+    sharepoint_fetch_document,
+    sharepoint_create_page,
+    SharePointSearchArgs,
+    SharePointFetchPageArgs,
+    SharePointFetchDocumentArgs,
+    SharePointCreatePageArgs,
+)
 from .splunk_tool import (
     search_splunk,
     list_splunk_indexes,
@@ -1089,16 +1099,19 @@ def get_cloud_tools():
     tools = []
     
     # Create wrapper for cloud_exec to hide internal parameters from AI
-    def cloud_exec_wrapper(provider: str, command: str, output_file: Optional[str] = None, **kwargs) -> str:
-        """Execute cloud CLI commands. Provider and command are required. Use output_file to save raw output to a file (useful for kubeconfig)."""
-        # Extract the injected context parameters and pass them to the real function
+    def cloud_exec_wrapper(provider: str, command: str, output_file: Optional[str] = None, account_id: Optional[str] = None, **kwargs) -> str:
+        """Execute cloud CLI commands. Provider and command are required. Use output_file to save raw output to a file (useful for kubeconfig).
+        
+For AWS with multiple connected accounts: the FIRST investigative call omit account_id to query all accounts.
+Once you identify which account has the issue, pass account_id (e.g. '151025634386') to target that specific account."""
         user_id = kwargs.get('user_id')
         session_id = kwargs.get('session_id')
         provider_preference = kwargs.get('provider_preference')
         timeout = kwargs.get('timeout')
         
         return cloud_exec(provider, command, user_id=user_id, session_id=session_id, 
-                         provider_preference=provider_preference, timeout=timeout, output_file=output_file)
+                         provider_preference=provider_preference, timeout=timeout,
+                         output_file=output_file, account_id=account_id)
     
     # Set the name to match what the system prompt expects
     cloud_exec_wrapper.__name__ = "cloud_exec"
@@ -1445,6 +1458,40 @@ def get_cloud_tools():
             logging.info(f"Added 3 Confluence search tools for user {user_id}")
     except Exception as e:
         logging.warning(f"Failed to add Confluence search tools: {e}")
+
+    # Add SharePoint search tools if enabled
+    try:
+        from utils.flags.feature_flags import is_sharepoint_enabled
+        from utils.secrets.secret_ref_utils import has_user_credentials
+
+        if is_sharepoint_enabled() and user_id and has_user_credentials(user_id, "sharepoint"):
+            _sharepoint_tools = [
+                (sharepoint_search, "sharepoint_search", SharePointSearchArgs,
+                 "Search SharePoint for pages, documents, and list items matching a query. "
+                 "Pass a search query and optional site_id to restrict to a specific site. Returns matching items with excerpts."),
+                (sharepoint_fetch_page, "sharepoint_fetch_page", SharePointFetchPageArgs,
+                 "Fetch a SharePoint page by site ID and page ID and return its content as markdown. "
+                 "Use after search to read full page details."),
+                (sharepoint_fetch_document, "sharepoint_fetch_document", SharePointFetchDocumentArgs,
+                 "Fetch a SharePoint document by drive ID and item ID and return extracted text content. "
+                 "Use for Word docs, PDFs, and other documents stored in SharePoint document libraries."),
+                (sharepoint_create_page, "sharepoint_create_page", SharePointCreatePageArgs,
+                 "Create a new SharePoint page with the given title and HTML/markdown content. "
+                 "Use to publish incident reports, postmortems, or runbooks to SharePoint."),
+            ]
+            for _func, _name, _schema, _desc in _sharepoint_tools:
+                _ctx = with_user_context(_func)
+                _notif = with_completion_notification(_ctx)
+                _final = wrap_func_with_capture(_notif, _name) if tool_capture else _notif
+                tools.append(StructuredTool.from_function(
+                    func=_final,
+                    name=_name,
+                    description=_desc,
+                    args_schema=_schema,
+                ))
+            logging.info(f"Added 4 SharePoint tools for user {user_id}")
+    except Exception as e:
+        logging.warning(f"Failed to add SharePoint tools: {e}")
 
     # Add Coroot observability tools if connected
     try:

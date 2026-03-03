@@ -1,5 +1,5 @@
 import { Github, Server } from "lucide-react";
-import { isSlackEnabled, isOvhEnabled, isConfluenceEnabled, isBitbucketEnabled, isDynatraceEnabled, isThousandEyesEnabled, isBigPandaEnabled } from "@/lib/feature-flags";
+import { isSlackEnabled, isOvhEnabled, isConfluenceEnabled, isSharePointEnabled, isBitbucketEnabled, isDynatraceEnabled, isThousandEyesEnabled, isBigPandaEnabled } from "@/lib/feature-flags";
 import type { ConnectorConfig } from "./types";
 
 class ConnectorRegistry {
@@ -150,6 +150,19 @@ class ConnectorRegistry {
         category: "Documentation",
         path: "/confluence/connect",
         storageKey: "isConfluenceConnected",
+      });
+    }
+
+    if (isSharePointEnabled()) {
+      this.register({
+        id: "sharepoint",
+        name: "SharePoint",
+        description: "Fetch documents, site pages, and search across SharePoint Online sites to automate incident response workflows.",
+        iconPath: "/sharepoint.png",
+        iconBgColor: "bg-white dark:bg-white",
+        category: "Documentation",
+        path: "/sharepoint/connect",
+        storageKey: "isSharePointConnected",
       });
     }
 

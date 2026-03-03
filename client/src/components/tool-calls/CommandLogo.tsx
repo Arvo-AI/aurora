@@ -172,6 +172,14 @@ const logos = {
       onError={(e) => console.error('Failed to load Bitbucket logo:', e)}
     />
   ),
+  sharepoint: (
+    <img
+      src="/sharepoint.png"
+      className="w-4 h-4 min-w-4 min-h-4 object-contain"
+      alt="SharePoint"
+      onError={(e) => console.error('Failed to load SharePoint logo:', e)}
+    />
+  ),
   web: (
     <svg
       className="w-4 h-4 min-w-4 min-h-4 text-blue-600 dark:text-blue-400"
@@ -272,6 +280,10 @@ const getLogoForCommand = (command: string | any, toolName: string, provider?: s
     return 'bitbucket'
   }
 
+  // SharePoint tools
+  if (tool.startsWith('sharepoint_')) {
+    return 'sharepoint'
+  }
 
   // IAC tools
   if (tool.includes('iac') || tool.includes('terraform')) {
