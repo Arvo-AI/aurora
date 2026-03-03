@@ -4,10 +4,10 @@ import logging
 from flask import Blueprint, jsonify, request
 from utils.db.connection_pool import db_pool
 from utils.auth.stateless_auth import (
-    get_user_id_from_request,
     get_user_preference,
     store_user_preference,
 )
+from utils.auth.rbac_decorators import require_permission, require_auth_only
 from routes.incident_feedback.weaviate_client import store_good_rca
 from uuid import UUID
 
@@ -43,19 +43,8 @@ def _is_aurora_learn_enabled(user_id: str) -> bool:
 
 
 @incident_feedback_bp.route("/api/incidents/<incident_id>/feedback", methods=["POST"])
-def submit_feedback(incident_id: str):
-    """
-    Submit feedback for an incident (thumbs up/down).
-
-    POST body:
-    {
-        "feedback_type": "helpful" | "not_helpful",
-        "comment": "optional comment for not_helpful"
-    }
-    """
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "Missing user_id"}), 400
+@require_permission("incidents", "write")
+def submit_feedback(user_id, incident_id: str):
 
     if not _validate_uuid(incident_id):
         return jsonify({"error": "Invalid incident ID format"}), 400
@@ -234,11 +223,8 @@ def submit_feedback(incident_id: str):
 
 
 @incident_feedback_bp.route("/api/incidents/<incident_id>/feedback", methods=["GET"])
-def get_feedback(incident_id: str):
-    """Get feedback for an incident (if exists)."""
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "Missing user_id"}), 400
+@require_permission("incidents", "read")
+def get_feedback(user_id, incident_id: str):
 
     if not _validate_uuid(incident_id):
         return jsonify({"error": "Invalid incident ID format"}), 400
@@ -283,22 +269,16 @@ def get_feedback(incident_id: str):
 
 
 @incident_feedback_bp.route("/api/user/preferences/aurora-learn", methods=["GET"])
-def get_aurora_learn_setting():
-    """Get Aurora Learn setting for the current user."""
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "Missing user_id"}), 400
+@require_auth_only
+def get_aurora_learn_setting(user_id):
 
     enabled = _is_aurora_learn_enabled(user_id)
     return jsonify({"enabled": enabled}), 200
 
 
 @incident_feedback_bp.route("/api/user/preferences/aurora-learn", methods=["PUT"])
-def set_aurora_learn_setting():
-    """Update Aurora Learn setting for the current user."""
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "Missing user_id"}), 400
+@require_auth_only
+def set_aurora_learn_setting(user_id):
 
     data = request.get_json()
     if data is None or "enabled" not in data:

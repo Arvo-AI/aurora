@@ -5,7 +5,8 @@ from flask import Blueprint, request, jsonify, session
 from datetime import datetime
 from utils.db.db_utils import connect_to_db_as_user
 from utils.web.cors_utils import create_cors_response
-from utils.auth.stateless_auth import get_user_id_from_request
+from utils.auth.rbac_decorators import require_permission
+from utils.auth.stateless_auth import get_org_id_from_request
 from utils.web.limiter_ext import limiter
 
 
@@ -44,21 +45,19 @@ def generate_chat_title(messages):
 
 @chat_bp.route('/sessions', methods=['GET'])
 @limiter.exempt
-def get_chat_sessions():
+@require_permission("chat", "read")
+def get_chat_sessions(user_id):
     """Get all chat sessions for a user."""
     
-    try:
-        # Get authenticated user from X-User-ID header
-        user_id = get_user_id_from_request()
-        
-        if not user_id:
-            return jsonify({'error': 'Authentication required'}), 401
+    org_id = get_org_id_from_request()
 
+    try:
         conn = connect_to_db_as_user()
         cursor = conn.cursor()
         
         # Set user context for RLS
         cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
+        cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
         conn.commit()
         
         # Fetch chat sessions ordered by updated_at descending
@@ -68,9 +67,9 @@ def get_chat_sessions():
                    CASE WHEN ui_state IS NULL THEN '{}'::jsonb ELSE ui_state END as ui_state,
                    COALESCE(status, 'active') as status
             FROM chat_sessions 
-            WHERE user_id = %s AND is_active = true
+            WHERE org_id = %s AND is_active = true
             ORDER BY updated_at DESC
-        """, (user_id,))
+        """, (org_id,))
         
         sessions = cursor.fetchall()
         
@@ -99,20 +98,17 @@ def get_chat_sessions():
             conn.close()
 
 @chat_bp.route('/sessions', methods=['POST'])
-def create_chat_session():
+@require_permission("chat", "write")
+def create_chat_session(user_id):
     """Create a new chat session."""
     try:
-        # Get authenticated user from X-User-ID header
-        user_id = get_user_id_from_request()
-        
-        if not user_id:
-            return jsonify({'error': 'Authentication required'}), 401
-            
         data = request.get_json()
         title = data.get('title')
         messages = data.get('messages', [])
         ui_state = data.get('ui_state', {})
         
+        org_id = get_org_id_from_request()
+
         # Generate title from messages if not provided
         if not title:
             title = generate_chat_title(messages)
@@ -125,13 +121,14 @@ def create_chat_session():
         
         # Set user context for RLS
         cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
+        cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
         conn.commit()
         
         # Insert new chat session
         cursor.execute("""
-            INSERT INTO chat_sessions (id, user_id, title, messages, ui_state, created_at, updated_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
-        """, (session_id, user_id, title, json.dumps(messages), json.dumps(ui_state), datetime.now(), datetime.now()))
+            INSERT INTO chat_sessions (id, user_id, org_id, title, messages, ui_state, created_at, updated_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        """, (session_id, user_id, org_id, title, json.dumps(messages), json.dumps(ui_state), datetime.now(), datetime.now()))
         
         conn.commit()
         
@@ -164,20 +161,18 @@ def create_chat_session():
 
 @chat_bp.route('/sessions/<session_id>', methods=['GET'])
 @limiter.exempt
-def get_chat_session(session_id):
+@require_permission("chat", "read")
+def get_chat_session(user_id, session_id):
     """Get a specific chat session."""
-    try:
-        # Get authenticated user from X-User-ID header
-        user_id = get_user_id_from_request()
-        
-        if not user_id:
-            return jsonify({'error': 'Authentication required'}), 401
+    org_id = get_org_id_from_request()
 
+    try:
         conn = connect_to_db_as_user()
         cursor = conn.cursor()
         
         # Set user context for RLS
         cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
+        cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
         conn.commit()
         
         # Fetch specific chat session (allow completed, but not cancelled)
@@ -186,8 +181,8 @@ def get_chat_session(session_id):
                    CASE WHEN ui_state IS NULL THEN '{}'::jsonb ELSE ui_state END as ui_state,
                    COALESCE(status, 'active') as status
             FROM chat_sessions 
-            WHERE id = %s AND user_id = %s AND is_active = true AND status != 'cancelled'
-        """, (session_id, user_id))
+            WHERE id = %s AND org_id = %s AND is_active = true AND status != 'cancelled'
+        """, (session_id, org_id))
         
         session_data = cursor.fetchone()
         
@@ -272,15 +267,12 @@ def get_chat_session(session_id):
             conn.close()
 
 @chat_bp.route('/sessions/<session_id>', methods=['PUT'])
-def update_chat_session(session_id):
+@require_permission("chat", "write")
+def update_chat_session(user_id, session_id):
     """Update a chat session."""
+    org_id = get_org_id_from_request()
+
     try:
-        # Get authenticated user from X-User-ID header
-        user_id = get_user_id_from_request()
-        
-        if not user_id:
-            return jsonify({'error': 'Authentication required'}), 401
-            
         data = request.get_json()
         title = data.get('title')
         messages = data.get('messages')
@@ -291,13 +283,14 @@ def update_chat_session(session_id):
         
         # Set user context for RLS
         cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
+        cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
         conn.commit()
         
         # Check if session exists and is not cancelled
         cursor.execute("""
             SELECT id, status FROM chat_sessions 
-            WHERE id = %s AND user_id = %s AND is_active = true
-        """, (session_id, user_id))
+            WHERE id = %s AND org_id = %s AND is_active = true
+        """, (session_id, org_id))
         
         session_row = cursor.fetchone()
         if not session_row:
@@ -325,8 +318,8 @@ def update_chat_session(session_id):
                 # First, check if the session has an existing custom title
                 cursor.execute("""
                     SELECT title FROM chat_sessions 
-                    WHERE id = %s AND user_id = %s AND is_active = true
-                """, (session_id, user_id))
+                    WHERE id = %s AND org_id = %s AND is_active = true
+                """, (session_id, org_id))
                 
                 existing_session = cursor.fetchone()
                 existing_title = existing_session[0] if existing_session else None
@@ -344,14 +337,14 @@ def update_chat_session(session_id):
         update_fields.append("updated_at = %s")
         update_values.append(datetime.now())
         
-        # Add session_id and user_id for WHERE clause
-        update_values.extend([session_id, user_id])
+        # Add session_id and org_id for WHERE clause
+        update_values.extend([session_id, org_id])
         
         # Update chat session
         cursor.execute(f"""
             UPDATE chat_sessions 
             SET {', '.join(update_fields)}
-            WHERE id = %s AND user_id = %s
+            WHERE id = %s AND org_id = %s
         """, update_values)
         
         conn.commit()
@@ -362,8 +355,8 @@ def update_chat_session(session_id):
                    CASE WHEN ui_state IS NULL THEN '{}'::jsonb ELSE ui_state END as ui_state,
                    COALESCE(status, 'active') as status
             FROM chat_sessions 
-            WHERE id = %s AND user_id = %s AND is_active = true
-        """, (session_id, user_id))
+            WHERE id = %s AND org_id = %s AND is_active = true
+        """, (session_id, org_id))
         
         session_data = cursor.fetchone()
         
@@ -389,27 +382,26 @@ def update_chat_session(session_id):
             conn.close()
 
 @chat_bp.route('/sessions/<session_id>', methods=['DELETE'])
-def delete_chat_session(session_id):
+@require_permission("chat", "write")
+def delete_chat_session(user_id, session_id):
     """Delete a chat session (soft delete)."""
+    org_id = get_org_id_from_request()
+
     try:
-        # Get authenticated user from X-User-ID header
-        user_id = get_user_id_from_request()
-        
-        if not user_id:
-            return jsonify({'error': 'Authentication required'}), 401
         logging.info(f"Deleting chat session {session_id} for user {user_id}")
         conn = connect_to_db_as_user()
         cursor = conn.cursor()
         
         # Set user context for RLS
         cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
+        cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
         conn.commit()
         
         # Check if session exists
         cursor.execute("""
             SELECT id FROM chat_sessions 
-            WHERE id = %s AND user_id = %s AND is_active = true
-        """, (session_id, user_id))
+            WHERE id = %s AND org_id = %s AND is_active = true
+        """, (session_id, org_id))
         
         if not cursor.fetchone():
             return jsonify({'error': 'Chat session not found'}), 404
@@ -418,8 +410,8 @@ def delete_chat_session(session_id):
         cursor.execute("""
             UPDATE chat_sessions 
             SET is_active = false, updated_at = %s
-            WHERE id = %s AND user_id = %s
-        """, (datetime.now(), session_id, user_id))
+            WHERE id = %s AND org_id = %s
+        """, (datetime.now(), session_id, org_id))
         
         conn.commit()
 
@@ -446,19 +438,19 @@ def delete_chat_session(session_id):
             conn.close() 
 
 @chat_bp.route('/sessions/bulk-delete', methods=['DELETE'])
-def delete_all_chat_sessions():
+@require_permission("chat", "write")
+def delete_all_chat_sessions(user_id):
     """Delete all chat sessions for a user (soft delete)."""
-    try:
-        user_id = get_user_id_from_request()
-        if not user_id:
-            return jsonify({'error': 'Authentication required'}), 401
+    org_id = get_org_id_from_request()
 
+    try:
         current_session_id = request.args.get('current_session_id')
         logging.info(f"Bulk delete request - current_session_id: {current_session_id}")
 
         conn = connect_to_db_as_user()
         cursor = conn.cursor()
         cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
+        cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
         conn.commit()
         
         if current_session_id:
@@ -466,15 +458,15 @@ def delete_all_chat_sessions():
             cursor.execute("""
                 UPDATE chat_sessions 
                 SET is_active = false, updated_at = %s
-                WHERE user_id = %s AND is_active = true AND id != %s
-            """, (datetime.now(), user_id, current_session_id))
+                WHERE org_id = %s AND is_active = true AND id != %s
+            """, (datetime.now(), org_id, current_session_id))
         else:
             logging.info("No current session to preserve, deleting all sessions")
             cursor.execute("""
                 UPDATE chat_sessions 
                 SET is_active = false, updated_at = %s
-                WHERE user_id = %s AND is_active = true
-            """, (datetime.now(), user_id))
+                WHERE org_id = %s AND is_active = true
+            """, (datetime.now(), org_id))
         
         deleted_count = cursor.rowcount
         logging.info(f"Deleted {deleted_count} chat sessions")

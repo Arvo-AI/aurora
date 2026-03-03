@@ -12,20 +12,28 @@ from utils.db.connection_pool import db_pool
 logger = logging.getLogger(__name__)
 
 
-def store_tokens_in_db(user_id: str, token_data: Dict, provider: str, 
-                      subscription_name: str = None, subscription_id: str = None) -> None:
+def store_tokens_in_db(user_id: str, token_data: Dict, provider: str,
+                      subscription_name: str = None, subscription_id: str = None,
+                      org_id: str = None) -> None:
     """
     Store token data in Vault and save secret reference in database.
-    Legacy token_data column storage has been removed.
-    
+
     Args:
         user_id: User identifier
         token_data: Token data to store
         provider: Provider name (gcp, aws, azure)
         subscription_name: Azure subscription name (optional)
         subscription_id: Azure subscription ID (optional)
+        org_id: Organization ID for multi-tenant scoping (optional, auto-resolved from request context)
     """
     start_time = time.perf_counter()
+
+    if not org_id:
+        try:
+            from utils.auth.stateless_auth import get_org_id_from_request
+            org_id = get_org_id_from_request()
+        except Exception:
+            pass
 
     try:
         logger.info(f"[STORE-TOKENS] Starting credential storage operation")
@@ -315,6 +323,14 @@ def store_tokens_in_db(user_id: str, token_data: Dict, provider: str,
             
             conn.commit()
 
+            # Set org_id on the token row if provided
+            if org_id:
+                cursor.execute(
+                    "UPDATE user_tokens SET org_id = %s WHERE user_id = %s AND provider = %s",
+                    (org_id, user_id, provider)
+                )
+                conn.commit()
+
         # Clear the secret cache so fresh value is fetched on next retrieval
         try:
             from utils.secrets.secret_cache import clear_secret_cache
@@ -335,14 +351,17 @@ def store_tokens_in_db(user_id: str, token_data: Dict, provider: str,
         raise
 
 
-def get_token_data(user_id: str, provider: str) -> Optional[Dict]:
+def get_token_data(user_id: str, provider: str, org_id: str = None) -> Optional[Dict]:
     """
     Retrieve token data from Vault only.
-    Legacy token_data column support has been removed.
+
+    When org_id is provided, looks up the token by org instead of user
+    (connectors are org-shared resources).
 
     Args:
         user_id: User identifier
         provider: Provider name (gcp, aws, azure) or list of providers
+        org_id: Organization ID for multi-tenant lookup (optional)
 
     Returns:
         Token data dictionary or empty dict if not found
@@ -355,7 +374,7 @@ def get_token_data(user_id: str, provider: str) -> Optional[Dict]:
         # Handle list provider types - get first available provider
         if isinstance(provider, list):
             logger.debug(f"[GET-TOKENS] Searching for credentials across {len(provider)} providers")
-            from utils.secret_ref_utils import get_user_token_data
+            from utils.secrets.secret_ref_utils import get_user_token_data
 
             for i, p in enumerate(provider):
                 logger.debug(f"[GET-TOKENS] Trying provider {i+1}/{len(provider)}: {p}")

@@ -1,6 +1,6 @@
 from flask import Blueprint, jsonify, request
 import logging
-from utils.auth.stateless_auth import get_user_id_from_request
+from utils.auth.rbac_decorators import require_permission
 from utils.web.cors_utils import create_cors_response
 from utils.db.connection_utils import list_active_connections, set_connection_status
 
@@ -12,16 +12,15 @@ def get_user_connections_from_db(user_id: str):
     """Return active connections using user_connections table."""
     return list_active_connections(user_id)
 
-@user_connections_bp.route('/api/user_connections', methods=['GET', 'OPTIONS'])
-def get_user_connections():
-    if request.method == 'OPTIONS':
-        return create_cors_response()
+@user_connections_bp.route('/api/user_connections', methods=['OPTIONS'])
+def get_user_connections_options():
+    return create_cors_response()
 
+
+@user_connections_bp.route('/api/user_connections', methods=['GET'])
+@require_permission("connectors", "read")
+def get_user_connections(user_id):
     try:
-        user_id = get_user_id_from_request()
-        if not user_id:
-            return jsonify({"error": "User not authenticated"}), 401
-        
         connections = get_user_connections_from_db(user_id)
         logger.info(f"Found {len(connections)} active connections for user {user_id}")
         return jsonify(connections), 200
@@ -31,13 +30,10 @@ def get_user_connections():
         return jsonify({"error": "An unexpected error occurred"}), 500
 
 @user_connections_bp.route('/api/user_connections', methods=['DELETE'])
-def disconnect_connection():
+@require_permission("connectors", "write")
+def disconnect_connection(user_id):
     """Mark a connection as not_connected."""
     try:
-        user_id = get_user_id_from_request()
-        if not user_id:
-            return jsonify({"error": "User not authenticated"}), 401
-
         data = request.get_json(force=True, silent=True) or {}
         provider = data.get("provider")
         account_id = data.get("account_id")

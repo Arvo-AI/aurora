@@ -4,7 +4,7 @@ import logging
 import os
 from flask import Blueprint, Response, jsonify, stream_with_context
 import redis
-from utils.auth.stateless_auth import get_user_id_from_request
+from utils.auth.rbac_decorators import require_permission
 from utils.db.connection_pool import db_pool
 
 logger = logging.getLogger(__name__)
@@ -13,12 +13,9 @@ visualization_bp = Blueprint('visualization', __name__)
 
 
 @visualization_bp.route('/api/incidents/<incident_id>/visualization/stream', methods=['GET'])
-def stream_visualization_updates(incident_id: str):
+@require_permission("incidents", "read")
+def stream_visualization_updates(user_id, incident_id: str):
     """SSE endpoint for real-time visualization updates."""
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return Response("Unauthorized", status=401)
-    
     # Verify incident ownership
     try:
         with db_pool.get_admin_connection() as conn:
@@ -70,12 +67,9 @@ def stream_visualization_updates(incident_id: str):
 
 
 @visualization_bp.route('/api/incidents/<incident_id>/visualization', methods=['GET'])
-def get_current_visualization(incident_id: str):
+@require_permission("incidents", "read")
+def get_current_visualization(user_id, incident_id: str):
     """Fetch current visualization JSON."""
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "Unauthorized"}), 401
-    
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:

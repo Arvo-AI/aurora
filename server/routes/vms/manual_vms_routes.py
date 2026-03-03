@@ -6,7 +6,7 @@ from psycopg2 import sql
 
 from utils.db.connection_pool import db_pool
 from utils.web.limiter_ext import limiter
-from utils.auth.stateless_auth import get_user_id_from_request
+from utils.auth.rbac_decorators import require_permission
 from utils.ssh.ssh_utils import (
     load_user_private_key_safe,
     parse_ssh_key_id,
@@ -65,11 +65,8 @@ def _serialize_vm_row(row: tuple) -> Dict[str, Any]:
 
 @manual_vms_bp.route("/api/vms/manual", methods=["GET"])
 @limiter.limit("30 per minute;200 per hour")
-def list_manual_vms():
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User not authenticated"}), 401
-
+@require_permission("vms", "read")
+def list_manual_vms(user_id):
     with db_pool.get_user_connection() as conn:
         with conn.cursor() as cur:
             cur.execute("SET myapp.current_user_id = %s;", (user_id,))
@@ -89,11 +86,8 @@ def list_manual_vms():
 
 @manual_vms_bp.route("/api/vms/manual", methods=["POST"])
 @limiter.limit("20 per minute;100 per hour")
-def create_manual_vm():
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User not authenticated"}), 401
-
+@require_permission("vms", "write")
+def create_manual_vm(user_id):
     data = request.get_json() or {}
     name = (data.get("name") or "").strip()
     ip_address = (data.get("ipAddress") or data.get("ip_address") or "").strip()
@@ -158,11 +152,8 @@ def create_manual_vm():
 
 @manual_vms_bp.route("/api/vms/manual/<int:vm_id>", methods=["PUT"])
 @limiter.limit("20 per minute;100 per hour")
-def update_manual_vm(vm_id: int):
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User not authenticated"}), 401
-
+@require_permission("vms", "write")
+def update_manual_vm(user_id, vm_id: int):
     data = request.get_json() or {}
     name = (data.get("name") or "").strip() or None
     ip_address = (data.get("ipAddress") or data.get("ip_address") or "").strip() or None
@@ -249,11 +240,8 @@ def update_manual_vm(vm_id: int):
 
 @manual_vms_bp.route("/api/vms/manual/<int:vm_id>", methods=["DELETE"])
 @limiter.limit("20 per minute;100 per hour")
-def delete_manual_vm(vm_id: int):
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User not authenticated"}), 401
-
+@require_permission("vms", "write")
+def delete_manual_vm(user_id, vm_id: int):
     with db_pool.get_user_connection() as conn:
         with conn.cursor() as cur:
             cur.execute("SET myapp.current_user_id = %s;", (user_id,))
@@ -271,11 +259,8 @@ def delete_manual_vm(vm_id: int):
 
 @manual_vms_bp.route("/api/vms/check-connection", methods=["POST"])
 @limiter.limit("30 per minute;120 per hour")
-def check_manual_vm_connection():
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User not authenticated"}), 401
-
+@require_permission("vms", "write")
+def check_manual_vm_connection(user_id):
     data = request.get_json() or {}
     vm_id = data.get("vmId")
     ip_address = (data.get("ipAddress") or data.get("ip_address") or "").strip()

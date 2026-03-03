@@ -3,18 +3,16 @@ from datetime import datetime
 from flask import Blueprint, request, jsonify, session, Response
 import flask
 from utils.web.cors_utils import create_cors_response
-from utils.auth.stateless_auth import get_user_id_from_request
+from utils.auth.rbac_decorators import require_auth_only
 from utils.auth.token_management import get_token_data
 
 debug_util_bp = Blueprint("debug_util_bp", __name__)
 
 
 @debug_util_bp.route("/debug/user-info", methods=["GET", "OPTIONS"])
-def debug_user_info():
-    if flask.request.method == 'OPTIONS':
-        return create_cors_response()
+@require_auth_only
+def debug_user_info(user_id):
     try:
-        user_id = get_user_id_from_request()
         debug_info = {
             "time": datetime.utcnow().isoformat(),
             "user_id": user_id,
@@ -22,9 +20,8 @@ def debug_user_info():
             "request_headers": dict(request.headers),
             "request_args": dict(request.args),
         }
-        if user_id:
-            token = get_token_data(user_id, "gcp") or {}
-            debug_info["token_keys"] = list(token.keys())
+        token = get_token_data(user_id, "gcp") or {}
+        debug_info["token_keys"] = list(token.keys())
         return jsonify(debug_info)
     except Exception as e:
         logging.error(f"Error in debug user-info endpoint: {e}", exc_info=True)

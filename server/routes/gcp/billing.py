@@ -1,7 +1,7 @@
 """GCP billing routes."""
 import logging
 from flask import Blueprint, request, jsonify
-from utils.auth.stateless_auth import get_user_id_from_request
+from utils.auth.rbac_decorators import require_permission
 from utils.auth.token_refresh import refresh_token_if_needed
 from connectors.gcp_connector.auth.oauth import get_credentials
 from utils.auth.token_management import get_token_data
@@ -11,15 +11,12 @@ from connectors.gcp_connector.billing import store_bigquery_data, is_bigquery_en
 gcp_billing_bp = Blueprint("gcp_billing", __name__)
 
 @gcp_billing_bp.route("/billing", methods=["POST"])
-def billing():
+@require_permission("connectors", "read")
+def billing(user_id):
     try:
         logging.info("running the billing api")
         data = request.get_json()
-        user_id = data.get("userId")
-        provider = data.get("X-Provider", "gcp")  # Default to GCP if not specified
-
-        if not user_id:
-            return jsonify({"error": "Missing user_id in request body"}), 400
+        provider = data.get("X-Provider", "gcp") if data else "gcp"
 
         # Refresh token if needed before proceeding
         try:

@@ -27,7 +27,7 @@ from typing import Dict, Optional
 from flask import request, jsonify, redirect
 import requests
 from routes.ovh import ovh_bp
-from utils.auth.stateless_auth import get_user_id_from_request
+from utils.auth.rbac_decorators import require_permission
 from utils.auth.token_management import store_tokens_in_db
 from urllib.parse import urlencode
 from utils.auth.oauth2_state_cache import store_oauth2_state, retrieve_oauth2_state
@@ -62,7 +62,8 @@ OAUTH2_TOKEN_ENDPOINTS = {
 
 @ovh_bp.route('/ovh/oauth2/initiate', methods=['POST', 'OPTIONS'])
 @limiter.limit("5 per minute;20 per hour;100 per day")
-def ovh_oauth2_initiate():
+@require_permission("connectors", "write")
+def ovh_oauth2_initiate(user_id):
     """
     Initiate OAuth2 authorization code flow.
 
@@ -86,11 +87,6 @@ def ovh_oauth2_initiate():
         return create_cors_response()
     
     try:
-        user_id = get_user_id_from_request()
-        if not user_id:
-            logger.warning("OAuth2 initiation attempt without user_id")
-            return jsonify({"error": "Missing user_id"}), 401
-
         data = request.get_json() or {}
         endpoint = data.get('endpoint')
         project_id = data.get('projectId')
@@ -353,7 +349,8 @@ def ovh_oauth2_callback():
 
 @ovh_bp.route('/ovh/oauth2/refresh', methods=['POST'])
 @limiter.limit("5 per minute;20 per hour;100 per day")
-def ovh_oauth2_refresh():
+@require_permission("connectors", "write")
+def ovh_oauth2_refresh(user_id):
     """
     Refresh expired OAuth2 access token using refresh token.
 
@@ -366,10 +363,6 @@ def ovh_oauth2_refresh():
     }
     """
     try:
-        user_id = get_user_id_from_request()
-        if not user_id:
-            return jsonify({"error": "Missing user_id"}), 401
-
         # Get current token data
         from utils.secrets.secret_ref_utils import get_user_token_data
         token_data = get_user_token_data(user_id, 'ovh')

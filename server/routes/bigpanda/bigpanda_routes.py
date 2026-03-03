@@ -14,8 +14,9 @@ from flask import Blueprint, jsonify, request
 from connectors.bigpanda_connector.api_client import BigPandaClient, BigPandaAPIError
 from utils.db.connection_pool import db_pool
 from utils.web.cors_utils import create_cors_response
-from utils.auth.stateless_auth import get_user_id_from_request
 from utils.auth.token_management import get_token_data, store_tokens_in_db
+from utils.auth.rbac_decorators import require_permission
+from utils.auth.stateless_auth import get_org_id_from_request
 
 logger = logging.getLogger(__name__)
 
@@ -31,14 +32,8 @@ def _get_stored_credentials(user_id: str) -> dict | None:
 
 
 @bigpanda_bp.route("/connect", methods=["POST", "OPTIONS"])
-def connect():
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
-
+@require_permission("connectors", "write")
+def connect(user_id):
     data = request.get_json(force=True, silent=True) or {}
     api_token = data.get("apiToken")
 
@@ -73,14 +68,8 @@ def connect():
 
 
 @bigpanda_bp.route("/status", methods=["GET", "OPTIONS"])
-def status():
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
-
+@require_permission("connectors", "read")
+def status(user_id):
     creds = _get_stored_credentials(user_id)
     if not creds or not creds.get("api_token"):
         return jsonify({"connected": False})
@@ -92,14 +81,8 @@ def status():
 
 
 @bigpanda_bp.route("/disconnect", methods=["POST", "DELETE", "OPTIONS"])
-def disconnect():
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
-
+@require_permission("connectors", "write")
+def disconnect(user_id):
     try:
         with db_pool.get_admin_connection() as conn:
             cursor = conn.cursor()
@@ -183,14 +166,8 @@ def webhook(user_id: str):
 
 
 @bigpanda_bp.route("/webhook-url", methods=["GET", "OPTIONS"])
-def get_webhook_url():
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
-
+@require_permission("connectors", "read")
+def get_webhook_url(user_id):
     ngrok_url = os.getenv("NGROK_URL", "").rstrip("/")
     backend_url = os.getenv("NEXT_PUBLIC_BACKEND_URL", "").rstrip("/")
     base_url = ngrok_url if ngrok_url and backend_url.startswith("http://localhost") else backend_url

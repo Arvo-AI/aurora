@@ -64,6 +64,39 @@ def get_user_id_from_request() -> Optional[str]:
     logger.debug("No user_id found in request - user not authenticated")
     return None
 
+
+def get_org_id_from_request() -> Optional[str]:
+    """Extract org ID from X-Org-ID header (set by Auth.js middleware).
+    
+    Trusts the header value since it's set server-side by the Next.js
+    middleware from the JWT session (same trust boundary as X-User-ID).
+    Falls back to looking up the user's org from the database if the
+    header is not present.
+    
+    Returns None if no org context is available.
+    """
+    org_id = request.headers.get('X-Org-ID')
+    if org_id:
+        return org_id
+
+    user_id = request.headers.get('X-User-ID')
+    if user_id:
+        try:
+            from utils.db.connection_pool import db_pool
+            with db_pool.get_admin_connection() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        "SELECT org_id FROM users WHERE id = %s",
+                        (user_id,)
+                    )
+                    row = cursor.fetchone()
+                    if row and row[0]:
+                        return row[0]
+        except Exception as e:
+            logger.warning(f"Error looking up org_id for user {user_id}: {e}")
+
+    return None
+
 def get_credentials_from_db(user_id: str, provider: str) -> Optional[Dict[str, Any]]:
     """
     Retrieve credentials from database or Vault.

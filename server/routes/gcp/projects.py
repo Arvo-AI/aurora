@@ -2,7 +2,8 @@
 import logging
 from flask import Blueprint, request, jsonify
 from utils.web.cors_utils import create_cors_response
-from utils.auth.stateless_auth import get_user_id_from_request, get_user_preference
+from utils.auth.stateless_auth import get_user_preference
+from utils.auth.rbac_decorators import require_permission, require_auth_only
 from utils.auth.token_refresh import refresh_token_if_needed
 from connectors.gcp_connector.auth.oauth import get_credentials
 from utils.auth.token_management import get_token_data
@@ -17,7 +18,8 @@ from googleapiclient.discovery import build
 gcp_projects_bp = Blueprint("gcp_projects", __name__)
 
 @gcp_projects_bp.route("/api/gcp/projects", methods=["POST", "OPTIONS"])
-def get_projects():
+@require_permission("connectors", "read")
+def get_projects(user_id):
     """Get all GCP projects with billing status for the authenticated user."""
     if request.method == "OPTIONS":
         return create_cors_response()
@@ -25,11 +27,7 @@ def get_projects():
     try:
         logging.info("Fetching GCP projects with billing status")
         data = request.get_json()
-        user_id = data.get("userId")
-        provider = data.get("X-Provider", "gcp")
-
-        if not user_id:
-            return jsonify({"error": "Missing user_id in request body"}), 400
+        provider = data.get("X-Provider", "gcp") if data else "gcp"
 
         # Refresh token if needed before proceeding
         try:
@@ -102,7 +100,8 @@ def get_projects():
 
 
 @gcp_projects_bp.route("/api/gcp/sa-project-access", methods=["GET", "POST", "OPTIONS"])
-def sa_project_access():
+@require_permission("connectors", "write")
+def sa_project_access(user_id):
     """GET -> list projects with SA access flag.
        POST -> update SA access based on payload {projects:[{projectId, enabled}]}
     """
@@ -110,11 +109,6 @@ def sa_project_access():
         return create_cors_response()
 
     try:
-        # Authenticate user from session/token - DO NOT trust request params/body
-        user_id = get_user_id_from_request()
-        if not user_id:
-            return jsonify({"error": "Unauthorized - authentication required"}), 401
-
         if request.method == "GET":
 
             provider = "gcp"
