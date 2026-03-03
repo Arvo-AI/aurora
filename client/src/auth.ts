@@ -1,6 +1,29 @@
 import NextAuth from "next-auth"
 import Credentials from "next-auth/providers/credentials"
 
+const ROLE_REVALIDATE_SECONDS = 5 * 60 // re-check role/org every 5 minutes
+
+async function refreshUserFromBackend(userId: string): Promise<{
+  role: string
+  orgId: string | null
+  orgName: string | null
+} | null> {
+  const backendUrl = process.env.BACKEND_URL
+  if (!backendUrl) return null
+
+  try {
+    const res = await fetch(`${backendUrl}/api/auth/me`, {
+      headers: { "X-User-ID": userId },
+      cache: "no-store",
+    })
+    if (!res.ok) return null
+    return await res.json()
+  } catch (err) {
+    console.error("Failed to refresh user from backend:", err)
+    return null
+  }
+}
+
 export const { handlers, signIn, signOut, auth } = NextAuth({
   // trustHost: true in development, false in production
   // In production, Auth.js will use FRONTEND_URL or infer from request headers
@@ -52,7 +75,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
     error: "/sign-in"
   },
   callbacks: {
-    jwt({ token, user }) {
+    async jwt({ token, user }) {
       if (user) {
         token.id = user.id
         token.email = user.email
@@ -60,7 +83,23 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
         token.role = user.role
         token.orgId = user.orgId
         token.orgName = user.orgName
+        token.lastRefreshedAt = Math.floor(Date.now() / 1000)
+        return token
       }
+
+      const lastRefreshed = (token.lastRefreshedAt as number) || 0
+      const now = Math.floor(Date.now() / 1000)
+
+      if (now - lastRefreshed > ROLE_REVALIDATE_SECONDS) {
+        const fresh = await refreshUserFromBackend(token.id as string)
+        if (fresh) {
+          token.role = fresh.role
+          token.orgId = fresh.orgId
+          token.orgName = fresh.orgName
+        }
+        token.lastRefreshedAt = now
+      }
+
       return token
     },
     session({ session, token }) {

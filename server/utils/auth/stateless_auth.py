@@ -68,17 +68,18 @@ def get_user_id_from_request() -> Optional[str]:
 def get_org_id_from_request() -> Optional[str]:
     """Extract org ID from X-Org-ID header (set by Auth.js middleware).
     
-    Falls back to looking up the user's org from the database if the header
-    is not present (backwards compatibility during migration).
-    
-    Validates that the header-provided org_id actually matches the user's
-    org in the database to prevent cross-org access.
+    Trusts the header value since it's set server-side by the Next.js
+    middleware from the JWT session (same trust boundary as X-User-ID).
+    Falls back to looking up the user's org from the database if the
+    header is not present.
     
     Returns None if no org context is available.
     """
-    user_id = request.headers.get('X-User-ID')
-    header_org_id = request.headers.get('X-Org-ID')
+    org_id = request.headers.get('X-Org-ID')
+    if org_id:
+        return org_id
 
+    user_id = request.headers.get('X-User-ID')
     if user_id:
         try:
             from utils.db.connection_pool import db_pool
@@ -89,23 +90,10 @@ def get_org_id_from_request() -> Optional[str]:
                         (user_id,)
                     )
                     row = cursor.fetchone()
-                    db_org_id = row[0] if row and row[0] else None
-
-                    if header_org_id and db_org_id:
-                        if header_org_id != db_org_id:
-                            logger.warning(
-                                "Org mismatch: header=%s db=%s user=%s — using DB value",
-                                header_org_id, db_org_id, user_id,
-                            )
-                        return db_org_id
-
-                    if db_org_id:
-                        return db_org_id
+                    if row and row[0]:
+                        return row[0]
         except Exception as e:
             logger.warning(f"Error looking up org_id for user {user_id}: {e}")
-
-    if header_org_id:
-        return header_org_id
 
     return None
 

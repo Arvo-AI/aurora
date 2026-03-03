@@ -273,6 +273,39 @@ def change_password():
         return jsonify({"error": "Password change failed"}), 500
 
 
+@auth_bp.route('/me', methods=['GET'])
+def get_current_user():
+    """Return the current user's role and org from the database.
+
+    Called periodically by the frontend JWT callback to keep the
+    session in sync after admin role changes.
+    """
+    user_id = request.headers.get('X-User-ID')
+    if not user_id:
+        return jsonify({"error": "Unauthorized"}), 401
+
+    conn = connect_to_db_as_user()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT u.role, u.org_id, o.name "
+                "FROM users u LEFT JOIN organizations o ON u.org_id = o.id "
+                "WHERE u.id = %s",
+                (user_id,),
+            )
+            row = cursor.fetchone()
+            if not row:
+                return jsonify({"error": "User not found"}), 404
+
+            return jsonify({
+                "role": row[0] or "viewer",
+                "orgId": row[1],
+                "orgName": row[2],
+            }), 200
+    finally:
+        conn.close()
+
+
 @auth_bp.route('/admins', methods=['GET'])
 def get_admins():
     """Return the list of admin users (name + email only). Any authenticated user may call this."""

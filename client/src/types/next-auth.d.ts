@@ -34,5 +34,6 @@ declare module "next-auth/jwt" {
     role?: UserRole
     orgId?: string
     orgName?: string
+    lastRefreshedAt?: number
   }
 }
