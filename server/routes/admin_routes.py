@@ -5,6 +5,7 @@ All endpoints require the ``(users, manage)`` permission (admin-only).
 
 import logging
 
+import bcrypt
 from flask import Blueprint, request, jsonify
 
 from utils.auth.rbac_decorators import require_permission
@@ -39,6 +40,61 @@ def list_users(user_id):
             }
             for r in rows
         ]), 200
+    finally:
+        conn.close()
+
+
+@admin_bp.route("/users", methods=["POST"])
+@require_permission("users", "manage")
+def create_user(user_id):
+    """Admin-created user with a specified role."""
+    data = request.get_json(silent=True) or {}
+    email = (data.get("email") or "").strip().lower()
+    password = data.get("password") or ""
+    name = (data.get("name") or "").strip()
+    role = (data.get("role") or "viewer").strip().lower()
+
+    if not email or not password:
+        return jsonify({"error": "Email and password are required"}), 400
+    if len(password) < 8:
+        return jsonify({"error": "Password must be at least 8 characters"}), 400
+    if role not in VALID_ROLES:
+        return jsonify({"error": f"Invalid role. Must be one of: {', '.join(sorted(VALID_ROLES))}"}), 400
+
+    password_hash = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+
+    conn = connect_to_db_as_user()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id FROM users WHERE email = %s", (email,))
+            if cur.fetchone():
+                return jsonify({"error": "User with this email already exists"}), 409
+
+            cur.execute(
+                """INSERT INTO users (email, password_hash, name, role, created_at)
+                   VALUES (%s, %s, %s, %s, NOW())
+                   RETURNING id, email, name, role, created_at""",
+                (email, password_hash, name or None, role),
+            )
+            row = cur.fetchone()
+        conn.commit()
+
+        new_user_id = row[0]
+        try:
+            enforcer = get_enforcer()
+            enforcer.add_grouping_policy(new_user_id, role)
+            enforcer.save_policy()
+        except Exception as casbin_err:
+            logger.warning("Failed to assign Casbin role for %s: %s", new_user_id, casbin_err)
+
+        logger.info("Admin %s created user %s (%s) with role '%s'", user_id, new_user_id, email, role)
+        return jsonify({
+            "id": row[0],
+            "email": row[1],
+            "name": row[2],
+            "role": row[3] or "viewer",
+            "created_at": row[4].isoformat() if row[4] else None,
+        }), 201
     finally:
         conn.close()
 
