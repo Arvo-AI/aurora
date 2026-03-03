@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from "react";
 import { Card, CardContent } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Plug, ArrowRight, CheckCircle2, XCircle, Loader2 } from "lucide-react";
 import Link from "next/link";
@@ -78,8 +77,6 @@ export default function OrgIntegrations() {
   const connected = connectors.filter((c) => c.connected);
   const available = connectors.filter((c) => !c.connected && !c.checking);
   const loading = connectors.some((c) => c.checking);
-
-  const categories = Array.from(new Set(connectors.map((c) => c.category)));
 
   return (
     <div className="space-y-6">

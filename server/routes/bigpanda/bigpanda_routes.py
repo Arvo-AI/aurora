@@ -16,7 +16,6 @@ from utils.db.connection_pool import db_pool
 from utils.web.cors_utils import create_cors_response
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.auth.rbac_decorators import require_permission
-from utils.auth.stateless_auth import get_org_id_from_request
 
 logger = logging.getLogger(__name__)
 

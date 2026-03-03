@@ -4,7 +4,6 @@ import { useEffect, useState } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Lock, Plus, X, Save, Loader2, Mail } from "lucide-react";
 import { toast } from "@/hooks/use-toast";

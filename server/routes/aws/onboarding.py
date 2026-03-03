@@ -7,7 +7,7 @@ import logging
 import os
 from flask import Blueprint, request, jsonify, Response
 from utils.web.cors_utils import create_cors_response
-from utils.auth.rbac_decorators import require_permission, require_auth_only
+from utils.auth.rbac_decorators import require_permission
 from utils.workspace.workspace_utils import (
     get_or_create_workspace,
     get_workspace_by_id,

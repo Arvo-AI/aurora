@@ -3,7 +3,7 @@ import logging
 from flask import Blueprint, request, jsonify
 from utils.web.cors_utils import create_cors_response
 from utils.auth.stateless_auth import get_user_preference
-from utils.auth.rbac_decorators import require_permission, require_auth_only
+from utils.auth.rbac_decorators import require_permission
 from utils.auth.token_refresh import refresh_token_if_needed
 from connectors.gcp_connector.auth.oauth import get_credentials
 from utils.auth.token_management import get_token_data

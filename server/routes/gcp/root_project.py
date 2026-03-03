@@ -10,7 +10,7 @@ from utils.auth.stateless_auth import (
     get_credentials_from_db,
     create_cors_response
 )
-from utils.auth.rbac_decorators import require_auth_only, require_permission
+from utils.auth.rbac_decorators import require_permission
 from connectors.gcp_connector.auth.oauth import get_credentials
 from connectors.gcp_connector.gcp.projects import check_billing_enabled
 from routes.gcp.root_project_tasks import setup_root_project_async
