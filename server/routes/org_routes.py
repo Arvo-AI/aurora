@@ -192,3 +192,215 @@ def remove_member(user_id, target_user_id):
     except Exception as e:
         logger.error("Error removing member: %s", e)
         return jsonify({"error": "Failed to remove member"}), 500
+
+
+@org_bp.route("/stats", methods=["GET", "OPTIONS"])
+@require_auth_only
+def get_org_stats(user_id):
+    """Return aggregate stats for the current org."""
+    if request.method == "OPTIONS":
+        return jsonify({}), 200
+
+    org_id = get_org_id_from_request()
+    if not org_id:
+        return jsonify({"error": "No organization found"}), 404
+
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT COUNT(*) FROM users WHERE org_id = %s", (org_id,)
+                )
+                member_count = cursor.fetchone()[0]
+
+                cursor.execute(
+                    "SELECT COUNT(*) FROM incidents WHERE org_id = %s", (org_id,)
+                )
+                incident_count = cursor.fetchone()[0]
+
+                cursor.execute(
+                    "SELECT COUNT(*) FROM chat_sessions WHERE org_id = %s",
+                    (org_id,),
+                )
+                chat_count = cursor.fetchone()[0]
+
+                cursor.execute(
+                    "SELECT COUNT(DISTINCT provider) FROM user_tokens WHERE org_id = %s",
+                    (org_id,),
+                )
+                integration_count = cursor.fetchone()[0]
+
+                return jsonify({
+                    "members": member_count,
+                    "incidents": incident_count,
+                    "chatSessions": chat_count,
+                    "integrations": integration_count,
+                })
+    except Exception as e:
+        logger.error("Error fetching org stats: %s", e)
+        return jsonify({"error": "Failed to fetch stats"}), 500
+
+
+@org_bp.route("/activity", methods=["GET", "OPTIONS"])
+@require_auth_only
+def get_org_activity(user_id):
+    """Return recent activity events for the org (member joins, role changes)."""
+    if request.method == "OPTIONS":
+        return jsonify({}), 200
+
+    org_id = get_org_id_from_request()
+    if not org_id:
+        return jsonify({"error": "No organization found"}), 404
+
+    limit = request.args.get("limit", 30, type=int)
+
+    try:
+        events = []
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """SELECT id, email, name, role, created_at
+                       FROM users WHERE org_id = %s
+                       ORDER BY created_at DESC LIMIT %s""",
+                    (org_id, limit),
+                )
+                for row in cursor.fetchall():
+                    ts = row[4]
+                    events.append({
+                        "type": "member_joined",
+                        "userId": row[0],
+                        "email": row[1],
+                        "name": row[2],
+                        "role": row[3] or "viewer",
+                        "timestamp": ts.isoformat() if ts else None,
+                        "description": f"{row[2] or row[1]} joined as {row[3] or 'viewer'}",
+                    })
+
+                cursor.execute(
+                    """SELECT i.source_type, i.alert_title, i.severity,
+                              i.status, i.created_at
+                       FROM incidents i
+                       WHERE i.org_id = %s
+                       ORDER BY i.created_at DESC LIMIT %s""",
+                    (org_id, limit),
+                )
+                for row in cursor.fetchall():
+                    ts = row[4]
+                    events.append({
+                        "type": "incident_created",
+                        "source": row[0],
+                        "title": row[1],
+                        "severity": row[2],
+                        "status": row[3],
+                        "timestamp": ts.isoformat() if ts else None,
+                        "description": f"Incident from {row[0]}: {row[1]}",
+                    })
+
+                cursor.execute(
+                    """SELECT ut.provider, ut.created_at, u.name, u.email
+                       FROM user_tokens ut
+                       JOIN users u ON ut.user_id = u.id
+                       WHERE ut.org_id = %s
+                       ORDER BY ut.created_at DESC LIMIT %s""",
+                    (org_id, limit),
+                )
+                for row in cursor.fetchall():
+                    ts = row[1]
+                    who = row[2] or row[3]
+                    events.append({
+                        "type": "connector_added",
+                        "provider": row[0],
+                        "timestamp": ts.isoformat() if ts else None,
+                        "description": f"{who} connected {row[0]}",
+                    })
+
+        events.sort(
+            key=lambda e: e.get("timestamp") or "",
+            reverse=True,
+        )
+        return jsonify({"events": events[:limit]})
+    except Exception as e:
+        logger.error("Error fetching org activity: %s", e)
+        return jsonify({"error": "Failed to fetch activity"}), 500
+
+
+@org_bp.route("/preferences", methods=["GET", "OPTIONS"])
+@require_auth_only
+def get_org_preferences(user_id):
+    """Get org-level preferences stored in user_preferences with user_id='__org__'."""
+    if request.method == "OPTIONS":
+        return jsonify({}), 200
+
+    org_id = get_org_id_from_request()
+    if not org_id:
+        return jsonify({"error": "No organization found"}), 404
+
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """SELECT preference_key, preference_value
+                       FROM user_preferences
+                       WHERE user_id = '__org__' AND org_id = %s""",
+                    (org_id,),
+                )
+                prefs = {row[0]: row[1] for row in cursor.fetchall()}
+
+                cursor.execute(
+                    "SELECT email FROM rca_notification_emails WHERE org_id = %s ORDER BY email",
+                    (org_id,),
+                )
+                prefs["notification_emails"] = [r[0] for r in cursor.fetchall()]
+
+                return jsonify(prefs)
+    except Exception as e:
+        logger.error("Error fetching org preferences: %s", e)
+        return jsonify({"error": "Failed to fetch preferences"}), 500
+
+
+@org_bp.route("/preferences", methods=["PUT", "OPTIONS"])
+@require_permission("org", "manage")
+def update_org_preferences(user_id):
+    """Update org-level preferences (admin only)."""
+    if request.method == "OPTIONS":
+        return jsonify({}), 200
+
+    org_id = get_org_id_from_request()
+    if not org_id:
+        return jsonify({"error": "No organization found"}), 404
+
+    data = request.get_json() or {}
+
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                for key, value in data.items():
+                    if key == "notification_emails":
+                        continue
+                    cursor.execute(
+                        """INSERT INTO user_preferences (user_id, org_id, preference_key, preference_value)
+                           VALUES ('__org__', %s, %s, %s)
+                           ON CONFLICT (user_id, preference_key)
+                           DO UPDATE SET preference_value = EXCLUDED.preference_value""",
+                        (org_id, key, str(value)),
+                    )
+
+                if "notification_emails" in data:
+                    emails = data["notification_emails"]
+                    cursor.execute(
+                        "DELETE FROM rca_notification_emails WHERE org_id = %s",
+                        (org_id,),
+                    )
+                    for email in emails:
+                        email = email.strip()
+                        if email:
+                            cursor.execute(
+                                """INSERT INTO rca_notification_emails
+                                   (user_id, org_id, email) VALUES (%s, %s, %s)""",
+                                (user_id, org_id, email),
+                            )
+                conn.commit()
+                return jsonify({"ok": True})
+    except Exception as e:
+        logger.error("Error updating org preferences: %s", e)
+        return jsonify({"error": "Failed to update preferences"}), 500

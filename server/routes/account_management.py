@@ -37,36 +37,34 @@ def get_connected_accounts(user_id, target_user_id):
         # ------------------------------
         cursor.execute(
             """
-            SELECT provider, subscription_id, subscription_name, timestamp
+            SELECT DISTINCT ON (provider)
+                   provider, subscription_id, subscription_name, timestamp, user_id
             FROM user_tokens 
-            WHERE user_id = %s AND org_id = %s AND secret_ref IS NOT NULL AND is_active = TRUE
+            WHERE (user_id = %s OR org_id = %s)
+              AND secret_ref IS NOT NULL
+              AND is_active = TRUE
+            ORDER BY provider, CASE WHEN user_id = %s THEN 0 ELSE 1 END
             """,
-            (user_id, org_id),
+            (user_id, org_id, user_id),
         )
 
         rows = cursor.fetchall()
 
         accounts: dict = {}
 
-        for provider, subscription_id, subscription_name, timestamp in rows:
+        for provider, subscription_id, subscription_name, timestamp, token_owner_id in rows:
             
-            token_data = get_token_data(user_id, provider)
+            token_data = get_token_data(token_owner_id, provider)
             if not token_data:
                 continue
             
             account_info = {"isConnected": True}
             
             if provider == "gcp":
-                token_data = get_token_data(user_id, provider)
-                if not token_data:
-                    continue
                 account_info["email"] = token_data.get("email", "Unknown")
                 account_info["name"] = token_data.get("name", "Google Cloud")
                 account_info["displayText"] = account_info["email"]
             elif provider == "aws":
-                token_data = get_token_data(user_id, provider)
-                if not token_data:
-                    continue
                 account_info["accountId"] = token_data.get("aws_account_id", "Unknown")
                 account_info["name"] = f"AWS Account"
                 account_info["displayText"] = f"Account {account_info['accountId']}"
@@ -88,7 +86,7 @@ def get_connected_accounts(user_id, target_user_id):
             """
             SELECT provider, account_id, role_arn, last_verified_at
             FROM user_connections
-            WHERE user_id = %s AND org_id = %s AND status = 'active'
+            WHERE user_id = %s AND (org_id = %s OR org_id IS NULL) AND status = 'active'
             """,
             (user_id, org_id),
         )
@@ -138,7 +136,7 @@ def delete_connected_account(user_id, target_user_id, provider):
             conn = connect_to_db_as_admin()
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT secret_ref FROM user_tokens WHERE user_id = %s AND org_id = %s AND provider = %s",
+                "SELECT secret_ref FROM user_tokens WHERE user_id = %s AND (org_id = %s OR org_id IS NULL) AND provider = %s",
                 (user_id, org_id, provider)
             )
             result = cursor.fetchone()
@@ -162,7 +160,7 @@ def delete_connected_account(user_id, target_user_id, provider):
             cursor = conn.cursor()
 
             cursor.execute(
-                "DELETE FROM user_tokens WHERE user_id = %s AND org_id = %s AND provider = %s",
+                "DELETE FROM user_tokens WHERE user_id = %s AND (org_id = %s OR org_id IS NULL) AND provider = %s",
                 (user_id, org_id, provider)
             )
             deleted = cursor.rowcount
@@ -188,7 +186,7 @@ def delete_connected_account(user_id, target_user_id, provider):
                 conn = connect_to_db_as_admin()
                 cursor = conn.cursor()
                 cursor.execute(
-                    "DELETE FROM user_preferences WHERE user_id = %s AND org_id = %s AND preference_key = 'gcp_root_project'",
+                    "DELETE FROM user_preferences WHERE user_id = %s AND (org_id = %s OR org_id IS NULL) AND preference_key = 'gcp_root_project'",
                     (user_id, org_id)
                 )
                 conn.commit()
@@ -239,7 +237,7 @@ def delete_connected_account(user_id, target_user_id, provider):
             cursor = conn.cursor()
 
             cursor.execute(
-                "DELETE FROM user_tokens WHERE user_id = %s AND org_id = %s AND provider = %s",
+                "DELETE FROM user_tokens WHERE user_id = %s AND (org_id = %s OR org_id IS NULL) AND provider = %s",
                 (user_id, org_id, provider)
             )
 
@@ -332,11 +330,15 @@ def get_user_tokens(user_id):
         conn.commit()
         cursor.execute(
             """
-            SELECT subscription_id, subscription_name, tenant_id, client_id, provider, email
+            SELECT DISTINCT ON (provider)
+                   subscription_id, subscription_name, tenant_id, client_id, provider, email
             FROM user_tokens 
-            WHERE user_id = %s AND org_id = %s AND is_active = TRUE AND secret_ref IS NOT NULL
+            WHERE (user_id = %s OR org_id = %s)
+              AND is_active = TRUE
+              AND secret_ref IS NOT NULL
+            ORDER BY provider, CASE WHEN user_id = %s THEN 0 ELSE 1 END
             """,
-            (user_id, org_id)
+            (user_id, org_id, user_id)
         )
         tokens = cursor.fetchall()
 

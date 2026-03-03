@@ -2,7 +2,7 @@
 
 import Link from "next/link"
 import { usePathname, useRouter } from "next/navigation"
-import { ChevronLeft, Settings, LogOut, User, Zap, Plug, Shield } from "lucide-react"
+import { ChevronLeft, Settings, LogOut, User, Zap, Plug, Building2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import ChatHistory from "@/components/ChatHistory"
@@ -189,25 +189,23 @@ export default function Navigation({
             </Link>
           </li>
 
-          {/* Admin Navigation Item (admin only) */}
-          {user?.role === 'admin' && (
-            <li>
-              <Link
-                href="/admin"
-                className={cn(
-                  "w-full flex items-center justify-between px-2.5 py-1.5 rounded-md hover:bg-primary/10 transition-colors text-sm border border-transparent hover:border-border/50",
-                  pathname?.startsWith("/admin") 
-                    ? "bg-card rounded-lg border border-border shadow-sm" 
-                    : "text-muted-foreground"
-                )}
-              >
-                <div className="flex items-center">
-                  <Shield size={16} />
-                  <span className="ml-2">Admin</span>
-                </div>
-              </Link>
-            </li>
-          )}
+          {/* Organization Navigation Item (all roles) */}
+          <li>
+            <Link
+              href="/org"
+              className={cn(
+                "w-full flex items-center justify-between px-2.5 py-1.5 rounded-md hover:bg-primary/10 transition-colors text-sm border border-transparent hover:border-border/50",
+                pathname?.startsWith("/org") 
+                  ? "bg-card rounded-lg border border-border shadow-sm" 
+                  : "text-muted-foreground"
+              )}
+            >
+              <div className="flex items-center">
+                <Building2 size={16} />
+                <span className="ml-2">Organization</span>
+              </div>
+            </Link>
+          </li>
 
           {/* Chat History Section */}
           {(

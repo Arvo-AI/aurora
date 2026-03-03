@@ -204,7 +204,29 @@ class DatadogClient:
 def _get_stored_datadog_credentials(user_id: str) -> Optional[Dict[str, Any]]:
     try:
         data = get_token_data(user_id, "datadog")
-        return data or None
+        if data:
+            return data
+
+        org_id = get_org_id_from_request()
+        if not org_id:
+            return None
+
+        from utils.db.db_utils import connect_to_db_as_admin
+        conn = connect_to_db_as_admin()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT user_id FROM user_tokens WHERE org_id = %s AND provider = 'datadog' AND is_active = TRUE AND secret_ref IS NOT NULL LIMIT 1",
+            (org_id,)
+        )
+        row = cursor.fetchone()
+        cursor.close()
+        conn.close()
+
+        if row:
+            data = get_token_data(row[0], "datadog")
+            return data or None
+
+        return None
     except Exception as exc:
         logger.error("[DATADOG] Failed to retrieve credentials for user %s: %s", user_id, exc)
         return None

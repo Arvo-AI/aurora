@@ -80,7 +80,7 @@ def callback():
             conn = connect_to_db_as_admin()
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT secret_ref FROM user_tokens WHERE user_id = %s AND org_id = %s AND provider = 'gcp'",
+                "SELECT secret_ref FROM user_tokens WHERE user_id = %s AND (org_id = %s OR org_id IS NULL) AND provider = 'gcp'",
                 (user_id, org_id)
             )
             result = cursor.fetchone()
@@ -167,19 +167,19 @@ def force_disconnect_gcp(user_id):
         cursor = conn.cursor()
         
         cursor.execute(
-            "SELECT secret_ref FROM user_tokens WHERE user_id = %s AND org_id = %s AND provider = 'gcp'",
+            "SELECT secret_ref FROM user_tokens WHERE user_id = %s AND (org_id = %s OR org_id IS NULL) AND provider = 'gcp'",
             (user_id, org_id)
         )
         result = cursor.fetchone()
         secret_ref = result[0] if result else None
         
         cursor.execute(
-            "DELETE FROM user_tokens WHERE user_id = %s AND org_id = %s AND provider = 'gcp'",
+            "DELETE FROM user_tokens WHERE user_id = %s AND (org_id = %s OR org_id IS NULL) AND provider = 'gcp'",
             (user_id, org_id)
         )
         
         cursor.execute(
-            "DELETE FROM user_preferences WHERE user_id = %s AND org_id = %s AND preference_key = 'gcp_root_project'",
+            "DELETE FROM user_preferences WHERE user_id = %s AND (org_id = %s OR org_id IS NULL) AND preference_key = 'gcp_root_project'",
             (user_id, org_id)
         )
         

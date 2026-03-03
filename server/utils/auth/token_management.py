@@ -12,21 +12,28 @@ from utils.db.connection_pool import db_pool
 logger = logging.getLogger(__name__)
 
 
-def store_tokens_in_db(user_id: str, token_data: Dict, provider: str, 
+def store_tokens_in_db(user_id: str, token_data: Dict, provider: str,
                       subscription_name: str = None, subscription_id: str = None,
                       org_id: str = None) -> None:
     """
     Store token data in Vault and save secret reference in database.
-    
+
     Args:
         user_id: User identifier
         token_data: Token data to store
         provider: Provider name (gcp, aws, azure)
         subscription_name: Azure subscription name (optional)
         subscription_id: Azure subscription ID (optional)
-        org_id: Organization ID for multi-tenant scoping (optional)
+        org_id: Organization ID for multi-tenant scoping (optional, auto-resolved from request context)
     """
     start_time = time.perf_counter()
+
+    if not org_id:
+        try:
+            from utils.auth.stateless_auth import get_org_id_from_request
+            org_id = get_org_id_from_request()
+        except Exception:
+            pass
 
     try:
         logger.info(f"[STORE-TOKENS] Starting credential storage operation")
