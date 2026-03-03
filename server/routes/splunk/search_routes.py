@@ -320,7 +320,7 @@ def get_job_results(user_id, sid: str):
 
 
 @search_bp.route("/search/jobs/<sid>", methods=["DELETE", "OPTIONS"])
-@require_permission("connectors", "read")
+@require_permission("connectors", "write")
 def cancel_job(user_id, sid: str):
     """Cancel a running search job."""
     # Validate SID format

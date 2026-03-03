@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { getEnv } from '@/lib/env';
+import ConnectorAuthGuard from "@/components/connectors/ConnectorAuthGuard";
 
 const backendUrl = getEnv('NEXT_PUBLIC_BACKEND_URL');
 
@@ -115,8 +116,9 @@ export default function OvhOnboardingPage() {
   };
 
   return (
-    <div className="min-h-screen bg-background py-12 px-4 sm:px-6 lg:px-8">
-      <div className="max-w-2xl mx-auto">
+    <ConnectorAuthGuard connectorName="OVH">
+      <div className="min-h-screen bg-background py-12 px-4 sm:px-6 lg:px-8">
+        <div className="max-w-2xl mx-auto">
         <div className="text-center mb-8">
           <Image
             src="/ovh.svg"
@@ -235,5 +237,6 @@ export default function OvhOnboardingPage() {
         </div>
       </div>
     </div>
+    </ConnectorAuthGuard>
   );
 }

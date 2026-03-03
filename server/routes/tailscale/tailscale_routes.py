@@ -129,28 +129,12 @@ def tailscale_connect(user_id):
         return jsonify({"error": "Failed to connect Tailscale"}), 500
 
 
-@tailscale_bp.route('/tailscale/tailnets', methods=['GET', 'POST'])
+@tailscale_bp.route('/tailscale/tailnets', methods=['GET'])
 @limiter.limit("30 per minute")
-@require_permission("connectors", "write")
-def tailscale_tailnets(user_id):
-    """
-    Fetch or save Tailscale tailnets (equivalent to projects).
-
-    GET Returns:
-    {
-        "tailnets": [
-            {"id": "...", "name": "...", "deviceCount": 0, "enabled": true}
-        ]
-    }
-
-    POST Body:
-    {
-        "tailnets": [{"id": "...", "enabled": true/false}]
-    }
-    """
+@require_permission("connectors", "read")
+def tailscale_tailnets_get(user_id):
+    """Fetch Tailscale tailnets (equivalent to projects)."""
     try:
-
-        # Get stored credentials
         token_data = get_token_data(user_id, "tailscale")
         if not token_data:
             return jsonify({
@@ -158,37 +142,12 @@ def tailscale_tailnets(user_id):
                 "action": "CONNECT_REQUIRED"
             }), 401
 
-        if request.method == 'POST':
-            # Save tailnet selections
-            data = request.get_json()
-            tailnets = data.get("tailnets", [])
-
-            # Store tailnet selections in user preferences
-            from utils.db.db_utils import connect_to_db_as_admin
-            conn = connect_to_db_as_admin()
-            try:
-                with conn.cursor() as cur:
-                    cur.execute("""
-                        INSERT INTO user_preferences (user_id, preference_key, preference_value)
-                        VALUES (%s, %s, %s)
-                        ON CONFLICT (user_id, preference_key)
-                        DO UPDATE SET preference_value = EXCLUDED.preference_value, updated_at = NOW()
-                    """, (user_id, 'tailscale_tailnets', json.dumps(tailnets)))
-                conn.commit()
-            finally:
-                conn.close()
-
-            logger.info(f"Saved Tailscale tailnet selections for user {user_id}")
-            return jsonify({"success": True, "message": "Tailnets saved"})
-
-        # GET - Fetch tailnets
         client_id = token_data.get("client_id")
         client_secret = token_data.get("client_secret")
 
         if not client_id or not client_secret:
             return jsonify({"error": "Invalid stored credentials"}), 401
 
-        # Get valid access token (refreshes if needed)
         success, access_token, error = get_valid_access_token(
             client_id, client_secret, token_data.get("token_data")
         )
@@ -196,13 +155,11 @@ def tailscale_tailnets(user_id):
         if not success:
             return jsonify({"error": error or "Failed to get access token"}), 401
 
-        # Fetch tailnets
         success, tailnets, error = get_user_tailnets(access_token)
 
         if not success:
             return jsonify({"error": error}), 400
 
-        # Load saved tailnet selections
         from utils.db.db_utils import connect_to_db_as_admin
         conn = connect_to_db_as_admin()
         saved_selections = {}
@@ -219,7 +176,6 @@ def tailscale_tailnets(user_id):
                     for t in saved_data:
                         saved_selections[t.get('id')] = t.get('enabled', True)
 
-                # Get root tailnet
                 cur.execute("""
                     SELECT preference_value FROM user_preferences
                     WHERE user_id = %s AND preference_key = %s
@@ -230,16 +186,53 @@ def tailscale_tailnets(user_id):
         finally:
             conn.close()
 
-        # Merge saved selections with fetched tailnets
         for tailnet in tailnets:
             tailnet_id = tailnet.get('id')
             if tailnet_id in saved_selections:
                 tailnet['enabled'] = saved_selections[tailnet_id]
             else:
-                tailnet['enabled'] = True  # Default to enabled
+                tailnet['enabled'] = True
             tailnet['isRootTailnet'] = (tailnet_id == root_tailnet_id)
 
         return jsonify({"tailnets": tailnets})
+
+    except Exception as e:
+        logger.error(f"Error with Tailscale tailnets: {e}", exc_info=True)
+        return jsonify({"error": "Failed to process tailnets request"}), 500
+
+
+@tailscale_bp.route('/tailscale/tailnets', methods=['POST'])
+@limiter.limit("30 per minute")
+@require_permission("connectors", "write")
+def tailscale_tailnets_post(user_id):
+    """Save Tailscale tailnet selections."""
+    try:
+        token_data = get_token_data(user_id, "tailscale")
+        if not token_data:
+            return jsonify({
+                "error": "Tailscale not connected. Please connect your account.",
+                "action": "CONNECT_REQUIRED"
+            }), 401
+
+        data = request.get_json()
+        tailnets = data.get("tailnets", [])
+
+        from utils.db.db_utils import connect_to_db_as_admin
+        conn = connect_to_db_as_admin()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO user_preferences (user_id, preference_key, preference_value)
+                    VALUES (%s, %s, %s)
+                    ON CONFLICT (user_id, preference_key)
+                    DO UPDATE SET preference_value = EXCLUDED.preference_value, updated_at = NOW()
+                """, (user_id, 'tailscale_tailnets', json.dumps(tailnets)))
+            conn.commit()
+        finally:
+            conn.close()
+
+        logger.info(f"Saved Tailscale tailnet selections for user {user_id}")
+        return jsonify({"success": True, "message": "Tailnets saved"})
 
     except Exception as e:
         logger.error(f"Error with Tailscale tailnets: {e}", exc_info=True)
@@ -373,41 +366,16 @@ def tailscale_ssh_setup(user_id):
         return jsonify({"error": "Failed to get SSH setup"}), 500
 
 
-@tailscale_bp.route('/tailscale/root-tailnet', methods=['GET', 'POST'])
+@tailscale_bp.route('/tailscale/root-tailnet', methods=['GET'])
 @limiter.limit("30 per minute")
-@require_permission("connectors", "write")
-def tailscale_root_tailnet(user_id):
-    """Get or set the root tailnet for Tailscale."""
+@require_permission("connectors", "read")
+def tailscale_root_tailnet_get(user_id):
+    """Get the root tailnet for Tailscale."""
     try:
-
         from utils.db.db_utils import connect_to_db_as_admin
         conn = connect_to_db_as_admin()
 
         try:
-            if request.method == 'POST':
-                data = request.get_json()
-                tailnet_id = data.get("tailnetId") or data.get("tailnet_id")
-
-                if not tailnet_id:
-                    return jsonify({"error": "tailnetId is required"}), 400
-
-                with conn.cursor() as cur:
-                    cur.execute("""
-                        INSERT INTO user_preferences (user_id, preference_key, preference_value)
-                        VALUES (%s, %s, %s::jsonb)
-                        ON CONFLICT (user_id, preference_key)
-                        DO UPDATE SET preference_value = EXCLUDED.preference_value, updated_at = NOW()
-                    """, (user_id, 'tailscale_root_tailnet', json.dumps(tailnet_id)))
-                conn.commit()
-
-                logger.info(f"Set Tailscale root tailnet to {tailnet_id} for user {user_id}")
-                return jsonify({
-                    "success": True,
-                    "tailnetId": tailnet_id,
-                    "message": "Root tailnet set successfully"
-                })
-
-            # GET - Fetch current root tailnet
             with conn.cursor() as cur:
                 cur.execute("""
                     SELECT preference_value FROM user_preferences
@@ -425,6 +393,45 @@ def tailscale_root_tailnet(user_id):
                     "tailnetId": None,
                     "hasRootTailnet": False
                 })
+        finally:
+            conn.close()
+
+    except Exception as e:
+        logger.error(f"Error with Tailscale root tailnet: {e}", exc_info=True)
+        return jsonify({"error": "Failed to process root tailnet request"}), 500
+
+
+@tailscale_bp.route('/tailscale/root-tailnet', methods=['POST'])
+@limiter.limit("30 per minute")
+@require_permission("connectors", "write")
+def tailscale_root_tailnet_post(user_id):
+    """Set the root tailnet for Tailscale."""
+    try:
+        from utils.db.db_utils import connect_to_db_as_admin
+        conn = connect_to_db_as_admin()
+
+        try:
+            data = request.get_json()
+            tailnet_id = data.get("tailnetId") or data.get("tailnet_id")
+
+            if not tailnet_id:
+                return jsonify({"error": "tailnetId is required"}), 400
+
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO user_preferences (user_id, preference_key, preference_value)
+                    VALUES (%s, %s, %s::jsonb)
+                    ON CONFLICT (user_id, preference_key)
+                    DO UPDATE SET preference_value = EXCLUDED.preference_value, updated_at = NOW()
+                """, (user_id, 'tailscale_root_tailnet', json.dumps(tailnet_id)))
+            conn.commit()
+
+            logger.info(f"Set Tailscale root tailnet to {tailnet_id} for user {user_id}")
+            return jsonify({
+                "success": True,
+                "tailnetId": tailnet_id,
+                "message": "Root tailnet set successfully"
+            })
         finally:
             conn.close()
 

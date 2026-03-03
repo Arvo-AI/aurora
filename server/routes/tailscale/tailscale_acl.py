@@ -17,55 +17,53 @@ from utils.web.limiter_ext import limiter
 logger = logging.getLogger(__name__)
 
 
-@tailscale_bp.route('/tailscale/acl', methods=['GET', 'PUT'])
+@tailscale_bp.route('/tailscale/acl', methods=['GET'])
 @limiter.limit("30 per minute")
-@require_permission("connectors", "write")
+@require_permission("connectors", "read")
 @require_tailscale
-def acl_policy(user_id):
-    """
-    Get or update the ACL policy.
-
-    GET: Returns current ACL policy
-    PUT: Updates ACL policy (requires full policy document)
-
-    PUT Request body:
-    {
-        "acl": { ... ACL policy document ... },
-        "ifMatch": "optional-etag-for-optimistic-locking"
-    }
-    """
+def acl_policy_get(user_id):
+    """Get the current ACL policy."""
     try:
-        # Use query param or default tailnet
         target_tailnet = request.args.get('tailnet', g.tailnet)
-
-        if request.method == 'PUT':
-            data = request.get_json() or {}
-            acl = data.get("acl")
-            if_match = data.get("ifMatch")
-
-            if not acl:
-                return jsonify({"error": "ACL policy is required"}), 400
-
-            success, updated_acl, error = g.tailscale_client.update_acl(target_tailnet, acl, if_match)
-
-            if not success:
-                return jsonify({"error": error}), 400
-
-            logger.info(f"ACL policy updated by user {g.user_id}")
-
-            return jsonify({
-                "success": True,
-                "message": "ACL policy updated",
-                "acl": updated_acl
-            })
-
-        # GET - Fetch current ACL
         success, acl_data, error = g.tailscale_client.get_acl(target_tailnet)
 
         if not success:
             return jsonify({"error": error}), 400
 
         return jsonify({"acl": acl_data})
+
+    except Exception as e:
+        logger.error(f"Error with Tailscale ACL: {e}", exc_info=True)
+        return jsonify({"error": "Failed to process ACL request"}), 500
+
+
+@tailscale_bp.route('/tailscale/acl', methods=['PUT'])
+@limiter.limit("30 per minute")
+@require_permission("connectors", "write")
+@require_tailscale
+def acl_policy_put(user_id):
+    """Update the ACL policy (requires full policy document)."""
+    try:
+        target_tailnet = request.args.get('tailnet', g.tailnet)
+        data = request.get_json() or {}
+        acl = data.get("acl")
+        if_match = data.get("ifMatch")
+
+        if not acl:
+            return jsonify({"error": "ACL policy is required"}), 400
+
+        success, updated_acl, error = g.tailscale_client.update_acl(target_tailnet, acl, if_match)
+
+        if not success:
+            return jsonify({"error": error}), 400
+
+        logger.info(f"ACL policy updated by user {g.user_id}")
+
+        return jsonify({
+            "success": True,
+            "message": "ACL policy updated",
+            "acl": updated_acl
+        })
 
     except Exception as e:
         logger.error(f"Error with Tailscale ACL: {e}", exc_info=True)

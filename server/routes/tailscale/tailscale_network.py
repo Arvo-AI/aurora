@@ -74,42 +74,14 @@ def get_dns_config(user_id):
         return jsonify({"error": "Failed to get DNS configuration"}), 500
 
 
-@tailscale_bp.route('/tailscale/dns/nameservers', methods=['GET', 'POST'])
+@tailscale_bp.route('/tailscale/dns/nameservers', methods=['GET'])
 @limiter.limit("30 per minute")
-@require_permission("connectors", "write")
+@require_permission("connectors", "read")
 @require_tailscale
-def dns_nameservers(user_id):
-    """
-    Get or set DNS nameservers.
-
-    POST Request body:
-    {
-        "nameservers": ["8.8.8.8", "8.8.4.4"]
-    }
-    """
+def dns_nameservers_get(user_id):
+    """Get DNS nameservers."""
     try:
         target_tailnet = request.args.get('tailnet', g.tailnet)
-
-        if request.method == 'POST':
-            data = request.get_json() or {}
-            nameservers = data.get("nameservers", [])
-
-            if not isinstance(nameservers, list):
-                return jsonify({"error": "nameservers must be an array"}), 400
-
-            success, error = g.tailscale_client.set_dns_nameservers(target_tailnet, nameservers)
-
-            if not success:
-                return jsonify({"error": error}), 400
-
-            logger.info(f"DNS nameservers updated by user {g.user_id}")
-
-            return jsonify({
-                "success": True,
-                "message": "Nameservers updated"
-            })
-
-        # GET
         success, data, error = g.tailscale_client.get_dns_nameservers(target_tailnet)
 
         if not success:
@@ -122,39 +94,45 @@ def dns_nameservers(user_id):
         return jsonify({"error": "Failed to process nameservers request"}), 500
 
 
-@tailscale_bp.route('/tailscale/dns/preferences', methods=['GET', 'POST'])
+@tailscale_bp.route('/tailscale/dns/nameservers', methods=['POST'])
 @limiter.limit("30 per minute")
 @require_permission("connectors", "write")
 @require_tailscale
-def dns_preferences(user_id):
-    """
-    Get or set DNS preferences (MagicDNS).
-
-    POST Request body:
-    {
-        "magicDNS": true
-    }
-    """
+def dns_nameservers_post(user_id):
+    """Set DNS nameservers."""
     try:
         target_tailnet = request.args.get('tailnet', g.tailnet)
+        data = request.get_json() or {}
+        nameservers = data.get("nameservers", [])
 
-        if request.method == 'POST':
-            data = request.get_json() or {}
-            magic_dns = data.get("magicDNS", True)
+        if not isinstance(nameservers, list):
+            return jsonify({"error": "nameservers must be an array"}), 400
 
-            success, error = g.tailscale_client.set_dns_preferences(target_tailnet, magic_dns)
+        success, error = g.tailscale_client.set_dns_nameservers(target_tailnet, nameservers)
 
-            if not success:
-                return jsonify({"error": error}), 400
+        if not success:
+            return jsonify({"error": error}), 400
 
-            logger.info(f"DNS preferences updated by user {g.user_id}")
+        logger.info(f"DNS nameservers updated by user {g.user_id}")
 
-            return jsonify({
-                "success": True,
-                "message": "DNS preferences updated"
-            })
+        return jsonify({
+            "success": True,
+            "message": "Nameservers updated"
+        })
 
-        # GET
+    except Exception as e:
+        logger.error(f"Error with Tailscale DNS nameservers: {e}", exc_info=True)
+        return jsonify({"error": "Failed to process nameservers request"}), 500
+
+
+@tailscale_bp.route('/tailscale/dns/preferences', methods=['GET'])
+@limiter.limit("30 per minute")
+@require_permission("connectors", "read")
+@require_tailscale
+def dns_preferences_get(user_id):
+    """Get DNS preferences (MagicDNS)."""
+    try:
+        target_tailnet = request.args.get('tailnet', g.tailnet)
         success, data, error = g.tailscale_client.get_dns_preferences(target_tailnet)
 
         if not success:
@@ -167,48 +145,79 @@ def dns_preferences(user_id):
         return jsonify({"error": "Failed to process DNS preferences request"}), 500
 
 
-@tailscale_bp.route('/tailscale/dns/searchpaths', methods=['GET', 'POST'])
+@tailscale_bp.route('/tailscale/dns/preferences', methods=['POST'])
 @limiter.limit("30 per minute")
 @require_permission("connectors", "write")
 @require_tailscale
-def dns_searchpaths(user_id):
-    """
-    Get or set DNS search paths.
-
-    POST Request body:
-    {
-        "searchPaths": ["example.com", "internal.local"]
-    }
-    """
+def dns_preferences_post(user_id):
+    """Set DNS preferences (MagicDNS)."""
     try:
         target_tailnet = request.args.get('tailnet', g.tailnet)
+        data = request.get_json() or {}
+        magic_dns = data.get("magicDNS", True)
 
-        if request.method == 'POST':
-            data = request.get_json() or {}
-            searchpaths = data.get("searchPaths", [])
+        success, error = g.tailscale_client.set_dns_preferences(target_tailnet, magic_dns)
 
-            if not isinstance(searchpaths, list):
-                return jsonify({"error": "searchPaths must be an array"}), 400
+        if not success:
+            return jsonify({"error": error}), 400
 
-            success, error = g.tailscale_client.set_dns_searchpaths(target_tailnet, searchpaths)
+        logger.info(f"DNS preferences updated by user {g.user_id}")
 
-            if not success:
-                return jsonify({"error": error}), 400
+        return jsonify({
+            "success": True,
+            "message": "DNS preferences updated"
+        })
 
-            logger.info(f"DNS search paths updated by user {g.user_id}")
+    except Exception as e:
+        logger.error(f"Error with Tailscale DNS preferences: {e}", exc_info=True)
+        return jsonify({"error": "Failed to process DNS preferences request"}), 500
 
-            return jsonify({
-                "success": True,
-                "message": "Search paths updated"
-            })
 
-        # GET
+@tailscale_bp.route('/tailscale/dns/searchpaths', methods=['GET'])
+@limiter.limit("30 per minute")
+@require_permission("connectors", "read")
+@require_tailscale
+def dns_searchpaths_get(user_id):
+    """Get DNS search paths."""
+    try:
+        target_tailnet = request.args.get('tailnet', g.tailnet)
         success, data, error = g.tailscale_client.get_dns_searchpaths(target_tailnet)
 
         if not success:
             return jsonify({"error": error}), 400
 
         return jsonify({"searchPaths": data})
+
+    except Exception as e:
+        logger.error(f"Error with Tailscale DNS search paths: {e}", exc_info=True)
+        return jsonify({"error": "Failed to process search paths request"}), 500
+
+
+@tailscale_bp.route('/tailscale/dns/searchpaths', methods=['POST'])
+@limiter.limit("30 per minute")
+@require_permission("connectors", "write")
+@require_tailscale
+def dns_searchpaths_post(user_id):
+    """Set DNS search paths."""
+    try:
+        target_tailnet = request.args.get('tailnet', g.tailnet)
+        data = request.get_json() or {}
+        searchpaths = data.get("searchPaths", [])
+
+        if not isinstance(searchpaths, list):
+            return jsonify({"error": "searchPaths must be an array"}), 400
+
+        success, error = g.tailscale_client.set_dns_searchpaths(target_tailnet, searchpaths)
+
+        if not success:
+            return jsonify({"error": error}), 400
+
+        logger.info(f"DNS search paths updated by user {g.user_id}")
+
+        return jsonify({
+            "success": True,
+            "message": "Search paths updated"
+        })
 
     except Exception as e:
         logger.error(f"Error with Tailscale DNS search paths: {e}", exc_info=True)
@@ -259,65 +268,55 @@ def get_routes(user_id):
 # Auth Keys
 # ============================================================================
 
-@tailscale_bp.route('/tailscale/auth-keys', methods=['GET', 'POST'])
+@tailscale_bp.route('/tailscale/auth-keys', methods=['GET'])
 @limiter.limit("30 per minute")
-@require_permission("connectors", "write")
+@require_permission("connectors", "read")
 @require_tailscale
-def auth_keys(user_id):
-    """
-    List or create auth keys.
-
-    POST Request body:
-    {
-        "reusable": false,
-        "ephemeral": false,
-        "preauthorized": true,
-        "tags": ["tag:server"],
-        "expirySeconds": 86400,
-        "description": "Server auth key"
-    }
-
-    Returns (POST):
-    {
-        "key": "tskey-auth-xxx",  // Only shown once!
-        "id": "...",
-        "created": "...",
-        "expires": "..."
-    }
-    """
+def auth_keys_get(user_id):
+    """List auth keys."""
     try:
         target_tailnet = request.args.get('tailnet', g.tailnet)
-
-        if request.method == 'POST':
-            data = request.get_json() or {}
-
-            success, key_data, error = g.tailscale_client.create_auth_key(
-                tailnet=target_tailnet,
-                reusable=data.get("reusable", False),
-                ephemeral=data.get("ephemeral", False),
-                preauthorized=data.get("preauthorized", True),
-                tags=data.get("tags"),
-                expiry_seconds=data.get("expirySeconds"),
-                description=data.get("description")
-            )
-
-            if not success:
-                return jsonify({"error": error}), 400
-
-            logger.info(f"Auth key created by user {g.user_id}")
-
-            return jsonify({
-                "success": True,
-                "key": key_data
-            })
-
-        # GET - List keys
         success, keys, error = g.tailscale_client.list_auth_keys(target_tailnet)
 
         if not success:
             return jsonify({"error": error}), 400
 
         return jsonify({"keys": keys})
+
+    except Exception as e:
+        logger.error(f"Error with Tailscale auth keys: {e}", exc_info=True)
+        return jsonify({"error": "Failed to process auth keys request"}), 500
+
+
+@tailscale_bp.route('/tailscale/auth-keys', methods=['POST'])
+@limiter.limit("30 per minute")
+@require_permission("connectors", "write")
+@require_tailscale
+def auth_keys_post(user_id):
+    """Create an auth key."""
+    try:
+        target_tailnet = request.args.get('tailnet', g.tailnet)
+        data = request.get_json() or {}
+
+        success, key_data, error = g.tailscale_client.create_auth_key(
+            tailnet=target_tailnet,
+            reusable=data.get("reusable", False),
+            ephemeral=data.get("ephemeral", False),
+            preauthorized=data.get("preauthorized", True),
+            tags=data.get("tags"),
+            expiry_seconds=data.get("expirySeconds"),
+            description=data.get("description")
+        )
+
+        if not success:
+            return jsonify({"error": error}), 400
+
+        logger.info(f"Auth key created by user {g.user_id}")
+
+        return jsonify({
+            "success": True,
+            "key": key_data
+        })
 
     except Exception as e:
         logger.error(f"Error with Tailscale auth keys: {e}", exc_info=True)
