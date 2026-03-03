@@ -34,9 +34,17 @@ export async function GET() {
     }
 
     if (!response.ok) {
-      // avoid logging raw backend response body
       console.error('[api/sharepoint/status] Backend error: status=%d', response.status);
-      return NextResponse.json({ error: 'Failed to fetch SharePoint status' }, { status: response.status });
+      let errorMessage = 'Failed to fetch SharePoint status';
+      try {
+        const errorData = await response.json();
+        if (errorData?.error) {
+          errorMessage = errorData.error;
+        }
+      } catch {
+        // response not JSON, use default message
+      }
+      return NextResponse.json({ error: errorMessage }, { status: response.status });
     }
 
     const data = await response.json();

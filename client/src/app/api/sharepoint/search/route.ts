@@ -45,9 +45,17 @@ export async function POST(request: NextRequest) {
     }
 
     if (!response.ok) {
-      // avoid logging raw backend response body
       console.error('[api/sharepoint/search] Backend error: status=%d', response.status);
-      return NextResponse.json({ error: 'Failed to search SharePoint' }, { status: response.status });
+      let errorMessage = 'Failed to search SharePoint';
+      try {
+        const errorData = await response.json();
+        if (errorData?.error) {
+          errorMessage = errorData.error;
+        }
+      } catch {
+        // response not JSON, use default message
+      }
+      return NextResponse.json({ error: errorMessage }, { status: response.status });
     }
 
     const data = await response.json();

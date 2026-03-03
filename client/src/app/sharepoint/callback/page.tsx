@@ -158,6 +158,7 @@ export default function SharePointCallbackPage() {
           router.replace("/sharepoint/connect");
         }, 1000);
       } catch (err) {
+        console.error("SharePoint OAuth exchange failed:", err instanceof Error ? err.message : err);
         try {
           const statusResult = await sharepointService.getStatus();
           if (statusResult?.connected) {

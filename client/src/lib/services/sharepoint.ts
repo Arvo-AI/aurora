@@ -1,7 +1,5 @@
 export interface SharePointStatus {
   connected: boolean;
-  siteUrl?: string;
-  siteName?: string;
   userDisplayName?: string | null;
   userEmail?: string | null;
   error?: string;

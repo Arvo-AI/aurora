@@ -77,10 +77,12 @@ export default function SharePointConnectPage() {
 
   const handleOAuthConnect = async () => {
     setIsOauthConnecting(true);
+    let redirecting = false;
     try {
       const result = await sharepointService.connect({});
 
       if (result?.authUrl) {
+        redirecting = true;
         window.location.href = result.authUrl;
         return;
       }
@@ -97,7 +99,9 @@ export default function SharePointConnectPage() {
       const message = err instanceof Error ? err.message : "OAuth connection failed";
       toast({ title: "Failed to connect SharePoint", description: message, variant: "destructive" });
     } finally {
-      setIsOauthConnecting(false);
+      if (!redirecting) {
+        setIsOauthConnecting(false);
+      }
     }
   };
 
@@ -153,12 +157,6 @@ export default function SharePointConnectPage() {
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-2 text-sm">
-            {status.siteName && (
-              <div><span className="font-medium">Site:</span> {status.siteName}</div>
-            )}
-            {status.siteUrl && (
-              <div><span className="font-medium">Site URL:</span> {status.siteUrl}</div>
-            )}
             {status.userDisplayName && (
               <div><span className="font-medium">User:</span> {status.userDisplayName}</div>
             )}
