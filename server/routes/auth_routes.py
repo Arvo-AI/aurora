@@ -6,6 +6,7 @@ import logging
 import bcrypt
 from flask import Blueprint, request, jsonify
 from utils.db.db_utils import connect_to_db_as_user
+from utils.db.connection_pool import db_pool
 from utils.web.cors_utils import create_cors_response
 import os
 
@@ -284,26 +285,27 @@ def get_current_user():
     if not user_id:
         return jsonify({"error": "Unauthorized"}), 401
 
-    conn = connect_to_db_as_user()
     try:
-        with conn.cursor() as cursor:
-            cursor.execute(
-                "SELECT u.role, u.org_id, o.name "
-                "FROM users u LEFT JOIN organizations o ON u.org_id = o.id "
-                "WHERE u.id = %s",
-                (user_id,),
-            )
-            row = cursor.fetchone()
-            if not row:
-                return jsonify({"error": "User not found"}), 404
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT u.role, u.org_id, o.name "
+                    "FROM users u LEFT JOIN organizations o ON u.org_id = o.id "
+                    "WHERE u.id = %s",
+                    (user_id,),
+                )
+                row = cursor.fetchone()
+                if not row:
+                    return jsonify({"error": "User not found"}), 404
 
-            return jsonify({
-                "role": row[0] or "viewer",
-                "orgId": row[1],
-                "orgName": row[2],
-            }), 200
-    finally:
-        conn.close()
+                return jsonify({
+                    "role": row[0] or "viewer",
+                    "orgId": row[1],
+                    "orgName": row[2],
+                }), 200
+    except Exception as e:
+        logger.error("Error in /me: %s", e)
+        return jsonify({"error": "Server error"}), 500
 
 
 @auth_bp.route('/admins', methods=['GET'])

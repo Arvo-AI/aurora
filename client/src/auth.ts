@@ -1,7 +1,7 @@
 import NextAuth from "next-auth"
 import Credentials from "next-auth/providers/credentials"
 
-const ROLE_REVALIDATE_SECONDS = 5 * 60 // re-check role/org every 5 minutes
+const ROLE_REVALIDATE_SECONDS = 60 // re-check role/org every 60 seconds
 
 async function refreshUserFromBackend(userId: string): Promise<{
   role: string
@@ -75,7 +75,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
     error: "/sign-in"
   },
   callbacks: {
-    async jwt({ token, user }) {
+    async jwt({ token, user, trigger }) {
       if (user) {
         token.id = user.id
         token.email = user.email
@@ -90,7 +90,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
       const lastRefreshed = (token.lastRefreshedAt as number) || 0
       const now = Math.floor(Date.now() / 1000)
 
-      if (now - lastRefreshed > ROLE_REVALIDATE_SECONDS) {
+      if (trigger === "update" || now - lastRefreshed > ROLE_REVALIDATE_SECONDS) {
         const fresh = await refreshUserFromBackend(token.id as string)
         if (fresh) {
           token.role = fresh.role

@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useUser } from "@/hooks/useAuthHooks";
+import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import { isAdmin as checkAdmin } from "@/lib/roles";
 import { Pencil, Check, X } from "lucide-react";
@@ -34,6 +35,7 @@ export interface OrgMember {
 
 export default function OrgPage() {
   const { user, isLoaded } = useUser();
+  const { update: updateSession } = useSession();
   const router = useRouter();
   const [org, setOrg] = useState<OrgData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -42,6 +44,8 @@ export default function OrgPage() {
   const [savingName, setSavingName] = useState(false);
 
   const isAdmin = checkAdmin(user?.role);
+  const editingNameRef = React.useRef(false);
+  editingNameRef.current = editingName;
 
   useEffect(() => {
     if (isLoaded && !user) router.replace("/sign-in");
@@ -49,7 +53,7 @@ export default function OrgPage() {
 
   useEffect(() => {
     if (user) fetchOrg();
-  }, [user]);
+  }, [user?.id]);
 
   async function fetchOrg() {
     try {
@@ -57,7 +61,9 @@ export default function OrgPage() {
       if (res.ok) {
         const data = await res.json();
         setOrg(data);
-        setNameInput(data.name);
+        if (!editingNameRef.current) {
+          setNameInput(data.name);
+        }
       }
     } catch (err) {
       console.error("Failed to fetch org:", err);
@@ -67,7 +73,8 @@ export default function OrgPage() {
   }
 
   async function saveName() {
-    if (!nameInput.trim() || nameInput === org?.name) {
+    const trimmed = nameInput.trim();
+    if (!trimmed || trimmed === org?.name) {
       setEditingName(false);
       return;
     }
@@ -76,15 +83,21 @@ export default function OrgPage() {
       const res = await fetch("/api/orgs/current", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: nameInput.trim() }),
+        body: JSON.stringify({ name: trimmed }),
       });
+      const data = await res.json();
       if (res.ok) {
-        const data = await res.json();
         setOrg((prev) => (prev ? { ...prev, name: data.name } : prev));
+        setNameInput(data.name);
         toast({ title: "Name updated" });
+        await updateSession();
+      } else {
+        toast({ title: data.error || "Failed to update name", variant: "destructive" });
+        setNameInput(org?.name || "");
       }
     } catch {
       toast({ title: "Failed to update", variant: "destructive" });
+      setNameInput(org?.name || "");
     } finally {
       setSavingName(false);
       setEditingName(false);
@@ -131,9 +144,12 @@ export default function OrgPage() {
           ) : (
             <button
               onClick={isAdmin ? () => setEditingName(true) : undefined}
-              className={`text-xl font-semibold tracking-tight ${isAdmin ? "hover:text-muted-foreground transition-colors cursor-text" : "cursor-default"}`}
+              className={`group flex items-center gap-2 text-xl font-semibold tracking-tight ${isAdmin ? "hover:text-muted-foreground transition-colors cursor-text" : "cursor-default"}`}
             >
               {org.name}
+              {isAdmin && (
+                <Pencil className="h-3.5 w-3.5 text-muted-foreground/0 group-hover:text-muted-foreground transition-colors" />
+              )}
             </button>
           )}
         </div>
