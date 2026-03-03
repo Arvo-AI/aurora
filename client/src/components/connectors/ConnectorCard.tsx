@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle, CardContent, CardFooter } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Check, ExternalLink, AlertCircle, Loader2, BarChart2, LogOut, KeyRound, Settings } from "lucide-react";
+import { Check, ExternalLink, AlertCircle, Loader2, BarChart2, LogOut, KeyRound, Settings, Lock } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { isSlackEnabled } from "@/lib/feature-flags";
 import { useConnectorStatus } from "@/hooks/use-connector-status";
@@ -16,6 +16,8 @@ import type { ConnectorConfig } from "./types";
 import { useGitHubStatus } from "@/hooks/use-github-status";
 import { useBitbucketStatus } from "@/hooks/use-bitbucket-status";
 import { useGraphDiscoveryStatus } from "@/hooks/use-graph-discovery-status";
+import { useUser } from "@/hooks/useAuthHooks";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 
 const slackService = isSlackEnabled() ? require("@/lib/services/slack").slackService : null;
 
@@ -26,6 +28,8 @@ interface ConnectorCardProps {
 export default function ConnectorCard({ connector }: ConnectorCardProps) {
   const router = useRouter();
   const { toast } = useToast();
+  const { user } = useUser();
+  const canWrite = user?.role === "admin" || user?.role === "editor";
   const [showGitHubDialog, setShowGitHubDialog] = useState(false);
   const [showBitbucketDialog, setShowBitbucketDialog] = useState(false);
   const [showGcpDialog, setShowGcpDialog] = useState(false);
@@ -303,50 +307,95 @@ export default function ConnectorCard({ connector }: ConnectorCardProps) {
         
         <CardFooter className="flex flex-col gap-2">
           {connector.id === 'onprem' ? (
-            // On Prem always shows both buttons
             <div className="flex gap-2 w-full flex-wrap">
-              <Button
-                onClick={() => router.push("/settings/ssh-keys")}
-                className="flex-1 min-w-[120px] bg-white text-black hover:bg-gray-100"
-              >
-                <KeyRound className="h-4 w-4 mr-2 shrink-0" />
-                <span className="truncate">SSH Keys</span>
-              </Button>
-              <Button
-                onClick={() => router.push("/vm-config")}
-                className="flex-1 min-w-[120px] bg-white text-black hover:bg-gray-100"
-              >
-                <Settings className="h-4 w-4 mr-2 shrink-0" />
-                <span className="truncate">VM Config</span>
-              </Button>
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span className="flex-1 min-w-[120px]">
+                      <Button
+                        onClick={() => router.push("/settings/ssh-keys")}
+                        className="w-full bg-white text-black hover:bg-gray-100"
+                        disabled={!canWrite}
+                      >
+                        {!canWrite ? <Lock className="h-4 w-4 mr-2 shrink-0" /> : <KeyRound className="h-4 w-4 mr-2 shrink-0" />}
+                        <span className="truncate">SSH Keys</span>
+                      </Button>
+                    </span>
+                  </TooltipTrigger>
+                  {!canWrite && (
+                    <TooltipContent>
+                      <p>Editor or Admin role required</p>
+                    </TooltipContent>
+                  )}
+                </Tooltip>
+              </TooltipProvider>
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span className="flex-1 min-w-[120px]">
+                      <Button
+                        onClick={() => router.push("/vm-config")}
+                        className="w-full bg-white text-black hover:bg-gray-100"
+                        disabled={!canWrite}
+                      >
+                        {!canWrite ? <Lock className="h-4 w-4 mr-2 shrink-0" /> : <Settings className="h-4 w-4 mr-2 shrink-0" />}
+                        <span className="truncate">VM Config</span>
+                      </Button>
+                    </span>
+                  </TooltipTrigger>
+                  {!canWrite && (
+                    <TooltipContent>
+                      <p>Editor or Admin role required</p>
+                    </TooltipContent>
+                  )}
+                </Tooltip>
+              </TooltipProvider>
             </div>
           ) : (
             <>
-              <Button 
-                onClick={handleConnect} 
-                className="w-full"
-                variant={isConnected ? "outline" : "default"}
-                disabled={isConnecting}
-              >
-                {isConnecting ? (
-                  <>
-                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                    {connector.id === "slack" && isConnected ? "Disconnecting..." : "Connecting..."}
-                  </>
-                ) : connector.id === "slack" && isConnected ? (
-                  <>
-                    <LogOut className="h-4 w-4 mr-2" />
-                    Disconnect
-                  </>
-                ) : isConnected ? (
-                  <>
-                    <ExternalLink className="h-4 w-4 mr-2" />
-                    {connector.id === 'kubectl' ? 'Manage Clusters' : 'Manage'}
-                  </>
-                ) : (
-                  "Connect"
-                )}
-              </Button>
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span className="w-full">
+                      <Button 
+                        onClick={handleConnect} 
+                        className="w-full"
+                        variant={isConnected ? "outline" : "default"}
+                        disabled={isConnecting || (!isConnected && !canWrite)}
+                      >
+                        {isConnecting ? (
+                          <>
+                            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                            {connector.id === "slack" && isConnected ? "Disconnecting..." : "Connecting..."}
+                          </>
+                        ) : connector.id === "slack" && isConnected ? (
+                          <>
+                            <LogOut className="h-4 w-4 mr-2" />
+                            Disconnect
+                          </>
+                        ) : isConnected ? (
+                          <>
+                            <ExternalLink className="h-4 w-4 mr-2" />
+                            {connector.id === 'kubectl' ? 'Manage Clusters' : 'Manage'}
+                          </>
+                        ) : !canWrite ? (
+                          <>
+                            <Lock className="h-4 w-4 mr-2" />
+                            Connect
+                          </>
+                        ) : (
+                          "Connect"
+                        )}
+                      </Button>
+                    </span>
+                  </TooltipTrigger>
+                  {!canWrite && !isConnected && (
+                    <TooltipContent>
+                      <p>Editor or Admin role required</p>
+                    </TooltipContent>
+                  )}
+                </Tooltip>
+              </TooltipProvider>
               
               {isConnected && connector.id === 'kubectl' && (
                 <Button

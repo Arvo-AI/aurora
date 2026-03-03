@@ -15,6 +15,7 @@ from utils.web.cors_utils import create_cors_response
 from utils.flags.feature_flags import is_pagerduty_oauth_enabled
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.auth.rbac_decorators import require_permission, require_auth_only
+from utils.auth.enforcer import get_enforcer
 from routes.pagerduty.oauth_utils import get_auth_url, exchange_code_for_token, refresh_token_if_needed
 from routes.pagerduty.pagerduty_helpers import PagerDutyClient, PagerDutyAPIError, validate_token, error_response
 
@@ -58,6 +59,12 @@ def pagerduty_api(user_id):
     """Unified PagerDuty endpoint."""
     if request.method == "OPTIONS":
         return create_cors_response()
+
+    # GET is a read (status check), POST/PATCH/DELETE are writes (connect/disconnect)
+    if request.method != "GET":
+        enforcer = get_enforcer()
+        if not enforcer.enforce(user_id, "connectors", "write"):
+            return jsonify({"error": "Forbidden"}), 403
     
     if request.method == "GET":
         creds = get_token_data(user_id, "pagerduty")

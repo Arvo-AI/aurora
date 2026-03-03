@@ -7,7 +7,7 @@ import flask
 import boto3
 from botocore.exceptions import ClientError
 from utils.web.cors_utils import create_cors_response
-from utils.auth.rbac_decorators import require_auth_only
+from utils.auth.rbac_decorators import require_auth_only, require_permission
 from utils.logging.secure_logging import mask_credential_value
 from utils.workspace.workspace_utils import (
     get_or_create_workspace,
@@ -18,7 +18,7 @@ from utils.workspace.workspace_utils import (
 auth_bp = Blueprint("aws_auth_bp", __name__)
 
 @auth_bp.route('/get-credentials', methods=['POST', 'OPTIONS'])
-@require_auth_only
+@require_permission("connectors", "read")
 def aws_get_credentials(user_id):
     """Retrieve AWS credentials stored for the user."""
     try:
@@ -72,7 +72,8 @@ def aws_get_credentials(user_id):
 
 
 @auth_bp.route('/auth', methods=['POST', 'OPTIONS'])
-def auth():
+@require_permission("connectors", "write")
+def auth(user_id):
     """
     AWS authentication endpoint using IAM role assumption.
     
@@ -88,11 +89,7 @@ def auth():
         role_arn = data.get('role_arn')
         read_only_role_arn = data.get('read_only_role_arn') or data.get('readOnlyRoleArn')
         external_id = data.get('external_id')
-        user_id = data.get('userId')
 
-        # Validate inputs
-        if not user_id:
-            return jsonify({"status": "error", "message": "Missing userId"}), 400
         if not role_arn:
             return jsonify({"status": "error", "message": "Missing role_arn"}), 400
 

@@ -14,7 +14,7 @@
 import logging
 from functools import wraps
 
-from flask import jsonify
+from flask import jsonify, request
 
 from utils.auth.stateless_auth import get_user_id_from_request
 from utils.auth.enforcer import get_enforcer
@@ -24,6 +24,11 @@ logger = logging.getLogger(__name__)
 
 def require_permission(resource: str, action: str):
     """Decorator that enforces Casbin RBAC on a Flask route.
+
+    OPTIONS (CORS preflight) requests are passed through without auth so
+    that browser preflight checks succeed.  flask-cors adds the CORS
+    headers; the route's own ``if request.method == 'OPTIONS'`` handler
+    (when present) is also called.
 
     Usage::
 
@@ -35,6 +40,9 @@ def require_permission(resource: str, action: str):
     def decorator(fn):
         @wraps(fn)
         def wrapper(*args, **kwargs):
+            if request.method == "OPTIONS":
+                return fn(None, *args, **kwargs)
+
             user_id = get_user_id_from_request()
             if not user_id:
                 return jsonify({"error": "Unauthorized"}), 401
@@ -59,6 +67,8 @@ def require_permission(resource: str, action: str):
 def require_auth_only(fn):
     """Decorator that checks authentication but skips permission checks.
 
+    OPTIONS (CORS preflight) requests are passed through without auth.
+
     Usage::
 
         @bp.route("/profile")
@@ -68,6 +78,9 @@ def require_auth_only(fn):
     """
     @wraps(fn)
     def wrapper(*args, **kwargs):
+        if request.method == "OPTIONS":
+            return fn(None, *args, **kwargs)
+
         user_id = get_user_id_from_request()
         if not user_id:
             return jsonify({"error": "Unauthorized"}), 401

@@ -27,15 +27,10 @@ def home():
 
 
 @gcp_auth_bp.route("/login", methods=["POST"])
-def login():
+@require_permission("connectors", "write")
+def login(user_id):
     """Send Google OAuth login URL with user_id encoded in state parameter."""
     logging.info("Logging user in.")
-
-    data = request.get_json()
-    user_id = data.get("userId")
-
-    if not user_id:
-        return jsonify({"error": "Missing userId"}), 400
 
     state = urllib.parse.quote(user_id)
     login_url = get_auth_url(state=state)

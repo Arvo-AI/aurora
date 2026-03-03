@@ -27,6 +27,7 @@ import {
   RefreshCw,
 } from "lucide-react";
 import { userPreferencesService } from "@/lib/services/incident-feedback";
+import { useUser } from "@/hooks/useAuthHooks";
 import { getEnv } from '@/lib/env';
 
 const BACKEND_URL = getEnv('NEXT_PUBLIC_BACKEND_URL');
@@ -54,6 +55,8 @@ interface Usage {
 
 export function KnowledgeBaseSettings() {
   const { userId, isLoading: userLoading } = useUserId();
+  const { user } = useUser();
+  const canWrite = user?.role === "admin" || user?.role === "editor";
   const { toast } = useToast();
 
   // Memory state
@@ -425,6 +428,14 @@ export function KnowledgeBaseSettings() {
         </p>
       </div>
 
+      {!canWrite && (
+        <div className="rounded-lg border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-950/30 px-4 py-3">
+          <p className="text-sm text-blue-800 dark:text-blue-200">
+            You have read-only access. Contact an admin to get Editor or Admin role to upload documents and modify memory.
+          </p>
+        </div>
+      )}
+
       {/* Aurora Learn Section */}
       <Card>
         <CardHeader>
@@ -439,7 +450,7 @@ export function KnowledgeBaseSettings() {
               <Switch
                 checked={auroraLearnEnabled}
                 onCheckedChange={handleToggleAuroraLearn}
-                disabled={isTogglingLearn}
+                disabled={isTogglingLearn || !canWrite}
               />
             )}
           </div>
@@ -477,6 +488,7 @@ export function KnowledgeBaseSettings() {
                 placeholder="## Query Patterns&#10;- Error logs: index=prod level=ERROR&#10;&#10;## Service Map&#10;- prod-api: Main gateway&#10;- prod-db: Cloud Spanner&#10;&#10;## Escalation&#10;- Spanner issues: @db-oncall"
                 className="min-h-[200px] font-mono text-sm"
                 maxLength={MEMORY_MAX_LENGTH}
+                disabled={!canWrite}
               />
               <div className="flex items-center justify-between">
                 <span className="text-sm text-muted-foreground">
@@ -484,7 +496,7 @@ export function KnowledgeBaseSettings() {
                 </span>
                 <Button
                   onClick={handleSaveMemory}
-                  disabled={isSavingMemory || !hasMemoryChanges}
+                  disabled={isSavingMemory || !hasMemoryChanges || !canWrite}
                 >
                   {isSavingMemory ? (
                     <>
@@ -531,7 +543,7 @@ export function KnowledgeBaseSettings() {
             />
             <Button
               onClick={() => fileInputRef.current?.click()}
-              disabled={isUploading}
+              disabled={isUploading || !canWrite}
               variant="outline"
             >
               {isUploading ? (
@@ -601,7 +613,7 @@ export function KnowledgeBaseSettings() {
                       variant="ghost"
                       size="icon"
                       onClick={() => handleDelete(doc.id, doc.original_filename)}
-                      disabled={deletingId === doc.id}
+                      disabled={deletingId === doc.id || !canWrite}
                     >
                       {deletingId === doc.id ? (
                         <Loader2 className="h-4 w-4 animate-spin" />
