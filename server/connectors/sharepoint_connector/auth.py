@@ -19,7 +19,7 @@ AUTH_URL = "https://login.microsoftonline.com/{tenant}/oauth2/v2.0/authorize"
 TOKEN_URL = "https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token"
 
 SCOPES = (
-    "Sites.Read.All Files.Read.All User.Read "
+    "Sites.ReadWrite.All Files.ReadWrite.All User.Read "
     "offline_access openid profile email"
 )
 
