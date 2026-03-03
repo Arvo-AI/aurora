@@ -11,28 +11,3 @@ def is_ovh_enabled() -> bool:
 def is_pagerduty_oauth_enabled() -> bool:
     """Check if PagerDuty OAuth integration is enabled via environment variable."""
     return os.getenv("NEXT_PUBLIC_ENABLE_PAGERDUTY_OAUTH", "false").lower() == "true"
-
-
-def is_slack_enabled() -> bool:
-    """Check if Slack integration is enabled via environment variable."""
-    return os.getenv("NEXT_PUBLIC_ENABLE_SLACK", "false").lower() == "true"
-
-
-def is_confluence_enabled() -> bool:
-    """Check if Confluence integration is enabled via environment variable."""
-    return os.getenv("NEXT_PUBLIC_ENABLE_CONFLUENCE", "false").lower() == "true"
-
-
-def is_bitbucket_enabled() -> bool:
-    """Check if Bitbucket integration is enabled via environment variable."""
-    return os.getenv("NEXT_PUBLIC_ENABLE_BITBUCKET", "false").lower() == "true"
-
-  
-def is_bigpanda_enabled() -> bool:
-    """Check if BigPanda integration is enabled via environment variable."""
-    return os.getenv("NEXT_PUBLIC_ENABLE_BIGPANDA", "false").lower() == "true"
-
-
-def is_thousandeyes_enabled() -> bool:
-    """Check if ThousandEyes integration is enabled via environment variable."""
-    return os.getenv("NEXT_PUBLIC_ENABLE_THOUSANDEYES", "false").lower() == "true"

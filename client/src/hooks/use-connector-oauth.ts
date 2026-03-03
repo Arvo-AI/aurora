@@ -2,14 +2,11 @@ import { useState, createElement } from "react";
 import { useToast } from "@/hooks/use-toast";
 import { GitHubIntegrationService } from "@/components/github-provider-integration";
 import { BitbucketIntegrationService } from "@/components/bitbucket-provider-integration";
-import { isSlackEnabled } from "@/lib/feature-flags";
 import type { ConnectorConfig } from "@/components/connectors/types";
 import { ToastAction } from "@/components/ui/toast";
 import { ExternalLink } from "lucide-react";
-
 import { getEnv } from '@/lib/env';
-
-const slackService = isSlackEnabled() ? require("@/lib/services/slack").slackService : null;
+import { slackService } from "@/lib/services/slack";
 const BACKEND_URL = getEnv('NEXT_PUBLIC_BACKEND_URL');
 
 export function useConnectorOAuth(connector: ConnectorConfig, userId: string | null) {

@@ -1,11 +1,11 @@
 import { useState, useEffect } from "react";
 import { GitHubIntegrationService } from "@/components/github-provider-integration";
 import { BitbucketIntegrationService } from "@/components/bitbucket-provider-integration";
-import { isSlackEnabled, isOvhEnabled, isScalewayEnabled } from "@/lib/feature-flags";
+import { isOvhEnabled, isScalewayEnabled } from "@/lib/feature-flags";
 import { getEnv } from '@/lib/env';
 import type { ConnectorConfig } from "@/components/connectors/types";
+import { slackService } from "@/lib/services/slack";
 
-const slackService = isSlackEnabled() ? require("@/lib/services/slack").slackService : null;
 const pagerdutyService = require("@/lib/services/pagerduty").pagerdutyService;
 
 export function useConnectorStatus(connector: ConnectorConfig, userId: string | null) {

@@ -1418,9 +1418,7 @@ def get_cloud_tools():
 
     # Add Confluence search tools if enabled
     try:
-        from utils.flags.feature_flags import is_confluence_enabled
-
-        if is_confluence_enabled() and user_id:
+        if user_id:
             _confluence_tools = [
                 (confluence_search_similar, "confluence_search_similar", ConfluenceSearchSimilarArgs,
                  "Search Confluence for pages related to an incident (postmortems, RCA docs). "

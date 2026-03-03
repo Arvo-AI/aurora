@@ -216,12 +216,10 @@ from routes.kubectl_token_routes import kubectl_token_bp
 app.register_blueprint(kubectl_token_bp)
 
 # --- Slack Integration Routes ---
-from utils.flags.feature_flags import is_slack_enabled
-if is_slack_enabled():
-    from routes.slack.slack_routes import slack_bp
-    from routes.slack.slack_events import slack_events_bp
-    app.register_blueprint(slack_bp, url_prefix="/slack")
-    app.register_blueprint(slack_events_bp, url_prefix="/slack")
+from routes.slack.slack_routes import slack_bp
+from routes.slack.slack_events import slack_events_bp
+app.register_blueprint(slack_bp, url_prefix="/slack")
+app.register_blueprint(slack_events_bp, url_prefix="/slack")
 
 # --- Jenkins Integration Routes ---
 from routes.jenkins import bp as jenkins_bp  # noqa: F401
@@ -259,10 +257,8 @@ from routes.coroot import bp as coroot_bp  # noqa: F401
 app.register_blueprint(coroot_bp, url_prefix="/coroot")
 
 # --- ThousandEyes Integration Routes ---
-from utils.flags.feature_flags import is_thousandeyes_enabled
-if is_thousandeyes_enabled():
-    from routes.thousandeyes import bp as thousandeyes_bp  # noqa: F401
-    app.register_blueprint(thousandeyes_bp, url_prefix="/thousandeyes")
+from routes.thousandeyes import bp as thousandeyes_bp  # noqa: F401
+app.register_blueprint(thousandeyes_bp, url_prefix="/thousandeyes")
 
 # --- Dynatrace Integration Routes ---
 from routes.dynatrace import bp as dynatrace_bp  # noqa: F401
@@ -270,11 +266,9 @@ import routes.dynatrace.tasks  # noqa: F401
 app.register_blueprint(dynatrace_bp, url_prefix="/dynatrace")
 
 # --- BigPanda Integration Routes ---
-from utils.flags.feature_flags import is_bigpanda_enabled
-if is_bigpanda_enabled():
-    from routes.bigpanda import bp as bigpanda_bp  # noqa: F401
-    import routes.bigpanda.tasks  # noqa: F401
-    app.register_blueprint(bigpanda_bp, url_prefix="/bigpanda")
+from routes.bigpanda import bp as bigpanda_bp  # noqa: F401
+import routes.bigpanda.tasks  # noqa: F401
+app.register_blueprint(bigpanda_bp, url_prefix="/bigpanda")
 
 # --- PagerDuty Integration Routes ---
 from routes.pagerduty.pagerduty_routes import pagerduty_bp  # noqa: F401
@@ -286,20 +280,16 @@ app.register_blueprint(knowledge_base_bp, url_prefix="/api/knowledge-base")
 
 
 # --- Confluence Integration Routes ---
-from utils.flags.feature_flags import is_confluence_enabled
-if is_confluence_enabled():
-    from routes.confluence import bp as confluence_bp  # noqa: F401
-    app.register_blueprint(confluence_bp, url_prefix="/confluence")
+from routes.confluence import bp as confluence_bp  # noqa: F401
+app.register_blueprint(confluence_bp, url_prefix="/confluence")
 
 # --- Bitbucket Integration Routes ---
-from utils.flags.feature_flags import is_bitbucket_enabled
-if is_bitbucket_enabled():
-    from routes.bitbucket.bitbucket import bitbucket_bp
-    from routes.bitbucket.bitbucket_browsing import bitbucket_browsing_bp
-    from routes.bitbucket.bitbucket_selection import bitbucket_selection_bp
-    app.register_blueprint(bitbucket_bp, url_prefix="/bitbucket")
-    app.register_blueprint(bitbucket_browsing_bp, url_prefix="/bitbucket")
-    app.register_blueprint(bitbucket_selection_bp, url_prefix="/bitbucket")
+from routes.bitbucket.bitbucket import bitbucket_bp
+from routes.bitbucket.bitbucket_browsing import bitbucket_browsing_bp
+from routes.bitbucket.bitbucket_selection import bitbucket_selection_bp
+app.register_blueprint(bitbucket_bp, url_prefix="/bitbucket")
+app.register_blueprint(bitbucket_browsing_bp, url_prefix="/bitbucket")
+app.register_blueprint(bitbucket_selection_bp, url_prefix="/bitbucket")
 
 # --- Incidents Routes ---
 from routes.incidents_routes import incidents_bp
