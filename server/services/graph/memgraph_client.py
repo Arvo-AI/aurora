@@ -139,6 +139,7 @@ class MemgraphClient:
             s.endpoint = $endpoint,
             s.criticality = $criticality,
             s.team_owner = $team_owner,
+            s.aws_account_id = $aws_account_id,
             s.metadata = $metadata,
             s.created_at = localDateTime(),
             s.updated_at = localDateTime()
@@ -155,6 +156,7 @@ class MemgraphClient:
             s.endpoint = $endpoint,
             s.criticality = $criticality,
             s.team_owner = $team_owner,
+            s.aws_account_id = $aws_account_id,
             s.metadata = $metadata,
             s.updated_at = localDateTime()
         RETURN s;
@@ -199,6 +201,7 @@ class MemgraphClient:
             s.endpoint = svc.endpoint,
             s.criticality = svc.criticality,
             s.team_owner = svc.team_owner,
+            s.aws_account_id = svc.aws_account_id,
             s.metadata = svc.metadata,
             s.created_at = localDateTime(),
             s.updated_at = localDateTime()
@@ -215,6 +218,7 @@ class MemgraphClient:
             s.endpoint = svc.endpoint,
             s.criticality = svc.criticality,
             s.team_owner = svc.team_owner,
+            s.aws_account_id = svc.aws_account_id,
             s.metadata = svc.metadata,
             s.updated_at = localDateTime()
         RETURN count(s) AS total;
@@ -830,5 +834,6 @@ class MemgraphClient:
             "endpoint": svc.get("endpoint", ""),
             "criticality": svc.get("criticality", "medium"),
             "team_owner": svc.get("team_owner", ""),
+            "aws_account_id": svc.get("aws_account_id", ""),
             "metadata": json.dumps(metadata) if isinstance(metadata, dict) else (metadata or "{}"),
         }
