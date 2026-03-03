@@ -1,5 +1,5 @@
 import { Github, Server } from "lucide-react";
-import { isSlackEnabled, isOvhEnabled, isConfluenceEnabled, isBitbucketEnabled, isDynatraceEnabled, isThousandEyesEnabled, isBigPandaEnabled } from "@/lib/feature-flags";
+import { isSlackEnabled, isOvhEnabled, isConfluenceEnabled, isBitbucketEnabled, isThousandEyesEnabled, isBigPandaEnabled } from "@/lib/feature-flags";
 import type { ConnectorConfig } from "./types";
 
 class ConnectorRegistry {
@@ -77,8 +77,7 @@ class ConnectorRegistry {
       alertsLabel: "View Alerts",
     });
 
-    if (isDynatraceEnabled()) {
-      this.register({
+    this.register({
         id: "dynatrace",
         name: "Dynatrace",
         description: "Connect to Dynatrace for full-stack observability. Receive problem notifications and query metrics, logs, and entities for root cause analysis.",
@@ -90,7 +89,6 @@ class ConnectorRegistry {
         alertsPath: "/dynatrace/alerts",
         alertsLabel: "View Problems",
       });
-    }
 
     this.register({
       id: "coroot",

@@ -265,11 +265,9 @@ if is_thousandeyes_enabled():
     app.register_blueprint(thousandeyes_bp, url_prefix="/thousandeyes")
 
 # --- Dynatrace Integration Routes ---
-from utils.flags.feature_flags import is_dynatrace_enabled
-if is_dynatrace_enabled():
-    from routes.dynatrace import bp as dynatrace_bp  # noqa: F401
-    import routes.dynatrace.tasks  # noqa: F401
-    app.register_blueprint(dynatrace_bp, url_prefix="/dynatrace")
+from routes.dynatrace import bp as dynatrace_bp  # noqa: F401
+import routes.dynatrace.tasks  # noqa: F401
+app.register_blueprint(dynatrace_bp, url_prefix="/dynatrace")
 
 # --- BigPanda Integration Routes ---
 from utils.flags.feature_flags import is_bigpanda_enabled
