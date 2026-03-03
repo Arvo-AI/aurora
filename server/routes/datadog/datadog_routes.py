@@ -12,6 +12,7 @@ from utils.web.cors_utils import create_cors_response
 from utils.logging.secure_logging import mask_credential_value
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.auth.rbac_decorators import require_permission
+from utils.auth.stateless_auth import get_org_id_from_request
 logger = logging.getLogger(__name__)
 
 datadog_bp = Blueprint("datadog", __name__)
@@ -480,6 +481,7 @@ def list_monitors(user_id):
 @datadog_bp.route("/events/ingested", methods=["GET", "OPTIONS"])
 @require_permission("connectors", "read")
 def list_ingested_events(user_id):
+    org_id = get_org_id_from_request()
     limit = request.args.get("limit", default=50, type=int)
     offset = request.args.get("offset", default=0, type=int)
     status_filter = request.args.get("status")
@@ -488,13 +490,14 @@ def list_ingested_events(user_id):
     try:
         with db_pool.get_admin_connection() as conn:
             cursor = conn.cursor()
+            cursor.execute("SET myapp.current_org_id = %s", (org_id,))
 
             base_query = """
                 SELECT id, event_type, event_title, status, scope, payload, received_at, created_at
                 FROM datadog_events
-                WHERE user_id = %s
+                WHERE org_id = %s
             """
-            params = [user_id]
+            params = [org_id]
             if status_filter:
                 base_query += " AND status = %s"
                 params.append(status_filter)
@@ -508,8 +511,8 @@ def list_ingested_events(user_id):
             cursor.execute(base_query, params)
             rows = cursor.fetchall()
 
-            count_query = "SELECT COUNT(*) FROM datadog_events WHERE user_id = %s"
-            count_params = [user_id]
+            count_query = "SELECT COUNT(*) FROM datadog_events WHERE org_id = %s"
+            count_params = [org_id]
             if status_filter:
                 count_query += " AND status = %s"
                 count_params.append(status_filter)

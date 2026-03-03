@@ -213,15 +213,27 @@ def process_datadog_event(
 
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                # Look up org_id for this user
+                cursor.execute("SELECT org_id FROM users WHERE id = %s", (user_id,))
+                org_row = cursor.fetchone()
+                org_id = org_row[0] if org_row and org_row[0] else None
+
+                # Set RLS context
+                cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
+                if org_id:
+                    cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
+                conn.commit()
+
                 received_at = datetime.now(timezone.utc)
                 cursor.execute(
                     """
-                    INSERT INTO datadog_events (user_id, event_type, event_title, status, scope, payload, received_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    INSERT INTO datadog_events (user_id, org_id, event_type, event_title, status, scope, payload, received_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                     RETURNING id
                     """,
                     (
                         user_id,
+                        org_id,
                         event_type,
                         event_title,
                         status,
@@ -286,6 +298,7 @@ def process_datadog_event(
                         alert_service=service,
                         alert_severity=severity,
                         alert_metadata=alert_metadata,
+                        org_id=org_id,
                     )
 
                     if correlation_result.is_correlated:
@@ -301,6 +314,7 @@ def process_datadog_event(
                             correlation_result=correlation_result,
                             alert_metadata=alert_metadata,
                             raw_payload=payload,
+                            org_id=org_id,
                         )
                         conn.commit()
                         return
@@ -313,9 +327,9 @@ def process_datadog_event(
                 cursor.execute(
                     """
                     INSERT INTO incidents 
-                    (user_id, source_type, source_alert_id, alert_title, alert_service, 
+                    (user_id, org_id, source_type, source_alert_id, alert_title, alert_service, 
                      severity, status, started_at, alert_metadata)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (source_type, source_alert_id, user_id) DO UPDATE
                     SET updated_at = CURRENT_TIMESTAMP,
                         started_at = CASE 
@@ -327,6 +341,7 @@ def process_datadog_event(
                     """,
                     (
                         user_id,
+                        org_id,
                         "datadog",
                         event_id,
                         event_title,
@@ -344,11 +359,12 @@ def process_datadog_event(
                 try:
                     cursor.execute(
                         """INSERT INTO incident_alerts
-                           (user_id, incident_id, source_type, source_alert_id, alert_title, alert_service,
+                           (user_id, org_id, incident_id, source_type, source_alert_id, alert_title, alert_service,
                             alert_severity, correlation_strategy, correlation_score, alert_metadata)
-                           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
                         (
                             user_id,
+                            org_id,
                             incident_id,
                             "datadog",
                             event_id,

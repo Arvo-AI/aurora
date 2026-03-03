@@ -8,6 +8,7 @@ import boto3
 from botocore.exceptions import ClientError
 from utils.web.cors_utils import create_cors_response
 from utils.auth.rbac_decorators import require_auth_only, require_permission
+from utils.auth.stateless_auth import get_org_id_from_request
 from utils.logging.secure_logging import mask_credential_value
 from utils.workspace.workspace_utils import (
     get_or_create_workspace,
@@ -31,21 +32,22 @@ def aws_get_credentials(user_id):
             logging.warning("Unauthorized access to AWS creds")
             return jsonify({"error": "Unauthorized"}), 401
 
+        org_id = get_org_id_from_request()
+
         # Try session cache first
         aws_credentials = session.get('aws_credentials')
         if not aws_credentials:
             try:
-                # Single source of truth: read from user_connections
                 from utils.db.connection_utils import get_user_aws_connection
                 aws_conn = get_user_aws_connection(user_id)
                 
                 if aws_conn:
-                    # Get external_id from workspace (needed for STS)
                     workspace = get_or_create_workspace(user_id, "default")
                     session['aws_credentials'] = {
                         'role_arn': aws_conn.get('role_arn'),
                         'external_id': workspace.get('aws_external_id'),
-                        'aws_account_id': aws_conn.get('account_id', 'Unknown')
+                        'aws_account_id': aws_conn.get('account_id', 'Unknown'),
+                        'org_id': org_id,
                     }
                     aws_credentials = session['aws_credentials']
                     logging.info(f"Retrieved AWS role credentials from user_connections for user {user_id}")
@@ -85,6 +87,7 @@ def auth(user_id):
 
     logging.info("=== AWS AUTH ENDPOINT STARTED ===")
     try:
+        org_id = get_org_id_from_request()
         data = flask.request.get_json()
         role_arn = data.get('role_arn')
         read_only_role_arn = data.get('read_only_role_arn') or data.get('readOnlyRoleArn')

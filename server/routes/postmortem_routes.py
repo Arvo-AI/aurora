@@ -15,6 +15,7 @@ from connectors.confluence_connector.client import (
 )
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.auth.rbac_decorators import require_permission
+from utils.auth.stateless_auth import get_org_id_from_request
 from connectors.confluence_connector.auth import refresh_access_token
 from utils.db.connection_pool import db_pool
 
@@ -81,17 +82,20 @@ def get_postmortem(user_id, incident_id):
     if not _validate_uuid(incident_id):
         return jsonify({"error": "Invalid incident ID"}), 400
 
+    org_id = get_org_id_from_request()
+
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
                 cursor.execute("SET myapp.current_user_id = %s", (user_id,))
+                cursor.execute("SET myapp.current_org_id = %s", (org_id,))
                 conn.commit()
                 cursor.execute(
                     """SELECT id, incident_id, user_id, content, generated_at, updated_at,
                               confluence_page_id, confluence_page_url, confluence_exported_at
                        FROM postmortems
-                       WHERE incident_id = %s AND user_id = %s""",
-                    (incident_id, user_id),
+                       WHERE incident_id = %s AND org_id = %s""",
+                    (incident_id, org_id),
                 )
                 row = cursor.fetchone()
 
@@ -141,16 +145,19 @@ def update_postmortem(user_id, incident_id):
             {"error": "Content exceeds maximum length of 100000 characters"}
         ), 400
 
+    org_id = get_org_id_from_request()
+
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
                 cursor.execute("SET myapp.current_user_id = %s", (user_id,))
+                cursor.execute("SET myapp.current_org_id = %s", (org_id,))
                 conn.commit()
                 cursor.execute(
                     """UPDATE postmortems
                        SET content = %s, updated_at = CURRENT_TIMESTAMP
-                       WHERE incident_id = %s AND user_id = %s""",
-                    (content, incident_id, user_id),
+                       WHERE incident_id = %s AND org_id = %s""",
+                    (content, incident_id, org_id),
                 )
                 updated = cursor.rowcount
                 conn.commit()
@@ -189,16 +196,19 @@ def export_to_confluence(user_id, incident_id):
 
     parent_page_id = data.get("parentPageId")
 
+    org_id = get_org_id_from_request()
+
     # Fetch postmortem content from DB
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
                 cursor.execute("SET myapp.current_user_id = %s", (user_id,))
+                cursor.execute("SET myapp.current_org_id = %s", (org_id,))
                 conn.commit()
                 cursor.execute(
                     """SELECT id, content FROM postmortems
-                       WHERE incident_id = %s AND user_id = %s""",
-                    (incident_id, user_id),
+                       WHERE incident_id = %s AND org_id = %s""",
+                    (incident_id, org_id),
                 )
                 row = cursor.fetchone()
     except Exception as e:
@@ -295,14 +305,15 @@ def export_to_confluence(user_id, incident_id):
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
                 cursor.execute("SET myapp.current_user_id = %s", (user_id,))
+                cursor.execute("SET myapp.current_org_id = %s", (org_id,))
                 conn.commit()
                 cursor.execute(
                     """UPDATE postmortems
                        SET confluence_page_id = %s,
                            confluence_page_url = %s,
                            confluence_exported_at = CURRENT_TIMESTAMP
-                       WHERE id = %s AND user_id = %s""",
-                    (str(page_id), page_url, str(postmortem_id), user_id),
+                       WHERE id = %s AND org_id = %s""",
+                    (str(page_id), page_url, str(postmortem_id), org_id),
                 )
                 conn.commit()
     except Exception as e:
@@ -327,10 +338,13 @@ def list_postmortems(user_id):
     except (ValueError, TypeError):
         limit, offset = 50, 0
 
+    org_id = get_org_id_from_request()
+
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
                 cursor.execute("SET myapp.current_user_id = %s", (user_id,))
+                cursor.execute("SET myapp.current_org_id = %s", (org_id,))
                 conn.commit()
                 cursor.execute(
                     """SELECT p.id, p.incident_id, p.user_id, p.content, p.generated_at, p.updated_at,
@@ -338,10 +352,10 @@ def list_postmortems(user_id):
                               i.alert_title
                        FROM postmortems p
                        LEFT JOIN incidents i ON p.incident_id = i.id
-                       WHERE p.user_id = %s
+                       WHERE p.org_id = %s
                        ORDER BY p.generated_at DESC
                        LIMIT %s OFFSET %s""",
-                    (user_id, limit, offset),
+                    (org_id, limit, offset),
                 )
                 rows = cursor.fetchall()
 

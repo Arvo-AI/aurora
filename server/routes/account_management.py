@@ -5,6 +5,7 @@ from utils.web.cors_utils import create_cors_response
 from utils.auth.rbac_decorators import require_auth_only
 from utils.db.db_utils import connect_to_db_as_admin, connect_to_db_as_user
 from utils.auth.token_management import get_token_data
+from utils.auth.stateless_auth import get_org_id_from_request
 from utils.secrets.secret_ref_utils import delete_user_secret, SUPPORTED_SECRET_PROVIDERS
 import requests
 import os
@@ -26,7 +27,8 @@ def get_connected_accounts(user_id, target_user_id):
             logging.warning(f"SECURITY: User {user_id} attempted to access connected accounts for {target_user_id}")
             return jsonify({"error": "Unauthorized access to user data"}), 403
         
-        # Connect to the database
+        org_id = get_org_id_from_request()
+
         conn = connect_to_db_as_admin()
         cursor = conn.cursor()
         
@@ -37,9 +39,9 @@ def get_connected_accounts(user_id, target_user_id):
             """
             SELECT provider, subscription_id, subscription_name, timestamp
             FROM user_tokens 
-            WHERE user_id = %s AND secret_ref IS NOT NULL AND is_active = TRUE
+            WHERE user_id = %s AND org_id = %s AND secret_ref IS NOT NULL AND is_active = TRUE
             """,
-            (user_id,),
+            (user_id, org_id),
         )
 
         rows = cursor.fetchall()
@@ -48,17 +50,13 @@ def get_connected_accounts(user_id, target_user_id):
 
         for provider, subscription_id, subscription_name, timestamp in rows:
             
-            # Get token data from Vault
             token_data = get_token_data(user_id, provider)
             if not token_data:
                 continue
             
-            # Extract account information based on provider
             account_info = {"isConnected": True}
             
-            # Only fetch full credentials when we actually need them for display
             if provider == "gcp":
-                # For GCP, we need email from credentials for display
                 token_data = get_token_data(user_id, provider)
                 if not token_data:
                     continue
@@ -66,7 +64,6 @@ def get_connected_accounts(user_id, target_user_id):
                 account_info["name"] = token_data.get("name", "Google Cloud")
                 account_info["displayText"] = account_info["email"]
             elif provider == "aws":
-                # For AWS, try to get account ID from credentials
                 token_data = get_token_data(user_id, provider)
                 if not token_data:
                     continue
@@ -74,13 +71,11 @@ def get_connected_accounts(user_id, target_user_id):
                 account_info["name"] = f"AWS Account"
                 account_info["displayText"] = f"Account {account_info['accountId']}"
             elif provider == "azure":
-                # For Azure, use subscription information from DB (no need to fetch credentials)
                 account_info["subscriptionId"] = subscription_id or "Unknown"
                 account_info["subscriptionName"] = subscription_name or "Azure Subscription"
                 account_info["name"] = subscription_name or "Azure"
                 account_info["displayText"] = subscription_name or "Azure Subscription"
             else:
-                # For other providers, use basic info from DB without fetching credentials
                 account_info["name"] = provider.capitalize()
                 account_info["displayText"] = subscription_name or subscription_id or provider.capitalize()
             
@@ -93,13 +88,13 @@ def get_connected_accounts(user_id, target_user_id):
             """
             SELECT provider, account_id, role_arn, last_verified_at
             FROM user_connections
-            WHERE user_id = %s AND status = 'active'
+            WHERE user_id = %s AND org_id = %s AND status = 'active'
             """,
-            (user_id,),
+            (user_id, org_id),
         )
 
         for provider, account_id, role_arn, last_verified in cursor.fetchall():
-            if provider in accounts:  # already filled (unlikely)
+            if provider in accounts:
                 continue
 
             if provider == "aws":
@@ -135,14 +130,16 @@ def delete_connected_account(user_id, target_user_id, provider):
             logging.warning(f"SECURITY: User {user_id} attempted to delete connected account for {target_user_id}")
             return jsonify({"error": "Unauthorized access to user data"}), 403
         
+        org_id = get_org_id_from_request()
+
         # Get secret_ref BEFORE deleting to clear cache properly
         secret_ref = None
         try:
             conn = connect_to_db_as_admin()
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT secret_ref FROM user_tokens WHERE user_id = %s AND provider = %s",
-                (user_id, provider)
+                "SELECT secret_ref FROM user_tokens WHERE user_id = %s AND org_id = %s AND provider = %s",
+                (user_id, org_id, provider)
             )
             result = cursor.fetchone()
             if result:
@@ -165,8 +162,8 @@ def delete_connected_account(user_id, target_user_id, provider):
             cursor = conn.cursor()
 
             cursor.execute(
-                "DELETE FROM user_tokens WHERE user_id = %s AND provider = %s",
-                (user_id, provider)
+                "DELETE FROM user_tokens WHERE user_id = %s AND org_id = %s AND provider = %s",
+                (user_id, org_id, provider)
             )
             deleted = cursor.rowcount
             conn.commit()
@@ -191,8 +188,8 @@ def delete_connected_account(user_id, target_user_id, provider):
                 conn = connect_to_db_as_admin()
                 cursor = conn.cursor()
                 cursor.execute(
-                    "DELETE FROM user_preferences WHERE user_id = %s AND preference_key = 'gcp_root_project'",
-                    (user_id,)
+                    "DELETE FROM user_preferences WHERE user_id = %s AND org_id = %s AND preference_key = 'gcp_root_project'",
+                    (user_id, org_id)
                 )
                 conn.commit()
                 if cursor.rowcount > 0:
@@ -242,8 +239,8 @@ def delete_connected_account(user_id, target_user_id, provider):
             cursor = conn.cursor()
 
             cursor.execute(
-                "DELETE FROM user_tokens WHERE user_id = %s AND provider = %s",
-                (user_id, provider)
+                "DELETE FROM user_tokens WHERE user_id = %s AND org_id = %s AND provider = %s",
+                (user_id, org_id, provider)
             )
 
             deleted = cursor.rowcount
@@ -324,19 +321,22 @@ def get_user_tokens(user_id):
             logging.warning(f"SECURITY: User {user_id} attempted to access data for {user_id_from_args}")
             return jsonify({"error": "Unauthorized access to user data"}), 403
         
+        org_id = get_org_id_from_request()
         logging.debug("Final authenticated user_id: %s", user_id)
         
         conn = connect_to_db_as_user()
         cursor = conn.cursor()
         cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
+        if org_id:
+            cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
         conn.commit()
         cursor.execute(
             """
             SELECT subscription_id, subscription_name, tenant_id, client_id, provider, email
             FROM user_tokens 
-            WHERE user_id = %s AND is_active = TRUE AND secret_ref IS NOT NULL
+            WHERE user_id = %s AND org_id = %s AND is_active = TRUE AND secret_ref IS NOT NULL
             """,
-            (user_id,)
+            (user_id, org_id)
         )
         tokens = cursor.fetchall()
 

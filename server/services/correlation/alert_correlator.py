@@ -112,6 +112,7 @@ class AlertCorrelator:
         alert_service: str,
         alert_severity: str,
         alert_metadata: Optional[Dict[str, Any]] = None,
+        org_id: Optional[str] = None,
     ) -> CorrelationResult:
         """Attempt to correlate an alert with an existing open incident.
 
@@ -130,6 +131,7 @@ class AlertCorrelator:
             alert_metadata: Optional dict with extra alert data.  If it
                 contains a ``received_at`` key the value is used as the
                 alert timestamp (datetime or ISO-8601 string).
+            org_id: Optional organization ID for org-scoped correlation.
 
         Returns:
             CorrelationResult: describes whether (and how) the alert matched.
@@ -145,6 +147,7 @@ class AlertCorrelator:
                 cursor,
                 user_id,
                 alert_received_at,
+                org_id=org_id,
             )
             logger.info(
                 "[CORRELATION] Found %d candidate incidents for user %s (alert_received_at=%s)",
@@ -243,26 +246,43 @@ class AlertCorrelator:
         cursor,
         user_id: str,
         alert_received_at: datetime,
+        org_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """Fetch open incidents updated within the time window.
 
         Returns at most 20 rows ordered by most-recently updated first.
+        When org_id is provided, scopes to the organization instead of just user_id.
         """
         cutoff = alert_received_at - timedelta(seconds=self.time_window_seconds)
 
-        cursor.execute(
-            """
-            SELECT id, alert_title, alert_service, affected_services,
-                   correlated_alert_count, started_at, updated_at
-            FROM incidents
-            WHERE user_id = %s
-              AND status = 'investigating'
-              AND updated_at >= %s
-            ORDER BY updated_at DESC
-            LIMIT 20
-            """,
-            (user_id, cutoff),
-        )
+        if org_id:
+            cursor.execute(
+                """
+                SELECT id, alert_title, alert_service, affected_services,
+                       correlated_alert_count, started_at, updated_at
+                FROM incidents
+                WHERE org_id = %s
+                  AND status = 'investigating'
+                  AND updated_at >= %s
+                ORDER BY updated_at DESC
+                LIMIT 20
+                """,
+                (org_id, cutoff),
+            )
+        else:
+            cursor.execute(
+                """
+                SELECT id, alert_title, alert_service, affected_services,
+                       correlated_alert_count, started_at, updated_at
+                FROM incidents
+                WHERE user_id = %s
+                  AND status = 'investigating'
+                  AND updated_at >= %s
+                ORDER BY updated_at DESC
+                LIMIT 20
+                """,
+                (user_id, cutoff),
+            )
         rows = cursor.fetchall()
         return [
             {
@@ -365,6 +385,7 @@ def handle_correlated_alert(
     correlation_result: CorrelationResult,
     alert_metadata: Dict[str, Any],
     raw_payload: Dict[str, Any],
+    org_id: Optional[str] = None,
 ) -> None:
     """Handle a correlated alert: record it, update incident, notify SSE, and enqueue RCA context update.
 
@@ -383,16 +404,18 @@ def handle_correlated_alert(
         correlation_result: The CorrelationResult from AlertCorrelator.correlate().
         alert_metadata: Dict with source-specific metadata.
         raw_payload: The complete raw webhook payload for context injection.
+        org_id: Optional organization ID to include in the incident_alerts record.
     """
     # 1. Insert into incident_alerts
     cursor.execute(
         """INSERT INTO incident_alerts
-           (user_id, incident_id, source_type, source_alert_id, alert_title, alert_service,
+           (user_id, org_id, incident_id, source_type, source_alert_id, alert_title, alert_service,
             alert_severity, correlation_strategy, correlation_score,
             correlation_details, alert_metadata)
-           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
         (
             user_id,
+            org_id,
             incident_id,
             source_type,
             source_alert_id,

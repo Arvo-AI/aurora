@@ -16,6 +16,7 @@ from utils.flags.feature_flags import is_pagerduty_oauth_enabled
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.auth.rbac_decorators import require_permission, require_auth_only
 from utils.auth.enforcer import get_enforcer
+from utils.auth.stateless_auth import get_org_id_from_request
 from routes.pagerduty.oauth_utils import get_auth_url, exchange_code_for_token, refresh_token_if_needed
 from routes.pagerduty.pagerduty_helpers import PagerDutyClient, PagerDutyAPIError, validate_token, error_response
 
@@ -57,6 +58,7 @@ def _validate_v3_webhook(payload: dict) -> tuple[bool, str]:
 @require_auth_only
 def pagerduty_api(user_id):
     """Unified PagerDuty endpoint."""
+    org_id = get_org_id_from_request()
     if request.method == "OPTIONS":
         return create_cors_response()
 

@@ -12,6 +12,7 @@ from routes.dynatrace.tasks import process_dynatrace_problem
 from utils.db.connection_pool import db_pool
 from utils.web.cors_utils import create_cors_response
 from utils.auth.stateless_auth import (
+    get_org_id_from_request,
     get_user_preference,
     store_user_preference,
 )
@@ -183,6 +184,7 @@ def webhook(user_id: str):
 @dynatrace_bp.route("/alerts", methods=["GET", "OPTIONS"])
 @require_permission("connectors", "read")
 def get_alerts(user_id):
+    org_id = get_org_id_from_request()
     limit = request.args.get("limit", 50, type=int)
     offset = request.args.get("offset", 0, type=int)
     state_filter = request.args.get("state")
@@ -190,9 +192,10 @@ def get_alerts(user_id):
     try:
         with db_pool.get_admin_connection() as conn:
             cursor = conn.cursor()
+            cursor.execute("SET myapp.current_org_id = %s", (org_id,))
 
-            conditions = ["user_id = %s"]
-            params: list = [user_id]
+            conditions = ["org_id = %s"]
+            params: list = [org_id]
             if state_filter:
                 conditions.append("problem_state = %s")
                 params.append(state_filter)

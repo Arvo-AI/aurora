@@ -17,6 +17,7 @@ from utils.web.cors_utils import create_cors_response
 from utils.web.webhook_signature import SIGNATURE_HEADER, verify_webhook_signature
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.auth.rbac_decorators import require_permission
+from utils.auth.stateless_auth import get_org_id_from_request
 
 logger = logging.getLogger(__name__)
 
@@ -387,6 +388,7 @@ def get_webhook_url(user_id):
 @require_permission("connectors", "read")
 def list_deployments(user_id):
     """List recent CloudBees CI deployment events for the authenticated user."""
+    org_id = get_org_id_from_request()
     limit = min(max(request.args.get("limit", 20, type=int), 1), 100)
     offset = max(request.args.get("offset", 0, type=int), 0)
     service_filter = request.args.get("service")
@@ -396,16 +398,18 @@ def list_deployments(user_id):
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                cursor.execute("SET myapp.current_org_id = %s", (org_id,))
+
                 if service_filter:
                     cursor.execute(
                         """SELECT id, service, environment, result, build_number, build_url,
                                   commit_sha, branch, repository, deployer, duration_ms,
                                   job_name, trace_id, received_at
                            FROM jenkins_deployment_events
-                           WHERE user_id = %s AND provider = 'cloudbees' AND service = %s
+                           WHERE org_id = %s AND provider = 'cloudbees' AND service = %s
                            ORDER BY received_at DESC
                            LIMIT %s OFFSET %s""",
-                        (user_id, service_filter, limit, offset),
+                        (org_id, service_filter, limit, offset),
                     )
                 else:
                     cursor.execute(
@@ -413,17 +417,17 @@ def list_deployments(user_id):
                                   commit_sha, branch, repository, deployer, duration_ms,
                                   job_name, trace_id, received_at
                            FROM jenkins_deployment_events
-                           WHERE user_id = %s AND provider = 'cloudbees'
+                           WHERE org_id = %s AND provider = 'cloudbees'
                            ORDER BY received_at DESC
                            LIMIT %s OFFSET %s""",
-                        (user_id, limit, offset),
+                        (org_id, limit, offset),
                     )
                 rows = cursor.fetchall()
 
                 cursor.execute(
-                    "SELECT COUNT(*) FROM jenkins_deployment_events WHERE user_id = %s AND provider = 'cloudbees'"
+                    "SELECT COUNT(*) FROM jenkins_deployment_events WHERE org_id = %s AND provider = 'cloudbees'"
                     + (" AND service = %s" if service_filter else ""),
-                    (user_id, service_filter) if service_filter else (user_id,),
+                    (org_id, service_filter) if service_filter else (org_id,),
                 )
                 total = cursor.fetchone()[0]
 

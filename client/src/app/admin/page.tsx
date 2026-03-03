@@ -615,7 +615,11 @@ export default function AdminPage() {
           <div>
             <h1 className="text-3xl font-bold">User Management</h1>
             <p className="text-sm text-muted-foreground mt-0.5">
-              Manage your team&apos;s access to Aurora
+              {user?.orgName ? (
+                <>Manage members of <span className="font-medium text-foreground">{user.orgName}</span></>
+              ) : (
+                <>Manage your team&apos;s access to Aurora</>
+              )}
             </p>
           </div>
         </div>

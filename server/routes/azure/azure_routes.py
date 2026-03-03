@@ -4,6 +4,7 @@ import flask
 from azure.identity import ClientSecretCredential
 from utils.web.cors_utils import create_cors_response
 from utils.auth.rbac_decorators import require_permission, require_auth_only
+from utils.auth.stateless_auth import get_org_id_from_request
 from connectors.azure_connector.auth import azure_login, azure_callback
 from connectors.azure_connector.k8s_client import (
     get_sp_object_id, get_aks_clusters, extract_resource_group,
@@ -20,6 +21,7 @@ azure_bp = Blueprint("azure_bp", __name__)
 def azure_login_route(user_id):
     if flask.request.method == 'OPTIONS':
         return create_cors_response()
+    org_id = get_org_id_from_request()
     return azure_login()
 
 
@@ -82,6 +84,7 @@ def fetch_data(user_id):
     if flask.request.method == 'OPTIONS':
         return create_cors_response()
     try:
+        org_id = get_org_id_from_request()
         from utils.auth.stateless_auth import get_credentials_from_db
         credentials = get_credentials_from_db(user_id, "azure")
         if credentials:
@@ -121,6 +124,7 @@ def azure_clusters(user_id):
     if flask.request.method == 'OPTIONS':
         return create_cors_response()
     try:
+        org_id = get_org_id_from_request()
         from utils.auth.stateless_auth import get_credentials_from_db
         credentials = get_credentials_from_db(user_id, "azure")
         if not credentials:
@@ -153,6 +157,7 @@ def azure_subscriptions(user_id):
     if request.method == "OPTIONS":
         return create_cors_response()
     try:
+        org_id = get_org_id_from_request()
         if request.method == "GET":
             token_data = get_token_data(user_id, "azure")
             if not token_data:

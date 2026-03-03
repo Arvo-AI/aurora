@@ -12,6 +12,7 @@ from utils.db.connection_pool import db_pool
 from utils.web.cors_utils import create_cors_response
 from utils.logging.secure_logging import mask_credential_value
 from utils.auth.stateless_auth import (
+    get_org_id_from_request,
     get_user_preference,
     store_user_preference,
 )
@@ -300,6 +301,7 @@ def alert_webhook(user_id: str):
 @require_permission("connectors", "read")
 def get_alerts(user_id):
     """Fetch Splunk alerts for the authenticated user."""
+    org_id = get_org_id_from_request()
     limit = request.args.get("limit", 50, type=int)
     offset = request.args.get("offset", 0, type=int)
     state_filter = request.args.get("state")
@@ -307,6 +309,7 @@ def get_alerts(user_id):
     try:
         with db_pool.get_admin_connection() as conn:
             cursor = conn.cursor()
+            cursor.execute("SET myapp.current_org_id = %s", (org_id,))
 
             if state_filter:
                 cursor.execute(
@@ -314,11 +317,11 @@ def get_alerts(user_id):
                     SELECT id, alert_id, alert_title, alert_state, search_name,
                            search_query, result_count, severity, payload, received_at, created_at
                     FROM splunk_alerts
-                    WHERE user_id = %s AND alert_state = %s
+                    WHERE org_id = %s AND alert_state = %s
                     ORDER BY received_at DESC
                     LIMIT %s OFFSET %s
                     """,
-                    (user_id, state_filter, limit, offset)
+                    (org_id, state_filter, limit, offset)
                 )
             else:
                 cursor.execute(
@@ -326,11 +329,11 @@ def get_alerts(user_id):
                     SELECT id, alert_id, alert_title, alert_state, search_name,
                            search_query, result_count, severity, payload, received_at, created_at
                     FROM splunk_alerts
-                    WHERE user_id = %s
+                    WHERE org_id = %s
                     ORDER BY received_at DESC
                     LIMIT %s OFFSET %s
                     """,
-                    (user_id, limit, offset)
+                    (org_id, limit, offset)
                 )
 
             alerts = cursor.fetchall()
@@ -338,13 +341,13 @@ def get_alerts(user_id):
             # Get total count
             if state_filter:
                 cursor.execute(
-                    "SELECT COUNT(*) FROM splunk_alerts WHERE user_id = %s AND alert_state = %s",
-                    (user_id, state_filter)
+                    "SELECT COUNT(*) FROM splunk_alerts WHERE org_id = %s AND alert_state = %s",
+                    (org_id, state_filter)
                 )
             else:
                 cursor.execute(
-                    "SELECT COUNT(*) FROM splunk_alerts WHERE user_id = %s",
-                    (user_id,)
+                    "SELECT COUNT(*) FROM splunk_alerts WHERE org_id = %s",
+                    (org_id,)
                 )
             total_count = cursor.fetchone()[0]
 

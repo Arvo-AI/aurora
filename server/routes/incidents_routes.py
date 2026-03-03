@@ -7,6 +7,7 @@ from flask import Blueprint, jsonify, request
 from utils.db.connection_pool import db_pool
 from utils.auth.token_management import get_token_data
 from utils.auth.rbac_decorators import require_permission
+from utils.auth.stateless_auth import get_org_id_from_request
 from chat.background.task import run_background_chat
 from typing import List, Dict, Any, Optional
 from uuid import UUID
@@ -234,11 +235,14 @@ def _format_incident_response(
 @require_permission("incidents", "read")
 def get_incidents(user_id):
 
+    org_id = get_org_id_from_request()
+
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
                 # Set RLS context
                 cursor.execute("SET myapp.current_user_id = %s", (user_id,))
+                cursor.execute("SET myapp.current_org_id = %s", (org_id,))
                 conn.commit()
 
                 cursor.execute(
@@ -251,12 +255,12 @@ def get_incidents(user_id):
                         i.merged_into_incident_id, target.alert_title as merged_into_title
                     FROM incidents i
                     LEFT JOIN incidents target ON i.merged_into_incident_id = target.id
-                    WHERE i.user_id = %s
+                    WHERE i.org_id = %s
                       AND i.status != 'merged'
                     ORDER BY i.started_at DESC
                     LIMIT 100
                     """,
-                    (user_id,),
+                    (org_id,),
                 )
                 rows = cursor.fetchall()
 
@@ -289,11 +293,14 @@ def get_incident(user_id, incident_id: str):
     if not _validate_uuid(incident_id):
         return jsonify({"error": "Invalid incident ID format"}), 400
 
+    org_id = get_org_id_from_request()
+
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
                 # Set RLS context
                 cursor.execute("SET myapp.current_user_id = %s", (user_id,))
+                cursor.execute("SET myapp.current_org_id = %s", (org_id,))
                 conn.commit()
                 # Get incident details
                 cursor.execute(
@@ -306,9 +313,9 @@ def get_incident(user_id, incident_id: str):
                         i.merged_into_incident_id, target.alert_title as merged_into_title
                     FROM incidents i
                     LEFT JOIN incidents target ON i.merged_into_incident_id = target.id
-                    WHERE i.id = %s AND i.user_id = %s
+                    WHERE i.id = %s AND i.org_id = %s
                     """,
-                    (incident_id, user_id),
+                    (incident_id, org_id),
                 )
                 row = cursor.fetchone()
 
@@ -640,10 +647,10 @@ def get_incident(user_id, incident_id: str):
                         """
                         SELECT id, title, messages, status, created_at, updated_at
                         FROM chat_sessions
-                        WHERE incident_id = %s AND user_id = %s AND is_active = true
+                        WHERE incident_id = %s AND org_id = %s AND is_active = true
                         ORDER BY created_at ASC
                         """,
-                        (incident_id, user_id),
+                        (incident_id, org_id),
                     )
                     chat_session_rows = cursor.fetchall()
                 except Exception as chat_err:
@@ -695,15 +702,18 @@ def get_incident_alerts(user_id, incident_id: str):
     if not _validate_uuid(incident_id):
         return jsonify({"error": "Invalid incident ID format"}), 400
 
+    org_id = get_org_id_from_request()
+
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
                 cursor.execute("SET myapp.current_user_id = %s", (user_id,))
+                cursor.execute("SET myapp.current_org_id = %s", (org_id,))
                 conn.commit()
 
                 cursor.execute(
-                    "SELECT 1 FROM incidents WHERE id = %s AND user_id = %s",
-                    (incident_id, user_id),
+                    "SELECT 1 FROM incidents WHERE id = %s AND org_id = %s",
+                    (incident_id, org_id),
                 )
                 if not cursor.fetchone():
                     return jsonify({"error": "Incident not found"}), 404
@@ -763,6 +773,8 @@ def update_incident(user_id, incident_id: str):
     if not _validate_uuid(incident_id):
         return jsonify({"error": "Invalid incident ID format"}), 400
 
+    org_id = get_org_id_from_request()
+
     data = request.get_json()
     if not data:
         return jsonify({"error": "Missing request body"}), 400
@@ -797,6 +809,7 @@ def update_incident(user_id, incident_id: str):
             with conn.cursor() as cursor:
                 # Set RLS context
                 cursor.execute("SET myapp.current_user_id = %s", (user_id,))
+                cursor.execute("SET myapp.current_org_id = %s", (org_id,))
                 conn.commit()
                 # Build update query dynamically based on provided fields
                 update_fields = []
@@ -828,8 +841,8 @@ def update_incident(user_id, incident_id: str):
                 previous_status = None
                 if data.get("status") == "resolved":
                     cursor.execute(
-                        "SELECT status FROM incidents WHERE id = %s AND user_id = %s",
-                        (incident_id, user_id),
+                        "SELECT status FROM incidents WHERE id = %s AND org_id = %s",
+                        (incident_id, org_id),
                     )
                     prev_row = cursor.fetchone()
                     previous_status = prev_row[0] if prev_row else None
@@ -838,12 +851,12 @@ def update_incident(user_id, incident_id: str):
                 update_fields.append("updated_at = CURRENT_TIMESTAMP")
 
                 # Add WHERE clause values
-                values.extend([incident_id, user_id])
+                values.extend([incident_id, org_id])
 
                 query = f"""
                     UPDATE incidents
                     SET {", ".join(update_fields)}
-                    WHERE id = %s AND user_id = %s
+                    WHERE id = %s AND org_id = %s
                     RETURNING id
                 """
 
@@ -888,6 +901,8 @@ def incident_chat(user_id, incident_id: str):
     if not _validate_uuid(incident_id):
         return jsonify({"error": "Invalid incident ID format"}), 400
 
+    org_id = get_org_id_from_request()
+
     data = request.get_json()
     if not data or not data.get("question"):
         return jsonify({"error": "Missing question"}), 400
@@ -923,13 +938,14 @@ def incident_chat(user_id, incident_id: str):
             with db_pool.get_admin_connection() as conn:
                 with conn.cursor() as cursor:
                     cursor.execute("SET myapp.current_user_id = %s", (user_id,))
+                    cursor.execute("SET myapp.current_org_id = %s", (org_id,))
                     conn.commit()
                     cursor.execute(
                         """
                         SELECT cs.id
                         FROM chat_sessions cs
                         WHERE cs.id = %s
-                          AND cs.user_id = %s
+                          AND cs.org_id = %s
                           AND (
                             cs.incident_id = %s
                             OR EXISTS (
@@ -938,7 +954,7 @@ def incident_chat(user_id, incident_id: str):
                             )
                           )
                         """,
-                        (existing_session_id, user_id, incident_id, incident_id),
+                        (existing_session_id, org_id, incident_id, incident_id),
                     )
                     session_row = cursor.fetchone()
 
@@ -971,6 +987,7 @@ def incident_chat(user_id, incident_id: str):
             with db_pool.get_admin_connection() as conn:
                 with conn.cursor() as cursor:
                     cursor.execute("SET myapp.current_user_id = %s", (user_id,))
+                    cursor.execute("SET myapp.current_org_id = %s", (org_id,))
                     conn.commit()
 
                     # Get incident
@@ -978,9 +995,9 @@ def incident_chat(user_id, incident_id: str):
                         """
                         SELECT alert_title, alert_service, severity, aurora_summary, aurora_status
                         FROM incidents
-                        WHERE id = %s AND user_id = %s
+                        WHERE id = %s AND org_id = %s
                         """,
-                        (incident_id, user_id),
+                        (incident_id, org_id),
                     )
                     incident_row = cursor.fetchone()
 
@@ -1125,6 +1142,8 @@ def update_suggestion(user_id, suggestion_id: str):
     if suggestion_id_int is None:
         return jsonify({"error": "Invalid suggestion ID"}), 400
 
+    org_id = get_org_id_from_request()
+
     data = request.get_json() or {}
     user_edited_content = data.get("userEditedContent")
     if not user_edited_content or not user_edited_content.strip():
@@ -1137,9 +1156,9 @@ def update_suggestion(user_id, suggestion_id: str):
                     """
                     SELECT s.id FROM incident_suggestions s
                     JOIN incidents i ON s.incident_id = i.id
-                    WHERE s.id = %s AND i.user_id = %s AND s.type = 'fix'
+                    WHERE s.id = %s AND i.org_id = %s AND s.type = 'fix'
                     """,
-                    (suggestion_id_int, user_id),
+                    (suggestion_id_int, org_id),
                 )
                 if not cursor.fetchone():
                     return jsonify(
@@ -1216,6 +1235,8 @@ def merge_alert_to_incident(user_id, target_incident_id: str):
     if not _validate_uuid(target_incident_id):
         return jsonify({"error": "Invalid target incident ID format"}), 400
 
+    org_id = get_org_id_from_request()
+
     data = request.get_json()
     if not data:
         return jsonify({"error": "Missing request body"}), 400
@@ -1240,6 +1261,7 @@ def merge_alert_to_incident(user_id, target_incident_id: str):
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
                 cursor.execute("SET myapp.current_user_id = %s", (user_id,))
+                cursor.execute("SET myapp.current_org_id = %s", (org_id,))
                 conn.commit()
 
                 # Get source incident details
@@ -1247,8 +1269,8 @@ def merge_alert_to_incident(user_id, target_incident_id: str):
                     """SELECT id, alert_title, alert_service, severity, source_type,
                               aurora_chat_session_id, alert_metadata, status
                        FROM incidents
-                       WHERE id = %s AND user_id = %s""",
-                    (source_incident_id, user_id),
+                       WHERE id = %s AND org_id = %s""",
+                    (source_incident_id, org_id),
                 )
                 source_row = cursor.fetchone()
                 if not source_row:
@@ -1273,8 +1295,8 @@ def merge_alert_to_incident(user_id, target_incident_id: str):
                 cursor.execute(
                     """SELECT id, aurora_chat_session_id, status
                        FROM incidents
-                       WHERE id = %s AND user_id = %s""",
-                    (target_incident_id, user_id),
+                       WHERE id = %s AND org_id = %s""",
+                    (target_incident_id, org_id),
                 )
                 target_row = cursor.fetchone()
                 if not target_row:
@@ -1481,21 +1503,24 @@ def get_recent_unlinked_incidents(user_id):
     # Optional: exclude a specific incident
     exclude_id = request.args.get("exclude")
 
+    org_id = get_org_id_from_request()
+
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
                 cursor.execute("SET myapp.current_user_id = %s", (user_id,))
+                cursor.execute("SET myapp.current_org_id = %s", (org_id,))
                 conn.commit()
 
                 query = """
                     SELECT id, alert_title, alert_service, severity, source_type,
                            status, aurora_status, created_at
                     FROM incidents
-                    WHERE user_id = %s
+                    WHERE org_id = %s
                       AND status = 'investigating'
                       AND created_at >= NOW() - INTERVAL '30 minutes'
                 """
-                params = [user_id]
+                params = [org_id]
 
                 if exclude_id and _validate_uuid(exclude_id):
                     query += " AND id != %s"

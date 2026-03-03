@@ -10,6 +10,7 @@ from flask import Blueprint, request, jsonify
 
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.enforcer import get_enforcer, reload_policies
+from utils.auth.stateless_auth import get_org_id_from_request
 from utils.db.db_utils import connect_to_db_as_user
 
 logger = logging.getLogger(__name__)
@@ -22,12 +23,18 @@ VALID_ROLES = {"admin", "editor", "viewer"}
 @admin_bp.route("/users", methods=["GET"])
 @require_permission("users", "manage")
 def list_users(user_id):
-    """List all users with their current role."""
+    """List users within the caller's org."""
+    org_id = get_org_id_from_request()
     conn = connect_to_db_as_user()
     try:
         with conn.cursor() as cur:
+            cur.execute("SET myapp.current_user_id = %s;", (user_id,))
+            if org_id:
+                cur.execute("SET myapp.current_org_id = %s;", (org_id,))
+            conn.commit()
             cur.execute(
-                "SELECT id, email, name, role, created_at FROM users ORDER BY created_at"
+                "SELECT id, email, name, role, created_at FROM users WHERE org_id = %s ORDER BY created_at",
+                (org_id,),
             )
             rows = cur.fetchall()
         return jsonify([
@@ -61,29 +68,39 @@ def create_user(user_id):
     if role not in VALID_ROLES:
         return jsonify({"error": f"Invalid role. Must be one of: {', '.join(sorted(VALID_ROLES))}"}), 400
 
+    org_id = get_org_id_from_request()
     password_hash = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
 
     conn = connect_to_db_as_user()
     try:
         with conn.cursor() as cur:
-            cur.execute("SELECT id FROM users WHERE email = %s", (email,))
+            cur.execute("SET myapp.current_user_id = %s;", (user_id,))
+            if org_id:
+                cur.execute("SET myapp.current_org_id = %s;", (org_id,))
+            conn.commit()
+
+            cur.execute("SELECT id FROM users WHERE email = %s AND org_id = %s", (email, org_id))
             if cur.fetchone():
                 return jsonify({"error": "User with this email already exists"}), 409
 
             cur.execute(
-                """INSERT INTO users (email, password_hash, name, role, created_at)
-                   VALUES (%s, %s, %s, %s, NOW())
+                """INSERT INTO users (email, password_hash, name, role, org_id, created_at)
+                   VALUES (%s, %s, %s, %s, %s, NOW())
                    RETURNING id, email, name, role, created_at""",
-                (email, password_hash, name or None, role),
+                (email, password_hash, name or None, role, org_id),
             )
             row = cur.fetchone()
         conn.commit()
 
         new_user_id = row[0]
         try:
-            enforcer = get_enforcer()
-            enforcer.add_grouping_policy(new_user_id, role)
-            enforcer.save_policy()
+            from utils.auth.enforcer import assign_role_to_user
+            if org_id:
+                assign_role_to_user(new_user_id, role, org_id)
+            else:
+                enforcer = get_enforcer()
+                enforcer.add_grouping_policy(new_user_id, role, "*")
+                enforcer.save_policy()
         except Exception as casbin_err:
             logger.warning("Failed to assign Casbin role for %s: %s", new_user_id, casbin_err)
 
@@ -103,8 +120,12 @@ def create_user(user_id):
 @require_permission("users", "manage")
 def get_user_roles(user_id, target_user_id):
     """Get the roles assigned to a specific user."""
+    org_id = get_org_id_from_request()
     enforcer = get_enforcer()
-    roles = enforcer.get_roles_for_user(target_user_id)
+    if org_id:
+        roles = enforcer.get_roles_for_user_in_domain(target_user_id, org_id)
+    else:
+        roles = enforcer.get_roles_for_user(target_user_id)
     return jsonify({"user_id": target_user_id, "roles": roles}), 200
 
 
@@ -122,13 +143,20 @@ def assign_role(user_id, target_user_id):
         return jsonify({"error": f"Invalid role. Must be one of: {', '.join(sorted(VALID_ROLES))}"}), 400
 
     enforcer = get_enforcer()
+    org_id = get_org_id_from_request()
 
     # Remove any existing role assignments for this user
-    current_roles = enforcer.get_roles_for_user(target_user_id)
-    for old_role in current_roles:
-        enforcer.remove_grouping_policy(target_user_id, old_role)
+    if org_id:
+        current_roles = enforcer.get_roles_for_user_in_domain(target_user_id, org_id)
+        for old_role in current_roles:
+            enforcer.remove_grouping_policy(target_user_id, old_role, org_id)
+        enforcer.add_grouping_policy(target_user_id, role, org_id)
+    else:
+        current_roles = enforcer.get_roles_for_user(target_user_id)
+        for old_role in current_roles:
+            enforcer.remove_grouping_policy(target_user_id, old_role)
+        enforcer.add_grouping_policy(target_user_id, role)
 
-    enforcer.add_grouping_policy(target_user_id, role)
     enforcer.save_policy()
     reload_policies()
 
@@ -136,7 +164,11 @@ def assign_role(user_id, target_user_id):
     conn = connect_to_db_as_user()
     try:
         with conn.cursor() as cur:
-            cur.execute("UPDATE users SET role = %s WHERE id = %s", (role, target_user_id))
+            cur.execute("SET myapp.current_user_id = %s;", (user_id,))
+            if org_id:
+                cur.execute("SET myapp.current_org_id = %s;", (org_id,))
+            conn.commit()
+            cur.execute("UPDATE users SET role = %s WHERE id = %s AND org_id = %s", (role, target_user_id, org_id))
         conn.commit()
     finally:
         conn.close()
@@ -154,22 +186,35 @@ def revoke_role(user_id, target_user_id, role):
         return jsonify({"error": f"Invalid role. Must be one of: {', '.join(sorted(VALID_ROLES))}"}), 400
 
     enforcer = get_enforcer()
-    enforcer.remove_grouping_policy(target_user_id, role)
+    org_id = get_org_id_from_request()
 
-    # Ensure the user always has at least viewer
-    remaining = enforcer.get_roles_for_user(target_user_id)
-    if not remaining:
-        enforcer.add_grouping_policy(target_user_id, "viewer")
+    if org_id:
+        enforcer.remove_grouping_policy(target_user_id, role, org_id)
+        remaining = enforcer.get_roles_for_user_in_domain(target_user_id, org_id)
+        if not remaining:
+            enforcer.add_grouping_policy(target_user_id, "viewer", org_id)
+    else:
+        enforcer.remove_grouping_policy(target_user_id, role)
+        remaining = enforcer.get_roles_for_user(target_user_id)
+        if not remaining:
+            enforcer.add_grouping_policy(target_user_id, "viewer")
 
     enforcer.save_policy()
     reload_policies()
 
-    fallback_role = (enforcer.get_roles_for_user(target_user_id) or ["viewer"])[0]
+    if org_id:
+        fallback_role = (enforcer.get_roles_for_user_in_domain(target_user_id, org_id) or ["viewer"])[0]
+    else:
+        fallback_role = (enforcer.get_roles_for_user(target_user_id) or ["viewer"])[0]
 
     conn = connect_to_db_as_user()
     try:
         with conn.cursor() as cur:
-            cur.execute("UPDATE users SET role = %s WHERE id = %s", (fallback_role, target_user_id))
+            cur.execute("SET myapp.current_user_id = %s;", (user_id,))
+            if org_id:
+                cur.execute("SET myapp.current_org_id = %s;", (org_id,))
+            conn.commit()
+            cur.execute("UPDATE users SET role = %s WHERE id = %s AND org_id = %s", (fallback_role, target_user_id, org_id))
         conn.commit()
     finally:
         conn.close()

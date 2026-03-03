@@ -80,24 +80,64 @@ def register():
                     "UPDATE users SET role = %s WHERE id = %s",
                     (role, user_id)
                 )
+
+                # Auto-create or assign org
+                org_id = None
+                org_name = None
+                if user_count == 1:
+                    # First user: create default organization
+                    cursor.execute(
+                        """
+                        INSERT INTO organizations (id, name, slug, created_by)
+                        VALUES (gen_random_uuid()::TEXT, 'Default Organization', 'default', %s)
+                        ON CONFLICT (slug) DO UPDATE SET slug = organizations.slug
+                        RETURNING id, name
+                        """,
+                        (user_id,)
+                    )
+                    org_row = cursor.fetchone()
+                    org_id, org_name = org_row[0], org_row[1]
+                    cursor.execute(
+                        "UPDATE users SET org_id = %s WHERE id = %s",
+                        (org_id, user_id)
+                    )
+                else:
+                    # Subsequent users: assign to the first (default) org
+                    cursor.execute(
+                        "SELECT id, name FROM organizations ORDER BY created_at ASC LIMIT 1"
+                    )
+                    org_row = cursor.fetchone()
+                    if org_row:
+                        org_id, org_name = org_row[0], org_row[1]
+                        cursor.execute(
+                            "UPDATE users SET org_id = %s WHERE id = %s",
+                            (org_id, user_id)
+                        )
+
                 conn.commit()
 
-                # Register the user-role mapping in Casbin
+                # Register the user-role mapping in Casbin (domain-aware)
                 try:
-                    from utils.auth.enforcer import get_enforcer
-                    enforcer = get_enforcer()
-                    enforcer.add_grouping_policy(user_id, role)
-                    enforcer.save_policy()
+                    from utils.auth.enforcer import assign_role_to_user
+                    if org_id:
+                        assign_role_to_user(user_id, role, org_id)
+                    else:
+                        from utils.auth.enforcer import get_enforcer
+                        enforcer = get_enforcer()
+                        enforcer.add_grouping_policy(user_id, role, "*")
+                        enforcer.save_policy()
                 except Exception as casbin_err:
                     logging.warning(f"Failed to assign Casbin role for {user_id}: {casbin_err}")
                 
-                logging.info(f"New user registered: {email} (role={role})")
+                logging.info(f"New user registered: {email} (role={role}, org={org_id})")
                 
                 return jsonify({
                     "id": user_id,
                     "email": user_email,
                     "name": user_name,
-                    "role": role
+                    "role": role,
+                    "orgId": org_id,
+                    "orgName": org_name,
                 }), 201
         finally:
             conn.close()
@@ -129,7 +169,9 @@ def login():
         try:
             with conn.cursor() as cursor:
                 cursor.execute(
-                    "SELECT id, email, name, password_hash, role FROM users WHERE email = %s",
+                    "SELECT u.id, u.email, u.name, u.password_hash, u.role, u.org_id, o.name "
+                    "FROM users u LEFT JOIN organizations o ON u.org_id = o.id "
+                    "WHERE u.email = %s",
                     (email,)
                 )
                 user = cursor.fetchone()
@@ -137,7 +179,7 @@ def login():
                 # Always perform password check to prevent timing attacks
                 # Use dummy hash if user doesn't exist
                 if user:
-                    user_id, user_email, user_name, password_hash, user_role = user
+                    user_id, user_email, user_name, password_hash, user_role, user_org_id, user_org_name = user
                 else:
                     # Dummy hash to maintain consistent timing
                     password_hash = bcrypt.hashpw(b'dummy', bcrypt.gensalt()).decode('utf-8')
@@ -154,7 +196,9 @@ def login():
                     "id": user_id,
                     "email": user_email,
                     "name": user_name,
-                    "role": user_role or "viewer"
+                    "role": user_role or "viewer",
+                    "orgId": user_org_id,
+                    "orgName": user_org_name,
                 }), 200
         finally:
             conn.close()

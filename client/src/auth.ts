@@ -39,7 +39,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
         }
         
         const user = await response.json()
-        return user // { id, email, name }
+        return user // { id, email, name, role, orgId, orgName }
       }
     })
   ],
@@ -58,17 +58,22 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
         token.email = user.email
         token.name = user.name
         token.role = user.role
+        token.orgId = user.orgId
+        token.orgName = user.orgName
       }
       return token
     },
     session({ session, token }) {
       if (token) {
         session.userId = token.id as string
+        session.orgId = token.orgId as string
         if (session.user) {
           session.user.id = token.id as string
           session.user.email = token.email as string
           session.user.name = token.name as string
           session.user.role = token.role as string
+          session.user.orgId = token.orgId as string
+          session.user.orgName = token.orgName as string
         }
       }
       return session

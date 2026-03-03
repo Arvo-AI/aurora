@@ -2,6 +2,7 @@
 import logging
 from flask import Blueprint, request, jsonify
 from utils.auth.rbac_decorators import require_permission
+from utils.auth.stateless_auth import get_org_id_from_request
 from utils.web.cors_utils import create_cors_response
 from utils.db.connection_pool import db_pool
 
@@ -18,13 +19,16 @@ def get_available_models_options():
 @llm_usage_bp.route('/api/llm-usage/models', methods=['GET'])
 @require_permission("llm_usage", "read")
 def get_available_models(user_id):
-    """Get list of models used by the user."""
+    """Get list of models used by the user, with org-level rollup."""
     try:
+        org_id = get_org_id_from_request()
         with db_pool.get_user_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
+            if org_id:
+                cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
             
-            # Get unique LLM models used by the user
+            # Per-user billing breakdown
             cursor.execute("""
                 SELECT 
                     model_name,
@@ -54,8 +58,18 @@ def get_available_models(user_id):
                     "last_used": model[6].isoformat() if model[6] else None
                 }
                 formatted_models.append(formatted_model)
+
+            # Org-level rollup (all members' usage)
+            org_total_cost = None
+            if org_id:
+                cursor.execute("""
+                    SELECT COALESCE(SUM(total_cost_with_surcharge), 0)
+                    FROM llm_usage_tracking
+                    WHERE org_id = %s
+                """, (org_id,))
+                row = cursor.fetchone()
+                org_total_cost = float(row[0]) if row else 0.0
         
-        # Calculate totals
         total_api_cost = sum(model["total_cost_with_surcharge"] for model in formatted_models)
         
         result = {
@@ -67,6 +81,8 @@ def get_available_models(user_id):
                 "currency": "USD"
             }
         }
+        if org_total_cost is not None:
+            result["billing_summary"]["org_total_cost"] = org_total_cost
 
         logger.info(f"Retrieved {len(formatted_models)} models for user {user_id}")
         return jsonify(result)

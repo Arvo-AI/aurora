@@ -1,10 +1,10 @@
-"""RBAC decorators for Flask route handlers.
+"""RBAC decorators for Flask route handlers with org (domain) support.
 
 ``@require_permission(resource, action)``
-    Checks authentication **and** Casbin authorisation.  Returns 401 if the
-    request has no valid user, 403 if the user lacks the required permission.
-    Injects ``user_id`` as the first positional argument of the wrapped
-    function (same convention as the legacy ``@require_auth``).
+    Checks authentication **and** Casbin authorisation (domain-aware).
+    Returns 401 if the request has no valid user, 403 if the user lacks
+    the required permission in their org.  Injects ``user_id`` as the
+    first positional argument of the wrapped function.
 
 ``@require_auth_only``
     Authentication-only check (no permission evaluation).  Useful for routes
@@ -16,19 +16,17 @@ from functools import wraps
 
 from flask import jsonify, request
 
-from utils.auth.stateless_auth import get_user_id_from_request
+from utils.auth.stateless_auth import get_user_id_from_request, get_org_id_from_request
 from utils.auth.enforcer import get_enforcer
 
 logger = logging.getLogger(__name__)
 
 
 def require_permission(resource: str, action: str):
-    """Decorator that enforces Casbin RBAC on a Flask route.
+    """Decorator that enforces Casbin domain-based RBAC on a Flask route.
 
     OPTIONS (CORS preflight) requests are passed through without auth so
-    that browser preflight checks succeed.  flask-cors adds the CORS
-    headers; the route's own ``if request.method == 'OPTIONS'`` handler
-    (when present) is also called.
+    that browser preflight checks succeed.
 
     Usage::
 
@@ -47,11 +45,13 @@ def require_permission(resource: str, action: str):
             if not user_id:
                 return jsonify({"error": "Unauthorized"}), 401
 
+            org_id = get_org_id_from_request()
+
             enforcer = get_enforcer()
-            if not enforcer.enforce(user_id, resource, action):
+            if org_id and not enforcer.enforce(user_id, org_id, resource, action):
                 logger.warning(
-                    "RBAC denied: user=%s resource=%s action=%s endpoint=%s",
-                    user_id, resource, action, fn.__name__,
+                    "RBAC denied: user=%s org=%s resource=%s action=%s endpoint=%s",
+                    user_id, org_id, resource, action, fn.__name__,
                 )
                 return jsonify({"error": "Forbidden"}), 403
 

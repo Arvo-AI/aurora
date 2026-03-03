@@ -3,6 +3,7 @@ import { auth } from '@/auth'
 
 export interface AuthResult {
   userId: string
+  orgId?: string
   headers: Record<string, string>
 }
 
@@ -16,12 +17,19 @@ export async function getAuthenticatedUser(): Promise<AuthResult | NextResponse>
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
+  const headers: Record<string, string> = {
+    'X-User-ID': session.userId,
+    'X-User-Role': session.user?.role || 'viewer',
+  }
+
+  if (session.orgId) {
+    headers['X-Org-ID'] = session.orgId
+  }
+
   return {
     userId: session.userId,
-    headers: {
-      'X-User-ID': session.userId,
-      'X-User-Role': session.user?.role || 'viewer',
-    }
+    orgId: session.orgId,
+    headers,
   }
 }
 

@@ -13,10 +13,10 @@ logger = logging.getLogger(__name__)
 
 
 def store_tokens_in_db(user_id: str, token_data: Dict, provider: str, 
-                      subscription_name: str = None, subscription_id: str = None) -> None:
+                      subscription_name: str = None, subscription_id: str = None,
+                      org_id: str = None) -> None:
     """
     Store token data in Vault and save secret reference in database.
-    Legacy token_data column storage has been removed.
     
     Args:
         user_id: User identifier
@@ -24,6 +24,7 @@ def store_tokens_in_db(user_id: str, token_data: Dict, provider: str,
         provider: Provider name (gcp, aws, azure)
         subscription_name: Azure subscription name (optional)
         subscription_id: Azure subscription ID (optional)
+        org_id: Organization ID for multi-tenant scoping (optional)
     """
     start_time = time.perf_counter()
 
@@ -315,6 +316,14 @@ def store_tokens_in_db(user_id: str, token_data: Dict, provider: str,
             
             conn.commit()
 
+            # Set org_id on the token row if provided
+            if org_id:
+                cursor.execute(
+                    "UPDATE user_tokens SET org_id = %s WHERE user_id = %s AND provider = %s",
+                    (org_id, user_id, provider)
+                )
+                conn.commit()
+
         # Clear the secret cache so fresh value is fetched on next retrieval
         try:
             from utils.secrets.secret_cache import clear_secret_cache
@@ -335,14 +344,17 @@ def store_tokens_in_db(user_id: str, token_data: Dict, provider: str,
         raise
 
 
-def get_token_data(user_id: str, provider: str) -> Optional[Dict]:
+def get_token_data(user_id: str, provider: str, org_id: str = None) -> Optional[Dict]:
     """
     Retrieve token data from Vault only.
-    Legacy token_data column support has been removed.
+
+    When org_id is provided, looks up the token by org instead of user
+    (connectors are org-shared resources).
 
     Args:
         user_id: User identifier
         provider: Provider name (gcp, aws, azure) or list of providers
+        org_id: Organization ID for multi-tenant lookup (optional)
 
     Returns:
         Token data dictionary or empty dict if not found

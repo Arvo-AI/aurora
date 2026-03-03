@@ -205,6 +205,10 @@ app.register_blueprint(llm_config_bp)  # LLM provider configuration routes
 app.register_blueprint(auth_bp)  # Auth.js authentication routes
 app.register_blueprint(admin_bp)  # RBAC admin routes
 
+# --- Organization Management Routes ---
+from routes.org_routes import org_bp
+app.register_blueprint(org_bp)
+
 # --- GitHub Integration Routes ---
 from routes.github.github import github_bp
 from routes.github.github_user_repos import github_user_repos_bp

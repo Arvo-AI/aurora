@@ -11,6 +11,7 @@ from utils.db.connection_pool import db_pool
 from utils.web.cors_utils import create_cors_response
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.auth.rbac_decorators import require_permission
+from utils.auth.stateless_auth import get_org_id_from_request
 
 logger = logging.getLogger(__name__)
 
@@ -182,6 +183,7 @@ def alert_webhook(user_id: str):
 @require_permission("connectors", "read")
 def get_alerts(user_id):
     """Fetch stored Netdata alerts for user."""
+    org_id = get_org_id_from_request()
     limit = request.args.get("limit", 50, type=int)
     offset = request.args.get("offset", 0, type=int)
     status_filter = request.args.get("status")
@@ -189,6 +191,7 @@ def get_alerts(user_id):
     try:
         with db_pool.get_admin_connection() as conn:
             cursor = conn.cursor()
+            cursor.execute("SET myapp.current_org_id = %s", (org_id,))
 
             if status_filter:
                 cursor.execute(
@@ -196,11 +199,11 @@ def get_alerts(user_id):
                     SELECT id, alert_name, alert_status, chart, host, space, room, 
                            value, message, payload, received_at, created_at
                     FROM netdata_alerts
-                    WHERE user_id = %s AND alert_status = %s
+                    WHERE org_id = %s AND alert_status = %s
                     ORDER BY received_at DESC
                     LIMIT %s OFFSET %s
                     """,
-                    (user_id, status_filter, limit, offset)
+                    (org_id, status_filter, limit, offset)
                 )
             else:
                 cursor.execute(
@@ -208,11 +211,11 @@ def get_alerts(user_id):
                     SELECT id, alert_name, alert_status, chart, host, space, room,
                            value, message, payload, received_at, created_at
                     FROM netdata_alerts
-                    WHERE user_id = %s
+                    WHERE org_id = %s
                     ORDER BY received_at DESC
                     LIMIT %s OFFSET %s
                     """,
-                    (user_id, limit, offset)
+                    (org_id, limit, offset)
                 )
 
             alerts = cursor.fetchall()
@@ -220,13 +223,13 @@ def get_alerts(user_id):
             # Get total count
             if status_filter:
                 cursor.execute(
-                    "SELECT COUNT(*) FROM netdata_alerts WHERE user_id = %s AND alert_status = %s",
-                    (user_id, status_filter)
+                    "SELECT COUNT(*) FROM netdata_alerts WHERE org_id = %s AND alert_status = %s",
+                    (org_id, status_filter)
                 )
             else:
                 cursor.execute(
-                    "SELECT COUNT(*) FROM netdata_alerts WHERE user_id = %s",
-                    (user_id,)
+                    "SELECT COUNT(*) FROM netdata_alerts WHERE org_id = %s",
+                    (org_id,)
                 )
             total_count = cursor.fetchone()[0]
 
