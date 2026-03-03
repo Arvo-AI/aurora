@@ -3,12 +3,13 @@
 import React, { useState } from 'react';
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog";
-import { Settings, User, BookOpen, FileText } from "lucide-react";
+import { Settings, User, BookOpen, FileText, Building2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { GeneralSettings } from "@/components/GeneralSettings";
 import { ProfileSettings } from "@/components/ProfileSettings";
 import { KnowledgeBaseSettings } from "@/components/KnowledgeBaseSettings";
 import { PostmortemsSettings } from "@/components/PostmortemsSettings";
+import { useUser } from "@/hooks/useAuthHooks";
 
 
 interface SettingsModalProps {
@@ -20,6 +21,7 @@ type SettingsTab = 'general' | 'profile' | 'knowledge-base' | 'postmortems';
 
 export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
   const [activeTab, setActiveTab] = useState<SettingsTab>('general');
+  const { user } = useUser();
 
   const tabs = [
     {
@@ -45,7 +47,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
       label: 'Postmortems',
       icon: FileText,
       description: 'View generated postmortems'
-    }
+    },
   ];
 
   const renderContent = () => {

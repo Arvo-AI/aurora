@@ -2,7 +2,7 @@
 
 import Link from "next/link"
 import { usePathname, useRouter } from "next/navigation"
-import { ChevronLeft, Settings, LogOut, User, Zap, Plug } from "lucide-react"
+import { ChevronLeft, Settings, LogOut, User, Zap, Plug, Building2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import ChatHistory from "@/components/ChatHistory"
@@ -125,9 +125,15 @@ export default function Navigation({
             />
             <div className="flex flex-col items-start">
               <h1 className="text-lg font-bold text-foreground">Aurora</h1>
-              <span className="px-1.5 py-0.5 text-xs font-semibold tracking-wider text-blue-700 bg-blue-100 rounded-full dark:bg-blue-900 dark:text-blue-200 mt-0.5">
-                BETA
-              </span>
+              {user?.orgName ? (
+                <span className="text-xs text-muted-foreground truncate max-w-[120px]">
+                  {user.orgName}
+                </span>
+              ) : (
+                <span className="px-1.5 py-0.5 text-xs font-semibold tracking-wider text-blue-700 bg-blue-100 rounded-full dark:bg-blue-900 dark:text-blue-200 mt-0.5">
+                  BETA
+                </span>
+              )}
             </div>
           </div>
           <Button 
@@ -179,6 +185,24 @@ export default function Navigation({
               <div className="flex items-center">
                 <Plug size={16} />
                 <span className="ml-2">Connectors</span>
+              </div>
+            </Link>
+          </li>
+
+          {/* Organization Navigation Item (all roles) */}
+          <li>
+            <Link
+              href="/org"
+              className={cn(
+                "w-full flex items-center justify-between px-2.5 py-1.5 rounded-md hover:bg-primary/10 transition-colors text-sm border border-transparent hover:border-border/50",
+                pathname?.startsWith("/org") 
+                  ? "bg-card rounded-lg border border-border shadow-sm" 
+                  : "text-muted-foreground"
+              )}
+            >
+              <div className="flex items-center">
+                <Building2 size={16} />
+                <span className="ml-2">Organization</span>
               </div>
             </Link>
           </li>
