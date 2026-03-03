@@ -3,7 +3,7 @@
 import logging
 from flask import Blueprint, request, jsonify
 from utils.db.connection_pool import db_pool
-from utils.auth import ROLE_ADMIN, ROLE_EDITOR, ROLE_VIEWER, VALID_ROLES
+from utils.auth import VALID_ROLES
 from utils.auth.rbac_decorators import require_permission, require_auth_only
 from utils.auth.stateless_auth import get_org_id_from_request
 
