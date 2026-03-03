@@ -40,3 +40,7 @@ export const isBigPandaEnabled = () => {
 export const isThousandEyesEnabled = () => {
   return getEnv('NEXT_PUBLIC_ENABLE_THOUSANDEYES') === 'true';
 };
+
+export const isSharePointEnabled = () => {
+  return getEnv('NEXT_PUBLIC_ENABLE_SHAREPOINT') === 'true';
+};
