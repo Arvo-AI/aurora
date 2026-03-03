@@ -158,7 +158,7 @@ class ConnectorRegistry {
         id: "sharepoint",
         name: "SharePoint",
         description: "Fetch documents, site pages, and search across SharePoint Online sites to automate incident response workflows.",
-        iconPath: "/sharepoint.svg.png",
+        iconPath: "/sharepoint.svg",
         iconBgColor: "bg-white dark:bg-white",
         category: "Documentation",
         path: "/sharepoint/connect",
