@@ -17,6 +17,7 @@ import { useGitHubStatus } from "@/hooks/use-github-status";
 import { useBitbucketStatus } from "@/hooks/use-bitbucket-status";
 import { useGraphDiscoveryStatus } from "@/hooks/use-graph-discovery-status";
 import { useUser } from "@/hooks/useAuthHooks";
+import { canWrite as checkCanWrite } from "@/lib/roles";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 
 const slackService = isSlackEnabled() ? require("@/lib/services/slack").slackService : null;
@@ -29,7 +30,7 @@ export default function ConnectorCard({ connector }: ConnectorCardProps) {
   const router = useRouter();
   const { toast } = useToast();
   const { user } = useUser();
-  const canWrite = user?.role === "admin" || user?.role === "editor";
+  const canWrite = checkCanWrite(user?.role);
   const [showGitHubDialog, setShowGitHubDialog] = useState(false);
   const [showBitbucketDialog, setShowBitbucketDialog] = useState(false);
   const [showGcpDialog, setShowGcpDialog] = useState(false);

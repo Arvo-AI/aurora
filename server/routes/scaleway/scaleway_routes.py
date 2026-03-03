@@ -158,31 +158,15 @@ def scaleway_connect(user_id):
         return jsonify({"error": "Failed to connect Scaleway"}), 500
 
 
-@scaleway_bp.route('/scaleway/projects', methods=['GET', 'POST', 'OPTIONS'])
+@scaleway_bp.route('/scaleway/projects', methods=['GET', 'OPTIONS'])
 @limiter.limit("30 per minute")
-@require_permission("connectors", "write")
-def scaleway_projects(user_id):
-    """
-    Fetch or save Scaleway projects.
-    
-    GET Returns:
-    {
-        "projects": [
-            {"projectId": "...", "projectName": "...", "organizationId": "..."}
-        ]
-    }
-    
-    POST Body:
-    {
-        "projects": [{"projectId": "...", "enabled": true/false}]
-    }
-    """
+@require_permission("connectors", "read")
+def scaleway_projects_read(user_id):
+    """GET - Fetch Scaleway projects."""
     if request.method == 'OPTIONS':
         return create_cors_response()
     
     try:
-        
-        # Get stored credentials
         token_data = get_token_data(user_id, "scaleway")
         if not token_data:
             return jsonify({
@@ -190,57 +174,66 @@ def scaleway_projects(user_id):
                 "action": "CONNECT_REQUIRED"
             }), 401
         
-        if request.method == 'POST':
-            # Save project selections
-            data = request.get_json()
-            projects = data.get("projects", [])
-            
-            # Store project selections in user preferences
-            store_user_preference(user_id, 'scaleway_projects', projects)
-            
-            logger.info(f"Saved Scaleway project selections for user {user_id}")
-            return jsonify({"success": True, "message": "Projects saved"})
-        
-        # GET - Fetch projects
         secret_key = token_data.get("secret_key")
         if not secret_key:
             return jsonify({"error": "Invalid stored credentials"}), 401
         
-        # Get organization_id and access_key from stored token data
         organization_id = token_data.get("organization_id")
         access_key = token_data.get("access_key")
         
-        # Fetch projects from Scaleway API
         success, projects, error = get_scaleway_projects(secret_key, organization_id, access_key)
         
         if not success:
             return jsonify({"error": error}), 400
         
-        # Load saved project selections
         saved_prefs = get_user_preference(user_id, 'scaleway_projects') or []
         root_project_id = get_user_preference(user_id, 'scaleway_root_project')
         
-        # Convert saved preferences list to dict for easier lookup
         saved_selections = {}
         if isinstance(saved_prefs, list):
             for p in saved_prefs:
                 if isinstance(p, dict):
                     saved_selections[p.get('projectId')] = p.get('enabled', True)
         
-        # Merge saved selections with fetched projects
         for project in projects:
             project_id = project.get('projectId')
             if project_id in saved_selections:
                 project['enabled'] = saved_selections[project_id]
             else:
-                project['enabled'] = True  # Default to enabled
+                project['enabled'] = True
             project['isRootProject'] = (project_id == root_project_id)
         
         return jsonify({"projects": projects})
         
     except Exception as e:
-        logger.error(f"Error with Scaleway projects: {e}", exc_info=True)
-        return jsonify({"error": "Failed to process projects request"}), 500
+        logger.error(f"Error fetching Scaleway projects: {e}", exc_info=True)
+        return jsonify({"error": "Failed to fetch projects"}), 500
+
+
+@scaleway_bp.route('/scaleway/projects', methods=['POST'])
+@limiter.limit("30 per minute")
+@require_permission("connectors", "write")
+def scaleway_projects_write(user_id):
+    """POST - Save Scaleway project selections."""
+    try:
+        token_data = get_token_data(user_id, "scaleway")
+        if not token_data:
+            return jsonify({
+                "error": "Scaleway not connected. Please connect your account.",
+                "action": "CONNECT_REQUIRED"
+            }), 401
+
+        data = request.get_json()
+        projects = data.get("projects", [])
+        
+        store_user_preference(user_id, 'scaleway_projects', projects)
+        
+        logger.info(f"Saved Scaleway project selections for user {user_id}")
+        return jsonify({"success": True, "message": "Projects saved"})
+        
+    except Exception as e:
+        logger.error(f"Error saving Scaleway projects: {e}", exc_info=True)
+        return jsonify({"error": "Failed to save projects"}), 500
 
 
 @scaleway_bp.route('/scaleway/status', methods=['GET', 'OPTIONS'])
@@ -320,34 +313,15 @@ def scaleway_disconnect(user_id):
         return jsonify({"error": "Failed to disconnect Scaleway"}), 500
 
 
-@scaleway_bp.route('/scaleway/root-project', methods=['GET', 'POST', 'OPTIONS'])
+@scaleway_bp.route('/scaleway/root-project', methods=['GET', 'OPTIONS'])
 @limiter.limit("30 per minute")
-@require_permission("connectors", "write")
-def scaleway_root_project(user_id):
-    """Get or set the root project for Scaleway."""
+@require_permission("connectors", "read")
+def scaleway_root_project_read(user_id):
+    """Get the current root project for Scaleway."""
     if request.method == 'OPTIONS':
         return create_cors_response()
     
     try:
-        
-        if request.method == 'POST':
-            data = request.get_json()
-            project_id = data.get("projectId")
-            
-            if not project_id:
-                return jsonify({"error": "projectId is required"}), 400
-            
-            # Store the root project preference
-            store_user_preference(user_id, 'scaleway_root_project', project_id)
-            
-            logger.info(f"Set Scaleway root project to {project_id} for user {user_id}")
-            return jsonify({
-                "success": True,
-                "projectId": project_id,
-                "message": "Root project set successfully"
-            })
-        
-        # GET - Fetch current root project
         root_project = get_user_preference(user_id, 'scaleway_root_project')
         
         if root_project:
@@ -362,8 +336,34 @@ def scaleway_root_project(user_id):
         })
             
     except Exception as e:
-        logger.error(f"Error with Scaleway root project: {e}", exc_info=True)
-        return jsonify({"error": "Failed to process root project request"}), 500
+        logger.error(f"Error getting Scaleway root project: {e}", exc_info=True)
+        return jsonify({"error": "Failed to get root project"}), 500
+
+
+@scaleway_bp.route('/scaleway/root-project', methods=['POST'])
+@limiter.limit("30 per minute")
+@require_permission("connectors", "write")
+def scaleway_root_project_write(user_id):
+    """Set the root project for Scaleway."""
+    try:
+        data = request.get_json()
+        project_id = data.get("projectId")
+        
+        if not project_id:
+            return jsonify({"error": "projectId is required"}), 400
+        
+        store_user_preference(user_id, 'scaleway_root_project', project_id)
+        
+        logger.info(f"Set Scaleway root project to {project_id} for user {user_id}")
+        return jsonify({
+            "success": True,
+            "projectId": project_id,
+            "message": "Root project set successfully"
+        })
+            
+    except Exception as e:
+        logger.error(f"Error setting Scaleway root project: {e}", exc_info=True)
+        return jsonify({"error": "Failed to set root project"}), 500
 
 
 @scaleway_bp.route('/scaleway/instances', methods=['GET', 'OPTIONS'])

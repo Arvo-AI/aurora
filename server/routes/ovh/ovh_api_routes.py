@@ -44,65 +44,17 @@ OVH_API_ENDPOINTS = {
 }
 
 
-@ovh_bp.route('/ovh/projects', methods=['GET', 'POST', 'OPTIONS'])
+@ovh_bp.route('/ovh/projects', methods=['GET', 'OPTIONS'])
 @limiter.limit(OVH_READ_LIMITS)
-@require_permission("connectors", "write")
-def ovh_projects(user_id):
-    """
-    GET /ovh_api/ovh/projects - Fetch list of OVH cloud projects
-    POST /ovh_api/ovh/projects - Save project enabled/disabled preferences
-
-    GET Returns:
-    {
-        "projects": [
-            {"projectId": "abc123", "projectName": "Production", "status": "ok", "enabled": true},
-        ]
-    }
-    
-    POST Body:
-    {
-        "projects": [{"projectId": "abc123", "enabled": false}]
-    }
-    """
-    # Handle CORS preflight
+@require_permission("connectors", "read")
+def ovh_projects_read(user_id):
+    """GET /ovh_api/ovh/projects - Fetch list of OVH cloud projects."""
     if request.method == 'OPTIONS':
         return create_cors_response()
-    
-    # Handle POST - save project preferences
-    if request.method == 'POST':
-        try:
-            data = request.get_json() or {}
-            projects = data.get('projects', [])
-            
-            if not projects:
-                return jsonify({"error": "No projects provided"}), 400
-            
-            # Store project preferences in user preferences (database)
-            
-            # Get existing preferences or create new
-            existing_prefs = get_user_preference(user_id, 'ovh_project_preferences') or {}
-            
-            # Update with new project settings
-            for project in projects:
-                project_id = project.get('projectId')
-                enabled = project.get('enabled', True)
-                if project_id:
-                    existing_prefs[project_id] = {'enabled': enabled}
-            
-            # Save updated preferences
-            store_user_preference(user_id, 'ovh_project_preferences', existing_prefs)
-            
-            logger.info(f"Saved OVH project preferences for user {user_id}: {len(projects)} projects")
-            return jsonify({"success": True, "message": "Project preferences saved"})
-            
-        except Exception as e:
-            logger.error(f"Error saving OVH project preferences: {e}", exc_info=True)
-            return jsonify({"error": "Failed to save project preferences"}), 500
-    
+
     try:
         logger.info(f"Fetching OVH projects for user: {user_id} (from header: {request.headers.get('X-User-ID')})")
 
-        # Get valid token data (auto-refreshes if expired)
         token_data = get_valid_access_token(user_id)
         if not token_data:
             logger.warning(f"Failed to get valid OVH token for user: {user_id}")
@@ -111,7 +63,6 @@ def ovh_projects(user_id):
                 "action": "RECONNECT_REQUIRED"
             }), 401
 
-        # Extract access token and endpoint from token data
         access_token = token_data.get('access_token')
         endpoint = token_data.get('endpoint')
 
@@ -119,13 +70,11 @@ def ovh_projects(user_id):
             logger.error(f"Invalid token data for user: {user_id}")
             return jsonify({"error": "Invalid OVH configuration"}), 400
 
-        # Get API base URL for the endpoint
         api_base_url = OVH_API_ENDPOINTS.get(endpoint)
         if not api_base_url:
             logger.error(f"Invalid OVH endpoint: {endpoint}")
             return jsonify({"error": "Invalid OVH endpoint"}), 400
 
-        # Call OVH API to get projects
         headers = {
             'Authorization': f'Bearer {access_token}',
             'Content-Type': 'application/json'
@@ -145,10 +94,8 @@ def ovh_projects(user_id):
             logger.error(f"OVH API error: {response.status_code} - {response.text}")
             return jsonify({"error": "OVH API request failed"}), response.status_code
 
-        # Parse project IDs
         project_ids = response.json()
 
-        # Fetch details for each project
         projects = []
         for project_id in project_ids:
             try:
@@ -167,7 +114,6 @@ def ovh_projects(user_id):
                         'enabled': True
                     })
                 else:
-                    # If we can't get details, still include the project ID
                     projects.append({
                         'projectId': project_id,
                         'projectName': project_id,
@@ -183,7 +129,6 @@ def ovh_projects(user_id):
                     'enabled': True
                 })
 
-        # Merge with saved project preferences and get root project
         root_project = None
         try:
             saved_prefs = get_user_preference(user_id, 'ovh_project_preferences') or {}
@@ -194,10 +139,8 @@ def ovh_projects(user_id):
             for project in projects:
                 project_id = project.get('projectId')
                 if project_id:
-                    # Apply enabled preference
                     if project_id in saved_prefs:
                         project['enabled'] = saved_prefs[project_id].get('enabled', True)
-                    # Mark root project
                     is_root = project_id == root_project
                     logger.info(f"Comparing project_id={project_id} with root_project={root_project}: {is_root}")
                     project['isRootProject'] = is_root
@@ -210,6 +153,36 @@ def ovh_projects(user_id):
     except Exception as e:
         logger.error(f"Error fetching OVH projects: {e}", exc_info=True)
         return jsonify({"error": "Failed to fetch OVH projects"}), 500
+
+
+@ovh_bp.route('/ovh/projects', methods=['POST'])
+@limiter.limit(OVH_READ_LIMITS)
+@require_permission("connectors", "write")
+def ovh_projects_write(user_id):
+    """POST /ovh_api/ovh/projects - Save project enabled/disabled preferences."""
+    try:
+        data = request.get_json() or {}
+        projects = data.get('projects', [])
+        
+        if not projects:
+            return jsonify({"error": "No projects provided"}), 400
+        
+        existing_prefs = get_user_preference(user_id, 'ovh_project_preferences') or {}
+        
+        for project in projects:
+            project_id = project.get('projectId')
+            enabled = project.get('enabled', True)
+            if project_id:
+                existing_prefs[project_id] = {'enabled': enabled}
+        
+        store_user_preference(user_id, 'ovh_project_preferences', existing_prefs)
+        
+        logger.info(f"Saved OVH project preferences for user {user_id}: {len(projects)} projects")
+        return jsonify({"success": True, "message": "Project preferences saved"})
+        
+    except Exception as e:
+        logger.error(f"Error saving OVH project preferences: {e}", exc_info=True)
+        return jsonify({"error": "Failed to save project preferences"}), 500
 
 
 @ovh_bp.route('/ovh/instances', methods=['GET', 'OPTIONS'])
@@ -494,55 +467,52 @@ def save_ovh_ssh_keys(user_id, instance_id):
     })
 
 
-@ovh_bp.route('/ovh/root-project', methods=['GET', 'POST', 'OPTIONS'])
+@ovh_bp.route('/ovh/root-project', methods=['GET', 'OPTIONS'])
 @limiter.limit(OVH_READ_LIMITS)
-@require_permission("connectors", "write")
-def ovh_root_project(user_id):
-    """
-    GET /ovh_api/ovh/root-project - Get current root project
-    POST /ovh_api/ovh/root-project - Set root project
-    
-    POST Body: { "projectId": "abc123" }
-    """
-    # Handle CORS preflight
+@require_permission("connectors", "read")
+def ovh_root_project_read(user_id):
+    """GET /ovh_api/ovh/root-project - Get current root project."""
     if request.method == 'OPTIONS':
         return create_cors_response()
     
     try:
-        
-        if request.method == 'GET':
-            root_project = get_user_preference(user_id, 'ovh_root_project')
-            return jsonify({"root_project": root_project})
-        
-        elif request.method == 'POST':
-            data = request.get_json() or {}
-            project_id = data.get('projectId')
-            
-            if not project_id:
-                return jsonify({"error": "projectId is required"}), 400
-            
-            # Store the root project preference
-            logger.info(f"Storing OVH root project preference: user={user_id} (from header: {request.headers.get('X-User-ID')}), project={project_id}")
-            store_user_preference(user_id, 'ovh_root_project', project_id)
-            
-            # Verify it was stored
-            stored_value = get_user_preference(user_id, 'ovh_root_project')
-            logger.info(f"Verified stored OVH root project: {stored_value} (type: {type(stored_value)})")
-            
-            if stored_value != project_id:
-                logger.error(f"Root project not stored correctly! Expected {project_id}, got {stored_value}")
-                return jsonify({"error": "Failed to store root project preference"}), 500
-            
-            logger.info(f"Set OVH root project to {project_id} for user {user_id}")
-            return jsonify({
-                "success": True,
-                "root_project": project_id,
-                "message": "Root project set successfully"
-            })
-            
+        root_project = get_user_preference(user_id, 'ovh_root_project')
+        return jsonify({"root_project": root_project})
     except Exception as e:
-        logger.error(f"Error handling OVH root project: {e}", exc_info=True)
-        return jsonify({"error": "Failed to handle root project request"}), 500
+        logger.error(f"Error getting OVH root project: {e}", exc_info=True)
+        return jsonify({"error": "Failed to get root project"}), 500
+
+
+@ovh_bp.route('/ovh/root-project', methods=['POST'])
+@limiter.limit(OVH_READ_LIMITS)
+@require_permission("connectors", "write")
+def ovh_root_project_write(user_id):
+    """POST /ovh_api/ovh/root-project - Set root project."""
+    try:
+        data = request.get_json() or {}
+        project_id = data.get('projectId')
+        
+        if not project_id:
+            return jsonify({"error": "projectId is required"}), 400
+        
+        logger.info(f"Storing OVH root project preference: user={user_id}, project={project_id}")
+        store_user_preference(user_id, 'ovh_root_project', project_id)
+        
+        stored_value = get_user_preference(user_id, 'ovh_root_project')
+        if stored_value != project_id:
+            logger.error(f"Root project not stored correctly! Expected {project_id}, got {stored_value}")
+            return jsonify({"error": "Failed to store root project preference"}), 500
+        
+        logger.info(f"Set OVH root project to {project_id} for user {user_id}")
+        return jsonify({
+            "success": True,
+            "root_project": project_id,
+            "message": "Root project set successfully"
+        })
+        
+    except Exception as e:
+        logger.error(f"Error setting OVH root project: {e}", exc_info=True)
+        return jsonify({"error": "Failed to set root project"}), 500
 
 
 @ovh_bp.route('/ovh/onboarding/validate', methods=['GET'])

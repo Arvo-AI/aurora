@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useUser } from "@/hooks/useAuthHooks";
 import { useRouter } from "next/navigation";
+import { isAdmin as checkAdmin } from "@/lib/roles";
 import { Pencil, Check, X } from "lucide-react";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Input } from "@/components/ui/input";
@@ -40,7 +41,7 @@ export default function OrgPage() {
   const [nameInput, setNameInput] = useState("");
   const [savingName, setSavingName] = useState(false);
 
-  const isAdmin = user?.role === "admin";
+  const isAdmin = checkAdmin(user?.role);
 
   useEffect(() => {
     if (isLoaded && !user) router.replace("/sign-in");

@@ -374,7 +374,7 @@ def get_token_data(user_id: str, provider: str, org_id: str = None) -> Optional[
         # Handle list provider types - get first available provider
         if isinstance(provider, list):
             logger.debug(f"[GET-TOKENS] Searching for credentials across {len(provider)} providers")
-            from utils.secret_ref_utils import get_user_token_data
+            from utils.secrets.secret_ref_utils import get_user_token_data
 
             for i, p in enumerate(provider):
                 logger.debug(f"[GET-TOKENS] Trying provider {i+1}/{len(provider)}: {p}")

@@ -28,6 +28,7 @@ import {
 } from "lucide-react";
 import { userPreferencesService } from "@/lib/services/incident-feedback";
 import { useUser } from "@/hooks/useAuthHooks";
+import { canWrite as checkCanWrite } from "@/lib/roles";
 import { getEnv } from '@/lib/env';
 
 const BACKEND_URL = getEnv('NEXT_PUBLIC_BACKEND_URL');
@@ -56,7 +57,7 @@ interface Usage {
 export function KnowledgeBaseSettings() {
   const { userId, isLoading: userLoading } = useUserId();
   const { user } = useUser();
-  const canWrite = user?.role === "admin" || user?.role === "editor";
+  const canWrite = checkCanWrite(user?.role);
   const { toast } = useToast();
 
   // Memory state

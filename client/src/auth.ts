@@ -4,7 +4,7 @@ import Credentials from "next-auth/providers/credentials"
 export const { handlers, signIn, signOut, auth } = NextAuth({
   // trustHost: true in development, false in production
   // In production, Auth.js will use FRONTEND_URL or infer from request headers
-  trustHost: process.env.NODE_ENV !== 'prod',
+  trustHost: process.env.NODE_ENV !== 'production',
   secret: process.env.AUTH_SECRET,
   providers: [
     Credentials({

@@ -103,6 +103,9 @@ def register():
                     )
                 else:
                     # Subsequent users: assign to the first (default) org
+                    # NOTE: In a multi-tenant production environment, replace this
+                    # with an invitation flow so strangers cannot self-register
+                    # into an existing organization.
                     cursor.execute(
                         "SELECT id, name FROM organizations ORDER BY created_at ASC LIMIT 1"
                     )
@@ -273,17 +276,25 @@ def change_password():
 @auth_bp.route('/admins', methods=['GET'])
 def get_admins():
     """Return the list of admin users (name + email only). Any authenticated user may call this."""
-    from utils.auth.stateless_auth import get_user_id_from_request
+    from utils.auth.stateless_auth import get_user_id_from_request, get_org_id_from_request
     user_id = get_user_id_from_request()
     if not user_id:
         return jsonify({"error": "Unauthorized"}), 401
 
+    org_id = get_org_id_from_request()
+
     conn = connect_to_db_as_user()
     try:
         with conn.cursor() as cursor:
-            cursor.execute(
-                "SELECT name, email FROM users WHERE role = 'admin' ORDER BY created_at"
-            )
+            if org_id:
+                cursor.execute(
+                    "SELECT name, email FROM users WHERE role = 'admin' AND org_id = %s ORDER BY created_at",
+                    (org_id,),
+                )
+            else:
+                cursor.execute(
+                    "SELECT name, email FROM users WHERE role = 'admin' ORDER BY created_at"
+                )
             rows = cursor.fetchall()
         return jsonify([{"name": r[0], "email": r[1]} for r in rows]), 200
     finally:

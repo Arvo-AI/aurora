@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Badge } from "@/components/ui/badge"
 import { Eye, Pencil, Crown, Shield, Mail } from "lucide-react"
+import { ROLE_ADMIN } from "@/lib/roles"
 
 const ROLE_INFO = {
   viewer: {
@@ -49,7 +50,7 @@ export function ProfileSettings() {
   const [admins, setAdmins] = useState<AdminUser[]>([])
 
   useEffect(() => {
-    if (user?.role !== "admin") {
+    if (user?.role !== ROLE_ADMIN) {
       fetch("/api/auth/admins")
         .then((res) => (res.ok ? res.json() : []))
         .then((users: { name: string | null; email: string }[]) => {
@@ -176,7 +177,7 @@ export function ProfileSettings() {
               <p className="text-sm text-muted-foreground leading-relaxed">
                 {info.description}
               </p>
-              {user.role !== "admin" && admins.length > 0 && (
+              {user.role !== ROLE_ADMIN && admins.length > 0 && (
                 <div className="pt-2 border-t">
                   <p className="text-xs text-muted-foreground mb-1.5">
                     To request a role change, contact an admin:

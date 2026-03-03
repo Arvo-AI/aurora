@@ -19,7 +19,6 @@ export async function getAuthenticatedUser(): Promise<AuthResult | NextResponse>
 
   const headers: Record<string, string> = {
     'X-User-ID': session.userId,
-    'X-User-Role': session.user?.role || 'viewer',
   }
 
   if (session.orgId) {

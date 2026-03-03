@@ -167,6 +167,7 @@ def remove_role_from_user(user_id: str, role: str, org_id: str) -> None:
     enforcer = get_enforcer()
     enforcer.remove_grouping_policy(user_id, role, org_id)
     enforcer.save_policy()
+    enforcer.load_policy()
     logger.info("Removed role %s from user %s in org %s", role, user_id, org_id)
 
 

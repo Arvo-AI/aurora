@@ -1,6 +1,6 @@
 """Account management routes for connected accounts."""
 import logging
-from flask import Blueprint, request, jsonify, session
+from flask import Blueprint, request, jsonify
 from utils.web.cors_utils import create_cors_response
 from utils.auth.rbac_decorators import require_auth_only
 from utils.db.db_utils import connect_to_db_as_admin, connect_to_db_as_user
@@ -310,11 +310,7 @@ def get_user_tokens(user_id):
             user_id,
             user_id_from_args,
         )
-        
-        if session:
-            session.clear()
-            logging.debug("Cleared Flask session for authenticated user %s", user_id)
-        
+
         if user_id_from_args and user_id_from_args != user_id:
             logging.warning(f"SECURITY: User {user_id} attempted to access data for {user_id_from_args}")
             return jsonify({"error": "Unauthorized access to user data"}), 403

@@ -35,15 +35,8 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { toast } from "@/hooks/use-toast";
+import { VALID_ROLES, ROLE_META, type UserRole } from "@/lib/roles";
 import type { OrgMember } from "../page";
-
-const VALID_ROLES = ["admin", "editor", "viewer"] as const;
-
-const ROLE_META: Record<string, { label: string; desc: string }> = {
-  admin: { label: "Admin", desc: "Full access" },
-  editor: { label: "Editor", desc: "Can edit" },
-  viewer: { label: "Viewer", desc: "Read only" },
-};
 
 const PERMISSION_TABLE: {
   category: string;
@@ -236,10 +229,8 @@ export default function OrgMembers({ org, currentUserId, isAdmin, onMembersChang
     const target = org.members.find((m) => m.id === targetUserId);
     setRemoving(targetUserId);
     try {
-      const res = await fetch(`/api/orgs/current`, {
+      const res = await fetch(`/api/orgs/current/members/${targetUserId}`, {
         method: "DELETE",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ targetUserId }),
       });
       if (res.ok) {
         toast({ title: `${target?.name || target?.email} removed` });

@@ -3,6 +3,7 @@
 import logging
 from flask import Blueprint, request, jsonify
 from utils.db.connection_pool import db_pool
+from utils.auth import ROLE_ADMIN, ROLE_EDITOR, ROLE_VIEWER, VALID_ROLES
 from utils.auth.rbac_decorators import require_permission, require_auth_only
 from utils.auth.stateless_auth import get_org_id_from_request
 
@@ -127,7 +128,7 @@ def add_member(user_id):
     if not target_user_id:
         return jsonify({"error": "userId is required"}), 400
 
-    if role not in ("admin", "editor", "viewer"):
+    if role not in VALID_ROLES:
         return jsonify({"error": "Invalid role"}), 400
 
     try:

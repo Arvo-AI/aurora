@@ -1,6 +1,7 @@
 "use client";
 
 import { useUser } from "@/hooks/useAuthHooks";
+import { canWrite } from "@/lib/roles";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Lock } from "lucide-react";
@@ -13,8 +14,7 @@ interface ConnectorAuthGuardProps {
 
 export function useCanWriteConnectors() {
   const { user, isLoaded } = useUser();
-  const canWrite = user?.role === "admin" || user?.role === "editor";
-  return { canWrite, isLoaded, role: user?.role };
+  return { canWrite: canWrite(user?.role), isLoaded, role: user?.role };
 }
 
 export default function ConnectorAuthGuard({

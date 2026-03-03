@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 admin_bp = Blueprint("admin", __name__, url_prefix="/api/admin")
 
-VALID_ROLES = {"admin", "editor", "viewer"}
+from utils.auth import VALID_ROLES
 
 
 @admin_bp.route("/users", methods=["GET"])

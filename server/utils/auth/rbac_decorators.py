@@ -3,8 +3,9 @@
 ``@require_permission(resource, action)``
     Checks authentication **and** Casbin authorisation (domain-aware).
     Returns 401 if the request has no valid user, 403 if the user lacks
-    the required permission in their org.  Injects ``user_id`` as the
-    first positional argument of the wrapped function.
+    the required permission in their org or if no org context is available.
+    Injects ``user_id`` as the first positional argument of the wrapped
+    function.
 
 ``@require_auth_only``
     Authentication-only check (no permission evaluation).  Useful for routes
@@ -46,9 +47,15 @@ def require_permission(resource: str, action: str):
                 return jsonify({"error": "Unauthorized"}), 401
 
             org_id = get_org_id_from_request()
+            if not org_id:
+                logger.warning(
+                    "RBAC denied: no org context for user=%s endpoint=%s",
+                    user_id, fn.__name__,
+                )
+                return jsonify({"error": "Forbidden — no organization context"}), 403
 
             enforcer = get_enforcer()
-            if org_id and not enforcer.enforce(user_id, org_id, resource, action):
+            if not enforcer.enforce(user_id, org_id, resource, action):
                 logger.warning(
                     "RBAC denied: user=%s org=%s resource=%s action=%s endpoint=%s",
                     user_id, org_id, resource, action, fn.__name__,

@@ -10,7 +10,7 @@ from utils.auth.stateless_auth import (
     get_credentials_from_db,
     create_cors_response
 )
-from utils.auth.rbac_decorators import require_auth_only
+from utils.auth.rbac_decorators import require_auth_only, require_permission
 from connectors.gcp_connector.auth.oauth import get_credentials
 from connectors.gcp_connector.gcp.projects import check_billing_enabled
 from routes.gcp.root_project_tasks import setup_root_project_async
@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 root_project_bp = Blueprint('root_project', __name__)
 
 @root_project_bp.route('/api/gcp/root-project', methods=['GET', 'OPTIONS'])
-@require_auth_only
+@require_permission("connectors", "read")
 def get_root_project(user_id):
     """Get the currently selected root project for the user."""
     try:
@@ -39,7 +39,7 @@ def get_root_project(user_id):
         return jsonify({"error": "Failed to get root project"}), 500
 
 @root_project_bp.route('/api/gcp/root-project', methods=['POST'])
-@require_auth_only
+@require_permission("connectors", "write")
 def set_root_project(user_id):
     """Set the root project for service account creation."""
     try:
