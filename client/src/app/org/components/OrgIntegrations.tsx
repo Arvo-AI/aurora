@@ -19,15 +19,15 @@ interface ConnectorStatus {
 const CONNECTORS: { id: string; name: string; iconPath: string; category: string; statusUrl: string }[] = [
   { id: "grafana", name: "Grafana", iconPath: "/grafana.svg", category: "Monitoring", statusUrl: "/api/grafana/status" },
   { id: "datadog", name: "Datadog", iconPath: "/datadog.svg", category: "Monitoring", statusUrl: "/api/datadog/status" },
-  { id: "pagerduty", name: "PagerDuty", iconPath: "/pagerduty.svg", category: "Incident Management", statusUrl: "/pagerduty" },
+  { id: "pagerduty", name: "PagerDuty", iconPath: "/pagerduty-icon.svg", category: "Incident Management", statusUrl: "/pagerduty" },
   { id: "netdata", name: "Netdata", iconPath: "/netdata.svg", category: "Monitoring", statusUrl: "/api/netdata/status" },
   { id: "splunk", name: "Splunk", iconPath: "/splunk.svg", category: "Monitoring", statusUrl: "/api/splunk/status" },
-  { id: "github", name: "GitHub", iconPath: "/github.svg", category: "Development", statusUrl: "/api/github/status" },
+  { id: "github", name: "GitHub", iconPath: "/github-mark.svg", category: "Development", statusUrl: "/api/connected-accounts" },
   { id: "jenkins", name: "Jenkins", iconPath: "/jenkins.svg", category: "CI/CD", statusUrl: "/api/jenkins/status?full=true" },
-  { id: "gcp", name: "Google Cloud", iconPath: "/googlecloud.svg", category: "Infrastructure", statusUrl: "/api/gcp/status" },
-  { id: "aws", name: "AWS", iconPath: "/aws.svg", category: "Infrastructure", statusUrl: "/api/aws/status" },
-  { id: "azure", name: "Azure", iconPath: "/azure.svg", category: "Infrastructure", statusUrl: "/api/azure/status" },
-  { id: "kubectl", name: "Kubernetes", iconPath: "/kubernetes.svg", category: "Infrastructure", statusUrl: "/api/kubectl/status" },
+  { id: "gcp", name: "Google Cloud", iconPath: "/google-cloud-svgrepo-com.svg", category: "Infrastructure", statusUrl: "/api/connected-accounts" },
+  { id: "aws", name: "AWS", iconPath: "/aws.ico", category: "Infrastructure", statusUrl: "/api/connected-accounts" },
+  { id: "azure", name: "Azure", iconPath: "/azure.ico", category: "Infrastructure", statusUrl: "/api/connected-accounts" },
+  { id: "kubectl", name: "Kubernetes", iconPath: "/kubernetes-svgrepo-com.svg", category: "Infrastructure", statusUrl: "/api/kubectl/status" },
 ];
 
 export default function OrgIntegrations() {
@@ -36,27 +36,43 @@ export default function OrgIntegrations() {
   );
 
   useEffect(() => {
-    CONNECTORS.forEach((c) => {
-      fetch(c.statusUrl)
-        .then((r) => r.json())
-        .then((data) => {
-          const isConnected =
-            data.connected === true ||
-            data.status === "connected" ||
-            data.authenticated === true ||
-            (data.is_connected === true);
-          setConnectors((prev) =>
-            prev.map((p) =>
-              p.id === c.id ? { ...p, connected: isConnected, checking: false } : p
-            )
-          );
-        })
-        .catch(() => {
-          setConnectors((prev) =>
-            prev.map((p) => (p.id === c.id ? { ...p, checking: false } : p))
-          );
+    const connectedAccountIds = new Set<string>();
+
+    fetch("/api/connected-accounts")
+      .then((r) => (r.ok ? r.json() : { accounts: {} }))
+      .then((data) => {
+        const accounts = data.accounts || {};
+        Object.keys(accounts).forEach((key) => connectedAccountIds.add(key.toLowerCase()));
+      })
+      .catch(() => {})
+      .finally(() => {
+        CONNECTORS.forEach((c) => {
+          if (c.statusUrl === "/api/connected-accounts") {
+            const match = connectedAccountIds.has(c.id);
+            setConnectors((prev) =>
+              prev.map((p) => (p.id === c.id ? { ...p, connected: match, checking: false } : p))
+            );
+          } else {
+            fetch(c.statusUrl)
+              .then((r) => r.json())
+              .then((data) => {
+                const isConnected =
+                  data.connected === true ||
+                  data.status === "connected" ||
+                  data.authenticated === true ||
+                  data.is_connected === true;
+                setConnectors((prev) =>
+                  prev.map((p) => (p.id === c.id ? { ...p, connected: isConnected, checking: false } : p))
+                );
+              })
+              .catch(() => {
+                setConnectors((prev) =>
+                  prev.map((p) => (p.id === c.id ? { ...p, checking: false } : p))
+                );
+              });
+          }
         });
-    });
+      });
   }, []);
 
   const connected = connectors.filter((c) => c.connected);

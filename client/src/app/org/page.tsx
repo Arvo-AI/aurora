@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useUser } from "@/hooks/useAuthHooks";
 import { useRouter } from "next/navigation";
-import { Building2, Pencil, Check, X } from "lucide-react";
+import { Pencil, Check, X } from "lucide-react";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -43,9 +43,7 @@ export default function OrgPage() {
   const isAdmin = user?.role === "admin";
 
   useEffect(() => {
-    if (isLoaded && !user) {
-      router.replace("/sign-in");
-    }
+    if (isLoaded && !user) router.replace("/sign-in");
   }, [isLoaded, user, router]);
 
   useEffect(() => {
@@ -81,8 +79,8 @@ export default function OrgPage() {
       });
       if (res.ok) {
         const data = await res.json();
-        setOrg((prev) => prev ? { ...prev, name: data.name } : prev);
-        toast({ title: "Organization updated", description: `Name changed to "${data.name}"` });
+        setOrg((prev) => (prev ? { ...prev, name: data.name } : prev));
+        toast({ title: "Name updated" });
       }
     } catch {
       toast({ title: "Failed to update", variant: "destructive" });
@@ -93,101 +91,91 @@ export default function OrgPage() {
   }
 
   if (!isLoaded || loading) {
-    return (
-      <div className="flex items-center justify-center h-full text-muted-foreground">
-        Loading...
-      </div>
-    );
+    return <div className="flex items-center justify-center h-full text-muted-foreground text-sm">Loading...</div>;
   }
 
   if (!org) {
-    return (
-      <div className="flex items-center justify-center h-full text-muted-foreground">
-        No organization found.
-      </div>
-    );
+    return <div className="flex items-center justify-center h-full text-muted-foreground text-sm">No organization found.</div>;
   }
 
+  const initial = org.name.charAt(0).toUpperCase();
+
   return (
-    <div className="max-w-6xl mx-auto px-6 py-8">
-      {/* Header with inline-editable org name */}
-      <div className="flex items-start gap-4 mb-8">
-        <div className="h-12 w-12 rounded-xl bg-primary/10 flex items-center justify-center flex-shrink-0">
-          <Building2 className="h-6 w-6 text-primary" />
-        </div>
-        <div className="flex-1 min-w-0">
+    <div className="max-w-5xl mx-auto px-6 py-10">
+      {/* Minimal header — just the name, editable */}
+      <div className="mb-10">
+        <div className="flex items-center gap-4 mb-1">
+          <div className="h-10 w-10 rounded-lg bg-foreground text-background flex items-center justify-center text-lg font-semibold select-none">
+            {initial}
+          </div>
           {editingName ? (
             <div className="flex items-center gap-2">
               <Input
                 value={nameInput}
                 onChange={(e) => setNameInput(e.target.value)}
-                className="text-2xl font-bold h-10 max-w-sm"
+                className="text-xl font-semibold h-9 max-w-xs border-none shadow-none focus-visible:ring-1 px-2"
                 autoFocus
                 onKeyDown={(e) => {
                   if (e.key === "Enter") saveName();
                   if (e.key === "Escape") { setEditingName(false); setNameInput(org.name); }
                 }}
               />
-              <Button size="icon" variant="ghost" className="h-8 w-8" onClick={saveName} disabled={savingName}>
-                <Check className="h-4 w-4" />
+              <Button size="icon" variant="ghost" className="h-7 w-7" onClick={saveName} disabled={savingName}>
+                <Check className="h-3.5 w-3.5" />
               </Button>
-              <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => { setEditingName(false); setNameInput(org.name); }}>
-                <X className="h-4 w-4" />
+              <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => { setEditingName(false); setNameInput(org.name); }}>
+                <X className="h-3.5 w-3.5" />
               </Button>
             </div>
           ) : (
-            <div className="flex items-center gap-2 group">
-              <h1 className="text-2xl font-bold truncate">{org.name}</h1>
-              {isAdmin && (
-                <button
-                  onClick={() => setEditingName(true)}
-                  className="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded hover:bg-muted"
-                >
-                  <Pencil className="h-4 w-4 text-muted-foreground" />
-                </button>
-              )}
-            </div>
+            <button
+              onClick={isAdmin ? () => setEditingName(true) : undefined}
+              className={`text-xl font-semibold tracking-tight ${isAdmin ? "hover:text-muted-foreground transition-colors cursor-text" : "cursor-default"}`}
+            >
+              {org.name}
+            </button>
           )}
-          <p className="text-sm text-muted-foreground mt-0.5">
-            {org.members.length} member{org.members.length !== 1 ? "s" : ""} · Created{" "}
-            {org.createdAt
-              ? new Date(org.createdAt).toLocaleDateString(undefined, { month: "long", day: "numeric", year: "numeric" })
-              : "recently"}
-          </p>
         </div>
+        <p className="text-[13px] text-muted-foreground ml-14">
+          <span className="font-mono text-xs text-muted-foreground/60">{org.slug}</span>
+          <span className="mx-2 text-border">·</span>
+          {org.members.length} member{org.members.length !== 1 ? "s" : ""}
+          <span className="mx-2 text-border">·</span>
+          since{" "}
+          {org.createdAt
+            ? new Date(org.createdAt).toLocaleDateString(undefined, { month: "short", year: "numeric" })
+            : "recently"}
+        </p>
       </div>
 
-      {/* Tabs */}
+      {/* Underline-style tabs — no pill background */}
       <Tabs defaultValue="overview" className="w-full">
-        <TabsList className="w-full justify-start h-11 bg-muted/50 p-1 rounded-lg mb-6">
-          <TabsTrigger value="overview" className="px-4">Overview</TabsTrigger>
-          <TabsTrigger value="members" className="px-4">Members</TabsTrigger>
-          <TabsTrigger value="integrations" className="px-4">Integrations</TabsTrigger>
-          <TabsTrigger value="preferences" className="px-4">Preferences</TabsTrigger>
-          <TabsTrigger value="activity" className="px-4">Activity</TabsTrigger>
-        </TabsList>
+        <div className="border-b border-border mb-8">
+          <TabsList className="h-auto p-0 bg-transparent rounded-none gap-6">
+            {["overview", "members", "integrations", "preferences", "activity"].map((tab) => (
+              <TabsTrigger
+                key={tab}
+                value={tab}
+                className="px-0 pb-2.5 pt-0 rounded-none border-b-2 border-transparent data-[state=active]:border-foreground data-[state=active]:bg-transparent data-[state=active]:shadow-none text-muted-foreground data-[state=active]:text-foreground capitalize text-sm font-medium"
+              >
+                {tab}
+              </TabsTrigger>
+            ))}
+          </TabsList>
+        </div>
 
         <TabsContent value="overview">
           <OrgOverview org={org} isAdmin={isAdmin} />
         </TabsContent>
-
         <TabsContent value="members">
-          <OrgMembers
-            org={org}
-            currentUserId={user?.id || ""}
-            isAdmin={isAdmin}
-            onMembersChanged={fetchOrg}
-          />
+          <OrgMembers org={org} currentUserId={user?.id || ""} isAdmin={isAdmin} onMembersChanged={fetchOrg} />
         </TabsContent>
-
         <TabsContent value="integrations">
           <OrgIntegrations />
         </TabsContent>
-
         <TabsContent value="preferences">
           <OrgPreferences isAdmin={isAdmin} />
         </TabsContent>
-
         <TabsContent value="activity">
           <OrgActivity />
         </TabsContent>

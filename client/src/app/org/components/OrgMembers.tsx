@@ -2,9 +2,6 @@
 
 import { useState, useCallback, Fragment } from "react";
 import {
-  Eye,
-  Pencil,
-  Crown,
   Check,
   Minus,
   Plus,
@@ -12,11 +9,8 @@ import {
   ChevronDown,
   UserMinus,
   Users,
-  X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import {
   Select,
   SelectContent,
@@ -40,44 +34,20 @@ import {
 } from "@/components/ui/collapsible";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { toast } from "@/hooks/use-toast";
 import type { OrgMember } from "../page";
 
 const VALID_ROLES = ["admin", "editor", "viewer"] as const;
 
-const ROLE_INFO = {
-  viewer: {
-    icon: Eye,
-    color: "text-blue-500",
-    bg: "bg-blue-500/10",
-    badge: "bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-200",
-    label: "Viewer",
-    summary: "Read-only access",
-  },
-  editor: {
-    icon: Pencil,
-    color: "text-amber-500",
-    bg: "bg-amber-500/10",
-    badge: "bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-200",
-    label: "Editor",
-    summary: "Read + write access",
-  },
-  admin: {
-    icon: Crown,
-    color: "text-purple-500",
-    bg: "bg-purple-500/10",
-    badge: "bg-purple-100 text-purple-700 dark:bg-purple-900 dark:text-purple-200",
-    label: "Admin",
-    summary: "Full access + user management",
-  },
-} as const;
-
-type PermAccess = boolean;
+const ROLE_META: Record<string, { label: string; desc: string }> = {
+  admin: { label: "Admin", desc: "Full access" },
+  editor: { label: "Editor", desc: "Can edit" },
+  viewer: { label: "Viewer", desc: "Read only" },
+};
 
 const PERMISSION_TABLE: {
   category: string;
-  features: { name: string; viewer: PermAccess; editor: PermAccess; admin: PermAccess }[];
+  features: { name: string; viewer: boolean; editor: boolean; admin: boolean }[];
 }[] = [
   {
     category: "Incidents",
@@ -98,7 +68,6 @@ const PERMISSION_TABLE: {
     category: "Chat & Knowledge Base",
     features: [
       { name: "Use the chat assistant", viewer: true, editor: true, admin: true },
-      { name: "View knowledge base", viewer: true, editor: true, admin: true },
       { name: "Upload & manage documents", viewer: false, editor: true, admin: true },
     ],
   },
@@ -107,14 +76,6 @@ const PERMISSION_TABLE: {
     features: [
       { name: "View connector status", viewer: true, editor: true, admin: true },
       { name: "Connect & disconnect", viewer: false, editor: true, admin: true },
-      { name: "Manage SSH keys & VMs", viewer: false, editor: true, admin: true },
-    ],
-  },
-  {
-    category: "Infrastructure",
-    features: [
-      { name: "View service graph", viewer: true, editor: true, admin: true },
-      { name: "Edit services & dependencies", viewer: false, editor: true, admin: true },
     ],
   },
   {
@@ -126,28 +87,6 @@ const PERMISSION_TABLE: {
     ],
   },
 ];
-
-function PermCell({ allowed }: { allowed: boolean }) {
-  return allowed ? (
-    <Check className="h-4 w-4 text-green-500" />
-  ) : (
-    <Minus className="h-4 w-4 text-muted-foreground/30" />
-  );
-}
-
-function RoleBadge({ role }: { role: string }) {
-  const info = ROLE_INFO[role as keyof typeof ROLE_INFO];
-  if (!info) return <Badge variant="outline">{role}</Badge>;
-  const Icon = info.icon;
-  return (
-    <span
-      className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium ${info.badge}`}
-    >
-      <Icon className="h-3 w-3" />
-      {info.label}
-    </span>
-  );
-}
 
 function AddUserDialog({ onCreated }: { onCreated: () => void }) {
   const [open, setOpen] = useState(false);
@@ -179,8 +118,7 @@ function AddUserDialog({ onCreated }: { onCreated: () => void }) {
       });
       const data = await res.json();
       if (!res.ok) { setError(data.error || "Failed to create user"); return; }
-      const roleLabel = ROLE_INFO[role as keyof typeof ROLE_INFO]?.label || role;
-      toast({ title: "User created", description: `${name || email} added as ${roleLabel}` });
+      toast({ title: "Member added", description: `${name || email} joined as ${role}` });
       reset();
       setOpen(false);
       onCreated();
@@ -194,9 +132,9 @@ function AddUserDialog({ onCreated }: { onCreated: () => void }) {
   return (
     <Dialog open={open} onOpenChange={(v) => { setOpen(v); if (!v) reset(); }}>
       <DialogTrigger asChild>
-        <Button size="sm" className="gap-1.5">
-          <Plus className="h-4 w-4" />
-          Add Member
+        <Button variant="outline" size="sm" className="gap-1.5 h-8">
+          <Plus className="h-3.5 w-3.5" />
+          Add
         </Button>
       </DialogTrigger>
       <DialogContent className="sm:max-w-md">
@@ -204,53 +142,50 @@ function AddUserDialog({ onCreated }: { onCreated: () => void }) {
           <DialogHeader>
             <DialogTitle>Add team member</DialogTitle>
             <DialogDescription>
-              Create an account for a new team member. They can sign in with these credentials.
+              Create an account. They&apos;ll sign in with these credentials.
             </DialogDescription>
           </DialogHeader>
           <div className="grid gap-4 py-4">
-            <div className="grid gap-2">
-              <Label htmlFor="add-name">Name</Label>
-              <Input id="add-name" placeholder="Jane Smith" value={name} onChange={(e) => setName(e.target.value)} />
+            <div className="grid gap-1.5">
+              <Label htmlFor="add-name" className="text-xs">Name</Label>
+              <Input id="add-name" placeholder="Jane Smith" value={name} onChange={(e) => setName(e.target.value)} className="h-9" />
             </div>
-            <div className="grid gap-2">
-              <Label htmlFor="add-email">Email</Label>
-              <Input id="add-email" type="email" placeholder="jane@company.com" required value={email} onChange={(e) => setEmail(e.target.value)} />
+            <div className="grid gap-1.5">
+              <Label htmlFor="add-email" className="text-xs">Email</Label>
+              <Input id="add-email" type="email" placeholder="jane@company.com" required value={email} onChange={(e) => setEmail(e.target.value)} className="h-9" />
             </div>
-            <div className="grid gap-2">
-              <Label htmlFor="add-password">Password</Label>
-              <Input id="add-password" type="password" placeholder="Min 8 characters" required value={password} onChange={(e) => setPassword(e.target.value)} />
+            <div className="grid grid-cols-2 gap-3">
+              <div className="grid gap-1.5">
+                <Label htmlFor="add-pw" className="text-xs">Password</Label>
+                <Input id="add-pw" type="password" placeholder="Min 8 chars" required value={password} onChange={(e) => setPassword(e.target.value)} className="h-9" />
+              </div>
+              <div className="grid gap-1.5">
+                <Label htmlFor="add-cpw" className="text-xs">Confirm</Label>
+                <Input id="add-cpw" type="password" placeholder="Re-enter" required value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} className="h-9" />
+              </div>
             </div>
-            <div className="grid gap-2">
-              <Label htmlFor="add-confirm-pw">Confirm password</Label>
-              <Input id="add-confirm-pw" type="password" placeholder="Re-enter password" required value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} />
-            </div>
-            <div className="grid gap-2">
-              <Label>Role</Label>
+            <div className="grid gap-1.5">
+              <Label className="text-xs">Role</Label>
               <Select value={role} onValueChange={setRole}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  {VALID_ROLES.map((r) => {
-                    const info = ROLE_INFO[r];
-                    const Icon = info.icon;
-                    return (
-                      <SelectItem key={r} value={r}>
-                        <span className="flex items-center gap-2">
-                          <Icon className={`h-3.5 w-3.5 ${info.color}`} />
-                          {info.label}
-                          <span className="text-muted-foreground text-xs ml-1">— {info.summary}</span>
-                        </span>
-                      </SelectItem>
-                    );
-                  })}
+                  {VALID_ROLES.map((r) => (
+                    <SelectItem key={r} value={r}>
+                      <span className="flex items-center gap-2">
+                        {ROLE_META[r].label}
+                        <span className="text-muted-foreground text-xs">— {ROLE_META[r].desc}</span>
+                      </span>
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </div>
             {error && <p className="text-sm text-destructive">{error}</p>}
           </div>
           <DialogFooter>
-            <Button type="submit" disabled={saving} className="gap-2">
-              {saving && <Loader2 className="h-4 w-4 animate-spin" />}
-              Create member
+            <Button type="submit" disabled={saving} size="sm" className="gap-2">
+              {saving && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+              Create
             </Button>
           </DialogFooter>
         </form>
@@ -282,16 +217,14 @@ export default function OrgMembers({ org, currentUserId, isAdmin, onMembersChang
           body: JSON.stringify({ role: newRole }),
         });
         if (res.ok) {
-          const displayName = target?.name || target?.email || "User";
-          const newLabel = ROLE_INFO[newRole as keyof typeof ROLE_INFO]?.label || newRole;
-          toast({ title: "Role updated", description: `${displayName} is now ${newLabel}` });
+          toast({ title: `${target?.name || target?.email} is now ${newRole}` });
           onMembersChanged();
         } else {
           const data = await res.json().catch(() => ({}));
-          toast({ title: "Failed to update role", description: data.error || "Something went wrong", variant: "destructive" });
+          toast({ title: "Failed", description: data.error || "Something went wrong", variant: "destructive" });
         }
       } catch {
-        toast({ title: "Failed to update role", description: "Could not reach the server", variant: "destructive" });
+        toast({ title: "Failed", description: "Could not reach server", variant: "destructive" });
       } finally {
         setUpdating(null);
       }
@@ -309,112 +242,79 @@ export default function OrgMembers({ org, currentUserId, isAdmin, onMembersChang
         body: JSON.stringify({ targetUserId }),
       });
       if (res.ok) {
-        toast({ title: "Member removed", description: `${target?.name || target?.email} has been removed` });
+        toast({ title: `${target?.name || target?.email} removed` });
         onMembersChanged();
       }
     } catch {
-      toast({ title: "Failed to remove member", variant: "destructive" });
+      toast({ title: "Failed to remove", variant: "destructive" });
     } finally {
       setRemoving(null);
     }
   }
 
-  function getInitials(member: OrgMember) {
-    if (member.name) {
-      return member.name.split(" ").map((n) => n[0]).join("").toUpperCase().slice(0, 2);
-    }
-    return member.email.slice(0, 2).toUpperCase();
-  }
-
   return (
-    <div className="space-y-4">
-      {/* Header with Add button */}
+    <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-lg font-semibold">Team Members</h2>
-          <p className="text-sm text-muted-foreground">
-            {org.members.length} member{org.members.length !== 1 ? "s" : ""} in {org.name}
-          </p>
-        </div>
+        <p className="text-sm text-muted-foreground">
+          {org.members.length} member{org.members.length !== 1 ? "s" : ""}
+        </p>
         {isAdmin && <AddUserDialog onCreated={onMembersChanged} />}
       </div>
 
-      {/* Member list */}
-      <div className="border border-border rounded-lg overflow-hidden">
-        {org.members.map((member, idx) => (
+      {/* Clean table — no heavy borders, just rows */}
+      <div className="text-sm">
+        <div className="grid grid-cols-[1fr_100px_100px_auto] gap-x-4 px-1 pb-2 text-xs text-muted-foreground font-medium border-b border-border">
+          <span>Name</span>
+          <span>Role</span>
+          <span>Joined</span>
+          <span className="w-8" />
+        </div>
+
+        {org.members.map((member) => (
           <div
             key={member.id}
-            className={`flex items-center gap-4 px-4 py-3 hover:bg-muted/30 transition-colors ${
-              idx < org.members.length - 1 ? "border-b border-border/50" : ""
-            }`}
+            className="grid grid-cols-[1fr_100px_100px_auto] gap-x-4 items-center px-1 py-3 border-b border-border/40 last:border-0 group"
           >
-            <Avatar className="h-9 w-9">
-              <AvatarFallback className="bg-primary/10 text-primary text-xs font-medium">
-                {getInitials(member)}
-              </AvatarFallback>
-            </Avatar>
-
-            <div className="flex-1 min-w-0">
+            {/* Name + email */}
+            <div className="min-w-0">
               <div className="flex items-center gap-2">
-                <span className="text-sm font-medium truncate">
-                  {member.name || member.email}
-                </span>
+                <div className="h-6 w-6 rounded-full bg-muted flex items-center justify-center text-[10px] font-medium text-muted-foreground flex-shrink-0">
+                  {(member.name || member.email).charAt(0).toUpperCase()}
+                </div>
+                <span className="font-medium truncate">{member.name || member.email}</span>
                 {member.id === currentUserId && (
-                  <span className="text-xs text-muted-foreground bg-muted px-1.5 py-0.5 rounded">you</span>
+                  <span className="text-[10px] text-muted-foreground/60 font-normal">you</span>
                 )}
               </div>
               {member.name && (
-                <p className="text-xs text-muted-foreground truncate">{member.email}</p>
+                <p className="text-xs text-muted-foreground truncate ml-8">{member.email}</p>
               )}
             </div>
 
-            <div className="flex items-center gap-2">
+            {/* Role */}
+            <div>
               {isAdmin && member.id !== currentUserId ? (
                 <Select
                   value={member.role}
                   onValueChange={(val) => handleRoleChange(member.id, val)}
                   disabled={updating === member.id}
                 >
-                  <SelectTrigger className="w-32 h-8 text-sm">
+                  <SelectTrigger className="w-24 h-7 text-xs border-transparent hover:border-border transition-colors">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {VALID_ROLES.map((r) => {
-                      const info = ROLE_INFO[r];
-                      const Icon = info.icon;
-                      return (
-                        <SelectItem key={r} value={r} className="text-sm">
-                          <span className="flex items-center gap-2">
-                            <Icon className={`h-3.5 w-3.5 ${info.color}`} />
-                            {info.label}
-                          </span>
-                        </SelectItem>
-                      );
-                    })}
+                    {VALID_ROLES.map((r) => (
+                      <SelectItem key={r} value={r} className="text-xs">{ROLE_META[r].label}</SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               ) : (
-                <RoleBadge role={member.role} />
-              )}
-
-              {isAdmin && member.id !== currentUserId && (
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-8 w-8 text-muted-foreground hover:text-destructive"
-                  onClick={() => handleRemove(member.id)}
-                  disabled={removing === member.id}
-                >
-                  {removing === member.id ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <UserMinus className="h-4 w-4" />
-                  )}
-                </Button>
+                <span className="text-xs text-muted-foreground capitalize">{member.role}</span>
               )}
             </div>
 
-            <span className="text-xs text-muted-foreground w-24 text-right hidden sm:block">
+            {/* Joined */}
+            <span className="text-xs text-muted-foreground tabular-nums">
               {member.createdAt
                 ? new Date(member.createdAt).toLocaleDateString(undefined, {
                     month: "short",
@@ -423,72 +323,70 @@ export default function OrgMembers({ org, currentUserId, isAdmin, onMembersChang
                   })
                 : "—"}
             </span>
+
+            {/* Remove */}
+            <div className="w-8 flex justify-end">
+              {isAdmin && member.id !== currentUserId ? (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-destructive"
+                  onClick={() => handleRemove(member.id)}
+                  disabled={removing === member.id}
+                >
+                  {removing === member.id ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : (
+                    <UserMinus className="h-3 w-3" />
+                  )}
+                </Button>
+              ) : null}
+            </div>
           </div>
         ))}
 
         {org.members.length === 0 && (
-          <div className="flex flex-col items-center justify-center py-12 text-center">
-            <Users className="h-10 w-10 text-muted-foreground/40 mb-3" />
+          <div className="flex flex-col items-center justify-center py-16 text-center">
+            <Users className="h-8 w-8 text-muted-foreground/30 mb-2" />
             <p className="text-sm text-muted-foreground">No members yet</p>
           </div>
         )}
       </div>
 
-      {/* Permission matrix accordion */}
+      {/* Permissions reference — collapsed by default */}
       <Collapsible open={permOpen} onOpenChange={setPermOpen}>
         <CollapsibleTrigger asChild>
-          <Button variant="ghost" className="w-full justify-between text-sm text-muted-foreground hover:text-foreground h-10 px-3">
-            <span>Role permissions reference</span>
-            <ChevronDown className={`h-4 w-4 transition-transform ${permOpen ? "rotate-180" : ""}`} />
-          </Button>
+          <button className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors py-1">
+            <ChevronDown className={`h-3 w-3 transition-transform ${permOpen ? "rotate-180" : ""}`} />
+            Permissions reference
+          </button>
         </CollapsibleTrigger>
         <CollapsibleContent>
-          <div className="rounded-lg border border-border overflow-hidden text-sm mt-2">
-            <table className="w-full">
-              <thead>
-                <tr className="bg-muted/50">
-                  <th className="text-left px-3 py-2.5 font-medium text-muted-foreground w-[55%]">Feature</th>
-                  {(["viewer", "editor", "admin"] as const).map((role) => {
-                    const info = ROLE_INFO[role];
-                    const Icon = info.icon;
-                    return (
-                      <th key={role} className="text-center px-2 py-2.5 font-medium w-[15%]">
-                        <div className="flex flex-col items-center gap-1">
-                          <Icon className={`h-4 w-4 ${info.color}`} />
-                          <span className="text-xs">{info.label}</span>
-                        </div>
-                      </th>
-                    );
-                  })}
-                </tr>
-              </thead>
-              <tbody>
-                {PERMISSION_TABLE.map((section) => (
-                  <Fragment key={section.category}>
-                    <tr>
-                      <td
-                        colSpan={4}
-                        className="px-3 py-1.5 text-xs font-semibold text-muted-foreground uppercase tracking-wider bg-muted/30 border-t border-border"
-                      >
-                        {section.category}
-                      </td>
-                    </tr>
-                    {section.features.map((feat) => (
-                      <tr key={feat.name} className="border-t border-border/50">
-                        <td className="px-3 py-2 text-foreground/80">{feat.name}</td>
-                        <td className="text-center px-2 py-2"><PermCell allowed={feat.viewer} /></td>
-                        <td className="text-center px-2 py-2"><PermCell allowed={feat.editor} /></td>
-                        <td className="text-center px-2 py-2"><PermCell allowed={feat.admin} /></td>
-                      </tr>
-                    ))}
-                  </Fragment>
+          <div className="mt-3 text-xs">
+            <div className="grid grid-cols-[1fr_60px_60px_60px] gap-x-2 pb-2 font-medium text-muted-foreground border-b border-border">
+              <span />
+              <span className="text-center">View</span>
+              <span className="text-center">Edit</span>
+              <span className="text-center">Admin</span>
+            </div>
+            {PERMISSION_TABLE.map((section) => (
+              <Fragment key={section.category}>
+                <div className="pt-3 pb-1 text-[10px] font-semibold text-muted-foreground/60 uppercase tracking-widest">
+                  {section.category}
+                </div>
+                {section.features.map((feat) => (
+                  <div key={feat.name} className="grid grid-cols-[1fr_60px_60px_60px] gap-x-2 py-1.5 border-b border-border/30 text-muted-foreground">
+                    <span>{feat.name}</span>
+                    <span className="flex justify-center">{feat.viewer ? <Check className="h-3 w-3 text-foreground/50" /> : <Minus className="h-3 w-3 text-border" />}</span>
+                    <span className="flex justify-center">{feat.editor ? <Check className="h-3 w-3 text-foreground/50" /> : <Minus className="h-3 w-3 text-border" />}</span>
+                    <span className="flex justify-center">{feat.admin ? <Check className="h-3 w-3 text-foreground/50" /> : <Minus className="h-3 w-3 text-border" />}</span>
+                  </div>
                 ))}
-              </tbody>
-            </table>
+              </Fragment>
+            ))}
           </div>
         </CollapsibleContent>
       </Collapsible>
     </div>
   );
 }
-

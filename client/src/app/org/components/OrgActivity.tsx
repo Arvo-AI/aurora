@@ -1,14 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Card, CardContent } from "@/components/ui/card";
-import {
-  UserPlus,
-  Zap,
-  Plug,
-  Loader2,
-  Clock,
-} from "lucide-react";
+import { Loader2, Clock } from "lucide-react";
 
 interface ActivityEvent {
   type: string;
@@ -16,12 +9,6 @@ interface ActivityEvent {
   description: string;
   [key: string]: unknown;
 }
-
-const EVENT_CONFIG: Record<string, { icon: typeof UserPlus; color: string; bg: string }> = {
-  member_joined: { icon: UserPlus, color: "text-blue-500", bg: "bg-blue-500/10" },
-  incident_created: { icon: Zap, color: "text-orange-500", bg: "bg-orange-500/10" },
-  connector_added: { icon: Plug, color: "text-green-500", bg: "bg-green-500/10" },
-};
 
 function timeAgo(dateStr: string): string {
   const now = Date.now();
@@ -34,11 +21,14 @@ function timeAgo(dateStr: string): string {
   if (hours < 24) return `${hours}h ago`;
   const days = Math.floor(hours / 24);
   if (days < 30) return `${days}d ago`;
-  return new Date(dateStr).toLocaleDateString(undefined, {
-    month: "short",
-    day: "numeric",
-  });
+  return new Date(dateStr).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
+
+const TYPE_LABELS: Record<string, string> = {
+  member_joined: "joined",
+  incident_created: "incident",
+  connector_added: "connected",
+};
 
 export default function OrgActivity() {
   const [events, setEvents] = useState<ActivityEvent[]>([]);
@@ -54,69 +44,66 @@ export default function OrgActivity() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center py-16 text-muted-foreground gap-2">
+      <div className="flex items-center justify-center py-16 text-muted-foreground gap-2 text-sm">
         <Loader2 className="h-4 w-4 animate-spin" />
-        Loading activity...
+        Loading...
       </div>
     );
   }
 
   if (events.length === 0) {
     return (
-      <div className="flex flex-col items-center justify-center py-16 text-center">
-        <Clock className="h-10 w-10 text-muted-foreground/40 mb-3" />
-        <p className="text-sm font-medium">No activity yet</p>
-        <p className="text-xs text-muted-foreground mt-1">
-          Events will appear here as your team uses Aurora
+      <div className="flex flex-col items-center justify-center py-20 text-center">
+        <Clock className="h-6 w-6 text-muted-foreground/30 mb-2" />
+        <p className="text-sm text-muted-foreground">No activity yet</p>
+        <p className="text-xs text-muted-foreground/60 mt-0.5">
+          Events appear here as your team uses Aurora
         </p>
       </div>
     );
   }
 
+  let lastDate = "";
+
   return (
-    <div className="space-y-4">
-      <div>
-        <h2 className="text-lg font-semibold">Recent Activity</h2>
-        <p className="text-sm text-muted-foreground">
-          Latest events across your organization
-        </p>
-      </div>
+    <div className="text-sm">
+      {events.map((event, idx) => {
+        const eventDate = event.timestamp
+          ? new Date(event.timestamp).toLocaleDateString(undefined, {
+              month: "long",
+              day: "numeric",
+              year: "numeric",
+            })
+          : "";
+        const showDate = eventDate !== lastDate;
+        if (showDate) lastDate = eventDate;
 
-      <div className="relative">
-        {/* Timeline line */}
-        <div className="absolute left-[19px] top-0 bottom-0 w-px bg-border" />
-
-        <div className="space-y-0">
-          {events.map((event, idx) => {
-            const config = EVENT_CONFIG[event.type] || EVENT_CONFIG.member_joined;
-            const Icon = config.icon;
-            return (
-              <div key={idx} className="relative flex items-start gap-4 py-3 pl-0">
-                <div
-                  className={`relative z-10 h-10 w-10 rounded-full ${config.bg} flex items-center justify-center flex-shrink-0 border-2 border-background`}
-                >
-                  <Icon className={`h-4 w-4 ${config.color}`} />
-                </div>
-                <div className="flex-1 min-w-0 pt-1">
-                  <p className="text-sm">{event.description}</p>
-                  {event.timestamp && (
-                    <p className="text-xs text-muted-foreground mt-0.5">
-                      {timeAgo(event.timestamp)}
-                      <span className="mx-1.5 text-border">·</span>
-                      {new Date(event.timestamp).toLocaleDateString(undefined, {
-                        month: "short",
-                        day: "numeric",
-                        hour: "numeric",
-                        minute: "2-digit",
-                      })}
-                    </p>
-                  )}
-                </div>
+        return (
+          <div key={idx}>
+            {showDate && eventDate && (
+              <div className="pt-6 pb-2 first:pt-0">
+                <span className="text-[11px] font-medium text-muted-foreground/60 uppercase tracking-wider">
+                  {eventDate}
+                </span>
               </div>
-            );
-          })}
-        </div>
-      </div>
+            )}
+            <div className="flex items-baseline gap-3 py-2 border-b border-border/30 last:border-0">
+              <span className="text-xs text-muted-foreground/50 tabular-nums w-14 text-right flex-shrink-0">
+                {event.timestamp
+                  ? new Date(event.timestamp).toLocaleTimeString(undefined, {
+                      hour: "numeric",
+                      minute: "2-digit",
+                    })
+                  : ""}
+              </span>
+              <span className="inline-block text-[10px] font-medium text-muted-foreground bg-muted px-1.5 py-0.5 rounded w-16 text-center flex-shrink-0">
+                {TYPE_LABELS[event.type] || event.type}
+              </span>
+              <span className="text-foreground/80">{event.description}</span>
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }
