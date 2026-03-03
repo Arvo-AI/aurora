@@ -15,10 +15,10 @@ Create a VM on your cloud provider of choice (AWS EC2, GCP Compute Engine, Azure
 | **OS** | Ubuntu 22.04 LTS or Debian 12 |
 | **CPU** | 4 cores minimum, 8 recommended |
 | **RAM** | 8 GB minimum, 32 GB recommended |
-| **Disk** | **40 GB SSD** |
+| **Disk** | **60 GB SSD** |
 
 :::warning Disk Size
-Aurora's Docker images, containers, and volumes require significant space. 20 GB is the documented minimum but leaves almost no headroom. **Use 40 GB** to avoid running out of space mid-deployment.
+Aurora's Docker images, containers, and volumes require significant space.
 :::
 
 After creation, note the VM's **public/external IP address** — you'll need it later.
