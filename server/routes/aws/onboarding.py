@@ -18,6 +18,8 @@ from utils.workspace.workspace_utils import (
 
 logger = logging.getLogger(__name__)
 
+CLOUDFORMATION_TEMPLATE_URL = "https://aurora-cfn-templates-390403884122.s3.ca-central-1.amazonaws.com/aurora-cross-account-role.yaml"
+
 onboarding_bp = Blueprint("aws_onboarding_bp", __name__)
 
 
@@ -786,28 +788,22 @@ def get_cfn_quickcreate_link(workspace_id):
         region = request.args.get("region", "us-east-1")
 
         # Quick-Create requires the template to be at a public HTTPS URL.
-        # Configure AWS_CFN_TEMPLATE_URL in .env pointing to the S3-hosted template.
-        template_url = request.args.get("templateUrl") or os.getenv("AWS_CFN_TEMPLATE_URL", "")
-        if not template_url:
-            logger.warning(
-                "AWS_CFN_TEMPLATE_URL is not configured. Quick-Create links will not include "
-                "a template URL — users must upload the template manually or set this env var."
-            )
+        # Aurora hosts this template publicly on its own AWS account.
+        template_url = request.args.get("templateUrl") or CLOUDFORMATION_TEMPLATE_URL
 
         import urllib.parse
-        import time as _time
-        unique_suffix = hex(int(_time.time()))[2:]
+        import secrets as _secrets
+        unique_suffix = _secrets.token_hex(4)
         role_type = request.args.get("roleType", "ReadOnly")
         if role_type not in ("ReadOnly", "Admin"):
             role_type = "ReadOnly"
         params = {
             "stackName": f"aurora-role-{unique_suffix}",
+            "templateURL": template_url,
             "param_AuroraAccountId": aurora_account_id,
             "param_ExternalId": external_id,
             "param_RoleType": role_type,
         }
-        if template_url:
-            params["templateURL"] = template_url
 
         qs = urllib.parse.urlencode(params)
         console_url = f"https://{region}.console.aws.amazon.com/cloudformation/home?region={region}#/stacks/quickcreate?{qs}"
@@ -840,6 +836,7 @@ def get_cfn_quickcreate_link(workspace_id):
             "stackSetsCommand": stacksets_command,
             "note": (
                 "Quick-Create link: log into the target AWS account and open this URL. "
+                "Aurora hosts the CloudFormation template publicly — no setup required. "
                 "For org-wide deployment (many accounts), use the StackSets command from "
                 "your AWS Organizations management account."
             ),

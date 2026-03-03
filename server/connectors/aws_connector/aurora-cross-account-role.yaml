@@ -39,8 +39,8 @@ Resources:
     Properties:
       RoleName: !If
         - IsAdmin
-        - AuroraAdminRole
-        - AuroraReadOnlyRole
+        - !Sub 'AuroraAdmin-${AWS::StackName}'
+        - !Sub 'AuroraReadOnly-${AWS::StackName}'
       MaxSessionDuration: 3600
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
