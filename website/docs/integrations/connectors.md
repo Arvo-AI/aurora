@@ -319,7 +319,6 @@ In **Basic Information**, copy:
 #### 4. Configure Environment
 
 ```bash
-NEXT_PUBLIC_ENABLE_SLACK=true
 SLACK_CLIENT_ID=your-slack-client-id
 SLACK_CLIENT_SECRET=your-slack-client-secret
 SLACK_SIGNING_SECRET=your-signing-secret
@@ -330,7 +329,7 @@ SLACK_SIGNING_SECRET=your-signing-secret
 | Error | Solution |
 |-------|----------|
 | "bad_redirect_uri" | Redirect URL must match exactly in Slack App settings |
-| "Slack connector not enabled" | Set `NEXT_PUBLIC_ENABLE_SLACK=true` and restart |
+| "Slack OAuth credentials not configured" | Set `SLACK_CLIENT_ID` and `SLACK_CLIENT_SECRET` in `.env` |
 
 ---
 
@@ -363,7 +362,6 @@ For Atlassian Cloud (`*.atlassian.net`):
 ##### 2. Configure Environment
 
 ```bash
-NEXT_PUBLIC_ENABLE_CONFLUENCE=true
 CONFLUENCE_CLIENT_ID=your-client-id
 CONFLUENCE_CLIENT_SECRET=your-client-secret
 ```
@@ -607,6 +605,29 @@ kubectl logs -n aurora -l app=aurora-kubectl-agent --tail=50
 The cluster should appear in Aurora UI with "Connected" status.
 
 See [kubectl-agent README](https://github.com/arvo-ai/aurora/blob/main/kubectl-agent/README.md) for advanced configuration.
+
+---
+
+## Development Tools
+
+### Bitbucket
+
+OAuth App authentication for Bitbucket Cloud.
+
+#### 1. Create OAuth Consumer
+
+1. Go to **Bitbucket workspace settings** > **OAuth consumers** > **Add consumer**
+   - Name: `Aurora`
+   - Callback URL: `{NEXT_PUBLIC_BACKEND_URL}/bitbucket/callback` (e.g. `https://your-aurora-domain/bitbucket/callback`)
+   - Permissions: **Repositories** (Read), **Pull requests** (Read)
+2. Copy the **Key** and **Secret**
+
+#### 2. Configure Environment
+
+```bash
+BB_OAUTH_CLIENT_ID=your-bitbucket-key
+BB_OAUTH_CLIENT_SECRET=your-bitbucket-secret
+```
 
 ---
 
