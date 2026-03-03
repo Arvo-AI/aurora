@@ -174,7 +174,7 @@ const logos = {
   ),
   sharepoint: (
     <img
-      src="/sharepoint.svg"
+      src="/sharepoint.png"
       className="w-4 h-4 min-w-4 min-h-4 object-contain"
       alt="SharePoint"
       onError={(e) => console.error('Failed to load SharePoint logo:', e)}
