@@ -65,66 +65,6 @@ class SharePointSearchService:
 
         return self._retry_with_refresh(_do_search)
 
-    def search_documents(
-        self,
-        query: str,
-        site_id: Optional[str] = None,
-        max_results: int = 10,
-    ) -> List[Dict[str, Any]]:
-        """Search for documents (driveItems) in SharePoint.
-
-        Args:
-            query: The search query string.
-            site_id: Optional site ID to scope the search.
-            max_results: Maximum number of results to return.
-
-        Returns:
-            List of search hit dictionaries.
-        """
-        def _do_search(client: SharePointClient) -> List[Dict[str, Any]]:
-            search_query = query
-            if site_id:
-                search_query = f"{query} site:{site_id}"
-
-            raw = client.search(
-                search_query,
-                entity_types=["driveItem"],
-                size=max_results,
-            )
-            return _extract_search_hits(raw)
-
-        return self._retry_with_refresh(_do_search)
-
-    def search_pages(
-        self,
-        query: str,
-        site_id: Optional[str] = None,
-        max_results: int = 10,
-    ) -> List[Dict[str, Any]]:
-        """Search for SharePoint pages.
-
-        Args:
-            query: The search query string.
-            site_id: Optional site ID to scope the search.
-            max_results: Maximum number of results to return.
-
-        Returns:
-            List of search hit dictionaries.
-        """
-        def _do_search(client: SharePointClient) -> List[Dict[str, Any]]:
-            search_query = query
-            if site_id:
-                search_query = f"{query} site:{site_id}"
-
-            raw = client.search(
-                search_query,
-                entity_types=["listItem"],
-                size=max_results,
-            )
-            return _extract_search_hits(raw)
-
-        return self._retry_with_refresh(_do_search)
-
     def fetch_page_markdown(
         self,
         site_id: str,
@@ -203,7 +143,11 @@ class SharePointSearchService:
             The created page resource from the Graph API.
         """
         def _do_create(client: SharePointClient) -> Dict[str, Any]:
-            html_content = markdown_to_sharepoint_html(markdown_content)
+            stripped = markdown_content.strip()
+            if stripped.startswith("<") and (">" in stripped):
+                html_content = stripped
+            else:
+                html_content = markdown_to_sharepoint_html(markdown_content)
             sid = site_id or self._creds.get("site_id")
             if not sid:
                 raise ValueError(
@@ -283,7 +227,14 @@ class SharePointSearchService:
             updated["expires_in"] = expires_in
             updated["expires_at"] = int(time.time()) + int(expires_in)
 
-        store_tokens_in_db(self.user_id, updated, "sharepoint")
+        try:
+            store_tokens_in_db(self.user_id, updated, "sharepoint")
+        except Exception as exc:
+            logger.warning(
+                "[SharePointSearch] Failed to persist refreshed token for user %s: %s",
+                self.user_id,
+                exc,
+            )
         self._creds = updated
         return updated
 

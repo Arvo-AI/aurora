@@ -25,10 +25,16 @@ SCOPES = (
 
 def _get_oauth_config() -> Dict[str, str]:
     frontend_url = os.getenv("FRONTEND_URL", "")
+    tenant_id = os.getenv("SHAREPOINT_TENANT_ID", "common")
+    if tenant_id == "common":
+        logger.warning(
+            "SHAREPOINT_TENANT_ID not set, using 'common'. "
+            "Enterprise tenants that block common-endpoint auth will fail at login."
+        )
     return {
         "client_id": os.getenv("SHAREPOINT_CLIENT_ID", ""),
         "client_secret": os.getenv("SHAREPOINT_CLIENT_SECRET", ""),
-        "tenant_id": os.getenv("SHAREPOINT_TENANT_ID", "common"),
+        "tenant_id": tenant_id,
         "redirect_uri": f"{frontend_url}/sharepoint/callback",
         "scopes": SCOPES,
     }

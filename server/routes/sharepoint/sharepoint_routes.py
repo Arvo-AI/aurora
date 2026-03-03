@@ -125,10 +125,11 @@ def connect():
 
     token_payload = {
         "access_token": access_token,
-        "refresh_token": refresh_token,
         "user_display_name": display_name,
         "user_email": email,
     }
+    if refresh_token:
+        token_payload["refresh_token"] = refresh_token
 
     expires_in = token_data.get("expires_in")
     if expires_in:
@@ -210,14 +211,31 @@ def disconnect():
         return jsonify({"error": "User authentication required"}), 401
 
     try:
+        # Fetch secret_ref before deleting the DB row so we can clean up Vault
+        secret_ref = None
         with db_pool.get_admin_connection() as conn:
             cursor = conn.cursor()
+            cursor.execute(
+                "SELECT secret_ref FROM user_tokens WHERE user_id = %s AND provider = %s",
+                (user_id, "sharepoint"),
+            )
+            row = cursor.fetchone()
+            if row:
+                secret_ref = row[0]
+
             cursor.execute(
                 "DELETE FROM user_tokens WHERE user_id = %s AND provider = %s",
                 (user_id, "sharepoint"),
             )
             deleted_count = cursor.rowcount
             conn.commit()
+
+        if secret_ref:
+            try:
+                from utils.secrets.secret_ref_utils import secret_manager
+                secret_manager.delete_secret(secret_ref)
+            except Exception as vault_exc:
+                logger.warning("[SHAREPOINT] Failed to delete Vault secret for user %s: %s", user_id, vault_exc)
 
         logger.info("[SHAREPOINT] Disconnected user %s (deleted %s token rows)", user_id, deleted_count)
         return jsonify({"success": True, "message": "SharePoint disconnected successfully"})

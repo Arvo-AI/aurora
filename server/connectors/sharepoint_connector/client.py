@@ -311,8 +311,20 @@ class SharePointClient:
         resp = self._request("GET", f"/drives/{drive_id}/items/{item_id}")
         return resp.json()
 
+    MAX_DOWNLOAD_SIZE_BYTES = 100 * 1024 * 1024  # 100 MB
+
     def download_drive_item(self, drive_id: str, item_id: str) -> bytes:
-        """Download the content of a drive item as bytes."""
+        """Download the content of a drive item as bytes.
+
+        Checks item size before downloading to prevent OOM on large files.
+        """
+        metadata = self.get_drive_item(drive_id, item_id)
+        file_size = metadata.get("size", 0)
+        if file_size and file_size > self.MAX_DOWNLOAD_SIZE_BYTES:
+            raise ValueError(
+                f"File too large ({file_size / (1024*1024):.1f} MB). "
+                f"Maximum supported size is {self.MAX_DOWNLOAD_SIZE_BYTES / (1024*1024):.0f} MB."
+            )
         resp = self._request(
             "GET", f"/drives/{drive_id}/items/{item_id}/content", stream=True
         )
@@ -394,8 +406,9 @@ class SharePointClient:
         if not sid:
             raise ValueError("site_id is required")
 
+        slug = re.sub(r"[^\w\-]", "-", title).strip("-") or "untitled"
         body: Dict[str, Any] = {
-            "name": f"{title}.aspx",
+            "name": f"{slug}.aspx",
             "title": title,
             "pageLayout": "article",
             "showComments": True,

@@ -8,8 +8,6 @@ from typing import Any, Dict, List
 
 from bs4 import BeautifulSoup, NavigableString, Tag
 
-from connectors.confluence_connector.runbook_parser import extract_sections
-
 logger = logging.getLogger(__name__)
 
 
@@ -127,7 +125,7 @@ def _render_table(table: Tag, lines: List[str]) -> None:
     parsed_rows: List[List[str]] = []
     for row in rows:
         cells = row.find_all(["th", "td"])
-        parsed_rows.append([cell.get_text(" ", strip=True) for cell in cells])
+        parsed_rows.append([cell.get_text(" ", strip=True).replace("|", "\\|") for cell in cells])
 
     if not parsed_rows:
         return
@@ -164,8 +162,16 @@ def extract_text_from_docx(file_bytes: bytes) -> str:
 
     try:
         doc = Document(io.BytesIO(file_bytes))
-        paragraphs = [para.text for para in doc.paragraphs if para.text.strip()]
-        return "\n\n".join(paragraphs)
+        parts: List[str] = []
+        for para in doc.paragraphs:
+            if para.text.strip():
+                parts.append(para.text)
+        for table in doc.tables:
+            for row in table.rows:
+                cell_texts = [cell.text.strip() for cell in row.cells if cell.text.strip()]
+                if cell_texts:
+                    parts.append(" | ".join(cell_texts))
+        return "\n\n".join(parts)
     except Exception as exc:
         logger.error("Failed to extract text from .docx: %s", exc)
         return ""
@@ -266,33 +272,7 @@ def extract_document_text(file_bytes: bytes, filename: str) -> str:
             ext,
             filename,
         )
-        return ""
-
-
-# ---------------------------------------------------------------------------
-# High-level page parsing
-# ---------------------------------------------------------------------------
-
-def parse_sharepoint_page(page_data: Dict[str, Any]) -> Dict[str, Any]:
-    """Parse a SharePoint page response into markdown, sections, and title.
-
-    Args:
-        page_data: The page resource dict from the Graph API (with ``canvasLayout`` expanded).
-
-    Returns:
-        Dictionary with ``markdown``, ``sections``, and ``title`` keys.
-    """
-    title = page_data.get("title", "")
-    canvas_layout = page_data.get("canvasLayout") or {}
-    markdown = sharepoint_page_to_markdown(canvas_layout)
-
-    sections = extract_sections(markdown)
-
-    return {
-        "markdown": markdown,
-        "sections": sections,
-        "title": title,
-    }
+        return f"[Unsupported file type: .{ext}] Cannot extract text from '{filename}'."
 
 
 # ---------------------------------------------------------------------------
