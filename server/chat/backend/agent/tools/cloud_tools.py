@@ -1089,16 +1089,19 @@ def get_cloud_tools():
     tools = []
     
     # Create wrapper for cloud_exec to hide internal parameters from AI
-    def cloud_exec_wrapper(provider: str, command: str, output_file: Optional[str] = None, **kwargs) -> str:
-        """Execute cloud CLI commands. Provider and command are required. Use output_file to save raw output to a file (useful for kubeconfig)."""
-        # Extract the injected context parameters and pass them to the real function
+    def cloud_exec_wrapper(provider: str, command: str, output_file: Optional[str] = None, account_id: Optional[str] = None, **kwargs) -> str:
+        """Execute cloud CLI commands. Provider and command are required. Use output_file to save raw output to a file (useful for kubeconfig).
+        
+For AWS with multiple connected accounts: the FIRST investigative call omit account_id to query all accounts.
+Once you identify which account has the issue, pass account_id (e.g. '151025634386') to target that specific account."""
         user_id = kwargs.get('user_id')
         session_id = kwargs.get('session_id')
         provider_preference = kwargs.get('provider_preference')
         timeout = kwargs.get('timeout')
         
         return cloud_exec(provider, command, user_id=user_id, session_id=session_id, 
-                         provider_preference=provider_preference, timeout=timeout, output_file=output_file)
+                         provider_preference=provider_preference, timeout=timeout,
+                         output_file=output_file, account_id=account_id)
     
     # Set the name to match what the system prompt expects
     cloud_exec_wrapper.__name__ = "cloud_exec"
