@@ -145,6 +145,7 @@ def update_workspace_aws_role(
             role_arn=role_arn,
             read_only_role_arn=read_only_role_arn,
             connection_method="sts_assume_role",
+            workspace_id=workspace_id,
             status="active",
         )
         logger.info("Saved AWS connection to user_connections for user %s (account: %s)", user_id, account_id)

@@ -1,21 +1,45 @@
 # AWS Connector
 
-IAM Role with External ID for cross-account access.
+Cross-account IAM roles with STS AssumeRole for single or multi-account setups.
+
+---
+
+## How It Works
+
+Aurora uses a single set of "base" AWS credentials that only have permission to
+call `sts:AssumeRole`. For every account it accesses, Aurora assumes an IAM role
+**inside that account** using a unique **External ID** to prevent confused-deputy
+attacks.
+
+```text
+Aurora base credentials (sts:AssumeRole only)
+  └─> sts:AssumeRole(RoleArn, ExternalId)
+        └─> Temporary credentials (1-hour sessions, auto-refreshed)
+```
+
+---
 
 ## Prerequisites
 
-Before setting up AWS integration, you need to configure Aurora's own AWS credentials. These credentials are used by Aurora to assume roles in your AWS account via STS (Security Token Service).
+| Requirement | Who Provides It |
+|---|---|
+| Aurora's AWS Account ID | Displayed on the Aurora AWS Onboarding page |
+| External ID (UUID) | Auto-generated per Aurora workspace |
+| CloudFormation template | Hosted publicly by Aurora (auto-included in Quick-Create links) |
 
-## Setup
+---
 
-### Step 1: Create an IAM User for Aurora
+## Operator Setup (Aurora's Own AWS Credentials)
 
-Aurora needs AWS credentials to call STS AssumeRole. Create an IAM user with the following policy:
+Before users can onboard their accounts, the Aurora operator must configure
+Aurora's own AWS credentials. These are used solely to call `sts:AssumeRole`.
+
+### 1. Create an IAM User for Aurora
 
 1. Go to [IAM > Users](https://console.aws.amazon.com/iam/home#/users) > **Create user**
 2. Name: `aurora-service-user` (or any name you prefer)
 3. **Do not** enable console access (Aurora only needs programmatic access)
-4. After creating the user, attach the following policy:
+4. Attach the following policy:
 
 ```json
 {
@@ -32,22 +56,17 @@ Aurora needs AWS credentials to call STS AssumeRole. Create an IAM user with the
 }
 ```
 
-This policy allows Aurora to assume roles in any AWS account. The user only needs `sts:AssumeRole` permission - Aurora will inherit the permissions of the roles it assumes.
-
-### Step 2: Create Access Keys
+### 2. Create Access Keys
 
 1. Go to the user you just created
-2. Click on the **Security credentials** tab
-3. Scroll down to **Access keys** section
-4. Click **Create access key**
-5. Select **Application running outside AWS** as the use case
-6. Click **Next** and optionally add a description
-7. Click **Create access key**
-8. **Important**: Copy both the **Access key ID** and **Secret access key** immediately - you won't be able to see the secret key again!
+2. Click the **Security credentials** tab
+3. Scroll to **Access keys** > **Create access key**
+4. Select **Application running outside AWS**
+5. Copy both the **Access key ID** and **Secret access key**
 
-### Step 3: Configure Aurora Environment
+### 3. Configure Aurora Environment
 
-Add the credentials to your Aurora `.env` file:
+Add to your `.env`:
 
 ```bash
 AWS_ACCESS_KEY_ID=your-access-key-id-here
@@ -55,79 +74,243 @@ AWS_SECRET_ACCESS_KEY=your-secret-access-key-here
 AWS_DEFAULT_REGION=us-east-1
 ```
 
-After adding these credentials, **rebuild and restart Aurora**:
+Rebuild and restart:
 
 ```bash
 make down
-make dev-build  # or make prod-local for production (build from source)
-make dev        # or make prod-prebuilt / make prod for production (prebuilt images)
+make dev-build  # or make prod-local for production
+make dev        # or make prod-prebuilt / make prod for production
 ```
 
-### Step 4: Create IAM Role in Your AWS Account
+### 4. Host the CloudFormation Template
 
-Now that Aurora has credentials configured, you can create the role that Aurora will assume:
+Aurora hosts the CloudFormation template publicly on its own AWS account so
+that end-users never need to upload or host it themselves. The template URL
+is hardcoded in the backend (`server/routes/aws/onboarding.py`).
 
-1. Go to [IAM > Roles](https://console.aws.amazon.com/iam/home#/roles) > **Create role**
-2. Trusted entity: **AWS account** > **Another AWS account**
-   - Account ID: Aurora's AWS Account ID (this will be displayed in the onboarding UI after credentials are configured)
-   - Check **Require external ID** and enter the External ID (displayed in onboarding UI)
-3. Attach permission policies to the role:
-   - For full access: `PowerUserAccess` (recommended for most use cases)
+1. **Create an S3 bucket**:
+
+```bash
+aws s3 mb s3://aurora-cfn-templates-<YOUR_AURORA_ACCOUNT_ID> --region <YOUR_REGION>
+```
+
+2. **Upload the template**:
+
+```bash
+aws s3 cp server/connectors/aws_connector/aurora-cross-account-role.yaml \
+  s3://aurora-cfn-templates-<YOUR_AURORA_ACCOUNT_ID>/aurora-cross-account-role.yaml
+```
+
+3. **Make the template publicly readable** (the template contains no secrets —
+   only parameter placeholders). The bucket policy is scoped to a single object:
+
+```bash
+aws s3api put-public-access-block \
+  --bucket aurora-cfn-templates-<YOUR_AURORA_ACCOUNT_ID> \
+  --public-access-block-configuration \
+      BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=false,RestrictPublicBuckets=false
+
+aws s3api put-bucket-policy \
+  --bucket aurora-cfn-templates-<YOUR_AURORA_ACCOUNT_ID> \
+  --policy '{
+    "Version": "2012-10-17",
+    "Statement": [{
+      "Sid": "PublicReadCFNTemplate",
+      "Effect": "Allow",
+      "Principal": "*",
+      "Action": "s3:GetObject",
+      "Resource": "arn:aws:s3:::aurora-cfn-templates-<YOUR_AURORA_ACCOUNT_ID>/aurora-cross-account-role.yaml"
+    }]
+  }'
+```
+
+4. **Update the constant** in `server/routes/aws/onboarding.py`:
+
+```python
+CLOUDFORMATION_TEMPLATE_URL = "https://aurora-cfn-templates-<YOUR_AURORA_ACCOUNT_ID>.s3.<YOUR_REGION>.amazonaws.com/aurora-cross-account-role.yaml"
+```
+
+5. Rebuild Aurora (`make rebuild-server`).
+
+---
+
+## Onboarding AWS Accounts
+
+Once the operator has configured Aurora's credentials and hosted the template,
+users can connect their AWS accounts via the onboarding UI.
+
+### Option A: Quick-Create Link (Recommended)
+
+Aurora hosts the CloudFormation template publicly, so the onboarding page
+always shows a ready-to-use **Quick-Create Link**.
+
+1. Navigate to **Connectors > AWS** in Aurora.
+2. Click the Quick-Create button.
+3. Log into the target AWS account in your browser.
+4. The AWS Console shows the stack with all parameters pre-filled.
+5. Check the IAM capabilities acknowledgement box and click **Create stack**.
+6. Copy the Role ARN from the stack outputs and paste it in Aurora.
+
+### Option B: Manual Setup
+
+1. Navigate to **Connectors > AWS** in Aurora.
+2. Copy the **External ID** and **Trust Policy** shown in the UI.
+3. In your AWS account, go to [IAM > Roles](https://console.aws.amazon.com/iam/home#/roles) > **Create role**.
+4. Trusted entity: **AWS account** > **Another AWS account**.
+   - Account ID: Aurora's AWS Account ID (shown in the UI)
+   - Check **Require external ID** and paste the External ID
+5. Attach permission policies:
    - For read-only: `ReadOnlyAccess`
+   - For full access: `PowerUserAccess`
    - Or create custom policies for specific permissions
-4. Name: `AuroraRole` (or any name you prefer)
-5. Copy the **Role ARN** after creation (format: `arn:aws:iam::123456789012:role/AuroraRole`)
+6. Name: `AuroraReadOnlyRole` (or any name you prefer)
+7. Copy the **Role ARN** and paste it in the Aurora onboarding form.
 
-### Step 5: Complete Onboarding in Aurora UI
+### Option C: Download CloudFormation Template
 
-1. Navigate to the AWS onboarding page in Aurora
-2. The UI will display:
-   - Your External ID (unique to your workspace)
-   - Aurora's AWS Account ID (dynamically retrieved from the credentials you configured)
-   - A trust policy template with the correct Account ID
-3. Copy the trust policy and use it when creating your IAM role (or use the AWS console wizard as described in Step 4)
-4. Enter your Role ARN in the onboarding form
-5. Click **Connect AWS Account**
+If you prefer to review or modify the template before deploying:
 
-> **Important**: After creating or updating an IAM role in AWS, changes can take **up to 5 minutes** to propagate across AWS services. If role assumption fails immediately after creating or updating the role, wait a few minutes and try again. This is normal AWS behavior and not an error with Aurora.
+1. Click **Download CloudFormation Template** in the onboarding UI.
+   The template has your workspace's External ID and Aurora's account ID pre-filled.
+2. Deploy via CLI:
 
-## How It Works
+```bash
+aws cloudformation deploy \
+  --template-file aurora-cross-account-role.yaml \
+  --stack-name aurora-role \
+  --capabilities CAPABILITY_NAMED_IAM \
+  --parameter-overrides \
+      AuroraAccountId=<AURORA_ACCOUNT_ID> \
+      ExternalId=<YOUR_EXTERNAL_ID> \
+  --region us-east-1
+```
 
-1. **Aurora's credentials** (`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`) are used to authenticate with AWS STS
-2. Aurora calls `sts:AssumeRole` with:
-   - Your role ARN
-   - The External ID (for security)
-   - A session name
-3. AWS returns temporary credentials that Aurora uses to access your AWS resources
-4. These temporary credentials are cached and refreshed automatically
+> `deploy` creates or updates the stack, so re-running is safe.
 
-## Security Best Practices
+---
 
-- **External ID**: The External ID prevents the "confused deputy" problem - it ensures that only Aurora (with the correct External ID) can assume your role
-- **Least Privilege**: Attach only the permissions your role needs. Aurora will inherit these permissions when it assumes the role
-- **Role Permissions**: The role you create can have any permissions you want Aurora to have. Common choices:
-  - `PowerUserAccess`: Full access except IAM management
-  - `ReadOnlyAccess`: Read-only access to all services
-  - Custom policies: Specific permissions for your use case
+## Multi-Account / Organization Deployment
 
-## Troubleshooting
+For organizations with many accounts (AWS Organizations, Control Tower):
 
-**"Aurora cannot assume this role"**
-- **IAM propagation delay**: AWS IAM changes (including role creation and trust policy updates) can take up to 5 minutes to propagate. If you just created or updated the role, wait a few minutes and try again before troubleshooting further.
-- Verify the trust policy has the correct Aurora Account ID and External ID
-- Ensure the role exists in your AWS account
-- Check that the External ID matches exactly (case-sensitive)
+### StackSets
 
-**"Unable to determine Aurora's AWS account ID"**
-- Ensure `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` are set in `.env`
-- Verify the credentials are valid by testing them with AWS CLI: `aws sts get-caller-identity`
-- Rebuild and restart Aurora after adding credentials
+Deploy to all member accounts at once from the management account:
 
-**"Access denied when assuming role"**
-- Verify the IAM user has `sts:AssumeRole` permission
-- Check that the role's trust policy allows Aurora's account ID
-- Ensure the External ID in the trust policy matches the one shown in the UI
+```bash
+aws cloudformation create-stack-set \
+  --stack-set-name aurora-role \
+  --template-body file://aurora-cross-account-role.yaml \
+  --parameters \
+      ParameterKey=AuroraAccountId,ParameterValue=<AURORA_ACCOUNT_ID> \
+      ParameterKey=ExternalId,ParameterValue=<YOUR_EXTERNAL_ID> \
+  --capabilities CAPABILITY_NAMED_IAM \
+  --permission-model SERVICE_MANAGED \
+  --auto-deployment Enabled=true,RetainStacksOnAccountRemoval=false
+
+aws cloudformation create-stack-instances \
+  --stack-set-name aurora-role \
+  --deployment-targets OrganizationalUnitIds=<ROOT_OU_ID> \
+  --regions us-east-1 \
+  --operation-preferences MaxConcurrentPercentage=100,FailureTolerancePercentage=10
+```
+
+With `--auto-deployment Enabled=true`, new accounts added to the OU
+automatically get the Aurora role.
+
+If you use **Control Tower**, you can alternatively register the template as a
+Service Catalog product distributed via Account Factory.
+
+### Bulk Register
+
+After roles are created across your accounts:
+
+1. Go to the Aurora AWS Onboarding page.
+2. Open **More: bulk register, StackSets**.
+3. Paste your account IDs, one per line:
+
+```text
+123456789012,us-east-1
+234567890123,eu-west-1
+345678901234,us-west-2
+```
+
+Format: `ACCOUNT_ID,REGION` (region defaults to `us-east-1` if omitted). You
+can also specify a custom role name as a third field:
+`ACCOUNT_ID,REGION,ROLE_NAME`.
+
+Aurora validates each account by attempting `sts:AssumeRole`. Successfully
+validated accounts are connected immediately; failed accounts show the error
+inline.
+
+---
+
+## What ReadOnlyAccess Covers
+
+The AWS-managed `ReadOnlyAccess` policy grants `Describe*`, `Get*`, `List*`,
+and `BatchGet*` actions across nearly all AWS services. Key inclusions:
+
+- **Compute**: EC2, ECS, EKS, Lambda
+- **Storage**: S3 (read objects + list buckets), EBS
+- **Database**: RDS, DynamoDB, Redshift, ElastiCache
+- **Networking**: VPC, ELB, Route 53, CloudFront
+- **Security**: IAM (read), SecurityHub, GuardDuty, Inspector
+- **Monitoring**: CloudWatch, CloudTrail, X-Ray
+- **Infrastructure-as-Code**: CloudFormation stack info
+
+**What it does NOT allow**:
+
+- Creating, modifying, or deleting any resources
+- Accessing S3 object contents that require specific bucket policies
+- KMS decryption (unless explicitly granted)
+- Accessing secrets in Secrets Manager or SSM Parameter Store (SecureString)
+
+For a full list, see the
+[AWS documentation](https://docs.aws.amazon.com/aws-managed-policy/latest/reference/ReadOnlyAccess.html).
+
+---
+
+## Security Model
+
+| Control | Detail |
+|---|---|
+| **External ID** | A UUID v4 unique to your Aurora workspace. Prevents other Aurora tenants from assuming your role (confused-deputy protection). |
+| **No write access** | The role only has `ReadOnlyAccess`. Aurora's session policy can further restrict in read-only mode. |
+| **Short-lived credentials** | STS sessions last at most 1 hour. Aurora proactively refreshes them before expiry. |
+| **Per-account isolation** | Each AWS account has its own role. Compromising one role does not affect other accounts. |
+| **Audit trail** | Every `AssumeRole` call is logged in the target account's CloudTrail. Session names include `aurora-<workspace_id>` for traceability. |
+
+---
 
 ## Account ID Detection
 
-Aurora automatically detects its AWS account ID by calling `sts:get-caller-identity` using the configured credentials. This account ID is displayed in the onboarding UI and used in the trust policy template. The account ID is retrieved dynamically, so you don't need to configure it manually.
+Aurora automatically detects its AWS account ID by calling
+`sts:get-caller-identity` using the configured credentials. This account ID
+is displayed in the onboarding UI and used in the trust policy template.
+
+---
+
+## Disconnecting
+
+- **Single account**: Click the trash icon next to the account in the connected
+  accounts table. This removes Aurora's connection; the IAM role still exists
+  in your AWS account until you delete the CloudFormation stack.
+- **All accounts**: Click **Disconnect All**.
+
+To fully remove access, delete the CloudFormation stack (or StackSet) in your
+AWS accounts.
+
+---
+
+## Troubleshooting
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| Quick-Create link says "templateURL is required" | Template URL not configured | Update the `CLOUDFORMATION_TEMPLATE_URL` constant in `server/routes/aws/onboarding.py` |
+| Quick-Create says role already exists | `AuroraReadOnlyRole` already in that account | Use the existing role (just register in Aurora), or delete the old stack first |
+| "Access denied" on bulk register | Role not created, or External ID mismatch | Verify the CFN stack deployed successfully with the correct External ID |
+| "Aurora cannot assume this role" | IAM propagation delay | Wait up to 5 minutes after role creation and retry |
+| "Unable to determine Aurora's AWS account ID" | Credentials not configured | Ensure `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` are set in `.env` |
+| Some accounts fail, others succeed | IAM role propagation delay | Wait 5 minutes and retry the failed accounts |
+| Discovery finds no resources | Resource Explorer not enabled | Run `aws resource-explorer-2 create-index --type AGGREGATOR` in your primary region |
+| Template deploy fails | `CAPABILITY_NAMED_IAM` not specified | Add `--capabilities CAPABILITY_NAMED_IAM` to your deploy command |
