@@ -297,11 +297,11 @@ def get_org_activity(user_id):
                     })
 
                 cursor.execute(
-                    """SELECT ut.provider, ut.created_at, u.name, u.email
+                    """SELECT ut.provider, ut.timestamp, u.name, u.email
                        FROM user_tokens ut
                        JOIN users u ON ut.user_id = u.id
                        WHERE ut.org_id = %s
-                       ORDER BY ut.created_at DESC LIMIT %s""",
+                       ORDER BY ut.timestamp DESC LIMIT %s""",
                     (org_id, limit),
                 )
                 for row in cursor.fetchall():
