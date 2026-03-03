@@ -744,6 +744,7 @@ class Workflow:
         _first_event = True
         _token_count = 0
         _event_count = 0
+        _model_turn_tokens = 0  # Tokens yielded in current model turn
         
         try:
             async for event in self.app.astream_events(input_state, self.config, version="v2"):
@@ -760,26 +761,33 @@ class Workflow:
                 if _event_count <= 5:
                     logger.info(f"[WORKFLOW STREAM] Event #{_event_count}: type={event_type}, name={event_name}")
                 
+                # Reset per-turn token counter when a new model call starts
+                if event_type == "on_chat_model_start":
+                    _model_turn_tokens = 0
+
                 # Handle token streaming from LLM
-                if event_type == "on_chat_model_stream":
+                elif event_type == "on_chat_model_stream":
                     _token_count += 1
                     chunk_data = event.get("data", {})
                     chunk_obj = chunk_data.get("chunk")
                     if chunk_obj and hasattr(chunk_obj, 'content') and chunk_obj.content:
+                        if _token_count <= 3:
+                            logger.debug(f"[STREAM DEBUG] Token #{_token_count} raw content type={type(chunk_obj.content).__name__}, value={str(chunk_obj.content)[:200]}")
                         # Extract text content (handles Gemini thinking model list format)
                         # include_thinking=True so reasoning flows to save_incident_thought() for RCA
                         content = _extract_text_from_content(chunk_obj.content, include_thinking=True)
 
-                        # Also check for Ollama reasoning content (DeepSeek-R1 etc.)
+                        # Also check for reasoning content (OpenRouter reasoning, DeepSeek-R1 etc.)
                         if not content and hasattr(chunk_obj, 'additional_kwargs'):
                             content = chunk_obj.additional_kwargs.get("reasoning_content", "")
 
                         # Only yield if we have actual text content
                         if content:
+                            _model_turn_tokens += 1
                             yield ("token", content)
                             if _token_count <= 5:
                                 logger.debug(f"[WORKFLOW STREAM] Token #{_token_count}: '{content[:30]}'")
-                
+
                 # Capture state from chain end events
                 elif event_type == "on_chain_end" and event_name == "LangGraph":
                     output_data = event.get("data", {}).get("output")
@@ -788,15 +796,27 @@ class Workflow:
                         logger.debug(f"[WORKFLOW STREAM] Captured final state from chain end")
                         # Yield values event for compatibility
                         yield ("values", output_data)
-                
-                # Handle tool calls
+
+                # Handle model turn completion — extract thinking/text as fallback
+                # when on_chat_model_stream didn't fire (LangGraph + Gemini bug)
                 elif event_type == "on_chat_model_end":
                     chunk_data = event.get("data", {})
                     output = chunk_data.get("output")
-                    if output and hasattr(output, 'tool_calls') and output.tool_calls:
+                    if output:
                         # Process tool calls
-                        self._process_tool_calls_from_chunk(output, tool_capture)
-                        logger.debug(f"[WORKFLOW STREAM] Detected {len(output.tool_calls)} tool calls")
+                        if hasattr(output, 'tool_calls') and output.tool_calls:
+                            self._process_tool_calls_from_chunk(output, tool_capture)
+                            logger.debug(f"[WORKFLOW STREAM] Detected {len(output.tool_calls)} tool calls")
+
+                        # Fallback: if streaming didn't yield tokens for this turn,
+                        # extract thinking + text from the complete response.
+                        # This handles ChatGoogleGenerativeAI which doesn't stream
+                        # when tools are bound in LangGraph (langgraph#4877).
+                        if _model_turn_tokens == 0 and hasattr(output, 'content') and output.content:
+                            content = _extract_text_from_content(output.content, include_thinking=True)
+                            if content:
+                                logger.info(f"[STREAM FALLBACK] Extracted {len(content)} chars from on_chat_model_end (streaming didn't fire)")
+                                yield ("token", content)
                 
                 # Periodic state snapshots (for incremental saves)
                 elif event_type == "on_chain_stream":
@@ -1093,8 +1113,15 @@ class Workflow:
                 message_id += 1
                 
             elif 'AI' in msg_type:
-                # Extract text content (handles Gemini thinking model list format)
-                content = _extract_text_from_content(getattr(msg, 'content', ''))
+                raw_content = getattr(msg, 'content', '')
+                # Extract text content (handles Gemini thinking model list format).
+                # Include thinking when text is empty and message has tool calls,
+                # so Gemini's reasoning appears in chat alongside tool cards.
+                # (Claude generates inline text with tool calls; Gemini puts reasoning
+                # in thinking blocks only, leaving text empty.)
+                content = _extract_text_from_content(raw_content)
+                if not content and getattr(msg, 'tool_calls', []):
+                    content = _extract_text_from_content(raw_content, include_thinking=True)
                 
                 # Get the AIMessage's run_id for consistency (needed regardless of tool calls)
                 run_id = getattr(msg, 'id', None)

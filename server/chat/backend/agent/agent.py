@@ -3,6 +3,8 @@ import logging
 import os
 from chat.backend.agent.db import PostgreSQLClient
 from chat.backend.agent.llm import LLMManager
+from chat.backend.agent.model_mapper import ModelMapper
+from chat.backend.agent.providers import create_chat_model
 from chat.backend.agent.weaviate_client import WeaviateClient
 from chat.backend.agent.utils.state import State
 from chat.backend.agent.utils.tool_context_capture import ToolContextCapture
@@ -13,6 +15,10 @@ from chat.backend.agent.prompt.prompt_builder import build_prompt_segments, asse
 from chat.backend.agent.utils.llm_usage_tracker import LLMUsageTracker, LLMUsage
 import time
 import asyncio
+
+# Providers that must use their native SDKs even when LLM_PROVIDER_MODE=openrouter,
+# because features like Gemini thinking only work with their native SDK.
+_DIRECT_ONLY_PROVIDERS = frozenset({"google", "vertex", "ollama"})
 
 class Agent:
     def __init__(self, weaviate_client: WeaviateClient, postgres_client: PostgreSQLClient, websocket_sender=None, event_loop=None, ctx_len=10):
@@ -403,10 +409,10 @@ class Agent:
             # Get provider mode from LLM manager
             provider_mode = self.llm_manager.provider_mode
             
-            # Determine the actual provider for usage tracking
-            from chat.backend.agent.model_mapper import ModelMapper
-            detected_provider = ModelMapper.detect_provider(model_name) if provider_mode != "openrouter" else "openrouter"
-            
+            # Detect the actual provider from model prefix (e.g., "google/gemini-3.1-pro" → "google")
+            detected_provider = ModelMapper.detect_provider(model_name)
+            is_direct_only = detected_provider in _DIRECT_ONLY_PROVIDERS
+
             # Create the usage tracking callback with correct provider
             usage_callback = AgentLLMUsageCallback(
                 user_id=state.user_id,
@@ -414,42 +420,38 @@ class Agent:
                 model_name=model_name,
                 api_provider=detected_provider
             )
-            
-            # Create streaming LLM based on provider mode
-            if provider_mode == "openrouter":
+
+            # Route to native SDK when provider_mode is direct, or when the model's
+            # provider requires its native SDK (e.g., Gemini thinking needs ChatGoogleGenerativeAI).
+            _use_direct = provider_mode != "openrouter" or is_direct_only
+
+            logging.info(f"Provider routing: model={model_name}, detected={detected_provider}, mode={provider_mode}, use_direct={_use_direct}")
+
+            if _use_direct:
+                streaming_llm = create_chat_model(
+                    model=model_name,
+                    temperature=self.llm_manager.main_llm.temperature,
+                    provider_mode="direct" if is_direct_only else provider_mode,
+                    streaming=True,
+                    callbacks=[usage_callback],
+                )
+            else:
                 # Use OpenRouter mode
                 openrouter_api_key = os.getenv("OPENROUTER_API_KEY")
                 if not openrouter_api_key:
                     raise ValueError("OPENROUTER_API_KEY environment variable is not set")
 
-                # Convert model name to OpenRouter format (e.g., claude-sonnet-4-5 -> claude-sonnet-4.5)
-                from chat.backend.agent.model_mapper import ModelMapper
                 openrouter_model_name = ModelMapper.get_native_name(model_name, "openrouter")
 
-                # Create ChatOpenAI with callbacks attached directly to the LLM
                 streaming_llm = ChatOpenAI(
                     model=openrouter_model_name,
                     temperature=self.llm_manager.main_llm.temperature,
-                    streaming=True,  # Enable streaming
+                    streaming=True,
                     openai_api_base="https://openrouter.ai/api/v1",
                     openai_api_key=openrouter_api_key,
-                    callbacks=[usage_callback],  # CRITICAL FIX: Attach the usage tracking callback!
-                    request_timeout=120.0,  # Increase timeout to 2 minutes
-                    max_retries=3  # Add retries for network stability
-                )
-            else:
-                # Use direct/auto mode - use provider system
-                from chat.backend.agent.providers import create_chat_model
-                
-                # Create streaming LLM using provider system
-                # Note: Providers handle their own timeout/retry defaults
-                # (OpenAI uses request_timeout, Anthropic uses timeout, etc.)
-                streaming_llm = create_chat_model(
-                    model=model_name,
-                    temperature=self.llm_manager.main_llm.temperature,
-                    provider_mode=provider_mode,
-                    streaming=True,  # Enable streaming
-                    callbacks=[usage_callback],  # Attach the usage tracking callback
+                    callbacks=[usage_callback],
+                    request_timeout=120.0,
+                    max_retries=3,
                 )
             
             # Create the agent using new LangChain 1.2.6+ API

@@ -63,6 +63,9 @@ class VertexAIProvider(BaseLLMProvider):
 
         logger.info(f"Creating Vertex AI chat model: {native_model} (project={self.project}, location={self.location})")
 
+        # Strip 'streaming' — not a valid ChatGoogleGenerativeAI param in v4.x
+        kwargs.pop("streaming", None)
+
         config = {
             "model": native_model,
             "temperature": temperature if temperature is not None else 0.7,

@@ -102,6 +102,9 @@ class GoogleProvider(BaseLLMProvider):
 
         logger.info(f"Creating Google AI chat model: {resolved_model}")
 
+        # Strip 'streaming' — not a valid ChatGoogleGenerativeAI param in v4.x
+        kwargs.pop("streaming", None)
+
         config = {
             "model": resolved_model,
             "temperature": temperature if temperature is not None else 0.7,
