@@ -381,7 +381,7 @@ def update_org_preferences(user_id):
                     cursor.execute(
                         """INSERT INTO user_preferences (user_id, org_id, preference_key, preference_value)
                            VALUES ('__org__', %s, %s, %s)
-                           ON CONFLICT (user_id, preference_key)
+                           ON CONFLICT (user_id, org_id, preference_key)
                            DO UPDATE SET preference_value = EXCLUDED.preference_value""",
                         (org_id, key, str(value)),
                     )

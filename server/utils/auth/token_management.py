@@ -35,9 +35,12 @@ def store_tokens_in_db(user_id: str, token_data: Dict, provider: str,
         except Exception:
             pass
 
+    request_org_id = org_id
+
     try:
         logger.info(f"[STORE-TOKENS] Starting credential storage operation")
         logger.info(f"[STORE-TOKENS] User ID: {user_id}")
+
         logger.info(f"[STORE-TOKENS] Provider: {provider}")
         logger.info(f"[STORE-TOKENS] Has subscription info: {bool(subscription_name or subscription_id)}")
 
@@ -324,10 +327,10 @@ def store_tokens_in_db(user_id: str, token_data: Dict, provider: str,
             conn.commit()
 
             # Set org_id on the token row if provided
-            if org_id:
+            if request_org_id:
                 cursor.execute(
                     "UPDATE user_tokens SET org_id = %s WHERE user_id = %s AND provider = %s",
-                    (org_id, user_id, provider)
+                    (request_org_id, user_id, provider)
                 )
                 conn.commit()
 

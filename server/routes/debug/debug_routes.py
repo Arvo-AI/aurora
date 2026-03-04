@@ -12,6 +12,8 @@ debug_util_bp = Blueprint("debug_util_bp", __name__)
 @debug_util_bp.route("/debug/user-info", methods=["GET", "OPTIONS"])
 @require_auth_only
 def debug_user_info(user_id):
+    if request.method == "OPTIONS":
+        return create_cors_response()
     try:
         debug_info = {
             "time": datetime.utcnow().isoformat(),

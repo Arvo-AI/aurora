@@ -129,9 +129,7 @@ def get_enforcer() -> casbin.Enforcer:
         _enforcer = casbin.Enforcer(model_path, adapter)
 
         def _domain_match(key1: str, key2: str) -> bool:
-            if key1 == "*" or key2 == "*":
-                return True
-            return key1 == key2
+            return key1 == key2 or key2 == "*"
 
         _enforcer.add_named_domain_matching_func("g", _domain_match)
 

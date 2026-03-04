@@ -1269,8 +1269,7 @@ def create_background_chat_session(
                 
                 # Set user and org context for RLS
                 cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
-                if org_id:
-                    cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
+                cursor.execute("SET myapp.current_org_id = %s;", (org_id or '',))
                 conn.commit()
                 
                 # Create the session with initial metadata and in_progress status

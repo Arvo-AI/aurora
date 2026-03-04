@@ -303,8 +303,8 @@ def get_current_user():
                     "orgId": row[1],
                     "orgName": row[2],
                 }), 200
-    except Exception as e:
-        logger.error("Error in /me: %s", e)
+    except Exception:
+        logging.exception("Error in /me")
         return jsonify({"error": "Server error"}), 500
 
 
