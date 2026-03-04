@@ -7,9 +7,6 @@ import { atlassianService } from "@/lib/services/atlassian";
 
 type Status = "loading" | "success" | "error";
 
-const OAUTH_IN_PROGRESS_TTL_MS = 30_000;
-const POLL_INTERVAL_MS = 1000;
-
 export default function AtlassianCallbackPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -18,74 +15,21 @@ export default function AtlassianCallbackPage() {
 
   useEffect(() => {
     let isActive = true;
-    let pollTimeoutId: number | null = null;
     const error = searchParams.get("error");
     const errorDescription = searchParams.get("error_description");
     const code = searchParams.get("code");
     const state = searchParams.get("state");
-    const sessionKey = code ? `atlassianOauthCode:${code}` : "";
-
-    const clearSessionMarker = () => {
-      if (typeof window === "undefined" || !sessionKey) return;
-      window.sessionStorage.removeItem(sessionKey);
-    };
-
-    const parseSessionMarker = (value: string | null) => {
-      if (!value) return null;
-      if (value === "done") return { status: "done" as const, startedAt: null };
-      if (value === "in-progress") return { status: "in-progress" as const, startedAt: null };
-      if (value.startsWith("in-progress:")) {
-        const startedAt = Number(value.split(":", 2)[1]);
-        if (!Number.isNaN(startedAt)) return { status: "in-progress" as const, startedAt };
-      }
-      return null;
-    };
 
     if (error) {
-      if (isActive) { setStatus("error"); setMessage(errorDescription || error); }
-      clearSessionMarker();
+      setStatus("error");
+      setMessage(errorDescription || error);
       return () => { isActive = false; };
     }
 
-    if (!code) {
-      if (isActive) { setStatus("error"); setMessage("Missing authorization code."); }
-      clearSessionMarker();
+    if (!code || !state) {
+      setStatus("error");
+      setMessage("Missing authorization code or state.");
       return () => { isActive = false; };
-    }
-
-    if (!state) {
-      if (isActive) { setStatus("error"); setMessage("Missing OAuth state."); }
-      clearSessionMarker();
-      return () => { isActive = false; };
-    }
-
-    if (typeof window !== "undefined") {
-      const cached = parseSessionMarker(window.sessionStorage.getItem(sessionKey));
-      const startedAt = cached?.startedAt ?? 0;
-      const isStale = cached?.status === "in-progress" && (!startedAt || Date.now() - startedAt > OAUTH_IN_PROGRESS_TTL_MS);
-
-      if (cached?.status === "done") {
-        router.replace("/atlassian/connect");
-        return () => { isActive = false; };
-      }
-      if (cached?.status === "in-progress" && !isStale) {
-        setMessage("Waiting for Atlassian OAuth to finish...");
-        const pollForCompletion = () => {
-          if (!isActive || typeof window === "undefined" || !sessionKey) return;
-          const current = parseSessionMarker(window.sessionStorage.getItem(sessionKey));
-          if (current?.status === "done") { router.replace("/atlassian/connect"); return; }
-          if (Date.now() - startedAt > OAUTH_IN_PROGRESS_TTL_MS) {
-            clearSessionMarker();
-            if (isActive) { setStatus("error"); setMessage("Previous OAuth attempt timed out. Please try again."); }
-            return;
-          }
-          pollTimeoutId = window.setTimeout(pollForCompletion, POLL_INTERVAL_MS);
-        };
-        pollForCompletion();
-        return () => { isActive = false; if (pollTimeoutId) clearTimeout(pollTimeoutId); };
-      }
-      if (isStale) clearSessionMarker();
-      window.sessionStorage.setItem(sessionKey, `in-progress:${Date.now()}`);
     }
 
     const exchangeCode = async () => {
@@ -101,40 +45,46 @@ export default function AtlassianCallbackPage() {
           throw new Error("Atlassian OAuth failed.");
         }
 
+        const results = result?.results || {};
+        const jiraConnected = results.jira?.connected;
+        const confluenceConnected = results.confluence?.connected;
+
         if (typeof window !== "undefined") {
-          localStorage.setItem("isAtlassianConnected", "true");
-          window.sessionStorage.setItem(sessionKey, "done");
+          if (confluenceConnected) localStorage.setItem("isConfluenceConnected", "true");
+          if (jiraConnected) localStorage.setItem("isJiraConnected", "true");
           window.dispatchEvent(new CustomEvent("providerStateChanged"));
         }
 
         if (!isActive) return;
         setStatus("success");
-        setMessage("Atlassian connected successfully!");
-        setTimeout(() => router.replace("/atlassian/connect"), 1000);
+        setMessage("Connected successfully!");
+
+        const returnTo = jiraConnected && !confluenceConnected ? "/jira/connect" : "/confluence/connect";
+        setTimeout(() => router.replace(returnTo), 1000);
       } catch (err) {
         try {
           const statusResult = await atlassianService.getStatus();
-          if (statusResult?.confluence?.connected || statusResult?.jira?.connected) {
+          const anyConnected = statusResult?.confluence?.connected || statusResult?.jira?.connected;
+          if (anyConnected) {
             if (typeof window !== "undefined") {
-              localStorage.setItem("isAtlassianConnected", "true");
-              window.sessionStorage.setItem(sessionKey!, "done");
+              if (statusResult?.confluence?.connected) localStorage.setItem("isConfluenceConnected", "true");
+              if (statusResult?.jira?.connected) localStorage.setItem("isJiraConnected", "true");
               window.dispatchEvent(new CustomEvent("providerStateChanged"));
             }
             if (!isActive) return;
             setStatus("success");
-            setMessage("Atlassian connected successfully!");
-            setTimeout(() => router.replace("/atlassian/connect"), 500);
+            setMessage("Connected successfully!");
+            const returnTo = statusResult?.jira?.connected && !statusResult?.confluence?.connected ? "/jira/connect" : "/confluence/connect";
+            setTimeout(() => router.replace(returnTo), 500);
             return;
           }
         } catch {
-          // ignore status check failure
+          // ignore
         }
 
-        clearSessionMarker();
         if (!isActive) return;
-        const errorMessage = err instanceof Error ? err.message : "OAuth exchange failed.";
         setStatus("error");
-        setMessage(errorMessage);
+        setMessage(err instanceof Error ? err.message : "OAuth exchange failed.");
       }
     };
 
@@ -164,9 +114,9 @@ export default function AtlassianCallbackPage() {
             <p className="text-lg font-medium text-red-600">{message}</p>
             <button
               className="px-4 py-2 rounded-md bg-primary text-primary-foreground"
-              onClick={() => router.replace("/atlassian/connect")}
+              onClick={() => router.replace("/confluence/connect")}
             >
-              Back to Atlassian setup
+              Back to setup
             </button>
           </>
         )}

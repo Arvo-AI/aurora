@@ -140,16 +140,29 @@ class ConnectorRegistry {
       });
     }
 
-    if (isConfluenceEnabled() || isJiraEnabled()) {
+    if (isConfluenceEnabled()) {
       this.register({
-        id: "atlassian",
-        name: "Atlassian",
-        description: "Connect Confluence for runbooks and Jira for issue tracking. One OAuth for both products.",
+        id: "confluence",
+        name: "Confluence",
+        description: "Fetch runbooks and documentation from Confluence pages to automate incident response workflows.",
         iconPath: "/confluence.svg",
         iconBgColor: "bg-white dark:bg-white",
         category: "Documentation",
-        path: "/atlassian/connect",
-        storageKey: "isAtlassianConnected",
+        path: "/confluence/connect",
+        storageKey: "isConfluenceConnected",
+      });
+    }
+
+    if (isJiraEnabled()) {
+      this.register({
+        id: "jira",
+        name: "Jira",
+        description: "Search issues, track incidents, and export postmortem action items as tracked Jira work.",
+        iconPath: "/jira.svg",
+        iconBgColor: "bg-white dark:bg-white",
+        category: "Documentation",
+        path: "/jira/connect",
+        storageKey: "isJiraConnected",
       });
     }
 
