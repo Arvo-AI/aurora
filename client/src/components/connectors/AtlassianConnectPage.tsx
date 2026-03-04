@@ -190,7 +190,7 @@ export function AtlassianConnectPage({ product, sibling }: AtlassianConnectPageP
             <CardContent className="space-y-3 pt-0">
               {sibling?.enabled && !siblingConnected && (
                 <label className="flex items-center gap-3 p-3 rounded-lg border cursor-pointer hover:bg-muted/50 transition-colors">
-                  <Checkbox checked={alsoConnectSibling} onCheckedChange={() => setAlsoConnectSibling(!alsoConnectSibling)} />
+                  <Checkbox checked={alsoConnectSibling} onCheckedChange={(checked) => setAlsoConnectSibling(checked === true)} />
                   <div className="flex items-center gap-2.5">
                     <Image src={sibling.icon} alt="" width={18} height={18} />
                     <span className="text-sm">Also connect {sibling.name}</span>

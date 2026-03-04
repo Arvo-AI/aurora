@@ -48,6 +48,8 @@ export default function AtlassianCallbackPage() {
         const results = result?.results || {};
         const jiraConnected = results.jira?.connected;
         const confluenceConnected = results.confluence?.connected;
+        const jiraError = results.jira?.error;
+        const confluenceError = results.confluence?.error;
 
         if (typeof window !== "undefined") {
           if (confluenceConnected) localStorage.setItem("isConfluenceConnected", "true");
@@ -56,8 +58,17 @@ export default function AtlassianCallbackPage() {
         }
 
         if (!isActive) return;
+
+        if (!jiraConnected && !confluenceConnected) {
+          const detail = jiraError || confluenceError || "Token may lack required scopes.";
+          throw new Error(`No products connected. ${detail}`);
+        }
+
         setStatus("success");
-        setMessage("Connected successfully!");
+        const parts: string[] = [];
+        if (jiraConnected) parts.push("Jira");
+        if (confluenceConnected) parts.push("Confluence");
+        setMessage(`${parts.join(" & ")} connected!`);
 
         const returnTo = jiraConnected && !confluenceConnected ? "/jira/connect" : "/confluence/connect";
         setTimeout(() => router.replace(returnTo), 1000);
