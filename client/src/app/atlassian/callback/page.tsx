@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Loader2, CheckCircle, XCircle } from "lucide-react";
 import { atlassianService } from "@/lib/services/atlassian";
@@ -12,9 +12,11 @@ export default function AtlassianCallbackPage() {
   const searchParams = useSearchParams();
   const [status, setStatus] = useState<Status>("loading");
   const [message, setMessage] = useState("Processing Atlassian OAuth callback...");
+  const exchangedRef = useRef(false);
 
   useEffect(() => {
-    let isActive = true;
+    if (exchangedRef.current) return;
+
     const error = searchParams.get("error");
     const errorDescription = searchParams.get("error_description");
     const code = searchParams.get("code");
@@ -23,14 +25,16 @@ export default function AtlassianCallbackPage() {
     if (error) {
       setStatus("error");
       setMessage(errorDescription || error);
-      return () => { isActive = false; };
+      return;
     }
 
     if (!code || !state) {
       setStatus("error");
       setMessage("Missing authorization code or state.");
-      return () => { isActive = false; };
+      return;
     }
+
+    exchangedRef.current = true;
 
     const exchangeCode = async () => {
       try {
@@ -57,8 +61,6 @@ export default function AtlassianCallbackPage() {
           window.dispatchEvent(new CustomEvent("providerStateChanged"));
         }
 
-        if (!isActive) return;
-
         if (!jiraConnected && !confluenceConnected) {
           const detail = jiraError || confluenceError || "Token may lack required scopes.";
           throw new Error(`No products connected. ${detail}`);
@@ -82,7 +84,6 @@ export default function AtlassianCallbackPage() {
               if (statusResult?.jira?.connected) localStorage.setItem("isJiraConnected", "true");
               window.dispatchEvent(new CustomEvent("providerStateChanged"));
             }
-            if (!isActive) return;
             setStatus("success");
             setMessage("Connected successfully!");
             const returnTo = statusResult?.jira?.connected && !statusResult?.confluence?.connected ? "/jira/connect" : "/confluence/connect";
@@ -93,14 +94,12 @@ export default function AtlassianCallbackPage() {
           // ignore
         }
 
-        if (!isActive) return;
         setStatus("error");
         setMessage(err instanceof Error ? err.message : "OAuth exchange failed.");
       }
     };
 
     exchangeCode();
-    return () => { isActive = false; };
   }, [searchParams, router]);
 
   return (
@@ -108,7 +107,7 @@ export default function AtlassianCallbackPage() {
       <div className="text-center space-y-4 p-8">
         {status === "loading" && (
           <>
-            <Loader2 className="h-12 w-12 animate-spin mx-auto text-primary" />
+            <Loader2 className="h-12 w-12 animate-spin mx-auto text-[#2684FF]" />
             <p className="text-lg font-medium">{message}</p>
           </>
         )}
@@ -125,7 +124,7 @@ export default function AtlassianCallbackPage() {
             <p className="text-lg font-medium text-red-600">{message}</p>
             <button
               className="px-4 py-2 rounded-md bg-primary text-primary-foreground"
-              onClick={() => router.replace("/confluence/connect")}
+              onClick={() => router.replace("/jira/connect")}
             >
               Back to setup
             </button>

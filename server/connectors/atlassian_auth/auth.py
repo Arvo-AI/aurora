@@ -25,7 +25,7 @@ ATLASSIAN_RESOURCES_URL = "https://api.atlassian.com/oauth/token/accessible-reso
 ATLASSIAN_AUDIENCE = "api.atlassian.com"
 
 CONFLUENCE_SCOPES = "read:page:confluence read:space:confluence read:user:confluence search:confluence"
-JIRA_SCOPES = "read:jira-work write:jira-work"
+JIRA_SCOPES = "read:jira-work write:jira-work read:jira-user"
 COMMON_SCOPES = "offline_access"
 
 PRODUCT_SCOPES: Dict[str, str] = {

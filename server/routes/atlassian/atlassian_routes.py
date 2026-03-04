@@ -201,6 +201,7 @@ def connect():
     site_url = None
     try:
         resources = fetch_accessible_resources(access_token)
+        logger.info("[ATLASSIAN] Accessible resources for user %s: %s", user_id, resources)
         for product in stored_products:
             resource = select_resource_for_product(resources or [], product)
             if resource:
