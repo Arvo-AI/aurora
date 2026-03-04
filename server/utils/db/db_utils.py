@@ -1460,9 +1460,24 @@ def initialize_tables():
                 except Exception as e:
                     logging.warning(f"Error creating index: {e}")
 
+            # Migration: Add Jira columns to postmortems table
+            try:
+                cursor.execute("""
+                    ALTER TABLE postmortems ADD COLUMN IF NOT EXISTS jira_issue_id TEXT;
+                    ALTER TABLE postmortems ADD COLUMN IF NOT EXISTS jira_issue_key TEXT;
+                    ALTER TABLE postmortems ADD COLUMN IF NOT EXISTS jira_issue_url TEXT;
+                    ALTER TABLE postmortems ADD COLUMN IF NOT EXISTS jira_exported_at TIMESTAMP;
+                """)
+                logging.info("Added Jira columns to postmortems table (if not exist).")
+                conn.commit()
+            except Exception as e:
+                logging.warning(f"Error adding Jira columns to postmortems: {e}")
+                conn.rollback()
+
             # Create a view for clusters after all tables are created
             create_clusters_view_sql = """
-                CREATE OR REPLACE VIEW k8s_clusters AS
+                DROP VIEW IF EXISTS k8s_clusters;
+                CREATE VIEW k8s_clusters AS
                 SELECT DISTINCT project_id, cluster_name, provider, user_id
                 FROM k8s_nodes
                 WHERE user_id = current_setting('myapp.current_user_id', true)::text;

@@ -23,6 +23,11 @@ def is_confluence_enabled() -> bool:
     return os.getenv("NEXT_PUBLIC_ENABLE_CONFLUENCE", "false").lower() == "true"
 
 
+def is_jira_enabled() -> bool:
+    """Check if Jira integration is enabled via environment variable."""
+    return os.getenv("NEXT_PUBLIC_ENABLE_JIRA", "false").lower() == "true"
+
+
 def is_bitbucket_enabled() -> bool:
     """Check if Bitbucket integration is enabled via environment variable."""
     return os.getenv("NEXT_PUBLIC_ENABLE_BITBUCKET", "false").lower() == "true"

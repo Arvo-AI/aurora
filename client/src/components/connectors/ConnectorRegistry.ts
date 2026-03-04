@@ -1,5 +1,5 @@
 import { Github, Server } from "lucide-react";
-import { isSlackEnabled, isOvhEnabled, isConfluenceEnabled, isSharePointEnabled, isBitbucketEnabled, isDynatraceEnabled, isThousandEyesEnabled, isBigPandaEnabled } from "@/lib/feature-flags";
+import { isSlackEnabled, isOvhEnabled, isConfluenceEnabled, isSharePointEnabled, isBitbucketEnabled, isDynatraceEnabled, isThousandEyesEnabled, isBigPandaEnabled, isJiraEnabled } from "@/lib/feature-flags";
 import type { ConnectorConfig } from "./types";
 
 class ConnectorRegistry {
@@ -140,16 +140,16 @@ class ConnectorRegistry {
       });
     }
 
-    if (isConfluenceEnabled()) {
+    if (isConfluenceEnabled() || isJiraEnabled()) {
       this.register({
-        id: "confluence",
-        name: "Confluence",
-        description: "Fetch runbooks and documentation from Confluence pages to automate incident response workflows.",
+        id: "atlassian",
+        name: "Atlassian",
+        description: "Connect Confluence for runbooks and Jira for issue tracking. One OAuth for both products.",
         iconPath: "/confluence.svg",
         iconBgColor: "bg-white dark:bg-white",
         category: "Documentation",
-        path: "/confluence/connect",
-        storageKey: "isConfluenceConnected",
+        path: "/atlassian/connect",
+        storageKey: "isAtlassianConnected",
       });
     }
 
