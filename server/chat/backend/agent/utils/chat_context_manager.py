@@ -42,7 +42,7 @@ class ChatContextManager:
         "anthropic": 180000,
         "google": 1000000,
         "vertex": 1000000,
-        "ollama": 8000,
+        "ollama": 120000,
     }
 
     @classmethod
