@@ -1,10 +1,4 @@
-"""Agent tools for interacting with Jira.
-
-Split into READ and WRITE tiers. The READ tier (search, get_issue, add_comment)
-is always registered when the user has a Jira connection. The WRITE tier
-(create_issue, update_issue, link_issues) is only registered when the user's
-``agent_tier`` setting is ``"write"``.
-"""
+"""Agent tools for interacting with Jira."""
 
 import json
 import logging
@@ -72,7 +66,7 @@ class JiraLinkIssuesArgs(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# READ tier tools
+# Search & read tools
 # ---------------------------------------------------------------------------
 
 def jira_search_issues(
@@ -203,7 +197,7 @@ def jira_add_comment(
 
 
 # ---------------------------------------------------------------------------
-# WRITE tier tools
+# Create & update tools
 # ---------------------------------------------------------------------------
 
 def jira_create_issue(

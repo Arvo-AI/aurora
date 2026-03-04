@@ -50,8 +50,8 @@ def build_incident_search_jql(
     if max_days_back:
         clauses.append(f"created >= -{max_days_back}d")
 
-    clauses.append("ORDER BY created DESC")
-    return " AND ".join(clauses)
+    query = " AND ".join(clauses)
+    return f"{query} ORDER BY created DESC" if clauses else "ORDER BY created DESC"
 
 
 def build_recent_issues_jql(
@@ -66,5 +66,5 @@ def build_recent_issues_jql(
     ]
     if status:
         clauses.append(f'status = "{_escape_jql_value(status)}"')
-    clauses.append("ORDER BY created DESC")
-    return " AND ".join(clauses)
+    query = " AND ".join(clauses)
+    return f"{query} ORDER BY created DESC"

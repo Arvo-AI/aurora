@@ -142,9 +142,6 @@ def connect():
                 "base_url": base_url.rstrip("/"),
                 "pat_token": pat_token,
             }
-            if product == "jira":
-                token_payload["agent_tier"] = data.get("agentTier", "read")
-
             store_tokens_in_db(user_id, token_payload, product)
             results[product] = {"connected": True, "authType": "pat", "baseUrl": base_url}
 
@@ -201,7 +198,7 @@ def connect():
     site_url = None
     try:
         resources = fetch_accessible_resources(access_token)
-        logger.info("[ATLASSIAN] Accessible resources for user %s: %s", user_id, resources)
+        logger.debug("[ATLASSIAN] Accessible resources for user %s: %s", user_id, resources)
         for product in stored_products:
             resource = select_resource_for_product(resources or [], product)
             if resource:
@@ -230,9 +227,6 @@ def connect():
             "refresh_token": refresh_token,
             "cloud_id": cloud_id,
         }
-        if product == "jira":
-            payload["agent_tier"] = data.get("agentTier", "read")
-
         store_tokens_in_db(user_id, payload, product)
         results[product] = {"connected": True, "authType": "oauth", "baseUrl": base_url, "cloudId": cloud_id}
 
@@ -294,9 +288,6 @@ def status():
             "baseUrl": base_url,
             "cloudId": cloud_id,
         }
-        if product == "jira":
-            info["agentTier"] = creds.get("agent_tier", "read")
-
         result[product] = info
 
     return jsonify(result)

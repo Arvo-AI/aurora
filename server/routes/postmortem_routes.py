@@ -456,7 +456,7 @@ def export_to_jira(incident_id):
     if not token:
         return jsonify({"error": "Jira credentials incomplete"}), 400
 
-    from connectors.jira_connector.adf_converter import markdown_to_adf, extract_action_items
+    from connectors.jira_connector.adf_converter import markdown_to_adf, extract_action_items, text_to_adf
     from connectors.jira_connector.client import JiraClient
 
     description_adf = markdown_to_adf(content)
@@ -506,7 +506,6 @@ def export_to_jira(incident_id):
         if not item.get("text"):
             continue
         try:
-            from connectors.jira_connector.adf_converter import text_to_adf
             sub_result = client.create_subtask(
                 parent_key=parent_key,
                 project_key=project_key,
@@ -546,31 +545,5 @@ def export_to_jira(incident_id):
 
 def _refresh_jira_credentials(user_id: str, creds: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Attempt to refresh OAuth Jira credentials."""
-    from connectors.atlassian_auth.auth import refresh_access_token as _refresh
-    import time as _time
-
-    refresh_token = creds.get("refresh_token")
-    if not refresh_token:
-        return None
-    try:
-        token_data = _refresh(refresh_token)
-    except Exception as exc:
-        logger.warning("[POSTMORTEM] Jira OAuth refresh failed for user %s: %s", user_id, exc)
-        return None
-
-    access_token = token_data.get("access_token")
-    if not access_token:
-        return None
-
-    updated = dict(creds)
-    updated["access_token"] = access_token
-    new_refresh = token_data.get("refresh_token")
-    if new_refresh:
-        updated["refresh_token"] = new_refresh
-    expires_in = token_data.get("expires_in")
-    if expires_in:
-        updated["expires_in"] = expires_in
-        updated["expires_at"] = int(_time.time()) + int(expires_in)
-
-    store_tokens_in_db(user_id, updated, "jira")
-    return updated
+    from routes.jira.jira_routes import _refresh_jira_credentials as _refresh
+    return _refresh(user_id, creds)

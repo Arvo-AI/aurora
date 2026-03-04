@@ -1459,7 +1459,7 @@ Once you identify which account has the issue, pass account_id (e.g. '1510256343
     except Exception as e:
         logging.warning(f"Failed to add Confluence search tools: {e}")
 
-    # Add Jira tools if enabled (two-tier: read always, write only if agent_tier == "write")
+    # Add Jira tools if enabled
     try:
         from utils.flags.feature_flags import is_jira_enabled
         from .jira_tool import (

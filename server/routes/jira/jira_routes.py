@@ -261,34 +261,3 @@ def link_issues():
     except Exception as exc:
         logger.error("[JIRA] Link issues failed for user %s: %s", user_id, exc)
         return jsonify({"error": "Failed to link Jira issues"}), 502
-
-
-# ------------------------------------------------------------------
-# GET/PATCH /jira/settings
-# ------------------------------------------------------------------
-
-@jira_bp.route("/settings", methods=["GET", "PATCH", "OPTIONS"])
-def settings():
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
-
-    creds = get_token_data(user_id, "jira")
-    if not creds:
-        return jsonify({"error": "Jira not connected"}), 404
-
-    if request.method == "GET":
-        return jsonify({
-            "agentTier": creds.get("agent_tier", "read"),
-        })
-
-    data = request.get_json(force=True, silent=True) or {}
-    agent_tier = data.get("agentTier")
-    if agent_tier and agent_tier in ("read", "write"):
-        creds["agent_tier"] = agent_tier
-        store_tokens_in_db(user_id, creds, "jira")
-
-    return jsonify({"success": True, "agentTier": creds.get("agent_tier", "read")})
