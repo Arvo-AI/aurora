@@ -6,6 +6,7 @@ from utils.db.connection_pool import db_pool
 from utils.auth.stateless_auth import (
     get_user_preference,
     store_user_preference,
+    get_org_id_from_request,
 )
 from utils.auth.rbac_decorators import require_permission, require_auth_only
 from routes.incident_feedback.weaviate_client import store_good_rca
@@ -56,6 +57,8 @@ def submit_feedback(user_id, incident_id: str):
             "error_code": "AURORA_LEARN_DISABLED"
         }), 403
 
+    org_id = get_org_id_from_request()
+
     data = request.get_json()
     if not data:
         return jsonify({"error": "Missing request body"}), 400
@@ -75,6 +78,7 @@ def submit_feedback(user_id, incident_id: str):
             with conn.cursor() as cursor:
                 # Set RLS context
                 cursor.execute("SET myapp.current_user_id = %s", (user_id,))
+                cursor.execute("SET myapp.current_org_id = %s", (org_id,))
 
                 # Check if feedback already exists (feedback is final)
                 cursor.execute(
@@ -229,10 +233,13 @@ def get_feedback(user_id, incident_id: str):
     if not _validate_uuid(incident_id):
         return jsonify({"error": "Invalid incident ID format"}), 400
 
+    org_id = get_org_id_from_request()
+
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
                 cursor.execute("SET myapp.current_user_id = %s", (user_id,))
+                cursor.execute("SET myapp.current_org_id = %s", (org_id,))
 
                 cursor.execute(
                     """

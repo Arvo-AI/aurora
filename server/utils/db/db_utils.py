@@ -1566,7 +1566,6 @@ def initialize_tables():
                             CREATE POLICY select_by_org ON {table_name}
                             FOR SELECT USING (
                                 org_id = current_setting('myapp.current_org_id', true)::text
-                                OR org_id IS NULL
                             );
                         END IF;
                     END $$;
@@ -1608,7 +1607,6 @@ def initialize_tables():
                                 CREATE POLICY insert_by_org ON {table_name}
                                 FOR INSERT WITH CHECK (
                                     org_id = current_setting('myapp.current_org_id', true)::text
-                                    OR org_id IS NULL
                                 );
                             END IF;
                         END $$;
@@ -1626,7 +1624,6 @@ def initialize_tables():
                                 CREATE POLICY update_by_org ON {table_name}
                                 FOR UPDATE USING (
                                     org_id = current_setting('myapp.current_org_id', true)::text
-                                    OR org_id IS NULL
                                 );
                             END IF;
                         END $$;
@@ -1644,7 +1641,6 @@ def initialize_tables():
                                 CREATE POLICY delete_by_org ON {table_name}
                                 FOR DELETE USING (
                                     org_id = current_setting('myapp.current_org_id', true)::text
-                                    OR org_id IS NULL
                                 );
                             END IF;
                         END $$;
@@ -1741,8 +1737,8 @@ def initialize_tables():
                                 FROM users u WHERE t.user_id = u.id
                                 AND t.org_id IS NULL;
                             """)
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logging.warning(f"Error backfilling org_id for {tbl}: {e}")
                     logging.info(
                         f"Migrated {orphan_count} users into default organization."
                     )
@@ -1757,8 +1753,8 @@ def initialize_tables():
                     cursor.execute(
                         f"CREATE INDEX IF NOT EXISTS idx_{tbl}_org_id ON {tbl}(org_id);"
                     )
-                except Exception:
-                    pass
+                except Exception as e:
+                    logging.warning(f"Error creating org_id index for {tbl}: {e}")
 
             # Create k8s_clusters view (after org_id migration so the column exists)
             try:
@@ -1766,8 +1762,7 @@ def initialize_tables():
                     CREATE OR REPLACE VIEW k8s_clusters AS
                     SELECT DISTINCT project_id, cluster_name, provider, user_id, org_id
                     FROM k8s_nodes
-                    WHERE org_id = current_setting('myapp.current_org_id', true)::text
-                       OR org_id IS NULL;
+                    WHERE org_id = current_setting('myapp.current_org_id', true)::text;
                 """
                 cursor.execute(create_clusters_view_sql)
                 logging.info("View 'k8s_clusters' created successfully.")

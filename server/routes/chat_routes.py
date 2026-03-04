@@ -67,9 +67,9 @@ def get_chat_sessions(user_id):
                    CASE WHEN ui_state IS NULL THEN '{}'::jsonb ELSE ui_state END as ui_state,
                    COALESCE(status, 'active') as status
             FROM chat_sessions 
-            WHERE org_id = %s AND is_active = true
+            WHERE org_id = %s AND user_id = %s AND is_active = true
             ORDER BY updated_at DESC
-        """, (org_id,))
+        """, (org_id, user_id))
         
         sessions = cursor.fetchall()
         
@@ -181,8 +181,8 @@ def get_chat_session(user_id, session_id):
                    CASE WHEN ui_state IS NULL THEN '{}'::jsonb ELSE ui_state END as ui_state,
                    COALESCE(status, 'active') as status
             FROM chat_sessions 
-            WHERE id = %s AND org_id = %s AND is_active = true AND status != 'cancelled'
-        """, (session_id, org_id))
+            WHERE id = %s AND org_id = %s AND user_id = %s AND is_active = true AND status != 'cancelled'
+        """, (session_id, org_id, user_id))
         
         session_data = cursor.fetchone()
         
@@ -289,8 +289,8 @@ def update_chat_session(user_id, session_id):
         # Check if session exists and is not cancelled
         cursor.execute("""
             SELECT id, status FROM chat_sessions 
-            WHERE id = %s AND org_id = %s AND is_active = true
-        """, (session_id, org_id))
+            WHERE id = %s AND org_id = %s AND user_id = %s AND is_active = true
+        """, (session_id, org_id, user_id))
         
         session_row = cursor.fetchone()
         if not session_row:
@@ -318,8 +318,8 @@ def update_chat_session(user_id, session_id):
                 # First, check if the session has an existing custom title
                 cursor.execute("""
                     SELECT title FROM chat_sessions 
-                    WHERE id = %s AND org_id = %s AND is_active = true
-                """, (session_id, org_id))
+                    WHERE id = %s AND org_id = %s AND user_id = %s AND is_active = true
+                """, (session_id, org_id, user_id))
                 
                 existing_session = cursor.fetchone()
                 existing_title = existing_session[0] if existing_session else None
@@ -338,13 +338,13 @@ def update_chat_session(user_id, session_id):
         update_values.append(datetime.now())
         
         # Add session_id and org_id for WHERE clause
-        update_values.extend([session_id, org_id])
+        update_values.extend([session_id, org_id, user_id])
         
         # Update chat session
         cursor.execute(f"""
             UPDATE chat_sessions 
             SET {', '.join(update_fields)}
-            WHERE id = %s AND org_id = %s
+            WHERE id = %s AND org_id = %s AND user_id = %s
         """, update_values)
         
         conn.commit()
@@ -355,8 +355,8 @@ def update_chat_session(user_id, session_id):
                    CASE WHEN ui_state IS NULL THEN '{}'::jsonb ELSE ui_state END as ui_state,
                    COALESCE(status, 'active') as status
             FROM chat_sessions 
-            WHERE id = %s AND org_id = %s AND is_active = true
-        """, (session_id, org_id))
+            WHERE id = %s AND org_id = %s AND user_id = %s AND is_active = true
+        """, (session_id, org_id, user_id))
         
         session_data = cursor.fetchone()
         
@@ -400,8 +400,8 @@ def delete_chat_session(user_id, session_id):
         # Check if session exists
         cursor.execute("""
             SELECT id FROM chat_sessions 
-            WHERE id = %s AND org_id = %s AND is_active = true
-        """, (session_id, org_id))
+            WHERE id = %s AND org_id = %s AND user_id = %s AND is_active = true
+        """, (session_id, org_id, user_id))
         
         if not cursor.fetchone():
             return jsonify({'error': 'Chat session not found'}), 404
@@ -410,8 +410,8 @@ def delete_chat_session(user_id, session_id):
         cursor.execute("""
             UPDATE chat_sessions 
             SET is_active = false, updated_at = %s
-            WHERE id = %s AND org_id = %s
-        """, (datetime.now(), session_id, org_id))
+            WHERE id = %s AND org_id = %s AND user_id = %s
+        """, (datetime.now(), session_id, org_id, user_id))
         
         conn.commit()
 
@@ -458,15 +458,15 @@ def delete_all_chat_sessions(user_id):
             cursor.execute("""
                 UPDATE chat_sessions 
                 SET is_active = false, updated_at = %s
-                WHERE org_id = %s AND is_active = true AND id != %s
-            """, (datetime.now(), org_id, current_session_id))
+                WHERE org_id = %s AND user_id = %s AND is_active = true AND id != %s
+            """, (datetime.now(), org_id, user_id, current_session_id))
         else:
             logging.info("No current session to preserve, deleting all sessions")
             cursor.execute("""
                 UPDATE chat_sessions 
                 SET is_active = false, updated_at = %s
-                WHERE org_id = %s AND is_active = true
-            """, (datetime.now(), org_id))
+                WHERE org_id = %s AND user_id = %s AND is_active = true
+            """, (datetime.now(), org_id, user_id))
         
         deleted_count = cursor.rowcount
         logging.info(f"Deleted {deleted_count} chat sessions")

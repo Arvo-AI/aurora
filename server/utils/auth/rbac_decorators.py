@@ -40,7 +40,8 @@ def require_permission(resource: str, action: str):
         @wraps(fn)
         def wrapper(*args, **kwargs):
             if request.method == "OPTIONS":
-                return fn(None, *args, **kwargs)
+                from utils.web.cors_utils import create_cors_response
+                return create_cors_response()
 
             user_id = get_user_id_from_request()
             if not user_id:
@@ -86,7 +87,8 @@ def require_auth_only(fn):
     @wraps(fn)
     def wrapper(*args, **kwargs):
         if request.method == "OPTIONS":
-            return fn(None, *args, **kwargs)
+            from utils.web.cors_utils import create_cors_response
+            return create_cors_response()
 
         user_id = get_user_id_from_request()
         if not user_id:

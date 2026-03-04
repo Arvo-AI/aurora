@@ -218,10 +218,13 @@ def process_datadog_event(
                 org_row = cursor.fetchone()
                 org_id = org_row[0] if org_row and org_row[0] else None
 
+                if not org_id:
+                    logger.error("[DATADOG][WEBHOOK] Missing org_id for user %s; skipping persistence", user_id)
+                    return
+
                 # Set RLS context
                 cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
-                if org_id:
-                    cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
+                cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
                 conn.commit()
 
                 received_at = datetime.now(timezone.utc)
