@@ -32,8 +32,8 @@ def store_tokens_in_db(user_id: str, token_data: Dict, provider: str,
         try:
             from utils.auth.stateless_auth import get_org_id_from_request
             org_id = get_org_id_from_request()
-        except Exception:
-            pass
+        except Exception as e:
+            logging.debug(f"Could not resolve org_id from request context: {e}")
 
     request_org_id = org_id
 

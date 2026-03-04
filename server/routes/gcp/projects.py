@@ -205,6 +205,9 @@ def sa_project_access(user_id):
             update_service_account_project_access(credentials, sa_email, selections)
 
             return jsonify({"success": True}), 200
+
+        return jsonify({"error": "Method not allowed"}), 405
+
     except ValueError as e:
         logging.warning(f"Validation error in sa_project_access: {e}")
         return jsonify({"error": "Invalid request parameters"}), 400

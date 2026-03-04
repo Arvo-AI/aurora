@@ -292,6 +292,8 @@ def manage_user_workspaces(authenticated_user_id, user_id):
             
             workspace = get_or_create_workspace(user_id, workspace_name)
             return jsonify(workspace)
+
+        return jsonify({"error": "Method not allowed"}), 405
         
     except Exception as e:
         logger.error(f"Failed to manage workspaces for user {user_id}: {e}")

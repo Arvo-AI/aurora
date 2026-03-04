@@ -66,8 +66,8 @@ def pagerduty_status(user_id):
             try:
                 store_tokens_in_db(user_id, {**creds, **refreshed}, "pagerduty")
                 creds.update(refreshed)
-            except Exception:
-                pass
+            except Exception as e:
+                logging.warning(f"Failed to refresh PagerDuty token: {e}")
 
     return jsonify({"connected": True, "displayName": creds.get("display_name", "PagerDuty"), "validatedAt": creds.get("validated_at"), "authType": creds.get("auth_type", "api_token"), "capabilities": creds.get("capabilities", {}), "externalUserEmail": creds.get("external_user_email"), "externalUserName": creds.get("external_user_name"), "accountSubdomain": creds.get("account_subdomain")})
 

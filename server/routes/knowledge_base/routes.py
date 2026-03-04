@@ -490,8 +490,6 @@ def search_documents(user_id):
     if request.method == "OPTIONS":
         return create_cors_response()
 
-    org_id = get_org_id_from_request()
-
     try:
         data = request.get_json(force=True, silent=True) or {}
     except Exception:
