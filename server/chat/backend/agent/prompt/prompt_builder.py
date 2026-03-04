@@ -1749,6 +1749,17 @@ def build_background_mode_segment(state: Optional[Any]) -> str:
             "6. Provide remediation steps",
             "",
             "YOU MUST make 15-20+ tool calls. After EACH tool call, continue investigating.",
+        ])
+
+        # OpenAI models don't produce text between tool calls unless instructed to
+        model_name = getattr(state, 'model', '') or ''
+        if model_name.startswith("openai/"):
+            parts.extend([
+                "THINK OUT LOUD: Before each tool call, briefly state what you're investigating and why (1-2 sentences).",
+                "After each tool result, briefly state your findings before the next tool call.",
+            ])
+
+        parts.extend([
             "NEVER stop after listing resources - that's just step 1.",
             "On failure: try 3-4 alternatives immediately.",
             "",

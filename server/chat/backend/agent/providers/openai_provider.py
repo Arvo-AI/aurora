@@ -64,6 +64,14 @@ class OpenAIProvider(BaseLLMProvider):
             "request_timeout": 120.0,
             "max_retries": 3,
         }
+
+        # Enable reasoning for models that support it (GPT-5+, o-series).
+        # This makes the model emit text preambles alongside tool calls,
+        # which flow to the ThoughtsPanel during RCA.
+        if self._supports_reasoning(native_model):
+            config["reasoning_effort"] = "high"
+            logger.info(f"Enabled reasoning_effort=high for {native_model}")
+
         config.update(kwargs)
 
         return ChatOpenAI(**config)
@@ -97,6 +105,15 @@ class OpenAIProvider(BaseLLMProvider):
             Model name in OpenAI native format
         """
         return ModelMapper.get_native_name(model, 'openai')
+
+    @staticmethod
+    def _supports_reasoning(native_model: str) -> bool:
+        """Check if an OpenAI model supports the reasoning_effort parameter."""
+        name = native_model.lower()
+        # Exclude older models that don't support reasoning.
+        # Everything else (gpt-5+, o-series, future models) gets it.
+        non_reasoning = ("gpt-3", "gpt-4")
+        return not name.startswith(non_reasoning)
 
     def get_supported_models(self) -> list[str]:
         """Get list of OpenAI models in OpenRouter format."""

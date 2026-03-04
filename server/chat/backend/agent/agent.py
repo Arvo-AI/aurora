@@ -443,6 +443,15 @@ class Agent:
 
                 openrouter_model_name = ModelMapper.get_native_name(model_name, "openrouter")
 
+                # Enable reasoning for OpenAI models via OpenRouter's reasoning param
+                openrouter_model_kwargs = {}
+                if detected_provider == "openai":
+                    from chat.backend.agent.providers.openai_provider import OpenAIProvider
+                    native = model_name.split("/", 1)[-1] if "/" in model_name else model_name
+                    if OpenAIProvider._supports_reasoning(native):
+                        openrouter_model_kwargs["extra_body"] = {"reasoning": {"effort": "high"}}
+                        logging.info(f"Enabled reasoning effort=high for {openrouter_model_name} via OpenRouter")
+
                 streaming_llm = ChatOpenAI(
                     model=openrouter_model_name,
                     temperature=self.llm_manager.main_llm.temperature,
@@ -452,6 +461,7 @@ class Agent:
                     callbacks=[usage_callback],
                     request_timeout=120.0,
                     max_retries=3,
+                    model_kwargs=openrouter_model_kwargs,
                 )
             
             # Create the agent using new LangChain 1.2.6+ API
