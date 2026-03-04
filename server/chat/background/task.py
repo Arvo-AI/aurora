@@ -172,6 +172,7 @@ def _get_connected_integrations(user_id: str) -> Dict[str, bool]:
     integrations = {
         'splunk': False,
         'dynatrace': False,
+        'datadog': False,
         'github': False,
         'confluence': False,
         'sharepoint': False,
@@ -192,6 +193,12 @@ def _get_connected_integrations(user_id: str) -> Dict[str, bool]:
         integrations['dynatrace'] = is_dynatrace_connected(user_id)
     except Exception as e:
         logger.debug(f"[BackgroundChat] Error checking Dynatrace: {e}")
+
+    try:
+        from chat.backend.agent.tools.datadog_tool import is_datadog_connected
+        integrations['datadog'] = is_datadog_connected(user_id)
+    except Exception as e:
+        logger.debug(f"[BackgroundChat] Error checking Datadog: {e}")
 
     try:
         # Check GitHub

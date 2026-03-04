@@ -1530,6 +1530,31 @@ def build_background_mode_segment(state: Optional[Any]) -> str:
             "Start with problems to understand the issue, then drill into entities and logs.",
         ])
 
+    # Datadog tools (if connected)
+    if integrations.get('datadog'):
+        parts.extend([
+            "",
+            "DATADOG INVESTIGATION:",
+            "IMPORTANT: Datadog is a REMOTE service. Use ONLY the query_datadog API tool.",
+            "Usage: query_datadog(resource_type=TYPE, query=QUERY, time_from=START)",
+            "Resource types:",
+            "1. 'logs' - Search log entries. query=Datadog log query syntax e.g. \"service:web status:error\"",
+            "2. 'metrics' - Query metric timeseries. query=metric query e.g. \"avg:system.cpu.user{*}\"",
+            "3. 'monitors' - List monitors with status. query=name filter (optional)",
+            "4. 'events' - Platform events. query=source filter (optional)",
+            "5. 'traces' - APM spans/traces. query=span query e.g. \"service:web @http.status_code:500\"",
+            "6. 'hosts' - Infrastructure hosts. query=host filter (optional)",
+            "7. 'incidents' - Datadog incidents. Lists active/recent incidents.",
+            "Investigation flow:",
+            "1. Search logs for errors around the alert time",
+            "2. Check traces for failing requests and latency",
+            "3. Query metrics for resource correlation (CPU, memory, error rates)",
+            "4. List monitors to understand alerting context",
+            "5. Check hosts for infrastructure health",
+            "6. Review incidents for related/correlated issues",
+            "Datadog query syntax: service:X, status:error, @http.status_code:5*, host:X, env:production",
+        ])
+
     # GitHub tools (if connected)
     if integrations.get('github'):
         parts.extend([
