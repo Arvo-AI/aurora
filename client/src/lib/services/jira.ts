@@ -1,7 +1,3 @@
-export interface JiraSettings {
-  agentTier: 'read' | 'write';
-}
-
 export interface JiraIssue {
   key: string;
   summary: string;
@@ -58,17 +54,6 @@ export const jiraService = {
     return handleJsonFetch<Record<string, unknown>>(`${API_BASE}/issue`, {
       method: 'POST',
       body: JSON.stringify(payload),
-    });
-  },
-
-  async getSettings(): Promise<JiraSettings | null> {
-    return handleJsonFetch<JiraSettings>(`${API_BASE}/settings`);
-  },
-
-  async updateSettings(settings: Partial<JiraSettings>): Promise<JiraSettings | null> {
-    return handleJsonFetch<JiraSettings>(`${API_BASE}/settings`, {
-      method: 'PATCH',
-      body: JSON.stringify(settings),
     });
   },
 };

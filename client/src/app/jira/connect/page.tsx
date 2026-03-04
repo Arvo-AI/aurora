@@ -1,10 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Loader2, CheckCircle, Shield, ShieldAlert, ExternalLink } from "lucide-react";
+import { Loader2, CheckCircle, ExternalLink } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { atlassianService, AtlassianStatus } from "@/lib/services/atlassian";
-import { jiraService } from "@/lib/services/jira";
 import { isConfluenceEnabled } from "@/lib/feature-flags";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
@@ -12,15 +11,12 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 
-type AgentTier = "read" | "write";
-
 export default function JiraConnectPage() {
   const { toast } = useToast();
   const [status, setStatus] = useState<AtlassianStatus | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isConnecting, setIsConnecting] = useState(false);
   const [isDisconnecting, setIsDisconnecting] = useState(false);
-  const [agentTier, setAgentTier] = useState<AgentTier>("read");
   const [alsoConnectConfluence, setAlsoConnectConfluence] = useState(false);
 
   const [patUrl, setPatUrl] = useState("");
@@ -35,7 +31,6 @@ export default function JiraConnectPage() {
     try {
       const result = await atlassianService.getStatus();
       setStatus(result);
-      if (result?.jira?.agentTier) setAgentTier(result.jira.agentTier);
       if (result?.jira?.connected) {
         localStorage.setItem("isJiraConnected", "true");
       } else {
@@ -55,7 +50,7 @@ export default function JiraConnectPage() {
     try {
       const products = ["jira"];
       if (alsoConnectConfluence && !confluenceConnected) products.push("confluence");
-      const result = await atlassianService.connect({ products, authType: "oauth", agentTier });
+      const result = await atlassianService.connect({ products, authType: "oauth" });
       if (result?.authUrl) {
         window.location.href = result.authUrl;
         return;
@@ -83,7 +78,6 @@ export default function JiraConnectPage() {
         authType: "pat",
         jiraBaseUrl: patUrl,
         jiraPatToken: patToken,
-        agentTier,
       });
       await loadStatus();
       toast({ title: "Jira connected via PAT" });
@@ -109,18 +103,6 @@ export default function JiraConnectPage() {
       toast({ title: "Failed to disconnect", description: err instanceof Error ? err.message : "Failed", variant: "destructive" });
     } finally {
       setIsDisconnecting(false);
-    }
-  };
-
-  const handleTierChange = async (tier: AgentTier) => {
-    setAgentTier(tier);
-    if (jiraConnected) {
-      try {
-        await jiraService.updateSettings({ agentTier: tier });
-        toast({ title: "Agent tier updated", description: tier === "write" ? "Full access enabled" : "Read-only mode" });
-      } catch {
-        toast({ title: "Failed to update tier", variant: "destructive" });
-      }
     }
   };
 
@@ -164,38 +146,6 @@ export default function JiraConnectPage() {
                 <CardDescription>{status.jira.baseUrl}</CardDescription>
               )}
             </CardHeader>
-            <CardContent className="space-y-4">
-              <div>
-                <Label className="text-sm font-medium">Agent Permission Tier</Label>
-                <p className="text-xs text-muted-foreground mb-3">
-                  Controls what the Aurora agent can do with your Jira
-                </p>
-                <div className="space-y-2">
-                  <label className="flex items-start gap-3 p-3 rounded-lg border cursor-pointer hover:bg-muted/50 transition-colors">
-                    <input type="radio" name="agentTier" value="read" checked={agentTier === "read"} onChange={() => handleTierChange("read")} className="mt-0.5" />
-                    <div>
-                      <div className="flex items-center gap-1.5 font-medium text-sm">
-                        <Shield className="h-4 w-4" /> Read Only
-                      </div>
-                      <p className="text-xs text-muted-foreground mt-0.5">
-                        Search issues, view details, add comments. Cannot create or modify issues.
-                      </p>
-                    </div>
-                  </label>
-                  <label className="flex items-start gap-3 p-3 rounded-lg border cursor-pointer hover:bg-muted/50 transition-colors">
-                    <input type="radio" name="agentTier" value="write" checked={agentTier === "write"} onChange={() => handleTierChange("write")} className="mt-0.5" />
-                    <div>
-                      <div className="flex items-center gap-1.5 font-medium text-sm">
-                        <ShieldAlert className="h-4 w-4" /> Full Access
-                      </div>
-                      <p className="text-xs text-muted-foreground mt-0.5">
-                        Everything in Read, plus create issues, update fields, and link issues.
-                      </p>
-                    </div>
-                  </label>
-                </div>
-              </div>
-            </CardContent>
             <CardFooter>
               <Button variant="destructive" size="sm" onClick={handleDisconnect} disabled={isDisconnecting}>
                 {isDisconnecting ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Disconnecting...</> : "Disconnect Jira"}
@@ -226,22 +176,8 @@ export default function JiraConnectPage() {
               <CardTitle>Jira Cloud (OAuth)</CardTitle>
               <CardDescription>Connect your Atlassian Cloud Jira instance using OAuth 2.0.</CardDescription>
             </CardHeader>
-            <CardContent className="space-y-4">
-              <div>
-                <Label className="text-sm font-medium">Agent Permission Tier</Label>
-                <div className="flex gap-4 mt-2">
-                  <label className="flex items-center gap-1.5 text-sm cursor-pointer">
-                    <input type="radio" name="tierInit" value="read" checked={agentTier === "read"} onChange={() => setAgentTier("read")} />
-                    <Shield className="h-3.5 w-3.5" /> Read Only
-                  </label>
-                  <label className="flex items-center gap-1.5 text-sm cursor-pointer">
-                    <input type="radio" name="tierInit" value="write" checked={agentTier === "write"} onChange={() => setAgentTier("write")} />
-                    <ShieldAlert className="h-3.5 w-3.5" /> Full Access
-                  </label>
-                </div>
-              </div>
-
-              {isConfluenceEnabled() && !confluenceConnected && (
+            {isConfluenceEnabled() && !confluenceConnected && (
+              <CardContent>
                 <label className="flex items-start gap-3 p-3 rounded-lg border cursor-pointer hover:bg-muted/50 transition-colors">
                   <Checkbox checked={alsoConnectConfluence} onCheckedChange={() => setAlsoConnectConfluence(!alsoConnectConfluence)} />
                   <div>
@@ -249,8 +185,8 @@ export default function JiraConnectPage() {
                     <p className="text-xs text-muted-foreground">Fetch runbooks and export postmortems. Same OAuth, no extra login.</p>
                   </div>
                 </label>
-              )}
-            </CardContent>
+              </CardContent>
+            )}
             <CardFooter>
               <Button onClick={handleOAuthConnect} disabled={isConnecting}>
                 {isConnecting ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Redirecting...</> : "Connect with Atlassian"}

@@ -3,7 +3,6 @@ export interface AtlassianProductStatus {
   authType?: 'oauth' | 'pat';
   baseUrl?: string;
   cloudId?: string | null;
-  agentTier?: 'read' | 'write';
   error?: string;
 }
 
@@ -21,7 +20,6 @@ export interface AtlassianConnectPayload {
   confluencePatToken?: string;
   jiraBaseUrl?: string;
   jiraPatToken?: string;
-  agentTier?: 'read' | 'write';
   code?: string;
   state?: string;
 }
