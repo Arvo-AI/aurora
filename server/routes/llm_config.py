@@ -205,8 +205,13 @@ def get_model_info():
                 native_name = ModelMapper.get_native_name(model_name, p)
                 if native_name != model_name or p == provider:
                     native_names[p] = native_name
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(
+                    "Failed to resolve native name for model '%s' with provider '%s': %s",
+                    model_name,
+                    p,
+                    e,
+                )
 
         return jsonify(
             {
