@@ -43,6 +43,8 @@ make prod-prebuilt   # or: make prod-local to build from source
 
 **That's it!** Open http://localhost:3000 in your browser.
 
+The first user to register becomes the admin. Subsequent registrations are **disabled by default** — admins invite new users from the Organization page. To allow open self-registration, set `ALLOW_OPEN_REGISTRATION=true` in `.env`.
+
 ### Pin a specific version
 
 By default, `make prod-prebuilt` pulls the latest images. To pin a release:
@@ -76,6 +78,23 @@ To stop: `make down`
 Logs: `make logs`
 
 If you want cloud connectors, add provider credentials referenced in `.env.example`.
+
+## Security & Roles
+
+Aurora uses **Casbin RBAC** with three roles enforced at both the API and UI layers:
+
+| Role | Capabilities |
+|------|-------------|
+| **Admin** | Full access — manage users, org settings, LLM config, connectors, incidents, chat |
+| **Editor** | Write access — connectors, SSH keys, VMs, knowledge base, incidents, chat |
+| **Viewer** | Read-only — view incidents, postmortems, dashboards, chat (can send messages) |
+
+Key security properties:
+- **Registration** is disabled by default after the first (admin) user. Set `ALLOW_OPEN_REGISTRATION=true` to re-enable.
+- **Backend RBAC** via `@require_permission` decorators on all write endpoints (Casbin policy enforcement).
+- **Frontend guards** via `ConnectorAuthGuard` on sensitive pages (SSH keys, VM config, connector auth).
+- **CORS** is restricted to `FRONTEND_URL` — no wildcard origins on any endpoint.
+- The Flask API (port 5080) is exposed to the host because the frontend makes direct browser calls to it for some features (OVH/Scaleway VMs, cloud graph). CORS and RBAC protect it.
 
 ## License
 Apache License 2.0. See [LICENSE](LICENSE).
