@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Image from "next/image";
-import { Loader2, CheckCircle, ExternalLink } from "lucide-react";
+import { Loader2, CheckCircle, ExternalLink, PenLine, FilePlus2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { atlassianService, AtlassianStatus } from "@/lib/services/atlassian";
 import { Button } from "@/components/ui/button";
@@ -46,6 +46,9 @@ export function AtlassianConnectPage({ product, sibling }: AtlassianConnectPageP
   const [patUrl, setPatUrl] = useState("");
   const [patToken, setPatToken] = useState("");
   const [isPatConnecting, setIsPatConnecting] = useState(false);
+  const [jiraMode, setJiraMode] = useState<"full" | "comment_only">("full");
+  const [isLoadingSettings, setIsLoadingSettings] = useState(false);
+  const [isSavingSettings, setIsSavingSettings] = useState(false);
 
   const connected = status?.[product.key]?.connected ?? false;
   const siblingConnected = sibling ? (status?.[sibling.key]?.connected ?? false) : true;
@@ -61,6 +64,38 @@ export function AtlassianConnectPage({ product, sibling }: AtlassianConnectPageP
   };
 
   useEffect(() => { loadStatus(); }, []);
+
+  const loadJiraSettings = async () => {
+    if (product.key !== "jira") return;
+    setIsLoadingSettings(true);
+    try {
+      const res = await fetch("/api/jira/settings", { credentials: "include" });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.jiraMode) setJiraMode(data.jiraMode);
+      }
+    } catch { /* silent */ } finally { setIsLoadingSettings(false); }
+  };
+
+  const saveJiraMode = async (mode: "full" | "comment_only") => {
+    setJiraMode(mode);
+    setIsSavingSettings(true);
+    try {
+      const res = await fetch("/api/jira/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ jiraMode: mode }),
+      });
+      if (res.ok) {
+        toast({ title: "Settings saved", description: mode === "full" ? "Aurora can create issues and comment" : "Aurora will only comment on existing issues" });
+      }
+    } catch {
+      toast({ title: "Failed to save settings", variant: "destructive" });
+    } finally { setIsSavingSettings(false); }
+  };
+
+  useEffect(() => { if (connected && product.key === "jira") loadJiraSettings(); }, [connected]);
 
   const handleOAuthConnect = async () => {
     setIsConnecting(true);
@@ -160,6 +195,68 @@ export function AtlassianConnectPage({ product, sibling }: AtlassianConnectPageP
               </Button>
             </CardFooter>
           </Card>
+
+          {product.key === "jira" && (
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="text-base">RCA Permissions</CardTitle>
+                <CardDescription className="text-xs">
+                  Choose what Aurora can do with Jira during Root Cause Analysis
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-2 pt-0">
+                <button
+                  onClick={() => saveJiraMode("full")}
+                  disabled={isSavingSettings}
+                  className={`w-full flex items-start gap-3 p-3 rounded-lg border text-left transition-colors ${
+                    jiraMode === "full"
+                      ? "border-[#2684FF] bg-[#2684FF]/[0.04]"
+                      : "border-border hover:bg-muted/50"
+                  }`}
+                >
+                  <div className={`mt-0.5 h-5 w-5 rounded-full border-2 flex items-center justify-center flex-shrink-0 ${
+                    jiraMode === "full" ? "border-[#2684FF]" : "border-muted-foreground/30"
+                  }`}>
+                    {jiraMode === "full" && <div className="h-2.5 w-2.5 rounded-full bg-[#2684FF]" />}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <FilePlus2 className="h-3.5 w-3.5 text-muted-foreground" />
+                      <span className="text-sm font-medium">Create & comment</span>
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      Create new issues, link related issues, and comment on existing ones
+                    </p>
+                  </div>
+                </button>
+
+                <button
+                  onClick={() => saveJiraMode("comment_only")}
+                  disabled={isSavingSettings}
+                  className={`w-full flex items-start gap-3 p-3 rounded-lg border text-left transition-colors ${
+                    jiraMode === "comment_only"
+                      ? "border-[#2684FF] bg-[#2684FF]/[0.04]"
+                      : "border-border hover:bg-muted/50"
+                  }`}
+                >
+                  <div className={`mt-0.5 h-5 w-5 rounded-full border-2 flex items-center justify-center flex-shrink-0 ${
+                    jiraMode === "comment_only" ? "border-[#2684FF]" : "border-muted-foreground/30"
+                  }`}>
+                    {jiraMode === "comment_only" && <div className="h-2.5 w-2.5 rounded-full bg-[#2684FF]" />}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <PenLine className="h-3.5 w-3.5 text-muted-foreground" />
+                      <span className="text-sm font-medium">Comment only</span>
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      Only add comments to existing issues — no new issues or links
+                    </p>
+                  </div>
+                </button>
+              </CardContent>
+            </Card>
+          )}
 
           {sibling?.enabled && !siblingConnected && (
             <a href={sibling.connectPath} className="block">

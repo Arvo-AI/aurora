@@ -11,7 +11,7 @@ from flask import Blueprint, jsonify, request
 from connectors.atlassian_auth.auth import refresh_access_token
 from connectors.jira_connector.client import JiraClient
 from connectors.jira_connector.adf_converter import markdown_to_adf, text_to_adf
-from utils.auth.stateless_auth import get_user_id_from_request
+from utils.auth.stateless_auth import get_user_id_from_request, get_user_preference, store_user_preference
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.web.cors_utils import create_cors_response
 
@@ -261,3 +261,49 @@ def link_issues():
     except Exception as exc:
         logger.error("[JIRA] Link issues failed for user %s: %s", user_id, exc)
         return jsonify({"error": "Failed to link Jira issues"}), 502
+
+
+# ------------------------------------------------------------------
+# GET /jira/settings
+# ------------------------------------------------------------------
+
+JIRA_MODE_KEY = "jira_mode"
+VALID_MODES = ("full", "comment_only")
+
+
+@jira_bp.route("/settings", methods=["GET", "OPTIONS"])
+def get_settings():
+    if request.method == "OPTIONS":
+        return create_cors_response()
+
+    user_id = get_user_id_from_request()
+    if not user_id:
+        return jsonify({"error": "User authentication required"}), 401
+
+    mode = get_user_preference(user_id, JIRA_MODE_KEY, default="full")
+    return jsonify({"jiraMode": mode})
+
+
+# ------------------------------------------------------------------
+# PUT /jira/settings
+# ------------------------------------------------------------------
+
+@jira_bp.route("/settings", methods=["PUT", "OPTIONS"])
+def update_settings():
+    if request.method == "OPTIONS":
+        return create_cors_response()
+
+    user_id = get_user_id_from_request()
+    if not user_id:
+        return jsonify({"error": "User authentication required"}), 401
+
+    data = request.get_json(force=True, silent=True) or {}
+    mode = data.get("jiraMode")
+
+    if mode not in VALID_MODES:
+        return jsonify({"error": f"jiraMode must be one of: {', '.join(VALID_MODES)}"}), 400
+
+    store_user_preference(user_id, JIRA_MODE_KEY, mode)
+    logger.info("[JIRA] Updated settings for user %s: jiraMode=%s", user_id, mode)
+
+    return jsonify({"success": True, "jiraMode": mode})

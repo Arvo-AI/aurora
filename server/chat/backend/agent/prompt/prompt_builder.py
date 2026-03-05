@@ -1568,6 +1568,7 @@ def build_background_mode_segment(state: Optional[Any]) -> str:
 
     # Jira integration (if connected)
     if integrations.get('jira'):
+        jira_mode = integrations.get('jira_mode', 'full')
         parts.extend([
             "",
             "JIRA INTEGRATION:",
@@ -1578,10 +1579,19 @@ def build_background_mode_segment(state: Optional[Any]) -> str:
             "- jira_search_issues(jql='type in (Bug, Incident) AND status != Done ORDER BY updated DESC') - Find open bugs/incidents",
             "- jira_get_issue(issue_key='PROJ-123') - Read issue details, linked PRs, comments for change context",
             "",
-            "Post-analysis (create tracking issue):",
-            "- jira_create_issue(project_key='PROJ', summary='title', description='details', issue_type='Bug') - Create incident tracking issue",
-            "- jira_add_comment(issue_key='PROJ-123', comment='update') - Add findings to existing issue",
         ])
+        if jira_mode == "comment_only":
+            parts.extend([
+                "Post-analysis (comment on existing issues only):",
+                "- jira_add_comment(issue_key='PROJ-123', comment='update') - Add findings to existing issue",
+                "NOTE: You are configured to COMMENT ONLY. Do NOT create new issues or link issues.",
+            ])
+        else:
+            parts.extend([
+                "Post-analysis (create tracking issue):",
+                "- jira_create_issue(project_key='PROJ', summary='title', description='details', issue_type='Bug') - Create incident tracking issue",
+                "- jira_add_comment(issue_key='PROJ-123', comment='update') - Add findings to existing issue",
+            ])
 
     # SharePoint search tools (if connected)
     if integrations.get('sharepoint'):

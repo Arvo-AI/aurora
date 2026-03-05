@@ -423,6 +423,16 @@ def _has_jira_connected(user_id: str) -> bool:
         return False
 
 
+def _get_jira_mode(user_id: str) -> str:
+    """Return the user's Jira mode preference: 'full' or 'comment_only'."""
+    try:
+        from utils.auth.stateless_auth import get_user_preference
+        return get_user_preference(user_id, "jira_mode", default="full") or "full"
+    except Exception as e:
+        logger.warning(f"Error getting Jira mode: {e}")
+        return "full"
+
+
 def _has_confluence_connected(user_id: str) -> bool:
     """Check if user has Confluence connected and the feature flag is enabled."""
     try:
@@ -793,22 +803,38 @@ def build_rca_prompt(
         if similar_context:
             prompt_parts.append(similar_context)
 
-    # Post-RCA actions: Jira ticket creation
+    # Post-RCA actions: Jira ticket creation or comment
     post_rca_actions = []
     if user_id and has_jira:
-        post_rca_actions.extend([
-            "",
-            "## POST-ANALYSIS ACTIONS (REQUIRED):",
-            "After completing your investigation and documenting findings:",
-            "",
-            "### Jira - Create or Update Tracking Issue:",
-            "- Search for an existing issue: `jira_search_issues(jql='text ~ \"ALERT_TITLE\" AND type in (Bug, Incident) ORDER BY created DESC')`",
-            "- If NO existing issue, create one with your RCA findings:",
-            "  `jira_create_issue(project_key='PROJECT', summary='Incident: TITLE', description='RCA summary with root cause and remediation', issue_type='Bug')`",
-            "- If an existing issue IS found, add your findings as a comment: `jira_add_comment(issue_key='PROJ-123', comment='RCA findings...')`",
-            "- Include: root cause, impact, evidence, remediation steps",
-            "",
-        ])
+        jira_mode = _get_jira_mode(user_id)
+
+        if jira_mode == "comment_only":
+            post_rca_actions.extend([
+                "",
+                "## POST-ANALYSIS ACTIONS (REQUIRED):",
+                "After completing your investigation and documenting findings:",
+                "",
+                "### Jira — Add Findings to Existing Issue:",
+                "- Search for an existing issue: `jira_search_issues(jql='text ~ \"ALERT_TITLE\" AND type in (Bug, Incident) ORDER BY created DESC')`",
+                "- Add your RCA findings as a comment: `jira_add_comment(issue_key='PROJ-123', comment='RCA findings...')`",
+                "- Include: root cause, impact, evidence, remediation steps",
+                "- **NOTE: You are configured to COMMENT ONLY. Do NOT create new issues or link issues.**",
+                "",
+            ])
+        else:
+            post_rca_actions.extend([
+                "",
+                "## POST-ANALYSIS ACTIONS (REQUIRED):",
+                "After completing your investigation and documenting findings:",
+                "",
+                "### Jira — Create or Update Tracking Issue:",
+                "- Search for an existing issue: `jira_search_issues(jql='text ~ \"ALERT_TITLE\" AND type in (Bug, Incident) ORDER BY created DESC')`",
+                "- If NO existing issue, create one with your RCA findings:",
+                "  `jira_create_issue(project_key='PROJECT', summary='Incident: TITLE', description='RCA summary with root cause and remediation', issue_type='Bug')`",
+                "- If an existing issue IS found, add your findings as a comment: `jira_add_comment(issue_key='PROJ-123', comment='RCA findings...')`",
+                "- Include: root cause, impact, evidence, remediation steps",
+                "",
+            ])
 
     if post_rca_actions:
         prompt_parts.extend(post_rca_actions)
