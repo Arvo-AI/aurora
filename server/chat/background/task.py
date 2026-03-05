@@ -1266,6 +1266,9 @@ def create_background_chat_session(
                 cursor.execute("SELECT org_id FROM users WHERE id = %s", (user_id,))
                 row = cursor.fetchone()
                 org_id = row[0] if row and row[0] else None
+
+                if not org_id:
+                    logger.warning("No org_id found for user %s in background task session creation", user_id)
                 
                 # Set user and org context for RLS
                 cursor.execute("SET myapp.current_user_id = %s;", (user_id,))

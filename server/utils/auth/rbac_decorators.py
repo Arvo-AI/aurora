@@ -16,6 +16,7 @@ import logging
 from functools import wraps
 
 from flask import jsonify, request
+from werkzeug.exceptions import HTTPException
 
 from utils.auth.stateless_auth import get_user_id_from_request, get_org_id_from_request
 from utils.auth.enforcer import get_enforcer
@@ -53,7 +54,7 @@ def require_permission(resource: str, action: str):
                     "RBAC denied: no org context for user=%s endpoint=%s",
                     user_id, fn.__name__,
                 )
-                return jsonify({"error": "Forbidden — no organization context"}), 403
+                return jsonify({"error": "Forbidden - no organization context"}), 403
 
             enforcer = get_enforcer()
             if not enforcer.enforce(user_id, org_id, resource, action):
@@ -65,6 +66,8 @@ def require_permission(resource: str, action: str):
 
             try:
                 return fn(user_id, *args, **kwargs)
+            except HTTPException:
+                raise
             except Exception as exc:
                 logger.error("Unhandled error in %s: %s", fn.__name__, exc, exc_info=True)
                 return jsonify({"error": "Internal server error"}), 500
@@ -95,6 +98,8 @@ def require_auth_only(fn):
             return jsonify({"error": "Unauthorized"}), 401
         try:
             return fn(user_id, *args, **kwargs)
+        except HTTPException:
+            raise
         except Exception as exc:
             logger.error("Unhandled error in %s: %s", fn.__name__, exc, exc_info=True)
             return jsonify({"error": "Internal server error"}), 500

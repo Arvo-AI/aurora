@@ -255,34 +255,21 @@ class AlertCorrelator:
         """
         cutoff = alert_received_at - timedelta(seconds=self.time_window_seconds)
 
-        if org_id:
-            cursor.execute(
-                """
-                SELECT id, alert_title, alert_service, affected_services,
-                       correlated_alert_count, started_at, updated_at
-                FROM incidents
-                WHERE org_id = %s
-                  AND status = 'investigating'
-                  AND updated_at >= %s
-                ORDER BY updated_at DESC
-                LIMIT 20
-                """,
-                (org_id, cutoff),
-            )
-        else:
-            cursor.execute(
-                """
-                SELECT id, alert_title, alert_service, affected_services,
-                       correlated_alert_count, started_at, updated_at
-                FROM incidents
-                WHERE user_id = %s
-                  AND status = 'investigating'
-                  AND updated_at >= %s
-                ORDER BY updated_at DESC
-                LIMIT 20
-                """,
-                (user_id, cutoff),
-            )
+        scope_col = "org_id" if org_id else "user_id"
+        scope_val = org_id if org_id else user_id
+        cursor.execute(
+            f"""
+            SELECT id, alert_title, alert_service, affected_services,
+                   correlated_alert_count, started_at, updated_at
+            FROM incidents
+            WHERE {scope_col} = %s
+              AND status = 'investigating'
+              AND updated_at >= %s
+            ORDER BY updated_at DESC
+            LIMIT 20
+            """,
+            (scope_val, cutoff),
+        )
         rows = cursor.fetchall()
         return [
             {

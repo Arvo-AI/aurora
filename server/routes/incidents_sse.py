@@ -16,28 +16,17 @@ _active_connection_queues_by_org = {}
 
 def broadcast_incident_update_to_user_connections(user_id: str, incident_data: dict, org_id: str = None):
     """Send incident update to all active SSE connections for a given org (or user as fallback)."""
-    if org_id:
-        org_queues = _active_connection_queues_by_org.get(org_id, [])
-        if not org_queues:
-            return
-        for message_queue in org_queues:
-            try:
-                message_queue.put_nowait(incident_data)
-            except queue.Full:
-                logger.warning(f"Message queue full for org {org_id}, dropping message")
-            except Exception as e:
-                logger.error(f"Error sending message to queue for org {org_id}: {e}")
-    else:
-        org_queues = _active_connection_queues_by_org.get(user_id, [])
-        if not org_queues:
-            return
-        for message_queue in org_queues:
-            try:
-                message_queue.put_nowait(incident_data)
-            except queue.Full:
-                logger.warning(f"Message queue full for user {user_id}, dropping message")
-            except Exception as e:
-                logger.error(f"Error sending message to queue for user {user_id}: {e}")
+    scope_key = org_id or user_id
+    org_queues = _active_connection_queues_by_org.get(scope_key, [])
+    if not org_queues:
+        return
+    for message_queue in org_queues:
+        try:
+            message_queue.put_nowait(incident_data)
+        except queue.Full:
+            logger.warning("Message queue full for scope %s, dropping message", scope_key)
+        except Exception as e:
+            logger.error("Error sending message to queue for scope %s: %s", scope_key, e)
 
 
 @incidents_sse_bp.route('/api/incidents/stream', methods=['GET'])

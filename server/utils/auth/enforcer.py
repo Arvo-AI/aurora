@@ -70,9 +70,10 @@ _DEFAULT_ROLE_HIERARCHY = [
 
 def _build_db_url() -> str:
     """Build a SQLAlchemy-compatible database URL from environment variables."""
+    import urllib.parse
     db_name = os.environ["POSTGRES_DB"]
     db_user = os.environ["POSTGRES_USER"]
-    db_password = os.getenv("POSTGRES_PASSWORD", "")
+    db_password = urllib.parse.quote_plus(os.getenv("POSTGRES_PASSWORD", ""))
     db_host = os.environ["POSTGRES_HOST"]
     db_port = os.environ["POSTGRES_PORT"]
     return f"postgresql://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}"

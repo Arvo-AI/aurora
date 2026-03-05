@@ -184,10 +184,15 @@ def process_grafana_alert(
                     with conn.cursor() as cursor:
                         received_at = datetime.now(timezone.utc)
 
-                        # Look up org_id for this user
-                        cursor.execute("SELECT org_id FROM users WHERE id = %s", (user_id,))
-                        org_row = cursor.fetchone()
-                        org_id = org_row[0] if org_row and org_row[0] else None
+                        # Look up org_id for this user (cached across calls)
+                        org_id = None
+                        try:
+                            from utils.auth.stateless_auth import get_org_id_for_user
+                            org_id = get_org_id_for_user(user_id)
+                        except Exception:
+                            cursor.execute("SELECT org_id FROM users WHERE id = %s", (user_id,))
+                            org_row = cursor.fetchone()
+                            org_id = org_row[0] if org_row and org_row[0] else None
 
                         if not org_id:
                             logger.error("[GRAFANA][ALERT] Missing org_id for user %s; skipping persistence", user_id)

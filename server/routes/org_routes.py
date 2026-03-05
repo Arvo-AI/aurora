@@ -1,6 +1,7 @@
 """Organization management routes."""
 
 import logging
+import re
 from flask import Blueprint, request, jsonify
 from utils.db.connection_pool import db_pool
 from utils.auth import VALID_ROLES
@@ -10,6 +11,23 @@ from utils.auth.stateless_auth import get_org_id_from_request
 logger = logging.getLogger(__name__)
 
 org_bp = Blueprint("org", __name__, url_prefix="/api/orgs")
+
+EMAIL_REGEX = re.compile(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$')
+SLUG_REGEX = re.compile(r'^[a-z0-9][a-z0-9-]{0,48}[a-z0-9]$')
+
+
+def _validate_org_id_for_user(user_id: str, org_id: str) -> bool:
+    """Check that the user actually belongs to the claimed org."""
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT 1 FROM users WHERE id = %s AND org_id = %s",
+                    (user_id, org_id),
+                )
+                return cursor.fetchone() is not None
+    except Exception:
+        return False
 
 
 @org_bp.route("/current", methods=["GET", "OPTIONS"])
@@ -22,6 +40,9 @@ def get_current_org(user_id):
     org_id = get_org_id_from_request()
     if not org_id:
         return jsonify({"error": "No organization found"}), 404
+
+    if not _validate_org_id_for_user(user_id, org_id):
+        return jsonify({"error": "Forbidden"}), 403
 
     try:
         with db_pool.get_admin_connection() as conn:
@@ -80,6 +101,16 @@ def update_org(user_id):
     if not name and not slug:
         return jsonify({"error": "name or slug required"}), 400
 
+    if name:
+        name = name.strip()
+        if not name or len(name) > 100:
+            return jsonify({"error": "Name must be 1-100 characters"}), 400
+
+    if slug:
+        slug = slug.strip().lower()
+        if not SLUG_REGEX.match(slug):
+            return jsonify({"error": "Slug must be 2-50 lowercase alphanumeric characters or hyphens"}), 400
+
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
@@ -134,6 +165,17 @@ def add_member(user_id):
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                # Check if user is already in a different org
+                cursor.execute(
+                    "SELECT org_id FROM users WHERE id = %s",
+                    (target_user_id,),
+                )
+                user_row = cursor.fetchone()
+                if not user_row:
+                    return jsonify({"error": "User not found"}), 404
+                if user_row[0] and user_row[0] != org_id:
+                    return jsonify({"error": "User already belongs to another organization"}), 409
+
                 cursor.execute(
                     "UPDATE users SET org_id = %s, role = %s WHERE id = %s RETURNING id, email, name",
                     (org_id, role, target_user_id),
@@ -175,6 +217,20 @@ def remove_member(user_id, target_user_id):
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                # Ensure at least one admin remains after removal
+                cursor.execute(
+                    "SELECT COUNT(*) FROM users WHERE org_id = %s AND role = 'admin' AND id != %s",
+                    (org_id, target_user_id),
+                )
+                remaining_admins = cursor.fetchone()[0]
+                cursor.execute(
+                    "SELECT role FROM users WHERE id = %s AND org_id = %s",
+                    (target_user_id, org_id),
+                )
+                target_row = cursor.fetchone()
+                if target_row and target_row[0] == 'admin' and remaining_admins < 1:
+                    return jsonify({"error": "Cannot remove the last admin"}), 400
+
                 cursor.execute(
                     "UPDATE users SET org_id = NULL WHERE id = %s AND org_id = %s RETURNING id",
                     (target_user_id, org_id),
@@ -205,6 +261,9 @@ def get_org_stats(user_id):
     org_id = get_org_id_from_request()
     if not org_id:
         return jsonify({"error": "No organization found"}), 404
+
+    if not _validate_org_id_for_user(user_id, org_id):
+        return jsonify({"error": "Forbidden"}), 403
 
     try:
         with db_pool.get_admin_connection() as conn:
@@ -388,18 +447,31 @@ def update_org_preferences(user_id):
 
                 if "notification_emails" in data:
                     emails = data["notification_emails"]
-                    cursor.execute(
-                        "DELETE FROM rca_notification_emails WHERE org_id = %s",
-                        (org_id,),
-                    )
+                    # Upsert instead of delete-all to preserve is_verified status
+                    valid_emails = []
                     for email in emails:
                         email = email.strip()
-                        if email:
-                            cursor.execute(
-                                """INSERT INTO rca_notification_emails
-                                   (user_id, org_id, email) VALUES (%s, %s, %s)""",
-                                (user_id, org_id, email),
-                            )
+                        if email and EMAIL_REGEX.match(email):
+                            valid_emails.append(email)
+                    # Remove emails no longer in the list
+                    if valid_emails:
+                        cursor.execute(
+                            "DELETE FROM rca_notification_emails WHERE org_id = %s AND email NOT IN %s",
+                            (org_id, tuple(valid_emails)),
+                        )
+                    else:
+                        cursor.execute(
+                            "DELETE FROM rca_notification_emails WHERE org_id = %s",
+                            (org_id,),
+                        )
+                    # Insert new emails (existing ones preserved via ON CONFLICT)
+                    for email in valid_emails:
+                        cursor.execute(
+                            """INSERT INTO rca_notification_emails
+                               (user_id, org_id, email) VALUES (%s, %s, %s)
+                               ON CONFLICT (org_id, email) DO NOTHING""",
+                            (user_id, org_id, email),
+                        )
                 conn.commit()
                 return jsonify({"ok": True})
     except Exception as e:

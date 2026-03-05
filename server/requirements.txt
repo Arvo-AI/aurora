@@ -88,8 +88,8 @@ paramiko>=3.4.0
 neo4j>=5.0
 
 # RBAC (Casbin with PostgreSQL storage)
-casbin>=1.36.0
-casbin-sqlalchemy-adapter>=1.0.0
+casbin>=1.36.0,<2.0.0
+casbin-sqlalchemy-adapter>=1.0.0,<2.0.0
 sqlalchemy>=2.0.0
 
 # Testing

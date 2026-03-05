@@ -25,7 +25,7 @@ def get_connected_accounts(user_id, target_user_id):
     try:
         if user_id != target_user_id:
             logging.warning(f"SECURITY: User {user_id} attempted to access connected accounts for {target_user_id}")
-            return jsonify({"error": "Unauthorized access to user data"}), 403
+            return jsonify({"error": "Not found"}), 404
         
         org_id = get_org_id_from_request()
 
@@ -126,7 +126,7 @@ def delete_connected_account(user_id, target_user_id, provider):
     try:
         if user_id != target_user_id:
             logging.warning(f"SECURITY: User {user_id} attempted to delete connected account for {target_user_id}")
-            return jsonify({"error": "Unauthorized access to user data"}), 403
+            return jsonify({"error": "Not found"}), 404
         
         org_id = get_org_id_from_request()
 

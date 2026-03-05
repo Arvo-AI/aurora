@@ -715,7 +715,8 @@ def initialize_tables():
                         verification_code_expires_at TIMESTAMP,
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         verified_at TIMESTAMP,
-                        UNIQUE(user_id, email)
+                        UNIQUE(user_id, email),
+                        UNIQUE(org_id, email)
                     );
 
                     CREATE INDEX IF NOT EXISTS idx_rca_emails_user_id ON rca_notification_emails(user_id);
@@ -889,6 +890,7 @@ def initialize_tables():
                         invited_by VARCHAR(255) NOT NULL REFERENCES users(id),
                         status VARCHAR(20) DEFAULT 'pending',
                         created_at TIMESTAMP DEFAULT NOW(),
+                        expires_at TIMESTAMP DEFAULT (NOW() + INTERVAL '7 days'),
                         UNIQUE(org_id, email)
                     );
 
@@ -1562,7 +1564,8 @@ def initialize_tables():
                         DROP POLICY IF EXISTS select_by_org ON {table_name};
                         CREATE POLICY select_by_org ON {table_name}
                         FOR SELECT USING (
-                            org_id = current_setting('myapp.current_org_id', true)::text
+                            org_id IS NOT NULL
+                            AND org_id = current_setting('myapp.current_org_id', true)::text
                         );
                     END $$;
                     """
@@ -1598,7 +1601,8 @@ def initialize_tables():
                             DROP POLICY IF EXISTS insert_by_org ON {table_name};
                             CREATE POLICY insert_by_org ON {table_name}
                             FOR INSERT WITH CHECK (
-                                org_id = current_setting('myapp.current_org_id', true)::text
+                                org_id IS NOT NULL
+                                AND org_id = current_setting('myapp.current_org_id', true)::text
                             );
                         END $$;
                         """
@@ -1610,7 +1614,8 @@ def initialize_tables():
                             DROP POLICY IF EXISTS update_by_org ON {table_name};
                             CREATE POLICY update_by_org ON {table_name}
                             FOR UPDATE USING (
-                                org_id = current_setting('myapp.current_org_id', true)::text
+                                org_id IS NOT NULL
+                                AND org_id = current_setting('myapp.current_org_id', true)::text
                             );
                         END $$;
                         """
@@ -1622,7 +1627,8 @@ def initialize_tables():
                             DROP POLICY IF EXISTS delete_by_org ON {table_name};
                             CREATE POLICY delete_by_org ON {table_name}
                             FOR DELETE USING (
-                                org_id = current_setting('myapp.current_org_id', true)::text
+                                org_id IS NOT NULL
+                                AND org_id = current_setting('myapp.current_org_id', true)::text
                             );
                         END $$;
                         """
@@ -1666,12 +1672,14 @@ def initialize_tables():
             ]
             for tbl in org_id_tables:
                 try:
+                    cursor.execute(f"SAVEPOINT sp_org_id_{tbl}")
                     cursor.execute(
                         f"ALTER TABLE {tbl} ADD COLUMN IF NOT EXISTS org_id VARCHAR(255);"
                     )
+                    cursor.execute(f"RELEASE SAVEPOINT sp_org_id_{tbl}")
                 except Exception as e:
                     logging.warning(f"Error adding org_id to {tbl}: {e}")
-                    conn.rollback()
+                    cursor.execute(f"ROLLBACK TO SAVEPOINT sp_org_id_{tbl}")
 
             # Add FK from users.org_id -> organizations.id (if not exists)
             try:
@@ -1793,6 +1801,34 @@ def initialize_tables():
                 """)
             except Exception as e:
                 logging.warning(f"Error migrating user_preferences UNIQUE constraint: {e}")
+                conn.rollback()
+
+            # rca_notification_emails: add UNIQUE(org_id, email) for org-scoped deduplication
+            try:
+                cursor.execute("""
+                    DO $$
+                    BEGIN
+                        IF NOT EXISTS (
+                            SELECT 1 FROM pg_constraint
+                            WHERE conname = 'rca_notification_emails_org_id_email_key'
+                        ) THEN
+                            ALTER TABLE rca_notification_emails ADD CONSTRAINT rca_notification_emails_org_id_email_key
+                                UNIQUE(org_id, email);
+                        END IF;
+                    END $$;
+                """)
+            except Exception as e:
+                logging.warning(f"Error adding rca_notification_emails org_email UNIQUE constraint: {e}")
+                conn.rollback()
+
+            # org_invitations: add expires_at column if missing
+            try:
+                cursor.execute("""
+                    ALTER TABLE org_invitations ADD COLUMN IF NOT EXISTS
+                        expires_at TIMESTAMP DEFAULT (NOW() + INTERVAL '7 days');
+                """)
+            except Exception as e:
+                logging.warning(f"Error adding expires_at to org_invitations: {e}")
                 conn.rollback()
 
             # Create k8s_clusters view (after org_id migration so the column exists)

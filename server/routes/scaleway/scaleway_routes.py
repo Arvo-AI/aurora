@@ -79,9 +79,6 @@ def scaleway_connect(user_id):
         "projectId": "optional"
     }
     """
-    if request.method == 'OPTIONS':
-        return create_cors_response()
-    
     try:
         data = request.get_json() or {}
         access_key = data.get('accessKey') or data.get('access_key')

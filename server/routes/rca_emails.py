@@ -70,11 +70,6 @@ def _check_rate_limit(user_id: str, email: str, action: str) -> tuple[bool, str]
         return True, ""  # Allow on error to avoid blocking legitimate users
 
 
-@rca_emails_bp.route('/api/rca-emails', methods=['OPTIONS'])
-def list_rca_emails_options():
-    return create_cors_response()
-
-
 @rca_emails_bp.route('/api/rca-emails', methods=['GET'])
 @require_permission("rca_emails", "read")
 def list_rca_emails(user_id):
@@ -118,11 +113,6 @@ def list_rca_emails(user_id):
     except Exception as e:
         logger.error(f"[RCAEmails] Error listing emails for user {user_id}: {e}")
         return jsonify({"error": "Failed to retrieve emails"}), 500
-
-
-@rca_emails_bp.route('/api/rca-emails/add', methods=['OPTIONS'])
-def add_rca_email_options():
-    return create_cors_response()
 
 
 @rca_emails_bp.route('/api/rca-emails/add', methods=['POST'])
@@ -212,10 +202,6 @@ def add_rca_email(user_id):
         return jsonify({"error": "Failed to add email"}), 500
 
 
-@rca_emails_bp.route('/api/rca-emails/verify', methods=['OPTIONS'])
-def verify_rca_email_options():
-    return create_cors_response()
-
 
 @rca_emails_bp.route('/api/rca-emails/verify', methods=['POST'])
 @require_permission("rca_emails", "write")
@@ -285,10 +271,6 @@ def verify_rca_email(user_id):
         logger.error(f"[RCAEmails] Error verifying email for user {user_id}: {e}")
         return jsonify({"error": "Failed to verify email"}), 500
 
-
-@rca_emails_bp.route('/api/rca-emails/resend', methods=['OPTIONS'])
-def resend_verification_code_options():
-    return create_cors_response()
 
 
 @rca_emails_bp.route('/api/rca-emails/resend', methods=['POST'])
@@ -363,10 +345,6 @@ def resend_verification_code(user_id):
         return jsonify({"error": "Failed to resend verification code"}), 500
 
 
-@rca_emails_bp.route('/api/rca-emails/<int:email_id>/toggle', methods=['OPTIONS'])
-def toggle_rca_email_options(email_id: int):
-    return create_cors_response()
-
 
 @rca_emails_bp.route('/api/rca-emails/<int:email_id>/toggle', methods=['POST'])
 @require_permission("rca_emails", "write")
@@ -408,10 +386,6 @@ def toggle_rca_email(user_id, email_id: int):
         logger.error(f"[RCAEmails] Error toggling email for user {user_id}: {e}")
         return jsonify({"error": "Failed to toggle email"}), 500
 
-
-@rca_emails_bp.route('/api/rca-emails/<int:email_id>', methods=['OPTIONS'])
-def remove_rca_email_options(email_id: int):
-    return create_cors_response()
 
 
 @rca_emails_bp.route('/api/rca-emails/<int:email_id>', methods=['DELETE'])

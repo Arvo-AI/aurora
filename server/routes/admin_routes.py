@@ -28,10 +28,6 @@ def list_users(user_id):
     conn = connect_to_db_as_user()
     try:
         with conn.cursor() as cur:
-            cur.execute("SET myapp.current_user_id = %s;", (user_id,))
-            if org_id:
-                cur.execute("SET myapp.current_org_id = %s;", (org_id,))
-            conn.commit()
             cur.execute(
                 "SELECT id, email, name, role, created_at FROM users WHERE org_id = %s ORDER BY created_at",
                 (org_id,),
@@ -121,6 +117,17 @@ def create_user(user_id):
 def get_user_roles(user_id, target_user_id):
     """Get the roles assigned to a specific user."""
     org_id = get_org_id_from_request()
+
+    # Verify target user belongs to the caller's org
+    conn = connect_to_db_as_user()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT 1 FROM users WHERE id = %s AND org_id = %s", (target_user_id, org_id))
+            if not cur.fetchone():
+                return jsonify({"error": "User not found in this organization"}), 404
+    finally:
+        conn.close()
+
     enforcer = get_enforcer()
     if org_id:
         roles = enforcer.get_roles_for_user_in_domain(target_user_id, org_id)

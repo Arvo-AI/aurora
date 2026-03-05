@@ -7,6 +7,7 @@ import bcrypt
 from flask import Blueprint, request, jsonify
 from utils.db.db_utils import connect_to_db_as_user
 from utils.db.connection_pool import db_pool
+from utils.auth.rbac_decorators import require_auth_only
 from utils.web.cors_utils import create_cors_response
 import os
 
@@ -87,6 +88,8 @@ def register():
                 org_name = None
                 if user_count == 1:
                     # First user: create default organization
+                    # No-op upsert: ON CONFLICT forces RETURNING to work when the
+                    # default org already exists from a previous run.
                     cursor.execute(
                         """
                         INSERT INTO organizations (id, name, slug, created_by)
@@ -275,16 +278,13 @@ def change_password():
 
 
 @auth_bp.route('/me', methods=['GET'])
-def get_current_user():
+@require_auth_only
+def get_current_user(user_id):
     """Return the current user's role and org from the database.
 
     Called periodically by the frontend JWT callback to keep the
     session in sync after admin role changes.
     """
-    user_id = request.headers.get('X-User-ID')
-    if not user_id:
-        return jsonify({"error": "Unauthorized"}), 401
-
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:

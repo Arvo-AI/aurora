@@ -362,7 +362,7 @@ export default function ConnectorCard({ connector }: ConnectorCardProps) {
                         onClick={handleConnect} 
                         className="w-full"
                         variant={isConnected ? "outline" : "default"}
-                        disabled={isConnecting || (!isConnected && !canWrite)}
+                        disabled={isConnecting || (!isConnected && !canWrite) || (isConnected && !canWrite)}
                       >
                         {isConnecting ? (
                           <>
@@ -375,10 +375,17 @@ export default function ConnectorCard({ connector }: ConnectorCardProps) {
                             Disconnect
                           </>
                         ) : isConnected ? (
-                          <>
-                            <ExternalLink className="h-4 w-4 mr-2" />
-                            {connector.id === 'kubectl' ? 'Manage Clusters' : 'Manage'}
-                          </>
+                          !canWrite ? (
+                            <>
+                              <Lock className="h-4 w-4 mr-2" />
+                              {connector.id === 'kubectl' ? 'Manage Clusters' : 'Manage'}
+                            </>
+                          ) : (
+                            <>
+                              <ExternalLink className="h-4 w-4 mr-2" />
+                              {connector.id === 'kubectl' ? 'Manage Clusters' : 'Manage'}
+                            </>
+                          )
                         ) : !canWrite ? (
                           <>
                             <Lock className="h-4 w-4 mr-2" />
@@ -390,7 +397,7 @@ export default function ConnectorCard({ connector }: ConnectorCardProps) {
                       </Button>
                     </span>
                   </TooltipTrigger>
-                  {!canWrite && !isConnected && (
+                  {!canWrite && (
                     <TooltipContent>
                       <p>Editor or Admin role required</p>
                     </TooltipContent>

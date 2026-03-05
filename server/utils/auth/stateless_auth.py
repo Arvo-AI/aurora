@@ -71,12 +71,19 @@ def get_org_id_from_request() -> Optional[str]:
     Trusts the header value since it's set server-side by the Next.js
     middleware from the JWT session (same trust boundary as X-User-ID).
     Falls back to looking up the user's org from the database if the
-    header is not present.
+    header is not present. Result is cached on flask.g for the duration
+    of the request.
     
     Returns None if no org context is available.
     """
+    from flask import g
+    cached = getattr(g, '_org_id_resolved', None)
+    if cached is not None:
+        return cached if cached != '' else None
+
     org_id = request.headers.get('X-Org-ID')
     if org_id:
+        g._org_id_resolved = org_id
         return org_id
 
     user_id = request.headers.get('X-User-ID')
@@ -91,11 +98,14 @@ def get_org_id_from_request() -> Optional[str]:
                     )
                     row = cursor.fetchone()
                     if row and row[0]:
+                        g._org_id_resolved = row[0]
                         return row[0]
         except Exception as e:
             logger.warning(f"Error looking up org_id for user {user_id}: {e}")
 
+    g._org_id_resolved = ''
     return None
+
 
 def get_credentials_from_db(user_id: str, provider: str) -> Optional[Dict[str, Any]]:
     """
@@ -437,4 +447,30 @@ def create_cors_response():
     response.headers['Access-Control-Allow-Origin'] = '*'
     response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
     response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-User-ID'
-    return response 
+    return response
+
+
+# Cache for user_id -> org_id mapping used by background tasks
+_user_org_cache: dict[str, str | None] = {}
+
+
+def get_org_id_for_user(user_id: str) -> Optional[str]:
+    """Look up org_id for a user by querying the DB. Cached in-memory for task batches.
+
+    Use this in Celery tasks where there is no Flask request context.
+    """
+    if user_id in _user_org_cache:
+        return _user_org_cache[user_id]
+
+    try:
+        from utils.db.connection_pool import db_pool
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT org_id FROM users WHERE id = %s", (user_id,))
+                row = cursor.fetchone()
+                org_id = row[0] if row and row[0] else None
+                _user_org_cache[user_id] = org_id
+                return org_id
+    except Exception as e:
+        logger.warning("Error looking up org_id for user %s: %s", user_id, e)
+        return None

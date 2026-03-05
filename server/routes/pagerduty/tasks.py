@@ -132,10 +132,14 @@ def _process_custom_field_update(
     # Store the custom field event in pagerduty_events table
     with db_pool.get_admin_connection() as conn:
         with conn.cursor() as cursor:
-            # Look up org_id for this user
-            cursor.execute("SELECT org_id FROM users WHERE id = %s", (user_id,))
-            org_row = cursor.fetchone()
-            org_id = org_row[0] if org_row and org_row[0] else None
+            org_id = None
+            try:
+                from utils.auth.stateless_auth import get_org_id_for_user
+                org_id = get_org_id_for_user(user_id)
+            except Exception:
+                cursor.execute("SELECT org_id FROM users WHERE id = %s", (user_id,))
+                org_row = cursor.fetchone()
+                org_id = org_row[0] if org_row and org_row[0] else None
 
             if not org_id:
                 logger.error("[PAGERDUTY] Missing org_id for user %s; skipping persistence", user_id)
@@ -500,10 +504,14 @@ def process_pagerduty_event(
         # Store the complete V3 webhook payload
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
-                # Look up org_id for this user
-                cursor.execute("SELECT org_id FROM users WHERE id = %s", (user_id,))
-                org_row = cursor.fetchone()
-                org_id = org_row[0] if org_row and org_row[0] else None
+                org_id = None
+                try:
+                    from utils.auth.stateless_auth import get_org_id_for_user
+                    org_id = get_org_id_for_user(user_id)
+                except Exception:
+                    cursor.execute("SELECT org_id FROM users WHERE id = %s", (user_id,))
+                    org_row = cursor.fetchone()
+                    org_id = org_row[0] if org_row and org_row[0] else None
 
                 # Set RLS context
                 cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
