@@ -31,9 +31,6 @@ Users provide their Bitbucket email and API token via the Aurora UI.
 # OAuth (required for OAuth flow)
 BB_OAUTH_CLIENT_ID=<your-oauth-consumer-key>
 BB_OAUTH_CLIENT_SECRET=<your-oauth-consumer-secret>
-
-# Feature flag (enables the Bitbucket integration)
-NEXT_PUBLIC_ENABLE_BITBUCKET=true
 ```
 
 ## OAuth Scopes

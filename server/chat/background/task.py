@@ -18,7 +18,6 @@ from langchain_core.messages import HumanMessage
 from utils.cache.redis_client import get_redis_client
 from utils.notifications.email_service import get_email_service
 from utils.auth.stateless_auth import get_user_email
-from utils.flags.feature_flags import is_slack_enabled
 from utils.notifications.slack_notification_service import (
     send_slack_investigation_started_notification,
     send_slack_investigation_completed_notification,
@@ -388,7 +387,7 @@ def run_background_chat(
                     email_start_enabled = _is_rca_email_start_notification_enabled(user_id)
                     email_start_notification_enabled = email_general_enabled and email_start_enabled
                     
-                    slack_notification_enabled = is_slack_enabled() and _has_slack_connected(user_id)
+                    slack_notification_enabled = _has_slack_connected(user_id)
                     
                     if send_notifications and (email_start_notification_enabled or slack_notification_enabled):
                         _send_rca_notification(user_id, incident_id, 'started', 

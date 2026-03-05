@@ -3,7 +3,6 @@ import logging
 import requests
 from typing import Dict, Any
 from dotenv import load_dotenv
-from utils.flags.feature_flags import is_slack_enabled
 
 load_dotenv()
 
@@ -24,9 +23,6 @@ else:
     base_url = backend_url
 
 REDIRECT_URI = f"{base_url}/slack/callback"
-
-if is_slack_enabled() and (not CLIENT_ID or not CLIENT_SECRET or not REDIRECT_URI):
-    raise ValueError("Slack OAuth credentials not configured. Please set SLACK_CLIENT_ID, SLACK_CLIENT_SECRET, and SLACK_REDIRECT_URI environment variables.")
 
 # Required OAuth scopes for Aurora Slack integration
 SLACK_SCOPES = [
@@ -53,6 +49,9 @@ def get_auth_url(state: str) -> str:
     """
     if not state:
         raise ValueError("State parameter is required for Slack OAuth. It is used to identify the user in the callback.")
+
+    if not CLIENT_ID or not CLIENT_SECRET:
+        raise ValueError("Slack OAuth credentials not configured. Please set SLACK_CLIENT_ID and SLACK_CLIENT_SECRET environment variables.")
     
     # Build scope string
     scope_string = ",".join(SLACK_SCOPES)

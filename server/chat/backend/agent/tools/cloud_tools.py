@@ -1431,9 +1431,8 @@ Once you identify which account has the issue, pass account_id (e.g. '1510256343
 
     # Add Confluence search tools if enabled
     try:
-        from utils.flags.feature_flags import is_confluence_enabled
-
-        if is_confluence_enabled() and user_id:
+        from utils.auth.token_management import get_token_data
+        if user_id and get_token_data(user_id, "confluence"):
             _confluence_tools = [
                 (confluence_search_similar, "confluence_search_similar", ConfluenceSearchSimilarArgs,
                  "Search Confluence for pages related to an incident (postmortems, RCA docs). "

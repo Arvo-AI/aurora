@@ -1,5 +1,5 @@
 import { Github, Server } from "lucide-react";
-import { isSlackEnabled, isOvhEnabled, isConfluenceEnabled, isSharePointEnabled, isBitbucketEnabled, isDynatraceEnabled, isThousandEyesEnabled, isBigPandaEnabled } from "@/lib/feature-flags";
+import { isOvhEnabled, isSharePointEnabled } from "@/lib/feature-flags";
 import type { ConnectorConfig } from "./types";
 
 class ConnectorRegistry {
@@ -77,8 +77,7 @@ class ConnectorRegistry {
       alertsLabel: "View Alerts",
     });
 
-    if (isDynatraceEnabled()) {
-      this.register({
+    this.register({
         id: "dynatrace",
         name: "Dynatrace",
         description: "Connect to Dynatrace for full-stack observability. Receive problem notifications and query metrics, logs, and entities for root cause analysis.",
@@ -90,7 +89,6 @@ class ConnectorRegistry {
         alertsPath: "/dynatrace/alerts",
         alertsLabel: "View Problems",
       });
-    }
 
     this.register({
       id: "coroot",
@@ -103,8 +101,7 @@ class ConnectorRegistry {
       storageKey: "isCorootConnected",
     });
 
-    if (isThousandEyesEnabled()) {
-      this.register({
+    this.register({
         id: "thousandeyes",
         name: "ThousandEyes",
         description: "Connect Cisco ThousandEyes for network intelligence: tests, alerts, path visualization, BGP monitoring, and Internet Insights outage detection.",
@@ -114,7 +111,6 @@ class ConnectorRegistry {
         path: "/thousandeyes/auth",
         storageKey: "isThousandEyesConnected",
       });
-    }
 
     this.register({
       id: "pagerduty",
@@ -127,8 +123,7 @@ class ConnectorRegistry {
       storageKey: "isPagerDutyConnected",
     });
 
-    if (isBigPandaEnabled()) {
-      this.register({
+    this.register({
         id: "bigpanda",
         name: "BigPanda",
         description: "Connect BigPanda for AIOps incident correlation. Receive pre-correlated incident clusters with enriched metadata for improved root cause analysis.",
@@ -138,10 +133,8 @@ class ConnectorRegistry {
         path: "/bigpanda/auth",
         storageKey: "isBigPandaConnected",
       });
-    }
 
-    if (isConfluenceEnabled()) {
-      this.register({
+    this.register({
         id: "confluence",
         name: "Confluence",
         description: "Fetch runbooks and documentation from Confluence pages to automate incident response workflows.",
@@ -151,7 +144,6 @@ class ConnectorRegistry {
         path: "/confluence/connect",
         storageKey: "isConfluenceConnected",
       });
-    }
 
     if (isSharePointEnabled()) {
       this.register({
@@ -188,8 +180,7 @@ class ConnectorRegistry {
       useCustomConnection: true,
     });
 
-    if (isBitbucketEnabled()) {
-      this.register({
+    this.register({
         id: "bitbucket",
         name: "Bitbucket",
         description: "Connect to Bitbucket Cloud to browse workspaces, manage repositories, track pull requests, and collaborate on code.",
@@ -199,10 +190,8 @@ class ConnectorRegistry {
         useCustomConnection: true,
         storageKey: "isBitbucketConnected",
       });
-    }
 
-    if (isSlackEnabled()) {
-      this.register({
+    this.register({
         id: "slack",
         name: "Slack",
         description: "Receive alerts and notifications directly in your Slack workspace. Connect your Slack workspace to get real-time updates and interact with Aurora.",
@@ -212,7 +201,6 @@ class ConnectorRegistry {
         storageKey: "isSlackConnected",
         useCustomConnection: true,
       });
-    }
 
     // Cloud Providers (now under Infrastructure category)
     this.register({
