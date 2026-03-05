@@ -78,7 +78,13 @@ class JiraClient:
                 return {}
             return response.json()
         except requests.RequestException as exc:
-            logger.error("Jira API request failed: %s %s (%s)", method, path, type(exc).__name__)
+            resp_body = ""
+            if hasattr(exc, "response") and exc.response is not None:
+                try:
+                    resp_body = exc.response.text[:500]
+                except Exception:
+                    pass
+            logger.error("Jira API request failed: %s %s (%s) — %s", method, path, type(exc).__name__, resp_body)
             raise
 
     # ------------------------------------------------------------------

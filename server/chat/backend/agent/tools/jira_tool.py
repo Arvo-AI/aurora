@@ -245,7 +245,10 @@ def jira_add_comment(
         raise
     except Exception as exc:
         logger.exception("Jira add comment failed for user %s: %s", user_id, exc)
-        raise ValueError("Failed to add Jira comment; check connection and permissions") from exc
+        return json.dumps(
+            {"status": "error", "error": f"Failed to add Jira comment: {exc}. Continue using other tools."},
+            ensure_ascii=False,
+        )
 
     return json.dumps(
         {"status": "success", "commentId": result.get("id"), "issueKey": issue_key},
@@ -285,7 +288,24 @@ def jira_create_issue(
         raise
     except Exception as exc:
         logger.exception("Jira create issue failed for user %s: %s", user_id, exc)
-        raise ValueError("Failed to create Jira issue; check connection and permissions") from exc
+        detail = ""
+        if hasattr(exc, "__cause__") and hasattr(exc.__cause__, "response"):
+            try:
+                detail = exc.__cause__.response.text[:500]
+            except Exception:
+                pass
+        elif hasattr(exc, "response"):
+            try:
+                detail = exc.response.text[:500]
+            except Exception:
+                pass
+        return json.dumps(
+            {"status": "error",
+             "error": f"Failed to create Jira issue: {exc}. {detail}".strip(),
+             "hint": "Check project_key exists, issue_type is valid (try 'Bug', 'Task', or 'Story'), and required fields are present. "
+                     "Use jira_add_comment on an existing issue as a fallback."},
+            ensure_ascii=False,
+        )
 
     return json.dumps(
         {"status": "success", "key": result.get("key"), "id": result.get("id")},
@@ -313,7 +333,10 @@ def jira_update_issue(
         raise
     except Exception as exc:
         logger.exception("Jira update issue failed for user %s: %s", user_id, exc)
-        raise ValueError("Failed to update Jira issue; check connection and permissions") from exc
+        return json.dumps(
+            {"status": "error", "error": f"Failed to update Jira issue: {exc}. Continue using other tools."},
+            ensure_ascii=False,
+        )
 
     return json.dumps({"status": "success", "issueKey": issue_key}, ensure_ascii=False)
 
@@ -337,7 +360,10 @@ def jira_link_issues(
         raise
     except Exception as exc:
         logger.exception("Jira link issues failed for user %s: %s", user_id, exc)
-        raise ValueError("Failed to link Jira issues; check connection and permissions") from exc
+        return json.dumps(
+            {"status": "error", "error": f"Failed to link Jira issues: {exc}. Continue using other tools."},
+            ensure_ascii=False,
+        )
 
     return json.dumps(
         {"status": "success", "inward": inward_key, "outward": outward_key, "type": link_type},

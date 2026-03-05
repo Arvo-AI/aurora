@@ -658,6 +658,105 @@ async def _execute_background_chat(
         # The workflow stream might complete, but tool calls could still be running
         if hasattr(wf, '_wait_for_ongoing_tool_calls'):
             await wf._wait_for_ongoing_tool_calls()
+
+        # --- Follow-up pass: Jira ticket action ---
+        # After the investigation finishes, prompt the agent again to actually
+        # create/update a Jira ticket with the full RCA context in history.
+        jira_followup_done = False
+        if rca_context and rca_context.get('integrations', {}).get('jira'):
+            try:
+                jira_mode = rca_context.get('integrations', {}).get('jira_mode', 'full')
+                if jira_mode == "comment_only":
+                    followup_text = (
+                        "Your investigation is complete. Now you MUST take action in Jira.\n\n"
+                        "IMPORTANT: Use the project key from issues you already found earlier in this conversation. "
+                        "Do NOT guess project keys like 'OPS' or 'PROJECT' — use the real key you saw in search results.\n\n"
+                        "1. Search for an existing Jira issue related to this incident: "
+                        "jira_search_issues(jql='text ~ \"<service_name>\" AND type in (Bug, Incident) ORDER BY updated DESC')\n"
+                        "2. Add your RCA findings as a comment on the most relevant issue using jira_add_comment.\n"
+                        "   Include: root cause, impact, evidence, and remediation steps.\n\n"
+                        "You are in COMMENT ONLY mode. Do NOT create new issues. "
+                        "Execute the tool calls now — do not just describe what you would do."
+                    )
+                else:
+                    followup_text = (
+                        "Your investigation is complete. Now you MUST take action in Jira.\n\n"
+                        "IMPORTANT: Use the project key from issues you already found earlier in this conversation. "
+                        "Do NOT guess project keys like 'OPS' or 'PROJECT' — use the real key you saw in search results "
+                        "(e.g. if you found RCA-35, the project key is 'RCA').\n\n"
+                        "1. Search for an existing Jira issue related to this incident: "
+                        "jira_search_issues(jql='text ~ \"<service_name>\" AND type in (Bug, Incident) ORDER BY updated DESC')\n"
+                        "2. If an existing issue is found, add your RCA findings as a comment using jira_add_comment.\n"
+                        "3. If NO existing issue is found, create a new one using jira_create_issue with:\n"
+                        "   - project_key from the search results (the prefix before the dash in issue keys)\n"
+                        "   - A clear summary (e.g. 'Incident: <title>')\n"
+                        "   - Description containing: root cause, impact, evidence, remediation steps\n"
+                        "   - issue_type='Bug'\n\n"
+                        "Execute the tool calls now — do not just describe what you would do."
+                    )
+
+                # Snapshot the investigation messages before the follow-up overwrites them
+                investigation_messages = []
+                try:
+                    with db_pool.get_admin_connection() as conn:
+                        with conn.cursor() as cursor:
+                            cursor.execute(
+                                "SELECT messages FROM chat_sessions WHERE id = %s",
+                                (session_id,)
+                            )
+                            row = cursor.fetchone()
+                            if row and row[0]:
+                                investigation_messages = row[0] if isinstance(row[0], list) else json.loads(row[0])
+                    logger.info(f"[BackgroundChat] Saved {len(investigation_messages)} investigation messages before Jira follow-up")
+                except Exception as snap_err:
+                    logger.error(f"[BackgroundChat] Failed to snapshot investigation messages: {snap_err}")
+
+                followup_message = HumanMessage(content=followup_text)
+                followup_state = State(
+                    user_id=user_id,
+                    session_id=session_id,
+                    incident_id=incident_id,
+                    provider_preference=provider_preference,
+                    selected_project_id=None,
+                    messages=[followup_message],
+                    question=followup_text,
+                    model=ModelConfig.RCA_MODEL,
+                    mode=mode,
+                    is_background=True,
+                    rca_context=rca_context,
+                )
+                logger.info(f"[BackgroundChat] Starting Jira follow-up pass for session {session_id} (mode={jira_mode})")
+
+                await process_workflow_async(wf, followup_state, background_ws, user_id, incident_id=incident_id)
+
+                if hasattr(wf, '_wait_for_ongoing_tool_calls'):
+                    await wf._wait_for_ongoing_tool_calls()
+
+                # Merge: prepend the investigation messages so the full RCA + follow-up are visible
+                if investigation_messages:
+                    try:
+                        with db_pool.get_admin_connection() as conn:
+                            with conn.cursor() as cursor:
+                                cursor.execute(
+                                    "SELECT messages FROM chat_sessions WHERE id = %s",
+                                    (session_id,)
+                                )
+                                row = cursor.fetchone()
+                                followup_msgs = (row[0] if isinstance(row[0], list) else json.loads(row[0])) if row and row[0] else []
+                                merged = investigation_messages + followup_msgs
+                                cursor.execute(
+                                    "UPDATE chat_sessions SET messages = %s::jsonb WHERE id = %s",
+                                    (json.dumps(merged), session_id)
+                                )
+                                conn.commit()
+                        logger.info(f"[BackgroundChat] Merged messages: {len(investigation_messages)} investigation + {len(followup_msgs)} follow-up = {len(merged)} total")
+                    except Exception as merge_err:
+                        logger.error(f"[BackgroundChat] Failed to merge messages: {merge_err}")
+
+                jira_followup_done = True
+                logger.info(f"[BackgroundChat] Jira follow-up pass completed for session {session_id}")
+            except Exception as e:
+                logger.error(f"[BackgroundChat] Jira follow-up pass failed: {e}")
         
         if incident_id:
             # Check if status was already set to complete (shouldn't happen, but log if it does)
