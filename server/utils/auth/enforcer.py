@@ -130,6 +130,11 @@ def get_enforcer() -> casbin.Enforcer:
         _enforcer = casbin.Enforcer(model_path, adapter)
 
         def _domain_match(key1: str, key2: str) -> bool:
+            """Match org (domain) in Casbin grouping policies.
+
+            Supports exact match and wildcard ``*`` (used for policies that
+            apply across all organisations, e.g. the built-in role definitions).
+            """
             return key1 == key2 or key2 == "*"
 
         _enforcer.add_named_domain_matching_func("g", _domain_match)

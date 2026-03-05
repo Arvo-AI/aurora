@@ -309,12 +309,10 @@ def get_current_user(user_id):
 
 
 @auth_bp.route('/admins', methods=['GET'])
-def get_admins():
+@require_auth_only
+def get_admins(user_id):
     """Return the list of admin users (name + email only). Any authenticated user may call this."""
-    from utils.auth.stateless_auth import get_user_id_from_request, get_org_id_from_request
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "Unauthorized"}), 401
+    from utils.auth.stateless_auth import get_org_id_from_request
 
     org_id = get_org_id_from_request()
     if not org_id:

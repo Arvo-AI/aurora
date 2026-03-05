@@ -21,7 +21,7 @@ export async function getAuthenticatedUser(): Promise<AuthResult | NextResponse>
     'X-User-ID': session.userId,
   }
 
-  if (session.orgId) {
+  if (session.orgId && session.orgId.trim() !== '') {
     headers['X-Org-ID'] = session.orgId
   }
 

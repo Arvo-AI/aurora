@@ -19,6 +19,8 @@ async function refreshUserFromBackend(userId: string): Promise<{
     if (!res.ok) return null
     return await res.json()
   } catch (err) {
+    // Intentionally return null on failure so the JWT keeps its current
+    // values and the user isn't logged out by a transient backend error.
     console.error("Failed to refresh user from backend:", err)
     return null
   }
