@@ -115,6 +115,25 @@ function syncLocalStorage(connectorId: string, connectorName: string, isConnecte
   }
 }
 
+// Connectors whose status should be verified via their own status endpoint
+// rather than relying on localStorage alone. This ensures org members see
+// shared connections even when they didn't personally connect the integration.
+const STATUS_ENDPOINTS: Record<string, string> = {
+  grafana: "/api/grafana/status",
+  datadog: "/api/datadog/status",
+  netdata: "/api/netdata/status",
+  splunk: "/api/splunk/status",
+  dynatrace: "/api/dynatrace/status",
+  coroot: "/api/coroot/status",
+  pagerduty: "/api/pagerduty",
+  bigpanda: "/api/bigpanda/status",
+  confluence: "/api/confluence/status",
+  jenkins: "/api/jenkins/status",
+  cloudbees: "/api/cloudbees/status",
+  tailscale: "/api/tailscale/status",
+  kubectl: "/api/kubectl/status",
+};
+
 // Helper function to check status for a single connector
 async function checkConnectorStatus(
   connector: ConnectorConfig,
@@ -151,14 +170,28 @@ async function checkConnectorStatus(
           const data = JSON.parse(cachedData);
           return data.connected || false;
         }
-        // Cache expired, return false to indicate not connected
         return false;
       } catch (error) {
         return false;
       }
     }
-    // No cache available
     return false;
+  }
+
+  // Connectors with status endpoints: verify via API so org members see shared connections
+  const statusEndpoint = STATUS_ENDPOINTS[connector.id];
+  if (statusEndpoint) {
+    try {
+      const res = await fetch(statusEndpoint, { credentials: "include" });
+      if (res.ok) {
+        const data = await res.json();
+        const isConnected = data.connected === true;
+        syncLocalStorage(connector.id, connector.name, isConnected, connector.storageKey);
+        return isConnected;
+      }
+    } catch {
+      // fall through to localStorage
+    }
   }
   
   // For other connectors, use their storage key
@@ -186,8 +219,14 @@ export default function ConnectorsClient() {
       const vmConfigStatus = await checkVmConfigStatus();
       
       const status: Record<string, boolean> = {};
-      for (const connector of allConnectors) {
-        status[connector.id] = await checkConnectorStatus(connector, apiStatuses, vmConfigStatus);
+      const results = await Promise.all(
+        allConnectors.map(async (connector) => ({
+          id: connector.id,
+          connected: await checkConnectorStatus(connector, apiStatuses, vmConfigStatus),
+        }))
+      );
+      for (const { id, connected } of results) {
+        status[id] = connected;
       }
       
       setConnectedStatus(status);
