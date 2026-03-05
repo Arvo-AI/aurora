@@ -247,3 +247,57 @@ def revoke_role(user_id, target_user_id, role):
     logger.info("Role '%s' revoked from user %s by admin %s (now: %s)",
                 role, target_user_id, user_id, fallback_role)
     return jsonify({"user_id": target_user_id, "role": fallback_role}), 200
+
+
+@admin_bp.route("/users/<target_user_id>", methods=["DELETE"])
+@require_permission("users", "manage")
+def delete_user(user_id, target_user_id):
+    """Permanently delete a user from the organization."""
+    if user_id == target_user_id:
+        return jsonify({"error": "Cannot delete your own account"}), 400
+
+    org_id = get_org_id_from_request()
+    conn = connect_to_db_as_user()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SET myapp.current_user_id = %s;", (user_id,))
+            if org_id:
+                cur.execute("SET myapp.current_org_id = %s;", (org_id,))
+            conn.commit()
+
+            cur.execute(
+                "SELECT id, email FROM users WHERE id = %s AND org_id = %s",
+                (target_user_id, org_id),
+            )
+            target = cur.fetchone()
+            if not target:
+                return jsonify({"error": "User not found in this organization"}), 404
+
+            target_email = target[1]
+
+            cur.execute(
+                "DELETE FROM users WHERE id = %s AND org_id = %s",
+                (target_user_id, org_id),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+    try:
+        enforcer = get_enforcer()
+        if org_id:
+            roles = enforcer.get_roles_for_user_in_domain(target_user_id, org_id)
+            for r in roles:
+                enforcer.remove_grouping_policy(target_user_id, r, org_id)
+        else:
+            roles = enforcer.get_roles_for_user(target_user_id)
+            for r in roles:
+                enforcer.remove_grouping_policy(target_user_id, r)
+        enforcer.save_policy()
+        reload_policies()
+    except Exception as casbin_err:
+        logger.warning("Failed to clean up Casbin policies for deleted user %s: %s",
+                        target_user_id, casbin_err)
+
+    logger.info("Admin %s deleted user %s (%s)", user_id, target_user_id, target_email)
+    return jsonify({"message": "User deleted", "id": target_user_id}), 200
