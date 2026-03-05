@@ -145,9 +145,9 @@ config:
   ENABLE_POD_ISOLATION: "false"              # Isolate terminal commands in separate pods
   # NEXT_PUBLIC_* feature flags (build-time only - requires image rebuild to change)
   NEXT_PUBLIC_ENABLE_OVH: "false"            # OVH Cloud integration
-  NEXT_PUBLIC_ENABLE_SLACK: "false"          # Slack notifications
   NEXT_PUBLIC_ENABLE_PAGERDUTY_OAUTH: "false" # PagerDuty integration
-  NEXT_PUBLIC_ENABLE_CONFLUENCE: "false"     # Confluence integration
+  NEXT_PUBLIC_ENABLE_SCALEWAY: "false"       # Scaleway integration
+  NEXT_PUBLIC_ENABLE_SHAREPOINT: "false"     # SharePoint integration
   
   # --- Pod Isolation Settings ---
   # When enabled, the chart automatically creates:
@@ -220,6 +220,19 @@ secrets:
     OVH_CA_CLIENT_SECRET: ""
     OVH_US_CLIENT_ID: ""         # US region
     OVH_US_CLIENT_SECRET: ""
+
+    # --- Optional: Confluence Integration ---
+    CONFLUENCE_CLIENT_ID: ""
+    CONFLUENCE_CLIENT_SECRET: ""
+
+    # --- Optional: SharePoint Integration ---
+    SHAREPOINT_CLIENT_ID: ""
+    SHAREPOINT_CLIENT_SECRET: ""
+    SHAREPOINT_TENANT_ID: "common"
+
+    # --- Optional: Bitbucket Integration ---
+    BB_OAUTH_CLIENT_ID: ""
+    BB_OAUTH_CLIENT_SECRET: ""
     
     # --- Optional: AWS Integration ---
     AWS_ACCESS_KEY_ID: ""

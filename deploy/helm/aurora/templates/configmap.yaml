@@ -19,7 +19,7 @@ data:
   
   # All other config values from .Values.config (excluding keys with computed defaults above)
   # NOTE: NEXT_PUBLIC_* vars are included because the backend reads feature flags like
-  # NEXT_PUBLIC_ENABLE_SLACK, NEXT_PUBLIC_ENABLE_OVH, etc. to conditionally register routes.
+  # NEXT_PUBLIC_ENABLE_OVH, NEXT_PUBLIC_ENABLE_SCALEWAY, etc. to conditionally register routes.
   {{- range $key, $value := .Values.config }}
   {{- if not (has $key (list "POSTGRES_HOST" "REDIS_URL" "WEAVIATE_HOST" "BACKEND_URL" "CHATBOT_INTERNAL_URL" "VAULT_ADDR" "SEARXNG_URL" "NEXT_PUBLIC_BACKEND_URL")) }}
   {{ $key }}: {{ $value | quote }}

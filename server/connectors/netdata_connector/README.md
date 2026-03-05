@@ -11,11 +11,7 @@ API Token authentication for Netdata Cloud.
 
 ### 2. Configure `.env`
 
-```bash
-NEXT_PUBLIC_ENABLE_NETDATA=true
-```
-
-> API tokens are entered by users via the UI.
+> API tokens are entered by users via the UI. No environment variables required.
 
 ## Webhook Configuration
 
@@ -26,4 +22,4 @@ In Netdata Cloud: **Space settings** > **Alert notifications** > **Add configura
 
 ## Troubleshooting
 
-**Netdata connector not enabled** — Ensure `NEXT_PUBLIC_ENABLE_NETDATA=true` and restart Aurora
+**Netdata connector not enabled** — Restart Aurora and verify the connector appears in the UI.

@@ -290,15 +290,13 @@ GH_OAUTH_CLIENT_SECRET=your-client-secret
 
 ### Slack
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `NEXT_PUBLIC_ENABLE_SLACK` | `false` | Enable Slack connector in UI |
-| `SLACK_CLIENT_ID` | - | Slack App Client ID |
-| `SLACK_CLIENT_SECRET` | - | Slack App Client Secret |
-| `SLACK_SIGNING_SECRET` | - | Slack App Signing Secret |
+| Variable | Description |
+|----------|-------------|
+| `SLACK_CLIENT_ID` | Slack App Client ID |
+| `SLACK_CLIENT_SECRET` | Slack App Client Secret |
+| `SLACK_SIGNING_SECRET` | Slack App Signing Secret |
 
 ```bash
-NEXT_PUBLIC_ENABLE_SLACK=true
 SLACK_CLIENT_ID=your-client-id
 SLACK_CLIENT_SECRET=your-client-secret
 SLACK_SIGNING_SECRET=your-signing-secret
@@ -336,11 +334,43 @@ OVH_EU_CLIENT_ID=your-eu-client-id
 OVH_EU_CLIENT_SECRET=your-eu-client-secret
 ```
 
-### Confluence
+### Scaleway
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `NEXT_PUBLIC_ENABLE_CONFLUENCE` | `false` | Enable Confluence connector |
+| `NEXT_PUBLIC_ENABLE_SCALEWAY` | `false` | Enable Scaleway connector in UI |
+
+```bash
+NEXT_PUBLIC_ENABLE_SCALEWAY=true
+```
+
+### Confluence
+
+| Variable | Description |
+|----------|-------------|
+| `CONFLUENCE_CLIENT_ID` | Confluence OAuth Client ID |
+| `CONFLUENCE_CLIENT_SECRET` | Confluence OAuth Client Secret |
+
+```bash
+CONFLUENCE_CLIENT_ID=your-client-id
+CONFLUENCE_CLIENT_SECRET=your-client-secret
+```
+
+### SharePoint
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `NEXT_PUBLIC_ENABLE_SHAREPOINT` | `false` | Enable SharePoint connector in UI |
+| `SHAREPOINT_CLIENT_ID` | - | Azure App Client ID |
+| `SHAREPOINT_CLIENT_SECRET` | - | Azure App Client Secret |
+| `SHAREPOINT_TENANT_ID` | `common` | Azure Tenant ID |
+
+```bash
+NEXT_PUBLIC_ENABLE_SHAREPOINT=true
+SHAREPOINT_CLIENT_ID=your-client-id
+SHAREPOINT_CLIENT_SECRET=your-client-secret
+SHAREPOINT_TENANT_ID=your-tenant-id
+```
 
 ## Email (SMTP)
 
