@@ -28,6 +28,8 @@ services:
     enabled: true    # Set false to use Weaviate Cloud or external instance
   vault:
     enabled: true    # Set false to use external Vault or other secrets manager
+  minio:
+    enabled: false   # Set true for local dev (provides S3-compatible storage in-cluster)
 
 # ------------------------------------------------------------------------------
 # ServiceAccount configuration
@@ -328,6 +330,13 @@ resources:
     limits:
       cpu: "500m"
       memory: "1Gi"
+  minio:
+    requests:
+      cpu: "50m"
+      memory: "128Mi"
+    limits:
+      cpu: "200m"
+      memory: "512Mi"
 
 # ------------------------------------------------------------------------------
 # Persistent storage
@@ -341,6 +350,8 @@ persistence:
     size: 10Gi           # Secrets storage
   redis:
     size: 5Gi            # Celery task state and cache
+  minio:
+    size: 10Gi           # Object storage (local dev only)
 
 # ------------------------------------------------------------------------------
 # Ingress configuration
