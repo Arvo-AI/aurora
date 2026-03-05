@@ -284,9 +284,23 @@ def get_org_stats(user_id):
                 )
                 chat_count = cursor.fetchone()[0]
 
+                integration_providers = [
+                    'grafana', 'datadog', 'pagerduty', 'netdata', 'splunk',
+                    'github', 'jenkins', 'cloudbees', 'gcp', 'aws', 'azure',
+                    'slack', 'dynatrace', 'confluence', 'coroot', 'thousandeyes',
+                    'bitbucket', 'bigpanda', 'tailscale',
+                ]
                 cursor.execute(
-                    "SELECT COUNT(DISTINCT provider) FROM user_tokens WHERE org_id = %s",
-                    (org_id,),
+                    """SELECT COUNT(DISTINCT provider) FROM (
+                        SELECT provider FROM user_tokens
+                        WHERE org_id = %s AND provider = ANY(%s)
+                          AND secret_ref IS NOT NULL AND is_active = TRUE
+                        UNION
+                        SELECT provider FROM user_connections
+                        WHERE org_id = %s AND provider = ANY(%s)
+                          AND status = 'active'
+                    ) p""",
+                    (org_id, integration_providers, org_id, integration_providers),
                 )
                 integration_count = cursor.fetchone()[0]
 
@@ -360,9 +374,10 @@ def get_org_activity(user_id):
                     """SELECT ut.provider, ut.timestamp, u.name, u.email
                        FROM user_tokens ut
                        JOIN users u ON ut.user_id = u.id
-                       WHERE ut.org_id = %s
+                       WHERE (ut.org_id = %s OR u.org_id = %s)
+                         AND ut.secret_ref IS NOT NULL AND ut.is_active = TRUE
                        ORDER BY ut.timestamp DESC LIMIT %s""",
-                    (org_id, limit),
+                    (org_id, org_id, limit),
                 )
                 for row in cursor.fetchall():
                     ts = row[1]
