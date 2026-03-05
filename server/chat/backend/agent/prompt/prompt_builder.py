@@ -1752,7 +1752,7 @@ def build_background_mode_segment(state: Optional[Any]) -> str:
         ])
 
         # OpenAI models don't produce text between tool calls unless instructed to
-        model_name = getattr(state, 'model', '') or ''
+        model_name = (getattr(state, 'model', '') or '').lower()
         if model_name.startswith("openai/"):
             parts.extend([
                 "THINK OUT LOUD: Before each tool call, briefly state what you're investigating and why (1-2 sentences).",

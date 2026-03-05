@@ -64,11 +64,12 @@ class ChatContextManager:
             return cls.MODEL_CONTEXT_LIMITS[base_model]
 
         # Try provider-based default before falling back to 7K
-        if "/" in model_name:
-            provider_prefix = model_name.split("/")[0]
-            if provider_prefix in cls.PROVIDER_DEFAULT_LIMITS:
-                logger.info(f"Using provider default context limit for {model_name} (provider={provider_prefix})")
-                return cls.PROVIDER_DEFAULT_LIMITS[provider_prefix]
+        for name in (resolved, model_name):
+            if "/" in name:
+                provider_prefix = name.split("/")[0]
+                if provider_prefix in cls.PROVIDER_DEFAULT_LIMITS:
+                    logger.info(f"Using provider default context limit for {model_name} (provider={provider_prefix})")
+                    return cls.PROVIDER_DEFAULT_LIMITS[provider_prefix]
 
         # Use default
         logger.warning(f"Unknown model {model_name}, using default context limit")

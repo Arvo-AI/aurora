@@ -770,14 +770,17 @@ class Workflow:
                     _token_count += 1
                     chunk_data = event.get("data", {})
                     chunk_obj = chunk_data.get("chunk")
-                    if chunk_obj and hasattr(chunk_obj, 'content') and chunk_obj.content:
-                        if _token_count <= 3:
-                            logger.debug(f"[STREAM DEBUG] Token #{_token_count} raw content type={type(chunk_obj.content).__name__}, value={str(chunk_obj.content)[:200]}")
-                        # Extract text content (handles Gemini thinking model list format)
-                        # include_thinking=True so reasoning flows to save_incident_thought() for RCA
-                        content = _extract_text_from_content(chunk_obj.content, include_thinking=True)
+                    if chunk_obj:
+                        content = ""
+                        if hasattr(chunk_obj, 'content') and chunk_obj.content:
+                            if _token_count <= 3:
+                                logger.debug(f"[STREAM DEBUG] Token #{_token_count} raw content type={type(chunk_obj.content).__name__}, value={str(chunk_obj.content)[:200]}")
+                            # Extract text content (handles Gemini thinking model list format)
+                            # include_thinking=True so reasoning flows to save_incident_thought() for RCA
+                            content = _extract_text_from_content(chunk_obj.content, include_thinking=True)
 
-                        # Also check for reasoning content (OpenRouter reasoning, DeepSeek-R1 etc.)
+                        # Check for reasoning content (OpenRouter reasoning, DeepSeek-R1 etc.)
+                        # regardless of whether content was found above
                         if not content and hasattr(chunk_obj, 'additional_kwargs'):
                             content = chunk_obj.additional_kwargs.get("reasoning_content", "")
 
@@ -812,8 +815,12 @@ class Workflow:
                         # extract thinking + text from the complete response.
                         # This handles ChatGoogleGenerativeAI which doesn't stream
                         # when tools are bound in LangGraph (langgraph#4877).
-                        if _model_turn_tokens == 0 and hasattr(output, 'content') and output.content:
-                            content = _extract_text_from_content(output.content, include_thinking=True)
+                        if _model_turn_tokens == 0:
+                            content = ""
+                            if hasattr(output, 'content') and output.content:
+                                content = _extract_text_from_content(output.content, include_thinking=True)
+                            if not content and hasattr(output, 'additional_kwargs'):
+                                content = output.additional_kwargs.get("reasoning_content", "")
                             if content:
                                 logger.info(f"[STREAM FALLBACK] Extracted {len(content)} chars from on_chat_model_end (streaming didn't fire)")
                                 yield ("token", content)
@@ -1120,7 +1127,11 @@ class Workflow:
                 # (Claude generates inline text with tool calls; Gemini puts reasoning
                 # in thinking blocks only, leaving text empty.)
                 content = _extract_text_from_content(raw_content)
-                if not content and getattr(msg, 'tool_calls', []):
+                has_tool_calls = (
+                    getattr(msg, 'tool_calls', [])
+                    or getattr(msg, 'additional_kwargs', {}).get('tool_calls', [])
+                )
+                if not content and has_tool_calls:
                     content = _extract_text_from_content(raw_content, include_thinking=True)
                 
                 # Get the AIMessage's run_id for consistency (needed regardless of tool calls)

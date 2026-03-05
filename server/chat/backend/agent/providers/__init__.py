@@ -114,6 +114,8 @@ class ProviderRegistry:
         # No OpenRouter fallback - if direct provider unavailable, fail with clear error
         detected_provider = ModelMapper.detect_provider(model)
 
+        if mode is None:
+            mode = "direct"
         if mode not in ("direct", "auto"):
             raise ValueError(
                 f"Invalid provider mode: {mode}. Use 'direct', 'auto', or 'openrouter'."

@@ -62,8 +62,9 @@ class OllamaProvider(BaseLLMProvider):
     def is_available(self) -> bool:
         """Check if Ollama is reachable by hitting /api/tags with a 3s timeout."""
         now = time.time()
-        # Cache for 60 seconds
-        if self._available_cache is not None and (now - self._available_cache_time) < 60:
+        # Cache for 10 seconds (short TTL to avoid prolonged false negatives
+        # that silently fall through to another provider)
+        if self._available_cache is not None and (now - self._available_cache_time) < 10:
             return self._available_cache
 
         try:

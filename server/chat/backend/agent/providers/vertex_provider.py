@@ -4,10 +4,11 @@ Vertex AI provider implementation for Gemini models via Google Cloud.
 Uses ChatGoogleGenerativeAI with vertexai=True from langchain-google-genai 4.x.
 No separate langchain-google-vertexai package needed.
 
-Auth: VERTEX_AI_PROJECT required. Auth via VERTEX_AI_API_KEY, VERTEX_AI_SERVICE_ACCOUNT_JSON,
+Auth: VERTEX_AI_PROJECT required. Auth via VERTEX_AI_SERVICE_ACCOUNT_JSON,
 GOOGLE_APPLICATION_CREDENTIALS, or Application Default Credentials (ADC).
 """
 
+import atexit
 import logging
 import os
 import tempfile
@@ -26,8 +27,7 @@ class VertexAIProvider(BaseLLMProvider):
     def __init__(self):
         super().__init__()
         self.project = os.getenv("VERTEX_AI_PROJECT")
-        self.location = os.getenv("VERTEX_AI_LOCATION", "us-central1")
-        self.api_key = os.getenv("VERTEX_AI_API_KEY")
+        self.location = os.getenv("VERTEX_AI_LOCATION", "global")
         self._setup_service_account()
 
     def _setup_service_account(self):
@@ -41,9 +41,14 @@ class VertexAIProvider(BaseLLMProvider):
                 )
                 tmp.write(sa_json)
                 tmp.close()
+                os.chmod(tmp.name, 0o600)
                 os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = tmp.name
+                atexit.register(lambda p=tmp.name: os.unlink(p) if os.path.exists(p) else None)
                 logger.info("Vertex AI: Set GOOGLE_APPLICATION_CREDENTIALS from VERTEX_AI_SERVICE_ACCOUNT_JSON")
             except Exception as e:
+                # Clean up on failure
+                if 'tmp' in locals() and os.path.exists(tmp.name):
+                    os.unlink(tmp.name)
                 logger.warning(f"Vertex AI: Failed to write service account JSON: {e}")
 
     def get_chat_model(
@@ -52,7 +57,7 @@ class VertexAIProvider(BaseLLMProvider):
         if not self.is_available():
             raise RuntimeError(
                 "Vertex AI provider is not available. Set VERTEX_AI_PROJECT and provide auth "
-                "(VERTEX_AI_API_KEY, VERTEX_AI_SERVICE_ACCOUNT_JSON, or GOOGLE_APPLICATION_CREDENTIALS)."
+                "(VERTEX_AI_SERVICE_ACCOUNT_JSON, or GOOGLE_APPLICATION_CREDENTIALS)."
             )
 
         if not self.supports_model(model):
@@ -73,10 +78,6 @@ class VertexAIProvider(BaseLLMProvider):
             "project": self.project,
             "location": self.location,
         }
-
-        # Use API key if provided, otherwise rely on ADC/service account
-        if self.api_key:
-            config["google_api_key"] = self.api_key
 
         apply_gemini_thinking_config(config, native_model)
 
