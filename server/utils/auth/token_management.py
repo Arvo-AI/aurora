@@ -412,7 +412,12 @@ def get_token_data(user_id: str, provider: str, org_id: str | None = None) -> Op
             pass
 
     try:
-        logger.debug(f"[GET-TOKENS] Starting credential retrieval for user {user_id}, provider(s): {provider}, org_id: {org_id}")
+        logger.debug(
+            "[GET-TOKENS] Starting credential retrieval for user %s, provider(s): %s, org_id: %s",
+            _format_user_id_for_log(user_id),
+            provider,
+            org_id,
+        )
 
         # Handle list provider types - get first available provider
         if isinstance(provider, list):
@@ -447,6 +452,10 @@ def get_token_data(user_id: str, provider: str, org_id: str | None = None) -> Op
     except Exception as e:
         elapsed_time = (time.perf_counter() - start_time) * 1000
         logger.error(f"[GET-TOKENS]Failed to fetch credentials after {elapsed_time:.2f}ms")
-        logger.error(f"[GET-TOKENS] User: {user_id}, Provider(s): {provider}")
+        logger.error(
+            "[GET-TOKENS] User: %s, Provider(s): %s",
+            _format_user_id_for_log(user_id),
+            provider,
+        )
         logger.error(f"[GET-TOKENS] Error: {e}")
         return {}
