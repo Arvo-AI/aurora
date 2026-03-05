@@ -344,6 +344,8 @@ OVH_EU_CLIENT_SECRET=your-eu-client-secret
 NEXT_PUBLIC_ENABLE_SCALEWAY=true
 ```
 
+> No additional server-side credentials required. Users connect via API key through the UI.
+
 ### Confluence
 
 | Variable | Description |

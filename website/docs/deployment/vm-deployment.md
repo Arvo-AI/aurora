@@ -115,7 +115,7 @@ LLM_PROVIDER_MODE=direct       # for direct provider keys (Anthropic, OpenAI, et
 FRONTEND_URL=http://YOUR_VM_IP:3000
 NEXT_PUBLIC_BACKEND_URL=http://YOUR_VM_IP:5080
 NEXT_PUBLIC_WEBSOCKET_URL=ws://YOUR_VM_IP:5006
-SEARXNG_BASE_URL=http://YOUR_VM_IP:8082
+SEARXNG_URL=http://YOUR_VM_IP:8082
 ```
 
 Leave `BACKEND_URL=http://aurora-server:5080` as-is — that's for internal container-to-container communication.
@@ -306,7 +306,7 @@ docker restart aurora-vault-init
 Cloud provider ephemeral IPs change when the VM is stopped and restarted. Update `.env` with the new IP and recreate the frontend:
 
 ```bash
-nano .env   # update FRONTEND_URL, NEXT_PUBLIC_BACKEND_URL, NEXT_PUBLIC_WEBSOCKET_URL, SEARXNG_BASE_URL
+nano .env   # update FRONTEND_URL, NEXT_PUBLIC_BACKEND_URL, NEXT_PUBLIC_WEBSOCKET_URL, SEARXNG_URL
 docker compose -f docker-compose.prod-local.yml up -d frontend
 ```
 

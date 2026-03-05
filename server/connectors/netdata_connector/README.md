@@ -9,7 +9,7 @@ API Token authentication for Netdata Cloud.
 1. Go to [Netdata Cloud](https://app.netdata.cloud/) > avatar > **Account Settings** > **API Tokens**
 2. Click **Create Token**, name it `Aurora`, copy the token
 
-### 2. Configure `.env`
+### 2. Configuration
 
 > API tokens are entered by users via the UI. No environment variables required.
 
@@ -22,4 +22,4 @@ In Netdata Cloud: **Space settings** > **Alert notifications** > **Add configura
 
 ## Troubleshooting
 
-**Netdata connector not enabled** — Restart Aurora and verify the connector appears in the UI.
+**Netdata connector not visible** — Restart Aurora and verify the connector appears in the UI.
