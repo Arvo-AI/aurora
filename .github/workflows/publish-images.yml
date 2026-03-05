@@ -118,6 +118,7 @@ jobs:
             NEXT_PUBLIC_ENABLE_OVH=true
             NEXT_PUBLIC_ENABLE_PAGERDUTY_OAUTH=true
             NEXT_PUBLIC_ENABLE_SCALEWAY=true
+            NEXT_PUBLIC_ENABLE_SHAREPOINT=true
           cache-from: type=gha,scope=frontend-publish
           cache-to: type=gha,mode=max,scope=frontend-publish
 
