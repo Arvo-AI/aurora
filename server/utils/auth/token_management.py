@@ -42,10 +42,10 @@ def store_tokens_in_db(user_id: str, token_data: Dict, provider: str,
 
     if not org_id:
         try:
-            from utils.auth.stateless_auth import get_org_id_from_request
-            org_id = get_org_id_from_request()
-        except RuntimeError as e:
-            logging.debug("Could not resolve org_id from request context: %s", e)
+            from utils.auth.stateless_auth import resolve_org_id
+            org_id = resolve_org_id(user_id)
+        except Exception as e:
+            logging.debug("Could not resolve org_id: %s", e)
 
     if not org_id:
         logging.warning(
@@ -406,8 +406,8 @@ def get_token_data(user_id: str, provider: str, org_id: str | None = None) -> Op
     # Resolve org_id from request context if not explicitly provided
     if not org_id:
         try:
-            from utils.auth.stateless_auth import get_org_id_from_request
-            org_id = get_org_id_from_request()
+            from utils.auth.stateless_auth import resolve_org_id
+            org_id = resolve_org_id(user_id)
         except Exception:
             pass
 

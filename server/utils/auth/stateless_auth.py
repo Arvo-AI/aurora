@@ -8,6 +8,41 @@ from utils.db.db_utils import connect_to_db_as_user
 # Configure logging
 logger = logging.getLogger(__name__)
 
+
+def resolve_org_id(user_id: str) -> Optional[str]:
+    """Resolve org_id for a user, working both inside and outside Flask request context.
+
+    Priority:
+      1. Flask request header X-Org-ID (if in request context)
+      2. flask.g cache (if in request context)
+      3. DB lookup from users table (always works)
+
+    Safe to call from Celery tasks, background threads, etc.
+    """
+    # Try request-context path first (fast, cached)
+    try:
+        org_id = get_org_id_from_request()
+        if org_id:
+            return org_id
+    except Exception:
+        pass
+
+    # Fallback: direct DB lookup (works outside request context)
+    if not user_id:
+        return None
+    try:
+        from utils.db.connection_pool import db_pool
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT org_id FROM users WHERE id = %s", (user_id,))
+                row = cursor.fetchone()
+                if row and row[0]:
+                    return row[0]
+    except Exception as e:
+        logger.debug("resolve_org_id: DB lookup failed for user %s: %s", user_id, e)
+
+    return None
+
 # ---------------------------------------------------------------------------
 # AWS credential cache (per-process, 55-minute TTL)
 # ---------------------------------------------------------------------------
@@ -125,13 +160,17 @@ def get_credentials_from_db(user_id: str, provider: str) -> Optional[Dict[str, A
                 cur.execute("SET myapp.current_user_id = %s;", (user_id,))
                 conn.commit()
 
+                org_id = resolve_org_id(user_id)
+
                 cur.execute(
                     """
                     SELECT role_arn, account_id FROM user_connections
-                    WHERE user_id = %s AND provider = 'aws' AND status = 'active'
-                    ORDER BY last_verified_at DESC NULLS LAST LIMIT 1;
+                    WHERE (user_id = %s OR org_id = %s) AND provider = 'aws' AND status = 'active'
+                    ORDER BY CASE WHEN user_id = %s THEN 0 ELSE 1 END,
+                             last_verified_at DESC NULLS LAST
+                    LIMIT 1;
                     """,
-                    (user_id,),
+                    (user_id, org_id, user_id),
                 )
                 row = cur.fetchone()
             finally:
@@ -181,9 +220,14 @@ def get_credentials_from_db(user_id: str, provider: str) -> Optional[Dict[str, A
                     cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
                     conn.commit()
                     
+                    org_id = resolve_org_id(user_id)
                     cursor.execute(
-                        "SELECT subscription_id, subscription_name FROM user_tokens WHERE user_id = %s AND provider = %s ORDER BY timestamp DESC LIMIT 1",
-                        (user_id, provider)
+                        """SELECT subscription_id, subscription_name
+                           FROM user_tokens
+                           WHERE (user_id = %s OR org_id = %s) AND provider = %s
+                           ORDER BY CASE WHEN user_id = %s THEN 0 ELSE 1 END, timestamp DESC
+                           LIMIT 1""",
+                        (user_id, org_id, provider, user_id)
                     )
                     result = cursor.fetchone()
                     
@@ -352,6 +396,7 @@ def get_connected_providers(user_id: str) -> List[str]:
     
     Checks both user_tokens (OAuth/secret-based) and user_connections (role-based)
     to determine which providers are actually connected.
+    Includes org-shared connections so all org members see the same providers.
     
     Args:
         user_id: The user ID to check
@@ -362,6 +407,7 @@ def get_connected_providers(user_id: str) -> List[str]:
     if not user_id:
         return []
     
+    org_id = resolve_org_id(user_id)
     connected_providers = []
     
     try:
@@ -375,9 +421,10 @@ def get_connected_providers(user_id: str) -> List[str]:
             """
             SELECT DISTINCT provider
             FROM user_tokens 
-            WHERE user_id = %s AND secret_ref IS NOT NULL AND is_active = TRUE
+            WHERE (user_id = %s OR org_id = %s)
+              AND secret_ref IS NOT NULL AND is_active = TRUE
             """,
-            (user_id,)
+            (user_id, org_id)
         )
         token_providers = [row[0] for row in cursor.fetchall()]
         connected_providers.extend(token_providers)
@@ -387,9 +434,9 @@ def get_connected_providers(user_id: str) -> List[str]:
             """
             SELECT DISTINCT provider
             FROM user_connections
-            WHERE user_id = %s AND status = 'active'
+            WHERE (user_id = %s OR org_id = %s) AND status = 'active'
             """,
-            (user_id,)
+            (user_id, org_id)
         )
         connection_providers = [row[0] for row in cursor.fetchall()]
         connected_providers.extend(connection_providers)
