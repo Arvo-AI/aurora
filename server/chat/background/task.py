@@ -174,6 +174,7 @@ def _get_connected_integrations(user_id: str) -> Dict[str, bool]:
         'dynatrace': False,
         'github': False,
         'confluence': False,
+        'jira': False,
         'sharepoint': False,
         'coroot': False,
         'jenkins': False,
@@ -209,6 +210,17 @@ def _get_connected_integrations(user_id: str) -> Dict[str, bool]:
         )
     except Exception as e:
         logger.debug(f"[BackgroundChat] Error checking Confluence: {e}")
+
+    try:
+        from utils.flags.feature_flags import is_jira_enabled
+        if is_jira_enabled():
+            from utils.auth.token_management import get_token_data as _get_jira_creds
+            jira_creds = _get_jira_creds(user_id, "jira")
+            integrations['jira'] = bool(
+                jira_creds and (jira_creds.get("access_token") or jira_creds.get("api_token"))
+            )
+    except Exception as e:
+        logger.debug(f"[BackgroundChat] Error checking Jira: {e}")
 
     try:
         from utils.flags.feature_flags import is_sharepoint_enabled

@@ -2,15 +2,47 @@
 
 import json
 import logging
+import time
 from typing import Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
 from connectors.jira_connector.client import JiraClient
 from connectors.jira_connector.adf_converter import text_to_adf, markdown_to_adf
-from utils.auth.token_management import get_token_data
+from utils.auth.token_management import get_token_data, store_tokens_in_db
 
 logger = logging.getLogger(__name__)
+
+
+def _refresh_oauth_token(user_id: str, creds: dict) -> Optional[dict]:
+    """Attempt to refresh an expired OAuth access token and persist the result."""
+    refresh_token = creds.get("refresh_token")
+    if not refresh_token:
+        return None
+    try:
+        from connectors.atlassian_auth.auth import refresh_access_token
+        token_data = refresh_access_token(refresh_token)
+    except Exception as exc:
+        logger.warning("[JIRA-TOOL] OAuth refresh failed for user %s: %s", user_id, exc)
+        return None
+
+    access_token = token_data.get("access_token")
+    if not access_token:
+        return None
+
+    updated = dict(creds)
+    updated["access_token"] = access_token
+    new_refresh = token_data.get("refresh_token")
+    if new_refresh:
+        updated["refresh_token"] = new_refresh
+    expires_in = token_data.get("expires_in")
+    if expires_in:
+        updated["expires_in"] = expires_in
+        updated["expires_at"] = int(time.time()) + int(expires_in)
+
+    store_tokens_in_db(user_id, updated, "jira")
+    logger.info("[JIRA-TOOL] Refreshed OAuth token for user %s", user_id)
+    return updated
 
 
 def _get_client(user_id: str) -> JiraClient:
@@ -19,13 +51,34 @@ def _get_client(user_id: str) -> JiraClient:
         raise ValueError("Jira is not connected. Please connect Jira first.")
 
     auth_type = (creds.get("auth_type") or "oauth").lower()
+
+    if auth_type == "oauth":
+        expires_at = creds.get("expires_at")
+        if expires_at and int(time.time()) >= int(expires_at) - 60:
+            refreshed = _refresh_oauth_token(user_id, creds)
+            if refreshed:
+                creds = refreshed
+
     base_url = creds.get("base_url", "")
     cloud_id = creds.get("cloud_id") if auth_type == "oauth" else None
     token = creds.get("pat_token") if auth_type == "pat" else creds.get("access_token")
     if not token:
         raise ValueError("Jira credentials are incomplete.")
 
-    return JiraClient(base_url, token, auth_type=auth_type, cloud_id=cloud_id)
+    client = JiraClient(base_url, token, auth_type=auth_type, cloud_id=cloud_id)
+
+    if auth_type == "oauth":
+        try:
+            client.get_myself()
+        except Exception:
+            logger.info("[JIRA-TOOL] Token validation failed, attempting refresh for user %s", user_id)
+            refreshed = _refresh_oauth_token(user_id, creds)
+            if not refreshed:
+                raise ValueError("Jira OAuth token expired and refresh failed. Please reconnect Jira.")
+            token = refreshed.get("access_token")
+            client = JiraClient(base_url, token, auth_type=auth_type, cloud_id=cloud_id)
+
+    return client
 
 
 # ---------------------------------------------------------------------------
@@ -83,11 +136,13 @@ def jira_search_issues(
     try:
         client = _get_client(user_id)
         result = client.search_issues(jql, max_results=min(max_results, 50))
-    except ValueError:
-        raise
     except Exception as exc:
         logger.exception("Jira search failed for user %s: %s", user_id, exc)
-        raise ValueError("Failed to search Jira; check connection and permissions") from exc
+        return json.dumps(
+            {"status": "error", "error": f"Jira search failed: {exc}. "
+             "Continue the investigation using other tools."},
+            ensure_ascii=False,
+        )
 
     issues = result.get("issues", [])
     simplified = []
@@ -123,11 +178,13 @@ def jira_get_issue(
     try:
         client = _get_client(user_id)
         issue = client.get_issue(issue_key)
-    except ValueError:
-        raise
     except Exception as exc:
         logger.exception("Jira get issue failed for user %s: %s", user_id, exc)
-        raise ValueError("Failed to get Jira issue; check connection and permissions") from exc
+        return json.dumps(
+            {"status": "error", "error": f"Jira get issue failed: {exc}. "
+             "Continue the investigation using other tools."},
+            ensure_ascii=False,
+        )
 
     fields = issue.get("fields", {})
     desc_body = fields.get("description")

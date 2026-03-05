@@ -93,6 +93,11 @@ class JiraClient:
     # Search
     # ------------------------------------------------------------------
 
+    _DEFAULT_SEARCH_FIELDS = [
+        "summary", "status", "assignee", "priority",
+        "created", "updated", "labels", "issuetype", "project",
+    ]
+
     def search_issues(
         self,
         jql: str,
@@ -100,15 +105,37 @@ class JiraClient:
         max_results: int = 20,
         start_at: int = 0,
     ) -> Dict[str, Any]:
-        """Search issues via JQL."""
-        body: Dict[str, Any] = {
+        """Search issues via JQL.
+
+        Uses /search/jql (Atlassian migrated from /search — CHANGE-2046, March 2026).
+        Falls back to /search for Data Center instances that may not have the new endpoint.
+        """
+        search_fields = fields or self._DEFAULT_SEARCH_FIELDS
+
+        new_body: Dict[str, Any] = {
             "jql": jql,
             "maxResults": max_results,
-            "startAt": start_at,
+            "fields": search_fields,
         }
-        if fields:
-            body["fields"] = fields
-        return self._request("POST", "/search", json_body=body)
+
+        try:
+            result = self._request("POST", "/search/jql", json_body=new_body)
+            if "total" not in result:
+                result["total"] = len(result.get("issues", []))
+            return result
+        except Exception as exc:
+            status = getattr(getattr(exc, "response", None), "status_code", None)
+            if status in (404, 405):
+                logger.info("Jira /search/jql not available, falling back to /search")
+                legacy_body: Dict[str, Any] = {
+                    "jql": jql,
+                    "maxResults": max_results,
+                    "startAt": start_at,
+                }
+                if fields:
+                    legacy_body["fields"] = fields
+                return self._request("POST", "/search", json_body=legacy_body)
+            raise
 
     # ------------------------------------------------------------------
     # Issue CRUD
