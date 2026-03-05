@@ -160,7 +160,7 @@ function AddUserDialog({ onCreated }: { onCreated: () => void }) {
             <div className="grid gap-1.5">
               <Label className="text-xs">Role</Label>
               <Select value={role} onValueChange={setRole}>
-                <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
+                <SelectTrigger className="h-9 w-full [&>span]:line-clamp-none"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   {VALID_ROLES.map((r) => (
                     <SelectItem key={r} value={r}>
