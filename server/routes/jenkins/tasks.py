@@ -233,7 +233,7 @@ def process_jenkins_deployment(
                                (user_id, source_type, source_alert_id, alert_title, alert_service,
                                 alert_environment, severity, status, started_at, alert_metadata)
                                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                               ON CONFLICT (source_type, source_alert_id, user_id) DO UPDATE
+                               ON CONFLICT (org_id, source_type, source_alert_id, user_id) DO UPDATE
                                SET updated_at = CURRENT_TIMESTAMP,
                                    alert_metadata = EXCLUDED.alert_metadata
                                RETURNING id""",

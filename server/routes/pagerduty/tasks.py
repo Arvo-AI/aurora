@@ -629,7 +629,7 @@ def process_pagerduty_event(
                     (user_id, org_id, source_type, source_alert_id, alert_title, alert_service, 
                      severity, status, started_at, alert_metadata)
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (source_type, source_alert_id, user_id) DO UPDATE
+                    ON CONFLICT (org_id, source_type, source_alert_id, user_id) DO UPDATE
                     SET updated_at = CURRENT_TIMESTAMP,
                         status = EXCLUDED.status,
                         severity = EXCLUDED.severity,

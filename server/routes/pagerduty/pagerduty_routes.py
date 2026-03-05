@@ -56,6 +56,9 @@ def _validate_v3_webhook(payload: dict) -> tuple[bool, str]:
 @require_permission("connectors", "read")
 def pagerduty_status(user_id):
     """Get PagerDuty connection status."""
+    if request.method == "OPTIONS":
+        return create_cors_response()
+
     creds = get_token_data(user_id, "pagerduty")
     if not creds:
         return jsonify({"connected": False})
@@ -66,8 +69,8 @@ def pagerduty_status(user_id):
             try:
                 store_tokens_in_db(user_id, {**creds, **refreshed}, "pagerduty")
                 creds.update(refreshed)
-            except Exception as e:
-                logging.warning(f"Failed to refresh PagerDuty token: {e}")
+            except Exception:
+                logger.exception("[PAGERDUTY] Failed to persist refreshed OAuth token for user %s", user_id)
 
     return jsonify({"connected": True, "displayName": creds.get("display_name", "PagerDuty"), "validatedAt": creds.get("validated_at"), "authType": creds.get("auth_type", "api_token"), "capabilities": creds.get("capabilities", {}), "externalUserEmail": creds.get("external_user_email"), "externalUserName": creds.get("external_user_name"), "accountSubdomain": creds.get("account_subdomain")})
 
@@ -99,7 +102,7 @@ def pagerduty_connect(user_id):
         token_info = validate_token(PagerDutyClient(api_token=token))
         logger.info(f"[PAGERDUTY] Token validated successfully for user {user_id}")
     except PagerDutyAPIError as e:
-        logger.warning(f"[PAGERDUTY] Token validation failed for user {user_id}: {str(e)}")
+        logger.warning("[PAGERDUTY] Token validation failed for user %s: %s", user_id, e)
         return error_response(e)
 
     token_data = {
@@ -111,7 +114,8 @@ def pagerduty_connect(user_id):
 
     try:
         store_tokens_in_db(user_id, token_data, "pagerduty")
-    except Exception as e:
+    except Exception:
+        logger.exception("[PAGERDUTY] Failed to store token data for user %s", user_id)
         return jsonify({"error": "Storage failed"}), 500
 
     return jsonify({"success": True, "connected": True, "displayName": display_name, **token_info})
@@ -123,11 +127,12 @@ def pagerduty_disconnect(user_id):
     """Disconnect PagerDuty."""
     try:
         with db_pool.get_admin_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("DELETE FROM user_tokens WHERE user_id = %s AND provider = %s", (user_id, "pagerduty"))
+            with conn.cursor() as cursor:
+                cursor.execute("DELETE FROM user_tokens WHERE user_id = %s AND provider = %s", (user_id, "pagerduty"))
             conn.commit()
         return jsonify({"success": True})
     except Exception:
+        logger.exception("[PAGERDUTY] Disconnect failed for user %s", user_id)
         return jsonify({"error": "Disconnect failed"}), 500
 
 

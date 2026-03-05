@@ -34,8 +34,12 @@ def aws_get_credentials(user_id):
 
         org_id = get_org_id_from_request()
 
-        # Try session cache first
+        # Validate session cache belongs to current org
         aws_credentials = session.get('aws_credentials')
+        if aws_credentials and aws_credentials.get('org_id') != org_id:
+            session.pop('aws_credentials', None)
+            aws_credentials = None
+
         if not aws_credentials:
             try:
                 from utils.db.connection_utils import get_user_aws_connection

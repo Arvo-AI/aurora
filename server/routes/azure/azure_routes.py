@@ -17,7 +17,7 @@ azure_bp = Blueprint("azure_bp", __name__)
 # ---- Azure Routes ------------------------------------------------------#
 @azure_bp.route("/azure/login", methods=["POST", "GET", "OPTIONS"])
 @require_permission("connectors", "write")
-def azure_login_route(user_id):
+def azure_login_route(_user_id):
     if flask.request.method == 'OPTIONS':
         return create_cors_response()
     return azure_login()
@@ -154,7 +154,9 @@ def azure_subscriptions(user_id):
         return create_cors_response()
     try:
         if request.method == "GET":
-            token_data = get_token_data(user_id, "azure")
+            from utils.auth.stateless_auth import get_org_id_from_request
+            org_id = get_org_id_from_request()
+            token_data = get_token_data(user_id, "azure", org_id=org_id)
             if not token_data:
                 logging.warning(f"[AZURE API] No Azure token data found for user {user_id}")
                 return jsonify({"error": "No Azure credentials found. Please authenticate with Azure."}), 401

@@ -221,12 +221,17 @@ def tailscale_tailnets_post(user_id):
         conn = connect_to_db_as_admin()
         try:
             with conn.cursor() as cur:
+                from utils.auth.stateless_auth import get_org_id_from_request
+                try:
+                    _org_id = get_org_id_from_request()
+                except Exception:
+                    _org_id = None
                 cur.execute("""
-                    INSERT INTO user_preferences (user_id, preference_key, preference_value)
-                    VALUES (%s, %s, %s)
-                    ON CONFLICT (user_id, preference_key)
+                    INSERT INTO user_preferences (user_id, org_id, preference_key, preference_value)
+                    VALUES (%s, %s, %s, %s)
+                    ON CONFLICT (user_id, org_id, preference_key)
                     DO UPDATE SET preference_value = EXCLUDED.preference_value, updated_at = NOW()
-                """, (user_id, 'tailscale_tailnets', json.dumps(tailnets)))
+                """, (user_id, _org_id, 'tailscale_tailnets', json.dumps(tailnets)))
             conn.commit()
         finally:
             conn.close()
@@ -418,12 +423,17 @@ def tailscale_root_tailnet_post(user_id):
                 return jsonify({"error": "tailnetId is required"}), 400
 
             with conn.cursor() as cur:
+                from utils.auth.stateless_auth import get_org_id_from_request
+                try:
+                    _org_id = get_org_id_from_request()
+                except Exception:
+                    _org_id = None
                 cur.execute("""
-                    INSERT INTO user_preferences (user_id, preference_key, preference_value)
-                    VALUES (%s, %s, %s::jsonb)
-                    ON CONFLICT (user_id, preference_key)
+                    INSERT INTO user_preferences (user_id, org_id, preference_key, preference_value)
+                    VALUES (%s, %s, %s, %s::jsonb)
+                    ON CONFLICT (user_id, org_id, preference_key)
                     DO UPDATE SET preference_value = EXCLUDED.preference_value, updated_at = NOW()
-                """, (user_id, 'tailscale_root_tailnet', json.dumps(tailnet_id)))
+                """, (user_id, _org_id, 'tailscale_root_tailnet', json.dumps(tailnet_id)))
             conn.commit()
 
             logger.info(f"Set Tailscale root tailnet to {tailnet_id} for user {user_id}")

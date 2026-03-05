@@ -25,7 +25,7 @@ onboarding_bp = Blueprint("aws_onboarding_bp", __name__)
 
 @onboarding_bp.route('/aws/env/check', methods=['GET', 'OPTIONS'])
 @require_permission("connectors", "read")
-def check_aws_environment(user_id):
+def check_aws_environment(_user_id):
     """
     Check if Aurora has AWS environment configured (AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY).
     
@@ -267,12 +267,10 @@ def get_aws_onboarding_status(user_id, workspace_id):
 
 
 
-@onboarding_bp.route('/users/<user_id>/workspaces', methods=['GET', 'POST', 'OPTIONS'])
+@onboarding_bp.route('/users/<user_id>/workspaces', methods=['GET', 'OPTIONS'])
 @require_permission("connectors", "read")
-def manage_user_workspaces(authenticated_user_id, user_id):
-    """
-    Get user workspaces (GET) or create new workspace (POST).
-    """
+def list_user_workspaces(authenticated_user_id, user_id):
+    """Get user workspaces."""
     if request.method == 'OPTIONS':
         return create_cors_response()
     
@@ -280,23 +278,30 @@ def manage_user_workspaces(authenticated_user_id, user_id):
         if authenticated_user_id != user_id:
             return jsonify({"error": "Access denied"}), 403
         
-        if request.method == 'GET':
-            # Return user workspaces (for now, auto-create default)
-            workspace = get_or_create_workspace(user_id, "default")
-            return jsonify({"workspaces": [workspace]})
-        
-        elif request.method == 'POST':
-            # Create new workspace
-            data = request.get_json() or {}
-            workspace_name = data.get('name', 'default')
-            
-            workspace = get_or_create_workspace(user_id, workspace_name)
-            return jsonify(workspace)
-
-        return jsonify({"error": "Method not allowed"}), 405
+        workspace = get_or_create_workspace(user_id, "default")
+        return jsonify({"workspaces": [workspace]})
         
     except Exception as e:
-        logger.error(f"Failed to manage workspaces for user {user_id}: {e}")
+        logger.error(f"Failed to list workspaces for user {user_id}: {e}")
+        return jsonify({"error": "Internal server error"}), 500
+
+
+@onboarding_bp.route('/users/<user_id>/workspaces', methods=['POST'])
+@require_permission("connectors", "write")
+def create_user_workspace(authenticated_user_id, user_id):
+    """Create new workspace."""
+    try:
+        if authenticated_user_id != user_id:
+            return jsonify({"error": "Access denied"}), 403
+        
+        data = request.get_json() or {}
+        workspace_name = data.get('name', 'default')
+        
+        workspace = get_or_create_workspace(user_id, workspace_name)
+        return jsonify(workspace)
+        
+    except Exception as e:
+        logger.error(f"Failed to create workspace for user {user_id}: {e}")
         return jsonify({"error": "Internal server error"}), 500
 
 
@@ -371,16 +376,13 @@ def workspace_cleanup(user_id, workspace_id):
 
 
 @onboarding_bp.route('/workspaces/<workspace_id>/aws/accounts', methods=['GET', 'OPTIONS'])
-def list_aws_accounts(workspace_id):
+@require_permission("connectors", "read")
+def list_aws_accounts(user_id, workspace_id):
     """Return all active AWS accounts connected to this workspace's owner."""
     if request.method == 'OPTIONS':
         return create_cors_response()
 
     try:
-        user_id = get_authenticated_user_id()
-        if not user_id:
-            return jsonify({"error": "Unauthorized"}), 401
-
         workspace = get_workspace_by_id(workspace_id)
         if not workspace or workspace['user_id'] != user_id:
             return jsonify({"error": "Access denied"}), 403
@@ -395,7 +397,8 @@ def list_aws_accounts(workspace_id):
 
 
 @onboarding_bp.route('/workspaces/<workspace_id>/aws/accounts/bulk', methods=['POST', 'OPTIONS'])
-def bulk_register_aws_accounts(workspace_id):
+@require_permission("connectors", "write")
+def bulk_register_aws_accounts(user_id, workspace_id):
     """Register multiple AWS accounts at once.
 
     Expected payload::
@@ -415,10 +418,6 @@ def bulk_register_aws_accounts(workspace_id):
         return create_cors_response()
 
     try:
-        user_id = get_authenticated_user_id()
-        if not user_id:
-            return jsonify({"error": "Unauthorized"}), 401
-
         workspace = get_workspace_by_id(workspace_id)
         if not workspace or workspace['user_id'] != user_id:
             return jsonify({"error": "Access denied"}), 403
@@ -505,16 +504,13 @@ def bulk_register_aws_accounts(workspace_id):
 
 
 @onboarding_bp.route('/workspaces/<workspace_id>/aws/accounts/<account_id>', methods=['DELETE', 'OPTIONS'])
-def delete_aws_account(workspace_id, account_id):
+@require_permission("connectors", "write")
+def delete_aws_account(user_id, workspace_id, account_id):
     """Disconnect a single AWS account from the workspace."""
     if request.method == 'OPTIONS':
         return create_cors_response()
 
     try:
-        user_id = get_authenticated_user_id()
-        if not user_id:
-            return jsonify({"error": "Unauthorized"}), 401
-
         workspace = get_workspace_by_id(workspace_id)
         if not workspace or workspace['user_id'] != user_id:
             return jsonify({"error": "Access denied"}), 403
@@ -532,7 +528,8 @@ def delete_aws_account(workspace_id, account_id):
 
 
 @onboarding_bp.route('/workspaces/<workspace_id>/aws/accounts/inactive', methods=['GET', 'OPTIONS'])
-def list_inactive_aws_accounts(workspace_id):
+@require_permission("connectors", "read")
+def list_inactive_aws_accounts(user_id, workspace_id):
     """Return recently disconnected AWS accounts that can be reconnected.
 
     The IAM role likely still exists in these accounts, so the user can
@@ -542,10 +539,6 @@ def list_inactive_aws_accounts(workspace_id):
         return create_cors_response()
 
     try:
-        user_id = get_authenticated_user_id()
-        if not user_id:
-            return jsonify({"error": "Unauthorized"}), 401
-
         workspace = get_workspace_by_id(workspace_id)
         if not workspace or workspace['user_id'] != user_id:
             return jsonify({"error": "Access denied"}), 403
@@ -560,7 +553,8 @@ def list_inactive_aws_accounts(workspace_id):
 
 
 @onboarding_bp.route('/workspaces/<workspace_id>/aws/accounts/<account_id>/reconnect', methods=['POST', 'OPTIONS'])
-def reconnect_aws_account(workspace_id, account_id):
+@require_permission("connectors", "write")
+def reconnect_aws_account(user_id, workspace_id, account_id):
     """Reconnect a previously disconnected AWS account.
 
     Validates the role still works via STS AssumeRole, then re-activates
@@ -570,10 +564,6 @@ def reconnect_aws_account(workspace_id, account_id):
         return create_cors_response()
 
     try:
-        user_id = get_authenticated_user_id()
-        if not user_id:
-            return jsonify({"error": "Unauthorized"}), 401
-
         workspace = get_workspace_by_id(workspace_id)
         if not workspace or workspace['user_id'] != user_id:
             return jsonify({"error": "Access denied"}), 403
@@ -631,7 +621,8 @@ def reconnect_aws_account(workspace_id, account_id):
 
 
 @onboarding_bp.route('/workspaces/<workspace_id>/aws/cfn-template', methods=['GET', 'OPTIONS'])
-def get_cfn_template(workspace_id):
+@require_permission("connectors", "read")
+def get_cfn_template(user_id, workspace_id):
     """Return the CloudFormation template with ExternalId and Aurora account ID pre-filled.
 
     Query params:
@@ -641,10 +632,6 @@ def get_cfn_template(workspace_id):
         return create_cors_response()
 
     try:
-        user_id = get_authenticated_user_id()
-        if not user_id:
-            return jsonify({"error": "Unauthorized"}), 401
-
         workspace = get_workspace_by_id(workspace_id)
         if not workspace or workspace['user_id'] != user_id:
             return jsonify({"error": "Access denied"}), 403
@@ -732,7 +719,8 @@ def get_cfn_template(workspace_id):
 
 
 @onboarding_bp.route('/workspaces/<workspace_id>/aws/cfn-quickcreate', methods=['GET', 'OPTIONS'])
-def get_cfn_quickcreate_link(workspace_id):
+@require_permission("connectors", "read")
+def get_cfn_quickcreate_link(user_id, workspace_id):
     """Return a CloudFormation Quick-Create URL that opens the AWS Console
     with all parameters pre-filled.
 
@@ -751,10 +739,6 @@ def get_cfn_quickcreate_link(workspace_id):
         return create_cors_response()
 
     try:
-        user_id = get_authenticated_user_id()
-        if not user_id:
-            return jsonify({"error": "Unauthorized"}), 401
-
         workspace = get_workspace_by_id(workspace_id)
         if not workspace or workspace['user_id'] != user_id:
             return jsonify({"error": "Access denied"}), 403

@@ -272,18 +272,24 @@ def get_deployment_task(user_id: str, task_id: str = None) -> Optional[Dict]:
 def store_user_preference(user_id: str, key: str, value: Any):
     """Store user preference in database."""
     try:
+        org_id = None
+        try:
+            org_id = get_org_id_from_request()
+        except Exception:
+            pass
+
         conn = connect_to_db_as_user()
         cursor = conn.cursor()
         cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
         conn.commit()
         
         cursor.execute("""
-            INSERT INTO user_preferences (user_id, preference_key, preference_value)
-            VALUES (%s, %s, %s)
-            ON CONFLICT (user_id, preference_key) DO UPDATE SET
+            INSERT INTO user_preferences (user_id, org_id, preference_key, preference_value)
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (user_id, org_id, preference_key) DO UPDATE SET
                 preference_value = EXCLUDED.preference_value,
                 updated_at = CURRENT_TIMESTAMP
-        """, (user_id, key, json.dumps(value)))
+        """, (user_id, org_id, key, json.dumps(value)))
         conn.commit()
         logger.debug(f"Stored preference {key} for user {user_id}")
     except Exception as e:

@@ -139,7 +139,7 @@ def update_memory(user_id):
                 """
                 INSERT INTO knowledge_base_memory (user_id, org_id, content, updated_at)
                 VALUES (%s, %s, %s, CURRENT_TIMESTAMP)
-                ON CONFLICT (user_id)
+                ON CONFLICT (user_id, org_id)
                 DO UPDATE SET content = EXCLUDED.content, updated_at = CURRENT_TIMESTAMP
                 RETURNING updated_at
                 """,

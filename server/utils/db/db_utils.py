@@ -332,7 +332,7 @@ def initialize_tables():
                         preference_value JSONB,
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        UNIQUE(user_id, preference_key)
+                        UNIQUE(user_id, org_id, preference_key)
                     );
                 """,
                 "workspaces": """
@@ -589,7 +589,7 @@ def initialize_tables():
                          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                          merged_into_incident_id UUID REFERENCES incidents(id) ON DELETE SET NULL,
-                         UNIQUE(source_type, source_alert_id, user_id)
+                         UNIQUE(org_id, source_type, source_alert_id, user_id)
                      );
                      
                      CREATE INDEX IF NOT EXISTS idx_incidents_user_id ON incidents(user_id, started_at DESC);
@@ -898,11 +898,12 @@ def initialize_tables():
                 "knowledge_base_memory": """
                     CREATE TABLE IF NOT EXISTS knowledge_base_memory (
                         id SERIAL PRIMARY KEY,
-                        user_id VARCHAR(1000) NOT NULL UNIQUE,
+                        user_id VARCHAR(1000) NOT NULL,
                         org_id VARCHAR(255),
                         content TEXT NOT NULL DEFAULT '',
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE(user_id, org_id)
                     );
 
                     CREATE INDEX IF NOT EXISTS idx_kb_memory_user_id ON knowledge_base_memory(user_id);
@@ -1554,20 +1555,15 @@ def initialize_tables():
                 cursor.execute(f"ALTER TABLE {table_name} FORCE ROW LEVEL SECURITY;")
                 logging.info(f"RLS forced on table '{table_name}'.")
 
-                # Create org-based SELECT policy (primary isolation mechanism)
+                # Create org-based SELECT policy (DROP+CREATE to ensure latest definition)
                 policy_sql = f"""
                     DO $$
                     BEGIN
-                        IF NOT EXISTS (
-                            SELECT 1 FROM pg_policies
-                            WHERE tablename = '{table_name}'
-                            AND policyname = 'select_by_org'
-                        ) THEN
-                            CREATE POLICY select_by_org ON {table_name}
-                            FOR SELECT USING (
-                                org_id = current_setting('myapp.current_org_id', true)::text
-                            );
-                        END IF;
+                        DROP POLICY IF EXISTS select_by_org ON {table_name};
+                        CREATE POLICY select_by_org ON {table_name}
+                        FOR SELECT USING (
+                            org_id = current_setting('myapp.current_org_id', true)::text
+                        );
                     END $$;
                     """
                 cursor.execute(policy_sql)
@@ -1599,16 +1595,11 @@ def initialize_tables():
                     insert_policy_sql = f"""
                         DO $$
                         BEGIN
-                            IF NOT EXISTS (
-                                SELECT 1 FROM pg_policies
-                                WHERE tablename = '{table_name}'
-                                AND policyname = 'insert_by_org'
-                            ) THEN
-                                CREATE POLICY insert_by_org ON {table_name}
-                                FOR INSERT WITH CHECK (
-                                    org_id = current_setting('myapp.current_org_id', true)::text
-                                );
-                            END IF;
+                            DROP POLICY IF EXISTS insert_by_org ON {table_name};
+                            CREATE POLICY insert_by_org ON {table_name}
+                            FOR INSERT WITH CHECK (
+                                org_id = current_setting('myapp.current_org_id', true)::text
+                            );
                         END $$;
                         """
                     cursor.execute(insert_policy_sql)
@@ -1616,16 +1607,11 @@ def initialize_tables():
                     update_policy_sql = f"""
                         DO $$
                         BEGIN
-                            IF NOT EXISTS (
-                                SELECT 1 FROM pg_policies
-                                WHERE tablename = '{table_name}'
-                                AND policyname = 'update_by_org'
-                            ) THEN
-                                CREATE POLICY update_by_org ON {table_name}
-                                FOR UPDATE USING (
-                                    org_id = current_setting('myapp.current_org_id', true)::text
-                                );
-                            END IF;
+                            DROP POLICY IF EXISTS update_by_org ON {table_name};
+                            CREATE POLICY update_by_org ON {table_name}
+                            FOR UPDATE USING (
+                                org_id = current_setting('myapp.current_org_id', true)::text
+                            );
                         END $$;
                         """
                     cursor.execute(update_policy_sql)
@@ -1633,16 +1619,11 @@ def initialize_tables():
                     delete_policy_sql = f"""
                         DO $$
                         BEGIN
-                            IF NOT EXISTS (
-                                SELECT 1 FROM pg_policies
-                                WHERE tablename = '{table_name}'
-                                AND policyname = 'delete_by_org'
-                            ) THEN
-                                CREATE POLICY delete_by_org ON {table_name}
-                                FOR DELETE USING (
-                                    org_id = current_setting('myapp.current_org_id', true)::text
-                                );
-                            END IF;
+                            DROP POLICY IF EXISTS delete_by_org ON {table_name};
+                            CREATE POLICY delete_by_org ON {table_name}
+                            FOR DELETE USING (
+                                org_id = current_setting('myapp.current_org_id', true)::text
+                            );
                         END $$;
                         """
                     cursor.execute(delete_policy_sql)
@@ -1755,6 +1736,64 @@ def initialize_tables():
                     )
                 except Exception as e:
                     logging.warning(f"Error creating org_id index for {tbl}: {e}")
+
+            # Migration: update UNIQUE constraints to include org_id
+            # incidents: (source_type, source_alert_id, user_id) -> (org_id, source_type, source_alert_id, user_id)
+            try:
+                cursor.execute("""
+                    DO $$
+                    BEGIN
+                        IF EXISTS (
+                            SELECT 1 FROM pg_constraint
+                            WHERE conname = 'incidents_source_type_source_alert_id_user_id_key'
+                        ) THEN
+                            ALTER TABLE incidents DROP CONSTRAINT incidents_source_type_source_alert_id_user_id_key;
+                            ALTER TABLE incidents ADD CONSTRAINT incidents_org_source_alert_user_key
+                                UNIQUE(org_id, source_type, source_alert_id, user_id);
+                        END IF;
+                    END $$;
+                """)
+            except Exception as e:
+                logging.warning(f"Error migrating incidents UNIQUE constraint: {e}")
+                conn.rollback()
+
+            # knowledge_base_memory: UNIQUE(user_id) -> UNIQUE(user_id, org_id)
+            try:
+                cursor.execute("""
+                    DO $$
+                    BEGIN
+                        IF EXISTS (
+                            SELECT 1 FROM pg_constraint
+                            WHERE conname = 'knowledge_base_memory_user_id_key'
+                        ) THEN
+                            ALTER TABLE knowledge_base_memory DROP CONSTRAINT knowledge_base_memory_user_id_key;
+                            ALTER TABLE knowledge_base_memory ADD CONSTRAINT knowledge_base_memory_user_org_key
+                                UNIQUE(user_id, org_id);
+                        END IF;
+                    END $$;
+                """)
+            except Exception as e:
+                logging.warning(f"Error migrating knowledge_base_memory UNIQUE constraint: {e}")
+                conn.rollback()
+
+            # user_preferences: UNIQUE(user_id, preference_key) -> UNIQUE(user_id, org_id, preference_key)
+            try:
+                cursor.execute("""
+                    DO $$
+                    BEGIN
+                        IF EXISTS (
+                            SELECT 1 FROM pg_constraint
+                            WHERE conname = 'user_preferences_user_id_preference_key_key'
+                        ) THEN
+                            ALTER TABLE user_preferences DROP CONSTRAINT user_preferences_user_id_preference_key_key;
+                            ALTER TABLE user_preferences ADD CONSTRAINT user_preferences_user_org_pref_key
+                                UNIQUE(user_id, org_id, preference_key);
+                        END IF;
+                    END $$;
+                """)
+            except Exception as e:
+                logging.warning(f"Error migrating user_preferences UNIQUE constraint: {e}")
+                conn.rollback()
 
             # Create k8s_clusters view (after org_id migration so the column exists)
             try:

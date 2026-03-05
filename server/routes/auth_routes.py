@@ -72,8 +72,8 @@ def register():
                 user = cursor.fetchone()
                 user_id, user_email, user_name = user[0], user[1], user[2]
 
-                # Auto-promote the very first user to admin
-                cursor.execute("SELECT COUNT(*) FROM users")
+                # Auto-promote the very first user to admin (with row lock to prevent race condition)
+                cursor.execute("SELECT COUNT(*) FROM users FOR UPDATE")
                 user_count = cursor.fetchone()[0]
                 role = "admin" if user_count == 1 else "viewer"
 
@@ -317,19 +317,16 @@ def get_admins():
         return jsonify({"error": "Unauthorized"}), 401
 
     org_id = get_org_id_from_request()
+    if not org_id:
+        return jsonify({"error": "Organization context required"}), 403
 
     conn = connect_to_db_as_user()
     try:
         with conn.cursor() as cursor:
-            if org_id:
-                cursor.execute(
-                    "SELECT name, email FROM users WHERE role = 'admin' AND org_id = %s ORDER BY created_at",
-                    (org_id,),
-                )
-            else:
-                cursor.execute(
-                    "SELECT name, email FROM users WHERE role = 'admin' ORDER BY created_at"
-                )
+            cursor.execute(
+                "SELECT name, email FROM users WHERE role = 'admin' AND org_id = %s ORDER BY created_at",
+                (org_id,),
+            )
             rows = cursor.fetchall()
         return jsonify([{"name": r[0], "email": r[1]} for r in rows]), 200
     finally:
