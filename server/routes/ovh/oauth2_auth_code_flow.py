@@ -193,7 +193,8 @@ def ovh_oauth2_callback():
         # Using cache instead of session to avoid cookie domain/SameSite issues
         state_data = retrieve_oauth2_state(state)
         if not state_data:
-            logger.warning(f"Invalid or expired OAuth2 state token: {state}")
+            # Do not log the raw state value to avoid leaking potentially sensitive data.
+            logger.warning("Invalid or expired OAuth2 state token")
             if is_get_request:
                 return redirect(f"{frontend_url}/ovh/onboarding?error=invalid_state")
             return jsonify({"error": "Invalid or expired state token"}), 400

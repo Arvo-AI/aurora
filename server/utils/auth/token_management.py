@@ -12,6 +12,18 @@ from utils.db.connection_pool import db_pool
 logger = logging.getLogger(__name__)
 
 
+def _format_user_id_for_log(user_id: str | None) -> str:
+    """
+    Return a redacted representation of user_id suitable for logs.
+
+    Avoids logging full identifiers that may be linked to credentials.
+    """
+    if not user_id:
+        return "unknown"
+    # Log only a small, non-sensitive prefix to aid debugging.
+    return f"{str(user_id)[:4]}***"
+
+
 def store_tokens_in_db(user_id: str, token_data: Dict, provider: str,
                       subscription_name: str = None, subscription_id: str = None,
                       org_id: str = None) -> None:
@@ -36,7 +48,11 @@ def store_tokens_in_db(user_id: str, token_data: Dict, provider: str,
             logging.debug("Could not resolve org_id from request context: %s", e)
 
     if not org_id:
-        logging.warning("[STORE-TOKENS] No org_id resolved for user %s, provider %s - token will lack org scope", user_id, provider)
+        logging.warning(
+            "[STORE-TOKENS] No org_id resolved for user %s, provider %s - token will lack org scope",
+            _format_user_id_for_log(user_id),
+            provider,
+        )
 
     request_org_id = org_id
 
@@ -352,7 +368,11 @@ def store_tokens_in_db(user_id: str, token_data: Dict, provider: str,
     except Exception as e:
         elapsed_time = (time.perf_counter() - start_time) * 1000
         logger.error(f"[STORE-TOKENS]Failed to store credentials after {elapsed_time:.2f}ms")
-        logger.error(f"[STORE-TOKENS] User: {user_id}, Provider: {provider}")
+        logger.error(
+            "[STORE-TOKENS] User: %s, Provider: %s",
+            _format_user_id_for_log(user_id),
+            provider,
+        )
         logger.error(f"[STORE-TOKENS] Error: {e}")
         raise
 
