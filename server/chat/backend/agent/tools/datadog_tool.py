@@ -154,7 +154,16 @@ def _query_metrics(client, query: str, time_from: str, time_to: str, limit: int)
     start_ms = _to_unix_ms(time_from)
     end_ms = _to_unix_ms(time_to)
     response = client.query_metrics(query=query, start_ms=start_ms, end_ms=end_ms)
-    series = response.get("data", [])[:limit]
+    data = response.get("data", {})
+    if isinstance(data, dict):
+        attrs = data.get("attributes", {})
+        result_data = {
+            "series": attrs.get("series", []),
+            "times": attrs.get("times", []),
+            "values": attrs.get("values", []),
+        }
+        return {"resource_type": "metrics", "count": len(result_data["series"]), "results": [result_data]}
+    series = data[:limit] if isinstance(data, list) else []
     return {"resource_type": "metrics", "count": len(series), "results": series}
 
 
