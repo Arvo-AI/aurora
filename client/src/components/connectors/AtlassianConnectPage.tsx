@@ -276,6 +276,28 @@ export function AtlassianConnectPage({ product, sibling }: AtlassianConnectPageP
               </Card>
             </a>
           )}
+
+          {sibling?.enabled && siblingConnected && sibling.key === "jira" && (
+            <a href={sibling.connectPath} className="block">
+              <Card className="border-[#2684FF]/20 hover:border-[#2684FF]/40 hover:bg-[#2684FF]/[0.02] transition-colors cursor-pointer">
+                <CardHeader>
+                  <div className="flex items-center gap-3">
+                    <div className="h-9 w-9 rounded-lg bg-white border flex items-center justify-center p-1.5">
+                      <Image src={sibling.icon} alt={sibling.name} width={22} height={22} />
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-1.5">
+                        <CardTitle className="text-sm">Jira connected</CardTitle>
+                        <CheckCircle className="h-3.5 w-3.5 text-[#2684FF]" />
+                      </div>
+                      <CardDescription className="text-xs">Configure RCA permissions for Jira</CardDescription>
+                    </div>
+                    <ExternalLink className="h-4 w-4 text-muted-foreground ml-auto" />
+                  </div>
+                </CardHeader>
+              </Card>
+            </a>
+          )}
         </div>
       ) : (
         <div className="space-y-4">
