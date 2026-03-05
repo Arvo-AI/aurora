@@ -2,7 +2,7 @@ from langchain_core.messages import ToolMessage, AIMessage, HumanMessage
 import logging
 import os
 from chat.backend.agent.db import PostgreSQLClient
-from chat.backend.agent.llm import LLMManager
+from chat.backend.agent.llm import LLMManager, ModelConfig
 from chat.backend.agent.model_mapper import ModelMapper
 from chat.backend.agent.providers import create_chat_model
 from chat.backend.agent.weaviate_client import WeaviateClient
@@ -326,12 +326,12 @@ class Agent:
                 logging.info(f"Using user-selected model for agentic workflow: {model_name}")
             elif has_images:
                 # Fall back to vision model for images if no model selected
-                model_name = "openai/gpt-4o"  # Vision-capable model
-                logging.info("Using vision model for agentic workflow due to multimodal content")
+                model_name = ModelConfig.VISION_MODEL
+                logging.info(f"Using vision model for agentic workflow: {model_name}")
             else:
                 # Default main model
-                model_name = "openai/gpt-4o"  # Default main model
-                logging.info("Using default main model for agentic workflow")
+                model_name = ModelConfig.MAIN_MODEL
+                logging.info(f"Using default main model for agentic workflow: {model_name}")
             
             
             # Create a custom callback for tracking LLM usage
