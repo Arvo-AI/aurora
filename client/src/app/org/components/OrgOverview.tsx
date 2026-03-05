@@ -108,14 +108,15 @@ export default function OrgOverview({ org, isAdmin }: OrgOverviewProps) {
         </div>
       </section>
 
-      {/* Invite block — understated */}
+      {/* Invite block — admin only */}
+      {isAdmin && (
       <section className="rounded-lg border border-border p-5">
         <div className="flex items-start justify-between gap-4">
           <div className="space-y-1">
             <h3 className="text-sm font-medium">Invite your team</h3>
             <p className="text-[13px] text-muted-foreground leading-relaxed max-w-md">
               Anyone with this link can create an account and join your organization.
-              New members start with read-only access{isAdmin ? " — promote them from the Members tab" : ""}.
+              New members start with read-only access — promote them from the Members tab.
             </p>
           </div>
         </div>
@@ -143,6 +144,7 @@ export default function OrgOverview({ org, isAdmin }: OrgOverviewProps) {
           </Button>
         </div>
       </section>
+      )}
 
     </div>
   );

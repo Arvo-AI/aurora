@@ -489,11 +489,19 @@ def get_user_email(user_id: str) -> Optional[str]:
 
 def create_cors_response():
     """Create a CORS response for OPTIONS requests."""
-    from flask import make_response
+    from flask import make_response, request as flask_request
+    import os
     response = make_response()
-    response.headers['Access-Control-Allow-Origin'] = '*'
+    frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
+    origin = flask_request.headers.get("Origin", frontend_url)
+    allowed_origins = {frontend_url, "http://localhost:3000"}
+    if origin in allowed_origins:
+        response.headers['Access-Control-Allow-Origin'] = origin
+    else:
+        response.headers['Access-Control-Allow-Origin'] = frontend_url
     response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
-    response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-User-ID'
+    response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-User-ID, X-Org-ID'
+    response.headers['Access-Control-Allow-Credentials'] = 'true'
     return response
 
 

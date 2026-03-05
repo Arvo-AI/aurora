@@ -14,6 +14,7 @@ import os
 auth_bp = Blueprint('auth', __name__, url_prefix='/api/auth')
 
 FRONTEND_URL = os.getenv("FRONTEND_URL")
+ALLOW_OPEN_REGISTRATION = os.getenv("ALLOW_OPEN_REGISTRATION", "false").lower() in ("true", "1", "yes")
 
 @auth_bp.after_request
 def add_cors_headers(response):
@@ -61,6 +62,13 @@ def register():
                 if cursor.fetchone():
                     return jsonify({"error": "User with this email already exists"}), 409
                 
+                # Lock rows and count existing users to determine role + registration gate
+                cursor.execute("SELECT COUNT(*) FROM (SELECT 1 FROM users FOR UPDATE) sub")
+                user_count = cursor.fetchone()[0]
+
+                if user_count > 0 and not ALLOW_OPEN_REGISTRATION:
+                    return jsonify({"error": "Open registration is disabled. Contact an admin for an invitation."}), 403
+
                 # Insert new user
                 cursor.execute(
                     """
@@ -73,10 +81,7 @@ def register():
                 user = cursor.fetchone()
                 user_id, user_email, user_name = user[0], user[1], user[2]
 
-                # Auto-promote the very first user to admin (with row lock to prevent race condition)
-                cursor.execute("SELECT COUNT(*) FROM users FOR UPDATE")
-                user_count = cursor.fetchone()[0]
-                role = "admin" if user_count == 1 else "viewer"
+                role = "admin" if user_count == 0 else "viewer"
 
                 cursor.execute(
                     "UPDATE users SET role = %s WHERE id = %s",
@@ -86,7 +91,7 @@ def register():
                 # Auto-create or assign org
                 org_id = None
                 org_name = None
-                if user_count == 1:
+                if user_count == 0:
                     # First user: create default organization
                     # No-op upsert: ON CONFLICT forces RETURNING to work when the
                     # default org already exists from a previous run.

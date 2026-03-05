@@ -186,7 +186,7 @@ def clear_terraform_state_options():
 
 
 @user_preferences_bp.route('/api/terraform/clear-state', methods=['POST'])
-@require_permission("user_preferences", "write")
+@require_permission("incidents", "write")
 def clear_terraform_state(user_id):
     """
     Clear Terraform state files for the current user.

@@ -12,11 +12,19 @@ logger = logging.getLogger(__name__)
 
 def create_cors_response(data=None, status=200):
     """Create a response with CORS headers"""
+    import os
     response = jsonify(data) if data else jsonify({})
     response.status_code = status
-    response.headers['Access-Control-Allow-Origin'] = '*'
+    frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
+    origin = request.headers.get("Origin", frontend_url)
+    allowed_origins = {frontend_url, "http://localhost:3000"}
+    if origin in allowed_origins:
+        response.headers['Access-Control-Allow-Origin'] = origin
+    else:
+        response.headers['Access-Control-Allow-Origin'] = frontend_url
     response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
-    response.headers['Access-Control-Allow-Headers'] = 'Content-Type, X-User-ID, Authorization'
+    response.headers['Access-Control-Allow-Headers'] = 'Content-Type, X-User-ID, X-Org-ID, Authorization'
+    response.headers['Access-Control-Allow-Credentials'] = 'true'
     return response
 
 @github_user_repos_bp.route("/user-repos", methods=["GET", "OPTIONS"])

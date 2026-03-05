@@ -8,11 +8,15 @@ import { useToast } from "@/hooks/use-toast";
 import { Trash2, FileText } from "lucide-react";
 import { clearTerraformState } from "@/lib/services/userSettings";
 import { RCASettings } from "@/components/RCASettings";
+import { useUser } from "@/hooks/useAuthHooks";
+import { canWrite } from "@/lib/roles";
 import Link from "next/link";
 
 export function GeneralSettings() {
   const [isClearingTerraformState, setIsClearingTerraformState] = useState(false);
   const { toast } = useToast();
+  const { user } = useUser();
+  const hasWriteAccess = canWrite(user?.role);
 
   const handleClearTerraformState = async () => {
     setIsClearingTerraformState(true);
@@ -145,6 +149,7 @@ export function GeneralSettings() {
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
+            {hasWriteAccess ? (
             <div className="flex items-center justify-between p-4 border rounded-lg">
               <div className="space-y-1">
                 <h4 className="font-medium">Clear Terraform State</h4>
@@ -162,6 +167,11 @@ export function GeneralSettings() {
                 {isClearingTerraformState ? 'Clearing...' : 'Clear State'}
               </Button>
             </div>
+            ) : (
+            <p className="text-sm text-muted-foreground p-4 border rounded-lg">
+              Terraform state management requires Editor or Admin role.
+            </p>
+            )}
           </CardContent>
         </Card>
       </div>
