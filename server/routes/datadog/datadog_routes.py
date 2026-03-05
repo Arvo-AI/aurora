@@ -151,12 +151,10 @@ class DatadogClient:
             attributes["interval"] = interval
 
         body = {
-            "data": [
-                {
-                    "type": "timeseries_request",
-                    "attributes": attributes,
-                }
-            ]
+            "data": {
+                "type": "timeseries_request",
+                "attributes": attributes,
+            }
         }
         return self._request("POST", "/api/v2/query/timeseries", json=body).json()
 
