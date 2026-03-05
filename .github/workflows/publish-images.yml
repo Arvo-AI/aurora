@@ -115,13 +115,8 @@ jobs:
             NEXT_PUBLIC_BACKEND_URL=http://localhost:5080
             NEXT_PUBLIC_WEBSOCKET_URL=ws://localhost:5006
             NEXT_PUBLIC_ENABLE_OVH=true
-            NEXT_PUBLIC_ENABLE_SLACK=true
             NEXT_PUBLIC_ENABLE_PAGERDUTY_OAUTH=true
-            NEXT_PUBLIC_ENABLE_CONFLUENCE=true
-            NEXT_PUBLIC_ENABLE_BITBUCKET=true
-            NEXT_PUBLIC_ENABLE_DYNATRACE=true
-            NEXT_PUBLIC_ENABLE_BIGPANDA=true
-            NEXT_PUBLIC_ENABLE_THOUSANDEYES=true
+            NEXT_PUBLIC_ENABLE_SCALEWAY=true
           cache-from: type=gha,scope=frontend-publish
           cache-to: type=gha,mode=max,scope=frontend-publish
 
