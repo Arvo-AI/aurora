@@ -2,11 +2,9 @@ name: Publish Docker Images
 
 # Trigger on:
 #   - Git tag v*.*.* → tags as :1.2.3, :1.2, and :latest
-#   - Push to main  → tags as :edge and :sha-<short>
 #   - Manual trigger (workflow_dispatch) for hotfixes
 on:
   push:
-    branches: [main]
     tags: ['v*.*.*']
   workflow_dispatch:
 
@@ -23,6 +21,7 @@ jobs:
   publish-server:
     name: Publish aurora-server
     runs-on: ubuntu-24.04
+    # Only run on the main repository, not on forks
     if: github.repository == 'Arvo-AI/aurora'
 
     steps:
@@ -48,11 +47,10 @@ jobs:
         with:
           images: ${{ env.SERVER_IMAGE }}
           tags: |
+            # v1.2.3 → :1.2.3, :1.2, :latest
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
-            type=edge,branch=main
-            type=sha,prefix=sha-,format=short
+            type=raw,value=latest
 
       - name: Build and push aurora-server
         uses: docker/build-push-action@v6
@@ -97,9 +95,7 @@ jobs:
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
-            type=edge,branch=main
-            type=sha,prefix=sha-,format=short
+            type=raw,value=latest
 
       - name: Build and push aurora-frontend
         uses: docker/build-push-action@v6
@@ -115,8 +111,9 @@ jobs:
             NEXT_PUBLIC_BACKEND_URL=http://localhost:5080
             NEXT_PUBLIC_WEBSOCKET_URL=ws://localhost:5006
             NEXT_PUBLIC_ENABLE_OVH=true
+            NEXT_PUBLIC_ENABLE_SLACK=true
             NEXT_PUBLIC_ENABLE_PAGERDUTY_OAUTH=true
-            NEXT_PUBLIC_ENABLE_SCALEWAY=true
+            NEXT_PUBLIC_ENABLE_CONFLUENCE=true
           cache-from: type=gha,scope=frontend-publish
           cache-to: type=gha,mode=max,scope=frontend-publish
 
