@@ -136,10 +136,11 @@ class DatadogClient:
 
     def query_metrics(self, query: str, start_ms: int, end_ms: int, interval: Optional[int] = None) -> Dict[str, Any]:
         attributes: Dict[str, Any] = {
+            "formulas": [{"formula": "a"}],
             "queries": [
                 {
                     "data_source": "metrics",
-                    "name": "query",
+                    "name": "a",
                     "query": query,
                 }
             ],
