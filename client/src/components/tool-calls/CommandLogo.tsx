@@ -180,6 +180,22 @@ const logos = {
       onError={(e) => console.error('Failed to load SharePoint logo:', e)}
     />
   ),
+  jira: (
+    <img
+      src="/jira.svg"
+      className="w-4 h-4 min-w-4 min-h-4 object-contain"
+      alt="Jira"
+      onError={(e) => console.error('Failed to load Jira logo:', e)}
+    />
+  ),
+  confluence: (
+    <img
+      src="/confluence.svg"
+      className="w-4 h-4 min-w-4 min-h-4 object-contain"
+      alt="Confluence"
+      onError={(e) => console.error('Failed to load Confluence logo:', e)}
+    />
+  ),
   web: (
     <svg
       className="w-4 h-4 min-w-4 min-h-4 text-blue-600 dark:text-blue-400"
@@ -283,6 +299,16 @@ const getLogoForCommand = (command: string | any, toolName: string, provider?: s
   // SharePoint tools
   if (tool.startsWith('sharepoint_')) {
     return 'sharepoint'
+  }
+
+  // Jira tools
+  if (tool.includes('jira')) {
+    return 'jira'
+  }
+
+  // Confluence tools
+  if (tool.includes('confluence')) {
+    return 'confluence'
   }
 
   // IAC tools
