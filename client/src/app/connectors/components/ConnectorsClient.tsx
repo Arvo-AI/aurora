@@ -8,10 +8,8 @@ import type { ConnectorConfig } from "@/components/connectors/types";
 import { isOvhEnabled } from "@/lib/feature-flags";
 import { getEnv } from '@/lib/env';
 
-// Helper function to fetch API statuses for custom connection connectors
-async function fetchApiStatuses(customConnectionConnectors: ConnectorConfig[]): Promise<Record<string, boolean>> {
-  if (customConnectionConnectors.length === 0) return {};
-  
+// Helper function to fetch connection status for all providers from the backend
+async function fetchApiStatuses(): Promise<Record<string, boolean>> {
   try {
     const response = await fetch('/api/connected-accounts', {
       credentials: 'include',
@@ -22,11 +20,8 @@ async function fetchApiStatuses(customConnectionConnectors: ConnectorConfig[]): 
     const accounts = data.accounts || {};
     const apiStatuses: Record<string, boolean> = {};
     
-    customConnectionConnectors.forEach((connector) => {
-      const isConnectedInDb = Object.keys(accounts).some(
-        key => key.toLowerCase() === connector.id.toLowerCase()
-      );
-      apiStatuses[connector.id] = isConnectedInDb;
+    Object.keys(accounts).forEach((key) => {
+      apiStatuses[key.toLowerCase()] = true;
     });
     
     return apiStatuses;
@@ -115,25 +110,6 @@ function syncLocalStorage(connectorId: string, connectorName: string, isConnecte
   }
 }
 
-// Connectors whose status should be verified via their own status endpoint
-// rather than relying on localStorage alone. This ensures org members see
-// shared connections even when they didn't personally connect the integration.
-const STATUS_ENDPOINTS: Record<string, string> = {
-  grafana: "/api/grafana/status",
-  datadog: "/api/datadog/status",
-  netdata: "/api/netdata/status",
-  splunk: "/api/splunk/status",
-  dynatrace: "/api/dynatrace/status",
-  coroot: "/api/coroot/status",
-  pagerduty: "/api/pagerduty",
-  bigpanda: "/api/bigpanda/status",
-  confluence: "/api/confluence/status",
-  jenkins: "/api/jenkins/status",
-  cloudbees: "/api/cloudbees/status",
-  tailscale: "/api/tailscale/status",
-  kubectl: "/api/kubectl/status",
-};
-
 // Helper function to check status for a single connector
 async function checkConnectorStatus(
   connector: ConnectorConfig,
@@ -147,8 +123,8 @@ async function checkConnectorStatus(
     return hasVmConfig;
   }
   
-  // For connectors with useCustomConnection (like GCP), use API status if available
-  if (connector.useCustomConnection && connector.id in apiStatuses) {
+  // Check /api/connected-accounts first (org-aware, covers all secret-based providers)
+  if (connector.id in apiStatuses) {
     const isConnected = apiStatuses[connector.id];
     syncLocalStorage(connector.id, connector.name, isConnected, connector.storageKey);
     return isConnected;
@@ -177,22 +153,6 @@ async function checkConnectorStatus(
     }
     return false;
   }
-
-  // Connectors with status endpoints: verify via API so org members see shared connections
-  const statusEndpoint = STATUS_ENDPOINTS[connector.id];
-  if (statusEndpoint) {
-    try {
-      const res = await fetch(statusEndpoint, { credentials: "include" });
-      if (res.ok) {
-        const data = await res.json();
-        const isConnected = data.connected === true;
-        syncLocalStorage(connector.id, connector.name, isConnected, connector.storageKey);
-        return isConnected;
-      }
-    } catch {
-      // fall through to localStorage
-    }
-  }
   
   // For other connectors, use their storage key
   const storageKey = connector.storageKey || `is${connector.name}Connected`;
@@ -213,8 +173,7 @@ export default function ConnectorsClient() {
       if (typeof window === "undefined") return;
       
       setIsLoading(true);
-      const customConnectionConnectors = allConnectors.filter(c => c.useCustomConnection);
-      const apiStatuses = await fetchApiStatuses(customConnectionConnectors);
+      const apiStatuses = await fetchApiStatuses();
       
       const vmConfigStatus = await checkVmConfigStatus();
       
