@@ -26,7 +26,7 @@ class ModelConfig:
     VISION_MODEL = "anthropic/claude-sonnet-4.5"
     
     # Background RCA model - configurable via RCA_MODEL env var, falls back to cost-based selection
-    RCA_MODEL = os.getenv("RCA_MODEL",
+    RCA_MODEL = os.getenv("RCA_MODEL") or (
         "anthropic/claude-3-haiku" if os.getenv("RCA_OPTIMIZE_COSTS", "true").lower() == "true"
         else "anthropic/claude-opus-4.5"
     )
