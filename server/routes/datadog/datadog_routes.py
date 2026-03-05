@@ -219,21 +219,21 @@ class DatadogClient:
     def list_hosts(self, query: Optional[str] = None, count: int = 100, from_ts: Optional[int] = None) -> Dict[str, Any]:
         """List infrastructure hosts via GET /api/v1/hosts."""
         params: Dict[str, Any] = {
-            "count": min(count, 1000),
+            "count": max(0, min(count, 1000)),
             "include_muted_hosts_data": True,
             "include_hosts_metadata": True,
         }
         if query:
             params["filter"] = query
-        if from_ts:
+        if from_ts is not None:
             params["from"] = from_ts
         return self._request("GET", "/api/v1/hosts", params=params).json()
 
     def list_incidents(self, page_size: int = 25, page_offset: int = 0) -> Dict[str, Any]:
         """List Datadog incidents via GET /api/v2/incidents."""
         params: Dict[str, Any] = {
-            "page[size]": min(page_size, 100),
-            "page[offset]": page_offset,
+            "page[size]": max(1, min(page_size, 100)),
+            "page[offset]": max(0, page_offset),
         }
         return self._request("GET", "/api/v2/incidents", params=params).json()
 

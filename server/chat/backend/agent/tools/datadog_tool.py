@@ -279,5 +279,5 @@ def query_datadog(
     except ValueError as exc:
         return json.dumps({"error": str(exc)})
     except Exception as exc:
-        logger.error("[DATADOG-TOOL] Query failed: %s", exc)
-        return json.dumps({"error": f"Query failed: {str(exc)}"})
+        logger.exception("[DATADOG-TOOL] Query failed for user=%s resource=%s: %s", user_id, resource_type, exc)
+        return json.dumps({"error": "Internal error while querying Datadog"})
