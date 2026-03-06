@@ -1460,14 +1460,15 @@ def initialize_tables():
                 except Exception as e:
                     logging.warning(f"Error creating index: {e}")
 
-            # Create a view for clusters after all tables are created
-            create_clusters_view_sql = """
-                CREATE OR REPLACE VIEW k8s_clusters AS
+            # Create a view for clusters after all tables are created.
+            # DROP first because CREATE OR REPLACE VIEW cannot remove columns from an existing view.
+            cursor.execute("DROP VIEW IF EXISTS k8s_clusters;")
+            cursor.execute("""
+                CREATE VIEW k8s_clusters AS
                 SELECT DISTINCT project_id, cluster_name, provider, user_id
                 FROM k8s_nodes
                 WHERE user_id = current_setting('myapp.current_user_id', true)::text;
-            """
-            cursor.execute(create_clusters_view_sql)
+            """)
             logging.info("View 'k8s_clusters' created successfully.")
 
             # DO NOT add k8s_clusters to RLS tables as views don't support RLS

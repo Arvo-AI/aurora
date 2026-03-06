@@ -17,11 +17,7 @@ logger = logging.getLogger(__name__)
 # Maximum length for chat session titles (in characters)
 TITLE_MAX_LENGTH = 50
 
-# Get Slack signing secret from environment
 SLACK_SIGNING_SECRET = os.getenv("SLACK_SIGNING_SECRET")
-
-if not SLACK_SIGNING_SECRET:
-    raise ValueError("SLACK_SIGNING_SECRET not configured")
 
 # Slack text length limits
 SLACK_MAX_SECTION_TEXT = 3000  # Slack Block Kit section text limit
@@ -37,7 +33,10 @@ def verify_slack_signature(request_body: bytes, timestamp: str, signature: str) 
     Verify that the request came from Slack by validating the signature.
     https://api.slack.com/authentication/verifying-requests-from-slack
     """
-    
+    if not SLACK_SIGNING_SECRET:
+        logger.warning("SLACK_SIGNING_SECRET not configured, rejecting Slack request")
+        return False
+
     # Check timestamp is recent (within 5 minutes) to avoid replay attacks (attacker could put their hands on old valid request)
     try:
         request_time = int(timestamp)
