@@ -231,8 +231,22 @@ def remove_member(user_id, target_user_id):
                 if target_row and target_row[0] == 'admin' and remaining_admins < 1:
                     return jsonify({"error": "Cannot remove the last admin"}), 400
 
+                # Clear FK references before deleting the user
                 cursor.execute(
-                    "UPDATE users SET org_id = NULL WHERE id = %s AND org_id = %s RETURNING id",
+                    "DELETE FROM org_invitations WHERE invited_by = %s", (target_user_id,)
+                )
+                cursor.execute(
+                    "UPDATE organizations SET created_by = NULL WHERE created_by = %s", (target_user_id,)
+                )
+                # Clean up user-scoped data
+                for tbl in (
+                    "user_tokens", "user_connections", "user_manual_vms",
+                    "user_preferences", "rca_notification_emails",
+                ):
+                    cursor.execute(f"DELETE FROM {tbl} WHERE user_id = %s", (target_user_id,))
+
+                cursor.execute(
+                    "DELETE FROM users WHERE id = %s AND org_id = %s RETURNING id",
                     (target_user_id, org_id),
                 )
                 row = cursor.fetchone()

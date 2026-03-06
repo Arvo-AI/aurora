@@ -275,6 +275,15 @@ def delete_user(user_id, target_user_id):
 
             target_email = target[1]
 
+            # Clear FK references and user-scoped data
+            cur.execute("DELETE FROM org_invitations WHERE invited_by = %s", (target_user_id,))
+            cur.execute("UPDATE organizations SET created_by = NULL WHERE created_by = %s", (target_user_id,))
+            for tbl in (
+                "user_tokens", "user_connections", "user_manual_vms",
+                "user_preferences", "rca_notification_emails",
+            ):
+                cur.execute(f"DELETE FROM {tbl} WHERE user_id = %s", (target_user_id,))
+
             cur.execute(
                 "DELETE FROM users WHERE id = %s AND org_id = %s",
                 (target_user_id, org_id),
