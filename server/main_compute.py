@@ -346,6 +346,10 @@ app.register_blueprint(vms_bp)  # VM management routes
 app.register_blueprint(user_connections_bp)
 app.register_blueprint(account_management_bp)
 
+# --- Unified Connector Status ---
+from routes.connector_status import connector_status_bp
+app.register_blueprint(connector_status_bp)
+
 # --- Monitoring & Logging Routes ---
 from routes.chat_routes import chat_bp
 
