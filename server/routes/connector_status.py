@@ -177,6 +177,17 @@ PROVIDER_CHECKERS = {
 @require_permission("connectors", "read")
 def all_connector_status(user_id):
     org_id = get_org_id_from_request() or ""
+    results = _check_all_connectors(user_id, org_id)
+    return jsonify({"connectors": results})
+
+
+def get_connected_count(user_id: str, org_id: str) -> int:
+    """Return the number of connectors with a live connection."""
+    results = _check_all_connectors(user_id, org_id)
+    return sum(1 for c in results.values() if c.get("connected"))
+
+
+def _check_all_connectors(user_id: str, org_id: str) -> Dict[str, Dict[str, Any]]:
 
     with db_pool.get_admin_connection() as conn:
         with conn.cursor() as cursor:
@@ -237,7 +248,7 @@ def all_connector_status(user_id):
         except Exception:
             pass
 
-    return jsonify({"connectors": results})
+    return results
 
 
 def _check_kubectl(org_id: str) -> Dict[str, Any]:
@@ -245,7 +256,9 @@ def _check_kubectl(org_id: str) -> Dict[str, Any]:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
                 cursor.execute(
-                    "SELECT COUNT(*) FROM active_kubectl_connections WHERE org_id = %s",
+                    """SELECT COUNT(*) FROM active_kubectl_connections ac
+                       JOIN kubectl_agent_tokens kat ON ac.token = kat.token
+                       WHERE kat.org_id = %s AND ac.status = 'active'""",
                     (org_id,),
                 )
                 count = cursor.fetchone()[0]

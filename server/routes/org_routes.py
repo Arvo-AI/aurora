@@ -298,25 +298,8 @@ def get_org_stats(user_id):
                 )
                 chat_count = cursor.fetchone()[0]
 
-                integration_providers = [
-                    'grafana', 'datadog', 'pagerduty', 'netdata', 'splunk',
-                    'github', 'jenkins', 'cloudbees', 'gcp', 'aws', 'azure',
-                    'slack', 'dynatrace', 'confluence', 'coroot', 'thousandeyes',
-                    'bitbucket', 'bigpanda', 'tailscale',
-                ]
-                cursor.execute(
-                    """SELECT COUNT(DISTINCT provider) FROM (
-                        SELECT provider FROM user_tokens
-                        WHERE org_id = %s AND provider = ANY(%s)
-                          AND secret_ref IS NOT NULL AND is_active = TRUE
-                        UNION
-                        SELECT provider FROM user_connections
-                        WHERE org_id = %s AND provider = ANY(%s)
-                          AND status = 'active'
-                    ) p""",
-                    (org_id, integration_providers, org_id, integration_providers),
-                )
-                integration_count = cursor.fetchone()[0]
+                from routes.connector_status import get_connected_count
+                integration_count = get_connected_count(user_id, org_id)
 
                 return jsonify({
                     "members": member_count,
