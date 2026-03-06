@@ -7,6 +7,7 @@ async function refreshUserFromBackend(userId: string): Promise<{
   role: string
   orgId: string | null
   orgName: string | null
+  mustChangePassword: boolean
 } | null> {
   const backendUrl = process.env.BACKEND_URL
   if (!backendUrl) return null
@@ -85,6 +86,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
         token.role = user.role
         token.orgId = user.orgId
         token.orgName = user.orgName
+        token.mustChangePassword = user.mustChangePassword
         token.lastRefreshedAt = Math.floor(Date.now() / 1000)
         return token
       }
@@ -98,6 +100,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
           token.role = fresh.role
           token.orgId = fresh.orgId
           token.orgName = fresh.orgName
+          token.mustChangePassword = fresh.mustChangePassword
         }
         token.lastRefreshedAt = now
       }
@@ -115,6 +118,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
           session.user.role = token.role as string
           session.user.orgId = token.orgId as string
           session.user.orgName = token.orgName as string
+          session.user.mustChangePassword = token.mustChangePassword as boolean
         }
       }
       return session

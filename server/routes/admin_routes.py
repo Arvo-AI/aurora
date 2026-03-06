@@ -80,8 +80,8 @@ def create_user(user_id):
                 return jsonify({"error": "User with this email already exists"}), 409
 
             cur.execute(
-                """INSERT INTO users (email, password_hash, name, role, org_id, created_at)
-                   VALUES (%s, %s, %s, %s, %s, NOW())
+                """INSERT INTO users (email, password_hash, name, role, org_id, must_change_password, created_at)
+                   VALUES (%s, %s, %s, %s, %s, TRUE, NOW())
                    RETURNING id, email, name, role, created_at""",
                 (email, password_hash, name or None, role, org_id),
             )

@@ -863,6 +863,7 @@ def initialize_tables():
                         password_hash VARCHAR(255) NOT NULL,
                         name VARCHAR(255),
                         org_id VARCHAR(255),
+                        must_change_password BOOLEAN DEFAULT FALSE,
                         created_at TIMESTAMP DEFAULT NOW(),
                         updated_at TIMESTAMP DEFAULT NOW()
                     );
@@ -1650,6 +1651,16 @@ def initialize_tables():
                 )
             except Exception as e:
                 logging.warning(f"Error adding role column to users: {e}")
+                conn.rollback()
+
+            # Migration: Add must_change_password column to users table
+            try:
+                cursor.execute(
+                    "ALTER TABLE users ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN DEFAULT FALSE;"
+                )
+                conn.commit()
+            except Exception as e:
+                logging.warning(f"Error adding must_change_password column: {e}")
                 conn.rollback()
 
             # Migration: Add org_id column to users and all org-scoped tables

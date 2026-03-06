@@ -6,6 +6,7 @@ import { ROLE_ADMIN } from "@/lib/roles"
 const publicRoutes = [
   "/sign-in",
   "/sign-up",
+  "/change-password",
   "/terms",
   "/api/auth/callback",  // NextAuth callbacks
   "/api/auth/signin",     // NextAuth sign-in
@@ -13,6 +14,7 @@ const publicRoutes = [
   "/api/auth/session",    // NextAuth session
   "/api/auth/providers",  // NextAuth providers
   "/api/auth/csrf",       // NextAuth CSRF
+  "/api/auth/change-password", // Password change API
 ]
 
 // Routes that should redirect authenticated users away
@@ -30,10 +32,16 @@ export default auth((req) => {
   )
   const isApiRoute = nextUrl.pathname.startsWith('/api/')
   const isAdminRoute = nextUrl.pathname.startsWith('/admin') || nextUrl.pathname.startsWith('/api/admin')
+  const isChangePasswordRoute = nextUrl.pathname.startsWith('/change-password')
 
   // If user is logged in and tries to access auth pages, redirect to home
   if (isAuthRoute && isLoggedIn) {
     return NextResponse.redirect(new URL("/", nextUrl))
+  }
+
+  // Force password change: redirect to /change-password if flag is set
+  if (isLoggedIn && req.auth?.user?.mustChangePassword && !isChangePasswordRoute && !isApiRoute) {
+    return NextResponse.redirect(new URL("/change-password", nextUrl))
   }
 
   // If user is not logged in and tries to access protected route

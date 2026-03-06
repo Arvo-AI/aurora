@@ -173,7 +173,8 @@ def login():
         try:
             with conn.cursor() as cursor:
                 cursor.execute(
-                    "SELECT u.id, u.email, u.name, u.password_hash, u.role, u.org_id, o.name "
+                    "SELECT u.id, u.email, u.name, u.password_hash, u.role, u.org_id, o.name, "
+                    "COALESCE(u.must_change_password, FALSE) "
                     "FROM users u LEFT JOIN organizations o ON u.org_id = o.id "
                     "WHERE u.email = %s",
                     (email,)
@@ -183,7 +184,7 @@ def login():
                 # Always perform password check to prevent timing attacks
                 # Use dummy hash if user doesn't exist
                 if user:
-                    user_id, user_email, user_name, password_hash, user_role, user_org_id, user_org_name = user
+                    user_id, user_email, user_name, password_hash, user_role, user_org_id, user_org_name, must_change_pw = user
                 else:
                     # Dummy hash to maintain consistent timing
                     password_hash = bcrypt.hashpw(b'dummy', bcrypt.gensalt()).decode('utf-8')
@@ -203,6 +204,7 @@ def login():
                     "role": user_role or "viewer",
                     "orgId": user_org_id,
                     "orgName": user_org_name,
+                    "mustChangePassword": bool(must_change_pw),
                 }), 200
         finally:
             conn.close()
@@ -258,7 +260,7 @@ def change_password():
                 # Hash and update new password
                 new_password_hash = bcrypt.hashpw(new_password.encode('utf-8'), bcrypt.gensalt())
                 cursor.execute(
-                    "UPDATE users SET password_hash = %s WHERE id = %s",
+                    "UPDATE users SET password_hash = %s, must_change_password = FALSE WHERE id = %s",
                     (new_password_hash.decode('utf-8'), user_id)
                 )
                 conn.commit()
@@ -286,7 +288,7 @@ def get_current_user(user_id):
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
                 cursor.execute(
-                    "SELECT u.role, u.org_id, o.name "
+                    "SELECT u.role, u.org_id, o.name, COALESCE(u.must_change_password, FALSE) "
                     "FROM users u LEFT JOIN organizations o ON u.org_id = o.id "
                     "WHERE u.id = %s",
                     (user_id,),
@@ -299,6 +301,7 @@ def get_current_user(user_id):
                     "role": row[0] or "viewer",
                     "orgId": row[1],
                     "orgName": row[2],
+                    "mustChangePassword": bool(row[3]),
                 }), 200
     except Exception:
         logging.exception("Error in /me")
