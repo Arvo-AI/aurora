@@ -18,7 +18,7 @@ export default function RootLayout({
         <script src="/env-config.js" />
       </head>
       <body className={`${inter.className} antialiased h-full`}>
-        <SessionProvider>
+        <SessionProvider refetchInterval={60} refetchOnWindowFocus={true}>
           <ConditionalShell>{children}</ConditionalShell>
         </SessionProvider>
       </body>
