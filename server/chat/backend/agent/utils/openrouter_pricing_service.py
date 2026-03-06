@@ -35,10 +35,27 @@ class OpenRouterPricingService:
             )
 
         self.fallback_pricing = {
+            # OpenAI (per 1K tokens)
             "openai/gpt-5.2": {"input": 0.00175, "output": 0.014},
-            "anthropic/claude-sonnet-4-5": {"input": 0.003, "output": 0.015},
+            "openai/gpt-4o": {"input": 0.0025, "output": 0.01},
+            "openai/gpt-4o-mini": {"input": 0.00015, "output": 0.0006},
+            # Anthropic
             "anthropic/claude-opus-4-5": {"input": 0.005, "output": 0.025},
+            "anthropic/claude-sonnet-4-5": {"input": 0.003, "output": 0.015},
+            "anthropic/claude-3.5-sonnet": {"input": 0.003, "output": 0.015},
+            "anthropic/claude-3-haiku": {"input": 0.00025, "output": 0.00125},
+            # Google AI / Vertex AI
+            "google/gemini-3.1-pro-preview": {"input": 0.002, "output": 0.012},
             "google/gemini-3-pro-preview": {"input": 0.00125, "output": 0.01},
+            "google/gemini-2.5-pro": {"input": 0.00125, "output": 0.01},
+            "google/gemini-2.5-flash": {"input": 0.0003, "output": 0.0025},
+            "vertex/gemini-3.1-pro-preview": {"input": 0.002, "output": 0.012},
+            "vertex/gemini-2.5-pro": {"input": 0.00125, "output": 0.01},
+            "vertex/gemini-2.5-flash": {"input": 0.0003, "output": 0.0025},
+            # Ollama (local, free)
+            "ollama/llama3.1": {"input": 0.0, "output": 0.0},
+            "ollama/qwen2.5": {"input": 0.0, "output": 0.0},
+            # Default fallback
             "default": {"input": 0.001, "output": 0.002},
         }
 

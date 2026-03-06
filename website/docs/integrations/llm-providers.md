@@ -46,6 +46,25 @@ In direct mode, Aurora auto-detects the provider from the model name prefix (e.g
 Vertex AI and Ollama always use their native SDKs regardless of `LLM_PROVIDER_MODE`. OpenAI, Anthropic, and Google AI models can all be routed through OpenRouter.
 :::
 
+## Supported Models
+
+| Provider | Model | Notes |
+|----------|-------|-------|
+| **OpenAI** | `openai/gpt-4o` | Best for complex investigations |
+| | `openai/gpt-4o-mini` | Faster, lower cost |
+| | `openai/gpt-5.2` | Latest generation |
+| **Anthropic** | `anthropic/claude-opus-4.5` | Most capable |
+| | `anthropic/claude-sonnet-4.5` | Balanced quality and speed |
+| | `anthropic/claude-3-haiku` | Fast and cost-effective (default RCA model) |
+| **Google Gemini** | `google/gemini-2.5-pro` | Best for complex tasks |
+| | `google/gemini-2.5-flash` | Fast and cost-effective |
+| | `google/gemini-3.1-pro-preview` | Latest generation with thinking |
+| **Ollama** | `ollama/llama3.1` | Meta's Llama 3.1 (8B/70B) |
+| | `ollama/qwen2.5` | Alibaba's Qwen 2.5 (various sizes) |
+| | Any model via `ollama pull` | |
+
+Model names use the `provider/model` format. New models from each provider are generally supported automatically — update your `RCA_MODEL` or select them in the UI.
+
 ## Provider Setup
 
 ### OpenRouter (Recommended for Getting Started)
