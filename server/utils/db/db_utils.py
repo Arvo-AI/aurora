@@ -1740,8 +1740,7 @@ def initialize_tables():
                                 FROM users u WHERE t.user_id = u.id
                                 AND t.org_id IS NULL;
                             """)
-                            backfilled = cursor.rowcount
-                            # Check for rows that couldn't be backfilled (user_id doesn't match users.id)
+                            rows_backfilled = cursor.rowcount
                             cursor.execute(f"""
                                 SELECT COUNT(*) FROM {tbl} WHERE org_id IS NULL;
                             """)
@@ -1751,6 +1750,8 @@ def initialize_tables():
                                     "Backfill: %d rows in %s still have NULL org_id "
                                     "(user_id may not match users.id)", remaining, tbl
                                 )
+                            elif rows_backfilled > 0:
+                                logging.info("Backfilled %d rows in %s with org_id", rows_backfilled, tbl)
                         except Exception as e:
                             logging.warning(f"Error backfilling org_id for {tbl}: {e}")
                     logging.info(
