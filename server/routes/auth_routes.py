@@ -3,6 +3,7 @@ Auth routes for user registration, login, and password management.
 Replaces the previous authentication system.
 """
 import logging
+import re
 import bcrypt
 from flask import Blueprint, request, jsonify
 from utils.db.db_utils import connect_to_db_as_user
@@ -14,7 +15,15 @@ import os
 auth_bp = Blueprint('auth', __name__, url_prefix='/api/auth')
 
 FRONTEND_URL = os.getenv("FRONTEND_URL")
-ALLOW_OPEN_REGISTRATION = os.getenv("ALLOW_OPEN_REGISTRATION", "false").lower() in ("true", "1", "yes")
+ALLOW_OPEN_REGISTRATION = os.getenv("ALLOW_OPEN_REGISTRATION", "true").lower() in ("true", "1", "yes")
+
+SLUG_REGEX = re.compile(r'^[a-z0-9][a-z0-9-]{0,48}[a-z0-9]$')
+
+def _name_to_slug(name: str) -> str:
+    slug = re.sub(r'[^a-z0-9]+', '-', name.lower()).strip('-')[:50]
+    if len(slug) < 2:
+        slug = slug + '-org'
+    return slug
 
 @auth_bp.after_request
 def add_cors_headers(response):
@@ -28,7 +37,14 @@ def add_cors_headers(response):
 
 @auth_bp.route('/register', methods=['POST', 'OPTIONS'])
 def register():
-    """Register a new user with email and password."""
+    """Register a new user and create their organization.
+
+    Body: { email, password, name, org_name }
+    - First user bypasses the ALLOW_OPEN_REGISTRATION gate.
+    - Every sign-up creates a new organization with the registrant as admin.
+    - Invited users (created by an admin via /api/admin/users) already have
+      accounts and should sign in directly — they don't call this endpoint.
+    """
     if request.method == 'OPTIONS':
         return create_cors_response()
     
@@ -40,21 +56,25 @@ def register():
         email = data.get('email')
         password = data.get('password')
         name = data.get('name')
+        org_name = (data.get('org_name') or '').strip()
         
         if not email or not password:
             return jsonify({"error": "Email and password are required"}), 400
             
         if len(password) < 8:
             return jsonify({"error": "Password must be at least 8 characters"}), 400
+
+        if not org_name:
+            return jsonify({"error": "Organization name is required"}), 400
+
+        if len(org_name) > 100:
+            return jsonify({"error": "Organization name must be 100 characters or less"}), 400
         
-        # Hash password with bcrypt
         password_hash = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt())
         
-        # Store user in database
         conn = connect_to_db_as_user()
         try:
             with conn.cursor() as cursor:
-                # Check if user already exists
                 cursor.execute(
                     "SELECT id FROM users WHERE email = %s",
                     (email,)
@@ -62,18 +82,25 @@ def register():
                 if cursor.fetchone():
                     return jsonify({"error": "User with this email already exists"}), 409
                 
-                # Lock rows and count existing users to determine role + registration gate
                 cursor.execute("SELECT COUNT(*) FROM (SELECT 1 FROM users FOR UPDATE) sub")
                 user_count = cursor.fetchone()[0]
 
                 if user_count > 0 and not ALLOW_OPEN_REGISTRATION:
                     return jsonify({"error": "Open registration is disabled. Contact an admin for an invitation."}), 403
 
-                # Insert new user
+                slug = _name_to_slug(org_name)
+                cursor.execute(
+                    "SELECT id FROM organizations WHERE slug = %s",
+                    (slug,)
+                )
+                if cursor.fetchone():
+                    import uuid
+                    slug = slug[:42] + '-' + uuid.uuid4().hex[:6]
+
                 cursor.execute(
                     """
-                    INSERT INTO users (email, password_hash, name, created_at)
-                    VALUES (%s, %s, %s, NOW())
+                    INSERT INTO users (email, password_hash, name, role, created_at)
+                    VALUES (%s, %s, %s, 'admin', NOW())
                     RETURNING id, email, name
                     """,
                     (email, password_hash.decode('utf-8'), name)
@@ -81,75 +108,40 @@ def register():
                 user = cursor.fetchone()
                 user_id, user_email, user_name = user[0], user[1], user[2]
 
-                role = "admin" if user_count == 0 else "viewer"
+                cursor.execute(
+                    """
+                    INSERT INTO organizations (id, name, slug, created_by)
+                    VALUES (gen_random_uuid()::TEXT, %s, %s, %s)
+                    RETURNING id, name
+                    """,
+                    (org_name, slug, user_id)
+                )
+                org_row = cursor.fetchone()
+                org_id, org_display_name = org_row[0], org_row[1]
 
                 cursor.execute(
-                    "UPDATE users SET role = %s WHERE id = %s",
-                    (role, user_id)
+                    "UPDATE users SET org_id = %s WHERE id = %s",
+                    (org_id, user_id)
                 )
-
-                # Auto-create or assign org
-                org_id = None
-                org_name = None
-                if user_count == 0:
-                    # First user: create default organization
-                    # No-op upsert: ON CONFLICT forces RETURNING to work when the
-                    # default org already exists from a previous run.
-                    cursor.execute(
-                        """
-                        INSERT INTO organizations (id, name, slug, created_by)
-                        VALUES (gen_random_uuid()::TEXT, 'Default Organization', 'default', %s)
-                        ON CONFLICT (slug) DO UPDATE SET slug = organizations.slug
-                        RETURNING id, name
-                        """,
-                        (user_id,)
-                    )
-                    org_row = cursor.fetchone()
-                    org_id, org_name = org_row[0], org_row[1]
-                    cursor.execute(
-                        "UPDATE users SET org_id = %s WHERE id = %s",
-                        (org_id, user_id)
-                    )
-                else:
-                    # Subsequent users: assign to the first (default) org
-                    # NOTE: In a multi-tenant production environment, replace this
-                    # with an invitation flow so strangers cannot self-register
-                    # into an existing organization.
-                    cursor.execute(
-                        "SELECT id, name FROM organizations ORDER BY created_at ASC LIMIT 1"
-                    )
-                    org_row = cursor.fetchone()
-                    if org_row:
-                        org_id, org_name = org_row[0], org_row[1]
-                        cursor.execute(
-                            "UPDATE users SET org_id = %s WHERE id = %s",
-                            (org_id, user_id)
-                        )
 
                 conn.commit()
 
                 # Register the user-role mapping in Casbin (domain-aware)
                 try:
                     from utils.auth.enforcer import assign_role_to_user
-                    if org_id:
-                        assign_role_to_user(user_id, role, org_id)
-                    else:
-                        from utils.auth.enforcer import get_enforcer
-                        enforcer = get_enforcer()
-                        enforcer.add_grouping_policy(user_id, role, "*")
-                        enforcer.save_policy()
+                    assign_role_to_user(user_id, "admin", org_id)
                 except Exception as casbin_err:
                     logging.warning(f"Failed to assign Casbin role for {user_id}: {casbin_err}")
                 
-                logging.info(f"New user registered: {email} (role={role}, org={org_id})")
+                logging.info(f"New user registered: {email} (role=admin, org={org_id})")
                 
                 return jsonify({
                     "id": user_id,
                     "email": user_email,
                     "name": user_name,
-                    "role": role,
+                    "role": "admin",
                     "orgId": org_id,
-                    "orgName": org_name,
+                    "orgName": org_display_name,
                 }), 201
         finally:
             conn.close()
