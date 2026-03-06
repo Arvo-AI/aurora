@@ -24,9 +24,10 @@ const slackService = isSlackEnabled() ? require("@/lib/services/slack").slackSer
 
 interface ConnectorCardProps {
   connector: ConnectorConfig;
+  connectedOverride?: boolean;
 }
 
-export default function ConnectorCard({ connector }: ConnectorCardProps) {
+export default function ConnectorCard({ connector, connectedOverride }: ConnectorCardProps) {
   const router = useRouter();
   const { toast } = useToast();
   const { user } = useUser();
@@ -45,13 +46,15 @@ export default function ConnectorCard({ connector }: ConnectorCardProps) {
   const bitbucketStatus = useBitbucketStatus(connector.id === "bitbucket" ? userId : null);
 
   const {
-    isConnected,
+    isConnected: hookIsConnected,
     setIsConnected,
     isCheckingConnection,
     isLoadingDetails,
     slackStatus,
     checkGitHubStatus,
   } = useConnectorStatus(connector, userId);
+
+  const isConnected = connectedOverride !== undefined ? connectedOverride : hookIsConnected;
 
   // Graph discovery status (only active for supported cloud providers)
   const { syncStatus } = useGraphDiscoveryStatus(connector.id, isConnected, userId);

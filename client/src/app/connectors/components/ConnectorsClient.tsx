@@ -136,14 +136,14 @@ export default function ConnectorsClient() {
                     Installed
                   </h2>
                 </div>
-                <ConnectorGrid connectors={installedConnectors} />
+                <ConnectorGrid connectors={installedConnectors} connectedStatus={connectedStatus} />
               </div>
             )}
             
             {availableConnectors.length > 0 && (
               <div>
                 <h2 className="text-xl font-semibold mb-4">Available</h2>
-                <ConnectorGrid connectors={availableConnectors} />
+                <ConnectorGrid connectors={availableConnectors} connectedStatus={connectedStatus} />
               </div>
             )}
             

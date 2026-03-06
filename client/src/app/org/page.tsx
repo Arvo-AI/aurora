@@ -13,7 +13,6 @@ import { toast } from "@/hooks/use-toast";
 import OrgOverview from "./components/OrgOverview";
 import OrgMembers from "./components/OrgMembers";
 import OrgIntegrations from "./components/OrgIntegrations";
-import OrgPreferences from "./components/OrgPreferences";
 import OrgActivity from "./components/OrgActivity";
 
 interface OrgData {
@@ -169,7 +168,7 @@ export default function OrgPage() {
       <Tabs defaultValue="overview" className="w-full">
         <div className="border-b border-border mb-8">
           <TabsList className="h-auto p-0 bg-transparent rounded-none gap-6">
-            {["overview", "members", "integrations", "preferences", "activity"].map((tab) => (
+            {["overview", "members", "integrations", "activity"].map((tab) => (
               <TabsTrigger
                 key={tab}
                 value={tab}
@@ -189,9 +188,6 @@ export default function OrgPage() {
         </TabsContent>
         <TabsContent value="integrations">
           <OrgIntegrations />
-        </TabsContent>
-        <TabsContent value="preferences">
-          <OrgPreferences isAdmin={isAdmin} />
         </TabsContent>
         <TabsContent value="activity">
           <OrgActivity />
