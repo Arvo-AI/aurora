@@ -72,8 +72,8 @@ def _parse_relative_time(time_str: str) -> datetime:
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
         return dt
-    except (ValueError, TypeError):
-        raise ValueError(f"Invalid time format: '{time_str}'. Use relative ('-1h', '-24h', '-7d'), 'now', or ISO 8601.")
+    except (ValueError, TypeError) as exc:
+        raise ValueError(f"Invalid time format: '{time_str}'. Use relative ('-1h', '-24h', '-7d'), 'now', or ISO 8601.") from exc
 
 
 def _to_iso8601(time_str: str) -> str:
@@ -260,5 +260,5 @@ def query_datadog(
     except ValueError as exc:
         return json.dumps({"error": str(exc)})
     except Exception as exc:
-        logger.exception("[DATADOG-TOOL] Query failed for user=%s resource=%s: %s", user_id, resource_type, exc)
+        logger.exception("[DATADOG-TOOL] Query failed for user=%s resource=%s", user_id, resource_type)
         return json.dumps({"error": "Internal error while querying Datadog"})
