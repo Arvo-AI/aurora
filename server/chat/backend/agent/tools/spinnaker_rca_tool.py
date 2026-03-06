@@ -215,8 +215,8 @@ def spinnaker_rca(
             state = get_state_context()
             if state and getattr(state, "is_background", False):
                 return json.dumps({"error": "trigger_pipeline is not available in background mode. Only read-only actions can run automatically."})
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("[SPINNAKER_RCA] Could not check background state: %s", e)
 
         if not application or not pipeline_name:
             return json.dumps({"error": "application and pipeline_name are required for trigger_pipeline"})
