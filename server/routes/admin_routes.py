@@ -75,7 +75,7 @@ def create_user(user_id):
                 cur.execute("SET myapp.current_org_id = %s;", (org_id,))
             conn.commit()
 
-            cur.execute("SELECT id FROM users WHERE email = %s AND org_id = %s", (email, org_id))
+            cur.execute("SELECT id FROM users WHERE email = %s AND org_id IS NOT DISTINCT FROM %s", (email, org_id))
             if cur.fetchone():
                 return jsonify({"error": "User with this email already exists"}), 409
 
@@ -122,7 +122,7 @@ def get_user_roles(user_id, target_user_id):
     conn = connect_to_db_as_user()
     try:
         with conn.cursor() as cur:
-            cur.execute("SELECT 1 FROM users WHERE id = %s AND org_id = %s", (target_user_id, org_id))
+            cur.execute("SELECT 1 FROM users WHERE id = %s AND org_id IS NOT DISTINCT FROM %s", (target_user_id, org_id))
             if not cur.fetchone():
                 return jsonify({"error": "User not found in this organization"}), 404
     finally:
@@ -155,7 +155,7 @@ def assign_role(user_id, target_user_id):
     conn = connect_to_db_as_user()
     try:
         with conn.cursor() as cur:
-            cur.execute("SELECT 1 FROM users WHERE id = %s AND org_id = %s", (target_user_id, org_id))
+            cur.execute("SELECT 1 FROM users WHERE id = %s AND org_id IS NOT DISTINCT FROM %s", (target_user_id, org_id))
             if not cur.fetchone():
                 return jsonify({"error": "Target user not found in this organization"}), 404
     finally:
@@ -184,7 +184,7 @@ def assign_role(user_id, target_user_id):
             if org_id:
                 cur.execute("SET myapp.current_org_id = %s;", (org_id,))
             conn.commit()
-            cur.execute("UPDATE users SET role = %s WHERE id = %s AND org_id = %s", (role, target_user_id, org_id))
+            cur.execute("UPDATE users SET role = %s WHERE id = %s AND org_id IS NOT DISTINCT FROM %s", (role, target_user_id, org_id))
         conn.commit()
     finally:
         conn.close()
@@ -207,7 +207,7 @@ def revoke_role(user_id, target_user_id, role):
     conn = connect_to_db_as_user()
     try:
         with conn.cursor() as cur:
-            cur.execute("SELECT 1 FROM users WHERE id = %s AND org_id = %s", (target_user_id, org_id))
+            cur.execute("SELECT 1 FROM users WHERE id = %s AND org_id IS NOT DISTINCT FROM %s", (target_user_id, org_id))
             if not cur.fetchone():
                 return jsonify({"error": "Target user not found in this organization"}), 404
     finally:
@@ -239,7 +239,7 @@ def revoke_role(user_id, target_user_id, role):
             if org_id:
                 cur.execute("SET myapp.current_org_id = %s;", (org_id,))
             conn.commit()
-            cur.execute("UPDATE users SET role = %s WHERE id = %s AND org_id = %s", (fallback_role, target_user_id, org_id))
+            cur.execute("UPDATE users SET role = %s WHERE id = %s AND org_id IS NOT DISTINCT FROM %s", (fallback_role, target_user_id, org_id))
         conn.commit()
     finally:
         conn.close()
@@ -266,7 +266,7 @@ def delete_user(user_id, target_user_id):
             conn.commit()
 
             cur.execute(
-                "SELECT id, email FROM users WHERE id = %s AND org_id = %s",
+                "SELECT id, email FROM users WHERE id = %s AND org_id IS NOT DISTINCT FROM %s",
                 (target_user_id, org_id),
             )
             target = cur.fetchone()
@@ -285,7 +285,7 @@ def delete_user(user_id, target_user_id):
                 cur.execute(f"DELETE FROM {tbl} WHERE user_id = %s", (target_user_id,))
 
             cur.execute(
-                "DELETE FROM users WHERE id = %s AND org_id = %s",
+                "DELETE FROM users WHERE id = %s AND org_id IS NOT DISTINCT FROM %s",
                 (target_user_id, org_id),
             )
         conn.commit()

@@ -288,7 +288,7 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
     >
       {preprocessedSummary}
     </ReactMarkdown>
-  ), [preprocessedSummary, processChildren, findMatchingSuggestion, extractTextFromNode]);
+  ), [preprocessedSummary, processChildren, findMatchingSuggestion, extractTextFromNode, canWrite]);
 
   return (
     <div className="space-y-8">

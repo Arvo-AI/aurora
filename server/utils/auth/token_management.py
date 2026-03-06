@@ -93,7 +93,7 @@ def store_tokens_in_db(user_id: str, token_data: Dict, provider: str,
             if provider == "azure":
                 cursor.execute(
                     "INSERT INTO user_tokens (user_id, org_id, secret_ref, provider, subscription_name, subscription_id, tenant_id, client_id, client_secret) "
-                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s) ON CONFLICT (user_id, provider) DO UPDATE "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) ON CONFLICT (user_id, provider) DO UPDATE "
                     "SET secret_ref = EXCLUDED.secret_ref, "
                     "org_id = COALESCE(EXCLUDED.org_id, user_tokens.org_id), "
                     "subscription_name = EXCLUDED.subscription_name, "
@@ -352,7 +352,7 @@ def store_tokens_in_db(user_id: str, token_data: Dict, provider: str,
             else:
                 cursor.execute(
                     "INSERT INTO user_tokens (user_id, org_id, secret_ref, provider) "
-                    "VALUES (%s, %s, %s, %s, %s) ON CONFLICT (user_id, provider) DO UPDATE "
+                    "VALUES (%s, %s, %s, %s) ON CONFLICT (user_id, provider) DO UPDATE "
                     "SET secret_ref = EXCLUDED.secret_ref, "
                     "org_id = COALESCE(EXCLUDED.org_id, user_tokens.org_id), "
                     "timestamp = CURRENT_TIMESTAMP, "

@@ -26,7 +26,6 @@ def get_projects(user_id):
     
     try:
         logging.info("Fetching GCP projects with billing status")
-        data = request.get_json(silent=True) or {}
         provider = "gcp"
 
         # Refresh token if needed before proceeding

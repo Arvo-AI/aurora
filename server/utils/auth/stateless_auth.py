@@ -330,7 +330,7 @@ def store_user_preference(user_id: str, key: str, value: Any):
         try:
             org_id = get_org_id_from_request()
         except Exception:
-            pass
+            logger.debug("No request context for org_id in store_user_preference")
 
         conn = connect_to_db_as_user()
         cursor = conn.cursor()
@@ -505,8 +505,11 @@ def create_cors_response():
     return response
 
 
-# Cache for user_id -> org_id mapping used by background tasks
-_user_org_cache: dict[str, str | None] = {}
+import time as _time
+
+# Cache for user_id -> org_id mapping used by background tasks (with TTL)
+_user_org_cache: dict[str, tuple[str | None, float]] = {}
+_USER_ORG_CACHE_TTL = 300  # 5 minutes
 
 
 def get_org_id_for_user(user_id: str) -> Optional[str]:
@@ -514,8 +517,11 @@ def get_org_id_for_user(user_id: str) -> Optional[str]:
 
     Use this in Celery tasks where there is no Flask request context.
     """
-    if user_id in _user_org_cache:
-        return _user_org_cache[user_id]
+    entry = _user_org_cache.get(user_id)
+    if entry is not None:
+        cached_org_id, cached_at = entry
+        if _time.monotonic() - cached_at < _USER_ORG_CACHE_TTL:
+            return cached_org_id
 
     try:
         from utils.db.connection_pool import db_pool
@@ -524,7 +530,7 @@ def get_org_id_for_user(user_id: str) -> Optional[str]:
                 cursor.execute("SELECT org_id FROM users WHERE id = %s", (user_id,))
                 row = cursor.fetchone()
                 org_id = row[0] if row and row[0] else None
-                _user_org_cache[user_id] = org_id
+                _user_org_cache[user_id] = (org_id, _time.monotonic())
                 return org_id
     except Exception as e:
         logger.warning("Error looking up org_id for user %s: %s", user_id, e)

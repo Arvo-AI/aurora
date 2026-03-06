@@ -13,10 +13,14 @@ async function refreshUserFromBackend(userId: string): Promise<{
   if (!backendUrl) return null
 
   try {
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 5000)
     const res = await fetch(`${backendUrl}/api/auth/me`, {
       headers: { "X-User-ID": userId },
       cache: "no-store",
+      signal: controller.signal,
     })
+    clearTimeout(timeout)
     if (!res.ok) return null
     return await res.json()
   } catch (err) {
@@ -50,14 +54,18 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
           return null
         }
 
+        const loginController = new AbortController()
+        const loginTimeout = setTimeout(() => loginController.abort(), 10000)
         const response = await fetch(`${backendUrl}/api/auth/login`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             email: credentials.email,
             password: credentials.password
-          })
+          }),
+          signal: loginController.signal,
         })
+        clearTimeout(loginTimeout)
         
         if (!response.ok) {
           console.error("Login failed:", response.status)
@@ -110,14 +118,14 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
     session({ session, token }) {
       if (token) {
         session.userId = token.id as string
-        session.orgId = token.orgId as string
+        session.orgId = (token.orgId as string) ?? undefined
         if (session.user) {
           session.user.id = token.id as string
           session.user.email = token.email as string
           session.user.name = token.name as string
           session.user.role = token.role as string
-          session.user.orgId = token.orgId as string
-          session.user.orgName = token.orgName as string
+          session.user.orgId = (token.orgId as string) ?? undefined
+          session.user.orgName = (token.orgName as string) ?? undefined
           session.user.mustChangePassword = token.mustChangePassword as boolean
         }
       }

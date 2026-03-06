@@ -324,6 +324,7 @@ def get_org_activity(user_id):
         return jsonify({"error": "No organization found"}), 404
 
     limit = request.args.get("limit", 30, type=int)
+    limit = max(1, min(limit, 200))
 
     try:
         events = []
@@ -459,6 +460,8 @@ def update_org_preferences(user_id):
 
                 if "notification_emails" in data:
                     emails = data["notification_emails"]
+                    if not isinstance(emails, list) or not all(isinstance(e, str) for e in emails):
+                        return jsonify({"error": "notification_emails must be a list of strings"}), 400
                     # Upsert instead of delete-all to preserve is_verified status
                     valid_emails = []
                     for email in emails:

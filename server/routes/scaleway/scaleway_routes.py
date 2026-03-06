@@ -220,7 +220,9 @@ def scaleway_projects_write(user_id):
                 "action": "CONNECT_REQUIRED"
             }), 401
 
-        data = request.get_json()
+        data = request.get_json(silent=True)
+        if data is None:
+            return jsonify({"error": "Invalid or missing JSON body"}), 400
         projects = data.get("projects", [])
         
         store_user_preference(user_id, 'scaleway_projects', projects)
@@ -343,7 +345,9 @@ def scaleway_root_project_read(user_id):
 def scaleway_root_project_write(user_id):
     """Set the root project for Scaleway."""
     try:
-        data = request.get_json()
+        data = request.get_json(silent=True)
+        if data is None:
+            return jsonify({"error": "Invalid or missing JSON body"}), 400
         project_id = data.get("projectId")
         
         if not project_id:

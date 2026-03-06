@@ -22,6 +22,8 @@ def get_connected_accounts_options(target_user_id):
 @require_auth_only
 def get_connected_accounts(user_id, target_user_id):
     """Get connected account information for a user."""
+    conn = None
+    cursor = None
     try:
         if user_id != target_user_id:
             logging.warning(f"SECURITY: User {user_id} attempted to access connected accounts for {target_user_id}")
@@ -108,10 +110,15 @@ def get_connected_accounts(user_id, target_user_id):
         conn.close()
         
         return jsonify({"accounts": accounts})
-    
+
     except Exception as e:
         logging.error(f"Error getting connected accounts: {e}", exc_info=True)
         return jsonify({"error": "Failed to get connected accounts"}), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
 
 
 @account_management_bp.route("/api/connected-accounts/<target_user_id>/<provider>", methods=["OPTIONS"])
