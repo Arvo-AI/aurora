@@ -237,7 +237,7 @@ app.register_blueprint(cloudbees_bp, url_prefix="/cloudbees")
 # --- Spinnaker Integration Routes ---
 from utils.flags.feature_flags import is_spinnaker_enabled
 if is_spinnaker_enabled():
-    from routes.spinnaker import bp as spinnaker_bp  # noqa: F401
+    from routes.spinnaker import bp as spinnaker_bp
     import routes.spinnaker.tasks  # noqa: F401
     app.register_blueprint(spinnaker_bp, url_prefix="/spinnaker")
 

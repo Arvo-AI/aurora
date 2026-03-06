@@ -61,17 +61,19 @@ async function proxyToBackend(request: NextRequest, { params }: { params: Promis
       return NextResponse.json(null, { status: response.status });
     }
 
-    let data: unknown;
+    const text = await response.text();
+    if (!text) {
+      return NextResponse.json(null, { status: response.status });
+    }
     try {
-      data = await response.json();
+      const data = JSON.parse(text);
+      return NextResponse.json(data);
     } catch {
-      const text = await response.text().catch(() => '');
       return NextResponse.json(
-        { error: text || 'Non-JSON response from backend' },
+        { error: 'Non-JSON response from backend' },
         { status: 502 },
       );
     }
-    return NextResponse.json(data);
   } catch (error) {
     if (error instanceof Error && error.name === 'AbortError') {
       return NextResponse.json({ error: 'Connection timeout' }, { status: 504 });

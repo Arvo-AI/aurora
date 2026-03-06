@@ -222,12 +222,12 @@ class SpinnakerClient:
         try:
             self._session.close()
         except Exception:
-            pass
+            logger.debug("[SPINNAKER] Failed to close session", exc_info=True)
         for path in self._temp_files:
             try:
                 os.unlink(path)
             except OSError:
-                pass
+                logger.debug("[SPINNAKER] Failed to remove temp file %s", path)
         self._temp_files.clear()
 
     # ------------------------------------------------------------------

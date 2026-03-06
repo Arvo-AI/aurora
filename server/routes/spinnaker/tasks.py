@@ -97,7 +97,7 @@ def process_spinnaker_deployment(
             try:
                 duration_ms = int(end_time) - int(start_time)
             except (ValueError, TypeError):
-                pass
+                logger.debug("%s Failed to compute duration from start=%s end=%s", log_prefix, start_time, end_time)
 
         logger.info(
             "%s[USER:%s] %s/%s → %s (trigger=%s)",

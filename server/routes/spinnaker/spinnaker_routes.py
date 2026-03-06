@@ -98,8 +98,8 @@ def connect():
     except SpinnakerAPIError as e:
         logger.warning("[SPINNAKER] Credential validation failed for user %s: %s", user_id, e)
         return jsonify({"error": str(e)}), 400
-    except Exception as e:
-        logger.warning("[SPINNAKER] Connection failed for user %s: %s", user_id, e)
+    except Exception:
+        logger.exception("[SPINNAKER] Connection failed for user %s", user_id)
         return jsonify({"error": "Failed to connect to Spinnaker. Verify the URL and credentials."}), 400
 
     # Fetch apps and accounts for the response
@@ -383,9 +383,6 @@ def get_webhook_url():
         backend_url = request.host_url.rstrip("/")
 
     webhook_url = f"{backend_url}/spinnaker/webhook/{user_id}"
-
-    creds = _get_stored_credentials(user_id) or {}
-    webhook_secret = creds.get("webhook_secret", "")
 
     echo_config = f"""# Add to your Spinnaker Echo configuration (echo-local.yml):
 rest:
