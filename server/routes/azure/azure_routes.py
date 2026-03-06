@@ -17,7 +17,7 @@ azure_bp = Blueprint("azure_bp", __name__)
 # ---- Azure Routes ------------------------------------------------------#
 @azure_bp.route("/azure/login", methods=["POST", "GET", "OPTIONS"])
 @require_permission("connectors", "write")
-def azure_login_route(_user_id):
+def azure_login_route(user_id):
     if flask.request.method == 'OPTIONS':
         return create_cors_response()
     return azure_login()

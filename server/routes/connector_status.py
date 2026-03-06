@@ -6,7 +6,7 @@ so the frontend never has to scatter status calls across a dozen endpoints.
 
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 import requests
 from flask import Blueprint, jsonify
@@ -245,8 +245,8 @@ def _check_all_connectors(user_id: str, org_id: str) -> Dict[str, Dict[str, Any]
                     )
                     if cursor.fetchone():
                         results["aws"] = {"connected": True}
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("[STATUS] AWS connection fallback check failed: %s", exc)
 
     return results
 

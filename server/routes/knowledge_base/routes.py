@@ -83,9 +83,9 @@ def get_memory(user_id):
                 """
                 SELECT content, updated_at
                 FROM knowledge_base_memory
-                WHERE org_id = %s
+                WHERE user_id = %s AND org_id = %s
                 """,
-                (org_id,)
+                (user_id, org_id,)
             )
             row = cursor.fetchone()
 

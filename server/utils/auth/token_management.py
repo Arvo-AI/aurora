@@ -58,7 +58,7 @@ def store_tokens_in_db(user_id: str, token_data: Dict, provider: str,
 
     try:
         logger.info(f"[STORE-TOKENS] Starting credential storage operation")
-        logger.info(f"[STORE-TOKENS] User ID: {user_id}")
+        logger.info(f"[STORE-TOKENS] User ID: {_format_user_id_for_log(user_id)}")
 
         logger.info(f"[STORE-TOKENS] Provider: {provider}")
         logger.info(f"[STORE-TOKENS] Has subscription info: {bool(subscription_name or subscription_id)}")
@@ -370,7 +370,7 @@ def store_tokens_in_db(user_id: str, token_data: Dict, provider: str,
             logger.warning(f"[STORE-TOKENS] Failed to clear secret cache: {cache_error}")
 
         elapsed_time = (time.perf_counter() - start_time) * 1000
-        logger.info(f"[STORE-TOKENS]Successfully stored credentials for user {user_id}, provider {provider}")
+        logger.info(f"[STORE-TOKENS]Successfully stored credentials for user {_format_user_id_for_log(user_id)}, provider {provider}")
         logger.info(f"[STORE-TOKENS]Secret reference stored in database")
         logger.info(f"[STORE-TOKENS] ⏱️ Total operation completed in {elapsed_time:.2f}ms")
 
@@ -409,7 +409,7 @@ def get_token_data(user_id: str, provider: str, org_id: str | None = None) -> Op
             from utils.auth.stateless_auth import resolve_org_id
             org_id = resolve_org_id(user_id)
         except Exception:
-            pass
+            logger.debug("[GET-TOKENS] Could not resolve org_id for user %s", _format_user_id_for_log(user_id))
 
     try:
         logger.debug(

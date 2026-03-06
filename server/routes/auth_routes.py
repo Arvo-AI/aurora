@@ -133,7 +133,7 @@ def register():
                 except Exception as casbin_err:
                     logging.warning(f"Failed to assign Casbin role for {user_id}: {casbin_err}")
                 
-                logging.info(f"New user registered: {email} (role=admin, org={org_id})")
+                logging.info(f"New user registered: {email[:3]}***@*** (role=admin, org={org_id})")
                 
                 return jsonify({
                     "id": user_id,
@@ -327,5 +327,8 @@ def get_admins(user_id):
             )
             rows = cursor.fetchall()
         return jsonify([{"name": r[0], "email": r[1]} for r in rows]), 200
+    except Exception as e:
+        logging.exception("Error fetching admins for org %s: %s", org_id, e)
+        return jsonify({"error": "Failed to fetch admins"}), 500
     finally:
         conn.close()

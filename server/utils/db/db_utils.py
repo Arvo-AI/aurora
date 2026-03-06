@@ -328,6 +328,7 @@ def initialize_tables():
                     CREATE TABLE IF NOT EXISTS user_preferences (
                         id SERIAL PRIMARY KEY,
                         user_id VARCHAR(255) NOT NULL,
+                        org_id VARCHAR(255),
                         preference_key VARCHAR(255) NOT NULL,
                         preference_value JSONB,
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -1506,6 +1507,8 @@ def initialize_tables():
                 "CREATE INDEX IF NOT EXISTS idx_user_manual_vms_key ON user_manual_vms(user_id, ssh_key_id);",
                 "CREATE INDEX IF NOT EXISTS idx_user_manual_vms_connection_verified ON user_manual_vms(user_id, connection_verified);",
                 "CREATE INDEX IF NOT EXISTS idx_user_preferences_user_key ON user_preferences(user_id, preference_key);",
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_user_prefs_with_org ON user_preferences(user_id, org_id, preference_key) WHERE org_id IS NOT NULL;",
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_user_prefs_null_org ON user_preferences(user_id, preference_key) WHERE org_id IS NULL;",
                 "CREATE INDEX IF NOT EXISTS idx_aurora_deployments_user_id ON aurora_deployments(user_id);",
                 "CREATE INDEX IF NOT EXISTS idx_aurora_deployments_project_id ON aurora_deployments(project_id);",
                 "CREATE INDEX IF NOT EXISTS idx_aurora_deployments_deployment_id ON aurora_deployments(deployment_id);",
@@ -1737,7 +1740,7 @@ def initialize_tables():
                                 FROM users u WHERE t.user_id = u.id
                                 AND t.org_id IS NULL;
                             """)
-                            affected = cursor.rowcount
+                            backfilled = cursor.rowcount
                             # Check for rows that couldn't be backfilled (user_id doesn't match users.id)
                             cursor.execute(f"""
                                 SELECT COUNT(*) FROM {tbl} WHERE org_id IS NULL;

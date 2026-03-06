@@ -215,7 +215,7 @@ class SecretRefManager:
             from utils.auth.stateless_auth import resolve_org_id
             org_id = resolve_org_id(user_id)
         except Exception:
-            pass
+            logger.debug("has_user_credentials: could not resolve org_id for user %s", user_id)
 
         conn = None
         cursor = None
@@ -262,7 +262,7 @@ class SecretRefManager:
             from utils.auth.stateless_auth import resolve_org_id
             org_id = resolve_org_id(user_id)
         except Exception:
-            pass
+            logger.debug("get_user_token_data: could not resolve org_id for user %s", user_id)
 
         conn = None
         cursor = None

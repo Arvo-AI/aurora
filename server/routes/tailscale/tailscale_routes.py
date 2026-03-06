@@ -169,6 +169,7 @@ def tailscale_tailnets_get(user_id):
                 cur.execute("""
                     SELECT preference_value FROM user_preferences
                     WHERE user_id = %s AND preference_key = %s
+                    ORDER BY org_id NULLS LAST LIMIT 1
                 """, (user_id, 'tailscale_tailnets'))
                 result = cur.fetchone()
                 if result and result[0]:
@@ -179,6 +180,7 @@ def tailscale_tailnets_get(user_id):
                 cur.execute("""
                     SELECT preference_value FROM user_preferences
                     WHERE user_id = %s AND preference_key = %s
+                    ORDER BY org_id NULLS LAST LIMIT 1
                 """, (user_id, 'tailscale_root_tailnet'))
                 root_result = cur.fetchone()
                 if root_result and root_result[0]:
@@ -214,7 +216,9 @@ def tailscale_tailnets_post(user_id):
                 "action": "CONNECT_REQUIRED"
             }), 401
 
-        data = request.get_json()
+        data = request.get_json(silent=True)
+        if data is None:
+            return jsonify({"error": "Invalid or missing JSON body"}), 400
         tailnets = data.get("tailnets", [])
 
         from utils.db.db_utils import connect_to_db_as_admin
@@ -385,6 +389,7 @@ def tailscale_root_tailnet_get(user_id):
                 cur.execute("""
                     SELECT preference_value FROM user_preferences
                     WHERE user_id = %s AND preference_key = %s
+                    ORDER BY org_id NULLS LAST LIMIT 1
                 """, (user_id, 'tailscale_root_tailnet'))
                 result = cur.fetchone()
 
@@ -416,7 +421,9 @@ def tailscale_root_tailnet_post(user_id):
         conn = connect_to_db_as_admin()
 
         try:
-            data = request.get_json()
+            data = request.get_json(silent=True)
+            if data is None:
+                return jsonify({"error": "Invalid or missing JSON body"}), 400
             tailnet_id = data.get("tailnetId") or data.get("tailnet_id")
 
             if not tailnet_id:
