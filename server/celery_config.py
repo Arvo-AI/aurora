@@ -54,6 +54,7 @@ celery_app.conf.update(
         'routes.bigpanda.tasks',
         'routes.pagerduty.tasks',
         'routes.jenkins.tasks',
+        'routes.spinnaker.tasks',
         'utils.terminal.terminal_pod_cleanup',
         'chat.background.task',
         'chat.background.summarization',
@@ -135,6 +136,12 @@ try:
     logging.info("Jenkins tasks imported successfully")
 except ImportError as e:
     logging.warning(f"Failed to import Jenkins tasks: {e}")
+
+try:
+    import routes.spinnaker.tasks  # noqa: F401
+    logging.info("Spinnaker tasks imported successfully")
+except ImportError as e:
+    logging.warning(f"Failed to import Spinnaker tasks: {e}")
 
 try:
     import services.discovery.tasks

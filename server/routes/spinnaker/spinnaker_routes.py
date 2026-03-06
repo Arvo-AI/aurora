@@ -325,11 +325,13 @@ def application_health(app: str):
 # ------------------------------------------------------------------
 
 
-@spinnaker_bp.route("/webhook/<user_id>", methods=["POST", "OPTIONS"])
+@spinnaker_bp.route("/webhook/<user_id>", methods=["POST", "OPTIONS"], strict_slashes=False)
 def deployment_webhook(user_id: str):
     """Receive a deployment event webhook from Spinnaker Echo.
 
-    Security: validates per-user HMAC-SHA256 signature via X-Aurora-Signature header.
+    Security: validates per-user HMAC-SHA256 signature via X-Aurora-Signature header
+    when present.  Echo does not support HMAC signing, so the signature check is
+    only enforced when the header is actually provided.
     """
     if request.method == "OPTIONS":
         return create_cors_response()
@@ -345,10 +347,7 @@ def deployment_webhook(user_id: str):
     webhook_secret = creds.get("webhook_secret")
     signature = request.headers.get(SIGNATURE_HEADER, "")
 
-    if webhook_secret:
-        if not signature:
-            logger.warning("[SPINNAKER] Webhook rejected: missing %s for user %s", SIGNATURE_HEADER, user_id[:50])
-            return jsonify({"error": f"Missing {SIGNATURE_HEADER} header"}), 401
+    if webhook_secret and signature:
         if not verify_webhook_signature(request.get_data(), signature, webhook_secret):
             logger.warning("[SPINNAKER] Webhook rejected: invalid signature for user %s", user_id[:50])
             return jsonify({"error": "Invalid webhook signature"}), 401
@@ -357,6 +356,25 @@ def deployment_webhook(user_id: str):
 
     if not isinstance(payload, dict):
         return jsonify({"error": "Invalid payload format"}), 400
+
+    # Normalise raw Echo/Orca event format into the flat format the task expects.
+    # Echo sends: { details: { type, application, ... }, content: { execution: { ... } } }
+    content = payload.get("content", {})
+    execution = content.get("execution", {}) if isinstance(content, dict) else {}
+    if isinstance(execution, dict) and execution and "details" in payload:
+        payload = {
+            "application": execution.get("application") or payload.get("details", {}).get("application", ""),
+            "pipeline": execution.get("name", ""),
+            "pipeline_name": execution.get("name", ""),
+            "execution_id": execution.get("id") or content.get("executionId", ""),
+            "status": execution.get("status", ""),
+            "trigger_type": execution.get("trigger", {}).get("type", "") if isinstance(execution.get("trigger"), dict) else "",
+            "trigger_user": execution.get("trigger", {}).get("user", "") if isinstance(execution.get("trigger"), dict) else "",
+            "start_time": execution.get("startTime") or execution.get("buildTime"),
+            "end_time": execution.get("endTime"),
+            "event_type": payload.get("details", {}).get("type", "pipeline"),
+            "execution": execution,
+        }
 
     logger.info(
         "[SPINNAKER] Received deployment webhook for user %s: app=%s pipeline=%s status=%s",

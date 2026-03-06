@@ -73,28 +73,58 @@ After connecting, Aurora displays a **webhook URL** and an **Echo configuration 
 
 ### Echo Configuration
 
-Add to your Spinnaker Echo configuration (`echo-local.yml` or via the SpinnakerService CR):
+Patch the SpinnakerService CR to add the Echo webhook profile. Replace `YOUR_AURORA_URL` with the URL where Aurora is reachable from the Spinnaker cluster, and `YOUR_USER_ID` with the value shown on the Spinnaker connector page.
 
-```yaml
-rest:
-  enabled: true
-  endpoints:
-    - wrap: false
-      url: "https://your-aurora-domain:5080/spinnaker/webhook/YOUR_USER_ID"
-      headers:
-        Content-Type: application/json
-      template: |-
-        {"application": "{{execution.application}}","pipeline": "{{execution.name}}","pipeline_name": "{{execution.name}}","execution_id": "{{execution.id}}","status": "{{execution.status}}","trigger_type": "{{execution.trigger.type}}","trigger_user": "{{execution.trigger.user}}","start_time": "{{execution.startTime}}","end_time": "{{execution.endTime}}"}
+```bash
+kubectl patch spinnakerservice spinnaker -n spinnaker --type=merge -p '{
+  "spec": {
+    "spinnakerConfig": {
+      "profiles": {
+        "echo": {
+          "rest": {
+            "enabled": true,
+            "endpoints": [
+              {
+                "wrap": false,
+                "url": "YOUR_AURORA_URL/spinnaker/webhook/YOUR_USER_ID",
+                "headers": {
+                  "Content-Type": "application/json"
+                }
+              }
+            ]
+          }
+        }
+      }
+    }
+  }
+}'
 ```
 
-Replace `YOUR_USER_ID` with the value shown on the Spinnaker connector page in Aurora.
+Echo will restart automatically. Verify the config was applied:
+
+```bash
+kubectl exec -n spinnaker deployment/spin-echo -- cat /opt/spinnaker/config/echo-local.yml | grep -A5 "rest:"
+```
+
+:::info Local Development
+If Aurora is running locally (Docker) and Spinnaker is on a remote cluster (GKE, EKS, etc.), Aurora isn't directly reachable. Use [ngrok](https://ngrok.com/) to expose your local Aurora:
+
+```bash
+ngrok http 5080
+# Use the ngrok URL as YOUR_AURORA_URL, e.g.:
+# https://abc123.ngrok-free.dev
+```
+:::
+
+Echo sends raw Orca pipeline events (starting, failed, succeeded, etc.) on every pipeline state change. Aurora normalizes these automatically — no custom template is needed.
 
 ### What Happens When Events Arrive
 
-1. Aurora stores the deployment event in the database
-2. For failed pipelines (`TERMINAL`, `CANCELED`, `STOPPED`), Aurora creates an incident
-3. The alert correlator checks if the deployment matches any existing incidents
-4. If **Automatic RCA on Deployment Failures** is enabled, Aurora triggers a background RCA investigation
+1. Echo sends pipeline lifecycle events (starting, stage changes, completion) to Aurora
+2. Aurora normalizes and stores each deployment event in the database
+3. For failed pipelines (`TERMINAL`, `CANCELED`, `STOPPED`), Aurora creates an incident
+4. The alert correlator checks if the deployment matches any existing incidents
+5. If **Automatic RCA on Deployment Failures** is enabled, Aurora triggers a background RCA investigation
 
 ---
 
@@ -682,4 +712,5 @@ Then in Aurora chat, ask: *"Show me recent Spinnaker deployments"* to verify the
 | **Gate readiness probe failing after SSL** | The probe uses HTTP but Gate now uses HTTPS. Update the probe command to use `https://localhost:8085/health` |
 | **Port 8085 not found on service** | The operator resets service ports. Re-run the `kubectl patch svc` command to add port 8085 |
 | **clouddriver `RawResourcesEndpointConfig` error** | Add a `clouddriver` profile with `rawResourcesEndpointConfig` (see SpinnakerService CR example above) |
-| **Webhook events not arriving** | Ensure the Aurora server is accessible from the Spinnaker cluster. For local setups, use ngrok or a tunnel |
+| **Webhook events not arriving** | Ensure the Aurora server is accessible from the Spinnaker cluster. For local setups, use `ngrok http 5080` to create a tunnel |
+| **Celery: "unregistered task spinnaker.process_deployment"** | The Celery worker doesn't have the Spinnaker task registered. Ensure `routes.spinnaker.tasks` is in `celery_config.py`'s `include` list and restart the worker |
