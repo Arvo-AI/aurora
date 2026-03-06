@@ -9,7 +9,11 @@ from typing import Any, Optional
 from pydantic import BaseModel, Field
 
 from routes.datadog.config import MAX_OUTPUT_SIZE, MAX_RESULTS_CAP
-from utils.auth.token_management import get_token_data
+from routes.datadog.datadog_routes import (
+    DatadogAPIError,
+    _get_stored_datadog_credentials,
+    _build_client_from_creds,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +73,7 @@ def _parse_relative_time(time_str: str) -> datetime:
             dt = dt.replace(tzinfo=timezone.utc)
         return dt
     except (ValueError, TypeError):
-        return datetime.now(timezone.utc)
+        raise ValueError(f"Invalid time format: '{time_str}'. Use relative ('-1h', '-24h', '-7d'), 'now', or ISO 8601.")
 
 
 def _to_iso8601(time_str: str) -> str:
@@ -89,35 +93,14 @@ def _to_unix_ms(time_str: str) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Connection helpers
+# Connection helpers (reuse from datadog_routes to avoid logic drift)
 # ---------------------------------------------------------------------------
-
-
-def _get_credentials(user_id: str) -> Optional[dict[str, Any]]:
-    """Return stored Datadog credentials if both api_key and app_key are present."""
-    try:
-        creds = get_token_data(user_id, "datadog")
-        if creds and creds.get("api_key") and creds.get("app_key"):
-            return creds
-    except Exception as exc:
-        logger.error("[DATADOG-TOOL] Failed to get credentials: %s", exc)
-    return None
 
 
 def is_datadog_connected(user_id: str) -> bool:
     """Check if a user has valid Datadog credentials stored."""
-    return _get_credentials(user_id) is not None
-
-
-def _build_client(creds: dict[str, Any]):
-    """Build and return a DatadogClient from credentials."""
-    from routes.datadog.datadog_routes import DatadogClient
-
-    return DatadogClient(
-        api_key=creds["api_key"],
-        app_key=creds["app_key"],
-        site=creds.get("site"),
-    )
+    creds = _get_stored_datadog_credentials(user_id)
+    return _build_client_from_creds(creds) is not None if creds else False
 
 
 # ---------------------------------------------------------------------------
@@ -155,16 +138,13 @@ def _query_metrics(client, query: str, time_from: str, time_to: str, limit: int)
     end_ms = _to_unix_ms(time_to)
     response = client.query_metrics(query=query, start_ms=start_ms, end_ms=end_ms)
     data = response.get("data", {})
-    if isinstance(data, dict):
-        attrs = data.get("attributes", {})
-        result_data = {
-            "series": attrs.get("series", []),
-            "times": attrs.get("times", []),
-            "values": attrs.get("values", []),
-        }
-        return {"resource_type": "metrics", "count": len(result_data["series"]), "results": [result_data]}
-    series = data[:limit] if isinstance(data, list) else []
-    return {"resource_type": "metrics", "count": len(series), "results": series}
+    attrs = data.get("attributes", {}) if isinstance(data, dict) else {}
+    result_data = {
+        "series": attrs.get("series", []),
+        "times": attrs.get("times", []),
+        "values": attrs.get("values", []),
+    }
+    return {"resource_type": "metrics", "count": len(result_data["series"]), "results": [result_data]}
 
 
 def _query_monitors(client, query: str, time_from: str, time_to: str, limit: int) -> dict:
@@ -235,14 +215,16 @@ def query_datadog(
     **kwargs,
 ) -> str:
     """Query Datadog for logs, metrics, monitors, events, traces, hosts, or incidents."""
-    from routes.datadog.datadog_routes import DatadogAPIError
-
     if not user_id:
         return json.dumps({"error": "User context not available"})
 
-    creds = _get_credentials(user_id)
+    creds = _get_stored_datadog_credentials(user_id)
     if not creds:
         return json.dumps({"error": "Datadog not connected. Please connect Datadog first."})
+
+    client = _build_client_from_creds(creds)
+    if not client:
+        return json.dumps({"error": "Datadog credentials are incomplete. Please reconnect Datadog."})
 
     resource_type = resource_type.lower().strip()
     handler = _HANDLERS.get(resource_type)
@@ -253,7 +235,6 @@ def query_datadog(
     logger.info("[DATADOG-TOOL] user=%s resource=%s query=%s", user_id, resource_type, query[:100] if query else "")
 
     try:
-        client = _build_client(creds)
         result = handler(client, query, time_from, time_to, limit)
         result["success"] = True
         result["time_range"] = f"{time_from} to {time_to}"

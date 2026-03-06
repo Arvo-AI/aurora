@@ -1,4 +1,4 @@
 """Shared constants for the Datadog integration."""
 
-MAX_OUTPUT_SIZE = 2 * 1024 * 1024  # 2MB
+MAX_OUTPUT_SIZE = 120_000  # ~120KB, matching other observability tools (Coroot, ThousandEyes)
 MAX_RESULTS_CAP = 1000

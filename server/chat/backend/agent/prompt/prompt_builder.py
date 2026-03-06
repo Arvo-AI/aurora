@@ -1544,7 +1544,7 @@ def build_background_mode_segment(state: Optional[Any]) -> str:
             "4. 'events' - Platform events. query=source filter (optional)",
             "5. 'traces' - APM spans/traces. query=span query e.g. \"service:web @http.status_code:500\"",
             "6. 'hosts' - Infrastructure hosts. query=host filter (optional)",
-            "7. 'incidents' - Datadog incidents. Lists active/recent incidents.",
+            "7. 'incidents' - Datadog incidents. Lists active/recent incidents (requires Incident Management; may 403 if not enabled).",
             "Investigation flow:",
             "1. Search logs for errors around the alert time",
             "2. Check traces for failing requests and latency",
