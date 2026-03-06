@@ -12,18 +12,6 @@ from utils.db.connection_pool import db_pool
 logger = logging.getLogger(__name__)
 
 
-def _format_user_id_for_log(user_id: str | None) -> str:
-    """
-    Return a redacted representation of user_id suitable for logs.
-
-    Avoids logging full identifiers that may be linked to credentials.
-    """
-    if not user_id:
-        return "unknown"
-    # Log only a small, non-sensitive prefix to aid debugging.
-    return f"{str(user_id)[:4]}***"
-
-
 def store_tokens_in_db(user_id: str, token_data: Dict, provider: str,
                       subscription_name: str = None, subscription_id: str = None,
                       org_id: str = None) -> None:
@@ -39,7 +27,6 @@ def store_tokens_in_db(user_id: str, token_data: Dict, provider: str,
         org_id: Organization ID for multi-tenant scoping (optional, auto-resolved from request context)
     """
     start_time = time.perf_counter()
-    _log_uid = _format_user_id_for_log(user_id)
 
     if not org_id:
         try:
@@ -50,18 +37,14 @@ def store_tokens_in_db(user_id: str, token_data: Dict, provider: str,
 
     if not org_id:
         logging.warning(
-            "[STORE-TOKENS] No org_id resolved for user %s, provider %s - token will lack org scope",
-            _log_uid,
+            "[STORE-TOKENS] No org_id resolved, provider %s - token will lack org scope",
             provider,
         )
 
     request_org_id = org_id
 
     try:
-        logger.info(f"[STORE-TOKENS] Starting credential storage operation")
-        logger.info(f"[STORE-TOKENS] User ID: {_log_uid}")
-
-        logger.info(f"[STORE-TOKENS] Provider: {provider}")
+        logger.info("[STORE-TOKENS] Starting credential storage for provider: %s", provider)
         logger.info(f"[STORE-TOKENS] Has subscription info: {bool(subscription_name or subscription_id)}")
 
         from utils.secrets.secret_ref_utils import SecretRefManager
@@ -389,19 +372,13 @@ def store_tokens_in_db(user_id: str, token_data: Dict, provider: str,
             logger.warning(f"[STORE-TOKENS] Failed to clear secret cache: {cache_error}")
 
         elapsed_time = (time.perf_counter() - start_time) * 1000
-        logger.info(f"[STORE-TOKENS]Successfully stored credentials for user {_log_uid}, provider {provider}")
-        logger.info(f"[STORE-TOKENS]Secret reference stored in database")
-        logger.info(f"[STORE-TOKENS] ⏱️ Total operation completed in {elapsed_time:.2f}ms")
+        logger.info("[STORE-TOKENS] Successfully stored credentials for provider: %s", provider)
+        logger.info(f"[STORE-TOKENS] Secret reference stored in database")
+        logger.info(f"[STORE-TOKENS] Total operation completed in {elapsed_time:.2f}ms")
 
     except Exception as e:
         elapsed_time = (time.perf_counter() - start_time) * 1000
-        logger.error(f"[STORE-TOKENS]Failed to store credentials after {elapsed_time:.2f}ms")
-        logger.error(
-            "[STORE-TOKENS] User: %s, Provider: %s",
-            _log_uid,
-            provider,
-        )
-        logger.error(f"[STORE-TOKENS] Error: {e}")
+        logger.error("[STORE-TOKENS] Failed to store credentials for provider %s after %.2fms: %s", provider, elapsed_time, e)
         raise
 
 
@@ -421,7 +398,6 @@ def get_token_data(user_id: str, provider: str, org_id: str | None = None) -> Op
         Token data dictionary or empty dict if not found
     """
     start_time = time.perf_counter()
-    _log_uid = _format_user_id_for_log(user_id)
 
     # Resolve org_id from request context if not explicitly provided
     if not org_id:
@@ -429,12 +405,11 @@ def get_token_data(user_id: str, provider: str, org_id: str | None = None) -> Op
             from utils.auth.stateless_auth import resolve_org_id
             org_id = resolve_org_id(user_id)
         except Exception:
-            logger.debug("[GET-TOKENS] Could not resolve org_id for user %s", _log_uid)
+            logger.debug("[GET-TOKENS] Could not resolve org_id from request context")
 
     try:
         logger.debug(
-            "[GET-TOKENS] Starting credential retrieval for user %s, provider(s): %s, org_id: %s",
-            _log_uid,
+            "[GET-TOKENS] Starting credential retrieval for provider(s): %s, org_id: %s",
             provider,
             org_id,
         )
@@ -471,11 +446,5 @@ def get_token_data(user_id: str, provider: str, org_id: str | None = None) -> Op
 
     except Exception as e:
         elapsed_time = (time.perf_counter() - start_time) * 1000
-        logger.error(f"[GET-TOKENS]Failed to fetch credentials after {elapsed_time:.2f}ms")
-        logger.error(
-            "[GET-TOKENS] User: %s, Provider(s): %s",
-            _log_uid,
-            provider,
-        )
-        logger.error(f"[GET-TOKENS] Error: {e}")
+        logger.error("[GET-TOKENS] Failed to fetch credentials for provider(s) %s after %.2fms: %s", provider, elapsed_time, e)
         return {}
