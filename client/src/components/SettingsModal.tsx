@@ -3,12 +3,13 @@
 import React, { useState } from 'react';
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog";
-import { Settings, User, BookOpen, FileText } from "lucide-react";
+import { Settings, User, BookOpen, FileText, Building2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { GeneralSettings } from "@/components/GeneralSettings";
 import { ProfileSettings } from "@/components/ProfileSettings";
 import { KnowledgeBaseSettings } from "@/components/KnowledgeBaseSettings";
 import { PostmortemsSettings } from "@/components/PostmortemsSettings";
+import { OrgSettings } from "@/components/OrgSettings";
 import { useUser } from "@/hooks/useAuthHooks";
 
 
@@ -17,13 +18,19 @@ interface SettingsModalProps {
   onClose: () => void;
 }
 
-type SettingsTab = 'general' | 'profile' | 'knowledge-base' | 'postmortems';
+type SettingsTab = 'organization' | 'general' | 'profile' | 'knowledge-base' | 'postmortems';
 
 export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
-  const [activeTab, setActiveTab] = useState<SettingsTab>('general');
+  const [activeTab, setActiveTab] = useState<SettingsTab>('organization');
   useUser();
 
   const tabs = [
+    {
+      id: 'organization' as SettingsTab,
+      label: 'Organization',
+      icon: Building2,
+      description: 'Manage your organization'
+    },
     {
       id: 'general' as SettingsTab,
       label: 'General',
@@ -52,6 +59,16 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
 
   const renderContent = () => {
     switch (activeTab) {
+      case 'organization':
+        return (
+          <div className="p-6 h-full overflow-y-auto flex flex-col min-h-0">
+            <h2 className="text-2xl font-bold mb-6 flex-shrink-0">Organization</h2>
+            <div className="flex-1 overflow-y-auto min-h-0">
+              <OrgSettings />
+            </div>
+          </div>
+        );
+
       case 'general':
         return (
           <div className="p-6 h-full overflow-y-auto flex flex-col min-h-0">
