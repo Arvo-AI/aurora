@@ -140,6 +140,14 @@ const logos = {
       onError={(e) => console.error('Failed to load CloudBees logo:', e)}
     />
   ),
+  spinnaker: (
+    <img
+      src="/spinnaker.svg"
+      className="w-4 h-4 min-w-4 min-h-4 object-contain"
+      alt="Spinnaker"
+      onError={(e) => console.error('Failed to load Spinnaker logo:', e)}
+    />
+  ),
   coroot: (
     <img
       src="/coroot.svg"
@@ -254,6 +262,11 @@ const getLogoForCommand = (command: string | any, toolName: string, provider?: s
   // CloudBees tools
   if (tool.includes('cloudbees')) {
     return 'cloudbees'
+  }
+
+  // Spinnaker tools
+  if (tool.includes('spinnaker')) {
+    return 'spinnaker'
   }
 
   // Jenkins tools

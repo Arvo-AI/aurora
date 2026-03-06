@@ -24,7 +24,7 @@ export async function DELETE(
     const { provider } = await context.params
 
     // Validate provider
-    if (!['gcp', 'azure', 'aws', 'github', 'grafana', 'datadog', 'netdata', 'ovh', 'scaleway', 'tailscale', 'slack', 'splunk', 'dynatrace', 'confluence', 'sharepoint', 'coroot', 'thousandeyes', 'jenkins', 'cloudbees', 'bigpanda'].includes(provider)) {
+    if (!['gcp', 'azure', 'aws', 'github', 'grafana', 'datadog', 'netdata', 'ovh', 'scaleway', 'tailscale', 'slack', 'splunk', 'dynatrace', 'confluence', 'sharepoint', 'coroot', 'thousandeyes', 'jenkins', 'cloudbees', 'bigpanda', 'spinnaker'].includes(provider)) {
       return NextResponse.json(
         { error: 'Invalid provider' },
         { status: 400 }
@@ -314,6 +314,26 @@ export async function DELETE(
         })
         return NextResponse.json(
           { error: 'Failed to disconnect CloudBees' },
+          { status: response.status }
+        )
+      }
+
+      const data = await response.json()
+      return NextResponse.json(data)
+    }
+
+    // Special handling for Spinnaker
+    if (provider === 'spinnaker') {
+      const response = await fetch(`${API_BASE_URL}/spinnaker/disconnect`, {
+        method: 'DELETE',
+        headers: authHeaders,
+      })
+
+      if (!response.ok) {
+        const errorText = await response.text()
+        console.error('Backend error disconnecting Spinnaker:', errorText)
+        return NextResponse.json(
+          { error: 'Failed to disconnect Spinnaker' },
           { status: response.status }
         )
       }
