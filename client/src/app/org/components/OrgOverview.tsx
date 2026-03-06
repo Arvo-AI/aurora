@@ -1,8 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Button } from "@/components/ui/button";
-import { Copy, Check } from "lucide-react";
 import type { OrgMember } from "../page";
 
 interface OrgOverviewProps {
@@ -17,17 +15,13 @@ interface OrgOverviewProps {
   isAdmin: boolean;
 }
 
-export default function OrgOverview({ org, isAdmin }: OrgOverviewProps) {
+export default function OrgOverview({ org }: OrgOverviewProps) {
   const [stats, setStats] = useState<{
     members: number;
     incidents: number;
     chatSessions: number;
     integrations: number;
   } | null>(null);
-  const [copied, setCopied] = useState(false);
-
-  const signUpUrl =
-    typeof window !== "undefined" ? `${window.location.origin}/sign-up` : "/sign-up";
 
   useEffect(() => {
     fetch("/api/orgs/stats")
@@ -35,12 +29,6 @@ export default function OrgOverview({ org, isAdmin }: OrgOverviewProps) {
       .then(setStats)
       .catch(() => {});
   }, []);
-
-  function copyLink() {
-    navigator.clipboard.writeText(signUpUrl);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  }
 
   const roleCounts = org.members.reduce(
     (acc, m) => {
@@ -107,44 +95,6 @@ export default function OrgOverview({ org, isAdmin }: OrgOverviewProps) {
           })}
         </div>
       </section>
-
-      {/* Invite block — admin only */}
-      {isAdmin && (
-      <section className="rounded-lg border border-border p-5">
-        <div className="flex items-start justify-between gap-4">
-          <div className="space-y-1">
-            <h3 className="text-sm font-medium">Invite your team</h3>
-            <p className="text-[13px] text-muted-foreground leading-relaxed max-w-md">
-              Anyone with this link can create an account and join your organization.
-              New members start with read-only access — promote them from the Members tab.
-            </p>
-          </div>
-        </div>
-        <div className="flex items-center gap-2 mt-4">
-          <div className="flex-1 bg-muted/40 rounded-md border border-border/50 px-3 py-2">
-            <code className="text-[13px] text-foreground/70 select-all break-all">{signUpUrl}</code>
-          </div>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={copyLink}
-            className="gap-1.5 h-9 px-3 flex-shrink-0"
-          >
-            {copied ? (
-              <>
-                <Check className="h-3.5 w-3.5" />
-                Copied
-              </>
-            ) : (
-              <>
-                <Copy className="h-3.5 w-3.5" />
-                Copy
-              </>
-            )}
-          </Button>
-        </div>
-      </section>
-      )}
 
     </div>
   );
