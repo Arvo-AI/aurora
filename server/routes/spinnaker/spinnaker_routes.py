@@ -97,7 +97,7 @@ def connect():
         )
     except SpinnakerAPIError as e:
         logger.warning("[SPINNAKER] Credential validation failed for user %s: %s", user_id, e)
-        return jsonify({"error": str(e)}), 400
+        return jsonify({"error": "Credential validation failed. Check your Spinnaker URL and credentials."}), 400
     except Exception:
         logger.exception("[SPINNAKER] Connection failed for user %s", user_id)
         return jsonify({"error": "Failed to connect to Spinnaker. Verify the URL and credentials."}), 400
@@ -222,7 +222,8 @@ def list_applications():
         apps = client.list_applications()
         return jsonify({"applications": apps})
     except SpinnakerAPIError as e:
-        return jsonify({"error": str(e)}), 502
+        logger.warning("[SPINNAKER] API error: %s", e)
+        return jsonify({"error": "Spinnaker API request failed"}), 502
 
 
 @spinnaker_bp.route("/applications/<app>/pipelines", methods=["GET", "OPTIONS"])
@@ -246,7 +247,8 @@ def list_pipelines(app: str):
         executions = client.list_pipeline_executions(app, limit=limit, statuses=statuses)
         return jsonify({"executions": executions})
     except SpinnakerAPIError as e:
-        return jsonify({"error": str(e)}), 502
+        logger.warning("[SPINNAKER] API error: %s", e)
+        return jsonify({"error": "Spinnaker API request failed"}), 502
 
 
 @spinnaker_bp.route("/applications/<app>/pipeline-configs", methods=["GET", "OPTIONS"])
@@ -267,7 +269,8 @@ def list_pipeline_configs(app: str):
         configs = client.list_pipeline_configs(app)
         return jsonify({"pipelineConfigs": configs})
     except SpinnakerAPIError as e:
-        return jsonify({"error": str(e)}), 502
+        logger.warning("[SPINNAKER] API error: %s", e)
+        return jsonify({"error": "Spinnaker API request failed"}), 502
 
 
 @spinnaker_bp.route("/applications/<app>/pipelines/<name>/trigger", methods=["POST", "OPTIONS"])
@@ -291,7 +294,8 @@ def trigger_pipeline(app: str, name: str):
         result = client.trigger_pipeline(app, name, parameters)
         return jsonify({"triggered": True, "result": result})
     except SpinnakerAPIError as e:
-        return jsonify({"error": str(e)}), 502
+        logger.warning("[SPINNAKER] API error: %s", e)
+        return jsonify({"error": "Spinnaker API request failed"}), 502
 
 
 @spinnaker_bp.route("/applications/<app>/health", methods=["GET", "OPTIONS"])
@@ -312,7 +316,8 @@ def application_health(app: str):
         clusters = client.list_clusters(app)
         return jsonify({"application": app, "clusters": clusters})
     except SpinnakerAPIError as e:
-        return jsonify({"error": str(e)}), 502
+        logger.warning("[SPINNAKER] API error: %s", e)
+        return jsonify({"error": "Spinnaker API request failed"}), 502
 
 
 # ------------------------------------------------------------------
