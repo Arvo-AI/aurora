@@ -59,6 +59,9 @@ Vertex AI and Ollama always use their native SDKs regardless of `LLM_PROVIDER_MO
 | **Google Gemini** | `google/gemini-2.5-pro` | Best for complex tasks |
 | | `google/gemini-2.5-flash` | Fast and cost-effective |
 | | `google/gemini-3.1-pro-preview` | Latest generation with thinking |
+| **Vertex AI** | `vertex/gemini-2.5-pro` | Same models via Google Cloud |
+| | `vertex/gemini-2.5-flash` | Enterprise-grade with IAM auth |
+| | `vertex/gemini-3.1-pro-preview` | Latest generation with thinking |
 | **Ollama** | `ollama/llama3.1` | Meta's Llama 3.1 (8B/70B) |
 | | `ollama/qwen2.5` | Alibaba's Qwen 2.5 (various sizes) |
 | | Any model via `ollama pull` | |
