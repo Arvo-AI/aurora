@@ -7,6 +7,7 @@ set -euo pipefail
 # Usage:
 #   ./deploy/k8s-deploy.sh                     # interactive prompts (cloud)
 #   ./deploy/k8s-deploy.sh --local             # local K8s (OrbStack, Docker Desktop)
+#   ./deploy/k8s-deploy.sh --private           # private/VPN deployment (internal LB, private hostname)
 #   ./deploy/k8s-deploy.sh --skip-build        # skip image build (images already pushed)
 #   ./deploy/k8s-deploy.sh --skip-vault        # skip vault setup (already initialized)
 #   ./deploy/k8s-deploy.sh --values-only       # only generate values file, don't deploy
@@ -25,6 +26,9 @@ SKIP_BUILD=false
 SKIP_VAULT=false
 VALUES_ONLY=false
 LOCAL_MODE=false
+PRIVATE_MODE=false
+INGRESS_IP=""
+PRIVATE_HOSTNAME=""
 
 for arg in "$@"; do
   case $arg in
@@ -32,6 +36,7 @@ for arg in "$@"; do
     --skip-vault) SKIP_VAULT=true ;;
     --values-only) VALUES_ONLY=true ;;
     --local) LOCAL_MODE=true ;;
+    --private) PRIVATE_MODE=true ;;
     *) echo "Unknown arg: $arg"; exit 1 ;;
   esac
 done
@@ -69,6 +74,8 @@ echo ""
 echo "═══════════════════════════════════════════════"
 if $LOCAL_MODE; then
   echo "  Aurora Local Kubernetes Deployment"
+elif $PRIVATE_MODE; then
+  echo "  Aurora Private/VPN Kubernetes Deployment"
 else
   echo "  Aurora Kubernetes Deployment"
 fi
@@ -90,6 +97,22 @@ if $LOCAL_MODE; then
     echo "  kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.8.1/deploy/static/provider/cloud/deploy.yaml"
     prompt INGRESS_IP "Ingress controller IP (once installed)"
   fi
+elif $PRIVATE_MODE; then
+  prompt REGISTRY "Container registry (e.g. gcr.io/my-project, docker.io/myuser, ghcr.io/myorg)"
+  IMAGE_TAG=$(git -C "$REPO_ROOT" rev-parse --short HEAD)
+  echo ""
+  info "Private/VPN mode: the ingress load balancer will use an internal/private IP."
+  info "Users must be on your VPN or within your VPC to reach Aurora."
+  prompt PRIVATE_HOSTNAME "Private hostname for Aurora (e.g. aurora.internal, aurora.company.vpn)"
+  warn "DNS for $PRIVATE_HOSTNAME must resolve on your VPN."
+  warn "Options: split-horizon DNS, /etc/hosts on each client, or Tailscale MagicDNS."
+  echo ""
+  info "Storage: S3-compatible object storage"
+  prompt STORAGE_BUCKET "Bucket name"
+  prompt STORAGE_ENDPOINT "Endpoint URL" "https://s3.amazonaws.com"
+  prompt STORAGE_REGION "Region" "us-east-1"
+  prompt STORAGE_ACCESS_KEY "Access key"
+  prompt STORAGE_SECRET_KEY "Secret key"
 else
   prompt REGISTRY "Container registry (e.g. gcr.io/my-project, docker.io/myuser, ghcr.io/myorg)"
   IMAGE_TAG=$(git -C "$REPO_ROOT" rev-parse --short HEAD)
@@ -131,12 +154,30 @@ cp "$CHART_DIR/values.yaml" "$VALUES_FILE"
 yq -i ".image.registry = \"$REGISTRY\"" "$VALUES_FILE"
 yq -i ".image.tag = \"$IMAGE_TAG\"" "$VALUES_FILE"
 
-# URLs (nip.io)
+# URLs (nip.io for local/cloud, private hostname for --private)
 yq -i ".config.AURORA_ENV = \"$AURORA_ENV\"" "$VALUES_FILE"
-yq -i ".config.NEXT_PUBLIC_BACKEND_URL = \"http://api.aurora-oss.${INGRESS_IP}.nip.io\"" "$VALUES_FILE"
-yq -i ".config.NEXT_PUBLIC_WEBSOCKET_URL = \"ws://ws.aurora-oss.${INGRESS_IP}.nip.io\"" "$VALUES_FILE"
-yq -i ".config.FRONTEND_URL = \"http://aurora-oss.${INGRESS_IP}.nip.io\"" "$VALUES_FILE"
-yq -i ".config.SEARXNG_BASE_URL = \"http://aurora-oss.${INGRESS_IP}.nip.io\"" "$VALUES_FILE"
+if $PRIVATE_MODE; then
+  yq -i ".config.NEXT_PUBLIC_BACKEND_URL = \"http://api.${PRIVATE_HOSTNAME}\"" "$VALUES_FILE"
+  yq -i ".config.NEXT_PUBLIC_WEBSOCKET_URL = \"ws://ws.${PRIVATE_HOSTNAME}\"" "$VALUES_FILE"
+  yq -i ".config.FRONTEND_URL = \"http://${PRIVATE_HOSTNAME}\"" "$VALUES_FILE"
+  yq -i ".config.SEARXNG_BASE_URL = \"http://${PRIVATE_HOSTNAME}\"" "$VALUES_FILE"
+  yq -i ".ingress.hosts.frontend = \"${PRIVATE_HOSTNAME}\"" "$VALUES_FILE"
+  yq -i ".ingress.hosts.api = \"api.${PRIVATE_HOSTNAME}\"" "$VALUES_FILE"
+  yq -i ".ingress.hosts.ws = \"ws.${PRIVATE_HOSTNAME}\"" "$VALUES_FILE"
+  yq -i ".ingress.internal = true" "$VALUES_FILE"
+  warn "Add your cloud provider's internal LB annotation to ingress.annotations in $VALUES_FILE before deploying:"
+  warn "  GKE: cloud.google.com/load-balancer-type: \"Internal\""
+  warn "  EKS: service.beta.kubernetes.io/aws-load-balancer-internal: \"true\""
+  warn "  AKS: service.beta.kubernetes.io/azure-load-balancer-internal: \"true\""
+else
+  yq -i ".config.NEXT_PUBLIC_BACKEND_URL = \"http://api.aurora-oss.${INGRESS_IP}.nip.io\"" "$VALUES_FILE"
+  yq -i ".config.NEXT_PUBLIC_WEBSOCKET_URL = \"ws://ws.aurora-oss.${INGRESS_IP}.nip.io\"" "$VALUES_FILE"
+  yq -i ".config.FRONTEND_URL = \"http://aurora-oss.${INGRESS_IP}.nip.io\"" "$VALUES_FILE"
+  yq -i ".config.SEARXNG_BASE_URL = \"http://aurora-oss.${INGRESS_IP}.nip.io\"" "$VALUES_FILE"
+  yq -i ".ingress.hosts.frontend = \"aurora-oss.${INGRESS_IP}.nip.io\"" "$VALUES_FILE"
+  yq -i ".ingress.hosts.api = \"api.aurora-oss.${INGRESS_IP}.nip.io\"" "$VALUES_FILE"
+  yq -i ".ingress.hosts.ws = \"ws.aurora-oss.${INGRESS_IP}.nip.io\"" "$VALUES_FILE"
+fi
 
 if $LOCAL_MODE; then
   # MinIO: built-in S3-compatible storage
@@ -172,11 +213,6 @@ esac
 yq -i ".config.LLM_PROVIDER_MODE = \"$LLM_PROVIDER\"" "$VALUES_FILE"
 yq -i ".secrets.llm.${LLM_KEY_FIELD} = \"$LLM_API_KEY\"" "$VALUES_FILE"
 
-# Ingress hosts
-yq -i ".ingress.hosts.frontend = \"aurora-oss.${INGRESS_IP}.nip.io\"" "$VALUES_FILE"
-yq -i ".ingress.hosts.api = \"api.aurora-oss.${INGRESS_IP}.nip.io\"" "$VALUES_FILE"
-yq -i ".ingress.hosts.ws = \"ws.aurora-oss.${INGRESS_IP}.nip.io\"" "$VALUES_FILE"
-
 ok "Values file generated: $VALUES_FILE"
 ok "Image tag: $IMAGE_TAG"
 
@@ -210,8 +246,16 @@ else
   DOCKER_BUILDKIT=1 docker buildx build "$REPO_ROOT/server" --target=prod --platform linux/amd64 --push -t "$REGISTRY/aurora-server:$IMAGE_TAG"
   ok "Server image pushed"
 
+  if $PRIVATE_MODE; then
+    FRONTEND_BACKEND_URL="http://api.${PRIVATE_HOSTNAME}"
+    FRONTEND_WS_URL="ws://ws.${PRIVATE_HOSTNAME}"
+  else
+    FRONTEND_BACKEND_URL="http://api.aurora-oss.${INGRESS_IP}.nip.io"
+    FRONTEND_WS_URL="ws://ws.aurora-oss.${INGRESS_IP}.nip.io"
+  fi
+
   info "Building aurora-frontend ($REGISTRY/aurora-frontend:$IMAGE_TAG) ..."
-  DOCKER_BUILDKIT=1 docker buildx build "$REPO_ROOT/client" --target=prod --platform linux/amd64 --push --build-arg "NEXT_PUBLIC_BACKEND_URL=http://api.aurora-oss.${INGRESS_IP}.nip.io" --build-arg "NEXT_PUBLIC_WEBSOCKET_URL=ws://ws.aurora-oss.${INGRESS_IP}.nip.io" -t "$REGISTRY/aurora-frontend:$IMAGE_TAG"
+  DOCKER_BUILDKIT=1 docker buildx build "$REPO_ROOT/client" --target=prod --platform linux/amd64 --push --build-arg "NEXT_PUBLIC_BACKEND_URL=${FRONTEND_BACKEND_URL}" --build-arg "NEXT_PUBLIC_WEBSOCKET_URL=${FRONTEND_WS_URL}" -t "$REGISTRY/aurora-frontend:$IMAGE_TAG"
   ok "Frontend image pushed"
 fi
 
@@ -290,7 +334,15 @@ echo "════════════════════════�
 echo ""
 kubectl get pods -n "$NAMESPACE"
 echo ""
-echo "  Frontend:  http://aurora-oss.${INGRESS_IP}.nip.io"
-echo "  API:       http://api.aurora-oss.${INGRESS_IP}.nip.io/health/"
-echo "  WebSocket: ws://ws.aurora-oss.${INGRESS_IP}.nip.io"
+if $PRIVATE_MODE; then
+  echo "  Frontend:  http://${PRIVATE_HOSTNAME}"
+  echo "  API:       http://api.${PRIVATE_HOSTNAME}/health/"
+  echo "  WebSocket: ws://ws.${PRIVATE_HOSTNAME}"
+  echo ""
+  warn "Access requires VPN connectivity and DNS resolution for ${PRIVATE_HOSTNAME}."
+else
+  echo "  Frontend:  http://aurora-oss.${INGRESS_IP}.nip.io"
+  echo "  API:       http://api.aurora-oss.${INGRESS_IP}.nip.io/health/"
+  echo "  WebSocket: ws://ws.aurora-oss.${INGRESS_IP}.nip.io"
+fi
 echo ""

@@ -27,9 +27,14 @@ The fastest way to deploy Aurora is with the interactive deploy script:
 
 # Local Kubernetes (OrbStack, Docker Desktop, Rancher Desktop)
 ./deploy/k8s-deploy.sh --local
+
+# Private / VPN deployment (internal load balancer, no public internet exposure)
+./deploy/k8s-deploy.sh --private
 ```
 
 The script handles values generation, image building, Helm deployment, and Vault initialization in one command. Use `--skip-build` to skip image builds or `--skip-vault` if Vault is already set up. Use `--values-only` to generate the values file without deploying.
+
+For a private deployment, the script prompts for a private hostname instead of a public IP and reminds you to configure DNS on your VPN. See [Private / VPN Deployment](#private--vpn-deployment) for details.
 
 For manual setup or more control, follow the step-by-step sections below.
 
@@ -409,6 +414,51 @@ Or use the automated script:
 ```
 
 This skips registry push, enables MinIO, and uses `localhost` as the registry.
+
+## Private / VPN Deployment
+
+Use this when Aurora should not be accessible from the public internet — for example, an internal tool accessible only to employees over a corporate VPN or within a private cloud network.
+
+Run the deploy script with the `--private` flag:
+
+```bash
+./deploy/k8s-deploy.sh --private
+```
+
+The script will prompt for a private hostname (e.g. `aurora.internal`) instead of a public IP, set `ingress.internal: true` in your values file, and bake that hostname into the frontend image at build time.
+
+### DNS requirement
+
+Your private hostname must resolve for users on your VPN. Options:
+
+- **Tailscale MagicDNS** — register the hostname in your Tailscale admin console; all connected devices resolve it automatically.
+- **Split-horizon DNS** — configure your internal DNS server to resolve the hostname to the ingress IP.
+- **`/etc/hosts`** — add `<ingress-ip> aurora.internal api.aurora.internal ws.aurora.internal` on each client machine (useful for small teams).
+
+### Internal load balancer
+
+Set the appropriate annotation in `values.generated.yaml` under `ingress.annotations` to tell your cloud provider to provision a VPC-internal load balancer with no public IP:
+
+| Cloud | Annotation |
+|-------|------------|
+| GKE | `cloud.google.com/load-balancer-type: "Internal"` |
+| EKS | `service.beta.kubernetes.io/aws-load-balancer-internal: "true"` |
+| AKS | `service.beta.kubernetes.io/azure-load-balancer-internal: "true"` |
+
+```yaml
+ingress:
+  internal: true
+  annotations:
+    cloud.google.com/load-balancer-type: "Internal"  # example for GKE
+```
+
+### Changing the hostname later
+
+Because `NEXT_PUBLIC_BACKEND_URL` and `NEXT_PUBLIC_WEBSOCKET_URL` are baked into the frontend image as build arguments (not runtime env vars), changing the hostname requires rebuilding and redeploying the frontend image. Re-running `./deploy/k8s-deploy.sh --private` with the new hostname handles this automatically.
+
+### Option A: IP restriction instead of internal LB
+
+If you prefer to keep a public ingress IP but restrict who can reach it, skip the internal LB annotation and instead lock down your cloud firewall / security group to your VPN's egress CIDR or your office IP range — the same pattern used in the VM deployment guide.
 
 ## Deployment
 
