@@ -2,10 +2,8 @@
 
 import { useState } from "react"
 import { useSession } from "next-auth/react"
-import { useRouter } from "next/navigation"
 
 export default function ChangePasswordPage() {
-  const router = useRouter()
   const { update: updateSession } = useSession()
 
   const [currentPassword, setCurrentPassword] = useState("")
@@ -50,8 +48,7 @@ export default function ChangePasswordPage() {
       }
 
       await updateSession()
-      router.push("/")
-      router.refresh()
+      window.location.href = "/"
     } catch {
       setError("An error occurred. Please try again.")
     } finally {
