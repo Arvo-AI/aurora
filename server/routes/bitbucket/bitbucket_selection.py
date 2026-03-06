@@ -6,25 +6,23 @@ import logging
 
 from flask import Blueprint, jsonify, request
 
-from utils.auth.stateless_auth import get_credentials_from_db, get_user_id_from_request
+from utils.auth.stateless_auth import get_credentials_from_db
 from utils.auth.token_management import store_tokens_in_db
 from utils.web.cors_utils import create_cors_response
+from utils.auth.rbac_decorators import require_permission
 
 bitbucket_selection_bp = Blueprint("bitbucket_selection", __name__)
 logger = logging.getLogger(__name__)
 
 
 @bitbucket_selection_bp.route("/workspace-selection", methods=["GET", "OPTIONS"])
-def get_workspace_selection():
+@require_permission("connectors", "read")
+def get_workspace_selection(user_id):
     """Get the stored Bitbucket workspace selection for a user."""
     if request.method == "OPTIONS":
         return create_cors_response()
 
     try:
-        user_id = get_user_id_from_request()
-        if not user_id:
-            return jsonify({"error": "User ID required"}), 400
-
         selection = get_credentials_from_db(user_id, "bitbucket_workspace_selection") or {}
 
         return jsonify({
@@ -39,16 +37,13 @@ def get_workspace_selection():
 
 
 @bitbucket_selection_bp.route("/workspace-selection", methods=["POST", "PUT", "OPTIONS"])
-def save_workspace_selection():
+@require_permission("connectors", "write")
+def save_workspace_selection(user_id):
     """Save the Bitbucket workspace selection for a user."""
     if request.method == "OPTIONS":
         return create_cors_response()
 
     try:
-        user_id = get_user_id_from_request()
-        if not user_id:
-            return jsonify({"error": "User ID required"}), 400
-
         data = request.get_json()
         if not data:
             return jsonify({"error": "Request body required"}), 400
@@ -86,16 +81,13 @@ def save_workspace_selection():
 
 
 @bitbucket_selection_bp.route("/workspace-selection", methods=["DELETE", "OPTIONS"])
-def clear_workspace_selection():
+@require_permission("connectors", "write")
+def clear_workspace_selection(user_id):
     """Clear the Bitbucket workspace selection for a user."""
     if request.method == "OPTIONS":
         return create_cors_response()
 
     try:
-        user_id = get_user_id_from_request()
-        if not user_id:
-            return jsonify({"error": "User ID required"}), 400
-
         from utils.secrets.secret_ref_utils import delete_user_secret
 
         delete_user_secret(user_id, "bitbucket_workspace_selection")

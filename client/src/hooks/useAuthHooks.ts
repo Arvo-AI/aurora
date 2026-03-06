@@ -12,7 +12,6 @@ export function useUser() {
   const isLoaded = status !== "loading";
   const isSignedIn = !!session?.user;
   
-  // Map Auth.js user to Auth.js-like user object
   const user = session?.user ? {
     id: session.user.id!,
     email: session.user.email || "",
@@ -20,6 +19,9 @@ export function useUser() {
     fullName: session.user.name || null,
     firstName: session.user.name?.split(' ')[0] || null,
     imageUrl: session.user.image || null,
+    role: session.user.role || "viewer",
+    orgId: session.user.orgId || null,
+    orgName: session.user.orgName || null,
   } : null;
 
   return {
@@ -39,5 +41,8 @@ export function useAuth() {
     isLoaded: status !== "loading",
     isSignedIn: !!session?.user,
     userId: session?.user?.id || null,
+    role: session?.user?.role || null,
+    orgId: session?.user?.orgId || null,
+    orgName: session?.user?.orgName || null,
   };
 }

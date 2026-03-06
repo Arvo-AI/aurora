@@ -13,6 +13,7 @@ export default function SignUpPage() {
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
   const [confirmPassword, setConfirmPassword] = useState("")
+  const [orgName, setOrgName] = useState("")
   const [error, setError] = useState("")
   const [isLoading, setIsLoading] = useState(false)
 
@@ -30,6 +31,11 @@ export default function SignUpPage() {
       return
     }
 
+    if (!orgName.trim()) {
+      setError("Organization name is required")
+      return
+    }
+
     setIsLoading(true)
 
     try {
@@ -38,7 +44,7 @@ export default function SignUpPage() {
       const response = await fetch(`${backendUrl}/api/auth/register`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password, name })
+        body: JSON.stringify({ email, password, name, org_name: orgName.trim() })
       })
 
       if (!response.ok) {
@@ -72,20 +78,37 @@ export default function SignUpPage() {
       <div className="max-w-md w-full space-y-8 bg-white dark:bg-gray-800 p-8 rounded-lg shadow-xl">
         <div>
           <h2 className="mt-6 text-center text-3xl font-extrabold text-gray-900 dark:text-white">
-            Create your Aurora account
+            Create your organization
           </h2>
           <p className="mt-2 text-center text-sm text-gray-600 dark:text-gray-300">
-            Or{" "}
+            Set up a new Aurora workspace.{" "}
             <Link
               href="/sign-in"
               className="font-medium text-blue-600 hover:text-blue-500 dark:text-blue-400 dark:hover:text-blue-300"
             >
-              sign in to existing account
+              Already have an account? Sign in
             </Link>
           </p>
         </div>
         <form className="mt-8 space-y-6" onSubmit={handleSubmit}>
           <div className="rounded-md shadow-sm space-y-3">
+            <div>
+              <label htmlFor="org-name" className="sr-only">
+                Organization name
+              </label>
+              <input
+                id="org-name"
+                name="org-name"
+                type="text"
+                required
+                value={orgName}
+                onChange={(e) => setOrgName(e.target.value)}
+                className="appearance-none relative block w-full px-3 py-2 border border-gray-300 dark:border-gray-700 placeholder-gray-500 dark:placeholder-gray-400 text-gray-900 dark:text-white rounded-md focus:outline-none focus:ring-blue-500 focus:border-blue-500 focus:z-10 sm:text-sm bg-white dark:bg-gray-800"
+                placeholder="Organization name"
+                disabled={isLoading}
+              />
+            </div>
+            <div className="border-t border-gray-200 dark:border-gray-700" />
             <div>
               <label htmlFor="name" className="sr-only">
                 Full name
@@ -168,7 +191,7 @@ export default function SignUpPage() {
               disabled={isLoading}
               className="group relative w-full flex justify-center py-2 px-4 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              {isLoading ? "Creating account..." : "Create account"}
+              {isLoading ? "Creating organization..." : "Create organization"}
             </button>
           </div>
         </form>

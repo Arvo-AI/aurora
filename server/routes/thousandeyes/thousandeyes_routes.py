@@ -10,10 +10,10 @@ from connectors.thousandeyes_connector.client import (
     invalidate_thousandeyes_client,
 )
 from chat.backend.agent.tools.mcp_tools import clear_credentials_cache
-from utils.auth.stateless_auth import get_user_id_from_request
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.secrets.secret_ref_utils import delete_user_secret
 from utils.web.cors_utils import create_cors_response
+from utils.auth.rbac_decorators import require_permission
 
 logger = logging.getLogger(__name__)
 
@@ -38,14 +38,8 @@ def _get_stored_credentials(user_id: str) -> Optional[Dict[str, Any]]:
 # ------------------------------------------------------------------
 
 @thousandeyes_bp.route("/connect", methods=["POST", "OPTIONS"])
-def connect():
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
-
+@require_permission("connectors", "write")
+def connect(user_id):
     payload = request.get_json(force=True, silent=True) or {}
     api_token = payload.get("api_token", "").strip()
     account_group_id = payload.get("account_group_id", "").strip() or None
@@ -86,14 +80,8 @@ def connect():
 
 
 @thousandeyes_bp.route("/status", methods=["GET", "OPTIONS"])
-def status():
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
-
+@require_permission("connectors", "read")
+def status(user_id):
     creds = _get_stored_credentials(user_id)
     if not creds:
         return jsonify({"connected": False})
@@ -125,14 +113,8 @@ def status():
 
 
 @thousandeyes_bp.route("/disconnect", methods=["DELETE", "POST", "OPTIONS"])
-def disconnect():
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
-
+@require_permission("connectors", "write")
+def disconnect(user_id):
     try:
         invalidate_thousandeyes_client(user_id)
         vault_ok, rows = delete_user_secret(user_id, "thousandeyes")

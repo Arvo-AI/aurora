@@ -19,6 +19,8 @@ import React, { useState, useMemo, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { useRouter } from 'next/navigation';
 import { useToast } from '@/hooks/use-toast';
+import { useUser } from '@/hooks/useAuthHooks';
+import { canWrite as checkCanWrite } from '@/lib/roles';
 import Link from 'next/link';
 import Image from 'next/image';
 import CitationBadge from './CitationBadge';
@@ -95,6 +97,8 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
   const alert = incident.alert;
   const router = useRouter();
   const { toast } = useToast();
+  const { user } = useUser();
+  const canWrite = checkCanWrite(user?.role);
   const showSeverity = (alert.severity && alert.severity !== 'unknown') || incident.status === 'analyzed';
 
   const handleResolveIncident = async () => {
@@ -243,7 +247,7 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
           const matchingSuggestion = findMatchingSuggestion(textContent);
           const isFixType = matchingSuggestion?.type === 'fix';
           const canExecute = Boolean(matchingSuggestion?.command);
-          const canShowAction = canExecute || isFixType;
+          const canShowAction = canWrite && (canExecute || isFixType);
 
           return (
             <li className="text-zinc-300 text-sm">
@@ -284,7 +288,7 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
     >
       {preprocessedSummary}
     </ReactMarkdown>
-  ), [preprocessedSummary, processChildren, findMatchingSuggestion, extractTextFromNode]);
+  ), [preprocessedSummary, processChildren, findMatchingSuggestion, extractTextFromNode, canWrite]);
 
   return (
     <div className="space-y-8">
@@ -554,7 +558,7 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
           )}
 
           {/* Resolve Incident button */}
-          {incident.auroraStatus === 'complete' && incident.status !== 'resolved' && incident.status !== 'merged' && (
+          {canWrite && incident.auroraStatus === 'complete' && incident.status !== 'resolved' && incident.status !== 'merged' && (
             <button
               onClick={handleResolveIncident}
               disabled={resolvingIncident}

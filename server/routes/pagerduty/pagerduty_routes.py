@@ -13,8 +13,8 @@ from flask import Blueprint, jsonify, request, redirect
 from utils.db.connection_pool import db_pool
 from utils.web.cors_utils import create_cors_response
 from utils.flags.feature_flags import is_pagerduty_oauth_enabled
-from utils.auth.stateless_auth import get_user_id_from_request
 from utils.auth.token_management import get_token_data, store_tokens_in_db
+from utils.auth.rbac_decorators import require_permission
 from routes.pagerduty.oauth_utils import get_auth_url, exchange_code_for_token, refresh_token_if_needed
 from routes.pagerduty.pagerduty_helpers import PagerDutyClient, PagerDutyAPIError, validate_token, error_response
 
@@ -52,97 +52,99 @@ def _validate_v3_webhook(payload: dict) -> tuple[bool, str]:
     return True, ""
 
 
-@pagerduty_bp.route("", methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"])
-def pagerduty_api():
-    """Unified PagerDuty endpoint."""
+@pagerduty_bp.route("", methods=["GET", "OPTIONS"])
+@require_permission("connectors", "read")
+def pagerduty_status(user_id):
+    """Get PagerDuty connection status."""
     if request.method == "OPTIONS":
         return create_cors_response()
-    
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "Authentication required"}), 401
-    
-    if request.method == "GET":
-        creds = get_token_data(user_id, "pagerduty")
-        if not creds:
-            return jsonify({"connected": False})
-        
-        if creds.get("auth_type") == "oauth":
-            success, refreshed = refresh_token_if_needed(creds)
-            if success and refreshed:
-                try:
-                    store_tokens_in_db(user_id, {**creds, **refreshed}, "pagerduty")
-                    creds.update(refreshed)
-                except Exception:
-                    pass
-        
-        return jsonify({"connected": True, "displayName": creds.get("display_name", "PagerDuty"), "validatedAt": creds.get("validated_at"), "authType": creds.get("auth_type", "api_token"), "capabilities": creds.get("capabilities", {}), "externalUserEmail": creds.get("external_user_email"), "externalUserName": creds.get("external_user_name"), "accountSubdomain": creds.get("account_subdomain")})
-    
-    elif request.method in ["POST", "PATCH"]:
-        data = request.get_json(force=True, silent=True) or {}
-        token = data.get("token")
-        
-        if not token or not isinstance(token, str):
-            return jsonify({"error": "Token required"}), 400
-        
-        token = token.strip()
-        
-        if request.method == "PATCH":
-            existing = get_token_data(user_id, "pagerduty")
-            if not existing:
-                return jsonify({"error": "Not connected"}), 404
-            if existing.get("auth_type") == "oauth":
-                return jsonify({"error": "Cannot rotate OAuth tokens"}), 400
-            display_name = existing.get("display_name", "PagerDuty")
-        else:
-            display_name = data.get("displayName", "PagerDuty")
-        
-        logger.info(f"[PAGERDUTY] Validating API token for user {user_id}")
-        try:
-            token_info = validate_token(PagerDutyClient(api_token=token))
-            logger.info(f"[PAGERDUTY] Token validated successfully for user {user_id}")
-        except PagerDutyAPIError as e:
-            logger.warning(f"[PAGERDUTY] Token validation failed for user {user_id}: {str(e)}")
-            return error_response(e)
-        
-        # Store token data
-        token_data = {
-            "auth_type": "api_token",
-            "api_token": token,
-            "display_name": display_name,
-            **token_info
-        }
-        
-        try:
-            store_tokens_in_db(user_id, token_data, "pagerduty")
-        except Exception as e:
-            return jsonify({"error": "Storage failed"}), 500
-        
-        return jsonify({"success": True, "connected": True, "displayName": display_name, **token_info})
-    
-    elif request.method == "DELETE":
-        try:
-            with db_pool.get_admin_connection() as conn:
-                cursor = conn.cursor()
+
+    creds = get_token_data(user_id, "pagerduty")
+    if not creds:
+        return jsonify({"connected": False})
+
+    if creds.get("auth_type") == "oauth":
+        success, refreshed = refresh_token_if_needed(creds)
+        if success and refreshed:
+            try:
+                store_tokens_in_db(user_id, {**creds, **refreshed}, "pagerduty")
+                creds.update(refreshed)
+            except Exception:
+                logger.exception("[PAGERDUTY] Failed to persist refreshed OAuth token for user %s", user_id)
+
+    return jsonify({"connected": True, "displayName": creds.get("display_name", "PagerDuty"), "validatedAt": creds.get("validated_at"), "authType": creds.get("auth_type", "api_token"), "capabilities": creds.get("capabilities", {}), "externalUserEmail": creds.get("external_user_email"), "externalUserName": creds.get("external_user_name"), "accountSubdomain": creds.get("account_subdomain")})
+
+
+@pagerduty_bp.route("", methods=["POST", "PATCH"])
+@require_permission("connectors", "write")
+def pagerduty_connect(user_id):
+    """Connect or update PagerDuty API token."""
+    data = request.get_json(force=True, silent=True) or {}
+    token = data.get("token")
+
+    if not token or not isinstance(token, str):
+        return jsonify({"error": "Token required"}), 400
+
+    token = token.strip()
+
+    if request.method == "PATCH":
+        existing = get_token_data(user_id, "pagerduty")
+        if not existing:
+            return jsonify({"error": "Not connected"}), 404
+        if existing.get("auth_type") == "oauth":
+            return jsonify({"error": "Cannot rotate OAuth tokens"}), 400
+        display_name = existing.get("display_name", "PagerDuty")
+    else:
+        display_name = data.get("displayName", "PagerDuty")
+
+    logger.info(f"[PAGERDUTY] Validating API token for user {user_id}")
+    try:
+        token_info = validate_token(PagerDutyClient(api_token=token))
+        logger.info(f"[PAGERDUTY] Token validated successfully for user {user_id}")
+    except PagerDutyAPIError as e:
+        logger.warning("[PAGERDUTY] Token validation failed for user %s: %s", user_id, e)
+        return error_response(e)
+
+    token_data = {
+        "auth_type": "api_token",
+        "api_token": token,
+        "display_name": display_name,
+        **token_info
+    }
+
+    try:
+        store_tokens_in_db(user_id, token_data, "pagerduty")
+    except Exception:
+        logger.exception("[PAGERDUTY] Failed to store token data for user %s", user_id)
+        return jsonify({"error": "Storage failed"}), 500
+
+    return jsonify({"success": True, "connected": True, "displayName": display_name, **token_info})
+
+
+@pagerduty_bp.route("", methods=["DELETE"])
+@require_permission("connectors", "write")
+def pagerduty_disconnect(user_id):
+    """Disconnect PagerDuty."""
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
                 cursor.execute("DELETE FROM user_tokens WHERE user_id = %s AND provider = %s", (user_id, "pagerduty"))
-                conn.commit()
-            return jsonify({"success": True})
-        except Exception:
-            return jsonify({"error": "Disconnect failed"}), 500
+            conn.commit()
+        return jsonify({"success": True})
+    except Exception:
+        logger.exception("[PAGERDUTY] Disconnect failed for user %s", user_id)
+        return jsonify({"error": "Disconnect failed"}), 500
 
 
 @pagerduty_bp.route("/oauth/login", methods=["POST", "OPTIONS"])
-def oauth_login():
+@require_permission("connectors", "write")
+def oauth_login(user_id):
     """Initiate OAuth flow."""
     if request.method == "OPTIONS":
         return create_cors_response()
     
     if not is_pagerduty_oauth_enabled():
         return jsonify({"error": "PagerDuty OAuth is not enabled"}), 403
-    
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "Authentication required"}), 401
     
     try:
         oauth_url = get_auth_url(state=urllib.parse.quote(user_id))
@@ -200,14 +202,11 @@ def oauth_callback():
 
 
 @pagerduty_bp.route("/webhook-url", methods=["GET", "OPTIONS"])
-def get_webhook_url():
+@require_permission("connectors", "read")
+def get_webhook_url(user_id):
     """Get the webhook URL that should be configured in PagerDuty."""
     if request.method == "OPTIONS":
         return create_cors_response()
-    
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
     
     # Use ngrok URL for development if available, otherwise use backend URL
     ngrok_url = os.getenv("NGROK_URL", "").rstrip("/")
@@ -232,34 +231,6 @@ def get_webhook_url():
             "6. Save the webhook configuration"
         ]
     })
-
-
-def _validate_v3_webhook(payload: dict) -> tuple[bool, str]:
-    """Validate PagerDuty V3 webhook structure.
-    
-    Args:
-        payload: The webhook payload to validate
-        
-    Returns:
-        Tuple of (is_valid, error_message)
-    """
-    if not isinstance(payload, dict):
-        return False, "Payload must be a JSON object"
-    
-    if "event" not in payload:
-        return False, "Missing 'event' field in V3 webhook"
-    
-    event = payload["event"]
-    if not isinstance(event, dict):
-        return False, "'event' must be an object"
-    
-    if "event_type" not in event:
-        return False, "Missing 'event_type' in event"
-    
-    if "resource_type" not in event:
-        return False, "Missing 'resource_type' in event"
-    
-    return True, ""
 
 
 @pagerduty_bp.route("/webhook/<user_id>", methods=["POST", "OPTIONS"])

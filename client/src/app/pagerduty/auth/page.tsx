@@ -20,6 +20,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { getUserFriendlyError } from "@/lib/utils";
+import ConnectorAuthGuard from "@/components/connectors/ConnectorAuthGuard";
 
 const CACHE_KEY = 'pagerduty_connection_status';
 
@@ -280,18 +281,19 @@ export default function PagerDutyAuthPage() {
   const isConnected = Boolean(status?.connected);
 
   return (
-    <div className="container mx-auto py-6 px-4 max-w-2xl">
-      {/* Header with centered logo */}
-      <div className="mb-6 flex flex-col items-center text-center">
-        <img src="/pagerduty-ar21.svg" alt="PagerDuty" className="h-24 w-auto mb-4" />
-        <p className="text-sm text-muted-foreground max-w-xl">
-          Receive incident alerts and manage on-call schedules directly in Aurora.
-        </p>
-      </div>
+    <ConnectorAuthGuard connectorName="PagerDuty">
+      <div className="container mx-auto py-6 px-4 max-w-2xl">
+        {/* Header with centered logo */}
+        <div className="mb-6 flex flex-col items-center text-center">
+          <img src="/pagerduty-ar21.svg" alt="PagerDuty" className="h-24 w-auto mb-4" />
+          <p className="text-sm text-muted-foreground max-w-xl">
+            Receive incident alerts and manage on-call schedules directly in Aurora.
+          </p>
+        </div>
 
-      <div className={isConnecting && !isConnected ? 'pointer-events-none opacity-50' : ''}>
-        {!isConnected ? (
-          <PagerDutyConnectionStep
+        <div className={isConnecting && !isConnected ? 'pointer-events-none opacity-50' : ''}>
+          {!isConnected ? (
+            <PagerDutyConnectionStep
             displayName={displayName}
             setDisplayName={setDisplayName}
             token={token}
@@ -352,6 +354,7 @@ export default function PagerDutyAuthPage() {
         </AlertDialogContent>
       </AlertDialog>
     </div>
+    </ConnectorAuthGuard>
   );
 }
 

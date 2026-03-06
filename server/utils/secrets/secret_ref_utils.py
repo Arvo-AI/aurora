@@ -197,7 +197,7 @@ class SecretRefManager:
 
     def has_user_credentials(self, user_id: str, provider: str) -> bool:
         """
-        Lightweight check if user has credentials stored (without accessing secrets).
+        Lightweight check if user (or their org) has credentials stored.
 
         Args:
             user_id: User ID (authenticated userId)
@@ -211,14 +211,26 @@ class SecretRefManager:
         if provider_base not in SUPPORTED_SECRET_PROVIDERS:
             return False
 
+        org_id = None
+        try:
+            from utils.auth.stateless_auth import resolve_org_id
+            org_id = resolve_org_id(user_id)
+        except Exception:
+            logger.debug("has_user_credentials: could not resolve org_id for user %s", user_id)
+
         conn = None
         cursor = None
         try:
             conn = connect_to_db_as_admin()
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT 1 FROM user_tokens WHERE user_id = %s AND provider = %s AND secret_ref IS NOT NULL AND is_active = TRUE LIMIT 1",
-                (user_id, provider)
+                """SELECT 1 FROM user_tokens
+                   WHERE (user_id = %s OR org_id = %s)
+                     AND provider = %s
+                     AND secret_ref IS NOT NULL
+                     AND is_active = TRUE
+                   LIMIT 1""",
+                (user_id, org_id, provider)
             )
             return cursor.fetchone() is not None
         except Exception as e:
@@ -246,6 +258,13 @@ class SecretRefManager:
         if provider_base not in SUPPORTED_SECRET_PROVIDERS:
             return None
 
+        org_id = None
+        try:
+            from utils.auth.stateless_auth import resolve_org_id
+            org_id = resolve_org_id(user_id)
+        except Exception:
+            logger.debug("get_user_token_data: could not resolve org_id for user")
+
         conn = None
         cursor = None
 
@@ -253,8 +272,15 @@ class SecretRefManager:
             conn = connect_to_db_as_admin()
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT secret_ref, client_id, client_secret FROM user_tokens WHERE user_id = %s AND provider = %s AND secret_ref IS NOT NULL AND is_active = TRUE",
-                (user_id, provider)
+                """SELECT secret_ref, client_id, client_secret
+                   FROM user_tokens
+                   WHERE (user_id = %s OR org_id = %s)
+                     AND provider = %s
+                     AND secret_ref IS NOT NULL
+                     AND is_active = TRUE
+                   ORDER BY CASE WHEN user_id = %s THEN 0 ELSE 1 END
+                   LIMIT 1""",
+                (user_id, org_id, provider, user_id)
             )
 
             result = cursor.fetchone()

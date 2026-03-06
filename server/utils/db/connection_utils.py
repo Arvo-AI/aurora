@@ -10,6 +10,15 @@ from utils.db.db_utils import connect_to_db_as_user, connect_to_db_as_admin
 logger = logging.getLogger(__name__)
 
 
+def _resolve_org_id(user_id: str) -> Optional[str]:
+    """Resolve org_id for org-aware queries."""
+    try:
+        from utils.auth.stateless_auth import resolve_org_id
+        return resolve_org_id(user_id)
+    except Exception:
+        return None
+
+
 def save_connection_metadata(
     user_id: str,
     provider: str,
@@ -112,11 +121,13 @@ def set_connection_status(
 
 
 def list_active_connections(user_id: str) -> List[Dict]:
-    """Return active connections for a user as list of dicts."""
+    """Return active connections for a user (including org-shared connections)."""
+    org_id = _resolve_org_id(user_id)
     sql = """
         SELECT provider, account_id, connection_method, role_arn, read_only_role_arn, region, last_verified_at
         FROM user_connections
-        WHERE user_id = %s AND status = 'active';
+        WHERE (user_id = %s OR org_id = %s) AND status = 'active'
+        ORDER BY CASE WHEN user_id = %s THEN 0 ELSE 1 END;
     """
     conn = None
     try:
@@ -124,7 +135,7 @@ def list_active_connections(user_id: str) -> List[Dict]:
         with conn.cursor() as cur:
             cur.execute("SET myapp.current_user_id = %s;", (user_id,))
             conn.commit()
-            cur.execute(sql, (user_id,))
+            cur.execute(sql, (user_id, org_id, user_id))
             rows = cur.fetchall()
         logger.info("[CONN-META] Fetched %d active connections for user %s", len(rows), user_id)
         return [
@@ -154,10 +165,12 @@ def get_user_aws_connection(user_id: str) -> Optional[Dict]:
     Returns None if no active AWS connection exists.
     For multi-account users, use get_all_user_aws_connections() instead.
     """
+    org_id = _resolve_org_id(user_id)
     sql = """
         SELECT account_id, role_arn, read_only_role_arn, connection_method, region, last_verified_at
         FROM user_connections
-        WHERE user_id = %s AND provider = 'aws' AND status = 'active'
+        WHERE (user_id = %s OR org_id = %s) AND provider = 'aws' AND status = 'active'
+        ORDER BY CASE WHEN user_id = %s THEN 0 ELSE 1 END
         LIMIT 1;
     """
     conn = None
@@ -166,7 +179,7 @@ def get_user_aws_connection(user_id: str) -> Optional[Dict]:
         with conn.cursor() as cur:
             cur.execute("SET myapp.current_user_id = %s;", (user_id,))
             conn.commit()
-            cur.execute(sql, (user_id,))
+            cur.execute(sql, (user_id, org_id, user_id))
             row = cur.fetchone()
             
             if row:
@@ -188,17 +201,18 @@ def get_user_aws_connection(user_id: str) -> Optional[Dict]:
 
 
 def get_all_user_aws_connections(user_id: str) -> List[Dict]:
-    """Get all active AWS connections for a user.
+    """Get all active AWS connections for a user (including org-shared).
 
     Returns a list of connection dicts, one per connected AWS account.
     Each dict includes account_id, role_arn, read_only_role_arn, region,
     connection_method, and last_verified_at.
     """
+    org_id = _resolve_org_id(user_id)
     sql = """
         SELECT account_id, role_arn, read_only_role_arn, connection_method, region, last_verified_at
         FROM user_connections
-        WHERE user_id = %s AND provider = 'aws' AND status = 'active'
-        ORDER BY account_id;
+        WHERE (user_id = %s OR org_id = %s) AND provider = 'aws' AND status = 'active'
+        ORDER BY CASE WHEN user_id = %s THEN 0 ELSE 1 END, account_id;
     """
     conn = None
     try:
@@ -206,7 +220,7 @@ def get_all_user_aws_connections(user_id: str) -> List[Dict]:
         with conn.cursor() as cur:
             cur.execute("SET myapp.current_user_id = %s;", (user_id,))
             conn.commit()
-            cur.execute(sql, (user_id,))
+            cur.execute(sql, (user_id, org_id, user_id))
             rows = cur.fetchall()
 
         logger.info("[CONN-META] Fetched %d active AWS connections for user %s", len(rows), user_id)

@@ -123,6 +123,7 @@ def initialize_tables():
                         project_id VARCHAR(255) NOT NULL,
                         cluster_name VARCHAR(255) NOT NULL,
                         user_id VARCHAR(1000),
+                        org_id VARCHAR(255),
                         provider VARCHAR(50),
                         UNIQUE (pod_name, namespace, project_id, cluster_name, user_id)
                     );
@@ -135,6 +136,7 @@ def initialize_tables():
                         project_id VARCHAR(255) NOT NULL,
                         cluster_name VARCHAR(255) NOT NULL,
                         user_id VARCHAR(1000),
+                        org_id VARCHAR(255),
                         provider VARCHAR(50),
                         UNIQUE (node_name, project_id, cluster_name, user_id)
                     );
@@ -152,6 +154,7 @@ def initialize_tables():
                         status TEXT,
                         type TEXT,
                         user_id VARCHAR(1000),
+                        org_id VARCHAR(255),
                         provider VARCHAR(50),
                         FOREIGN KEY (node_name, project_id, cluster_name, user_id) REFERENCES k8s_nodes (node_name, project_id, cluster_name, user_id) ON DELETE CASCADE,
                         UNIQUE (node_name, project_id, cluster_name, type, user_id)
@@ -166,6 +169,7 @@ def initialize_tables():
                         project_id VARCHAR(255) NOT NULL,
                         cluster_name VARCHAR(255) NOT NULL,
                         user_id VARCHAR(1000),
+                        org_id VARCHAR(255),
                         provider VARCHAR(50),
                         UNIQUE (service_name, namespace, project_id, cluster_name, user_id)
 
@@ -180,6 +184,7 @@ def initialize_tables():
                         project_id VARCHAR(255) NOT NULL,
                         cluster_name VARCHAR(255) NOT NULL,
                         user_id VARCHAR(1000),
+                        org_id VARCHAR(255),
                         provider VARCHAR(50),
                         UNIQUE (deployment_name, namespace, project_id, cluster_name, user_id)
                     );
@@ -192,6 +197,7 @@ def initialize_tables():
                         project_id VARCHAR(255) NOT NULL,
                         cluster_name VARCHAR(255) NOT NULL,
                         user_id VARCHAR(1000),
+                        org_id VARCHAR(255),
                         provider VARCHAR(50),
                         UNIQUE (ingress_name, namespace, project_id, cluster_name, user_id)
                     );
@@ -206,6 +212,7 @@ def initialize_tables():
                         project_id VARCHAR(255) NOT NULL,
                         cluster_name VARCHAR(255) NOT NULL,
                         user_id VARCHAR(1000),
+                        org_id VARCHAR(255),
                         provider VARCHAR(50),
                         UNIQUE (pod_name, namespace, project_id, cluster_name, user_id)
                     );
@@ -219,6 +226,7 @@ def initialize_tables():
                         project_id VARCHAR(255) NOT NULL,
                         cluster_name VARCHAR(255) NOT NULL,
                         user_id VARCHAR(1000),
+                        org_id VARCHAR(255),
                         provider VARCHAR(50),
                         UNIQUE (node_name, project_id, cluster_name, user_id)
                     );
@@ -239,6 +247,7 @@ def initialize_tables():
                         dataset_id VARCHAR(255),
                         table_name VARCHAR(255),
                         user_id VARCHAR(1000),
+                        org_id VARCHAR(255),
                         provider VARCHAR(50),
                         timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         UNIQUE (service, sku, category, usage_date, region, project_id, dataset_id, user_id)
@@ -256,6 +265,7 @@ def initialize_tables():
                         category VARCHAR(50),
                         unit VARCHAR(50),
                         user_id VARCHAR(50),
+                        org_id VARCHAR(255),
                         provider VARCHAR(50),
                         UNIQUE (metric_name, timestamp, labels, resource_type, resource_labels, category, unit, user_id)
                     );
@@ -264,6 +274,7 @@ def initialize_tables():
                     CREATE TABLE IF NOT EXISTS user_tokens (
                         id SERIAL PRIMARY KEY,
                         user_id VARCHAR(255) NOT NULL,
+                        org_id VARCHAR(255),
                         token_data JSONB,
                         secret_ref VARCHAR(512),
                         provider VARCHAR(50) NOT NULL,
@@ -284,6 +295,7 @@ def initialize_tables():
                     CREATE TABLE IF NOT EXISTS user_manual_vms (
                         id SERIAL PRIMARY KEY,
                         user_id VARCHAR(255) NOT NULL,
+                        org_id VARCHAR(255),
                         name VARCHAR(255) NOT NULL,
                         ip_address VARCHAR(45) NOT NULL,
                         port INTEGER DEFAULT 22,
@@ -300,6 +312,7 @@ def initialize_tables():
                     CREATE TABLE IF NOT EXISTS user_connections (
                         id SERIAL PRIMARY KEY,
                         user_id VARCHAR(255) NOT NULL,
+                        org_id VARCHAR(255),
                         provider VARCHAR(50) NOT NULL,
                         account_id VARCHAR(255) NOT NULL,
                         role_arn VARCHAR(512),
@@ -315,17 +328,19 @@ def initialize_tables():
                     CREATE TABLE IF NOT EXISTS user_preferences (
                         id SERIAL PRIMARY KEY,
                         user_id VARCHAR(255) NOT NULL,
+                        org_id VARCHAR(255),
                         preference_key VARCHAR(255) NOT NULL,
                         preference_value JSONB,
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        UNIQUE(user_id, preference_key)
+                        UNIQUE(user_id, org_id, preference_key)
                     );
                 """,
                 "workspaces": """
                     CREATE TABLE IF NOT EXISTS workspaces (
                         id VARCHAR(50) PRIMARY KEY,
                         user_id VARCHAR(255) NOT NULL,
+                        org_id VARCHAR(255),
                         name VARCHAR(255) NOT NULL,
                         aws_external_id VARCHAR(36),                    -- UUID v4 for ExternalId (needed for STS)
                         aws_discovery_artifact_bucket VARCHAR(255),     -- S3 bucket for mirror.json
@@ -339,6 +354,7 @@ def initialize_tables():
                     CREATE TABLE IF NOT EXISTS aurora_deployments (
                         id SERIAL PRIMARY KEY,
                         user_id VARCHAR(255) NOT NULL,
+                        org_id VARCHAR(255),
                         deployment_name VARCHAR(255) NOT NULL,
                         project_id VARCHAR(255) NOT NULL,
                         deployment_id VARCHAR(255) UNIQUE NOT NULL,
@@ -357,6 +373,7 @@ def initialize_tables():
                     CREATE TABLE IF NOT EXISTS deployment_tasks (
                         id SERIAL PRIMARY KEY,
                         user_id VARCHAR(255) NOT NULL,
+                        org_id VARCHAR(255),
                         task_id VARCHAR(255) NOT NULL,
                         deployment_id VARCHAR(255),
                         status VARCHAR(50),
@@ -381,6 +398,7 @@ def initialize_tables():
                         type VARCHAR(100),
                         error_msg VARCHAR(1000),
                         user_id VARCHAR(1000),
+                        org_id VARCHAR(255),
                         task_id VARCHAR(100),
                         service_name_map JSONB
                     );
@@ -389,6 +407,7 @@ def initialize_tables():
                     CREATE TABLE IF NOT EXISTS chat_sessions (
                         id VARCHAR(50) PRIMARY KEY,
                         user_id VARCHAR(1000) NOT NULL,
+                        org_id VARCHAR(255),
                         title VARCHAR(255) NOT NULL,
                         messages JSONB DEFAULT '[]'::jsonb,
                         ui_state JSONB DEFAULT '{}'::jsonb,
@@ -403,6 +422,7 @@ def initialize_tables():
                     CREATE TABLE IF NOT EXISTS llm_usage_tracking (
                         id SERIAL PRIMARY KEY,
                         user_id VARCHAR(1000) NOT NULL,
+                        org_id VARCHAR(255),
                         session_id VARCHAR(50),
                         timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         model_name VARCHAR(255) NOT NULL,
@@ -425,6 +445,7 @@ def initialize_tables():
                     CREATE TABLE IF NOT EXISTS cloud_feed_metadata (
                         id SERIAL PRIMARY KEY,
                         user_id VARCHAR(255) NOT NULL,
+                        org_id VARCHAR(255),
                         project_id VARCHAR(255) NOT NULL,
                         provider VARCHAR(50) NOT NULL,
                         feed_name VARCHAR(255) NOT NULL,
@@ -443,6 +464,7 @@ def initialize_tables():
                 "cloud_ingestion_state": """
                     CREATE TABLE IF NOT EXISTS cloud_ingestion_state (
                         user_id VARCHAR(255) NOT NULL,
+                        org_id VARCHAR(255),
                         provider VARCHAR(50) NOT NULL,
                         in_progress BOOLEAN DEFAULT FALSE,
                         total_projects INTEGER,
@@ -458,6 +480,7 @@ def initialize_tables():
                     CREATE TABLE IF NOT EXISTS grafana_alerts (
                         id SERIAL PRIMARY KEY,
                         user_id VARCHAR(255) NOT NULL,
+                        org_id VARCHAR(255),
                         alert_uid VARCHAR(255),
                         alert_title TEXT,
                         alert_state VARCHAR(50),
@@ -478,6 +501,7 @@ def initialize_tables():
                     CREATE TABLE IF NOT EXISTS datadog_events (
                         id SERIAL PRIMARY KEY,
                         user_id VARCHAR(255) NOT NULL,
+                        org_id VARCHAR(255),
                         event_type VARCHAR(100),
                         event_title TEXT,
                         status VARCHAR(50),
@@ -501,6 +525,7 @@ def initialize_tables():
                     CREATE TABLE IF NOT EXISTS netdata_alerts (
                         id SERIAL PRIMARY KEY,
                         user_id VARCHAR(255) NOT NULL,
+                        org_id VARCHAR(255),
                         alert_name VARCHAR(255),
                         alert_status VARCHAR(50),
                         alert_class VARCHAR(100),
@@ -525,6 +550,7 @@ def initialize_tables():
                     CREATE TABLE IF NOT EXISTS pagerduty_events (
                         id SERIAL PRIMARY KEY,
                         user_id VARCHAR(255) NOT NULL,
+                        org_id VARCHAR(255),
                         event_type VARCHAR(100),
                         incident_id VARCHAR(255),
                         incident_title TEXT,
@@ -546,6 +572,7 @@ def initialize_tables():
                      CREATE TABLE IF NOT EXISTS incidents (
                          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
                          user_id VARCHAR(255) NOT NULL,
+                         org_id VARCHAR(255),
                          source_type VARCHAR(20) NOT NULL,
                          source_alert_id INTEGER NOT NULL,
                          status VARCHAR(20) NOT NULL DEFAULT 'investigating',
@@ -563,7 +590,7 @@ def initialize_tables():
                          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                          merged_into_incident_id UUID REFERENCES incidents(id) ON DELETE SET NULL,
-                         UNIQUE(source_type, source_alert_id, user_id)
+                         UNIQUE(org_id, source_type, source_alert_id, user_id)
                      );
                      
                      CREATE INDEX IF NOT EXISTS idx_incidents_user_id ON incidents(user_id, started_at DESC);
@@ -608,6 +635,7 @@ def initialize_tables():
                     CREATE TABLE IF NOT EXISTS incident_alerts (
                         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
                         user_id VARCHAR(1000) NOT NULL,
+                        org_id VARCHAR(255),
                         incident_id UUID NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
                         source_type VARCHAR(20) NOT NULL,
                         source_alert_id INTEGER NOT NULL,
@@ -680,6 +708,7 @@ def initialize_tables():
                     CREATE TABLE IF NOT EXISTS rca_notification_emails (
                         id SERIAL PRIMARY KEY,
                         user_id VARCHAR(1000) NOT NULL,
+                        org_id VARCHAR(255),
                         email VARCHAR(255) NOT NULL,
                         is_verified BOOLEAN DEFAULT FALSE,
                         is_enabled BOOLEAN DEFAULT TRUE,
@@ -687,7 +716,8 @@ def initialize_tables():
                         verification_code_expires_at TIMESTAMP,
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         verified_at TIMESTAMP,
-                        UNIQUE(user_id, email)
+                        UNIQUE(user_id, email),
+                        UNIQUE(org_id, email)
                     );
 
                     CREATE INDEX IF NOT EXISTS idx_rca_emails_user_id ON rca_notification_emails(user_id);
@@ -698,6 +728,7 @@ def initialize_tables():
                     CREATE TABLE IF NOT EXISTS splunk_alerts (
                         id SERIAL PRIMARY KEY,
                         user_id VARCHAR(255) NOT NULL,
+                        org_id VARCHAR(255),
                         alert_id VARCHAR(255),
                         alert_title TEXT,
                         alert_state VARCHAR(50),
@@ -718,6 +749,7 @@ def initialize_tables():
                     CREATE TABLE IF NOT EXISTS jenkins_deployment_events (
                         id SERIAL PRIMARY KEY,
                         user_id VARCHAR(255) NOT NULL,
+                        org_id VARCHAR(255),
                         event_type VARCHAR(50) DEFAULT 'deployment',
                         service VARCHAR(255),
                         environment VARCHAR(100),
@@ -748,6 +780,7 @@ def initialize_tables():
                     CREATE TABLE IF NOT EXISTS dynatrace_problems (
                         id SERIAL PRIMARY KEY,
                         user_id VARCHAR(255) NOT NULL,
+                        org_id VARCHAR(255),
                         problem_id VARCHAR(255),
                         pid VARCHAR(255),
                         problem_title TEXT,
@@ -770,6 +803,7 @@ def initialize_tables():
                     CREATE TABLE IF NOT EXISTS bigpanda_events (
                         id SERIAL PRIMARY KEY,
                         user_id VARCHAR(255) NOT NULL,
+                        org_id VARCHAR(255),
                         event_type VARCHAR(100),
                         incident_id VARCHAR(255),
                         incident_title TEXT,
@@ -794,6 +828,7 @@ def initialize_tables():
                         id SERIAL PRIMARY KEY,
                         token VARCHAR(128) UNIQUE NOT NULL,
                         user_id TEXT NOT NULL,
+                        org_id VARCHAR(255),
                         cluster_name TEXT,
                         cluster_id TEXT,
                         created_at TIMESTAMP DEFAULT NOW(),
@@ -828,19 +863,51 @@ def initialize_tables():
                         email VARCHAR(255) NOT NULL UNIQUE,
                         password_hash VARCHAR(255) NOT NULL,
                         name VARCHAR(255),
+                        org_id VARCHAR(255),
+                        must_change_password BOOLEAN DEFAULT FALSE,
                         created_at TIMESTAMP DEFAULT NOW(),
                         updated_at TIMESTAMP DEFAULT NOW()
                     );
                     
                     CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
                 """,
+                "organizations": """
+                    CREATE TABLE IF NOT EXISTS organizations (
+                        id VARCHAR(255) PRIMARY KEY DEFAULT gen_random_uuid()::TEXT,
+                        name VARCHAR(255) NOT NULL,
+                        slug VARCHAR(255) NOT NULL UNIQUE,
+                        created_by VARCHAR(255) REFERENCES users(id),
+                        created_at TIMESTAMP DEFAULT NOW(),
+                        updated_at TIMESTAMP DEFAULT NOW()
+                    );
+
+                    CREATE INDEX IF NOT EXISTS idx_organizations_slug ON organizations(slug);
+                """,
+                "org_invitations": """
+                    CREATE TABLE IF NOT EXISTS org_invitations (
+                        id VARCHAR(255) PRIMARY KEY DEFAULT gen_random_uuid()::TEXT,
+                        org_id VARCHAR(255) NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+                        email VARCHAR(255) NOT NULL,
+                        role VARCHAR(50) DEFAULT 'viewer',
+                        invited_by VARCHAR(255) NOT NULL REFERENCES users(id),
+                        status VARCHAR(20) DEFAULT 'pending',
+                        created_at TIMESTAMP DEFAULT NOW(),
+                        expires_at TIMESTAMP DEFAULT (NOW() + INTERVAL '7 days'),
+                        UNIQUE(org_id, email)
+                    );
+
+                    CREATE INDEX IF NOT EXISTS idx_org_invitations_org_id ON org_invitations(org_id);
+                    CREATE INDEX IF NOT EXISTS idx_org_invitations_email ON org_invitations(email);
+                """,
                 "knowledge_base_memory": """
                     CREATE TABLE IF NOT EXISTS knowledge_base_memory (
                         id SERIAL PRIMARY KEY,
-                        user_id VARCHAR(1000) NOT NULL UNIQUE,
+                        user_id VARCHAR(1000) NOT NULL,
+                        org_id VARCHAR(255),
                         content TEXT NOT NULL DEFAULT '',
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE(user_id, org_id)
                     );
 
                     CREATE INDEX IF NOT EXISTS idx_kb_memory_user_id ON knowledge_base_memory(user_id);
@@ -849,6 +916,7 @@ def initialize_tables():
                     CREATE TABLE IF NOT EXISTS knowledge_base_documents (
                         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
                         user_id VARCHAR(1000) NOT NULL,
+                        org_id VARCHAR(255),
                         filename VARCHAR(500) NOT NULL,
                         original_filename VARCHAR(500) NOT NULL,
                         file_type VARCHAR(50) NOT NULL,
@@ -869,6 +937,7 @@ def initialize_tables():
                     CREATE TABLE IF NOT EXISTS incident_feedback (
                         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
                         user_id VARCHAR(255) NOT NULL,
+                        org_id VARCHAR(255),
                         incident_id UUID NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
                         feedback_type VARCHAR(20) NOT NULL,
                         comment TEXT,
@@ -886,6 +955,7 @@ def initialize_tables():
                         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
                         incident_id UUID NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
                         user_id VARCHAR(255) NOT NULL,
+                        org_id VARCHAR(255),
                         content TEXT,
                         generated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -1437,6 +1507,8 @@ def initialize_tables():
                 "CREATE INDEX IF NOT EXISTS idx_user_manual_vms_key ON user_manual_vms(user_id, ssh_key_id);",
                 "CREATE INDEX IF NOT EXISTS idx_user_manual_vms_connection_verified ON user_manual_vms(user_id, connection_verified);",
                 "CREATE INDEX IF NOT EXISTS idx_user_preferences_user_key ON user_preferences(user_id, preference_key);",
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_user_prefs_with_org ON user_preferences(user_id, org_id, preference_key) WHERE org_id IS NOT NULL;",
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_user_prefs_null_org ON user_preferences(user_id, preference_key) WHERE org_id IS NULL;",
                 "CREATE INDEX IF NOT EXISTS idx_aurora_deployments_user_id ON aurora_deployments(user_id);",
                 "CREATE INDEX IF NOT EXISTS idx_aurora_deployments_project_id ON aurora_deployments(project_id);",
                 "CREATE INDEX IF NOT EXISTS idx_aurora_deployments_deployment_id ON aurora_deployments(deployment_id);",
@@ -1461,14 +1533,25 @@ def initialize_tables():
                     logging.warning(f"Error creating index: {e}")
 
             # Create a view for clusters after all tables are created
-            create_clusters_view_sql = """
-                CREATE OR REPLACE VIEW k8s_clusters AS
-                SELECT DISTINCT project_id, cluster_name, provider, user_id
-                FROM k8s_nodes
-                WHERE user_id = current_setting('myapp.current_user_id', true)::text;
-            """
-            cursor.execute(create_clusters_view_sql)
-            logging.info("View 'k8s_clusters' created successfully.")
+            # View creation moved to after org_id migration (see below)
+
+            # Early migration: ensure org_id column exists on all tables
+            # before RLS policies try to reference it
+            _org_id_tables = list(set(rls_tables + [
+                "users", "workspaces", "aurora_deployments",
+                "cloud_feed_metadata", "cloud_ingestion_state",
+                "pagerduty_events", "knowledge_base_memory",
+                "knowledge_base_documents",
+            ]))
+            for tbl in _org_id_tables:
+                try:
+                    cursor.execute(
+                        f"ALTER TABLE {tbl} ADD COLUMN IF NOT EXISTS org_id VARCHAR(255);"
+                    )
+                except Exception as e:
+                    logging.warning(f"Early org_id migration for {tbl}: {e}")
+                    conn.rollback()
+            conn.commit()
 
             # DO NOT add k8s_clusters to RLS tables as views don't support RLS
             # Apply RLS policies to tables only
@@ -1478,24 +1561,30 @@ def initialize_tables():
                 cursor.execute(f"ALTER TABLE {table_name} FORCE ROW LEVEL SECURITY;")
                 logging.info(f"RLS forced on table '{table_name}'.")
 
-                # Create SELECT policy
+                # Create org-based SELECT policy (DROP+CREATE to ensure latest definition)
                 policy_sql = f"""
                     DO $$
                     BEGIN
-                        IF NOT EXISTS (
-                            SELECT 1 FROM pg_policies
-                            WHERE tablename = '{table_name}'
-                            AND policyname = 'select_by_user'
-                        ) THEN
-                            CREATE POLICY select_by_user ON {table_name}
-                            FOR SELECT USING (user_id = current_setting('myapp.current_user_id')::text);
-                        END IF;
+                        DROP POLICY IF EXISTS select_by_org ON {table_name};
+                        CREATE POLICY select_by_org ON {table_name}
+                        FOR SELECT USING (
+                            org_id IS NOT NULL
+                            AND org_id = current_setting('myapp.current_org_id', true)::text
+                        );
                     END $$;
                     """
                 cursor.execute(policy_sql)
-                logging.info(
-                    f"RLS SELECT policy creation command executed for table '{table_name}'."
-                )
+
+                # Drop legacy user-based policies if they exist
+                for old_policy in ['select_by_user', 'insert_by_user', 'update_by_user', 'delete_by_user']:
+                    cursor.execute(f"""
+                        DO $$
+                        BEGIN
+                            DROP POLICY IF EXISTS {old_policy} ON {table_name};
+                        EXCEPTION WHEN undefined_object THEN
+                            NULL;
+                        END $$;
+                    """)
 
                 # For tables that need full CRUD policies, create INSERT, UPDATE, and DELETE policies
                 if table_name in [
@@ -1510,68 +1599,277 @@ def initialize_tables():
                     "incident_feedback",
                     "postmortems",
                 ]:
-                    # INSERT policy
                     insert_policy_sql = f"""
                         DO $$
                         BEGIN
-                            IF NOT EXISTS (
-                                SELECT 1 FROM pg_policies
-                                WHERE tablename = '{table_name}'
-                                AND policyname = 'insert_by_user'
-                            ) THEN
-                                CREATE POLICY insert_by_user ON {table_name}
-                                FOR INSERT WITH CHECK (user_id = current_setting('myapp.current_user_id')::text);
-                            END IF;
+                            DROP POLICY IF EXISTS insert_by_org ON {table_name};
+                            CREATE POLICY insert_by_org ON {table_name}
+                            FOR INSERT WITH CHECK (
+                                org_id IS NOT NULL
+                                AND org_id = current_setting('myapp.current_org_id', true)::text
+                            );
                         END $$;
                         """
                     cursor.execute(insert_policy_sql)
-                    logging.info(
-                        f"RLS INSERT policy creation command executed for table '{table_name}'."
-                    )
 
-                    # UPDATE policy
                     update_policy_sql = f"""
                         DO $$
                         BEGIN
-                            IF NOT EXISTS (
-                                SELECT 1 FROM pg_policies
-                                WHERE tablename = '{table_name}'
-                                AND policyname = 'update_by_user'
-                            ) THEN
-                                CREATE POLICY update_by_user ON {table_name}
-                                FOR UPDATE USING (user_id = current_setting('myapp.current_user_id')::text);
-                            END IF;
+                            DROP POLICY IF EXISTS update_by_org ON {table_name};
+                            CREATE POLICY update_by_org ON {table_name}
+                            FOR UPDATE USING (
+                                org_id IS NOT NULL
+                                AND org_id = current_setting('myapp.current_org_id', true)::text
+                            );
                         END $$;
                         """
                     cursor.execute(update_policy_sql)
-                    logging.info(
-                        f"RLS UPDATE policy creation command executed for table '{table_name}'."
-                    )
 
-                    # DELETE policy
                     delete_policy_sql = f"""
                         DO $$
                         BEGIN
-                            IF NOT EXISTS (
-                                SELECT 1 FROM pg_policies
-                                WHERE tablename = '{table_name}'
-                                AND policyname = 'delete_by_user'
-                            ) THEN
-                                CREATE POLICY delete_by_user ON {table_name}
-                                FOR DELETE USING (user_id = current_setting('myapp.current_user_id')::text);
-                            END IF;
+                            DROP POLICY IF EXISTS delete_by_org ON {table_name};
+                            CREATE POLICY delete_by_org ON {table_name}
+                            FOR DELETE USING (
+                                org_id IS NOT NULL
+                                AND org_id = current_setting('myapp.current_org_id', true)::text
+                            );
                         END $$;
                         """
                     cursor.execute(delete_policy_sql)
-                    logging.info(
-                        f"RLS DELETE policy creation command executed for table '{table_name}'."
-                    )
 
                 cursor.execute(
                     f"SELECT policyname, qual FROM pg_policies WHERE tablename = '{table_name}';"
                 )
                 policies = cursor.fetchall()
                 logging.info(f"RLS policies for table '{table_name}': {policies}")
+
+            # Migration: Add role column to users table for RBAC
+            try:
+                cursor.execute(
+                    "ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(50) DEFAULT 'viewer';"
+                )
+                logging.info(
+                    "Added role column to users table (if not exists)."
+                )
+            except Exception as e:
+                logging.warning(f"Error adding role column to users: {e}")
+                conn.rollback()
+
+            # Migration: Add must_change_password column to users table
+            try:
+                cursor.execute(
+                    "ALTER TABLE users ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN DEFAULT FALSE;"
+                )
+                conn.commit()
+            except Exception as e:
+                logging.warning(f"Error adding must_change_password column: {e}")
+                conn.rollback()
+
+            # Migration: Add org_id column to users and all org-scoped tables
+            org_id_tables = [
+                "users", "user_tokens", "user_connections", "user_manual_vms",
+                "user_preferences", "workspaces", "aurora_deployments",
+                "deployment_tasks", "deployments", "chat_sessions",
+                "llm_usage_tracking", "cloud_feed_metadata", "cloud_ingestion_state",
+                "grafana_alerts", "datadog_events", "netdata_alerts",
+                "pagerduty_events", "incidents", "incident_alerts",
+                "rca_notification_emails", "splunk_alerts",
+                "jenkins_deployment_events", "dynatrace_problems",
+                "bigpanda_events", "kubectl_agent_tokens",
+                "k8s_pods", "k8s_nodes", "k8s_node_conditions",
+                "k8s_services", "k8s_deployments", "k8s_ingresses",
+                "k8s_pod_metrics", "k8s_node_metrics",
+                "cloud_billing_usage", "provider_metrics",
+                "knowledge_base_memory", "knowledge_base_documents",
+                "incident_feedback", "postmortems",
+            ]
+            for tbl in org_id_tables:
+                try:
+                    cursor.execute(f"SAVEPOINT sp_org_id_{tbl}")
+                    cursor.execute(
+                        f"ALTER TABLE {tbl} ADD COLUMN IF NOT EXISTS org_id VARCHAR(255);"
+                    )
+                    cursor.execute(f"RELEASE SAVEPOINT sp_org_id_{tbl}")
+                except Exception as e:
+                    logging.warning(f"Error adding org_id to {tbl}: {e}")
+                    cursor.execute(f"ROLLBACK TO SAVEPOINT sp_org_id_{tbl}")
+
+            # Add FK from users.org_id -> organizations.id (if not exists)
+            try:
+                cursor.execute("""
+                    DO $$
+                    BEGIN
+                        IF NOT EXISTS (
+                            SELECT 1 FROM pg_constraint
+                            WHERE conname = 'users_org_id_fkey'
+                        ) THEN
+                            ALTER TABLE users
+                            ADD CONSTRAINT users_org_id_fkey
+                            FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE SET NULL;
+                        END IF;
+                    END $$;
+                """)
+            except Exception as e:
+                logging.warning(f"Error adding users.org_id FK: {e}")
+                conn.rollback()
+
+            # Migration: Create default org for existing users that have no org
+            try:
+                cursor.execute("SELECT COUNT(*) FROM users WHERE org_id IS NULL;")
+                orphan_count = cursor.fetchone()[0]
+                if orphan_count > 0:
+                    cursor.execute("""
+                        INSERT INTO organizations (id, name, slug, created_by)
+                        SELECT gen_random_uuid()::TEXT, 'Default Organization', 'default',
+                               (SELECT id FROM users ORDER BY created_at ASC LIMIT 1)
+                        WHERE NOT EXISTS (SELECT 1 FROM organizations WHERE slug = 'default');
+                    """)
+                    cursor.execute("""
+                        UPDATE users SET org_id = (
+                            SELECT id FROM organizations WHERE slug = 'default'
+                        ) WHERE org_id IS NULL;
+                    """)
+                    # Backfill org_id on all data tables from the user's org
+                    for tbl in org_id_tables:
+                        if tbl == "users":
+                            continue
+                        try:
+                            cursor.execute(f"""
+                                UPDATE {tbl} t SET org_id = u.org_id
+                                FROM users u WHERE t.user_id = u.id
+                                AND t.org_id IS NULL;
+                            """)
+                            rows_backfilled = cursor.rowcount
+                            cursor.execute(f"""
+                                SELECT COUNT(*) FROM {tbl} WHERE org_id IS NULL;
+                            """)
+                            remaining = cursor.fetchone()[0]
+                            if remaining > 0:
+                                logging.warning(
+                                    "Backfill: %d rows in %s still have NULL org_id "
+                                    "(user_id may not match users.id)", remaining, tbl
+                                )
+                            elif rows_backfilled > 0:
+                                logging.info("Backfilled %d rows in %s with org_id", rows_backfilled, tbl)
+                        except Exception as e:
+                            logging.warning(f"Error backfilling org_id for {tbl}: {e}")
+                    logging.info(
+                        f"Migrated {orphan_count} users into default organization."
+                    )
+                conn.commit()
+            except Exception as e:
+                logging.warning(f"Error creating default org migration: {e}")
+                conn.rollback()
+
+            # Create org_id indexes for performance
+            for tbl in org_id_tables:
+                try:
+                    cursor.execute(
+                        f"CREATE INDEX IF NOT EXISTS idx_{tbl}_org_id ON {tbl}(org_id);"
+                    )
+                except Exception as e:
+                    logging.warning(f"Error creating org_id index for {tbl}: {e}")
+
+            # Migration: update UNIQUE constraints to include org_id
+            # incidents: (source_type, source_alert_id, user_id) -> (org_id, source_type, source_alert_id, user_id)
+            try:
+                cursor.execute("""
+                    DO $$
+                    BEGIN
+                        IF EXISTS (
+                            SELECT 1 FROM pg_constraint
+                            WHERE conname = 'incidents_source_type_source_alert_id_user_id_key'
+                        ) THEN
+                            ALTER TABLE incidents DROP CONSTRAINT incidents_source_type_source_alert_id_user_id_key;
+                            ALTER TABLE incidents ADD CONSTRAINT incidents_org_source_alert_user_key
+                                UNIQUE(org_id, source_type, source_alert_id, user_id);
+                        END IF;
+                    END $$;
+                """)
+            except Exception as e:
+                logging.warning(f"Error migrating incidents UNIQUE constraint: {e}")
+                conn.rollback()
+
+            # knowledge_base_memory: UNIQUE(user_id) -> UNIQUE(user_id, org_id)
+            try:
+                cursor.execute("""
+                    DO $$
+                    BEGIN
+                        IF EXISTS (
+                            SELECT 1 FROM pg_constraint
+                            WHERE conname = 'knowledge_base_memory_user_id_key'
+                        ) THEN
+                            ALTER TABLE knowledge_base_memory DROP CONSTRAINT knowledge_base_memory_user_id_key;
+                            ALTER TABLE knowledge_base_memory ADD CONSTRAINT knowledge_base_memory_user_org_key
+                                UNIQUE(user_id, org_id);
+                        END IF;
+                    END $$;
+                """)
+            except Exception as e:
+                logging.warning(f"Error migrating knowledge_base_memory UNIQUE constraint: {e}")
+                conn.rollback()
+
+            # user_preferences: UNIQUE(user_id, preference_key) -> UNIQUE(user_id, org_id, preference_key)
+            try:
+                cursor.execute("""
+                    DO $$
+                    BEGIN
+                        IF EXISTS (
+                            SELECT 1 FROM pg_constraint
+                            WHERE conname = 'user_preferences_user_id_preference_key_key'
+                        ) THEN
+                            ALTER TABLE user_preferences DROP CONSTRAINT user_preferences_user_id_preference_key_key;
+                            ALTER TABLE user_preferences ADD CONSTRAINT user_preferences_user_org_pref_key
+                                UNIQUE(user_id, org_id, preference_key);
+                        END IF;
+                    END $$;
+                """)
+            except Exception as e:
+                logging.warning(f"Error migrating user_preferences UNIQUE constraint: {e}")
+                conn.rollback()
+
+            # rca_notification_emails: add UNIQUE(org_id, email) for org-scoped deduplication
+            try:
+                cursor.execute("""
+                    DO $$
+                    BEGIN
+                        IF NOT EXISTS (
+                            SELECT 1 FROM pg_constraint
+                            WHERE conname = 'rca_notification_emails_org_id_email_key'
+                        ) THEN
+                            ALTER TABLE rca_notification_emails ADD CONSTRAINT rca_notification_emails_org_id_email_key
+                                UNIQUE(org_id, email);
+                        END IF;
+                    END $$;
+                """)
+            except Exception as e:
+                logging.warning(f"Error adding rca_notification_emails org_email UNIQUE constraint: {e}")
+                conn.rollback()
+
+            # org_invitations: add expires_at column if missing
+            try:
+                cursor.execute("""
+                    ALTER TABLE org_invitations ADD COLUMN IF NOT EXISTS
+                        expires_at TIMESTAMP DEFAULT (NOW() + INTERVAL '7 days');
+                """)
+            except Exception as e:
+                logging.warning(f"Error adding expires_at to org_invitations: {e}")
+                conn.rollback()
+
+            # Create k8s_clusters view (after org_id migration so the column exists)
+            try:
+                create_clusters_view_sql = """
+                    CREATE OR REPLACE VIEW k8s_clusters AS
+                    SELECT DISTINCT project_id, cluster_name, provider, user_id, org_id
+                    FROM k8s_nodes
+                    WHERE org_id = current_setting('myapp.current_org_id', true)::text;
+                """
+                cursor.execute(create_clusters_view_sql)
+                logging.info("View 'k8s_clusters' created successfully.")
+            except Exception as e:
+                logging.warning(f"Error creating k8s_clusters view: {e}")
+                conn.rollback()
 
             conn.commit()
             logging.info("Database tables initialized successfully.")

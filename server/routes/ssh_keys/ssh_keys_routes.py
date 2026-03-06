@@ -14,7 +14,7 @@ from utils.ssh.ssh_key_utils import (
     build_ssh_provider_name,
     generate_ssh_key_pair
 )
-from utils.auth.stateless_auth import get_user_id_from_request
+from utils.auth.rbac_decorators import require_permission
 from utils.auth.token_management import store_tokens_in_db
 
 ssh_keys_bp = Blueprint("ssh_keys_bp", __name__)
@@ -70,12 +70,9 @@ def _load_raw_key_row(user_id: str, key_id: int) -> Optional[tuple]:
 
 @ssh_keys_bp.route("/api/ssh-keys", methods=["POST"])
 @limiter.limit("10 per minute;40 per hour")
-def create_ssh_key():
+@require_permission("ssh_keys", "write")
+def create_ssh_key(user_id):
     """Generate and store a new Aurora-managed SSH keypair."""
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User not authenticated"}), 401
-
     try:
         private_key, public_key = generate_ssh_key_pair()
         provider = build_ssh_provider_name()
@@ -140,12 +137,9 @@ def create_ssh_key():
 
 @ssh_keys_bp.route("/api/ssh-keys", methods=["GET"])
 @limiter.limit("30 per minute;200 per hour")
-def list_ssh_keys():
+@require_permission("ssh_keys", "read")
+def list_ssh_keys(user_id):
     """Return public metadata for all Aurora-managed SSH keys for the user."""
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User not authenticated"}), 401
-
     try:
         return jsonify({"keys": _list_user_keys(user_id)})
     except Exception as exc:
@@ -155,12 +149,9 @@ def list_ssh_keys():
 
 @ssh_keys_bp.route("/api/ssh-keys/<int:key_id>", methods=["GET"])
 @limiter.limit("30 per minute;200 per hour")
-def get_ssh_key(key_id: int):
+@require_permission("ssh_keys", "read")
+def get_ssh_key(user_id, key_id: int):
     """Fetch a single SSH key's public material."""
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User not authenticated"}), 401
-
     try:
         key_record = _get_single_key(user_id, key_id)
         if not key_record:
@@ -173,12 +164,9 @@ def get_ssh_key(key_id: int):
 
 @ssh_keys_bp.route("/api/ssh-keys/<int:key_id>", methods=["PATCH"])
 @limiter.limit("10 per minute;40 per hour")
-def rename_ssh_key(key_id: int):
+@require_permission("ssh_keys", "write")
+def rename_ssh_key(user_id, key_id: int):
     """Rename a managed SSH key label."""
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User not authenticated"}), 401
-
     data = request.get_json() or {}
     new_label = (data.get("label") or "").strip()
     if not new_label:
@@ -219,12 +207,9 @@ def rename_ssh_key(key_id: int):
 
 @ssh_keys_bp.route("/api/ssh-keys/<int:key_id>", methods=["DELETE"])
 @limiter.limit("10 per minute;40 per hour")
-def delete_ssh_key(key_id: int):
+@require_permission("ssh_keys", "write")
+def delete_ssh_key(user_id, key_id: int):
     """Delete a managed SSH keypair (DB row + Vault entry)."""
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User not authenticated"}), 401
-
     try:
         key_record = _get_single_key(user_id, key_id)
         if not key_record:

@@ -132,15 +132,34 @@ def _process_custom_field_update(
     # Store the custom field event in pagerduty_events table
     with db_pool.get_admin_connection() as conn:
         with conn.cursor() as cursor:
+            org_id = None
+            try:
+                from utils.auth.stateless_auth import get_org_id_for_user
+                org_id = get_org_id_for_user(user_id)
+            except Exception:
+                cursor.execute("SELECT org_id FROM users WHERE id = %s", (user_id,))
+                org_row = cursor.fetchone()
+                org_id = org_row[0] if org_row and org_row[0] else None
+
+            if not org_id:
+                logger.error("[PAGERDUTY] Missing org_id for user %s; skipping persistence", user_id)
+                return
+
+            # Set RLS context
+            cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
+            cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
+            conn.commit()
+
             cursor.execute(
                 """
                 INSERT INTO pagerduty_events 
-                (user_id, event_type, incident_id, incident_title, incident_status, 
+                (user_id, org_id, event_type, incident_id, incident_title, incident_status, 
                  incident_urgency, service_name, service_id, payload, received_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
                     user_id,
+                    org_id,
                     "incident.custom_field_values.updated",
                     incident_id,
                     None,  # No title in custom field event
@@ -485,16 +504,32 @@ def process_pagerduty_event(
         # Store the complete V3 webhook payload
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                org_id = None
+                try:
+                    from utils.auth.stateless_auth import get_org_id_for_user
+                    org_id = get_org_id_for_user(user_id)
+                except Exception:
+                    cursor.execute("SELECT org_id FROM users WHERE id = %s", (user_id,))
+                    org_row = cursor.fetchone()
+                    org_id = org_row[0] if org_row and org_row[0] else None
+
+                # Set RLS context
+                cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
+                if org_id:
+                    cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
+                conn.commit()
+
                 cursor.execute(
                     """
                     INSERT INTO pagerduty_events 
-                    (user_id, event_type, incident_id, incident_title, incident_status, 
+                    (user_id, org_id, event_type, incident_id, incident_title, incident_status, 
                      incident_urgency, service_name, service_id, payload, received_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     RETURNING id
                     """,
                     (
                         user_id,
+                        org_id,
                         event_type,
                         incident_id,
                         incident_title,
@@ -502,7 +537,7 @@ def process_pagerduty_event(
                         incident_urgency,
                         service_name,
                         service_id,
-                        json.dumps(raw_payload),  # Store complete original webhook
+                        json.dumps(raw_payload),
                         received_at,
                     ),
                 )
@@ -569,6 +604,7 @@ def process_pagerduty_event(
                             alert_service=service_name,
                             alert_severity=severity,
                             alert_metadata=alert_metadata,
+                            org_id=org_id,
                         )
 
                         if correlation_result.is_correlated:
@@ -584,6 +620,7 @@ def process_pagerduty_event(
                                 correlation_result=correlation_result,
                                 alert_metadata=alert_metadata,
                                 raw_payload=raw_payload,
+                                org_id=org_id,
                             )
                             conn.commit()
                             return
@@ -597,10 +634,10 @@ def process_pagerduty_event(
                 cursor.execute(
                     """
                     INSERT INTO incidents 
-                    (user_id, source_type, source_alert_id, alert_title, alert_service, 
+                    (user_id, org_id, source_type, source_alert_id, alert_title, alert_service, 
                      severity, status, started_at, alert_metadata)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (source_type, source_alert_id, user_id) DO UPDATE
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (org_id, source_type, source_alert_id, user_id) DO UPDATE
                     SET updated_at = CURRENT_TIMESTAMP,
                         status = EXCLUDED.status,
                         severity = EXCLUDED.severity,
@@ -614,6 +651,7 @@ def process_pagerduty_event(
                     """,
                     (
                         user_id,
+                        org_id,
                         "pagerduty",
                         incident_number,
                         incident_title,
@@ -632,11 +670,12 @@ def process_pagerduty_event(
                     try:
                         cursor.execute(
                             """INSERT INTO incident_alerts
-                               (user_id, incident_id, source_type, source_alert_id, alert_title, alert_service,
+                               (user_id, org_id, incident_id, source_type, source_alert_id, alert_title, alert_service,
                                 alert_severity, correlation_strategy, correlation_score, alert_metadata)
-                               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
                             (
                                 user_id,
+                                org_id,
                                 incident_db_id,
                                 "pagerduty",
                                 event_db_id,

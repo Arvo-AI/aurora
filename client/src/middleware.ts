@@ -1,10 +1,12 @@
 import { auth } from "@/auth"
 import { NextResponse } from "next/server"
+import { ROLE_ADMIN } from "@/lib/roles"
 
 // Public routes that don't require authentication
 const publicRoutes = [
   "/sign-in",
   "/sign-up",
+  "/change-password",
   "/terms",
   "/api/auth/callback",  // NextAuth callbacks
   "/api/auth/signin",     // NextAuth sign-in
@@ -12,6 +14,7 @@ const publicRoutes = [
   "/api/auth/session",    // NextAuth session
   "/api/auth/providers",  // NextAuth providers
   "/api/auth/csrf",       // NextAuth CSRF
+  "/api/auth/change-password", // Password change API
 ]
 
 // Routes that should redirect authenticated users away
@@ -28,10 +31,17 @@ export default auth((req) => {
     nextUrl.pathname.startsWith(route)
   )
   const isApiRoute = nextUrl.pathname.startsWith('/api/')
+  const isAdminRoute = nextUrl.pathname.startsWith('/admin') || nextUrl.pathname.startsWith('/api/admin')
+  const isChangePasswordRoute = nextUrl.pathname.startsWith('/change-password')
 
   // If user is logged in and tries to access auth pages, redirect to home
   if (isAuthRoute && isLoggedIn) {
     return NextResponse.redirect(new URL("/", nextUrl))
+  }
+
+  // Force password change: redirect to /change-password if flag is set
+  if (isLoggedIn && req.auth?.user?.mustChangePassword && !isChangePasswordRoute && !isApiRoute) {
+    return NextResponse.redirect(new URL("/change-password", nextUrl))
   }
 
   // If user is not logged in and tries to access protected route
@@ -49,6 +59,17 @@ export default auth((req) => {
     const signInUrl = new URL("/sign-in", nextUrl)
     signInUrl.searchParams.set("callbackUrl", callbackUrl)
     return NextResponse.redirect(signInUrl)
+  }
+
+  // Gate admin routes to admin role only
+  if (isAdminRoute && isLoggedIn) {
+    const role = req.auth?.user?.role
+    if (role !== ROLE_ADMIN) {
+      if (isApiRoute) {
+        return NextResponse.json({ error: "Forbidden" }, { status: 403 })
+      }
+      return NextResponse.redirect(new URL("/", nextUrl))
+    }
   }
 
   return NextResponse.next()

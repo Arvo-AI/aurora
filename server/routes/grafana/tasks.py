@@ -183,6 +183,26 @@ def process_grafana_alert(
                 with db_pool.get_admin_connection() as conn:
                     with conn.cursor() as cursor:
                         received_at = datetime.now(timezone.utc)
+
+                        # Look up org_id for this user (cached across calls)
+                        org_id = None
+                        try:
+                            from utils.auth.stateless_auth import get_org_id_for_user
+                            org_id = get_org_id_for_user(user_id)
+                        except Exception:
+                            cursor.execute("SELECT org_id FROM users WHERE id = %s", (user_id,))
+                            org_row = cursor.fetchone()
+                            org_id = org_row[0] if org_row and org_row[0] else None
+
+                        if not org_id:
+                            logger.error("[GRAFANA][ALERT] Missing org_id for user %s; skipping persistence", user_id)
+                            return
+
+                        # Set RLS context
+                        cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
+                        cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
+                        conn.commit()
+
                         # Extract relevant fields from Grafana payload
                         alert_uid = payload.get("ruleUID") or payload.get("ruleUid")
                         alert_title = payload.get("title") or payload.get(
@@ -201,12 +221,13 @@ def process_grafana_alert(
                         cursor.execute(
                             """
                             INSERT INTO grafana_alerts 
-                            (user_id, alert_uid, alert_title, alert_state, rule_name, rule_url, dashboard_url, panel_url, payload, received_at)
-                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            (user_id, org_id, alert_uid, alert_title, alert_state, rule_name, rule_url, dashboard_url, panel_url, payload, received_at)
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                             RETURNING id
                             """,
                             (
                                 user_id,
+                                org_id,
                                 alert_uid,
                                 alert_title,
                                 alert_state,
@@ -298,6 +319,7 @@ def process_grafana_alert(
                                 alert_service=service,
                                 alert_severity=severity,
                                 alert_metadata=alert_metadata,
+                                org_id=org_id,
                             )
 
                             if correlation_result.is_correlated:
@@ -313,6 +335,7 @@ def process_grafana_alert(
                                     correlation_result=correlation_result,
                                     alert_metadata=alert_metadata,
                                     raw_payload=payload,
+                                    org_id=org_id,
                                 )
                                 conn.commit()
                                 return
@@ -325,10 +348,10 @@ def process_grafana_alert(
                         cursor.execute(
                             """
                             INSERT INTO incidents 
-                            (user_id, source_type, source_alert_id, alert_title, alert_service, 
+                            (user_id, org_id, source_type, source_alert_id, alert_title, alert_service, 
                              severity, status, started_at, alert_metadata)
-                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-                            ON CONFLICT (source_type, source_alert_id, user_id) DO UPDATE
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            ON CONFLICT (org_id, source_type, source_alert_id, user_id) DO UPDATE
                             SET updated_at = CURRENT_TIMESTAMP,
                                 started_at = CASE 
                                     WHEN incidents.status != 'analyzed' THEN EXCLUDED.started_at
@@ -339,6 +362,7 @@ def process_grafana_alert(
                             """,
                             (
                                 user_id,
+                                org_id,
                                 "grafana",
                                 alert_id,
                                 alert_title,
@@ -356,11 +380,12 @@ def process_grafana_alert(
                         try:
                             cursor.execute(
                                 """INSERT INTO incident_alerts
-                                   (user_id, incident_id, source_type, source_alert_id, alert_title, alert_service,
+                                   (user_id, org_id, incident_id, source_type, source_alert_id, alert_title, alert_service,
                                     alert_severity, correlation_strategy, correlation_score, alert_metadata)
-                                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
                                 (
                                     user_id,
+                                    org_id,
                                     incident_id,
                                     "grafana",
                                     alert_id,

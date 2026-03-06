@@ -8,6 +8,7 @@ Allows users to check which providers are available and test API key validity.
 from flask import Blueprint, jsonify, request
 from chat.backend.agent.providers import get_registry, get_available_providers
 from chat.backend.agent.model_mapper import ModelMapper
+from utils.auth.rbac_decorators import require_permission
 import logging
 import os
 
@@ -17,7 +18,8 @@ llm_config_bp = Blueprint("llm_config", __name__, url_prefix="/api/llm-config")
 
 
 @llm_config_bp.route("/available-providers", methods=["GET"])
-def get_llm_providers():
+@require_permission("llm_config", "read")
+def get_llm_providers(user_id):
     """
     Get list of available LLM providers and their status.
 
@@ -59,7 +61,8 @@ def get_llm_providers():
 
 
 @llm_config_bp.route("/provider-details", methods=["GET"])
-def get_provider_details():
+@require_permission("llm_config", "read")
+def get_provider_details(user_id):
     """
     Get detailed information about each provider including supported models.
 
@@ -94,7 +97,8 @@ def get_provider_details():
 
 
 @llm_config_bp.route("/test-provider", methods=["POST"])
-def test_provider():
+@require_permission("llm_config", "write")
+def test_provider(user_id):
     """
     Test a specific provider's API key validity by making a minimal API call.
 
@@ -169,7 +173,8 @@ def test_provider():
 
 
 @llm_config_bp.route("/model-info", methods=["GET"])
-def get_model_info():
+@require_permission("llm_config", "read")
+def get_model_info(user_id):
     """
     Get information about a specific model including which provider it belongs to.
 
@@ -221,7 +226,8 @@ def get_model_info():
 
 
 @llm_config_bp.route("/supported-models", methods=["GET"])
-def get_supported_models():
+@require_permission("llm_config", "read")
+def get_supported_models(user_id):
     """
     Get list of all supported models, optionally filtered by provider.
 

@@ -8,8 +8,9 @@ import time
 
 from flask import Blueprint, jsonify, render_template, request
 
-from utils.auth.stateless_auth import get_user_id_from_request, get_credentials_from_db
+from utils.auth.stateless_auth import get_credentials_from_db
 from utils.web.cors_utils import create_cors_response
+from utils.auth.rbac_decorators import require_permission
 
 bitbucket_bp = Blueprint("bitbucket", __name__)
 logger = logging.getLogger(__name__)
@@ -18,17 +19,14 @@ FRONTEND_URL = os.getenv("FRONTEND_URL")
 
 
 @bitbucket_bp.route("/login", methods=["POST", "OPTIONS"])
-def bitbucket_login():
+@require_permission("connectors", "write")
+def bitbucket_login(user_id):
     """Handle Bitbucket login - either API token or OAuth initiation."""
     if request.method == "OPTIONS":
         return create_cors_response()
 
     try:
         data = request.get_json() or {}
-        user_id = data.get("userId") or get_user_id_from_request()
-
-        if not user_id:
-            return jsonify({"error": "User ID is required"}), 400
 
         api_token = data.get("api_token")
         email = data.get("email")
@@ -220,16 +218,13 @@ def bitbucket_callback():
 
 
 @bitbucket_bp.route("/status", methods=["GET", "OPTIONS"])
-def bitbucket_status():
+@require_permission("connectors", "read")
+def bitbucket_status(user_id):
     """Check Bitbucket connection status for a user."""
     if request.method == "OPTIONS":
         return create_cors_response()
 
     try:
-        user_id = get_user_id_from_request()
-        if not user_id:
-            return jsonify({"connected": False, "error": "User ID required"}), 400
-
         bb_creds = get_credentials_from_db(user_id, "bitbucket")
         if not bb_creds or not bb_creds.get("access_token"):
             return jsonify({"connected": False})
@@ -277,16 +272,13 @@ def bitbucket_status():
 
 
 @bitbucket_bp.route("/disconnect", methods=["POST", "OPTIONS"])
-def bitbucket_disconnect():
+@require_permission("connectors", "write")
+def bitbucket_disconnect(user_id):
     """Disconnect Bitbucket account for a user."""
     if request.method == "OPTIONS":
         return create_cors_response()
 
     try:
-        user_id = get_user_id_from_request()
-        if not user_id:
-            return jsonify({"error": "User ID required"}), 400
-
         from utils.secrets.secret_ref_utils import delete_user_secret
 
         # Delete both bitbucket credentials and workspace selection

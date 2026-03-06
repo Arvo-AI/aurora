@@ -3,15 +3,27 @@ Auth routes for user registration, login, and password management.
 Replaces the previous authentication system.
 """
 import logging
+import re
 import bcrypt
 from flask import Blueprint, request, jsonify
 from utils.db.db_utils import connect_to_db_as_user
+from utils.db.connection_pool import db_pool
+from utils.auth.rbac_decorators import require_auth_only
 from utils.web.cors_utils import create_cors_response
 import os
 
 auth_bp = Blueprint('auth', __name__, url_prefix='/api/auth')
 
 FRONTEND_URL = os.getenv("FRONTEND_URL")
+ALLOW_OPEN_REGISTRATION = os.getenv("ALLOW_OPEN_REGISTRATION", "true").lower() in ("true", "1", "yes")
+
+SLUG_REGEX = re.compile(r'^[a-z0-9][a-z0-9-]{0,48}[a-z0-9]$')
+
+def _name_to_slug(name: str) -> str:
+    slug = re.sub(r'[^a-z0-9]+', '-', name.lower()).strip('-')[:50]
+    if len(slug) < 2:
+        slug = slug + '-org'
+    return slug
 
 @auth_bp.after_request
 def add_cors_headers(response):
@@ -25,7 +37,14 @@ def add_cors_headers(response):
 
 @auth_bp.route('/register', methods=['POST', 'OPTIONS'])
 def register():
-    """Register a new user with email and password."""
+    """Register a new user and create their organization.
+
+    Body: { email, password, name, org_name }
+    - First user bypasses the ALLOW_OPEN_REGISTRATION gate.
+    - Every sign-up creates a new organization with the registrant as admin.
+    - Invited users (created by an admin via /api/admin/users) already have
+      accounts and should sign in directly — they don't call this endpoint.
+    """
     if request.method == 'OPTIONS':
         return create_cors_response()
     
@@ -37,21 +56,25 @@ def register():
         email = data.get('email')
         password = data.get('password')
         name = data.get('name')
+        org_name = (data.get('org_name') or '').strip()
         
         if not email or not password:
             return jsonify({"error": "Email and password are required"}), 400
             
         if len(password) < 8:
             return jsonify({"error": "Password must be at least 8 characters"}), 400
+
+        if not org_name:
+            return jsonify({"error": "Organization name is required"}), 400
+
+        if len(org_name) > 100:
+            return jsonify({"error": "Organization name must be 100 characters or less"}), 400
         
-        # Hash password with bcrypt
         password_hash = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt())
         
-        # Store user in database
         conn = connect_to_db_as_user()
         try:
             with conn.cursor() as cursor:
-                # Check if user already exists
                 cursor.execute(
                     "SELECT id FROM users WHERE email = %s",
                     (email,)
@@ -59,24 +82,66 @@ def register():
                 if cursor.fetchone():
                     return jsonify({"error": "User with this email already exists"}), 409
                 
-                # Insert new user
+                cursor.execute("SELECT COUNT(*) FROM (SELECT 1 FROM users FOR UPDATE) sub")
+                user_count = cursor.fetchone()[0]
+
+                if user_count > 0 and not ALLOW_OPEN_REGISTRATION:
+                    return jsonify({"error": "Open registration is disabled. Contact an admin for an invitation."}), 403
+
+                slug = _name_to_slug(org_name)
+                cursor.execute(
+                    "SELECT id FROM organizations WHERE slug = %s",
+                    (slug,)
+                )
+                if cursor.fetchone():
+                    import uuid
+                    slug = slug[:42] + '-' + uuid.uuid4().hex[:6]
+
                 cursor.execute(
                     """
-                    INSERT INTO users (email, password_hash, name, created_at)
-                    VALUES (%s, %s, %s, NOW())
+                    INSERT INTO users (email, password_hash, name, role, created_at)
+                    VALUES (%s, %s, %s, 'admin', NOW())
                     RETURNING id, email, name
                     """,
                     (email, password_hash.decode('utf-8'), name)
                 )
                 user = cursor.fetchone()
+                user_id, user_email, user_name = user[0], user[1], user[2]
+
+                cursor.execute(
+                    """
+                    INSERT INTO organizations (id, name, slug, created_by)
+                    VALUES (gen_random_uuid()::TEXT, %s, %s, %s)
+                    RETURNING id, name
+                    """,
+                    (org_name, slug, user_id)
+                )
+                org_row = cursor.fetchone()
+                org_id, org_display_name = org_row[0], org_row[1]
+
+                cursor.execute(
+                    "UPDATE users SET org_id = %s WHERE id = %s",
+                    (org_id, user_id)
+                )
+
                 conn.commit()
+
+                # Register the user-role mapping in Casbin (domain-aware)
+                try:
+                    from utils.auth.enforcer import assign_role_to_user
+                    assign_role_to_user(user_id, "admin", org_id)
+                except Exception as casbin_err:
+                    logging.warning(f"Failed to assign Casbin role for {user_id}: {casbin_err}")
                 
-                logging.info(f"New user registered: {email}")
+                logging.info(f"New user registered: {email[:3]}***@*** (role=admin, org={org_id})")
                 
                 return jsonify({
-                    "id": user[0],
-                    "email": user[1],
-                    "name": user[2]
+                    "id": user_id,
+                    "email": user_email,
+                    "name": user_name,
+                    "role": "admin",
+                    "orgId": org_id,
+                    "orgName": org_display_name,
                 }), 201
         finally:
             conn.close()
@@ -108,7 +173,10 @@ def login():
         try:
             with conn.cursor() as cursor:
                 cursor.execute(
-                    "SELECT id, email, name, password_hash FROM users WHERE email = %s",
+                    "SELECT u.id, u.email, u.name, u.password_hash, u.role, u.org_id, o.name, "
+                    "COALESCE(u.must_change_password, FALSE) "
+                    "FROM users u LEFT JOIN organizations o ON u.org_id = o.id "
+                    "WHERE u.email = %s",
                     (email,)
                 )
                 user = cursor.fetchone()
@@ -116,7 +184,7 @@ def login():
                 # Always perform password check to prevent timing attacks
                 # Use dummy hash if user doesn't exist
                 if user:
-                    user_id, user_email, user_name, password_hash = user
+                    user_id, user_email, user_name, password_hash, user_role, user_org_id, user_org_name, must_change_pw = user
                 else:
                     # Dummy hash to maintain consistent timing
                     password_hash = bcrypt.hashpw(b'dummy', bcrypt.gensalt()).decode('utf-8')
@@ -132,7 +200,11 @@ def login():
                 return jsonify({
                     "id": user_id,
                     "email": user_email,
-                    "name": user_name
+                    "name": user_name,
+                    "role": user_role or "viewer",
+                    "orgId": user_org_id,
+                    "orgName": user_org_name,
+                    "mustChangePassword": bool(must_change_pw),
                 }), 200
         finally:
             conn.close()
@@ -188,7 +260,7 @@ def change_password():
                 # Hash and update new password
                 new_password_hash = bcrypt.hashpw(new_password.encode('utf-8'), bcrypt.gensalt())
                 cursor.execute(
-                    "UPDATE users SET password_hash = %s WHERE id = %s",
+                    "UPDATE users SET password_hash = %s, must_change_password = FALSE WHERE id = %s",
                     (new_password_hash.decode('utf-8'), user_id)
                 )
                 conn.commit()
@@ -202,3 +274,61 @@ def change_password():
     except Exception as e:
         logging.error(f"Error changing password: {e}")
         return jsonify({"error": "Password change failed"}), 500
+
+
+@auth_bp.route('/me', methods=['GET'])
+@require_auth_only
+def get_current_user(user_id):
+    """Return the current user's role and org from the database.
+
+    Called periodically by the frontend JWT callback to keep the
+    session in sync after admin role changes.
+    """
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT u.role, u.org_id, o.name, COALESCE(u.must_change_password, FALSE) "
+                    "FROM users u LEFT JOIN organizations o ON u.org_id = o.id "
+                    "WHERE u.id = %s",
+                    (user_id,),
+                )
+                row = cursor.fetchone()
+                if not row:
+                    return jsonify({"error": "User not found"}), 404
+
+                return jsonify({
+                    "role": row[0] or "viewer",
+                    "orgId": row[1],
+                    "orgName": row[2],
+                    "mustChangePassword": bool(row[3]),
+                }), 200
+    except Exception:
+        logging.exception("Error in /me")
+        return jsonify({"error": "Server error"}), 500
+
+
+@auth_bp.route('/admins', methods=['GET'])
+@require_auth_only
+def get_admins(user_id):
+    """Return the list of admin users (name + email only). Any authenticated user may call this."""
+    from utils.auth.stateless_auth import get_org_id_from_request
+
+    org_id = get_org_id_from_request()
+    if not org_id:
+        return jsonify({"error": "Organization context required"}), 403
+
+    conn = connect_to_db_as_user()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT name, email FROM users WHERE role = 'admin' AND org_id = %s ORDER BY created_at",
+                (org_id,),
+            )
+            rows = cursor.fetchall()
+        return jsonify([{"name": r[0], "email": r[1]} for r in rows]), 200
+    except Exception as e:
+        logging.exception("Error fetching admins for org %s: %s", org_id, e)
+        return jsonify({"error": "Failed to fetch admins"}), 500
+    finally:
+        conn.close()

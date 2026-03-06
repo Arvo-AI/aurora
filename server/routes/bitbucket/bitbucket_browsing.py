@@ -6,8 +6,9 @@ import logging
 
 from flask import Blueprint, request, jsonify
 
-from utils.auth.stateless_auth import get_user_id_from_request, get_credentials_from_db
+from utils.auth.stateless_auth import get_credentials_from_db
 from utils.web.cors_utils import create_cors_response
+from utils.auth.rbac_decorators import require_permission
 
 bitbucket_browsing_bp = Blueprint("bitbucket_browsing", __name__)
 logger = logging.getLogger(__name__)
@@ -50,16 +51,13 @@ def _get_bb_client(user_id):
 
 
 @bitbucket_browsing_bp.route("/workspaces", methods=["GET", "OPTIONS"])
-def list_workspaces():
+@require_permission("connectors", "read")
+def list_workspaces(user_id):
     """List Bitbucket workspaces for the authenticated user."""
     if request.method == "OPTIONS":
         return create_cors_response()
 
     try:
-        user_id = get_user_id_from_request()
-        if not user_id:
-            return jsonify({"error": "User ID required"}), 400
-
         client = _get_bb_client(user_id)
         if not client:
             return jsonify({"error": "Bitbucket not connected"}), 401
@@ -73,16 +71,13 @@ def list_workspaces():
 
 
 @bitbucket_browsing_bp.route("/projects/<workspace>", methods=["GET", "OPTIONS"])
-def list_projects(workspace):
+@require_permission("connectors", "read")
+def list_projects(user_id, workspace):
     """List projects in a Bitbucket workspace."""
     if request.method == "OPTIONS":
         return create_cors_response()
 
     try:
-        user_id = get_user_id_from_request()
-        if not user_id:
-            return jsonify({"error": "User ID required"}), 400
-
         client = _get_bb_client(user_id)
         if not client:
             return jsonify({"error": "Bitbucket not connected"}), 401
@@ -96,16 +91,13 @@ def list_projects(workspace):
 
 
 @bitbucket_browsing_bp.route("/repos/<workspace>", methods=["GET", "OPTIONS"])
-def list_repos(workspace):
+@require_permission("connectors", "read")
+def list_repos(user_id, workspace):
     """List repositories in a Bitbucket workspace, optionally filtered by project."""
     if request.method == "OPTIONS":
         return create_cors_response()
 
     try:
-        user_id = get_user_id_from_request()
-        if not user_id:
-            return jsonify({"error": "User ID required"}), 400
-
         client = _get_bb_client(user_id)
         if not client:
             return jsonify({"error": "Bitbucket not connected"}), 401
@@ -128,16 +120,13 @@ def list_repos(workspace):
 
 
 @bitbucket_browsing_bp.route("/branches/<workspace>/<repo_slug>", methods=["GET", "OPTIONS"])
-def list_branches(workspace, repo_slug):
+@require_permission("connectors", "read")
+def list_branches(user_id, workspace, repo_slug):
     """List branches for a Bitbucket repository."""
     if request.method == "OPTIONS":
         return create_cors_response()
 
     try:
-        user_id = get_user_id_from_request()
-        if not user_id:
-            return jsonify({"error": "User ID required"}), 400
-
         client = _get_bb_client(user_id)
         if not client:
             return jsonify({"error": "Bitbucket not connected"}), 401
@@ -151,16 +140,13 @@ def list_branches(workspace, repo_slug):
 
 
 @bitbucket_browsing_bp.route("/pull-requests/<workspace>/<repo_slug>", methods=["GET", "OPTIONS"])
-def list_pull_requests(workspace, repo_slug):
+@require_permission("connectors", "read")
+def list_pull_requests(user_id, workspace, repo_slug):
     """List pull requests for a Bitbucket repository."""
     if request.method == "OPTIONS":
         return create_cors_response()
 
     try:
-        user_id = get_user_id_from_request()
-        if not user_id:
-            return jsonify({"error": "User ID required"}), 400
-
         client = _get_bb_client(user_id)
         if not client:
             return jsonify({"error": "Bitbucket not connected"}), 401
@@ -175,16 +161,13 @@ def list_pull_requests(workspace, repo_slug):
 
 
 @bitbucket_browsing_bp.route("/issues/<workspace>/<repo_slug>", methods=["GET", "OPTIONS"])
-def list_issues(workspace, repo_slug):
+@require_permission("connectors", "read")
+def list_issues(user_id, workspace, repo_slug):
     """List issues for a Bitbucket repository."""
     if request.method == "OPTIONS":
         return create_cors_response()
 
     try:
-        user_id = get_user_id_from_request()
-        if not user_id:
-            return jsonify({"error": "User ID required"}), 400
-
         client = _get_bb_client(user_id)
         if not client:
             return jsonify({"error": "Bitbucket not connected"}), 401
