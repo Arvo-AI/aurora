@@ -23,7 +23,6 @@ OAuth 2.0 authentication for Slack workspaces.
 ### 2. Configure `.env`
 
 ```bash
-NEXT_PUBLIC_ENABLE_SLACK=true
 SLACK_CLIENT_ID=your-slack-client-id
 SLACK_CLIENT_SECRET=your-slack-client-secret
 SLACK_SIGNING_SECRET=your-signing-secret
@@ -32,5 +31,3 @@ SLACK_SIGNING_SECRET=your-signing-secret
 ## Troubleshooting
 
 **"bad_redirect_uri"** — Redirect URL must match exactly in Slack App. Use ngrok URL when tunneling externally.
-
-**Slack connector not enabled** — Ensure `NEXT_PUBLIC_ENABLE_SLACK=true` and restart Aurora

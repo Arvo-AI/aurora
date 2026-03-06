@@ -53,6 +53,16 @@ from .confluence_search_tool import (
     ConfluenceSearchRunbookArgs,
     ConfluenceFetchPageArgs,
 )
+from .sharepoint_search_tool import (
+    sharepoint_search,
+    sharepoint_fetch_page,
+    sharepoint_fetch_document,
+    sharepoint_create_page,
+    SharePointSearchArgs,
+    SharePointFetchPageArgs,
+    SharePointFetchDocumentArgs,
+    SharePointCreatePageArgs,
+)
 from .splunk_tool import (
     search_splunk,
     list_splunk_indexes,
@@ -1421,9 +1431,8 @@ Once you identify which account has the issue, pass account_id (e.g. '1510256343
 
     # Add Confluence search tools if enabled
     try:
-        from utils.flags.feature_flags import is_confluence_enabled
-
-        if is_confluence_enabled() and user_id:
+        from utils.auth.token_management import get_token_data
+        if user_id and get_token_data(user_id, "confluence"):
             _confluence_tools = [
                 (confluence_search_similar, "confluence_search_similar", ConfluenceSearchSimilarArgs,
                  "Search Confluence for pages related to an incident (postmortems, RCA docs). "
@@ -1448,6 +1457,40 @@ Once you identify which account has the issue, pass account_id (e.g. '1510256343
             logging.info(f"Added 3 Confluence search tools for user {user_id}")
     except Exception as e:
         logging.warning(f"Failed to add Confluence search tools: {e}")
+
+    # Add SharePoint search tools if enabled
+    try:
+        from utils.flags.feature_flags import is_sharepoint_enabled
+        from utils.secrets.secret_ref_utils import has_user_credentials
+
+        if is_sharepoint_enabled() and user_id and has_user_credentials(user_id, "sharepoint"):
+            _sharepoint_tools = [
+                (sharepoint_search, "sharepoint_search", SharePointSearchArgs,
+                 "Search SharePoint for pages, documents, and list items matching a query. "
+                 "Pass a search query and optional site_id to restrict to a specific site. Returns matching items with excerpts."),
+                (sharepoint_fetch_page, "sharepoint_fetch_page", SharePointFetchPageArgs,
+                 "Fetch a SharePoint page by site ID and page ID and return its content as markdown. "
+                 "Use after search to read full page details."),
+                (sharepoint_fetch_document, "sharepoint_fetch_document", SharePointFetchDocumentArgs,
+                 "Fetch a SharePoint document by drive ID and item ID and return extracted text content. "
+                 "Use for Word docs, PDFs, and other documents stored in SharePoint document libraries."),
+                (sharepoint_create_page, "sharepoint_create_page", SharePointCreatePageArgs,
+                 "Create a new SharePoint page with the given title and HTML/markdown content. "
+                 "Use to publish incident reports, postmortems, or runbooks to SharePoint."),
+            ]
+            for _func, _name, _schema, _desc in _sharepoint_tools:
+                _ctx = with_user_context(_func)
+                _notif = with_completion_notification(_ctx)
+                _final = wrap_func_with_capture(_notif, _name) if tool_capture else _notif
+                tools.append(StructuredTool.from_function(
+                    func=_final,
+                    name=_name,
+                    description=_desc,
+                    args_schema=_schema,
+                ))
+            logging.info(f"Added 4 SharePoint tools for user {user_id}")
+    except Exception as e:
+        logging.warning(f"Failed to add SharePoint tools: {e}")
 
     # Add Coroot observability tools if connected
     try:

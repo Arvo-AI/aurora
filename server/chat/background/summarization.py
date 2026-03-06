@@ -656,7 +656,6 @@ def generate_incident_summary_from_chat(
         _update_incident_summary(incident_id, summary)
 
         # Send completion notifications now that summary is generated
-        from utils.flags.feature_flags import is_slack_enabled
         from chat.background.task import (
             _send_rca_notification,
             _is_rca_email_notification_enabled,
@@ -664,7 +663,7 @@ def generate_incident_summary_from_chat(
         )
 
         email_enabled = _is_rca_email_notification_enabled(user_id)
-        slack_enabled = is_slack_enabled() and _has_slack_connected(user_id)
+        slack_enabled = _has_slack_connected(user_id)
 
         if email_enabled or slack_enabled:
             _send_rca_notification(

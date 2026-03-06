@@ -24,7 +24,7 @@ export async function DELETE(
     const { provider } = await context.params
 
     // Validate provider
-    if (!['gcp', 'azure', 'aws', 'github', 'grafana', 'datadog', 'netdata', 'ovh', 'scaleway', 'tailscale', 'slack', 'splunk', 'dynatrace', 'confluence', 'coroot', 'thousandeyes', 'jenkins', 'cloudbees', 'bigpanda'].includes(provider)) {
+    if (!['gcp', 'azure', 'aws', 'github', 'grafana', 'datadog', 'netdata', 'ovh', 'scaleway', 'tailscale', 'slack', 'splunk', 'dynatrace', 'confluence', 'sharepoint', 'coroot', 'thousandeyes', 'jenkins', 'cloudbees', 'bigpanda'].includes(provider)) {
       return NextResponse.json(
         { error: 'Invalid provider' },
         { status: 400 }
@@ -243,6 +243,33 @@ export async function DELETE(
         console.error('Backend error disconnecting Confluence:', errorText)
         return NextResponse.json(
           { error: 'Failed to disconnect Confluence' },
+          { status: response.status }
+        )
+      }
+
+      const data = await response.json()
+      return NextResponse.json(data)
+    }
+
+    // Special handling for SharePoint
+    if (provider === 'sharepoint') {
+      const controller = new AbortController()
+      const timeoutId = setTimeout(() => controller.abort(), 20000)
+      let response: Response
+      try {
+        response = await fetch(`${API_BASE_URL}/sharepoint/disconnect`, {
+          method: 'DELETE',
+          headers: authHeaders,
+          signal: controller.signal,
+        })
+      } finally {
+        clearTimeout(timeoutId)
+      }
+
+      if (!response.ok) {
+        console.error('Backend error disconnecting SharePoint: status=%d', response.status)
+        return NextResponse.json(
+          { error: 'Failed to disconnect SharePoint' },
           { status: response.status }
         )
       }

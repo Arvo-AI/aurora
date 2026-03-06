@@ -173,10 +173,10 @@ prod-prebuilt:
 	@docker compose -f docker-compose.prod-local.yml up -d
 	@echo ""
 	@echo "✓ Aurora is starting! Services will be available at:"
-	@echo "  - Frontend: $${FRONTEND_URL:-http://localhost:3000}"
-	@echo "  - Backend API: $${NEXT_PUBLIC_BACKEND_URL:-http://localhost:5080}"
-	@echo "  - Chatbot WebSocket: $${NEXT_PUBLIC_WEBSOCKET_URL:-ws://localhost:5006}"
-	@echo "  - Vault UI: http://$$(echo $${FRONTEND_URL:-http://localhost:3000} | sed 's|.*://||;s|:.*||'):8200"
+	@echo "  - Frontend: $$(v=$$(grep -E '^FRONTEND_URL=' .env | cut -d= -f2- | tr -d '\"'); echo $${v:-http://localhost:3000})"
+	@echo "  - Backend API: $$(v=$$(grep -E '^NEXT_PUBLIC_BACKEND_URL=' .env | cut -d= -f2- | tr -d '\"'); echo $${v:-http://localhost:5080})"
+	@echo "  - Chatbot WebSocket: $$(v=$$(grep -E '^NEXT_PUBLIC_WEBSOCKET_URL=' .env | cut -d= -f2- | tr -d '\"'); echo $${v:-ws://localhost:5006})"
+	@echo "  - Vault UI: http://$$(v=$$(grep -E '^FRONTEND_URL=' .env | cut -d= -f2- | tr -d '\"' | sed 's|.*://||;s|:.*||'); echo $${v:-localhost}):8200"
 	@echo ""
 	@echo "View logs with: make prod-logs"
 
@@ -190,9 +190,9 @@ prod-local:
 	@docker compose -f docker-compose.prod-local.yml up --build -d
 	@echo ""
 	@echo "✓ Aurora is starting (built from source)!"
-	@echo "  - Frontend: $${FRONTEND_URL:-http://localhost:3000}"
-	@echo "  - Backend API: $${NEXT_PUBLIC_BACKEND_URL:-http://localhost:5080}"
-	@echo "  - Chatbot WebSocket: $${NEXT_PUBLIC_WEBSOCKET_URL:-ws://localhost:5006}"
+	@echo "  - Frontend: $$(v=$$(grep -E '^FRONTEND_URL=' .env | cut -d= -f2- | tr -d '\"'); echo $${v:-http://localhost:3000})"
+	@echo "  - Backend API: $$(v=$$(grep -E '^NEXT_PUBLIC_BACKEND_URL=' .env | cut -d= -f2- | tr -d '\"'); echo $${v:-http://localhost:5080})"
+	@echo "  - Chatbot WebSocket: $$(v=$$(grep -E '^NEXT_PUBLIC_WEBSOCKET_URL=' .env | cut -d= -f2- | tr -d '\"'); echo $${v:-ws://localhost:5006})"
 
 prod-local-logs:
 	@if [ -z "$(filter-out $@,$(MAKECMDGOALS))" ]; then \

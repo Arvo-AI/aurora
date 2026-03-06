@@ -7,8 +7,8 @@ import { Card, CardHeader, CardTitle, CardContent, CardFooter } from "@/componen
 import { Badge } from "@/components/ui/badge";
 import { Check, ExternalLink, AlertCircle, Loader2, BarChart2, LogOut, KeyRound, Settings, Lock } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
-import { isSlackEnabled } from "@/lib/feature-flags";
 import { useConnectorStatus } from "@/hooks/use-connector-status";
+import { slackService } from "@/lib/services/slack";
 import { useConnectorOAuth } from "@/hooks/use-connector-oauth";
 import { ConnectorDialogs } from "./ConnectorDialogs";
 import { ConnectorCardContent } from "./ConnectorCardContent";
@@ -19,8 +19,6 @@ import { useGraphDiscoveryStatus } from "@/hooks/use-graph-discovery-status";
 import { useUser } from "@/hooks/useAuthHooks";
 import { canWrite as checkCanWrite } from "@/lib/roles";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-
-const slackService = isSlackEnabled() ? require("@/lib/services/slack").slackService : null;
 
 interface ConnectorCardProps {
   connector: ConnectorConfig;
