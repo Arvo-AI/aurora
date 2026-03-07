@@ -82,8 +82,8 @@ RUN ARCH=$(uname -m) && \
         echo "Unsupported architecture: $ARCH" && exit 1; \
     fi && \
     curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-${AWS_CLI_ARCH}.zip" -o "awscliv2.zip" && \
-    unzip awscliv2.zip && \
-    ./aws/install && \
+    unzip -q awscliv2.zip && \
+    ./aws/install --quiet && \
     rm -rf awscliv2.zip aws/
 
 # Install Azure CLI (manual download method)
