@@ -1,10 +1,10 @@
 "use client"
 
 import { useState } from "react"
-import { useSession } from "next-auth/react"
+import { useSession, signIn } from "next-auth/react"
 
 export default function ChangePasswordPage() {
-  const { update: updateSession } = useSession()
+  const { data: session } = useSession()
 
   const [currentPassword, setCurrentPassword] = useState("")
   const [newPassword, setNewPassword] = useState("")
@@ -47,8 +47,15 @@ export default function ChangePasswordPage() {
         return
       }
 
-      await updateSession()
-      window.location.href = "/"
+      // Re-authenticate with the new password to get a fresh JWT that
+      // has mustChangePassword=false. Using updateSession() alone is
+      // unreliable because the middleware may read the stale JWT cookie
+      // before the update is fully persisted.
+      await signIn("credentials", {
+        email: session?.user?.email,
+        password: newPassword,
+        callbackUrl: "/",
+      })
     } catch {
       setError("An error occurred. Please try again.")
     } finally {
