@@ -7,6 +7,7 @@ set -euo pipefail
 # Usage:
 #   ./deploy/k8s-deploy.sh                     # interactive prompts (cloud)
 #   ./deploy/k8s-deploy.sh --local             # local K8s (OrbStack, Docker Desktop)
+#   ./deploy/k8s-deploy.sh --private           # private/VPN deployment (internal LB, private hostname)
 #   ./deploy/k8s-deploy.sh --skip-build        # skip image build (images already pushed)
 #   ./deploy/k8s-deploy.sh --skip-vault        # skip vault setup (already initialized)
 #   ./deploy/k8s-deploy.sh --values-only       # only generate values file, don't deploy
@@ -25,6 +26,9 @@ SKIP_BUILD=false
 SKIP_VAULT=false
 VALUES_ONLY=false
 LOCAL_MODE=false
+PRIVATE_MODE=false
+INGRESS_IP=""
+PRIVATE_HOSTNAME=""
 
 for arg in "$@"; do
   case $arg in
@@ -32,6 +36,7 @@ for arg in "$@"; do
     --skip-vault) SKIP_VAULT=true ;;
     --values-only) VALUES_ONLY=true ;;
     --local) LOCAL_MODE=true ;;
+    --private) PRIVATE_MODE=true ;;
     *) echo "Unknown arg: $arg"; exit 1 ;;
   esac
 done
@@ -54,6 +59,32 @@ info() { echo -e "\033[1;34m→\033[0m $1"; }
 ok()   { echo -e "\033[1;32m✓\033[0m $1"; }
 warn() { echo -e "\033[1;33m!\033[0m $1"; }
 
+ensure_nginx_ingress() {
+  if kubectl get ns ingress-nginx &>/dev/null && \
+     kubectl get deployment -n ingress-nginx ingress-nginx-controller &>/dev/null; then
+    ok "Nginx Ingress Controller already installed"
+    return
+  fi
+  info "Installing Nginx Ingress Controller..."
+  kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.8.1/deploy/static/provider/cloud/deploy.yaml
+  info "Waiting for ingress controller to become ready..."
+  kubectl rollout status deployment/ingress-nginx-controller -n ingress-nginx --timeout=120s
+  ok "Nginx Ingress Controller ready"
+}
+
+wait_for_ingress_ip() {
+  local ns="$1" svc="ingress-nginx-controller"
+  info "Waiting for ingress external IP (this can take 1-3 minutes for cloud load balancers)..." >&2
+  local ip=""
+  local attempts=0
+  while [[ -z "$ip" && $attempts -lt 40 ]]; do
+    ip=$(kubectl get svc "$svc" -n "$ns" -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || true)
+    [[ -z "$ip" ]] && ip=$(kubectl get svc "$svc" -n "$ns" -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || true)
+    [[ -z "$ip" ]] && { sleep 5; (( attempts++ )) || true; }
+  done
+  echo "$ip"
+}
+
 # ─── Preflight ───────────────────────────────────────────────────────────────
 
 info "Checking prerequisites..."
@@ -69,6 +100,8 @@ echo ""
 echo "═══════════════════════════════════════════════"
 if $LOCAL_MODE; then
   echo "  Aurora Local Kubernetes Deployment"
+elif $PRIVATE_MODE; then
+  echo "  Aurora Private/VPN Kubernetes Deployment"
 else
   echo "  Aurora Kubernetes Deployment"
 fi
@@ -90,10 +123,26 @@ if $LOCAL_MODE; then
     echo "  kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.8.1/deploy/static/provider/cloud/deploy.yaml"
     prompt INGRESS_IP "Ingress controller IP (once installed)"
   fi
+elif $PRIVATE_MODE; then
+  prompt REGISTRY "Container registry (e.g. gcr.io/my-project, docker.io/myuser, ghcr.io/myorg)"
+  IMAGE_TAG=$(git -C "$REPO_ROOT" rev-parse --short HEAD)
+  echo ""
+  info "Private/VPN mode: the ingress load balancer will use an internal/private IP."
+  info "Users must be on your VPN or within your VPC to reach Aurora."
+  prompt PRIVATE_HOSTNAME "Private hostname for Aurora (e.g. aurora.internal, aurora.company.vpn)"
+  warn "DNS for $PRIVATE_HOSTNAME must resolve on your VPN."
+  warn "Options: split-horizon DNS, /etc/hosts on each client, or Tailscale MagicDNS."
+  echo ""
+  info "Storage: S3-compatible object storage"
+  prompt STORAGE_BUCKET "Bucket name"
+  prompt STORAGE_ENDPOINT "Endpoint URL" "https://s3.amazonaws.com"
+  prompt STORAGE_REGION "Region" "us-east-1"
+  prompt STORAGE_ACCESS_KEY "Access key"
+  prompt STORAGE_SECRET_KEY "Secret key"
 else
   prompt REGISTRY "Container registry (e.g. gcr.io/my-project, docker.io/myuser, ghcr.io/myorg)"
   IMAGE_TAG=$(git -C "$REPO_ROOT" rev-parse --short HEAD)
-  prompt INGRESS_IP "Ingress controller external IP (run: kubectl get svc -n ingress-nginx ingress-nginx-controller)"
+  info "Ingress IP will be detected automatically after deploy."
 
   echo ""
   info "Storage: S3-compatible object storage"
@@ -117,6 +166,19 @@ else
   prompt AURORA_ENV "Environment (dev, staging, production)" "staging"
 fi
 
+# ─── Ensure nginx ingress + detect IP (cloud / private) ─────────────────────
+
+if ! $LOCAL_MODE && ! $VALUES_ONLY; then
+  ensure_nginx_ingress
+  INGRESS_IP=$(wait_for_ingress_ip ingress-nginx)
+  if [[ -z "$INGRESS_IP" ]]; then
+    warn "Could not detect ingress IP automatically."
+    prompt INGRESS_IP "Enter ingress IP or hostname manually"
+  else
+    ok "Ingress IP: $INGRESS_IP"
+  fi
+fi
+
 # ─── Generate values ─────────────────────────────────────────────────────────
 
 POSTGRES_PW=$(openssl rand -base64 32)
@@ -131,12 +193,45 @@ cp "$CHART_DIR/values.yaml" "$VALUES_FILE"
 yq -i ".image.registry = \"$REGISTRY\"" "$VALUES_FILE"
 yq -i ".image.tag = \"$IMAGE_TAG\"" "$VALUES_FILE"
 
-# URLs (nip.io)
+# URLs (nip.io for local/cloud, private hostname for --private)
 yq -i ".config.AURORA_ENV = \"$AURORA_ENV\"" "$VALUES_FILE"
-yq -i ".config.NEXT_PUBLIC_BACKEND_URL = \"http://api.aurora-oss.${INGRESS_IP}.nip.io\"" "$VALUES_FILE"
-yq -i ".config.NEXT_PUBLIC_WEBSOCKET_URL = \"ws://ws.aurora-oss.${INGRESS_IP}.nip.io\"" "$VALUES_FILE"
-yq -i ".config.FRONTEND_URL = \"http://aurora-oss.${INGRESS_IP}.nip.io\"" "$VALUES_FILE"
-yq -i ".config.SEARXNG_BASE_URL = \"http://aurora-oss.${INGRESS_IP}.nip.io\"" "$VALUES_FILE"
+if $PRIVATE_MODE; then
+  yq -i ".config.NEXT_PUBLIC_BACKEND_URL = \"http://api.${PRIVATE_HOSTNAME}\"" "$VALUES_FILE"
+  yq -i ".config.NEXT_PUBLIC_WEBSOCKET_URL = \"ws://ws.${PRIVATE_HOSTNAME}\"" "$VALUES_FILE"
+  yq -i ".config.FRONTEND_URL = \"http://${PRIVATE_HOSTNAME}\"" "$VALUES_FILE"
+  yq -i ".config.SEARXNG_BASE_URL = \"http://${PRIVATE_HOSTNAME}\"" "$VALUES_FILE"
+  yq -i ".ingress.hosts.frontend = \"${PRIVATE_HOSTNAME}\"" "$VALUES_FILE"
+  yq -i ".ingress.hosts.api = \"api.${PRIVATE_HOSTNAME}\"" "$VALUES_FILE"
+  yq -i ".ingress.hosts.ws = \"ws.${PRIVATE_HOSTNAME}\"" "$VALUES_FILE"
+  yq -i ".ingress.internal = true" "$VALUES_FILE"
+
+  # Auto-detect cloud provider from kubectl context and apply internal LB annotation
+  KUBE_CONTEXT=$(kubectl config current-context 2>/dev/null || true)
+  if [[ "$KUBE_CONTEXT" == gke_* ]]; then
+    yq -i '.ingress.annotations["cloud.google.com/load-balancer-type"] = "Internal"' "$VALUES_FILE"
+    ok "Detected GKE — applied internal load balancer annotation"
+  elif [[ "$KUBE_CONTEXT" == *arn:aws* ]] || [[ "$KUBE_CONTEXT" == *eks* ]]; then
+    yq -i '.ingress.annotations["service.beta.kubernetes.io/aws-load-balancer-internal"] = "true"' "$VALUES_FILE"
+    ok "Detected EKS — applied internal load balancer annotation"
+  elif [[ "$KUBE_CONTEXT" == *aks* ]]; then
+    yq -i '.ingress.annotations["service.beta.kubernetes.io/azure-load-balancer-internal"] = "true"' "$VALUES_FILE"
+    ok "Detected AKS — applied internal load balancer annotation"
+  else
+    warn "Could not detect cloud provider from context '$KUBE_CONTEXT'."
+    warn "To get a VPC-internal load balancer, manually add the annotation for your provider:"
+    warn "  GKE: ingress.annotations[cloud.google.com/load-balancer-type] = Internal"
+    warn "  EKS: ingress.annotations[service.beta.kubernetes.io/aws-load-balancer-internal] = true"
+    warn "  AKS: ingress.annotations[service.beta.kubernetes.io/azure-load-balancer-internal] = true"
+  fi
+else
+  yq -i ".config.NEXT_PUBLIC_BACKEND_URL = \"http://api.aurora-oss.${INGRESS_IP}.nip.io\"" "$VALUES_FILE"
+  yq -i ".config.NEXT_PUBLIC_WEBSOCKET_URL = \"ws://ws.aurora-oss.${INGRESS_IP}.nip.io\"" "$VALUES_FILE"
+  yq -i ".config.FRONTEND_URL = \"http://aurora-oss.${INGRESS_IP}.nip.io\"" "$VALUES_FILE"
+  yq -i ".config.SEARXNG_BASE_URL = \"http://aurora-oss.${INGRESS_IP}.nip.io\"" "$VALUES_FILE"
+  yq -i ".ingress.hosts.frontend = \"aurora-oss.${INGRESS_IP}.nip.io\"" "$VALUES_FILE"
+  yq -i ".ingress.hosts.api = \"api.aurora-oss.${INGRESS_IP}.nip.io\"" "$VALUES_FILE"
+  yq -i ".ingress.hosts.ws = \"ws.aurora-oss.${INGRESS_IP}.nip.io\"" "$VALUES_FILE"
+fi
 
 if $LOCAL_MODE; then
   # MinIO: built-in S3-compatible storage
@@ -172,11 +267,6 @@ esac
 yq -i ".config.LLM_PROVIDER_MODE = \"$LLM_PROVIDER\"" "$VALUES_FILE"
 yq -i ".secrets.llm.${LLM_KEY_FIELD} = \"$LLM_API_KEY\"" "$VALUES_FILE"
 
-# Ingress hosts
-yq -i ".ingress.hosts.frontend = \"aurora-oss.${INGRESS_IP}.nip.io\"" "$VALUES_FILE"
-yq -i ".ingress.hosts.api = \"api.aurora-oss.${INGRESS_IP}.nip.io\"" "$VALUES_FILE"
-yq -i ".ingress.hosts.ws = \"ws.aurora-oss.${INGRESS_IP}.nip.io\"" "$VALUES_FILE"
-
 ok "Values file generated: $VALUES_FILE"
 ok "Image tag: $IMAGE_TAG"
 
@@ -210,8 +300,16 @@ else
   DOCKER_BUILDKIT=1 docker buildx build "$REPO_ROOT/server" --target=prod --platform linux/amd64 --push -t "$REGISTRY/aurora-server:$IMAGE_TAG"
   ok "Server image pushed"
 
+  if $PRIVATE_MODE; then
+    FRONTEND_BACKEND_URL="http://api.${PRIVATE_HOSTNAME}"
+    FRONTEND_WS_URL="ws://ws.${PRIVATE_HOSTNAME}"
+  else
+    FRONTEND_BACKEND_URL="http://api.aurora-oss.${INGRESS_IP}.nip.io"
+    FRONTEND_WS_URL="ws://ws.aurora-oss.${INGRESS_IP}.nip.io"
+  fi
+
   info "Building aurora-frontend ($REGISTRY/aurora-frontend:$IMAGE_TAG) ..."
-  DOCKER_BUILDKIT=1 docker buildx build "$REPO_ROOT/client" --target=prod --platform linux/amd64 --push --build-arg "NEXT_PUBLIC_BACKEND_URL=http://api.aurora-oss.${INGRESS_IP}.nip.io" --build-arg "NEXT_PUBLIC_WEBSOCKET_URL=ws://ws.aurora-oss.${INGRESS_IP}.nip.io" -t "$REGISTRY/aurora-frontend:$IMAGE_TAG"
+  DOCKER_BUILDKIT=1 docker buildx build "$REPO_ROOT/client" --target=prod --platform linux/amd64 --push --build-arg "NEXT_PUBLIC_BACKEND_URL=${FRONTEND_BACKEND_URL}" --build-arg "NEXT_PUBLIC_WEBSOCKET_URL=${FRONTEND_WS_URL}" -t "$REGISTRY/aurora-frontend:$IMAGE_TAG"
   ok "Frontend image pushed"
 fi
 
@@ -290,7 +388,36 @@ echo "════════════════════════�
 echo ""
 kubectl get pods -n "$NAMESPACE"
 echo ""
-echo "  Frontend:  http://aurora-oss.${INGRESS_IP}.nip.io"
-echo "  API:       http://api.aurora-oss.${INGRESS_IP}.nip.io/health/"
-echo "  WebSocket: ws://ws.aurora-oss.${INGRESS_IP}.nip.io"
+if $PRIVATE_MODE; then
+  echo "  Frontend:  http://${PRIVATE_HOSTNAME}"
+  echo "  API:       http://api.${PRIVATE_HOSTNAME}/health/"
+  echo "  WebSocket: ws://ws.${PRIVATE_HOSTNAME}"
+  echo ""
+  warn "Access requires VPN connectivity and DNS resolution for ${PRIVATE_HOSTNAME}."
+
+  # Detect ingress IP for /etc/hosts guidance
+  PRIVATE_INGRESS_IP=$(wait_for_ingress_ip ingress-nginx)
+  if [[ -n "$PRIVATE_INGRESS_IP" ]]; then
+    echo ""
+    info "Ingress load balancer IP: $PRIVATE_INGRESS_IP"
+    echo ""
+    echo "  Add to /etc/hosts on each VPN client (or configure split-horizon DNS):"
+    echo ""
+    echo "    ${PRIVATE_INGRESS_IP}  ${PRIVATE_HOSTNAME} api.${PRIVATE_HOSTNAME} ws.${PRIVATE_HOSTNAME}"
+    echo ""
+    read -rp "Add this entry to your local /etc/hosts now? [y/N] " ADD_HOSTS
+    if [[ "${ADD_HOSTS,,}" == "y" ]]; then
+      echo "${PRIVATE_INGRESS_IP}  ${PRIVATE_HOSTNAME} api.${PRIVATE_HOSTNAME} ws.${PRIVATE_HOSTNAME}" | sudo tee -a /etc/hosts >/dev/null
+      ok "Added to /etc/hosts"
+    fi
+  else
+    warn "Could not detect ingress IP yet. Once the load balancer is assigned, add to /etc/hosts:"
+    echo "    <ingress-ip>  ${PRIVATE_HOSTNAME} api.${PRIVATE_HOSTNAME} ws.${PRIVATE_HOSTNAME}"
+    echo "  Check IP with: kubectl get svc ingress-nginx-controller -n ingress-nginx"
+  fi
+else
+  echo "  Frontend:  http://aurora-oss.${INGRESS_IP}.nip.io"
+  echo "  API:       http://api.aurora-oss.${INGRESS_IP}.nip.io/health/"
+  echo "  WebSocket: ws://ws.aurora-oss.${INGRESS_IP}.nip.io"
+fi
 echo ""
