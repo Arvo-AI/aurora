@@ -20,16 +20,19 @@ Environment Variables:
 - GOOGLE_AI_API_KEY: Google AI Studio API key
 """
 
-import os
-from typing import Optional, Dict, List
-from langchain_core.language_models.chat_models import BaseChatModel
 import logging
+import os
+from typing import Dict, List, Optional
+
+from langchain_core.language_models.chat_models import BaseChatModel
 
 from .base_provider import BaseLLMProvider
 from .openrouter_provider import OpenRouterProvider
 from .openai_provider import OpenAIProvider
 from .anthropic_provider import AnthropicProvider
 from .google_provider import GoogleProvider
+from .vertex_provider import VertexAIProvider
+from .ollama_provider import OllamaProvider
 from ..model_mapper import ModelMapper
 
 logger = logging.getLogger(__name__)
@@ -52,6 +55,8 @@ class ProviderRegistry:
         self._providers["openai"] = OpenAIProvider()
         self._providers["anthropic"] = AnthropicProvider()
         self._providers["google"] = GoogleProvider()
+        self._providers["vertex"] = VertexAIProvider()
+        self._providers["ollama"] = OllamaProvider()
 
         logger.info("Initialized provider registry")
 
@@ -74,11 +79,11 @@ class ProviderRegistry:
         Returns:
             Dictionary of available provider instances
         """
-        available = {}
-        for name, provider in self._providers.items():
-            if provider.is_available():
-                available[name] = provider
-        return available
+        return {
+            name: provider
+            for name, provider in self._providers.items()
+            if provider.is_available()
+        }
 
     def get_provider_for_model(
         self, model: str, mode: str = "direct"
@@ -109,39 +114,41 @@ class ProviderRegistry:
         # No OpenRouter fallback - if direct provider unavailable, fail with clear error
         detected_provider = ModelMapper.detect_provider(model)
 
-        if mode in ("direct", "auto"):
-            if not detected_provider or detected_provider == "openrouter":
-                # Model has no known direct provider mapping
-                raise RuntimeError(
-                    f"Model '{model}' has no direct provider mapping. "
-                    f"Use mode='openrouter' to route through OpenRouter, or check model name format (e.g., 'anthropic/claude-opus-4.5')."
-                )
-
-            provider = self._providers.get(detected_provider)
-            if provider and provider.is_available():
-                logger.info(
-                    f"Using {detected_provider} provider for model {model} (mode={mode})"
-                )
-                return provider
-
-            # Provider exists but not available (missing credentials)
-            env_var_hints = {
-                "openai": "OPENAI_API_KEY",
-                "anthropic": "ANTHROPIC_API_KEY",
-                "google": "GOOGLE_AI_API_KEY",
-            }
-            hint = env_var_hints.get(
-                detected_provider, f"{detected_provider.upper()}_API_KEY"
-            )
-            raise RuntimeError(
-                f"Provider '{detected_provider}' is not available for model '{model}'. "
-                f"Configure {hint} or set LLM_PROVIDER_MODE=openrouter to use OpenRouter instead."
-            )
-
-        else:
+        if mode is None:
+            mode = "direct"
+        if mode not in ("direct", "auto"):
             raise ValueError(
                 f"Invalid provider mode: {mode}. Use 'direct', 'auto', or 'openrouter'."
             )
+
+        if not detected_provider or detected_provider == "openrouter":
+            raise RuntimeError(
+                f"Model '{model}' has no direct provider mapping. "
+                f"Use mode='openrouter' to route through OpenRouter, or check model name format (e.g., 'anthropic/claude-opus-4.5')."
+            )
+
+        provider = self._providers.get(detected_provider)
+        if provider and provider.is_available():
+            logger.info(
+                f"Using {detected_provider} provider for model {model} (mode={mode})"
+            )
+            return provider
+
+        # Provider exists but not available (missing credentials)
+        env_var_hints = {
+            "openai": "OPENAI_API_KEY",
+            "anthropic": "ANTHROPIC_API_KEY",
+            "google": "GOOGLE_AI_API_KEY",
+            "vertex": "VERTEX_AI_PROJECT",
+            "ollama": "OLLAMA_BASE_URL",
+        }
+        hint = env_var_hints.get(
+            detected_provider, f"{detected_provider.upper()}_API_KEY"
+        )
+        raise RuntimeError(
+            f"Provider '{detected_provider}' is not available for model '{model}'. "
+            f"Configure {hint} or set LLM_PROVIDER_MODE=openrouter to use OpenRouter instead."
+        )
 
     def get_provider_info(self) -> List[Dict]:
         """
@@ -150,16 +157,14 @@ class ProviderRegistry:
         Returns:
             List of provider information dictionaries
         """
-        info = []
-        for name, provider in self._providers.items():
-            info.append(
-                {
-                    "name": name,
-                    "available": provider.is_available(),
-                    "class": provider.__class__.__name__,
-                }
-            )
-        return info
+        return [
+            {
+                "name": name,
+                "available": provider.is_available(),
+                "class": provider.__class__.__name__,
+            }
+            for name, provider in self._providers.items()
+        ]
 
 
 # Global provider registry instance
@@ -242,6 +247,8 @@ __all__ = [
     "OpenAIProvider",
     "AnthropicProvider",
     "GoogleProvider",
+    "VertexAIProvider",
+    "OllamaProvider",
     "ProviderRegistry",
     "get_registry",
     "create_chat_model",

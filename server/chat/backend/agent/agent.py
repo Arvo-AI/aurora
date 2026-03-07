@@ -2,7 +2,9 @@ from langchain_core.messages import ToolMessage, AIMessage, HumanMessage
 import logging
 import os
 from chat.backend.agent.db import PostgreSQLClient
-from chat.backend.agent.llm import LLMManager
+from chat.backend.agent.llm import LLMManager, ModelConfig
+from chat.backend.agent.model_mapper import ModelMapper
+from chat.backend.agent.providers import create_chat_model
 from chat.backend.agent.weaviate_client import WeaviateClient
 from chat.backend.agent.utils.state import State
 from chat.backend.agent.utils.tool_context_capture import ToolContextCapture
@@ -13,6 +15,32 @@ from chat.backend.agent.prompt.prompt_builder import build_prompt_segments, asse
 from chat.backend.agent.utils.llm_usage_tracker import LLMUsageTracker, LLMUsage
 import time
 import asyncio
+
+# Providers that must use their native SDKs even when LLM_PROVIDER_MODE=openrouter,
+# because features like Gemini thinking only work with their native SDK.
+_DIRECT_ONLY_PROVIDERS = frozenset({"vertex", "ollama"})
+
+
+class _ReasoningChatOpenAI(ChatOpenAI):
+    """ChatOpenAI subclass that captures OpenRouter reasoning fields.
+
+    OpenRouter returns reasoning content in delta.reasoning / delta.reasoning_details,
+    but LangChain's _convert_delta_to_message_chunk ignores these fields. This subclass
+    captures them and puts reasoning into additional_kwargs["reasoning_content"] so that
+    workflow.py's streaming code can forward it to the ThoughtsPanel.
+    """
+
+    def _convert_chunk_to_generation_chunk(self, chunk, default_chunk_class, base_generation_info):
+        result = super()._convert_chunk_to_generation_chunk(chunk, default_chunk_class, base_generation_info)
+        if result is None:
+            return None
+        choices = chunk.get("choices") or chunk.get("chunk", {}).get("choices") or []
+        if choices:
+            delta = choices[0].get("delta") or {}
+            reasoning = delta.get("reasoning")
+            if reasoning and hasattr(result.message, "additional_kwargs"):
+                result.message.additional_kwargs["reasoning_content"] = reasoning
+        return result
 
 class Agent:
     def __init__(self, weaviate_client: WeaviateClient, postgres_client: PostgreSQLClient, websocket_sender=None, event_loop=None, ctx_len=10):
@@ -320,12 +348,12 @@ class Agent:
                 logging.info(f"Using user-selected model for agentic workflow: {model_name}")
             elif has_images:
                 # Fall back to vision model for images if no model selected
-                model_name = "openai/gpt-4o"  # Vision-capable model
-                logging.info("Using vision model for agentic workflow due to multimodal content")
+                model_name = ModelConfig.VISION_MODEL
+                logging.info(f"Using vision model for agentic workflow: {model_name}")
             else:
                 # Default main model
-                model_name = "openai/gpt-4o"  # Default main model
-                logging.info("Using default main model for agentic workflow")
+                model_name = ModelConfig.MAIN_MODEL
+                logging.info(f"Using default main model for agentic workflow: {model_name}")
             
             
             # Create a custom callback for tracking LLM usage
@@ -403,10 +431,10 @@ class Agent:
             # Get provider mode from LLM manager
             provider_mode = self.llm_manager.provider_mode
             
-            # Determine the actual provider for usage tracking
-            from chat.backend.agent.model_mapper import ModelMapper
-            detected_provider = ModelMapper.detect_provider(model_name) if provider_mode != "openrouter" else "openrouter"
-            
+            # Detect the actual provider from model prefix (e.g., "google/gemini-3.1-pro" → "google")
+            detected_provider = ModelMapper.detect_provider(model_name)
+            is_direct_only = detected_provider in _DIRECT_ONLY_PROVIDERS
+
             # Create the usage tracking callback with correct provider
             usage_callback = AgentLLMUsageCallback(
                 user_id=state.user_id,
@@ -414,42 +442,51 @@ class Agent:
                 model_name=model_name,
                 api_provider=detected_provider
             )
-            
-            # Create streaming LLM based on provider mode
-            if provider_mode == "openrouter":
+
+            # Route to native SDK when provider_mode is direct, or when the model's
+            # provider requires its native SDK (e.g., Gemini thinking needs ChatGoogleGenerativeAI).
+            _use_direct = provider_mode != "openrouter" or is_direct_only
+
+            logging.info(f"Provider routing: model={model_name}, detected={detected_provider}, mode={provider_mode}, use_direct={_use_direct}")
+
+            if _use_direct:
+                streaming_llm = create_chat_model(
+                    model=model_name,
+                    temperature=self.llm_manager.main_llm.temperature,
+                    provider_mode="direct" if is_direct_only else provider_mode,
+                    streaming=True,
+                    callbacks=[usage_callback],
+                )
+            else:
                 # Use OpenRouter mode
                 openrouter_api_key = os.getenv("OPENROUTER_API_KEY")
                 if not openrouter_api_key:
                     raise ValueError("OPENROUTER_API_KEY environment variable is not set")
 
-                # Convert model name to OpenRouter format (e.g., claude-sonnet-4-5 -> claude-sonnet-4.5)
-                from chat.backend.agent.model_mapper import ModelMapper
                 openrouter_model_name = ModelMapper.get_native_name(model_name, "openrouter")
 
-                # Create ChatOpenAI with callbacks attached directly to the LLM
-                streaming_llm = ChatOpenAI(
+                # Enable reasoning via OpenRouter's unified reasoning param
+                openrouter_model_kwargs = {}
+                if detected_provider == "openai":
+                    from chat.backend.agent.providers.openai_provider import OpenAIProvider
+                    native = model_name.split("/", 1)[-1] if "/" in model_name else model_name
+                    if OpenAIProvider._supports_reasoning(native):
+                        openrouter_model_kwargs["extra_body"] = {"reasoning": {"effort": "high"}}
+                        logging.info(f"Enabled reasoning effort=high for {openrouter_model_name} via OpenRouter")
+                elif detected_provider == "google":
+                    openrouter_model_kwargs["extra_body"] = {"reasoning": {"effort": "high"}}
+                    logging.info(f"Enabled reasoning effort=high for {openrouter_model_name} via OpenRouter")
+
+                streaming_llm = _ReasoningChatOpenAI(
                     model=openrouter_model_name,
                     temperature=self.llm_manager.main_llm.temperature,
-                    streaming=True,  # Enable streaming
+                    streaming=True,
                     openai_api_base="https://openrouter.ai/api/v1",
                     openai_api_key=openrouter_api_key,
-                    callbacks=[usage_callback],  # CRITICAL FIX: Attach the usage tracking callback!
-                    request_timeout=120.0,  # Increase timeout to 2 minutes
-                    max_retries=3  # Add retries for network stability
-                )
-            else:
-                # Use direct/auto mode - use provider system
-                from chat.backend.agent.providers import create_chat_model
-                
-                # Create streaming LLM using provider system
-                # Note: Providers handle their own timeout/retry defaults
-                # (OpenAI uses request_timeout, Anthropic uses timeout, etc.)
-                streaming_llm = create_chat_model(
-                    model=model_name,
-                    temperature=self.llm_manager.main_llm.temperature,
-                    provider_mode=provider_mode,
-                    streaming=True,  # Enable streaming
-                    callbacks=[usage_callback],  # Attach the usage tracking callback
+                    callbacks=[usage_callback],
+                    request_timeout=120.0,
+                    max_retries=3,
+                    model_kwargs=openrouter_model_kwargs,
                 )
             
             # Create the agent using new LangChain 1.2.6+ API

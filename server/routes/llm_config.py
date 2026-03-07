@@ -5,13 +5,17 @@ This module provides endpoints for managing and querying LLM provider configurat
 Allows users to check which providers are available and test API key validity.
 """
 
-from flask import Blueprint, jsonify, request
-from chat.backend.agent.providers import get_registry, get_available_providers
-from chat.backend.agent.model_mapper import ModelMapper
 import logging
 import os
 
+from flask import Blueprint, jsonify, request
+
+from chat.backend.agent.model_mapper import ModelMapper
+from chat.backend.agent.providers import get_available_providers, get_registry
+
 logger = logging.getLogger(__name__)
+
+PROVIDER_NAMES = ["openrouter", "openai", "anthropic", "google", "vertex", "ollama"]
 
 llm_config_bp = Blueprint("llm_config", __name__, url_prefix="/api/llm-config")
 
@@ -38,7 +42,7 @@ def get_llm_providers():
 
         # Build detailed provider info
         provider_info = {}
-        for provider_name in ["openrouter", "openai", "anthropic", "google"]:
+        for provider_name in PROVIDER_NAMES:
             is_available = available_providers.get(provider_name, False)
             provider_info[provider_name] = {
                 "available": is_available,
@@ -198,13 +202,18 @@ def get_model_info():
 
         # Get native names for all providers
         native_names = {}
-        for p in ["openrouter", "openai", "anthropic", "google"]:
+        for p in PROVIDER_NAMES:
             try:
                 native_name = ModelMapper.get_native_name(model_name, p)
                 if native_name != model_name or p == provider:
                     native_names[p] = native_name
-            except:
-                pass
+            except Exception as e:
+                logger.debug(
+                    "Failed to resolve native name for model '%s' with provider '%s': %s",
+                    model_name,
+                    p,
+                    e,
+                )
 
         return jsonify(
             {

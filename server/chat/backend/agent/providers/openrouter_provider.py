@@ -5,11 +5,11 @@ OpenRouter acts as a unified gateway to multiple LLM providers.
 This provider maintains backward compatibility with the existing Aurora setup.
 """
 
-import os
-from typing import Optional
-from langchain_openai import ChatOpenAI
-from langchain_core.language_models.chat_models import BaseChatModel
 import logging
+import os
+
+from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_openai import ChatOpenAI
 
 from .base_provider import BaseLLMProvider
 from ..model_mapper import ModelMapper
@@ -52,7 +52,6 @@ class OpenRouterProvider(BaseLLMProvider):
 
         logger.info(f"Creating OpenRouter chat model: {openrouter_model}")
 
-        # Build configuration
         config = {
             "model": openrouter_model,
             "temperature": temperature,
@@ -61,8 +60,6 @@ class OpenRouterProvider(BaseLLMProvider):
             "request_timeout": 120.0,
             "max_retries": 3,
         }
-
-        # Add any additional kwargs
         config.update(kwargs)
 
         return ChatOpenAI(**config)
