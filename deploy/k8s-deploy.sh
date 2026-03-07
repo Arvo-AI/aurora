@@ -59,6 +59,32 @@ info() { echo -e "\033[1;34m→\033[0m $1"; }
 ok()   { echo -e "\033[1;32m✓\033[0m $1"; }
 warn() { echo -e "\033[1;33m!\033[0m $1"; }
 
+ensure_nginx_ingress() {
+  if kubectl get ns ingress-nginx &>/dev/null && \
+     kubectl get deployment -n ingress-nginx ingress-nginx-controller &>/dev/null; then
+    ok "Nginx Ingress Controller already installed"
+    return
+  fi
+  info "Installing Nginx Ingress Controller..."
+  kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.8.1/deploy/static/provider/cloud/deploy.yaml
+  info "Waiting for ingress controller to become ready..."
+  kubectl rollout status deployment/ingress-nginx-controller -n ingress-nginx --timeout=120s
+  ok "Nginx Ingress Controller ready"
+}
+
+wait_for_ingress_ip() {
+  local ns="$1" svc="ingress-nginx-controller"
+  info "Waiting for ingress external IP (this can take 1-3 minutes for cloud load balancers)..." >&2
+  local ip=""
+  local attempts=0
+  while [[ -z "$ip" && $attempts -lt 40 ]]; do
+    ip=$(kubectl get svc "$svc" -n "$ns" -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || true)
+    [[ -z "$ip" ]] && ip=$(kubectl get svc "$svc" -n "$ns" -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || true)
+    [[ -z "$ip" ]] && { sleep 5; (( attempts++ )) || true; }
+  done
+  echo "$ip"
+}
+
 # ─── Preflight ───────────────────────────────────────────────────────────────
 
 info "Checking prerequisites..."
@@ -116,7 +142,7 @@ elif $PRIVATE_MODE; then
 else
   prompt REGISTRY "Container registry (e.g. gcr.io/my-project, docker.io/myuser, ghcr.io/myorg)"
   IMAGE_TAG=$(git -C "$REPO_ROOT" rev-parse --short HEAD)
-  prompt INGRESS_IP "Ingress controller external IP (run: kubectl get svc -n ingress-nginx ingress-nginx-controller)"
+  info "Ingress IP will be detected automatically after deploy."
 
   echo ""
   info "Storage: S3-compatible object storage"
@@ -138,6 +164,19 @@ if $LOCAL_MODE; then
   prompt AURORA_ENV "Environment (dev, staging, production)" "dev"
 else
   prompt AURORA_ENV "Environment (dev, staging, production)" "staging"
+fi
+
+# ─── Ensure nginx ingress + detect IP (cloud / private) ─────────────────────
+
+if ! $LOCAL_MODE && ! $VALUES_ONLY; then
+  ensure_nginx_ingress
+  INGRESS_IP=$(wait_for_ingress_ip ingress-nginx)
+  if [[ -z "$INGRESS_IP" ]]; then
+    warn "Could not detect ingress IP automatically."
+    prompt INGRESS_IP "Enter ingress IP or hostname manually"
+  else
+    ok "Ingress IP: $INGRESS_IP"
+  fi
 fi
 
 # ─── Generate values ─────────────────────────────────────────────────────────
@@ -165,10 +204,25 @@ if $PRIVATE_MODE; then
   yq -i ".ingress.hosts.api = \"api.${PRIVATE_HOSTNAME}\"" "$VALUES_FILE"
   yq -i ".ingress.hosts.ws = \"ws.${PRIVATE_HOSTNAME}\"" "$VALUES_FILE"
   yq -i ".ingress.internal = true" "$VALUES_FILE"
-  warn "Add your cloud provider's internal LB annotation to ingress.annotations in $VALUES_FILE before deploying:"
-  warn "  GKE: cloud.google.com/load-balancer-type: \"Internal\""
-  warn "  EKS: service.beta.kubernetes.io/aws-load-balancer-internal: \"true\""
-  warn "  AKS: service.beta.kubernetes.io/azure-load-balancer-internal: \"true\""
+
+  # Auto-detect cloud provider from kubectl context and apply internal LB annotation
+  KUBE_CONTEXT=$(kubectl config current-context 2>/dev/null || true)
+  if [[ "$KUBE_CONTEXT" == gke_* ]]; then
+    yq -i '.ingress.annotations["cloud.google.com/load-balancer-type"] = "Internal"' "$VALUES_FILE"
+    ok "Detected GKE — applied internal load balancer annotation"
+  elif [[ "$KUBE_CONTEXT" == *arn:aws* ]] || [[ "$KUBE_CONTEXT" == *eks* ]]; then
+    yq -i '.ingress.annotations["service.beta.kubernetes.io/aws-load-balancer-internal"] = "true"' "$VALUES_FILE"
+    ok "Detected EKS — applied internal load balancer annotation"
+  elif [[ "$KUBE_CONTEXT" == *aks* ]]; then
+    yq -i '.ingress.annotations["service.beta.kubernetes.io/azure-load-balancer-internal"] = "true"' "$VALUES_FILE"
+    ok "Detected AKS — applied internal load balancer annotation"
+  else
+    warn "Could not detect cloud provider from context '$KUBE_CONTEXT'."
+    warn "To get a VPC-internal load balancer, manually add the annotation for your provider:"
+    warn "  GKE: ingress.annotations[cloud.google.com/load-balancer-type] = Internal"
+    warn "  EKS: ingress.annotations[service.beta.kubernetes.io/aws-load-balancer-internal] = true"
+    warn "  AKS: ingress.annotations[service.beta.kubernetes.io/azure-load-balancer-internal] = true"
+  fi
 else
   yq -i ".config.NEXT_PUBLIC_BACKEND_URL = \"http://api.aurora-oss.${INGRESS_IP}.nip.io\"" "$VALUES_FILE"
   yq -i ".config.NEXT_PUBLIC_WEBSOCKET_URL = \"ws://ws.aurora-oss.${INGRESS_IP}.nip.io\"" "$VALUES_FILE"
@@ -340,6 +394,27 @@ if $PRIVATE_MODE; then
   echo "  WebSocket: ws://ws.${PRIVATE_HOSTNAME}"
   echo ""
   warn "Access requires VPN connectivity and DNS resolution for ${PRIVATE_HOSTNAME}."
+
+  # Detect ingress IP for /etc/hosts guidance
+  PRIVATE_INGRESS_IP=$(wait_for_ingress_ip ingress-nginx)
+  if [[ -n "$PRIVATE_INGRESS_IP" ]]; then
+    echo ""
+    info "Ingress load balancer IP: $PRIVATE_INGRESS_IP"
+    echo ""
+    echo "  Add to /etc/hosts on each VPN client (or configure split-horizon DNS):"
+    echo ""
+    echo "    ${PRIVATE_INGRESS_IP}  ${PRIVATE_HOSTNAME} api.${PRIVATE_HOSTNAME} ws.${PRIVATE_HOSTNAME}"
+    echo ""
+    read -rp "Add this entry to your local /etc/hosts now? [y/N] " ADD_HOSTS
+    if [[ "${ADD_HOSTS,,}" == "y" ]]; then
+      echo "${PRIVATE_INGRESS_IP}  ${PRIVATE_HOSTNAME} api.${PRIVATE_HOSTNAME} ws.${PRIVATE_HOSTNAME}" | sudo tee -a /etc/hosts >/dev/null
+      ok "Added to /etc/hosts"
+    fi
+  else
+    warn "Could not detect ingress IP yet. Once the load balancer is assigned, add to /etc/hosts:"
+    echo "    <ingress-ip>  ${PRIVATE_HOSTNAME} api.${PRIVATE_HOSTNAME} ws.${PRIVATE_HOSTNAME}"
+    echo "  Check IP with: kubectl get svc ingress-nginx-controller -n ingress-nginx"
+  fi
 else
   echo "  Frontend:  http://aurora-oss.${INGRESS_IP}.nip.io"
   echo "  API:       http://api.aurora-oss.${INGRESS_IP}.nip.io/health/"
