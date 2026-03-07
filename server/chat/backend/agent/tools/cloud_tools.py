@@ -108,6 +108,11 @@ from .dynatrace_tool import (
     is_dynatrace_connected,
     QueryDynatraceArgs,
 )
+from .datadog_tool import (
+    query_datadog,
+    is_datadog_connected,
+    QueryDatadogArgs,
+)
 from .thousandeyes_tool import (
     thousandeyes_list_tests,
     thousandeyes_get_test_detail,
@@ -1385,6 +1390,25 @@ Once you identify which account has the issue, pass account_id (e.g. '1510256343
             args_schema=QueryDynatraceArgs,
         ))
         logging.info(f"Added Dynatrace tool for user {user_id}")
+
+    # Add Datadog tool if connected
+    if user_id and is_datadog_connected(user_id):
+        context_wrapped_dd = with_user_context(query_datadog)
+        notification_wrapped_dd = with_completion_notification(context_wrapped_dd)
+        final_dd_func = wrap_func_with_capture(notification_wrapped_dd, "query_datadog") if tool_capture else notification_wrapped_dd
+
+        tools.append(StructuredTool.from_function(
+            func=final_dd_func,
+            name="query_datadog",
+            description=(
+                "Query Datadog for logs, metrics, monitors, events, traces, hosts, or incidents. "
+                "Set resource_type to 'logs', 'metrics', 'monitors', 'events', 'traces', 'hosts', or 'incidents'. "
+                "Examples: query_datadog(resource_type='logs', query='service:web status:error', time_from='-1h') "
+                "or query_datadog(resource_type='metrics', query='avg:system.cpu.user{*}', time_from='-2h')"
+            ),
+            args_schema=QueryDatadogArgs,
+        ))
+        logging.info(f"Added Datadog tool for user {user_id}")
 
     # Add Bitbucket tools if connected
     try:

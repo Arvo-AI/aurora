@@ -156,6 +156,14 @@ const logos = {
       onError={(e) => console.error('Failed to load Dynatrace logo:', e)}
     />
   ),
+  datadog: (
+    <img
+      src="/datadog.svg"
+      className="w-4 h-4 min-w-4 min-h-4 object-contain"
+      alt="Datadog"
+      onError={(e) => console.error('Failed to load Datadog logo:', e)}
+    />
+  ),
   thousandeyes: (
     <img
       src="/thousandeyes.svg"
@@ -268,6 +276,11 @@ const getLogoForCommand = (command: string | any, toolName: string, provider?: s
 
   if (tool.includes('dynatrace') || tool === 'query_dynatrace') {
     return 'dynatrace'
+  }
+
+  // Datadog tools
+  if (tool.includes('datadog') || tool === 'query_datadog') {
+    return 'datadog'
   }
 
   // ThousandEyes tools
