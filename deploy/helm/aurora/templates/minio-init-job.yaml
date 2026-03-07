@@ -1,0 +1,40 @@
+{{- if .Values.services.minio.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "aurora.fullname" . }}-minio-init
+  labels:
+    {{- include "aurora.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install
+    "helm.sh/hook-weight": "0"
+    "helm.sh/hook-delete-policy": hook-succeeded
+spec:
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: minio-init
+          image: minio/mc:RELEASE.2025-04-16T18-13-26Z
+          command:
+            - /bin/sh
+            - -c
+            - |
+              until mc alias set aurora http://{{ include "aurora.fullname" . }}-minio:9000 "$ACCESS_KEY" "$SECRET_KEY" 2>/dev/null; do
+                echo "Waiting for MinIO..."
+                sleep 2
+              done
+              mc mb --ignore-existing aurora/{{ .Values.config.STORAGE_BUCKET }}
+              echo "Bucket ready"
+          env:
+            - name: ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "aurora.fullname" . }}-secrets-backend
+                  key: STORAGE_ACCESS_KEY
+            - name: SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "aurora.fullname" . }}-secrets-backend
+                  key: STORAGE_SECRET_KEY
+{{- end }}
