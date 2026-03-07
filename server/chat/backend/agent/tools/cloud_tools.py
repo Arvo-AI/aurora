@@ -30,6 +30,7 @@ from .github_rca_tool import github_rca, GitHubRCAArgs
 from .github_fix_tool import github_fix, GitHubFixArgs
 from .jenkins_rca_tool import jenkins_rca, JenkinsRCAArgs
 from .cloudbees_rca_tool import cloudbees_rca, CloudBeesRCAArgs
+from .spinnaker_rca_tool import spinnaker_rca, SpinnakerRCAArgs
 
 # Visualization trigger caching
 from cachetools import TTLCache
@@ -1127,6 +1128,7 @@ Once you identify which account has the issue, pass account_id (e.g. '1510256343
         (github_fix, "github_fix"),
         (jenkins_rca, "jenkins_rca"),
         (cloudbees_rca, "cloudbees_rca"),
+        (spinnaker_rca, "spinnaker_rca"),
         (github_apply_fix, "github_apply_fix"),
         (cloud_exec_wrapper, "cloud_exec"),
         (terminal_exec, "terminal_exec"),
@@ -1240,6 +1242,23 @@ Once you identify which account has the issue, pass account_id (e.g. '1510256343
                     "pipeline_name+run_number for Blue Ocean. service is optional for recent_deployments."
                 ),
                 args_schema=CloudBeesRCAArgs
+            )
+        elif name == 'spinnaker_rca':
+            tool = StructuredTool.from_function(
+                func=final_func,
+                name=name,
+                description=(
+                    "Query Spinnaker CD platform for root cause analysis and interactive investigation. "
+                    "Actions: "
+                    "'recent_pipelines' (list recent pipeline executions; optional application filter and limit), "
+                    "'pipeline_detail' (get full execution with stage-by-stage status; requires execution_id), "
+                    "'application_health' (cluster + server group health; requires application), "
+                    "'list_pipeline_configs' (available pipeline definitions; requires application), "
+                    "'trigger_pipeline' (trigger a pipeline e.g. rollback; requires application + pipeline_name, optional parameters), "
+                    "'execution_logs' (detailed logs for failed stages; requires execution_id). "
+                    "Use during RCA to check if deployments correlate with incidents."
+                ),
+                args_schema=SpinnakerRCAArgs
             )
         elif name == 'github_apply_fix':
             tool = StructuredTool.from_function(
