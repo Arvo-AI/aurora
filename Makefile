@@ -55,7 +55,7 @@ dev:
 		echo "Please run 'make init' first to set up your environment."; \
 		exit 1; \
 	fi
-	docker compose up --build -d
+	docker compose up --build -d --renew-anon-volumes
 
 dev-build: build
 build:
