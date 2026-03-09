@@ -159,9 +159,9 @@ class SecretRefManager:
             )
             if cursor.rowcount > 0:
                 conn.commit()
-                logger.info("Updated secret_ref for user %s, provider %s", user_id, provider)
+                logger.info("Updated secret_ref for provider %s", provider)
                 return True
-            logger.warning("No record found for user %s, provider %s", user_id, provider)
+            logger.warning("No record found for provider %s", provider)
             return False
         except Exception as e:
             logger.error("Failed to update secret_ref: %s", e)
@@ -197,7 +197,7 @@ class SecretRefManager:
             )
             return cursor.fetchone() is not None
         except Exception as e:
-            logger.debug("Error checking credentials for user %s, provider %s: %s", user_id, provider, e)
+            logger.debug("Error checking credentials for provider %s: %s", provider, e)
             return False
         finally:
             if cursor:
@@ -232,7 +232,7 @@ class SecretRefManager:
 
             result = cursor.fetchone()
             if not result:
-                logger.debug("No secret reference found for user %s, provider %s", user_id, provider)
+                logger.debug("No secret reference found for provider %s", provider)
                 return None
 
             secret_ref, role_arn, external_id_secret_ref = result
@@ -261,15 +261,15 @@ class SecretRefManager:
             error_msg = str(e) if e else repr(e)
             error_type = type(e).__name__
             logger.error(
-                "Failed to get token data for user %s, provider %s: %s (%s)",
-                user_id, provider, error_msg or "Unknown error", error_type,
+                "Failed to get token data for provider %s: %s (%s)",
+                provider, error_msg or "Unknown error", error_type,
             )
 
             error_str = error_msg.lower()
             if "not found" in error_str or "no versions" in error_str or "invalidpath" in error_str:
                 logger.info(
-                    "Secret not found in Vault for user %s, provider %s. Clearing stale secret_ref.",
-                    user_id, provider,
+                    "Secret not found in Vault for provider %s. Clearing stale secret_ref.",
+                    provider,
                 )
                 self._clear_secret_ref(user_id, provider)
 
@@ -298,7 +298,7 @@ class SecretRefManager:
 
             result = cursor.fetchone()
             if not result:
-                logger.info("No token data to migrate for user %s, provider %s", user_id, provider)
+                logger.info("No token data to migrate for provider %s", provider)
                 return False
 
             token_data = result[0]
@@ -315,7 +315,7 @@ class SecretRefManager:
             )
 
             conn.commit()
-            logger.info("Successfully migrated token to Vault for user %s, provider %s", user_id, provider)
+            logger.info("Successfully migrated token to Vault for provider %s", provider)
             return True
 
         except Exception as e:
@@ -349,11 +349,11 @@ class SecretRefManager:
             )
             conn.commit()
             logger.info(
-                "Cleared stale secret_ref for user %s / provider %s (secret not found)",
-                user_id, provider,
+                "Cleared stale secret_ref for provider %s (secret not found)",
+                provider,
             )
         except Exception as e:
-            logger.warning("Failed to clear stale secret_ref for %s/%s: %s", user_id, provider, e)
+            logger.warning("Failed to clear stale secret_ref for provider %s: %s", provider, e)
         finally:
             if cursor:
                 cursor.close()
@@ -384,7 +384,7 @@ class SecretRefManager:
                 secret_ref = result[0]
                 delete_success = self.delete_secret(secret_ref)
                 if not delete_success:
-                    logger.warning("Failed to delete secret from Vault for user %s, provider %s", user_id, provider)
+                    logger.warning("Failed to delete secret from Vault for provider %s", provider)
 
             cursor.execute(
                 f"DELETE FROM user_tokens WHERE user_id = %s AND provider = %s {clause}",
@@ -394,12 +394,12 @@ class SecretRefManager:
             conn.commit()
 
             if deleted_rows > 0:
-                logger.info("Deleted credentials for user %s, provider %s", user_id, provider)
+                logger.info("Deleted credentials for provider %s", provider)
 
             return delete_success, deleted_rows
 
         except Exception as e:
-            logger.error("Failed to delete user secret for %s/%s: %s", user_id, provider, e)
+            logger.error("Failed to delete user secret for provider %s: %s", provider, e)
             if conn:
                 conn.rollback()
             return False, 0
