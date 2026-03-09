@@ -1,13 +1,14 @@
 # ============================================
 # Development Stage
 # ============================================
-FROM node:20-alpine AS dev
+FROM oven/bun:1.2.22-alpine AS dev
 
 WORKDIR /app
 
-# Install dependencies from committed npm lockfile
-COPY package.json package-lock.json ./
-RUN npm ci
+# Install dependencies first (will be overridden by volume mount in dev)
+COPY package.json bun.lock ./
+RUN --mount=type=cache,target=/root/.bun/install/cache \
+    bun install
 
 COPY docker-entrypoint.sh /docker-entrypoint.sh
 RUN chmod +x /docker-entrypoint.sh
@@ -17,12 +18,12 @@ EXPOSE 3000
 
 # Use the same entrypoint as prod to generate env-config.js at startup
 ENTRYPOINT ["/docker-entrypoint.sh"]
-CMD ["npm", "run", "dev"]
+CMD ["bun", "run", "dev"]
 
 # ============================================
 # Production Builder Stage
 # ============================================
-FROM node:20-alpine AS builder
+FROM oven/bun:1.2.22-alpine AS builder
 
 # Declare build arguments for NEXT_PUBLIC_ variables
 
@@ -49,19 +50,20 @@ ENV NEXT_PUBLIC_ENABLE_SHAREPOINT=$NEXT_PUBLIC_ENABLE_SHAREPOINT
 WORKDIR /app
 
 # Optimize Docker layer caching by copying package files and installing dependencies first
-COPY package.json package-lock.json ./
-RUN npm ci
+COPY package.json bun.lock ./
+RUN --mount=type=cache,target=/root/.bun/install/cache \
+    bun install
 
 # Copy the entire project after installing dependencies
 COPY . .
 
 # Build the Next.js app
-RUN npm run build
+RUN bun run build
 
 # ============================================
 # Production Runner Stage
 # ============================================
-FROM node:20-alpine AS prod
+FROM oven/bun:1.2.22-alpine AS prod
 
 WORKDIR /app
 
@@ -76,4 +78,4 @@ RUN chmod +x /docker-entrypoint.sh && chown -R 1000:1000 /app
 # Expose port and run Next.js
 EXPOSE 3000
 ENTRYPOINT ["/docker-entrypoint.sh"]
-CMD ["npm", "run", "start"]
+CMD ["bun", "run", "start"]
