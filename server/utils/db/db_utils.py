@@ -1507,8 +1507,6 @@ def initialize_tables():
                 "CREATE INDEX IF NOT EXISTS idx_user_manual_vms_key ON user_manual_vms(user_id, ssh_key_id);",
                 "CREATE INDEX IF NOT EXISTS idx_user_manual_vms_connection_verified ON user_manual_vms(user_id, connection_verified);",
                 "CREATE INDEX IF NOT EXISTS idx_user_preferences_user_key ON user_preferences(user_id, preference_key);",
-                "CREATE UNIQUE INDEX IF NOT EXISTS idx_user_prefs_with_org ON user_preferences(user_id, org_id, preference_key) WHERE org_id IS NOT NULL;",
-                "CREATE UNIQUE INDEX IF NOT EXISTS idx_user_prefs_null_org ON user_preferences(user_id, preference_key) WHERE org_id IS NULL;",
                 "CREATE INDEX IF NOT EXISTS idx_aurora_deployments_user_id ON aurora_deployments(user_id);",
                 "CREATE INDEX IF NOT EXISTS idx_aurora_deployments_project_id ON aurora_deployments(project_id);",
                 "CREATE INDEX IF NOT EXISTS idx_aurora_deployments_deployment_id ON aurora_deployments(deployment_id);",
@@ -1531,6 +1529,7 @@ def initialize_tables():
                     )  # Extract index name
                 except Exception as e:
                     logging.warning(f"Error creating index: {e}")
+                    conn.rollback()
 
             # View creation moved to after org_id migration (see below)
 
@@ -1549,6 +1548,20 @@ def initialize_tables():
                     )
                 except Exception as e:
                     logging.warning(f"Early org_id migration for {tbl}: {e}")
+                    conn.rollback()
+            conn.commit()
+
+            # Create org_id-dependent indexes after the migration above
+            org_id_indexes = [
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_user_prefs_with_org ON user_preferences(user_id, org_id, preference_key) WHERE org_id IS NOT NULL;",
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_user_prefs_null_org ON user_preferences(user_id, preference_key) WHERE org_id IS NULL;",
+            ]
+            for index_sql in org_id_indexes:
+                try:
+                    cursor.execute(index_sql)
+                    logging.info(f"Index created: {index_sql.split()[5]}")
+                except Exception as e:
+                    logging.warning(f"Error creating index: {e}")
                     conn.rollback()
             conn.commit()
 
