@@ -1,4 +1,4 @@
-.PHONY: help dev down logs rebuild-server restart prod prod-build prod-logs prod-down clean nuke build-no-cache dev-fresh prod-clean prod-nuke prod-build-no-cache prod-fresh prod-prebuilt prod-local init prod-local-logs prod-local-down prod-local-clean prod-local-nuke deploy-build deploy
+.PHONY: help dev down logs rebuild-server restart prod prod-build prod-logs prod-down clean nuke build-no-cache dev-fresh prod-clean prod-nuke prod-build-no-cache prod-fresh prod-prebuilt prod-local prod-traefik init prod-local-logs prod-local-down prod-local-clean prod-local-nuke deploy-build deploy
 
 help:
 	@echo "Available commands:"
@@ -29,6 +29,7 @@ help:
 	@echo "  make prod-prebuilt      - Pull prebuilt images from GHCR and start (no build)"
 	@echo "                            Use VERSION=v1.2.3 to pin a specific release"
 	@echo "  make prod-local         - Build from source and start"
+	@echo "  make prod-traefik       - Build from source with Traefik TLS reverse proxy"
 	@echo "  make prod-local-logs    - Show logs for production containers"
 	@echo "  make down               - Stop production containers (same as dev)"
 	@echo "  make prod-local-clean   - Stop and remove production volumes"
@@ -63,6 +64,7 @@ build:
 
 down:
 	@docker compose down --remove-orphans 2>/dev/null || true
+	@docker compose -f docker-compose.prod-local.yml -f docker-compose.traefik.yml down --remove-orphans 2>/dev/null || true
 	@docker compose -f docker-compose.prod-local.yml down --remove-orphans 2>/dev/null || true
 	@for ep in $$(docker network inspect aurora_default -f '{{range .Containers}}{{.Name}} {{end}}' 2>/dev/null); do docker network disconnect -f aurora_default $$ep 2>/dev/null; done; true
 	@docker network rm aurora_default 2>/dev/null || true
@@ -193,6 +195,20 @@ prod-local:
 	@echo "  - Frontend: $$(v=$$(grep -E '^FRONTEND_URL=' .env | cut -d= -f2- | tr -d '\"'); echo $${v:-http://localhost:3000})"
 	@echo "  - Backend API: $$(v=$$(grep -E '^NEXT_PUBLIC_BACKEND_URL=' .env | cut -d= -f2- | tr -d '\"'); echo $${v:-http://localhost:5080})"
 	@echo "  - Chatbot WebSocket: $$(v=$$(grep -E '^NEXT_PUBLIC_WEBSOCKET_URL=' .env | cut -d= -f2- | tr -d '\"'); echo $${v:-ws://localhost:5006})"
+
+prod-traefik:
+	@if [ ! -f .env ]; then \
+		echo "Error: .env file not found."; \
+		echo "Please run 'make init' first to set up your environment."; \
+		exit 1; \
+	fi
+	@echo "Building from source and starting Aurora with Traefik reverse proxy..."
+	@docker compose -f docker-compose.prod-local.yml -f docker-compose.traefik.yml up --build -d
+	@echo ""
+	@echo "Aurora is starting with Traefik TLS proxy!"
+	@echo "  - Frontend: https://$$(grep -E '^DOMAIN=' .env | cut -d= -f2- | tr -d '\"')"
+	@echo "  - Backend API: https://$$(grep -E '^API_DOMAIN=' .env | cut -d= -f2- | tr -d '\"')"
+	@echo "  - WebSocket: wss://$$(grep -E '^WS_DOMAIN=' .env | cut -d= -f2- | tr -d '\"')"
 
 prod-local-logs:
 	@if [ -z "$(filter-out $@,$(MAKECMDGOALS))" ]; then \

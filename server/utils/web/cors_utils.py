@@ -1,8 +1,13 @@
+import logging
 from flask import jsonify, request
 import os
 from urllib.parse import urlparse
 
+logger = logging.getLogger(__name__)
+
 FRONTEND_URL = os.getenv("FRONTEND_URL", "")
+if not FRONTEND_URL:
+    logger.warning("FRONTEND_URL not set - CORS will reject all cross-origin requests")
 
 # Build allowed origins set from FRONTEND_URL
 _allowed_origins = set()

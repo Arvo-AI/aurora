@@ -107,40 +107,6 @@ x-common-env: &common-env
   FRONTEND_URL: ${FRONTEND_URL}
 
 services:
-  traefik:
-    image: traefik:v3.3
-    container_name: aurora-traefik
-    ports:
-      - "80:80"
-      - "443:443"
-    environment:
-      TRAEFIK_CERTIFICATESRESOLVERS_LETSENCRYPT_ACME_EMAIL: ${ACME_EMAIL}
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-      - ./config/traefik/traefik.yml:/etc/traefik/traefik.yml:ro
-      - ./config/traefik/dynamic:/etc/traefik/dynamic:ro
-      - traefik-certs:/letsencrypt
-      - traefik-logs:/var/log/traefik
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
-    cap_add:
-      - NET_BIND_SERVICE
-    read_only: true
-    tmpfs:
-      - /tmp
-    healthcheck:
-      test: ["CMD", "traefik", "healthcheck"]
-      interval: 15s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
-    restart: unless-stopped
-    networks:
-      - proxy
-      - backend
-
   aurora-server:
     build:
       context: ./server
@@ -148,13 +114,8 @@ services:
       target: prod
     image: aurora_server:latest
     container_name: aurora-server
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.api.rule=Host(`${API_DOMAIN}`)"
-      - "traefik.http.routers.api.entrypoints=websecure"
-      - "traefik.http.routers.api.tls.certresolver=letsencrypt"
-      - "traefik.http.routers.api.middlewares=security-headers@file,rate-limit@file"
-      - "traefik.http.services.api.loadbalancer.server.port=${FLASK_PORT}"
+    ports:
+      - "${FLASK_PORT:-5080}:${FLASK_PORT:-5080}"
     volumes:
       - terraform-workdir:/app/terraform_workdir
       - /var/run/docker.sock:/var/run/docker.sock
@@ -229,7 +190,6 @@ services:
         condition: service_healthy
     restart: unless-stopped
     networks:
-      - proxy
       - backend
 
   celery_worker:
@@ -385,13 +345,8 @@ services:
     image: aurora_chatbot:latest
     stdin_open: true
     tty: true
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.ws.rule=Host(`${WS_DOMAIN}`)"
-      - "traefik.http.routers.ws.entrypoints=websecure"
-      - "traefik.http.routers.ws.tls.certresolver=letsencrypt"
-      - "traefik.http.routers.ws.middlewares=security-headers@file,rate-limit@file"
-      - "traefik.http.services.ws.loadbalancer.server.port=5006"
+    ports:
+      - "5006:5006"
     command: ["python", "main_chatbot.py"]
     volumes:
       - terraform-workdir:/app/terraform_workdir
@@ -417,9 +372,13 @@ services:
         condition: service_healthy
       vault:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; s=socket.socket(); s.settimeout(2); s.connect(('localhost',5006)); s.close()"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
     restart: unless-stopped
     networks:
-      - proxy
       - backend
 
   postgres:
@@ -522,18 +481,13 @@ services:
 
       # Auth.js configuration (required)
       AUTH_SECRET: ${AUTH_SECRET}
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.frontend.rule=Host(`${DOMAIN}`)"
-      - "traefik.http.routers.frontend.entrypoints=websecure"
-      - "traefik.http.routers.frontend.tls.certresolver=letsencrypt"
-      - "traefik.http.routers.frontend.middlewares=security-headers@file,rate-limit@file"
-      - "traefik.http.services.frontend.loadbalancer.server.port=3000"
+    ports:
+      - "3000:3000"
     depends_on:
       - aurora-server
     restart: unless-stopped
     networks:
-      - proxy
+      - backend
 
   # SeaweedFS - S3-compatible Object Storage (Apache 2.0 licensed)
   # ═══════════════════════════════════════════════════════════════════════════
@@ -697,11 +651,7 @@ volumes:
   vault-data:
   vault-init:
   memgraph-data:
-  traefik-certs:
-  traefik-logs:
 
 networks:
-  proxy:
-    name: aurora-proxy
   backend:
     name: aurora-backend

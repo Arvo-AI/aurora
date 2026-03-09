@@ -1,0 +1,89 @@
+# Traefik TLS reverse proxy overlay for Aurora
+# Usage: docker compose -f docker-compose.prod-local.yml -f docker-compose.traefik.yml up -d
+# Or:    make prod-traefik
+#
+# Requires DOMAIN, API_DOMAIN, WS_DOMAIN, ACME_EMAIL in .env
+# See config/traefik/ for static and dynamic Traefik configuration.
+
+services:
+  traefik:
+    image: traefik:v3.3
+    container_name: aurora-traefik
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      TRAEFIK_CERTIFICATESRESOLVERS_LETSENCRYPT_ACME_EMAIL: ${ACME_EMAIL}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./config/traefik/traefik.yml:/etc/traefik/traefik.yml:ro
+      - ./config/traefik/dynamic:/etc/traefik/dynamic:ro
+      - traefik-certs:/letsencrypt
+      - traefik-logs:/var/log/traefik
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    read_only: true
+    tmpfs:
+      - /tmp
+    healthcheck:
+      test: ["CMD", "traefik", "healthcheck"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    depends_on:
+      aurora-server:
+        condition: service_started
+      chatbot:
+        condition: service_started
+      frontend:
+        condition: service_started
+    networks:
+      - proxy
+      - backend
+
+  aurora-server:
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.api.rule=Host(`${API_DOMAIN}`)"
+      - "traefik.http.routers.api.entrypoints=websecure"
+      - "traefik.http.routers.api.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.api.middlewares=security-headers@file,rate-limit@file"
+      - "traefik.http.services.api.loadbalancer.server.port=${FLASK_PORT}"
+    networks:
+      - proxy
+
+  chatbot:
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.ws.rule=Host(`${WS_DOMAIN}`)"
+      - "traefik.http.routers.ws.entrypoints=websecure"
+      - "traefik.http.routers.ws.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.ws.middlewares=security-headers@file,rate-limit@file"
+      - "traefik.http.services.ws.loadbalancer.server.port=5006"
+    networks:
+      - proxy
+
+  frontend:
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.frontend.rule=Host(`${DOMAIN}`)"
+      - "traefik.http.routers.frontend.entrypoints=websecure"
+      - "traefik.http.routers.frontend.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.frontend.middlewares=security-headers@file,rate-limit@file"
+      - "traefik.http.services.frontend.loadbalancer.server.port=3000"
+    networks:
+      - proxy
+
+volumes:
+  traefik-certs:
+  traefik-logs:
+
+networks:
+  proxy:
+    name: aurora-proxy
