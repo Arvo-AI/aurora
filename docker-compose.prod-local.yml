@@ -107,6 +107,40 @@ x-common-env: &common-env
   FRONTEND_URL: ${FRONTEND_URL}
 
 services:
+  traefik:
+    image: traefik:v3.3
+    container_name: aurora-traefik
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      TRAEFIK_CERTIFICATESRESOLVERS_LETSENCRYPT_ACME_EMAIL: ${ACME_EMAIL}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./config/traefik/traefik.yml:/etc/traefik/traefik.yml:ro
+      - ./config/traefik/dynamic:/etc/traefik/dynamic:ro
+      - traefik-certs:/letsencrypt
+      - traefik-logs:/var/log/traefik
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    read_only: true
+    tmpfs:
+      - /tmp
+    healthcheck:
+      test: ["CMD", "traefik", "healthcheck"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - proxy
+      - backend
+
   aurora-server:
     build:
       context: ./server
@@ -114,8 +148,13 @@ services:
       target: prod
     image: aurora_server:latest
     container_name: aurora-server
-    ports:
-      - "${FLASK_PORT}:${FLASK_PORT}"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.api.rule=Host(`${API_DOMAIN}`)"
+      - "traefik.http.routers.api.entrypoints=websecure"
+      - "traefik.http.routers.api.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.api.middlewares=security-headers@file,rate-limit@file"
+      - "traefik.http.services.api.loadbalancer.server.port=${FLASK_PORT}"
     volumes:
       - terraform-workdir:/app/terraform_workdir
       - /var/run/docker.sock:/var/run/docker.sock
@@ -189,6 +228,9 @@ services:
       memgraph:
         condition: service_healthy
     restart: unless-stopped
+    networks:
+      - proxy
+      - backend
 
   celery_worker:
     build:
@@ -234,6 +276,8 @@ services:
       - vault
       - memgraph
     restart: unless-stopped
+    networks:
+      - backend
 
   celery_beat:
     build:
@@ -256,30 +300,36 @@ services:
     depends_on:
       - redis
     restart: unless-stopped
+    networks:
+      - backend
 
   redis:
     image: redis:7-alpine
     container_name: aurora-redis
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 3s
       retries: 3
+    networks:
+      - backend
 
   searxng:
     image: searxng/searxng:2025.5.8-7ca24eee4
     container_name: aurora-searxng
     ports:
-      - "8082:8080"
+      - "127.0.0.1:8082:8080"
     volumes:
       - ./config/searxng:/etc/searxng
     environment:
       - SEARXNG_BASE_URL=${SEARXNG_BASE_URL}
       - SEARXNG_SECRET=${SEARXNG_SECRET}
     restart: unless-stopped
+    networks:
+      - backend
 
   # Vault in file storage mode (persistent, production-like)
   # NOTE: Uses file storage with persistent volumes and auto-initialization.
@@ -288,7 +338,7 @@ services:
     image: hashicorp/vault:1.15
     container_name: aurora-vault
     ports:
-      - "8200:8200"
+      - "127.0.0.1:8200:8200"
     environment:
       VAULT_ADDR: http://127.0.0.1:8200
       VAULT_LOG_LEVEL: info
@@ -307,6 +357,8 @@ services:
       timeout: 3s
       retries: 3
     restart: unless-stopped
+    networks:
+      - backend
 
   vault-init:
     image: busybox:latest
@@ -322,7 +374,8 @@ services:
     depends_on:
       vault:
         condition: service_healthy
-
+    networks:
+      - backend
 
   chatbot:
     build:
@@ -332,8 +385,13 @@ services:
     image: aurora_chatbot:latest
     stdin_open: true
     tty: true
-    ports:
-      - "5006:5006"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.ws.rule=Host(`${WS_DOMAIN}`)"
+      - "traefik.http.routers.ws.entrypoints=websecure"
+      - "traefik.http.routers.ws.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.ws.middlewares=security-headers@file,rate-limit@file"
+      - "traefik.http.services.ws.loadbalancer.server.port=5006"
     command: ["python", "main_chatbot.py"]
     volumes:
       - terraform-workdir:/app/terraform_workdir
@@ -360,12 +418,15 @@ services:
       vault:
         condition: service_healthy
     restart: unless-stopped
+    networks:
+      - proxy
+      - backend
 
   postgres:
     image: postgres:15-alpine
     container_name: aurora-postgres
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -378,6 +439,8 @@ services:
       timeout: 5s
       retries: 5
     restart: unless-stopped
+    networks:
+      - backend
 
   weaviate:
     image: cr.weaviate.io/semitechnologies/weaviate:1.27.6
@@ -393,8 +456,8 @@ services:
       - --scheme
       - http
     ports:
-      - "8080:8080"
-      - "50051:50051"
+      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:50051:50051"
     volumes:
       - weaviate_data:/var/lib/weaviate
     restart: unless-stopped
@@ -417,12 +480,16 @@ services:
       interval: 10s
       timeout: 5s
       retries: 3
+    networks:
+      - backend
 
   t2v-transformers:
     image: cr.weaviate.io/semitechnologies/transformers-inference:sentence-transformers-all-MiniLM-L6-v2
     environment:
       ENABLE_CUDA: '0'
     restart: unless-stopped
+    networks:
+      - backend
 
   frontend:
     build:
@@ -455,11 +522,18 @@ services:
 
       # Auth.js configuration (required)
       AUTH_SECRET: ${AUTH_SECRET}
-    ports:
-      - "3000:3000"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.frontend.rule=Host(`${DOMAIN}`)"
+      - "traefik.http.routers.frontend.entrypoints=websecure"
+      - "traefik.http.routers.frontend.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.frontend.middlewares=security-headers@file,rate-limit@file"
+      - "traefik.http.services.frontend.loadbalancer.server.port=3000"
     depends_on:
       - aurora-server
     restart: unless-stopped
+    networks:
+      - proxy
 
   # SeaweedFS - S3-compatible Object Storage (Apache 2.0 licensed)
   # ═══════════════════════════════════════════════════════════════════════════
@@ -475,8 +549,8 @@ services:
       -mdir=/data/master
       -defaultReplication=000
     ports:
-      - "9333:9333"
-      - "19333:19333"
+      - "127.0.0.1:9333:9333"
+      - "127.0.0.1:19333:19333"
     volumes:
       - seaweedfs_master_data:/data/master
     restart: unless-stopped
@@ -486,6 +560,8 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+    networks:
+      - backend
 
   seaweedfs-volume:
     image: chrislusf/seaweedfs:4.07
@@ -498,7 +574,7 @@ services:
       -dir=/data
       -max=100
     ports:
-      - "8081:8081"
+      - "127.0.0.1:8081:8081"
     volumes:
       - seaweedfs_volume_data:/data
     depends_on:
@@ -511,6 +587,8 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+    networks:
+      - backend
 
   seaweedfs-filer:
     image: chrislusf/seaweedfs:4.07
@@ -525,8 +603,8 @@ services:
       -s3.allowEmptyFolder=true
       -s3.config=/etc/seaweedfs/s3.json
     ports:
-      - "8888:8888"
-      - "8333:8333"
+      - "127.0.0.1:8888:8888"
+      - "127.0.0.1:8333:8333"
     volumes:
       - seaweedfs_filer_data:/data
       - ./config/seaweedfs/s3.json:/etc/seaweedfs/s3.json:ro
@@ -542,6 +620,8 @@ services:
       timeout: 5s
       retries: 3
       start_period: 15s
+    networks:
+      - backend
 
   seaweedfs-init:
     image: amazon/aws-cli:latest
@@ -563,6 +643,8 @@ services:
     depends_on:
       seaweedfs-filer:
         condition: service_healthy
+    networks:
+      - backend
 
   # Memgraph - In-memory Graph Database
   # ═══════════════════════════════════════════════════════════════════════════
@@ -571,8 +653,8 @@ services:
     image: memgraph/memgraph-mage:latest
     container_name: aurora-memgraph
     ports:
-      - "7687:7687"
-      - "7444:7444"
+      - "127.0.0.1:7687:7687"
+      - "127.0.0.1:7444:7444"
     volumes:
       - memgraph-data:/var/lib/memgraph
     environment:
@@ -588,18 +670,22 @@ services:
       timeout: 5s
       retries: 5
     restart: unless-stopped
+    networks:
+      - backend
 
   memgraph-lab:
     image: memgraph/lab:latest
     container_name: aurora-memgraph-lab
     ports:
-      - "3001:3000"
+      - "127.0.0.1:3001:3000"
     depends_on:
       - memgraph
     environment:
       - QUICK_CONNECT_MG_HOST=memgraph
       - QUICK_CONNECT_MG_PORT=7687
     restart: unless-stopped
+    networks:
+      - backend
 
 volumes:
   postgres-data:
@@ -611,3 +697,11 @@ volumes:
   vault-data:
   vault-init:
   memgraph-data:
+  traefik-certs:
+  traefik-logs:
+
+networks:
+  proxy:
+    name: aurora-proxy
+  backend:
+    name: aurora-backend
