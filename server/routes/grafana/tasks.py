@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from celery_config import celery_app
+from chat.background.rca_prompt_builder import build_grafana_rca_prompt
 from services.correlation.alert_correlator import AlertCorrelator
 from services.correlation import handle_correlated_alert
 
@@ -34,68 +35,6 @@ def _should_trigger_background_chat(user_id: str, payload: Dict[str, Any]) -> bo
 
     # Always trigger RCA for any webhook received
     return True
-
-
-def _build_rca_prompt_from_alert(
-    payload: Dict[str, Any], user_id: Optional[str] = None
-) -> str:
-    """Build an RCA analysis prompt from a Grafana alert payload.
-
-    Args:
-        payload: The Grafana alert payload
-        user_id: Optional user ID for Aurora Learn context injection
-
-    Returns:
-        A prompt string for the background chat agent
-    """
-    title = payload.get("title") or payload.get("ruleName") or "Unknown Alert"
-    state = payload.get("state") or payload.get("status") or "unknown"
-    message = (
-        payload.get("message")
-        or payload.get("annotations", {}).get("description")
-        or ""
-    )
-
-    # Extract labels for context
-    labels = payload.get("commonLabels", {}) or payload.get("labels", {})
-    labels_str = ", ".join(f"{k}={v}" for k, v in labels.items()) if labels else "none"
-
-    # Extract any values/metrics
-    values = payload.get("values") or payload.get("evalMatches", [])
-    values_str = ""
-    if values:
-        if isinstance(values, list):
-            values_str = "\n".join(f"  - {v}" for v in values[:5])  # Limit to 5
-        elif isinstance(values, dict):
-            values_str = "\n".join(f"  - {k}: {v}" for k, v in list(values.items())[:5])
-
-    # Build the prompt parts separately to avoid f-string backslash issues
-    prompt_parts = [
-        "A Grafana alert has been triggered and requires Root Cause Analysis.",
-        "",
-        "ALERT DETAILS:",
-        f"- Title: {title}",
-        f"- State: {state}",
-        f"- Labels: {labels_str}",
-    ]
-
-    if message:
-        prompt_parts.append(f"- Message: {message}")
-
-    if values_str:
-        prompt_parts.append("- Values/Metrics:")
-        prompt_parts.append(values_str)
-
-    # Add Aurora Learn context if available
-    try:
-        from chat.background.rca_prompt_builder import inject_aurora_learn_context
-
-        service = labels.get("service") or labels.get("job") or ""
-        inject_aurora_learn_context(prompt_parts, user_id, title, service, "grafana")
-    except Exception as e:
-        logger.warning(f"[AURORA LEARN] Failed to get context: {e}")
-
-    return "\n".join(prompt_parts)
 
 
 def _extract_severity(payload: Dict[str, Any]) -> str:
@@ -481,8 +420,8 @@ def process_grafana_alert(
                                     },
                                 )
 
-                                # Build simple RCA prompt with Aurora Learn context injection
-                                rca_prompt = _build_rca_prompt_from_alert(
+                                # Build comprehensive RCA prompt with provider context
+                                rca_prompt = build_grafana_rca_prompt(
                                     payload, user_id=user_id
                                 )
 

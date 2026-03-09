@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from celery_config import celery_app
+from chat.background.rca_prompt_builder import build_splunk_rca_prompt
 from services.correlation.alert_correlator import AlertCorrelator
 from services.correlation import handle_correlated_alert
 
@@ -26,60 +27,6 @@ def _should_trigger_background_chat(user_id: str, payload: Dict[str, Any]) -> bo
         )
         return False
     return True
-
-
-def _build_rca_prompt_from_alert(
-    payload: Dict[str, Any], user_id: Optional[str] = None
-) -> str:
-    """Build a simple user-visible prompt from a Splunk alert payload.
-
-    Note: Detailed RCA instructions are injected via system prompt (rca_context),
-    not in this user message.
-
-    Args:
-        payload: The Splunk alert payload
-        user_id: Optional user ID for Aurora Learn context injection
-    """
-    search_name = payload.get("search_name") or payload.get("name") or "Unknown Alert"
-    result_count = payload.get("result_count") or payload.get("results_count") or 0
-    search_query = payload.get("search") or payload.get("search_query") or ""
-
-    # Extract result sample if available
-    results = payload.get("results") or payload.get("result") or []
-    results_str = ""
-    if results:
-        if isinstance(results, list):
-            results_str = "\n".join(f"  - {json.dumps(r)}" for r in results[:5])
-        elif isinstance(results, dict):
-            results_str = f"  - {json.dumps(results)}"
-
-    prompt_parts = [
-        "A Splunk alert has been triggered and requires Root Cause Analysis.",
-        "",
-        "ALERT DETAILS:",
-        f"- Search Name: {search_name}",
-        f"- Result Count: {result_count}",
-    ]
-
-    if search_query:
-        prompt_parts.append(f"- SPL Query: {search_query}")
-
-    if results_str:
-        prompt_parts.append("- Sample Results:")
-        prompt_parts.append(results_str)
-
-    # Add Aurora Learn context if available
-    try:
-        from chat.background.rca_prompt_builder import inject_aurora_learn_context
-
-        service = payload.get("app") or payload.get("source") or ""
-        inject_aurora_learn_context(
-            prompt_parts, user_id, search_name, service, "splunk"
-        )
-    except Exception as e:
-        logger.warning(f"[AURORA LEARN] Failed to get context: {e}")
-
-    return "\n".join(prompt_parts)
 
 
 def _extract_severity(payload: Dict[str, Any]) -> str:
@@ -386,8 +333,8 @@ def process_splunk_alert(
                                     },
                                 )
 
-                                # Build simple RCA prompt with Aurora Learn context injection
-                                rca_prompt = _build_rca_prompt_from_alert(
+                                # Build comprehensive RCA prompt with provider context
+                                rca_prompt = build_splunk_rca_prompt(
                                     payload, user_id=user_id
                                 )
 
