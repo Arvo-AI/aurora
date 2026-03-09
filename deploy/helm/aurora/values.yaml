@@ -28,6 +28,8 @@ services:
     enabled: true    # Set false to use Weaviate Cloud or external instance
   vault:
     enabled: true    # Set false to use external Vault or other secrets manager
+  minio:
+    enabled: false   # Set true for local dev (provides S3-compatible storage in-cluster)
 
 # ------------------------------------------------------------------------------
 # ServiceAccount configuration
@@ -340,6 +342,13 @@ resources:
     limits:
       cpu: "500m"
       memory: "1Gi"
+  minio:
+    requests:
+      cpu: "50m"
+      memory: "128Mi"
+    limits:
+      cpu: "200m"
+      memory: "512Mi"
 
 # ------------------------------------------------------------------------------
 # Persistent storage
@@ -353,6 +362,8 @@ persistence:
     size: 10Gi           # Secrets storage
   redis:
     size: 5Gi            # Celery task state and cache
+  minio:
+    size: 10Gi           # Object storage (local dev only)
 
 # ------------------------------------------------------------------------------
 # Ingress configuration
@@ -364,6 +375,15 @@ persistence:
 ingress:
   enabled: true
   className: "nginx"   # Use your ingress controller class (nginx, traefik, alb, gce, etc.)
+
+  # Set to true for private/VPN deployments to provision a VPC-internal load balancer.
+  # The ingress will have no public IP — only reachable from within your VPC or over VPN.
+  # You must also add your cloud provider's internal LB annotation via ingress.annotations:
+  #   GKE:   cloud.google.com/load-balancer-type: "Internal"
+  #   EKS:   service.beta.kubernetes.io/aws-load-balancer-internal: "true"
+  #   AKS:   service.beta.kubernetes.io/azure-load-balancer-internal: "true"
+  # This is set automatically when deploying with: ./deploy/k8s-deploy.sh --private
+  internal: false
   
   # Custom annotations - merged with controller-specific defaults below
   # Use this to add your own annotations or override defaults

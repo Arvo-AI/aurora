@@ -1532,7 +1532,6 @@ def initialize_tables():
                 except Exception as e:
                     logging.warning(f"Error creating index: {e}")
 
-            # Create a view for clusters after all tables are created
             # View creation moved to after org_id migration (see below)
 
             # Early migration: ensure org_id column exists on all tables
@@ -1858,9 +1857,11 @@ def initialize_tables():
                 conn.rollback()
 
             # Create k8s_clusters view (after org_id migration so the column exists)
+            # DROP first because CREATE OR REPLACE VIEW cannot remove columns from an existing view
             try:
+                cursor.execute("DROP VIEW IF EXISTS k8s_clusters;")
                 create_clusters_view_sql = """
-                    CREATE OR REPLACE VIEW k8s_clusters AS
+                    CREATE VIEW k8s_clusters AS
                     SELECT DISTINCT project_id, cluster_name, provider, user_id, org_id
                     FROM k8s_nodes
                     WHERE org_id = current_setting('myapp.current_org_id', true)::text;
