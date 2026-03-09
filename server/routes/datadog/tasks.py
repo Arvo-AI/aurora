@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from celery_config import celery_app
+from chat.background.rca_prompt_builder import build_datadog_rca_prompt
 from services.correlation.alert_correlator import AlertCorrelator
 from services.correlation import handle_correlated_alert
 
@@ -65,80 +66,6 @@ def _should_trigger_background_chat(user_id: str, payload: Dict[str, Any]) -> bo
 
     # Always trigger RCA for any webhook received
     return True
-
-
-def _build_rca_prompt_from_alert(
-    payload: Dict[str, Any], user_id: Optional[str] = None
-) -> str:
-    """Build an RCA analysis prompt from a Datadog alert payload.
-
-    Args:
-        payload: The Datadog alert payload
-        user_id: Optional user ID for Aurora Learn context injection
-
-    Returns:
-        A prompt string for the background chat agent
-    """
-    title = (
-        payload.get("title")
-        or payload.get("event_title")
-        or payload.get("event", {}).get("title")
-        or "Unknown Alert"
-    )
-    status = (
-        payload.get("status")
-        or payload.get("state")
-        or payload.get("alert_type")
-        or "unknown"
-    )
-    event_type = payload.get("event_type") or payload.get("alert_type") or "unknown"
-
-    # Extract scope/tags for context
-    scope = payload.get("scope") or payload.get("event", {}).get("scope") or "none"
-    tags = payload.get("tags", [])
-    tags_str = ", ".join(tags[:10]) if tags else "none"  # Limit to 10 tags
-
-    # Extract monitor info
-    monitor_id = payload.get("monitor_id") or payload.get("alert_id") or "unknown"
-    monitor_name = payload.get("monitor_name") or title
-
-    # Extract message/description
-    message = (
-        payload.get("body")
-        or payload.get("message")
-        or payload.get("event", {}).get("text")
-        or ""
-    )
-
-    # Build the prompt parts
-    prompt_parts = [
-        "A Datadog alert has been triggered and requires Root Cause Analysis.",
-        "",
-        "ALERT DETAILS:",
-        f"- Title: {title}",
-        f"- Monitor: {monitor_name} (ID: {monitor_id})",
-        f"- Status: {status}",
-        f"- Event Type: {event_type}",
-        f"- Scope: {scope}",
-        f"- Tags: {tags_str}",
-    ]
-
-    if message:
-        prompt_parts.append(f"- Message: {message}")
-
-    # Add Aurora Learn context if available
-    try:
-        from chat.background.rca_prompt_builder import inject_aurora_learn_context
-
-        # Extract service from tags if available
-        service = next(
-            (tag.split(":", 1)[1] for tag in tags if tag.startswith("service:")), ""
-        )
-        inject_aurora_learn_context(prompt_parts, user_id, title, service, "datadog")
-    except Exception as e:
-        logger.warning(f"[AURORA LEARN] Failed to get context: {e}")
-
-    return "\n".join(prompt_parts)
 
 
 def _extract_severity(payload: Dict[str, Any]) -> str:
@@ -455,8 +382,8 @@ def process_datadog_event(
                                     },
                                 )
 
-                                # Build simple RCA prompt with Aurora Learn context injection
-                                rca_prompt = _build_rca_prompt_from_alert(
+                                # Build comprehensive RCA prompt with provider context
+                                rca_prompt = build_datadog_rca_prompt(
                                     payload, user_id=user_id
                                 )
 
