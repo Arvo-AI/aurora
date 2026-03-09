@@ -872,7 +872,7 @@ def update_incident(user_id, incident_id: str):
                 if data.get("status") == "resolved" and previous_status != "resolved":
                     try:
                         from chat.background.postmortem_generator import generate_postmortem
-                        generate_postmortem.delay(incident_id, user_id)
+                        generate_postmortem.delay(incident_id, user_id, org_id)
                         logger.info(
                             "[INCIDENTS] Triggered postmortem generation for resolved incident %s",
                             incident_id,
