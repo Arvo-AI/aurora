@@ -15,7 +15,6 @@ import os
 auth_bp = Blueprint('auth', __name__, url_prefix='/api/auth')
 
 FRONTEND_URL = os.getenv("FRONTEND_URL")
-ALLOW_OPEN_REGISTRATION = os.getenv("ALLOW_OPEN_REGISTRATION", "true").lower() in ("true", "1", "yes")
 
 SLUG_REGEX = re.compile(r'^[a-z0-9][a-z0-9-]{0,48}[a-z0-9]$')
 
@@ -37,13 +36,12 @@ def add_cors_headers(response):
 
 @auth_bp.route('/register', methods=['POST', 'OPTIONS'])
 def register():
-    """Register a new user and create their organization.
+    """Register the first user and create the initial organization.
 
     Body: { email, password, name, org_name }
-    - First user bypasses the ALLOW_OPEN_REGISTRATION gate.
-    - Every sign-up creates a new organization with the registrant as admin.
-    - Invited users (created by an admin via /api/admin/users) already have
-      accounts and should sign in directly — they don't call this endpoint.
+    - Only allowed when no users exist yet (bootstraps the first admin).
+    - After the first user, all accounts are created by an admin via
+      /api/admin/users (invite-only).
     """
     if request.method == 'OPTIONS':
         return create_cors_response()
@@ -85,8 +83,8 @@ def register():
                 cursor.execute("SELECT COUNT(*) FROM (SELECT 1 FROM users FOR UPDATE) sub")
                 user_count = cursor.fetchone()[0]
 
-                if user_count > 0 and not ALLOW_OPEN_REGISTRATION:
-                    return jsonify({"error": "Open registration is disabled. Contact an admin for an invitation."}), 403
+                if user_count > 0:
+                    return jsonify({"error": "Registration is closed. Contact an admin for an invitation."}), 403
 
                 slug = _name_to_slug(org_name)
                 cursor.execute(

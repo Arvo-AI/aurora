@@ -43,7 +43,7 @@ make prod-prebuilt   # or: make prod-local to build from source
 
 **That's it!** Open http://localhost:3000 in your browser.
 
-The first user to register becomes the admin. Subsequent registrations are **disabled by default** — admins invite new users from the Organization page. To allow open self-registration, set `ALLOW_OPEN_REGISTRATION=true` in `.env`.
+The first user to register becomes the admin. After that, registration is closed — admins invite new users from the Organization page.
 
 ### Pin a specific version
 
@@ -90,7 +90,7 @@ Aurora uses **Casbin RBAC** with three roles enforced at both the API and UI lay
 | **Viewer** | Read-only — view incidents, postmortems, dashboards, chat (can send messages) |
 
 Key security properties:
-- **Registration** is disabled by default after the first (admin) user. Set `ALLOW_OPEN_REGISTRATION=true` to re-enable.
+- **Registration** is closed after the first (admin) user. New accounts are created by admins only.
 - **Backend RBAC** via `@require_permission` decorators on all write endpoints (Casbin policy enforcement).
 - **Frontend guards** via `ConnectorAuthGuard` on sensitive pages (SSH keys, VM config, connector auth).
 - **CORS** is restricted to `FRONTEND_URL` — no wildcard origins on any endpoint.
