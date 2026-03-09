@@ -36,11 +36,11 @@ def add_cors_headers(response):
 
 @auth_bp.route('/register', methods=['POST', 'OPTIONS'])
 def register():
-    """Register the first user and create the initial organization.
+    """Register a new organization with its first admin user.
 
     Body: { email, password, name, org_name }
-    - Only allowed when no users exist yet (bootstraps the first admin).
-    - After the first user, all accounts are created by an admin via
+    - Creates a new org and assigns the caller as its admin.
+    - Users within an existing org are created by an admin via
       /api/admin/users (invite-only).
     """
     if request.method == 'OPTIONS':
@@ -79,12 +79,6 @@ def register():
                 )
                 if cursor.fetchone():
                     return jsonify({"error": "User with this email already exists"}), 409
-                
-                cursor.execute("SELECT COUNT(*) FROM (SELECT 1 FROM users FOR UPDATE) sub")
-                user_count = cursor.fetchone()[0]
-
-                if user_count > 0:
-                    return jsonify({"error": "Registration is closed. Contact an admin for an invitation."}), 403
 
                 slug = _name_to_slug(org_name)
                 cursor.execute(
