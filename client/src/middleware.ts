@@ -6,6 +6,7 @@ const publicRoutes = [
   "/sign-in",
   "/sign-up",
   "/terms",
+  "/privacy",
   "/api/auth/callback",  // NextAuth callbacks
   "/api/auth/signin",     // NextAuth sign-in
   "/api/auth/signout",    // NextAuth sign-out
