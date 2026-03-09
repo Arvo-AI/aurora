@@ -669,7 +669,7 @@ export default function AWSOnboardingPage() {
     );
   }
 
-  if (showDocs && credentialsConfigured === false) {
+  if (credentialsConfigured === false) {
     return (
       <ConnectorAuthGuard connectorName="AWS">
         <div className="min-h-screen bg-black flex items-center justify-center p-4 sm:p-6">
