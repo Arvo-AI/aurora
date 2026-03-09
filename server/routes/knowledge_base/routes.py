@@ -506,7 +506,8 @@ def search_documents(user_id):
 
     try:
         from routes.knowledge_base.weaviate_client import search_knowledge_base
-        results = search_knowledge_base(user_id, query, limit)
+        org_id = get_org_id_from_request()
+        results = search_knowledge_base(user_id, query, limit, org_id=org_id)
 
         return jsonify({
             "query": query,

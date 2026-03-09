@@ -83,6 +83,25 @@ def is_valid_user_id(user_id: str) -> bool:
     return bool(user_id and isinstance(user_id, str))
 
 
+def validate_user_exists(user_id: str) -> bool:
+    """Check that a user_id actually exists in the database.
+
+    Use this for trust boundaries where user_id comes from an untrusted
+    source (e.g. WebSocket messages) rather than the auth middleware.
+    """
+    if not user_id or not isinstance(user_id, str) or len(user_id) > 255:
+        return False
+    try:
+        from utils.db.connection_pool import db_pool
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT 1 FROM users WHERE id = %s", (user_id,))
+                return cursor.fetchone() is not None
+    except Exception as e:
+        logger.warning("Failed to validate user_id %s: %s", user_id, e)
+        return False
+
+
 def get_user_id_from_request() -> Optional[str]:
     """Extract user ID from X-User-ID header (set by Auth.js middleware).
     

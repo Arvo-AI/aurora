@@ -193,6 +193,42 @@ CORS(app, origins=FRONTEND_URL, supports_credentials=True,
 )
 
 # ============================================================================
+# Tenant Isolation Middleware - Validates X-User-ID / X-Org-ID Pairing
+# ============================================================================
+
+_OPEN_PREFIXES = ("/api/auth/login", "/api/auth/register", "/health")
+
+@app.before_request
+def enforce_user_org_binding():
+    """Reject requests where X-Org-ID doesn't match the user's actual org."""
+    if request.method == "OPTIONS":
+        return None
+
+    if any(request.path.startswith(p) for p in _OPEN_PREFIXES):
+        return None
+
+    user_id = request.headers.get("X-User-ID")
+    claimed_org = request.headers.get("X-Org-ID")
+
+    if not user_id or not claimed_org:
+        return None
+
+    from utils.auth.stateless_auth import resolve_org_id
+    actual_org = resolve_org_id(user_id)
+
+    if not actual_org:
+        return jsonify({"error": "Unauthorized - unknown user"}), 401
+
+    if actual_org != claimed_org:
+        logging.getLogger(__name__).warning(
+            "Tenant mismatch: user=%s claimed_org=%s actual_org=%s",
+            user_id, claimed_org, actual_org,
+        )
+        return jsonify({"error": "Forbidden - organization mismatch"}), 403
+
+    return None
+
+# ============================================================================
 # Register Blueprints - Organized by Domain
 # ============================================================================
 

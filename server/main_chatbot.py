@@ -51,6 +51,7 @@ from chat.backend.agent.tools.cloud_tools import register_websocket_connection, 
 from chat.backend.agent.access import ModeAccessController
 from utils.text.text_utils import clean_markdown
 from utils.internal.api_handler import handle_http_request
+from utils.auth.stateless_auth import validate_user_exists, get_org_id_for_user
 
 
 class RateLimiter:
@@ -95,7 +96,16 @@ async def handle_init(data, websocket, current_user_id, deployment_listener_task
     """Handle connection initialization message and return updated state."""
 
     user_id = data.get('user_id')
+
     if user_id and current_user_id != user_id:
+        if not validate_user_exists(user_id):
+            logger.warning(f"WebSocket init rejected: invalid user_id {user_id!r}")
+            await websocket.send(json.dumps({
+                "type": "error",
+                "data": {"text": "Authentication failed: invalid user identity."}
+            }))
+            return current_user_id, deployment_listener_task
+
         logger.info(f"Initializing connection for user {user_id}")
         current_user_id = user_id
 
@@ -809,6 +819,20 @@ async def handle_connection(websocket) -> None:
             
             user_id = data.get('user_id')  # Extract user_id from the incoming data
             session_id = data.get('session_id')  # Extract session_id from the incoming data
+
+            # Server-side validation: reject unverified user_ids
+            if user_id and user_id != current_user_id:
+                if not validate_user_exists(user_id):
+                    logger.warning(f"Message rejected: unverified user_id {user_id!r}")
+                    await websocket.send(json.dumps({
+                        "type": "error",
+                        "data": {"text": "Authentication failed: invalid user identity."}
+                    }))
+                    continue
+                current_user_id = user_id
+
+            # Resolve org for tenant-scoped DB queries
+            org_id = get_org_id_for_user(user_id) if user_id else None
             
             # Get connected providers from database instead of relying on frontend preferences
             from utils.auth.stateless_auth import get_connected_providers
@@ -1015,9 +1039,9 @@ async def handle_connection(websocket) -> None:
                 current_user_id = user_id
                 # Deployment listener removed
 
-            # Set the session variable for RLS enforcement
+            # Set the session variable for RLS enforcement (user + org)
             try:
-                postgres_client.set_user_context(user_id)
+                postgres_client.set_user_context(user_id, org_id=org_id)
             except Exception as e:
                 logger.error("Failed to set user context: %s", e, exc_info=True)
                 await websocket.send(json.dumps({

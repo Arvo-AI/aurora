@@ -1191,6 +1191,23 @@ def apply_fix_suggestion(user_id, suggestion_id: str):
     if suggestion_id_int is None:
         return jsonify({"error": "Invalid suggestion ID"}), 400
 
+    # Verify the suggestion belongs to an incident in the caller's org
+    org_id = get_org_id_from_request()
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """SELECT 1 FROM incident_suggestions s
+                       JOIN incidents i ON s.incident_id = i.id
+                       WHERE s.id = %s AND i.org_id = %s""",
+                    (suggestion_id_int, org_id),
+                )
+                if not cursor.fetchone():
+                    return jsonify({"error": "Suggestion not found"}), 404
+    except Exception as exc:
+        logger.exception("[INCIDENTS] Org check failed for suggestion %s", suggestion_id)
+        return jsonify({"error": "Internal error"}), 500
+
     data = request.get_json() or {}
     use_edited_content = data.get("useEditedContent", True)
     target_branch = data.get("targetBranch")

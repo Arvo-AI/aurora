@@ -61,6 +61,27 @@ SUPPORTED_SECRET_PROVIDERS: Set[str] = {
 }
 
 
+def _resolve_org(user_id: str) -> Optional[str]:
+    """Best-effort org_id resolution for use in admin-connection queries."""
+    try:
+        from utils.auth.stateless_auth import resolve_org_id
+        return resolve_org_id(user_id)
+    except Exception:
+        return None
+
+
+def _org_clause(org_id: Optional[str]) -> Tuple[str, Tuple]:
+    """Build a reusable SQL fragment for org-scoped token queries.
+
+    Returns (sql_fragment, params) to append to a WHERE clause.
+    When org_id is available the fragment restricts to matching rows;
+    otherwise it returns an always-true fragment so the query still works.
+    """
+    if org_id:
+        return "AND (org_id = %s OR org_id IS NULL)", (org_id,)
+    return "", ()
+
+
 class SecretRefManager:
     """Manager for handling secret references in the database.
 
@@ -92,55 +113,24 @@ class SecretRefManager:
     # ------------------------------------------------------------------
 
     def store_secret(self, secret_name: str, secret_value: str) -> str:
-        """
-        Store a secret in Vault and return the reference.
-
-        Args:
-            secret_name: Name of the secret
-            secret_value: The actual secret value to store
-
-        Returns:
-            Secret reference string (Vault format)
-        """
-        # Delegate to Vault backend (which handles logging)
+        """Store a secret in Vault and return the reference."""
         return self.backend.store_secret(
             secret_name=secret_name,
             secret_value=secret_value,
         )
 
     def get_secret(self, secret_ref: str) -> str:
-        """
-        Retrieve a secret from Vault using a reference.
-
-        Args:
-            secret_ref: Secret reference (Vault format)
-
-        Returns:
-            The actual secret value
-        """
-        # Check cache first
+        """Retrieve a secret from Vault using a reference."""
         cached_secret = get_cached_secret(secret_ref)
         if cached_secret is not None:
             return cached_secret
 
-        # Retrieve from Vault backend (which handles logging)
         secret_value = self.backend.get_secret(secret_ref)
-
-        # Store in cache for future requests
         update_secret_cache(secret_ref, secret_value)
-
         return secret_value
 
     def delete_secret(self, secret_ref: str) -> bool:
-        """
-        Delete a secret from Vault using its reference.
-
-        Args:
-            secret_ref: Secret reference (Vault format)
-
-        Returns:
-            True if successful, False otherwise
-        """
+        """Delete a secret from Vault using its reference."""
         try:
             self.backend.delete_secret(secret_ref)
             clear_secret_cache(secret_ref)
@@ -150,40 +140,29 @@ class SecretRefManager:
             return False
 
     # ------------------------------------------------------------------
-    # Database operations (unchanged)
+    # Database operations
     # ------------------------------------------------------------------
 
     def update_user_token_with_secret_ref(self, user_id: str, provider: str, secret_ref: str) -> bool:
-        """
-        Update a user's token record to use a secret reference instead of storing the token directly.
-
-        Args:
-            user_id: User ID
-            provider: Provider name (gcp, aws, azure, etc.)
-            secret_ref: Secret reference string
-
-        Returns:
-            True if successful, False otherwise
-        """
+        """Update a user's token record to point at a Vault secret reference."""
+        org_id = _resolve_org(user_id)
+        clause, params = _org_clause(org_id)
         conn = None
         cursor = None
         try:
             conn = connect_to_db_as_admin()
             cursor = conn.cursor()
-
             cursor.execute(
-                "UPDATE user_tokens SET secret_ref = %s, is_active = TRUE WHERE user_id = %s AND provider = %s",
-                (secret_ref, user_id, provider)
+                f"UPDATE user_tokens SET secret_ref = %s, is_active = TRUE "
+                f"WHERE user_id = %s AND provider = %s {clause}",
+                (secret_ref, user_id, provider) + params,
             )
-
             if cursor.rowcount > 0:
                 conn.commit()
                 logger.info("Updated secret_ref for user %s, provider %s", user_id, provider)
                 return True
-            else:
-                logger.warning("No record found for user %s, provider %s", user_id, provider)
-                return False
-
+            logger.warning("No record found for user %s, provider %s", user_id, provider)
+            return False
         except Exception as e:
             logger.error("Failed to update secret_ref: %s", e)
             if conn:
@@ -196,28 +175,12 @@ class SecretRefManager:
                 conn.close()
 
     def has_user_credentials(self, user_id: str, provider: str) -> bool:
-        """
-        Lightweight check if user (or their org) has credentials stored.
-
-        Args:
-            user_id: User ID (authenticated userId)
-            provider: Provider name
-
-        Returns:
-            True if credentials exist, False otherwise
-        """
-        # Fast exit: if provider not managed in Vault, skip DB query
+        """Lightweight check if user (or their org) has credentials stored."""
         provider_base = provider.lower().split('_')[0]
         if provider_base not in SUPPORTED_SECRET_PROVIDERS:
             return False
 
-        org_id = None
-        try:
-            from utils.auth.stateless_auth import resolve_org_id
-            org_id = resolve_org_id(user_id)
-        except Exception:
-            logger.debug("has_user_credentials: could not resolve org_id for user %s", user_id)
-
+        org_id = _resolve_org(user_id)
         conn = None
         cursor = None
         try:
@@ -243,28 +206,12 @@ class SecretRefManager:
                 conn.close()
 
     def get_user_token_data(self, user_id: str, provider: str) -> Optional[Dict[str, Any]]:
-        """
-        Get user token data from Vault.
-
-        Args:
-            user_id: User ID (authenticated userId)
-            provider: Provider name
-
-        Returns:
-            Token data as dictionary, or None if not found
-        """
-        # Fast-exit for providers not stored in Vault
+        """Get user token data from Vault."""
         provider_base = provider.lower().split('_')[0]
         if provider_base not in SUPPORTED_SECRET_PROVIDERS:
             return None
 
-        org_id = None
-        try:
-            from utils.auth.stateless_auth import resolve_org_id
-            org_id = resolve_org_id(user_id)
-        except Exception:
-            logger.debug("get_user_token_data: could not resolve org_id for user")
-
+        org_id = _resolve_org(user_id)
         conn = None
         cursor = None
 
@@ -289,19 +236,14 @@ class SecretRefManager:
                 return None
 
             secret_ref, role_arn, external_id_secret_ref = result
-
-            # Fetch credentials from Vault
             secret_value = self.get_secret(secret_ref)
 
-            # Parse the secret value
             try:
                 token_data = json.loads(secret_value)
 
-                # For AWS, enhance token_data with metadata
                 if provider == "aws":
                     if role_arn:
                         token_data["role_arn"] = role_arn
-                    # Retrieve external_id from separate secret if available
                     if external_id_secret_ref:
                         try:
                             external_id = self.get_secret(external_id_secret_ref)
@@ -313,7 +255,6 @@ class SecretRefManager:
                 return token_data
 
             except json.JSONDecodeError:
-                # If not JSON, return as plain token
                 return {"token": secret_value}
 
         except Exception as e:
@@ -321,19 +262,14 @@ class SecretRefManager:
             error_type = type(e).__name__
             logger.error(
                 "Failed to get token data for user %s, provider %s: %s (%s)",
-                user_id,
-                provider,
-                error_msg or "Unknown error",
-                error_type,
+                user_id, provider, error_msg or "Unknown error", error_type,
             )
 
-            # If the secret doesn't exist anymore, clear the secret_ref so future checks are fast
             error_str = error_msg.lower()
             if "not found" in error_str or "no versions" in error_str or "invalidpath" in error_str:
                 logger.info(
                     "Secret not found in Vault for user %s, provider %s. Clearing stale secret_ref.",
-                    user_id,
-                    provider,
+                    user_id, provider,
                 )
                 self._clear_secret_ref(user_id, provider)
 
@@ -345,27 +281,19 @@ class SecretRefManager:
                 conn.close()
 
     def migrate_token_to_secret_ref(self, user_id: str, provider: str, secret_name_prefix: str = "aurora-dev") -> bool:
-        """
-        Migrate an existing token from token_data column to Vault.
-
-        Args:
-            user_id: User ID
-            provider: Provider name
-            secret_name_prefix: Prefix for the secret name
-
-        Returns:
-            True if successful, False otherwise
-        """
+        """Migrate an existing token from token_data column to Vault."""
+        org_id = _resolve_org(user_id)
+        clause, params = _org_clause(org_id)
         conn = None
         cursor = None
         try:
             conn = connect_to_db_as_admin()
             cursor = conn.cursor()
 
-            # Get current token data
             cursor.execute(
-                "SELECT token_data FROM user_tokens WHERE user_id = %s AND provider = %s AND secret_ref IS NULL",
-                (user_id, provider)
+                f"SELECT token_data FROM user_tokens "
+                f"WHERE user_id = %s AND provider = %s {clause} AND secret_ref IS NULL",
+                (user_id, provider) + params,
             )
 
             result = cursor.fetchone()
@@ -374,20 +302,16 @@ class SecretRefManager:
                 return False
 
             token_data = result[0]
-
-            # Create secret name
-            # Sanitize user_id for secret name (remove special characters)
             safe_user_id = ''.join(c for c in user_id if c.isalnum() or c in '-_')
             secret_name = f"{secret_name_prefix}-{safe_user_id}-{provider}-token"
 
-            # Store in Vault
             token_json = json.dumps(token_data) if isinstance(token_data, dict) else str(token_data)
             secret_ref = self.store_secret(secret_name, token_json)
 
-            # Update database record with secret reference
             cursor.execute(
-                "UPDATE user_tokens SET secret_ref = %s WHERE user_id = %s AND provider = %s",
-                (secret_ref, user_id, provider)
+                f"UPDATE user_tokens SET secret_ref = %s "
+                f"WHERE user_id = %s AND provider = %s {clause}",
+                (secret_ref, user_id, provider) + params,
             )
 
             conn.commit()
@@ -411,21 +335,22 @@ class SecretRefManager:
 
     def _clear_secret_ref(self, user_id: str, provider: str) -> None:
         """Set secret_ref to NULL for the given user/provider (stale reference cleanup)."""
+        org_id = _resolve_org(user_id)
+        clause, params = _org_clause(org_id)
         conn = None
         cursor = None
         try:
             conn = connect_to_db_as_admin()
             cursor = conn.cursor()
-            # Some deployments have secret_ref column defined as NOT NULL. Use empty string instead of NULL.
             cursor.execute(
-                "UPDATE user_tokens SET is_active = FALSE, secret_ref = '' WHERE user_id = %s AND provider = %s",
-                (user_id, provider),
+                f"UPDATE user_tokens SET is_active = FALSE, secret_ref = '' "
+                f"WHERE user_id = %s AND provider = %s {clause}",
+                (user_id, provider) + params,
             )
             conn.commit()
             logger.info(
                 "Cleared stale secret_ref for user %s / provider %s (secret not found)",
-                user_id,
-                provider,
+                user_id, provider,
             )
         except Exception as e:
             logger.warning("Failed to clear stale secret_ref for %s/%s: %s", user_id, provider, e)
@@ -436,14 +361,9 @@ class SecretRefManager:
                 conn.close()
 
     def delete_user_secret(self, user_id: str, provider: str) -> Tuple[bool, int]:
-        """
-        Delete a user's secret from Vault and clear its reference from the database.
-
-        Returns:
-            A tuple containing:
-            - bool: True if secret deletion was successful (or not needed), False otherwise.
-            - int: The number of rows deleted from the database.
-        """
+        """Delete a user's secret from Vault and clear its reference from the database."""
+        org_id = _resolve_org(user_id)
+        clause, params = _org_clause(org_id)
         conn = None
         cursor = None
         delete_success = True
@@ -453,10 +373,10 @@ class SecretRefManager:
             conn = connect_to_db_as_admin()
             cursor = conn.cursor()
 
-            # Retrieve the secret_ref before deleting from DB
             cursor.execute(
-                "SELECT secret_ref FROM user_tokens WHERE user_id = %s AND provider = %s AND secret_ref IS NOT NULL",
-                (user_id, provider)
+                f"SELECT secret_ref FROM user_tokens "
+                f"WHERE user_id = %s AND provider = %s {clause} AND secret_ref IS NOT NULL",
+                (user_id, provider) + params,
             )
             result = cursor.fetchone()
 
@@ -466,10 +386,9 @@ class SecretRefManager:
                 if not delete_success:
                     logger.warning("Failed to delete secret from Vault for user %s, provider %s", user_id, provider)
 
-            # Always clear the database entry
             cursor.execute(
-                "DELETE FROM user_tokens WHERE user_id = %s AND provider = %s",
-                (user_id, provider)
+                f"DELETE FROM user_tokens WHERE user_id = %s AND provider = %s {clause}",
+                (user_id, provider) + params,
             )
             deleted_rows = cursor.rowcount
             conn.commit()
@@ -496,38 +415,20 @@ secret_manager = SecretRefManager()
 
 
 def has_user_credentials(user_id: str, provider: str) -> bool:
-    """
-    Lightweight check if user has credentials stored (without accessing secrets).
-    This function provides a fast way to check connection status.
-
-    Args:
-        user_id: User ID (authenticated userId)
-        provider: Provider name
-    """
+    """Lightweight check if user has credentials stored (without accessing secrets)."""
     return secret_manager.has_user_credentials(user_id, provider)
 
 
 def get_user_token_data(user_id: str, provider: str) -> Optional[Dict[str, Any]]:
-    """
-    Get user token data, automatically handling secret references.
-    This function provides backward compatibility with existing code.
-
-    Args:
-        user_id: User ID (authenticated userId)
-        provider: Provider name
-    """
+    """Get user token data, automatically handling secret references."""
     return secret_manager.get_user_token_data(user_id, provider)
 
 
 def migrate_user_token_to_secret_ref(user_id: str, provider: str) -> bool:
-    """
-    Migrate a user's token from database storage to Vault.
-    """
+    """Migrate a user's token from database storage to Vault."""
     return secret_manager.migrate_token_to_secret_ref(user_id, provider)
 
 
 def delete_user_secret(user_id: str, provider: str) -> Tuple[bool, int]:
-    """
-    Delete a user's secret from Vault and clear its reference from the database.
-    """
+    """Delete a user's secret from Vault and clear its reference from the database."""
     return secret_manager.delete_user_secret(user_id, provider)

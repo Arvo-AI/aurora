@@ -47,9 +47,14 @@ def generate_chat_title(messages):
 @limiter.exempt
 @require_permission("chat", "read")
 def get_chat_sessions(user_id):
-    """Get all chat sessions for a user."""
+    """Get all chat sessions visible to the user.
+    
+    Returns the user's own sessions. Pass ?scope=org to include
+    all sessions in the org (available to any org member).
+    """
     
     org_id = get_org_id_from_request()
+    scope = request.args.get('scope', 'user')
 
     try:
         conn = connect_to_db_as_user()
@@ -60,30 +65,49 @@ def get_chat_sessions(user_id):
         cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
         conn.commit()
         
-        # Fetch chat sessions ordered by updated_at descending
-        cursor.execute("""
-            SELECT id, title, created_at, updated_at, 
-                   CASE WHEN messages IS NULL THEN '[]'::jsonb ELSE messages END as messages,
-                   CASE WHEN ui_state IS NULL THEN '{}'::jsonb ELSE ui_state END as ui_state,
-                   COALESCE(status, 'active') as status
-            FROM chat_sessions 
-            WHERE org_id = %s AND user_id = %s AND is_active = true
-            ORDER BY updated_at DESC
-        """, (org_id, user_id))
+        if scope == 'org':
+            cursor.execute("""
+                SELECT cs.id, cs.title, cs.created_at, cs.updated_at, 
+                       CASE WHEN cs.messages IS NULL THEN '[]'::jsonb ELSE cs.messages END as messages,
+                       CASE WHEN cs.ui_state IS NULL THEN '{}'::jsonb ELSE cs.ui_state END as ui_state,
+                       COALESCE(cs.status, 'active') as status,
+                       cs.user_id,
+                       u.name as user_name
+                FROM chat_sessions cs
+                LEFT JOIN users u ON cs.user_id = u.id
+                WHERE cs.org_id = %s AND cs.is_active = true
+                ORDER BY cs.updated_at DESC
+            """, (org_id,))
+        else:
+            cursor.execute("""
+                SELECT cs.id, cs.title, cs.created_at, cs.updated_at, 
+                       CASE WHEN cs.messages IS NULL THEN '[]'::jsonb ELSE cs.messages END as messages,
+                       CASE WHEN cs.ui_state IS NULL THEN '{}'::jsonb ELSE cs.ui_state END as ui_state,
+                       COALESCE(cs.status, 'active') as status,
+                       cs.user_id,
+                       NULL as user_name
+                FROM chat_sessions cs
+                WHERE cs.org_id = %s AND cs.user_id = %s AND cs.is_active = true
+                ORDER BY cs.updated_at DESC
+            """, (org_id, user_id))
         
         sessions = cursor.fetchall()
         
         result = []
-        for session_data in sessions:
+        for s in sessions:
             session_dict = {
-                'id': session_data[0],
-                'title': session_data[1],
-                'created_at': session_data[2].isoformat() if session_data[2] else None,
-                'updated_at': session_data[3].isoformat() if session_data[3] else None,
-                'message_count': len(session_data[4]) if session_data[4] else 0,
-                'ui_state': session_data[5] if session_data[5] else {},
-                'status': session_data[6] if session_data[6] else 'active'
+                'id': s[0],
+                'title': s[1],
+                'created_at': s[2].isoformat() if s[2] else None,
+                'updated_at': s[3].isoformat() if s[3] else None,
+                'message_count': len(s[4]) if s[4] else 0,
+                'ui_state': s[5] if s[5] else {},
+                'status': s[6] if s[6] else 'active',
+                'user_id': s[7],
+                'is_own': s[7] == user_id,
             }
+            if scope == 'org' and s[8]:
+                session_dict['user_name'] = s[8]
             result.append(session_dict)
         
         return jsonify({'sessions': result}), 200
@@ -163,7 +187,7 @@ def create_chat_session(user_id):
 @limiter.exempt
 @require_permission("chat", "read")
 def get_chat_session(user_id, session_id):
-    """Get a specific chat session."""
+    """Get a specific chat session. Any org member can read any session in the org."""
     org_id = get_org_id_from_request()
 
     try:
@@ -175,14 +199,15 @@ def get_chat_session(user_id, session_id):
         cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
         conn.commit()
         
-        # Fetch specific chat session (allow completed, but not cancelled)
+        # Any org member can read sessions in their org (not restricted to own user_id)
         cursor.execute("""
             SELECT id, title, messages, created_at, updated_at,
                    CASE WHEN ui_state IS NULL THEN '{}'::jsonb ELSE ui_state END as ui_state,
-                   COALESCE(status, 'active') as status
+                   COALESCE(status, 'active') as status,
+                   user_id
             FROM chat_sessions 
-            WHERE id = %s AND org_id = %s AND user_id = %s AND is_active = true AND status != 'cancelled'
-        """, (session_id, org_id, user_id))
+            WHERE id = %s AND org_id = %s AND is_active = true AND status != 'cancelled'
+        """, (session_id, org_id))
         
         session_data = cursor.fetchone()
         
@@ -252,7 +277,9 @@ def get_chat_session(user_id, session_id):
             'created_at': session_data[3].isoformat() if session_data[3] else None,
             'updated_at': session_data[4].isoformat() if session_data[4] else None,
             'ui_state': session_data[5] if session_data[5] else {},
-            'status': session_data[6] if session_data[6] else 'active'
+            'status': session_data[6] if session_data[6] else 'active',
+            'user_id': session_data[7],
+            'is_own': session_data[7] == user_id,
         }
         
         return jsonify(result), 200
