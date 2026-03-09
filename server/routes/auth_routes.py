@@ -143,6 +143,94 @@ def register():
         return jsonify({"error": "Registration failed"}), 500
 
 
+@auth_bp.route('/setup-org', methods=['POST', 'OPTIONS'])
+def setup_org():
+    """Create an organization for an authenticated user who doesn't have one.
+
+    Body: { org_name }
+    Header: X-User-ID (set by the frontend proxy)
+    """
+    if request.method == 'OPTIONS':
+        return create_cors_response()
+
+    user_id = request.headers.get('X-User-ID')
+    if not user_id:
+        return jsonify({"error": "Authentication required"}), 401
+
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "Invalid request body"}), 400
+
+        org_name = (data.get('org_name') or '').strip()
+
+        if not org_name:
+            return jsonify({"error": "Organization name is required"}), 400
+
+        if len(org_name) > 100:
+            return jsonify({"error": "Organization name must be 100 characters or less"}), 400
+
+        conn = connect_to_db_as_user()
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT id, org_id FROM users WHERE id = %s",
+                    (user_id,)
+                )
+                user_row = cursor.fetchone()
+                if not user_row:
+                    return jsonify({"error": "User not found"}), 404
+
+                if user_row[1]:
+                    return jsonify({"error": "You already belong to an organization"}), 409
+
+                slug = _name_to_slug(org_name)
+                cursor.execute(
+                    "SELECT id FROM organizations WHERE slug = %s",
+                    (slug,)
+                )
+                if cursor.fetchone():
+                    import uuid
+                    slug = slug[:42] + '-' + uuid.uuid4().hex[:6]
+
+                cursor.execute(
+                    """
+                    INSERT INTO organizations (id, name, slug, created_by)
+                    VALUES (gen_random_uuid()::TEXT, %s, %s, %s)
+                    RETURNING id, name
+                    """,
+                    (org_name, slug, user_id)
+                )
+                org_row = cursor.fetchone()
+                org_id, org_display_name = org_row[0], org_row[1]
+
+                cursor.execute(
+                    "UPDATE users SET org_id = %s, role = 'admin' WHERE id = %s",
+                    (org_id, user_id)
+                )
+
+                conn.commit()
+
+                try:
+                    from utils.auth.enforcer import assign_role_to_user
+                    assign_role_to_user(user_id, "admin", org_id)
+                except Exception as casbin_err:
+                    logging.warning(f"Failed to assign Casbin role for {user_id}: {casbin_err}")
+
+                logging.info(f"User {user_id} created org {org_id} ({org_name})")
+
+                return jsonify({
+                    "orgId": org_id,
+                    "orgName": org_display_name,
+                }), 201
+        finally:
+            conn.close()
+
+    except Exception as e:
+        logging.error(f"Error during org setup: {e}")
+        return jsonify({"error": "Organization setup failed"}), 500
+
+
 @auth_bp.route('/login', methods=['POST', 'OPTIONS'])
 def login():
     """Authenticate user with email and password."""

@@ -15,6 +15,7 @@ const publicRoutes = [
   "/api/auth/providers",  // NextAuth providers
   "/api/auth/csrf",       // NextAuth CSRF
   "/api/auth/change-password", // Password change API
+  "/api/auth/setup-org",  // Org setup for org-less users
 ]
 
 // Routes that should redirect authenticated users away
@@ -33,6 +34,7 @@ export default auth((req) => {
   const isApiRoute = nextUrl.pathname.startsWith('/api/')
   const isAdminRoute = nextUrl.pathname.startsWith('/admin') || nextUrl.pathname.startsWith('/api/admin')
   const isChangePasswordRoute = nextUrl.pathname.startsWith('/change-password')
+  const isSetupOrgRoute = nextUrl.pathname.startsWith('/setup-org')
 
   // If user is logged in and tries to access auth pages, redirect to home
   if (isAuthRoute && isLoggedIn) {
@@ -42,6 +44,11 @@ export default auth((req) => {
   // Force password change: redirect to /change-password if flag is set
   if (isLoggedIn && req.auth?.user?.mustChangePassword && !isChangePasswordRoute && !isApiRoute) {
     return NextResponse.redirect(new URL("/change-password", nextUrl))
+  }
+
+  // Force org setup: redirect users without an org to create one
+  if (isLoggedIn && !req.auth?.user?.orgId && !isSetupOrgRoute && !isChangePasswordRoute && !isApiRoute) {
+    return NextResponse.redirect(new URL("/setup-org", nextUrl))
   }
 
   // If user is not logged in and tries to access protected route
