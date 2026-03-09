@@ -83,7 +83,7 @@ RUN ARCH=$(uname -m) && \
     fi && \
     curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-${AWS_CLI_ARCH}.zip" -o "awscliv2.zip" && \
     unzip -q awscliv2.zip && \
-    ./aws/install --quiet && \
+    ./aws/install > /dev/null 2>&1 && \
     rm -rf awscliv2.zip aws/
 
 # Install Azure CLI (manual download method)
