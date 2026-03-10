@@ -349,7 +349,7 @@ def get_org_activity(user_id):
                     })
 
                 cursor.execute(
-                    """SELECT i.source_type, i.alert_title, i.severity,
+                    """SELECT i.id, i.source_type, i.alert_title, i.severity,
                               i.status, i.created_at
                        FROM incidents i
                        WHERE i.org_id = %s
@@ -357,15 +357,16 @@ def get_org_activity(user_id):
                     (org_id, limit),
                 )
                 for row in cursor.fetchall():
-                    ts = row[4]
+                    ts = row[5]
                     events.append({
                         "type": "incident_created",
-                        "source": row[0],
-                        "title": row[1],
-                        "severity": row[2],
-                        "status": row[3],
+                        "incidentId": row[0],
+                        "source": row[1],
+                        "title": row[2],
+                        "severity": row[3],
+                        "status": row[4],
                         "timestamp": ts.isoformat() if ts else None,
-                        "description": f"Incident from {row[0]}: {row[1]}",
+                        "description": row[2] or f"Incident from {row[1]}",
                     })
 
                 cursor.execute(
@@ -386,6 +387,30 @@ def get_org_activity(user_id):
                         "timestamp": ts.isoformat() if ts else None,
                         "description": f"{who} connected {row[0]}",
                     })
+
+                cursor.execute(
+                    """SELECT uc.provider, uc.last_verified_at, u.name, u.email
+                       FROM user_connections uc
+                       JOIN users u ON uc.user_id = u.id
+                       WHERE (uc.org_id = %s OR u.org_id = %s)
+                         AND uc.status = 'active'
+                       ORDER BY uc.last_verified_at DESC LIMIT %s""",
+                    (org_id, org_id, limit),
+                )
+                for row in cursor.fetchall():
+                    ts = row[1]
+                    who = row[2] or row[3]
+                    provider = row[0]
+                    if not any(
+                        e.get("type") == "connector_added" and e.get("provider") == provider
+                        for e in events
+                    ):
+                        events.append({
+                            "type": "connector_added",
+                            "provider": provider,
+                            "timestamp": ts.isoformat() if ts else None,
+                            "description": f"{who} connected {provider}",
+                        })
 
         events.sort(
             key=lambda e: e.get("timestamp") or "",
