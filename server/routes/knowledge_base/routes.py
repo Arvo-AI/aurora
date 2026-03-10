@@ -66,7 +66,7 @@ def serialize_document(row: tuple) -> dict[str, Any]:
 @knowledge_base_bp.route("/memory", methods=["GET", "OPTIONS"])
 @require_permission("knowledge_base", "read")
 def get_memory(user_id):
-    """Get user's knowledge base memory content."""
+    """Get the org's knowledge base memory content."""
     if request.method == "OPTIONS":
         return create_cors_response()
 
@@ -83,9 +83,11 @@ def get_memory(user_id):
                 """
                 SELECT content, updated_at
                 FROM knowledge_base_memory
-                WHERE user_id = %s AND org_id = %s
+                WHERE org_id = %s
+                ORDER BY updated_at DESC
+                LIMIT 1
                 """,
-                (user_id, org_id,)
+                (org_id,)
             )
             row = cursor.fetchone()
 

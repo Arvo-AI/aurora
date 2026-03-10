@@ -564,3 +564,20 @@ def get_org_id_for_user(user_id: str) -> Optional[str]:
     except Exception as e:
         logger.warning("Error looking up org_id for user %s: %s", user_id, e)
         return None
+
+
+def set_rls_context(cursor, conn, user_id: str, *, log_prefix: str = "") -> Optional[str]:
+    """Resolve org_id and configure RLS session variables on a DB connection.
+
+    Returns the org_id on success, or None (and logs an error) when the org
+    cannot be resolved — callers should abort persistence in that case.
+    """
+    org_id = get_org_id_for_user(user_id)
+    if not org_id:
+        logger.error("%s Missing org_id for user %s; cannot set RLS context", log_prefix, user_id)
+        return None
+
+    cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
+    cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
+    conn.commit()
+    return org_id

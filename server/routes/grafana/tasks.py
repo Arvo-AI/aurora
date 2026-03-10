@@ -123,24 +123,10 @@ def process_grafana_alert(
                     with conn.cursor() as cursor:
                         received_at = datetime.now(timezone.utc)
 
-                        # Look up org_id for this user (cached across calls)
-                        org_id = None
-                        try:
-                            from utils.auth.stateless_auth import get_org_id_for_user
-                            org_id = get_org_id_for_user(user_id)
-                        except Exception:
-                            cursor.execute("SELECT org_id FROM users WHERE id = %s", (user_id,))
-                            org_row = cursor.fetchone()
-                            org_id = org_row[0] if org_row and org_row[0] else None
-
+                        from utils.auth.stateless_auth import set_rls_context
+                        org_id = set_rls_context(cursor, conn, user_id, log_prefix="[GRAFANA][ALERT]")
                         if not org_id:
-                            logger.error("[GRAFANA][ALERT] Missing org_id for user %s; skipping persistence", user_id)
                             return
-
-                        # Set RLS context
-                        cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
-                        cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
-                        conn.commit()
 
                         # Extract relevant fields from Grafana payload
                         alert_uid = payload.get("ruleUID") or payload.get("ruleUid")

@@ -1375,13 +1375,14 @@ def merge_alert_to_incident(user_id, target_incident_id: str):
                 # Insert the source alert into target incident's alerts
                 cursor.execute(
                     """INSERT INTO incident_alerts
-                       (user_id, incident_id, source_type, source_alert_id, alert_title,
+                       (user_id, org_id, incident_id, source_type, source_alert_id, alert_title,
                         alert_service, alert_severity, correlation_strategy, correlation_score,
                         correlation_details, alert_metadata)
-                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                        RETURNING id""",
                     (
                         user_id,
+                        org_id,
                         target_incident_id,
                         source_type,
                         source_alert_row[2],  # source_alert_id - no longer nullable

@@ -1782,7 +1782,7 @@ def build_background_mode_segment(state: Optional[Any]) -> str:
 def build_knowledge_base_memory_segment(user_id: Optional[str]) -> str:
     """Build knowledge base memory segment for system prompt.
 
-    Fetches user's knowledge base memory content and formats it for injection
+    Fetches the org's knowledge base memory content and formats it for injection
     into the system prompt. This content is always included for authenticated users.
     """
     if not user_id:
@@ -1792,15 +1792,24 @@ def build_knowledge_base_memory_segment(user_id: Optional[str]) -> str:
     kb_logger = logging.getLogger(__name__)
 
     try:
-        with db_pool.get_user_connection() as conn:
+        with db_pool.get_admin_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
-            conn.commit()
-
             cursor.execute(
-                "SELECT content FROM knowledge_base_memory WHERE user_id = %s",
-                (user_id,)
+                "SELECT org_id FROM users WHERE id = %s", (user_id,)
             )
+            user_row = cursor.fetchone()
+            org_id = user_row[0] if user_row else None
+
+            if org_id:
+                cursor.execute(
+                    "SELECT content FROM knowledge_base_memory WHERE org_id = %s ORDER BY updated_at DESC LIMIT 1",
+                    (org_id,)
+                )
+            else:
+                cursor.execute(
+                    "SELECT content FROM knowledge_base_memory WHERE user_id = %s ORDER BY updated_at DESC LIMIT 1",
+                    (user_id,)
+                )
             row = cursor.fetchone()
 
         if row and row[0] and row[0].strip():

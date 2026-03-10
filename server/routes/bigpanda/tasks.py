@@ -142,6 +142,11 @@ def process_bigpanda_event(
 
         with db_pool.get_admin_connection() as conn, conn.cursor() as cursor:
 
+            from utils.auth.stateless_auth import set_rls_context
+            org_id = set_rls_context(cursor, conn, user_id, log_prefix="[BIGPANDA]")
+            if not org_id:
+                return
+
             # 1. Store raw event in bigpanda_events
             cursor.execute(
                 """INSERT INTO bigpanda_events
@@ -174,7 +179,7 @@ def process_bigpanda_event(
                     cursor=cursor, user_id=user_id, source_type="bigpanda",
                     source_alert_id=alert_db_id, alert_title=title,
                     alert_service=service, alert_severity=severity,
-                    alert_metadata=alert_metadata,
+                    alert_metadata=alert_metadata, org_id=org_id,
                 )
                 if result.is_correlated:
                     handle_correlated_alert(
@@ -182,7 +187,7 @@ def process_bigpanda_event(
                         source_type="bigpanda", source_alert_id=alert_db_id,
                         alert_title=title, alert_service=service, alert_severity=severity,
                         correlation_result=result, alert_metadata=alert_metadata,
-                        raw_payload=raw_payload,
+                        raw_payload=raw_payload, org_id=org_id,
                     )
                     conn.commit()
                     return
@@ -198,16 +203,16 @@ def process_bigpanda_event(
             # 4. Create new incident
             cursor.execute(
                 """INSERT INTO incidents
-                   (user_id, source_type, source_alert_id, alert_title, alert_service,
+                   (user_id, org_id, source_type, source_alert_id, alert_title, alert_service,
                     severity, status, started_at, alert_metadata)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (org_id, source_type, source_alert_id, user_id) DO UPDATE
                    SET updated_at = CURRENT_TIMESTAMP,
                        started_at = CASE WHEN incidents.status != 'analyzed'
                                     THEN EXCLUDED.started_at ELSE incidents.started_at END,
                        alert_metadata = EXCLUDED.alert_metadata
                    RETURNING id""",
-                (user_id, "bigpanda", alert_db_id, title, service,
+                (user_id, org_id, "bigpanda", alert_db_id, title, service,
                  severity, "investigating", received_at, json.dumps(alert_metadata)),
             )
             incident_row = cursor.fetchone()
@@ -216,10 +221,10 @@ def process_bigpanda_event(
             if aurora_incident_id:
                 cursor.execute(
                     """INSERT INTO incident_alerts
-                       (user_id, incident_id, source_type, source_alert_id, alert_title,
+                       (user_id, org_id, incident_id, source_type, source_alert_id, alert_title,
                         alert_service, alert_severity, correlation_strategy, correlation_score, alert_metadata)
-                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
-                    (user_id, aurora_incident_id, "bigpanda", alert_db_id, title,
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                    (user_id, org_id, aurora_incident_id, "bigpanda", alert_db_id, title,
                      service, severity, "primary", 1.0, json.dumps(alert_metadata)),
                 )
                 cursor.execute(
