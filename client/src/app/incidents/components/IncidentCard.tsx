@@ -589,7 +589,7 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
       {/* Feedback Section - only show when analysis is complete */}
       {incident.auroraStatus === 'complete' && (
         <div className="mt-6 pt-6 border-t border-zinc-800/50">
-          <IncidentFeedback incidentId={incident.id} />
+          <IncidentFeedback incidentId={incident.id} readOnly={!canWrite} />
         </div>
       )}
 
