@@ -36,13 +36,15 @@ def save_connection_metadata(
     Uses an UPSERT so callers can invoke freely.
     Returns True on success, False otherwise.
     """
+    org_id = _resolve_org_id(user_id)
     sql = """
         INSERT INTO user_connections (
-            user_id, provider, account_id, role_arn, read_only_role_arn,
+            user_id, org_id, provider, account_id, role_arn, read_only_role_arn,
             connection_method, region, workspace_id, status, last_verified_at
-        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         ON CONFLICT (user_id, provider, account_id)
         DO UPDATE SET
+            org_id = COALESCE(EXCLUDED.org_id, user_connections.org_id),
             role_arn = EXCLUDED.role_arn,
             read_only_role_arn = EXCLUDED.read_only_role_arn,
             connection_method = EXCLUDED.connection_method,
@@ -59,6 +61,7 @@ def save_connection_metadata(
                 sql,
                 (
                     user_id,
+                    org_id,
                     provider,
                     account_id,
                     role_arn,
@@ -134,6 +137,8 @@ def list_active_connections(user_id: str) -> List[Dict]:
         conn = connect_to_db_as_user()
         with conn.cursor() as cur:
             cur.execute("SET myapp.current_user_id = %s;", (user_id,))
+            if org_id:
+                cur.execute("SET myapp.current_org_id = %s;", (org_id,))
             conn.commit()
             cur.execute(sql, (user_id, org_id, user_id))
             rows = cur.fetchall()
@@ -178,6 +183,8 @@ def get_user_aws_connection(user_id: str) -> Optional[Dict]:
         conn = connect_to_db_as_user()
         with conn.cursor() as cur:
             cur.execute("SET myapp.current_user_id = %s;", (user_id,))
+            if org_id:
+                cur.execute("SET myapp.current_org_id = %s;", (org_id,))
             conn.commit()
             cur.execute(sql, (user_id, org_id, user_id))
             row = cur.fetchone()
@@ -219,6 +226,8 @@ def get_all_user_aws_connections(user_id: str) -> List[Dict]:
         conn = connect_to_db_as_user()
         with conn.cursor() as cur:
             cur.execute("SET myapp.current_user_id = %s;", (user_id,))
+            if org_id:
+                cur.execute("SET myapp.current_org_id = %s;", (org_id,))
             conn.commit()
             cur.execute(sql, (user_id, org_id, user_id))
             rows = cur.fetchall()

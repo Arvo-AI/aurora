@@ -88,23 +88,36 @@ def get_connected_accounts(user_id, target_user_id):
             """
             SELECT provider, account_id, role_arn, last_verified_at
             FROM user_connections
-            WHERE user_id = %s AND (org_id = %s OR org_id IS NULL) AND status = 'active'
+            WHERE (user_id = %s OR org_id = %s) AND status = 'active'
+            ORDER BY CASE WHEN user_id = %s THEN 0 ELSE 1 END
             """,
-            (user_id, org_id),
+            (user_id, org_id, user_id),
         )
 
         for provider, account_id, role_arn, last_verified in cursor.fetchall():
             if provider in accounts:
                 continue
 
+            account_info = {
+                "isConnected": True,
+                "name": f"{provider.upper()} Account" if provider == "aws" else provider.capitalize(),
+                "displayText": f"Account {account_id}" if account_id else provider.capitalize(),
+            }
+
             if provider == "aws":
-                accounts[provider] = {
-                    "isConnected": True,
-                    "accountId": account_id,
-                    "roleArn": role_arn,
-                    "name": "AWS Account",
-                    "displayText": f"Account {account_id}",
-                }
+                account_info["accountId"] = account_id
+                account_info["roleArn"] = role_arn
+                account_info["name"] = "AWS Account"
+            elif provider == "gcp":
+                account_info["projectId"] = account_id
+                account_info["name"] = "Google Cloud"
+                account_info["displayText"] = account_id or "Google Cloud"
+            elif provider == "azure":
+                account_info["subscriptionId"] = account_id
+                account_info["name"] = "Azure"
+                account_info["displayText"] = account_id or "Azure Subscription"
+
+            accounts[provider] = account_info
 
         cursor.close()
         conn.close()

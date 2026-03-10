@@ -191,6 +191,7 @@ def _check_all_connectors(user_id: str, org_id: str) -> Dict[str, Dict[str, Any]
 
     with db_pool.get_admin_connection() as conn:
         with conn.cursor() as cursor:
+            # 1) Token-based providers (user_tokens)
             cursor.execute(
                 """
                 SELECT DISTINCT ON (provider) provider, user_id
@@ -204,6 +205,21 @@ def _check_all_connectors(user_id: str, org_id: str) -> Dict[str, Dict[str, Any]
             )
             providers = {row[0]: row[1] for row in cursor.fetchall()}
 
+            # 2) Role / connection-based providers (user_connections)
+            cursor.execute(
+                """
+                SELECT DISTINCT ON (provider) provider
+                FROM user_connections
+                WHERE (user_id = %s OR org_id = %s)
+                  AND status = 'active'
+                ORDER BY provider, CASE WHEN user_id = %s THEN 0 ELSE 1 END
+                """,
+                (user_id, org_id, user_id),
+            )
+            for (prov,) in cursor.fetchall():
+                if prov not in providers:
+                    providers[prov] = user_id
+
     results: Dict[str, Dict[str, Any]] = {}
 
     def _run_check(provider: str, token_owner_id: str) -> tuple:
@@ -211,6 +227,16 @@ def _check_all_connectors(user_id: str, org_id: str) -> Dict[str, Dict[str, Any]
             return provider, _check_kubectl(org_id)
         creds = get_token_data(token_owner_id, provider)
         if not creds:
+            # No token-based creds, but if provider came from user_connections
+            # it is still a valid active connection.
+            with db_pool.get_admin_connection() as fallback_conn:
+                with fallback_conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT 1 FROM user_connections WHERE (user_id = %s OR org_id = %s) AND provider = %s AND status = 'active' LIMIT 1",
+                        (user_id, org_id, provider),
+                    )
+                    if cur.fetchone():
+                        return provider, {"connected": True}
             return provider, {"connected": False}
         checker = PROVIDER_CHECKERS.get(provider, _check_credentials_only)
         try:
@@ -234,19 +260,6 @@ def _check_all_connectors(user_id: str, org_id: str) -> Dict[str, Dict[str, Any]
                 prov = futures[future]
                 logger.warning("[STATUS] %s check timed out: %s", prov, exc)
                 results[prov] = {"connected": False}
-
-    if "aws" not in results or not results["aws"].get("connected"):
-        try:
-            with db_pool.get_admin_connection() as conn:
-                with conn.cursor() as cursor:
-                    cursor.execute(
-                        "SELECT 1 FROM user_connections WHERE user_id = %s AND (org_id = %s OR org_id IS NULL) AND status = 'active' LIMIT 1",
-                        (user_id, org_id),
-                    )
-                    if cursor.fetchone():
-                        results["aws"] = {"connected": True}
-        except Exception as exc:
-            logger.debug("[STATUS] AWS connection fallback check failed: %s", exc)
 
     return results
 
