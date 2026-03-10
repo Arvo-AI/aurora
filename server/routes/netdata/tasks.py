@@ -19,8 +19,8 @@ from routes.netdata.helpers import (
     generate_alert_hash,
     normalize_netdata_payload,
     should_trigger_background_chat,
-    build_rca_prompt_from_alert,
 )
+from chat.background.rca_prompt_builder import build_netdata_rca_prompt
 from services.correlation.alert_correlator import AlertCorrelator
 from services.correlation import handle_correlated_alert
 
@@ -300,7 +300,7 @@ def process_netdata_alert(
                                     )
 
                                     # Build simple RCA prompt with Aurora Learn context injection
-                                    rca_prompt = build_rca_prompt_from_alert(
+                                    rca_prompt = build_netdata_rca_prompt(
                                         data, user_id=user_id
                                     )
 
