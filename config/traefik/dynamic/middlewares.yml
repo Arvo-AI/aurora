@@ -1,0 +1,30 @@
+# Traefik Dynamic Configuration — Security Middlewares
+# Applied via Docker labels: middlewares=security-headers@file
+
+http:
+  middlewares:
+    security-headers:
+      headers:
+        # HSTS — force HTTPS for 1 year, include subdomains, allow preload list
+        stsSeconds: 31536000
+        stsIncludeSubdomains: true
+        stsPreload: true
+        # Prevent clickjacking
+        frameDeny: true
+        # Prevent MIME-type sniffing
+        contentTypeNosniff: true
+        # XSS protection (legacy, but still useful for older browsers)
+        browserXssFilter: true
+        # Referrer policy — send origin only on cross-origin, full on same-origin
+        referrerPolicy: "strict-origin-when-cross-origin"
+        # Permissions policy — disable unnecessary browser features
+        permissionsPolicy: "camera=(), microphone=(), geolocation=(), payment=()"
+        customResponseHeaders:
+          # Prevent Adobe Flash/PDF cross-domain requests
+          X-Permitted-Cross-Domain-Policies: "none"
+    # Rate limiting at the reverse proxy level (additional layer over Flask-Limiter)
+    rate-limit:
+      rateLimit:
+        average: 100
+        burst: 200
+        period: 1s
