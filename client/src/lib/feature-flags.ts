@@ -20,3 +20,7 @@ export const isScalewayEnabled = () => {
 export const isSharePointEnabled = () => {
   return getEnv('NEXT_PUBLIC_ENABLE_SHAREPOINT') === 'true';
 };
+
+export const isSpinnakerEnabled = () => {
+  return getEnv('NEXT_PUBLIC_ENABLE_SPINNAKER') === 'true';
+};

@@ -351,7 +351,7 @@ export function useConnectorStatus(connector: ConnectorConfig, userId: string | 
     const connected = localStorage.getItem(storageKey) === "true";
     setIsConnected(connected);
 
-    if (connector.id === "jenkins" || connector.id === "cloudbees") {
+    if (connector.id === "jenkins" || connector.id === "cloudbees" || connector.id === "spinnaker") {
       checkCIConnectionViaApi();
     }
   };
