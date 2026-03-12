@@ -1,4 +1,4 @@
-.PHONY: help dev down logs rebuild-server restart prod prod-build prod-logs prod-down clean nuke build-no-cache dev-fresh prod-clean prod-nuke prod-build-no-cache prod-fresh prod-prebuilt prod-local init prod-local-logs prod-local-down prod-local-clean prod-local-nuke deploy-build deploy vm-deploy
+.PHONY: help dev down logs rebuild-server restart prod prod-build prod-logs prod-down clean nuke build-no-cache dev-fresh prod-clean prod-nuke prod-build-no-cache prod-fresh prod-prebuilt prod-local init prod-local-logs prod-local-down prod-local-clean prod-local-nuke deploy-build deploy package-airgap prod-airgap prod-airgap-logs vm-deploy
 
 help:
 	@echo "Available commands:"
@@ -34,10 +34,6 @@ help:
 	@echo "  make prod-local-clean   - Stop and remove production volumes"
 	@echo "  make prod-local-nuke    - Full cleanup: containers, volumes, images"
 	@echo ""
-	@echo "VM Deployment (single server / cloud VM):"
-	@echo "  make vm-deploy          - Interactive setup: installs Docker, configures .env, and starts Aurora"
-	@echo "                            Supports --prebuilt (default), --build, --skip-docker, --hostname=<host>"
-	@echo ""
 	@echo "Kubernetes Deployment:"
 	@echo "  make deploy-build      - Build and push images for K8s deployment (reads values.generated.yaml)"
 	@echo "  make deploy            - Run deploy-build then deploy with Helm"
@@ -68,6 +64,7 @@ build:
 down:
 	@docker compose down --remove-orphans 2>/dev/null || true
 	@docker compose -f docker-compose.prod-local.yml down --remove-orphans 2>/dev/null || true
+	@docker compose -f docker-compose.airgap.yml down --remove-orphans 2>/dev/null || true
 	@for ep in $$(docker network inspect aurora_default -f '{{range .Containers}}{{.Name}} {{end}}' 2>/dev/null); do docker network disconnect -f aurora_default $$ep 2>/dev/null; done; true
 	@docker network rm aurora_default 2>/dev/null || true
 
@@ -221,6 +218,41 @@ prod-local-nuke:
 	@docker image prune -f
 	@echo "Production-local cleanup complete!"
 	@echo "Note: .env file preserved. To remove it, delete manually."
+
+# Air-gap deployment commands (restricted-egress / enterprise VMs)
+package-airgap:
+	@chmod +x scripts/package-airgap.sh
+	@./scripts/package-airgap.sh
+
+prod-airgap:
+	@if [ ! -f .env ]; then \
+		echo "Error: .env file not found."; \
+		echo "Please run 'make init' first to set up your environment."; \
+		exit 1; \
+	fi
+	@if [ -n "$(AIRGAP_BUNDLE)" ]; then \
+		echo "Loading images from $(AIRGAP_BUNDLE)..."; \
+		docker load < "$(AIRGAP_BUNDLE)"; \
+		echo ""; \
+	fi
+	@echo "Starting Aurora in air-gap mode (pre-built images, no registry pulls)..."
+	@docker compose -f docker-compose.airgap.yml down --remove-orphans 2>/dev/null || true
+	@docker network rm aurora_default 2>/dev/null || true
+	@docker compose -f docker-compose.airgap.yml up -d
+	@echo ""
+	@echo "Aurora is starting (air-gap mode)!"
+	@echo "  - Frontend: $$(v=$$(grep -E '^FRONTEND_URL=' .env | cut -d= -f2- | tr -d '"'); echo $${v:-http://localhost:3000})"
+	@echo "  - Backend API: $$(v=$$(grep -E '^NEXT_PUBLIC_BACKEND_URL=' .env | cut -d= -f2- | tr -d '"'); echo $${v:-http://localhost:5080})"
+	@echo "  - Chatbot WebSocket: $$(v=$$(grep -E '^NEXT_PUBLIC_WEBSOCKET_URL=' .env | cut -d= -f2- | tr -d '"'); echo $${v:-ws://localhost:5006})"
+	@echo ""
+	@echo "View logs with: make prod-airgap-logs"
+
+prod-airgap-logs:
+	@if [ -z "$(filter-out $@,$(MAKECMDGOALS))" ]; then \
+		docker compose -f docker-compose.airgap.yml logs --tail 50 -f; \
+	else \
+		docker compose -f docker-compose.airgap.yml logs --tail 50 -f $(filter-out $@,$(MAKECMDGOALS)); \
+	fi
 
 # Kubernetes deployment commands
 deploy-build:

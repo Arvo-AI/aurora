@@ -163,6 +163,51 @@ make prod-prebuilt
 ```
 Pulls prebuilt images from GHCR instead of building locally. Faster to start, but uses the last published release.
 
+**Option C — Air-gap / restricted-egress deployment** (no outbound internet on the VM):
+
+If the VM cannot reach Docker Hub, GHCR, PyPI, or npm (common on enterprise/government infrastructure), use the air-gap workflow. This builds everything on a machine with internet access and produces a single transferable bundle.
+
+On a **connected machine** (your laptop, a CI runner, etc.):
+
+```bash
+git clone https://github.com/arvo-ai/aurora.git && cd aurora
+make package-airgap
+```
+
+This builds all Aurora images for `linux/amd64` (the default server architecture), pulls all third-party images, and saves everything into `aurora-airgap-<version>.tar.gz` with a SHA-256 checksum file.
+
+If building on Apple Silicon (M1/M2/M3) for an x86 server, this cross-compiles automatically. To target ARM servers instead:
+
+```bash
+PLATFORM=linux/arm64 make package-airgap
+```
+
+Transfer both files to the VM (via `scp`, GCS bucket, internal file server, etc.):
+
+```bash
+scp aurora-airgap-*.tar.gz aurora-airgap-*.sha256 user@VM_IP:~/aurora/
+```
+
+On the **air-gapped VM**:
+
+```bash
+# Verify checksum
+sha256sum -c aurora-airgap-*.sha256
+
+# Load images and start
+make prod-airgap AIRGAP_BUNDLE=aurora-airgap-<version>.tar.gz
+```
+
+On subsequent runs (images already loaded), just run:
+
+```bash
+make prod-airgap
+```
+
+:::tip Air-gap updates
+Each new Aurora release needs a fresh bundle generated and transferred. The `.env` file stays on the VM and is never part of the bundle.
+:::
+
 ## 7. Get and Set the Vault Token
 
 After the stack is running, the `vault-init` sidecar initializes Vault and generates a root token. Extract it and write it into `.env`:
@@ -188,6 +233,7 @@ docker logs aurora-vault-init
 # Use whichever command you chose in step 6
 make down && make prod-local      # if you built from source
 make down && make prod-prebuilt   # if you pulled prebuilt images
+make down && make prod-airgap     # if you used air-gap deployment
 ```
 
 ## 9. Open Firewall Ports
@@ -276,6 +322,17 @@ git pull
 
 # Rebuild and restart
 make down && make prod-local
+```
+
+For air-gap deployments, rebuild the bundle on a connected machine and transfer it:
+
+```bash
+# On connected machine
+git pull && make package-airgap
+
+# Transfer to VM, then on the VM:
+make down
+make prod-airgap AIRGAP_BUNDLE=aurora-airgap-<version>.tar.gz
 ```
 
 The `NEXT_PUBLIC_*` environment variables are injected at container startup, not baked at build time. If you only change those values in `.env`, you can skip a full rebuild:

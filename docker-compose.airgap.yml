@@ -1,3 +1,8 @@
+# Air-gap deployment compose file.
+# All images are pre-built and loaded via: scripts/package-airgap.sh
+# No build sections — every service uses a local image with pull_policy: never.
+# Usage: make prod-airgap AIRGAP_BUNDLE=aurora-airgap-<version>.tar.gz
+
 x-common-env: &common-env
   # Global
   AURORA_ENV: ${AURORA_ENV}
@@ -23,53 +28,21 @@ x-common-env: &common-env
   STORAGE_CACHE_ENABLED: ${STORAGE_CACHE_ENABLED}
   STORAGE_CACHE_TTL: ${STORAGE_CACHE_TTL}
 
-  # Terraform Timeouts
-
   # Weaviate
   WEAVIATE_HOST: ${WEAVIATE_HOST}
   WEAVIATE_PORT: ${WEAVIATE_PORT}
   WEAVIATE_GRPC_PORT: ${WEAVIATE_GRPC_PORT}
-
-  # Knowledge Base storage uses the pluggable storage system (SeaWeedFS/S3-compatible)
-  # Configure via STORAGE_* environment variables
 
   # AWS base credentials for role assumption
   AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
   AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
   AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION}
 
-  # LLM & AI Services (needed for background chats)
-  OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
-  OPENAI_API_KEY: ${OPENAI_API_KEY}
-  ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
-  GOOGLE_AI_API_KEY: ${GOOGLE_AI_API_KEY}
-  LLM_PROVIDER_MODE: ${LLM_PROVIDER_MODE}
-  SEARXNG_URL: ${SEARXNG_URL}
-  RCA_OPTIMIZE_COSTS: ${RCA_OPTIMIZE_COSTS}
-  RCA_MODEL: ${RCA_MODEL}
-  MAIN_MODEL: ${MAIN_MODEL}
-  VISION_MODEL: ${VISION_MODEL}
-  SUMMARIZATION_MODEL: ${SUMMARIZATION_MODEL}
-  AGENT_RECURSION_LIMIT: ${AGENT_RECURSION_LIMIT}
-
-  # Vertex AI (Google Cloud)
-  VERTEX_AI_PROJECT: ${VERTEX_AI_PROJECT}
-  VERTEX_AI_LOCATION: ${VERTEX_AI_LOCATION}
-  VERTEX_AI_SERVICE_ACCOUNT_JSON: ${VERTEX_AI_SERVICE_ACCOUNT_JSON}
-
-  # Ollama (local LLM inference)
-  OLLAMA_BASE_URL: ${OLLAMA_BASE_URL}
-
-  # Pod Isolation
-  ENABLE_POD_ISOLATION: ${ENABLE_POD_ISOLATION}
-
-
-  # Feature Flags (single NEXT_PUBLIC_ENABLE_* vars for both backend and frontend)
+  # Feature Flags (all disabled by default for minimal local setup)
   NEXT_PUBLIC_ENABLE_OVH: ${NEXT_PUBLIC_ENABLE_OVH}
   NEXT_PUBLIC_ENABLE_PAGERDUTY_OAUTH: ${NEXT_PUBLIC_ENABLE_PAGERDUTY_OAUTH}
   NEXT_PUBLIC_ENABLE_SCALEWAY: ${NEXT_PUBLIC_ENABLE_SCALEWAY}
   NEXT_PUBLIC_ENABLE_SHAREPOINT: ${NEXT_PUBLIC_ENABLE_SHAREPOINT}
-  NEXT_PUBLIC_ENABLE_SPINNAKER: ${NEXT_PUBLIC_ENABLE_SPINNAKER}
   # Slack OAuth (needed by celery_worker for formatting responses)
   SLACK_CLIENT_ID: ${SLACK_CLIENT_ID}
   SLACK_CLIENT_SECRET: ${SLACK_CLIENT_SECRET}
@@ -92,6 +65,31 @@ x-common-env: &common-env
   OVH_US_CLIENT_ID: ${OVH_US_CLIENT_ID}
   OVH_US_CLIENT_SECRET: ${OVH_US_CLIENT_SECRET}
 
+  # LLM & AI Services (required - at least one)
+  OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
+  OPENAI_API_KEY: ${OPENAI_API_KEY}
+  ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+  GOOGLE_AI_API_KEY: ${GOOGLE_AI_API_KEY}
+  LLM_PROVIDER_MODE: ${LLM_PROVIDER_MODE}
+  SEARXNG_URL: ${SEARXNG_URL}
+  RCA_OPTIMIZE_COSTS: ${RCA_OPTIMIZE_COSTS}
+  RCA_MODEL: ${RCA_MODEL}
+  MAIN_MODEL: ${MAIN_MODEL}
+  VISION_MODEL: ${VISION_MODEL}
+  SUMMARIZATION_MODEL: ${SUMMARIZATION_MODEL}
+  AGENT_RECURSION_LIMIT: ${AGENT_RECURSION_LIMIT}
+
+  # Vertex AI (Google Cloud)
+  VERTEX_AI_PROJECT: ${VERTEX_AI_PROJECT}
+  VERTEX_AI_LOCATION: ${VERTEX_AI_LOCATION}
+  VERTEX_AI_SERVICE_ACCOUNT_JSON: ${VERTEX_AI_SERVICE_ACCOUNT_JSON}
+
+  # Ollama (local LLM inference)
+  OLLAMA_BASE_URL: ${OLLAMA_BASE_URL}
+
+  # Pod Isolation (disabled for local)
+  ENABLE_POD_ISOLATION: ${ENABLE_POD_ISOLATION}
+
   # Security
   FLASK_SECRET_KEY: ${FLASK_SECRET_KEY}
 
@@ -111,7 +109,7 @@ x-common-env: &common-env
   MEMGRAPH_PASSWORD: ${MEMGRAPH_PASSWORD}
   DISCOVERY_INTERVAL_HOURS: ${DISCOVERY_INTERVAL_HOURS}
 
-  # Email Notifications (SMTP)
+  # Email Notifications (SMTP) - optional for local
   SMTP_HOST: ${SMTP_HOST}
   SMTP_PORT: ${SMTP_PORT}
   SMTP_USER: ${SMTP_USER}
@@ -120,75 +118,48 @@ x-common-env: &common-env
   SMTP_FROM_NAME: ${SMTP_FROM_NAME}
   FRONTEND_URL: ${FRONTEND_URL}
 
-
 services:
   aurora-server:
-    build:
-      context: ./server
-      dockerfile: Dockerfile
-      target: dev
     image: aurora_server:latest
+    pull_policy: never
     container_name: aurora-server
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
-      - "${FLASK_PORT:-5080}:${FLASK_PORT:-5080}"
+      - "${FLASK_PORT}:${FLASK_PORT}"
     volumes:
-      - ./server:/app
       - terraform-workdir:/app/terraform_workdir
       - /var/run/docker.sock:/var/run/docker.sock
     command: ["python", "main_compute.py"]
     environment:
       <<: *common-env
-      FLASK_PORT: ${FLASK_PORT:-5080}
-
-      # Frontend/Backend URLs
+      OTEL_SERVICE_NAME: aurora-server
+      FLASK_PORT: ${FLASK_PORT}
       FRONTEND_URL: ${FRONTEND_URL}
       BACKEND_URL: ${BACKEND_URL}
       NEXT_PUBLIC_BACKEND_URL: ${NEXT_PUBLIC_BACKEND_URL}
       NGROK_URL: ${NGROK_URL}
-
-      # GCP Auth
       CLIENT_ID: ${CLIENT_ID}
       CLIENT_SECRET: ${CLIENT_SECRET}
-
-      # Slack OAuth
-      SLACK_CLIENT_ID: ${SLACK_CLIENT_ID}
-      SLACK_CLIENT_SECRET: ${SLACK_CLIENT_SECRET}
-      SLACK_SIGNING_SECRET: ${SLACK_SIGNING_SECRET}
-
-      # AWS
       AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
       AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
       AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION}
-
-      # Cloud Provider Cache Settings (applies to all providers)
       AURORA_SETUP_CACHE_ENABLED: ${AURORA_SETUP_CACHE_ENABLED}
       AURORA_SETUP_CACHE_TTL: ${AURORA_SETUP_CACHE_TTL}
       AURORA_VERIFY_CLI_IDENTITY: ${AURORA_VERIFY_CLI_IDENTITY}
       AURORA_CACHE_TOKEN_IN_REDIS: ${AURORA_CACHE_TOKEN_IN_REDIS}
-
-      # GitHub OAuth
       GH_OAUTH_CLIENT_ID: ${GH_OAUTH_CLIENT_ID}
       GH_OAUTH_CLIENT_SECRET: ${GH_OAUTH_CLIENT_SECRET}
-
-      # Bitbucket OAuth
       BB_OAUTH_CLIENT_ID: ${BB_OAUTH_CLIENT_ID}
       BB_OAUTH_CLIENT_SECRET: ${BB_OAUTH_CLIENT_SECRET}
-
-      # PagerDuty OAuth
       PAGERDUTY_CLIENT_ID: ${PAGERDUTY_CLIENT_ID}
       PAGERDUTY_CLIENT_SECRET: ${PAGERDUTY_CLIENT_SECRET}
-
-      # Backend Secrets
-      FLASK_SECRET_KEY: ${FLASK_SECRET_KEY}
-
-      # Security & Rate Limiting
+      SLACK_CLIENT_ID: ${SLACK_CLIENT_ID}
+      SLACK_CLIENT_SECRET: ${SLACK_CLIENT_SECRET}
+      SLACK_SIGNING_SECRET: ${SLACK_SIGNING_SECRET}
       RATE_LIMITING_ENABLED: ${RATE_LIMITING_ENABLED}
       RATE_LIMIT_BYPASS_TOKEN: ${RATE_LIMIT_BYPASS_TOKEN}
       RATE_LIMIT_HEADERS_ENABLED: ${RATE_LIMIT_HEADERS_ENABLED}
-
-      # OVH OAuth2
       OVH_CA_CLIENT_ID: ${OVH_CA_CLIENT_ID}
       OVH_CA_CLIENT_SECRET: ${OVH_CA_CLIENT_SECRET}
       OVH_EU_CLIENT_ID: ${OVH_EU_CLIENT_ID}
@@ -196,23 +167,26 @@ services:
       OVH_US_CLIENT_ID: ${OVH_US_CLIENT_ID}
       OVH_US_CLIENT_SECRET: ${OVH_US_CLIENT_SECRET}
     depends_on:
-      - postgres
-      - weaviate
-      - redis
-      - vault
-      - seaweedfs-filer
-      - memgraph
+      postgres:
+        condition: service_healthy
+      weaviate:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      vault:
+        condition: service_healthy
+      seaweedfs-filer:
+        condition: service_healthy
+      memgraph:
+        condition: service_healthy
+    restart: unless-stopped
 
   celery_worker:
-    build:
-      context: ./server
-      dockerfile: Dockerfile
-      target: dev
     image: aurora_celery-worker:latest
+    pull_policy: never
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
-      - ./server:/app
       - terraform-workdir:/app/terraform_workdir
       - /var/run/docker.sock:/var/run/docker.sock
     command: >
@@ -220,57 +194,62 @@ services:
         --loglevel=info
     environment:
       <<: *common-env
+      OTEL_SERVICE_NAME: celery-worker
       CHATBOT_INTERNAL_URL: ${CHATBOT_INTERNAL_URL}
-
-      # Frontend/Backend URLs
       FRONTEND_URL: ${FRONTEND_URL}
       BACKEND_URL: ${BACKEND_URL}
       NEXT_PUBLIC_BACKEND_URL: ${NEXT_PUBLIC_BACKEND_URL}
-
-      # AWS
-      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
-      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
-      AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION}
-
-      # Cloud Provider Cache Settings (applies to all providers)
       AURORA_SETUP_CACHE_ENABLED: ${AURORA_SETUP_CACHE_ENABLED}
       AURORA_SETUP_CACHE_TTL: ${AURORA_SETUP_CACHE_TTL}
       AURORA_VERIFY_CLI_IDENTITY: ${AURORA_VERIFY_CLI_IDENTITY}
       AURORA_CACHE_TOKEN_IN_REDIS: ${AURORA_CACHE_TOKEN_IN_REDIS}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION}
+      OVH_CA_CLIENT_ID: ${OVH_CA_CLIENT_ID}
+      OVH_CA_CLIENT_SECRET: ${OVH_CA_CLIENT_SECRET}
+      OVH_EU_CLIENT_ID: ${OVH_EU_CLIENT_ID}
+      OVH_EU_CLIENT_SECRET: ${OVH_EU_CLIENT_SECRET}
+      OVH_US_CLIENT_ID: ${OVH_US_CLIENT_ID}
+      OVH_US_CLIENT_SECRET: ${OVH_US_CLIENT_SECRET}
     depends_on:
       - redis
       - vault
-      - seaweedfs-filer
       - memgraph
+    restart: unless-stopped
 
   celery_beat:
-    build:
-      context: ./server
-      dockerfile: Dockerfile
-      target: dev
-    volumes:
-      - ./server:/app
+    image: aurora_celery-beat:latest
+    pull_policy: never
     environment:
       <<: *common-env
-
-      # Frontend/Backend URLs
+      OTEL_SERVICE_NAME: celery-beat
       FRONTEND_URL: ${FRONTEND_URL}
       BACKEND_URL: ${BACKEND_URL}
       NEXT_PUBLIC_BACKEND_URL: ${NEXT_PUBLIC_BACKEND_URL}
-
     command: >
       celery -A celery_config beat
         --loglevel=info
     depends_on:
       - redis
+    restart: unless-stopped
 
   redis:
     image: redis:7-alpine
+    pull_policy: never
+    container_name: aurora-redis
     ports:
       - "6379:6379"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
 
   searxng:
     image: searxng/searxng:2025.5.8-7ca24eee4
+    pull_policy: never
     container_name: aurora-searxng
     ports:
       - "8082:8080"
@@ -280,9 +259,10 @@ services:
       - SEARXNG_BASE_URL=${SEARXNG_BASE_URL}
       - SEARXNG_SECRET=${SEARXNG_SECRET}
     restart: unless-stopped
-    
+
   vault:
     image: hashicorp/vault:1.15
+    pull_policy: never
     container_name: aurora-vault
     ports:
       - "8200:8200"
@@ -303,9 +283,11 @@ services:
       interval: 5s
       timeout: 3s
       retries: 3
+    restart: unless-stopped
 
   vault-init:
     image: busybox:1.37.0
+    pull_policy: never
     container_name: aurora-vault-init
     restart: "no"
     volumes:
@@ -319,32 +301,24 @@ services:
       vault:
         condition: service_healthy
 
-
   chatbot:
-    build:
-      context: ./server
-      dockerfile: Dockerfile
-      target: dev
     image: aurora_chatbot:latest
+    pull_policy: never
     extra_hosts:
       - "host.docker.internal:host-gateway"
     stdin_open: true
     tty: true
+    ports:
+      - "5006:5006"
     command: ["python", "main_chatbot.py"]
     volumes:
-      - ./server:/app
       - terraform-workdir:/app/terraform_workdir
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
       <<: *common-env
-
-      # Frontend URL
+      OTEL_SERVICE_NAME: chatbot
       FRONTEND_URL: ${FRONTEND_URL}
       CHATBOT_INTERNAL_URL: ${CHATBOT_INTERNAL_URL}
-
-      # Caching & Performance
-
-      # Pod & MCP Settings
       CHATBOT_POD_TTL: ${CHATBOT_POD_TTL}
       ENABLE_POD_ISOLATION: ${ENABLE_POD_ISOLATION}
       TERMINAL_NAMESPACE: ${TERMINAL_NAMESPACE}
@@ -357,11 +331,11 @@ services:
         condition: service_healthy
       vault:
         condition: service_healthy
-    ports:
-      - "5006:5006"
+    restart: unless-stopped
 
   postgres:
     image: postgres:15-alpine
+    pull_policy: never
     container_name: aurora-postgres
     ports:
       - "5432:5432"
@@ -376,9 +350,11 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    restart: unless-stopped
 
   weaviate:
     image: cr.weaviate.io/semitechnologies/weaviate:1.27.6
+    pull_policy: never
     container_name: weaviate
     depends_on:
       postgres:
@@ -395,7 +371,7 @@ services:
       - "50051:50051"
     volumes:
       - weaviate_data:/var/lib/weaviate
-    restart: on-failure:0
+    restart: unless-stopped
     environment:
       AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: "true"
       PERSISTENCE_DATA_PATH: "/var/lib/weaviate"
@@ -418,50 +394,35 @@ services:
 
   t2v-transformers:
     image: cr.weaviate.io/semitechnologies/transformers-inference:sentence-transformers-all-MiniLM-L6-v2
+    pull_policy: never
     environment:
       ENABLE_CUDA: '0'
+    restart: unless-stopped
 
   frontend:
-    build:
-      context: ./client
-      dockerfile: Dockerfile
-      target: dev
     image: aurora_frontend:latest
+    pull_policy: never
     environment:
-      # Next.js development configuration
-      NODE_ENV: development
-      WATCHPACK_POLLING: "true"
-      CHOKIDAR_USEPOLLING: "true"
-      WATCHPACK_POLLING_INTERVAL: 1000
-
-      # Public variables (browser-accessible, injected at runtime via docker-entrypoint.sh)
+      NODE_ENV: production
       NEXT_PUBLIC_BACKEND_URL: ${NEXT_PUBLIC_BACKEND_URL}
       NEXT_PUBLIC_WEBSOCKET_URL: ${NEXT_PUBLIC_WEBSOCKET_URL}
       NEXT_PUBLIC_ENABLE_OVH: ${NEXT_PUBLIC_ENABLE_OVH}
       NEXT_PUBLIC_ENABLE_PAGERDUTY_OAUTH: ${NEXT_PUBLIC_ENABLE_PAGERDUTY_OAUTH}
       NEXT_PUBLIC_ENABLE_SCALEWAY: ${NEXT_PUBLIC_ENABLE_SCALEWAY}
       NEXT_PUBLIC_ENABLE_SHAREPOINT: ${NEXT_PUBLIC_ENABLE_SHAREPOINT}
-      NEXT_PUBLIC_ENABLE_SPINNAKER: ${NEXT_PUBLIC_ENABLE_SPINNAKER}
       BACKEND_URL: ${BACKEND_URL}
       FRONTEND_URL: ${FRONTEND_URL}
-
-      # Auth.js configuration (required)
       AUTH_SECRET: ${AUTH_SECRET}
-      AUTH_URL: ${FRONTEND_URL}
     ports:
       - "3000:3000"
-    volumes:
-      - ./client:/app
-      - /app/node_modules
-      - /app/.next
     depends_on:
       - aurora-server
+    restart: unless-stopped
 
-  # SeaweedFS - S3-compatible Object Storage (Apache 2.0 licensed)
-  # ═══════════════════════════════════════════════════════════════════════════
-
+  # SeaweedFS - S3-compatible Object Storage
   seaweedfs-master:
     image: chrislusf/seaweedfs:4.07
+    pull_policy: never
     container_name: aurora-seaweedfs-master
     command: >
       master
@@ -485,6 +446,7 @@ services:
 
   seaweedfs-volume:
     image: chrislusf/seaweedfs:4.07
+    pull_policy: never
     container_name: aurora-seaweedfs-volume
     command: >
       volume
@@ -510,6 +472,7 @@ services:
 
   seaweedfs-filer:
     image: chrislusf/seaweedfs:4.07
+    pull_policy: never
     container_name: aurora-seaweedfs-filer
     command: >
       filer
@@ -541,6 +504,7 @@ services:
 
   seaweedfs-init:
     image: amazon/aws-cli:2.34.6
+    pull_policy: never
     container_name: aurora-seaweedfs-init
     restart: "no"
     entrypoint: /bin/sh
@@ -561,10 +525,9 @@ services:
         condition: service_healthy
 
   # Memgraph - In-memory Graph Database
-  # ═══════════════════════════════════════════════════════════════════════════
-
   memgraph:
     image: memgraph/memgraph-mage:3.8.1
+    pull_policy: never
     container_name: aurora-memgraph
     ports:
       - "7687:7687"
@@ -576,7 +539,7 @@ services:
       - MEMGRAPH_PASSWORD=${MEMGRAPH_PASSWORD}
     command: >
       --memory-limit=512
-      --log-level=ERROR
+      --log-level=WARNING
       --also-log-to-stderr
     healthcheck:
       test: ["CMD-SHELL", "python3 -c \"import socket; s=socket.socket(); s.settimeout(2); s.connect(('localhost',7687)); s.close()\""]
@@ -587,6 +550,7 @@ services:
 
   memgraph-lab:
     image: memgraph/lab:3.8.0
+    pull_policy: never
     container_name: aurora-memgraph-lab
     ports:
       - "3001:3000"
