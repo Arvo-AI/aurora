@@ -7,6 +7,7 @@ Cache keeps a single ``SpinnakerClient`` per user_id alive for
 is reused across Flask requests and agent tool calls.
 """
 
+import hashlib
 import logging
 import os
 import tempfile
@@ -20,9 +21,9 @@ from requests.auth import HTTPBasicAuth
 logger = logging.getLogger(__name__)
 
 SPINNAKER_TIMEOUT = 30
-CLIENT_CACHE_TTL = 36000  # 10 hours
+CLIENT_CACHE_TTL = 3600  # 1 hour
 
-_client_cache: Dict[str, Tuple["SpinnakerClient", float]] = {}
+_client_cache: Dict[str, Tuple["SpinnakerClient", float, str]] = {}
 _cache_lock = threading.Lock()
 _user_locks: Dict[str, threading.Lock] = {}
 _SWEEP_INTERVAL: float = CLIENT_CACHE_TTL / 2
@@ -78,10 +79,12 @@ def get_spinnaker_client(
         now = time.monotonic()
         with _cache_lock:
             entry = _client_cache.get(user_id)
+        creds_hash = hashlib.sha256(
+            f"{base_url}:{auth_type}:{username}:{password}:{cert_pem}:{key_pem}".encode()
+        ).hexdigest()
         if entry is not None:
-            client, created_at = entry
-            creds_match = client.base_url == base_url and client.auth_type == auth_type
-            if creds_match and (now - created_at) < CLIENT_CACHE_TTL:
+            client, created_at, prev_hash = entry
+            if prev_hash == creds_hash and (now - created_at) < CLIENT_CACHE_TTL:
                 return client
 
         client = SpinnakerClient(
@@ -111,7 +114,7 @@ def get_spinnaker_client(
                         user_id,
                         exc_info=True,
                     )
-            _client_cache[user_id] = (client, now)
+            _client_cache[user_id] = (client, now, creds_hash)
             _sweep_stale_locks()
         return client
 
@@ -142,6 +145,7 @@ def get_spinnaker_client_for_user(user_id: str) -> Optional["SpinnakerClient"]:
             ca_bundle_pem=creds.get("ca_bundle_pem"),
         )
     except Exception:
+        logger.warning("[SPINNAKER] Failed to get client for user %s", user_id, exc_info=True)
         return None
 
 
@@ -211,6 +215,7 @@ class SpinnakerClient:
             raise SpinnakerAPIError(f"Missing PEM content for {suffix}")
         fd, path = tempfile.mkstemp(suffix=f"-spinnaker-{suffix}")
         try:
+            os.fchmod(fd, 0o600)
             os.write(fd, content.encode("utf-8"))
         finally:
             os.close(fd)

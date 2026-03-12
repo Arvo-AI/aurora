@@ -91,11 +91,11 @@ def process_spinnaker_deployment(
         stages = exec_fields.get("stages")
         parameters = exec_fields.get("parameters")
 
-        # Calculate duration
+        # Calculate duration (Spinnaker timestamps are epoch milliseconds)
         duration_ms = None
         if start_time and end_time:
             try:
-                duration_ms = int(end_time) - int(start_time)
+                duration_ms = int(end_time) - int(start_time)  # millis - millis = millis
             except (ValueError, TypeError):
                 logger.debug("%s Failed to compute duration from start=%s end=%s", log_prefix, start_time, end_time)
 
@@ -145,8 +145,8 @@ def process_spinnaker_deployment(
                             payload.get("event_type", "pipeline"),
                             application, pipeline_name, execution_id,
                             execution_url, status, trigger_type, trigger_user,
-                            datetime.fromtimestamp(start_time / 1000, tz=timezone.utc) if isinstance(start_time, (int, float)) and start_time else None,
-                            datetime.fromtimestamp(end_time / 1000, tz=timezone.utc) if isinstance(end_time, (int, float)) and end_time else None,
+                            datetime.fromtimestamp(start_time / 1000, tz=timezone.utc) if isinstance(start_time, (int, float)) and start_time else None,  # epoch ms → UTC
+                            datetime.fromtimestamp(end_time / 1000, tz=timezone.utc) if isinstance(end_time, (int, float)) and end_time else None,  # epoch ms → UTC
                             duration_ms,
                             json.dumps(stages) if stages else None,
                             json.dumps(parameters) if parameters else None,

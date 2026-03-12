@@ -1,6 +1,7 @@
 import logging
 import os
 import secrets
+import uuid
 from typing import Any, Dict, Optional
 
 from flask import Blueprint, jsonify, request
@@ -63,6 +64,9 @@ def connect():
 
     if not base_url:
         return jsonify({"error": "Spinnaker Gate URL is required"}), 400
+
+    if not base_url.startswith(("http://", "https://")):
+        return jsonify({"error": "Spinnaker Gate URL must start with http:// or https://"}), 400
 
     # Build kwargs depending on auth type
     if auth_type == "x509":
@@ -338,6 +342,11 @@ def deployment_webhook(user_id: str):
 
     if not user_id or len(user_id) > 255:
         return jsonify({"error": "user_id is required"}), 400
+
+    try:
+        uuid.UUID(user_id)
+    except ValueError:
+        return jsonify({"error": "Invalid user_id format"}), 400
 
     creds = _get_stored_credentials(user_id)
     if not creds:

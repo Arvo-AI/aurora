@@ -7,10 +7,9 @@ application health, cluster status, and trigger pipelines (e.g., rollback).
 
 import json
 import logging
-from typing import Dict, Optional
+from typing import Dict, Literal, Optional
 
 from pydantic import BaseModel, Field
-from typing import Literal
 
 logger = logging.getLogger(__name__)
 
