@@ -98,7 +98,7 @@ vault:
 
 | Error | Cause | Fix |
 |-------|-------|-----|
-| `permission denied` | IAM/RBAC misconfigured | Check cloud IAM permissions |
+| `permission denied` | IAM/RBAC misconfigured | Ensure both `roles/cloudkms.cryptoKeyEncrypterDecrypter` and `roles/cloudkms.viewer` are granted |
 | `key not found` | Wrong key ID/ARN | Verify key exists and ID is correct |
 | `network timeout` | Can't reach KMS | Check network/firewall rules |
 | `sealed after restart` | Auto-unseal not configured | Verify seal config in Vault |

@@ -63,6 +63,11 @@ gcloud kms keyrings add-iam-policy-binding $KEYRING --location=$LOCATION \
   --member "serviceAccount:vault-kms@${PROJECT_ID}.iam.gserviceaccount.com" \
   --role "roles/cloudkms.cryptoKeyEncrypterDecrypter"
 
+# Grant KMS viewer role (required for Vault to read key metadata during auto-unseal)
+gcloud kms keyrings add-iam-policy-binding $KEYRING --location=$LOCATION \
+  --member "serviceAccount:vault-kms@${PROJECT_ID}.iam.gserviceaccount.com" \
+  --role "roles/cloudkms.viewer"
+
 # Bind to Kubernetes service account
 gcloud iam service-accounts add-iam-policy-binding \
   vault-kms@${PROJECT_ID}.iam.gserviceaccount.com \
@@ -81,6 +86,11 @@ gcloud kms keys add-iam-policy-binding $KEY --location=$LOCATION --keyring=$KEYR
 gcloud kms keyrings add-iam-policy-binding $KEYRING --location=$LOCATION \
   --member "serviceAccount:YOUR_COMPUTE_SA@${PROJECT_ID}.iam.gserviceaccount.com" \
   --role "roles/cloudkms.cryptoKeyEncrypterDecrypter"
+
+# Grant KMS viewer role (required for Vault to read key metadata during auto-unseal)
+gcloud kms keyrings add-iam-policy-binding $KEYRING --location=$LOCATION \
+  --member "serviceAccount:YOUR_COMPUTE_SA@${PROJECT_ID}.iam.gserviceaccount.com" \
+  --role "roles/cloudkms.viewer"
 ```
 
 ### Option C: On-Premises / Non-GCP Kubernetes (Service Account Key)
@@ -100,6 +110,11 @@ gcloud kms keys add-iam-policy-binding $KEY --location=$LOCATION --keyring=$KEYR
 gcloud kms keyrings add-iam-policy-binding $KEYRING --location=$LOCATION \
   --member "serviceAccount:vault-kms@${PROJECT_ID}.iam.gserviceaccount.com" \
   --role "roles/cloudkms.cryptoKeyEncrypterDecrypter"
+
+# Grant KMS viewer role (required for Vault to read key metadata during auto-unseal)
+gcloud kms keyrings add-iam-policy-binding $KEYRING --location=$LOCATION \
+  --member "serviceAccount:vault-kms@${PROJECT_ID}.iam.gserviceaccount.com" \
+  --role "roles/cloudkms.viewer"
 
 # Create and download key file
 gcloud iam service-accounts keys create vault-kms-key.json \
@@ -351,7 +366,7 @@ kubectl logs -n aurora statefulset/aurora-oss-vault -f
 
 | Error | Fix |
 |-------|-----|
-| `PERMISSION_DENIED` | Check IAM binding on key |
+| `PERMISSION_DENIED` | Ensure both `roles/cloudkms.cryptoKeyEncrypterDecrypter` and `roles/cloudkms.viewer` are granted on the keyring |
 | `NOT_FOUND` | Verify project/region/keyring/key names |
 | `INVALID_ARGUMENT` | Check key is encryption type, not signing |
 | `Workload Identity not working` | Verify GKE cluster has WI enabled |
