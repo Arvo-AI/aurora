@@ -21,9 +21,11 @@ class ModelConfig:
     Change these values to switch providers across the entire application.
     """
     
-    # Primary models for chat and operations
-    MAIN_MODEL = "anthropic/claude-sonnet-4.6"
-    VISION_MODEL = "anthropic/claude-sonnet-4.6"
+    _DEFAULT_MODEL = "anthropic/claude-sonnet-4.6"
+
+    # Primary models - configurable via env vars
+    MAIN_MODEL = os.getenv("MAIN_MODEL") or _DEFAULT_MODEL
+    VISION_MODEL = os.getenv("VISION_MODEL") or os.getenv("MAIN_MODEL") or _DEFAULT_MODEL
 
     # Background RCA model - configurable via RCA_MODEL env var, falls back to cost-based selection
     RCA_MODEL = os.getenv("RCA_MODEL") or (
@@ -31,18 +33,18 @@ class ModelConfig:
         else "anthropic/claude-opus-4.6"
     )
 
-    # Summarization models
-    INCIDENT_REPORT_SUMMARIZATION_MODEL = "anthropic/claude-sonnet-4.6"  # For incident reports and chat context
-    TOOL_OUTPUT_SUMMARIZATION_MODEL = "anthropic/claude-sonnet-4.6"  # For summarizing large tool outputs to reduce token usage
+    # Summarization models - configurable via env vars, fall back to MAIN_MODEL
+    INCIDENT_REPORT_SUMMARIZATION_MODEL = os.getenv("SUMMARIZATION_MODEL") or os.getenv("MAIN_MODEL") or _DEFAULT_MODEL
+    TOOL_OUTPUT_SUMMARIZATION_MODEL = os.getenv("SUMMARIZATION_MODEL") or os.getenv("MAIN_MODEL") or _DEFAULT_MODEL
 
-    # Visualization extraction model - always use Sonnet for reliable structured output
-    VISUALIZATION_MODEL = "anthropic/claude-sonnet-4.6"
+    # Visualization extraction model
+    VISUALIZATION_MODEL = os.getenv("MAIN_MODEL") or _DEFAULT_MODEL
 
     # Suggestion extraction
-    SUGGESTION_MODEL = "anthropic/claude-sonnet-4.6"
-    
+    SUGGESTION_MODEL = os.getenv("MAIN_MODEL") or _DEFAULT_MODEL
+
     # Email report generation
-    EMAIL_REPORT_MODEL = "anthropic/claude-sonnet-4.6"
+    EMAIL_REPORT_MODEL = os.getenv("MAIN_MODEL") or _DEFAULT_MODEL
 
 
 class LLMManager:

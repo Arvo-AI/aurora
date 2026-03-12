@@ -1428,6 +1428,31 @@ def initialize_tables():
                 logging.warning(f"Error creating postmortems table: {e}")
                 conn.rollback()
 
+            # Migration: Restore unique constraint on (source_type, source_alert_id, user_id)
+            # The incidents table was migrated to add org_id, which dropped the old 3-column
+            # unique constraint. All webhook task code (datadog, grafana, pagerduty, etc.) uses
+            # ON CONFLICT (source_type, source_alert_id, user_id), so this constraint must exist.
+            try:
+                cursor.execute("""
+                    DO $$
+                    BEGIN
+                        IF NOT EXISTS (
+                            SELECT 1 FROM pg_constraint
+                            WHERE conname = 'incidents_source_type_source_alert_id_user_id_key'
+                            AND conrelid = 'incidents'::regclass
+                        ) THEN
+                            ALTER TABLE incidents
+                            ADD CONSTRAINT incidents_source_type_source_alert_id_user_id_key
+                            UNIQUE (source_type, source_alert_id, user_id);
+                        END IF;
+                    END $$;
+                """)
+                logging.info("Ensured unique constraint on incidents(source_type, source_alert_id, user_id).")
+                conn.commit()
+            except Exception as e:
+                logging.warning(f"Error adding unique constraint to incidents: {e}")
+                conn.rollback()
+
             # Create indexes for performance
             indexes = [
                 "CREATE INDEX IF NOT EXISTS idx_user_tokens_last_activity ON user_tokens(last_activity);",

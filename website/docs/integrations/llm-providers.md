@@ -67,12 +67,12 @@ Vertex AI and Ollama always use their native SDKs regardless of `LLM_PROVIDER_MO
 | | `anthropic/claude-3.5-sonnet` | Widely used, reliable |
 | | `anthropic/claude-3-haiku` | Cheapest (default RCA model) |
 | **Google Gemini** | `google/gemini-3.1-pro-preview` | Latest flagship with thinking |
-| | `google/gemini-3-flash` | Fast, outperforms 2.5 Pro |
+| | `google/gemini-3-flash-preview` | Fast, outperforms 2.5 Pro |
 | | `google/gemini-2.5-pro` | Strong for complex tasks |
 | | `google/gemini-2.5-flash` | Cost-effective |
 | | `google/gemini-2.5-flash-lite` | Cheapest Gemini option |
 | **Vertex AI** | `vertex/gemini-3.1-pro-preview` | Latest flagship with thinking |
-| | `vertex/gemini-3-flash` | Fast, enterprise-grade |
+| | `vertex/gemini-3-flash-preview` | Fast, enterprise-grade |
 | | `vertex/gemini-2.5-pro` | Strong for complex tasks |
 | | `vertex/gemini-2.5-flash` | Cost-effective with IAM auth |
 | | `vertex/gemini-2.5-flash-lite` | Cheapest Vertex option |
