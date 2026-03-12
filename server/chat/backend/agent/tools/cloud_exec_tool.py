@@ -17,6 +17,7 @@ from utils.auth.cloud_auth import generate_azure_access_token
 from .output_sanitizer import sanitize_command_output, filter_error_messages, truncate_json_fields
 from utils.cloud.infrastructure_confirmation import wait_for_user_confirmation
 from .cloud_provider_utils import determine_target_provider_from_context
+from chat.backend.agent.prompt.prompt_builder import CLOUD_EXEC_PROVIDERS
 from chat.backend.agent.access import ModeAccessController
 from utils.cloud.cloud_utils import get_mode_from_context
 
@@ -1581,6 +1582,13 @@ Security & Compliance
             if not success:
                 return json.dumps({"error": f"Failed to setup Tailscale environment. Please connect your Tailscale account first.", "final_command": command, "requires_connection": True})
             resource_id = tailnet
+        elif provider.lower() not in CLOUD_EXEC_PROVIDERS:
+            return json.dumps({
+                "error": f"Provider '{provider}' does not support CLI execution through cloud_exec. "
+                         f"Supported providers: {', '.join(sorted(CLOUD_EXEC_PROVIDERS))}.",
+                "final_command": command,
+                "provider": provider.lower()
+            })
         else:
             # GCP isolated setup (default)
             success, project_id, auth_method, isolated_env = setup_gcp_environment_isolated(user_id, selected_project_id, provider_preference)
