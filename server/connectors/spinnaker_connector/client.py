@@ -79,9 +79,10 @@ def get_spinnaker_client(
         now = time.monotonic()
         with _cache_lock:
             entry = _client_cache.get(user_id)
-        creds_hash = hashlib.sha256(
-            f"{base_url}:{auth_type}:{username}:{password}:{cert_pem}:{key_pem}".encode()
-        ).hexdigest()
+        # Cache key from non-sensitive fields only — avoids hashing raw secrets
+        # while still detecting config changes that should invalidate the client.
+        cache_key_material = f"{base_url}:{auth_type}:{username}:{bool(cert_pem)}:{bool(key_pem)}:{bool(ca_bundle_pem)}"
+        creds_hash = hashlib.sha256(cache_key_material.encode("utf-8")).hexdigest()
         if entry is not None:
             client, created_at, prev_hash = entry
             if prev_hash == creds_hash and (now - created_at) < CLIENT_CACHE_TTL:

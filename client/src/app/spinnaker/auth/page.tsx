@@ -12,30 +12,20 @@ import type {
 } from "@/lib/services/spinnaker";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import {
-  Check, ChevronLeft, Copy, ExternalLink, Eye, EyeOff,
-  Loader2, Rocket, ShieldCheck, Upload, Webhook, Zap,
-} from "lucide-react";
+import { Check, ChevronLeft, Loader2 } from "lucide-react";
 import { getUserFriendlyError } from "@/lib/utils";
-import { formatTimeAgo } from "@/lib/utils/time-format";
+
+import { TokenAuthForm } from "./components/TokenAuthForm";
+import { X509AuthForm } from "./components/X509AuthForm";
+import { ConnectionInfo } from "./components/ConnectionInfo";
+import { RcaToggle } from "./components/RcaToggle";
+import { WebhookPanel } from "./components/WebhookPanel";
+import { DeploymentsList } from "./components/DeploymentsList";
 
 const CACHE_KEY = "spinnaker_connection_status";
 const LOCAL_STORAGE_KEY = "isSpinnakerConnected";
-
-const toSafeExternalUrl = (value?: string): string | null => {
-  if (!value) return null;
-  try {
-    const u = new URL(value);
-    return u.protocol === "http:" || u.protocol === "https:" ? u.toString() : null;
-  } catch {
-    return null;
-  }
-};
 
 export default function SpinnakerAuthPage() {
   const router = useRouter();
@@ -62,7 +52,6 @@ export default function SpinnakerAuthPage() {
   const [deployments, setDeployments] = useState<SpinnakerDeploymentEvent[]>([]);
   const [rcaSettings, setRcaSettings] = useState<SpinnakerRcaSettings | null>(null);
   const [rcaToggleLoading, setRcaToggleLoading] = useState(false);
-  const [copied, setCopied] = useState(false);
 
   const loadStatus = async () => {
     setCheckingStatus(true);
@@ -109,16 +98,6 @@ export default function SpinnakerAuthPage() {
       spinnakerService.getRcaSettings().then(data => { if (data) setRcaSettings(data); }).catch(() => {});
     }
   }, [status?.connected]);
-
-  const copyToClipboard = async (text: string) => {
-    try {
-      await navigator.clipboard.writeText(text);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch {
-      toast({ title: "Copy failed", description: "Unable to copy to clipboard", variant: "destructive" });
-    }
-  };
 
   const readFile = (file: File): Promise<string> => {
     return new Promise((resolve, reject) => {
@@ -251,9 +230,6 @@ export default function SpinnakerAuthPage() {
 
   const isConnected = Boolean(status?.connected);
 
-  const isTokenFormValid = baseUrl && username && password;
-  const isX509FormValid = baseUrl && certContent && keyContent;
-
   if (checkingStatus && !status) {
     return (
       <div className="container mx-auto py-16 px-4 max-w-3xl flex flex-col items-center justify-center gap-3">
@@ -293,190 +269,10 @@ export default function SpinnakerAuthPage() {
 
       {isConnected ? (
         <div className="space-y-4">
-          {/* Connection Info Card */}
-          <Card>
-            <CardContent className="pt-6 space-y-6">
-              <div className="flex items-center justify-between gap-4">
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-medium truncate">{status?.baseUrl}</p>
-                  <p className="text-xs text-muted-foreground mt-0.5">
-                    Auth: {status?.authType || "Token/Basic"}
-                  </p>
-                </div>
-                {(() => {
-                  const safeUrl = toSafeExternalUrl(status?.baseUrl);
-                  return safeUrl ? (
-                    <a href={safeUrl} target="_blank" rel="noopener noreferrer"
-                      className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors shrink-0">
-                      Open Dashboard
-                      <ExternalLink className="h-3 w-3" />
-                    </a>
-                  ) : null;
-                })()}
-              </div>
-
-              <div className="border-t" />
-              <div className="grid grid-cols-2 gap-4">
-                <div className="text-center">
-                  <p className="text-2xl font-semibold tabular-nums">{status?.applications ?? 0}</p>
-                  <p className="text-[11px] text-muted-foreground mt-0.5">Applications</p>
-                </div>
-                <div className="text-center">
-                  <p className="text-2xl font-semibold tabular-nums">{status?.cloudAccounts?.length ?? 0}</p>
-                  <p className="text-[11px] text-muted-foreground mt-0.5">Cloud Accounts</p>
-                </div>
-              </div>
-
-              {status?.cloudAccounts && status.cloudAccounts.length > 0 && (
-                <>
-                  <div className="border-t" />
-                  <div className="space-y-2">
-                    <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Cloud Accounts</p>
-                    <div className="flex flex-wrap gap-1.5">
-                      {status.cloudAccounts.map((account) => (
-                        <Badge key={account} variant="secondary" className="text-xs">
-                          {account}
-                        </Badge>
-                      ))}
-                    </div>
-                  </div>
-                </>
-              )}
-            </CardContent>
-          </Card>
-
-          {/* RCA Toggle Card */}
-          <Card>
-            <CardContent className="pt-6">
-              <div className="flex items-center justify-between">
-                <div className="space-y-1 flex-1">
-                  <h4 className="font-medium flex items-center gap-2">
-                    <Zap className="h-4 w-4" />
-                    Automatic RCA on Deployment Failures
-                  </h4>
-                  <p className="text-sm text-muted-foreground">
-                    Automatically trigger root cause analysis when a Spinnaker pipeline fails
-                  </p>
-                </div>
-                <Switch
-                  checked={rcaSettings?.rcaEnabled ?? true}
-                  onCheckedChange={handleRcaToggle}
-                  disabled={rcaToggleLoading}
-                  className="ml-4"
-                />
-              </div>
-            </CardContent>
-          </Card>
-
-          {/* Webhook Card */}
-          {webhookInfo && (
-            <Card>
-              <CardHeader className="pb-3">
-                <div className="flex items-center gap-2">
-                  <Webhook className="h-5 w-5 text-teal-600" />
-                  <CardTitle className="text-lg">Send Deployment Events to Aurora</CardTitle>
-                </div>
-                <CardDescription>
-                  Configure Spinnaker Echo to send pipeline events to Aurora for deployment tracking
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                <div>
-                  <p className="text-xs font-medium text-muted-foreground mb-1.5">Webhook URL</p>
-                  <div className="relative">
-                    <pre className="text-xs bg-muted p-3 rounded-lg whitespace-pre-wrap break-all pr-20">
-                      <code>{webhookInfo.webhookUrl}</code>
-                    </pre>
-                    <Button size="sm" variant="secondary" className="absolute top-2 right-2 h-8 gap-1.5"
-                      onClick={() => copyToClipboard(webhookInfo.webhookUrl)}>
-                      {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
-                      {copied ? "Copied!" : "Copy"}
-                    </Button>
-                  </div>
-                </div>
-
-                {webhookInfo.echoConfig && (
-                  <div>
-                    <p className="text-xs font-medium text-muted-foreground mb-1.5">Echo Configuration</p>
-                    <pre className="text-xs bg-muted p-3 rounded-lg whitespace-pre-wrap break-all">
-                      <code>{webhookInfo.echoConfig}</code>
-                    </pre>
-                  </div>
-                )}
-
-                {webhookInfo.instructions && webhookInfo.instructions.length > 0 && (
-                  <div className="space-y-1.5 text-xs text-muted-foreground">
-                    <p className="font-medium text-foreground">Setup Instructions:</p>
-                    {webhookInfo.instructions.map((instruction, i) => (
-                      <div key={i} className="flex items-start gap-2">
-                        <span className="font-mono w-4 text-right shrink-0">{i + 1}.</span>
-                        <span>{instruction}</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-          )}
-
-          {/* Recent Deployments Card */}
-          {deployments.length > 0 && (
-            <Card>
-              <CardHeader className="pb-3">
-                <div className="flex items-center gap-2">
-                  <Rocket className="h-5 w-5 text-teal-600" />
-                  <CardTitle className="text-lg">Recent Deployments</CardTitle>
-                </div>
-              </CardHeader>
-              <CardContent>
-                <div className="space-y-2">
-                  {deployments.map((dep) => {
-                    const timeAgo = dep.receivedAt ? formatTimeAgo(new Date(dep.receivedAt)) : null;
-                    return (
-                      <div key={dep.id} className="flex items-start justify-between p-3 rounded-lg border bg-card hover:bg-muted/50 transition-colors">
-                        <div className="flex-1 min-w-0 space-y-1">
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <Badge
-                              variant={
-                                dep.status === "SUCCEEDED" ? "default" :
-                                dep.status === "TERMINAL" || dep.status === "FAILED_CONTINUE" ? "destructive" :
-                                "secondary"
-                              }
-                              className="h-5 text-xs shrink-0"
-                            >
-                              {dep.status}
-                            </Badge>
-                            <span className="font-medium text-sm">{dep.application}</span>
-                          </div>
-                          <div className="flex items-center gap-2 text-xs text-muted-foreground flex-wrap">
-                            <span>{dep.pipelineName}</span>
-                            {dep.triggerType && (
-                              <>
-                                <span>&bull;</span>
-                                <span>{dep.triggerType}</span>
-                              </>
-                            )}
-                            {timeAgo && (
-                              <>
-                                <span>&bull;</span>
-                                <span>{timeAgo}</span>
-                              </>
-                            )}
-                            {dep.triggerUser && dep.triggerUser !== "anonymous" && (
-                              <>
-                                <span>&bull;</span>
-                                <span>by {dep.triggerUser}</span>
-                              </>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </CardContent>
-            </Card>
-          )}
+          <ConnectionInfo status={status!} />
+          <RcaToggle rcaSettings={rcaSettings} loading={rcaToggleLoading} onToggle={handleRcaToggle} />
+          {webhookInfo && <WebhookPanel webhookInfo={webhookInfo} />}
+          <DeploymentsList deployments={deployments} />
 
           {/* Disconnect */}
           <div className="flex items-center justify-between px-1">
@@ -489,7 +285,6 @@ export default function SpinnakerAuthPage() {
           </div>
         </div>
       ) : (
-        /* Setup View */
         <div className="space-y-6">
           <Card>
             <CardHeader>
@@ -505,196 +300,25 @@ export default function SpinnakerAuthPage() {
                   <TabsTrigger value="x509">X.509 Certificate</TabsTrigger>
                 </TabsList>
 
-                {/* Token / Basic Auth Tab */}
                 <TabsContent value="token" className="mt-6">
-                  <form onSubmit={handleConnect} className="space-y-5">
-                    <div className="grid gap-1.5">
-                      <Label htmlFor="spinnaker-url" className="text-sm font-medium">Spinnaker Gate URL</Label>
-                      <Input
-                        id="spinnaker-url"
-                        value={baseUrl}
-                        onChange={(e) => setBaseUrl(e.target.value)}
-                        placeholder="https://spinnaker-gate.example.com"
-                        required
-                        disabled={loading}
-                        className="h-10"
-                      />
-                      <p className="text-xs text-muted-foreground">
-                        Full URL to your Spinnaker Gate API (e.g. https://gate.spinnaker.example.com)
-                      </p>
-                    </div>
-
-                    <div className="grid gap-1.5">
-                      <Label htmlFor="spinnaker-username" className="text-sm font-medium">Username</Label>
-                      <Input
-                        id="spinnaker-username"
-                        value={username}
-                        onChange={(e) => setUsername(e.target.value)}
-                        placeholder="your-username"
-                        required
-                        disabled={loading}
-                        className="h-10"
-                      />
-                    </div>
-
-                    <div className="grid gap-1.5">
-                      <Label htmlFor="spinnaker-password" className="text-sm font-medium">Password / API Token</Label>
-                      <div className="relative">
-                        <Input
-                          id="spinnaker-password"
-                          type={showPassword ? "text" : "password"}
-                          value={password}
-                          onChange={(e) => setPassword(e.target.value)}
-                          placeholder="Enter password or API token"
-                          required
-                          disabled={loading}
-                          className="h-10 pr-10"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => setShowPassword(!showPassword)}
-                          className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
-                          aria-label={showPassword ? "Hide password" : "Show password"}
-                        >
-                          {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                        </button>
-                      </div>
-                    </div>
-
-                    <div className="flex items-start gap-2.5 p-3 rounded-lg bg-muted/50 text-xs">
-                      <ShieldCheck className="h-4 w-4 text-green-600 dark:text-green-500 shrink-0 mt-0.5" />
-                      <div className="space-y-1">
-                        <p className="font-medium">Secure Connection</p>
-                        <p className="text-muted-foreground">
-                          Your credentials are encrypted and stored in Vault. Aurora monitors applications and pipelines, and can trigger pipelines (e.g., rollback) with your confirmation.
-                        </p>
-                      </div>
-                    </div>
-
-                    <Button type="submit" disabled={loading || !isTokenFormValid} className="w-full h-10">
-                      {loading ? (<><Loader2 className="h-4 w-4 mr-2 animate-spin" />Connecting...</>) : "Connect Spinnaker"}
-                    </Button>
-                  </form>
+                  <TokenAuthForm
+                    baseUrl={baseUrl} setBaseUrl={setBaseUrl}
+                    username={username} setUsername={setUsername}
+                    password={password} setPassword={setPassword}
+                    showPassword={showPassword} setShowPassword={setShowPassword}
+                    loading={loading} onSubmit={handleConnect}
+                  />
                 </TabsContent>
 
-                {/* X.509 Certificate Tab */}
                 <TabsContent value="x509" className="mt-6">
-                  <form onSubmit={handleConnect} className="space-y-5">
-                    <div className="grid gap-1.5">
-                      <Label htmlFor="spinnaker-x509-url" className="text-sm font-medium">Spinnaker Gate URL</Label>
-                      <Input
-                        id="spinnaker-x509-url"
-                        value={baseUrl}
-                        onChange={(e) => setBaseUrl(e.target.value)}
-                        placeholder="https://spinnaker-gate-x509.example.com"
-                        required
-                        disabled={loading}
-                        className="h-10"
-                      />
-                      <p className="text-xs text-muted-foreground">
-                        Full URL to your Spinnaker Gate X.509 endpoint (often a separate port, e.g. :8085)
-                      </p>
-                    </div>
-
-                    <div className="grid gap-1.5">
-                      <Label className="text-sm font-medium">Client Certificate (PEM)</Label>
-                      <div className="flex items-center gap-3">
-                        <Label
-                          htmlFor="cert-upload"
-                          className="flex items-center gap-2 px-4 py-2 rounded-md border cursor-pointer hover:bg-muted/50 transition-colors text-sm"
-                        >
-                          <Upload className="h-4 w-4" />
-                          {certFileName || "Choose certificate file"}
-                        </Label>
-                        <input
-                          id="cert-upload"
-                          type="file"
-                          accept=".pem,.crt,.cert"
-                          className="hidden"
-                          onChange={(e) => handleFileUpload(e, setCertContent, setCertFileName)}
-                          disabled={loading}
-                        />
-                        {certContent && (
-                          <Badge variant="secondary" className="text-xs">
-                            <Check className="h-3 w-3 mr-1" /> Loaded
-                          </Badge>
-                        )}
-                      </div>
-                      <p className="text-xs text-muted-foreground">PEM-encoded client certificate (.pem, .crt)</p>
-                    </div>
-
-                    <div className="grid gap-1.5">
-                      <Label className="text-sm font-medium">Client Private Key (PEM)</Label>
-                      <div className="flex items-center gap-3">
-                        <Label
-                          htmlFor="key-upload"
-                          className="flex items-center gap-2 px-4 py-2 rounded-md border cursor-pointer hover:bg-muted/50 transition-colors text-sm"
-                        >
-                          <Upload className="h-4 w-4" />
-                          {keyFileName || "Choose key file"}
-                        </Label>
-                        <input
-                          id="key-upload"
-                          type="file"
-                          accept=".pem,.key"
-                          className="hidden"
-                          onChange={(e) => handleFileUpload(e, setKeyContent, setKeyFileName)}
-                          disabled={loading}
-                        />
-                        {keyContent && (
-                          <Badge variant="secondary" className="text-xs">
-                            <Check className="h-3 w-3 mr-1" /> Loaded
-                          </Badge>
-                        )}
-                      </div>
-                      <p className="text-xs text-muted-foreground">PEM-encoded private key (.pem, .key)</p>
-                    </div>
-
-                    <div className="grid gap-1.5">
-                      <Label className="text-sm font-medium">
-                        CA Bundle (PEM) <span className="text-muted-foreground font-normal">- optional</span>
-                      </Label>
-                      <div className="flex items-center gap-3">
-                        <Label
-                          htmlFor="ca-upload"
-                          className="flex items-center gap-2 px-4 py-2 rounded-md border cursor-pointer hover:bg-muted/50 transition-colors text-sm"
-                        >
-                          <Upload className="h-4 w-4" />
-                          {caFileName || "Choose CA bundle file"}
-                        </Label>
-                        <input
-                          id="ca-upload"
-                          type="file"
-                          accept=".pem,.crt,.cert"
-                          className="hidden"
-                          onChange={(e) => handleFileUpload(e, setCaContent, setCaFileName)}
-                          disabled={loading}
-                        />
-                        {caContent && (
-                          <Badge variant="secondary" className="text-xs">
-                            <Check className="h-3 w-3 mr-1" /> Loaded
-                          </Badge>
-                        )}
-                      </div>
-                      <p className="text-xs text-muted-foreground">
-                        CA certificate bundle for verifying the server (only needed for self-signed or private CAs)
-                      </p>
-                    </div>
-
-                    <div className="flex items-start gap-2.5 p-3 rounded-lg bg-muted/50 text-xs">
-                      <ShieldCheck className="h-4 w-4 text-green-600 dark:text-green-500 shrink-0 mt-0.5" />
-                      <div className="space-y-1">
-                        <p className="font-medium">Secure Connection</p>
-                        <p className="text-muted-foreground">
-                          Certificate and key data are encrypted and stored in Vault. Aurora monitors applications and pipelines, and can trigger pipelines (e.g., rollback) with your confirmation.
-                        </p>
-                      </div>
-                    </div>
-
-                    <Button type="submit" disabled={loading || !isX509FormValid} className="w-full h-10">
-                      {loading ? (<><Loader2 className="h-4 w-4 mr-2 animate-spin" />Connecting...</>) : "Connect Spinnaker"}
-                    </Button>
-                  </form>
+                  <X509AuthForm
+                    baseUrl={baseUrl} setBaseUrl={setBaseUrl}
+                    certContent={certContent} keyContent={keyContent} caContent={caContent}
+                    certFileName={certFileName} keyFileName={keyFileName} caFileName={caFileName}
+                    loading={loading} onSubmit={handleConnect} onFileUpload={handleFileUpload}
+                    setCertContent={setCertContent} setKeyContent={setKeyContent} setCaContent={setCaContent}
+                    setCertFileName={setCertFileName} setKeyFileName={setKeyFileName} setCaFileName={setCaFileName}
+                  />
                 </TabsContent>
               </Tabs>
             </CardContent>
