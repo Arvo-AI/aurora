@@ -262,11 +262,17 @@ info "LLM provider configuration"
 
 if [[ -n "${LLM_API_KEY:-}" ]]; then
   LLM_KEY="$LLM_API_KEY"
-  LLM_PROVIDER_MODE="${LLM_PROVIDER:-openrouter}"
+  LLM_PROVIDER_INPUT="${LLM_PROVIDER:-openrouter}"
   ok "Using LLM config from environment"
 else
-  prompt LLM_PROVIDER_MODE "Provider (openrouter, openai, anthropic, google)" "openrouter"
-  prompt LLM_KEY "API key for $LLM_PROVIDER_MODE"
+  prompt LLM_PROVIDER_INPUT "Provider (openrouter, openai, anthropic, google)" "openrouter"
+  prompt LLM_KEY "API key for $LLM_PROVIDER_INPUT"
+fi
+
+if [[ "$LLM_PROVIDER_INPUT" == "openrouter" ]]; then
+  LLM_PROVIDER_MODE="openrouter"
+else
+  LLM_PROVIDER_MODE="direct"
 fi
 
 # ─── Step 5: Generate .env ───────────────────────────────────────────────────
@@ -317,7 +323,7 @@ fi
 
 # LLM provider
 sed -i.bak "s|^LLM_PROVIDER_MODE=.*|LLM_PROVIDER_MODE=$LLM_PROVIDER_MODE|" .env
-case "$LLM_PROVIDER_MODE" in
+case "$LLM_PROVIDER_INPUT" in
   openrouter) sed -i.bak "s|^OPENROUTER_API_KEY=.*|OPENROUTER_API_KEY=$LLM_KEY|" .env ;;
   openai)     sed -i.bak "s|^OPENAI_API_KEY=.*|OPENAI_API_KEY=$LLM_KEY|" .env ;;
   anthropic)  sed -i.bak "s|^ANTHROPIC_API_KEY=.*|ANTHROPIC_API_KEY=$LLM_KEY|" .env ;;

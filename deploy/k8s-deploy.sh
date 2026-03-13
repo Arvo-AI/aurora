@@ -264,7 +264,7 @@ case "$LLM_PROVIDER" in
   anthropic) LLM_KEY_FIELD="ANTHROPIC_API_KEY" ;;
   google) LLM_KEY_FIELD="GOOGLE_AI_API_KEY" ;;
 esac
-yq -i ".config.LLM_PROVIDER_MODE = \"$LLM_PROVIDER\"" "$VALUES_FILE"
+yq -i ".config.LLM_PROVIDER_MODE = \"$(if [[ "$LLM_PROVIDER" == "openrouter" ]]; then echo openrouter; else echo direct; fi)\"" "$VALUES_FILE"
 yq -i ".secrets.llm.${LLM_KEY_FIELD} = \"$LLM_API_KEY\"" "$VALUES_FILE"
 
 ok "Values file generated: $VALUES_FILE"
