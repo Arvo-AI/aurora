@@ -2,21 +2,21 @@
 set -euo pipefail
 
 # Package all Aurora Docker images into a single transferable tarball
-# for deployment on air-gapped / restricted-egress VMs.
+# for deployment on airtight / restricted-egress VMs.
 #
 # Run this on a machine with internet access:
-#   ./scripts/package-airgap.sh                          # default: linux/amd64
-#   PLATFORM=linux/arm64 ./scripts/package-airgap.sh     # for ARM servers
+#   ./scripts/package-airtight.sh                          # default: linux/amd64
+#   PLATFORM=linux/arm64 ./scripts/package-airtight.sh     # for ARM servers
 #
 # Transfer the resulting .tar.gz to the target VM, then:
-#   make prod-airgap AIRGAP_BUNDLE=aurora-airgap-<version>.tar.gz
+#   make prod-airtight AIRTIGHT_BUNDLE=aurora-airtight-<version>.tar.gz
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 VERSION="${VERSION:-$(cd "$REPO_ROOT" && git rev-parse --short HEAD 2>/dev/null || echo "dev")}"
 PLATFORM="${PLATFORM:-linux/amd64}"
-OUTPUT="${REPO_ROOT}/aurora-airgap-${VERSION}.tar.gz"
+OUTPUT="${REPO_ROOT}/aurora-airtight-${VERSION}.tar.gz"
 
 THIRD_PARTY_IMAGES=(
   "postgres:15-alpine"
@@ -41,7 +41,7 @@ AURORA_IMAGES=(
 )
 
 echo "============================================"
-echo "  Aurora Air-Gap Packager (${VERSION})"
+echo "  Aurora Airtight Packager (${VERSION})"
 echo "  Platform: ${PLATFORM}"
 echo "============================================"
 echo ""
@@ -93,4 +93,4 @@ echo "  Checksum: ${OUTPUT}.sha256"
 echo "============================================"
 echo ""
 echo "Transfer both files to the target VM, then run:"
-echo "  make prod-airgap AIRGAP_BUNDLE=aurora-airgap-${VERSION}.tar.gz"
+echo "  make prod-airtight AIRTIGHT_BUNDLE=aurora-airtight-${VERSION}.tar.gz"
