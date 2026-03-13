@@ -9,7 +9,7 @@ Deploy Aurora on a single VM using Docker Compose.
 **Choose your deployment path:**
 
 - [Standard Deployment](#standard-deployment) — the VM has unrestricted internet access
-- [Secure Deployment (Air-Gap)](#secure-deployment-air-gap) — the VM has restricted or no outbound internet (enterprise, government, private infrastructure)
+- [Secure Deployment (Air-Tight)](#secure-deployment-airtight) — the VM has restricted or no outbound internet (enterprise, government, private infrastructure)
 
 ---
 
@@ -294,13 +294,13 @@ docker compose -f docker-compose.prod-local.yml up -d frontend
 
 ---
 
-## Secure Deployment (Air-Gap)
+## Secure Deployment (Air-Tight)
 
 Use this path when the target VM has restricted or no outbound internet access (enterprise, government, private infrastructure). All Docker images are pre-built and bundled into a single tarball on a machine with internet access, then transferred to the VM. Nothing is fetched from the internet during deployment.
 
 **Prerequisites:**
 
-- You have received the air-gap bundle (`aurora-airgap-<version>.tar.gz`) and its checksum file (`aurora-airgap-<version>.tar.gz.sha256`)
+- You have received the airtight bundle (`aurora-airtight-<version>.tar.gz`) and its checksum file (`aurora-airtight-<version>.tar.gz.sha256`)
 - The target VM meets the [hardware requirements](#1-provision-a-vm) (4+ CPU, 8+ GB RAM, 60 GB SSD)
 - Docker and Docker Compose are installed on the VM (see [Install Dependencies](#3-install-dependencies) — `apt` / `yum` access to OS package repos is typically allowed even on restricted networks)
 - You can SSH into the VM
@@ -311,12 +311,12 @@ Move the `.tar.gz` and `.sha256` files to the VM using whatever transfer method 
 
 ```bash
 # SCP
-scp aurora-airgap-*.tar.gz aurora-airgap-*.sha256 user@VM_IP:~/
+scp aurora-airtight-*.tar.gz aurora-airtight-*.sha256 user@VM_IP:~/
 
 # GCS bucket (GCP)
-gcloud storage cp aurora-airgap-*.tar.gz aurora-airgap-*.sha256 gs://YOUR_BUCKET/
+gcloud storage cp aurora-airtight-*.tar.gz aurora-airtight-*.sha256 gs://YOUR_BUCKET/
 # Then on the VM:
-gcloud storage cp gs://YOUR_BUCKET/aurora-airgap-* ~/
+gcloud storage cp gs://YOUR_BUCKET/aurora-airtight-* ~/
 
 # Azure Blob / AWS S3 / internal file server — use your org's standard method
 ```
@@ -325,14 +325,14 @@ gcloud storage cp gs://YOUR_BUCKET/aurora-airgap-* ~/
 
 ```bash
 cd ~
-sha256sum -c aurora-airgap-*.sha256
+sha256sum -c aurora-airtight-*.sha256
 ```
 
 You should see `OK`. If the check fails, the file was corrupted during transfer — re-transfer it.
 
 ### 3. Clone the Repository
 
-The repo contains configuration files (`docker-compose.airgap.yml`, `Makefile`, `.env.example`) needed to run the stack. No images are pulled during this step.
+The repo contains configuration files (`docker-compose.airtight.yml`, `Makefile`, `.env.example`) needed to run the stack. No images are pulled during this step.
 
 ```bash
 git clone https://github.com/arvo-ai/aurora.git
@@ -382,7 +382,7 @@ Save and exit (`Ctrl+X`, `Y`, `Enter` in nano).
 ### 5. Load Images and Start
 
 ```bash
-make prod-airgap AIRGAP_BUNDLE=~/aurora-airgap-<version>.tar.gz
+make prod-airtight AIRTIGHT_BUNDLE=~/aurora-airtight-<version>.tar.gz
 ```
 
 This loads every Docker image from the tarball into the local Docker daemon and starts the full Aurora stack. No outbound network calls are made. First run takes a few minutes while images are loaded.
@@ -390,7 +390,7 @@ This loads every Docker image from the tarball into the local Docker daemon and 
 On subsequent restarts (images already loaded):
 
 ```bash
-make prod-airgap
+make prod-airtight
 ```
 
 ### 6. Get and Set the Vault Token
@@ -406,7 +406,7 @@ grep VAULT_TOKEN .env
 ### 7. Restart to Apply Vault Token
 
 ```bash
-make down && make prod-airgap
+make down && make prod-airtight
 ```
 
 ### 8. Open Firewall Ports
@@ -419,38 +419,38 @@ Same as the [standard deployment firewall step](#9-open-firewall-ports) — allo
 http://YOUR_VM_IP:3000
 ```
 
-### Deploying Updates (Air-Gap)
+### Deploying Updates (Air-Tight)
 
 Each new Aurora release requires a fresh bundle. On the connected machine:
 
 ```bash
-git pull && make package-airgap
+git pull && make package-airtight
 ```
 
 Transfer the new tarball and checksum to the VM, then:
 
 ```bash
 make down
-make prod-airgap AIRGAP_BUNDLE=~/aurora-airgap-<version>.tar.gz
+make prod-airtight AIRTIGHT_BUNDLE=~/aurora-airtight-<version>.tar.gz
 ```
 
 The `.env` file stays on the VM and is never part of the bundle.
 
-### Creating the Air-Gap Bundle
+### Creating the Air-Tight Bundle
 
 This section is for the person building the bundle on a machine with internet access.
 
 ```bash
 git clone https://github.com/arvo-ai/aurora.git && cd aurora
-make package-airgap
+make package-airtight
 ```
 
-This builds all Aurora images, pulls all third-party images, and saves everything into `aurora-airgap-<version>.tar.gz` with a SHA-256 checksum. The default target architecture is `linux/amd64`.
+This builds all Aurora images, pulls all third-party images, and saves everything into `aurora-airtight-<version>.tar.gz` with a SHA-256 checksum. The default target architecture is `linux/amd64`.
 
 To target ARM servers:
 
 ```bash
-PLATFORM=linux/arm64 make package-airgap
+PLATFORM=linux/arm64 make package-airtight
 ```
 
 If building on Apple Silicon for an x86 server, the default `linux/amd64` cross-compiles automatically — no extra flags needed.

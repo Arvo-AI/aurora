@@ -1,7 +1,7 @@
-# Air-gap deployment compose file.
-# All images are pre-built and loaded via: scripts/package-airgap.sh
+# Airtight deployment compose file.
+# All images are pre-built and loaded via: scripts/package-airtight.sh
 # No build sections — every service uses a local image with pull_policy: never.
-# Usage: make prod-airgap AIRGAP_BUNDLE=aurora-airgap-<version>.tar.gz
+# Usage: make prod-airtight AIRTIGHT_BUNDLE=aurora-airtight-<version>.tar.gz
 
 x-common-env: &common-env
   # Global
