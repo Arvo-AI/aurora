@@ -33,7 +33,7 @@ langchain_community==0.3.31
 langchain_core==1.2.11
 langchain_openai==1.1.7
 langchain-anthropic>=0.3.0
-google-genai==1.58.0 # Pin below 1.67 — extra_items TypedDict requires Python 3.13+
+google-genai==1.58.0  # Pin to avoid interactions module using extra_items TypedDict (requires Python 3.13+)
 langchain-google-genai>=4.0.0,<5.0.0
 langchain-ollama>=0.3.0,<1.0.0
 langgraph==1.0.6
