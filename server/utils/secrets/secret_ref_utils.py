@@ -58,6 +58,7 @@ SUPPORTED_SECRET_PROVIDERS: Set[str] = {
     "aurora",   # Aurora-managed SSH keys
     "jenkins",  # Jenkins CI/CD connector tokens
     "cloudbees", # CloudBees CI connector tokens
+    "spinnaker", # Spinnaker CD connector tokens
 }
 
 

@@ -8,6 +8,7 @@ import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { Copy, Check, ExternalLink } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { copyToClipboard } from "@/lib/utils";
 
 export function PagerDutyWebhookStep() {
   const { toast } = useToast();
@@ -57,13 +58,17 @@ export function PagerDutyWebhookStep() {
     }
   };
 
-  const copyToClipboard = async (text: string) => {
+  const handleCopyToClipboard = async (text: string) => {
     try {
-      await navigator.clipboard.writeText(text);
+      await copyToClipboard(text);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {
-      setError('Failed to copy');
+      toast({
+        title: 'Copy failed',
+        description: 'Could not copy to clipboard. Please copy the URL manually.',
+        variant: 'destructive',
+      });
     }
   };
 
@@ -138,7 +143,7 @@ export function PagerDutyWebhookStep() {
           </div>
           <div className="flex gap-2">
             <code className="flex-1 px-3 py-2 rounded bg-muted text-xs break-all border">{webhookUrl}</code>
-            <Button variant={copied ? "secondary" : "outline"} size="sm" onClick={() => copyToClipboard(webhookUrl)}>
+            <Button variant={copied ? "secondary" : "outline"} size="sm" onClick={() => handleCopyToClipboard(webhookUrl)}>
               {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
             </Button>
           </div>

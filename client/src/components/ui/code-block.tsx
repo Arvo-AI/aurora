@@ -4,7 +4,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { Card, CardContent } from "./card";
 import { Button } from "./button";
 import { Copy, Check, ChevronDown, ChevronUp } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { cn, copyToClipboard } from "@/lib/utils";
 import { getLanguageFromCode, getLanguageDisplayName } from "@/utils/language-detection";
 // Import Prism.js with type assertion
 import Prism from "prismjs";
@@ -128,7 +128,7 @@ export const CodeBlock: React.FC<CodeBlockProps> = ({
 
   const handleCopy = async () => {
     try {
-      await navigator.clipboard.writeText(formattedCode);
+      await copyToClipboard(formattedCode);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch (err) {

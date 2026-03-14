@@ -1,4 +1,4 @@
-.PHONY: help dev down logs rebuild-server restart prod prod-build prod-logs prod-down clean nuke build-no-cache dev-fresh prod-clean prod-nuke prod-build-no-cache prod-fresh prod-prebuilt prod-local init prod-local-logs prod-local-down prod-local-clean prod-local-nuke deploy-build deploy
+.PHONY: help dev down logs rebuild-server restart prod prod-build prod-logs prod-down clean nuke build-no-cache dev-fresh prod-clean prod-nuke prod-build-no-cache prod-fresh prod-prebuilt prod-local init prod-local-logs prod-local-down prod-local-clean prod-local-nuke deploy-build deploy vm-deploy
 
 help:
 	@echo "Available commands:"
@@ -33,6 +33,10 @@ help:
 	@echo "  make down               - Stop production containers (same as dev)"
 	@echo "  make prod-local-clean   - Stop and remove production volumes"
 	@echo "  make prod-local-nuke    - Full cleanup: containers, volumes, images"
+	@echo ""
+	@echo "VM Deployment (single server / cloud VM):"
+	@echo "  make vm-deploy          - Interactive setup: installs Docker, configures .env, and starts Aurora"
+	@echo "                            Supports --prebuilt (default), --build, --skip-docker, --hostname=<host>"
 	@echo ""
 	@echo "Kubernetes Deployment:"
 	@echo "  make deploy-build      - Build and push images for K8s deployment (reads values.generated.yaml)"
@@ -274,6 +278,10 @@ deploy: deploy-build
 	@echo "✓ Deployment complete!"
 	@echo "Next: Initialize Vault (first time only) and verify deployment."
 	@echo "  kubectl get pods -n aurora"
+
+vm-deploy:
+	@chmod +x deploy/vm-deploy.sh
+	@deploy/vm-deploy.sh $(filter-out $@,$(MAKECMDGOALS))
 
 %:
 	@:

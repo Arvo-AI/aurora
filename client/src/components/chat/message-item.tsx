@@ -5,6 +5,7 @@ import { Message } from "../../app/chat/types";
 import { MarkdownRenderer } from "../ui/markdown-renderer";
 import { Copy, Check } from "lucide-react";
 import { Button } from "../ui/button";
+import { copyToClipboard } from "@/lib/utils";
 
 // Import the tool call widget router (routes to custom widgets)
 import ToolCallWidget from "../tool-calls/ToolCallWidget";
@@ -50,7 +51,7 @@ export const MessageItem = React.memo(({ message, sendRaw, onUpdateMessage, sess
     try {
       if (!allMessages || messageIndex === undefined) {
         // Fallback: just copy this message
-        await navigator.clipboard.writeText(message.text || "");
+        await copyToClipboard(message.text || "");
         setCopied(true);
         setTimeout(() => setCopied(false), 2000);
         return;
@@ -91,7 +92,7 @@ export const MessageItem = React.memo(({ message, sendRaw, onUpdateMessage, sess
         }
       }
       
-      await navigator.clipboard.writeText(textToCopy);
+      await copyToClipboard(textToCopy);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch (err) {
