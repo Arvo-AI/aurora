@@ -8,7 +8,7 @@ export default function ConditionalShell({ children }: { children: React.ReactNo
   
   // Don't wrap auth pages and legal pages in ClientShell (which has AppLayout, navigation, etc.)
   const isAuthPage = pathname?.startsWith("/sign-in") || pathname?.startsWith("/sign-up")
-  const isLegalPage = pathname?.startsWith("/terms")
+  const isLegalPage = pathname?.startsWith("/terms") || pathname?.startsWith("/privacy")
   
   if (isAuthPage || isLegalPage) {
     return <>{children}</>
