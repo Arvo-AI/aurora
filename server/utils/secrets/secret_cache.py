@@ -19,7 +19,7 @@ def get_cached_secret(secret_name: str) -> Optional[str]:
         cache_key = f"secret:{secret_name}"
         value = redis_client.get(cache_key)
         if value:
-            logger.info(f"  Cache HIT for secret: {secret_name[:60]}...")
+            logger.debug(f"  Cache HIT for secret: {secret_name[:60]}...")
         else:
             logger.debug(f"Cache MISS for secret: {secret_name[:60]}...")
         return value

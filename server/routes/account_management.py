@@ -1,10 +1,11 @@
 """Account management routes for connected accounts."""
 import logging
-from flask import Blueprint, request, jsonify, session
+from flask import Blueprint, request, jsonify
 from utils.web.cors_utils import create_cors_response
-from utils.auth.stateless_auth import get_user_id_from_request
+from utils.auth.rbac_decorators import require_auth_only
 from utils.db.db_utils import connect_to_db_as_admin, connect_to_db_as_user
 from utils.auth.token_management import get_token_data
+from utils.auth.stateless_auth import get_org_id_from_request
 from utils.secrets.secret_ref_utils import delete_user_secret, SUPPORTED_SECRET_PROVIDERS
 import requests
 import os
@@ -12,25 +13,24 @@ import os
 account_management_bp = Blueprint("account_management", __name__)
 
 
-@account_management_bp.route("/api/connected-accounts/<user_id>", methods=["GET", "OPTIONS"])
-def get_connected_accounts(user_id):
+@account_management_bp.route("/api/connected-accounts/<target_user_id>", methods=["OPTIONS"])
+def get_connected_accounts_options(target_user_id):
+    return create_cors_response()
+
+
+@account_management_bp.route("/api/connected-accounts/<target_user_id>", methods=["GET"])
+@require_auth_only
+def get_connected_accounts(user_id, target_user_id):
     """Get connected account information for a user."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-    
+    conn = None
+    cursor = None
     try:
-        # Get authenticated user identity from X-User-ID header
-        authenticated_user_id = get_user_id_from_request()
+        if user_id != target_user_id:
+            logging.warning(f"SECURITY: User {user_id} attempted to access connected accounts for {target_user_id}")
+            return jsonify({"error": "Not found"}), 404
         
-        if not authenticated_user_id:
-            logging.warning("No authenticated user found for connected accounts request")
-            return jsonify({"error": "Unauthorized"}), 401
-        
-        if authenticated_user_id != user_id:
-            logging.warning(f"SECURITY: User {authenticated_user_id} attempted to access connected accounts for {user_id}")
-            return jsonify({"error": "Unauthorized access to user data"}), 403
-        
-        # Connect to the database
+        org_id = get_org_id_from_request()
+
         conn = connect_to_db_as_admin()
         cursor = conn.cursor()
         
@@ -39,52 +39,43 @@ def get_connected_accounts(user_id):
         # ------------------------------
         cursor.execute(
             """
-            SELECT provider, subscription_id, subscription_name, timestamp
+            SELECT DISTINCT ON (provider)
+                   provider, subscription_id, subscription_name, timestamp, user_id
             FROM user_tokens 
-            WHERE user_id = %s AND secret_ref IS NOT NULL AND is_active = TRUE
+            WHERE (user_id = %s OR org_id = %s)
+              AND secret_ref IS NOT NULL
+              AND is_active = TRUE
+            ORDER BY provider, CASE WHEN user_id = %s THEN 0 ELSE 1 END
             """,
-            (user_id,),
+            (user_id, org_id, user_id),
         )
 
         rows = cursor.fetchall()
 
         accounts: dict = {}
 
-        for provider, subscription_id, subscription_name, timestamp in rows:
+        for provider, subscription_id, subscription_name, timestamp, token_owner_id in rows:
             
-            # Get token data from Vault
-            token_data = get_token_data(user_id, provider)
+            token_data = get_token_data(token_owner_id, provider)
             if not token_data:
                 continue
             
-            # Extract account information based on provider
             account_info = {"isConnected": True}
             
-            # Only fetch full credentials when we actually need them for display
             if provider == "gcp":
-                # For GCP, we need email from credentials for display
-                token_data = get_token_data(user_id, provider)
-                if not token_data:
-                    continue
                 account_info["email"] = token_data.get("email", "Unknown")
                 account_info["name"] = token_data.get("name", "Google Cloud")
                 account_info["displayText"] = account_info["email"]
             elif provider == "aws":
-                # For AWS, try to get account ID from credentials
-                token_data = get_token_data(user_id, provider)
-                if not token_data:
-                    continue
                 account_info["accountId"] = token_data.get("aws_account_id", "Unknown")
                 account_info["name"] = f"AWS Account"
                 account_info["displayText"] = f"Account {account_info['accountId']}"
             elif provider == "azure":
-                # For Azure, use subscription information from DB (no need to fetch credentials)
                 account_info["subscriptionId"] = subscription_id or "Unknown"
                 account_info["subscriptionName"] = subscription_name or "Azure Subscription"
                 account_info["name"] = subscription_name or "Azure"
                 account_info["displayText"] = subscription_name or "Azure Subscription"
             else:
-                # For other providers, use basic info from DB without fetching credentials
                 account_info["name"] = provider.capitalize()
                 account_info["displayText"] = subscription_name or subscription_id or provider.capitalize()
             
@@ -97,60 +88,76 @@ def get_connected_accounts(user_id):
             """
             SELECT provider, account_id, role_arn, last_verified_at
             FROM user_connections
-            WHERE user_id = %s AND status = 'active'
+            WHERE (user_id = %s OR org_id = %s) AND status = 'active'
+            ORDER BY CASE WHEN user_id = %s THEN 0 ELSE 1 END
             """,
-            (user_id,),
+            (user_id, org_id, user_id),
         )
 
         for provider, account_id, role_arn, last_verified in cursor.fetchall():
-            if provider in accounts:  # already filled (unlikely)
+            if provider in accounts:
                 continue
 
+            account_info = {
+                "isConnected": True,
+                "name": f"{provider.upper()} Account" if provider == "aws" else provider.capitalize(),
+                "displayText": f"Account {account_id}" if account_id else provider.capitalize(),
+            }
+
             if provider == "aws":
-                accounts[provider] = {
-                    "isConnected": True,
-                    "accountId": account_id,
-                    "roleArn": role_arn,
-                    "name": "AWS Account",
-                    "displayText": f"Account {account_id}",
-                }
+                account_info["accountId"] = account_id
+                account_info["roleArn"] = role_arn
+                account_info["name"] = "AWS Account"
+            elif provider == "gcp":
+                account_info["projectId"] = account_id
+                account_info["name"] = "Google Cloud"
+                account_info["displayText"] = account_id or "Google Cloud"
+            elif provider == "azure":
+                account_info["subscriptionId"] = account_id
+                account_info["name"] = "Azure"
+                account_info["displayText"] = account_id or "Azure Subscription"
+
+            accounts[provider] = account_info
 
         cursor.close()
         conn.close()
         
         return jsonify({"accounts": accounts})
-    
+
     except Exception as e:
         logging.error(f"Error getting connected accounts: {e}", exc_info=True)
         return jsonify({"error": "Failed to get connected accounts"}), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
 
 
-@account_management_bp.route("/api/connected-accounts/<user_id>/<provider>", methods=["DELETE", "OPTIONS"])
-def delete_connected_account(user_id, provider):
+@account_management_bp.route("/api/connected-accounts/<target_user_id>/<provider>", methods=["OPTIONS"])
+def delete_connected_account_options(target_user_id, provider):
+    return create_cors_response()
+
+
+@account_management_bp.route("/api/connected-accounts/<target_user_id>/<provider>", methods=["DELETE"])
+@require_auth_only
+def delete_connected_account(user_id, target_user_id, provider):
     """Delete stored credentials for *provider* so tools can no longer use them."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
     try:
-        # Get authenticated user identity from X-User-ID header
-        authenticated_user_id = get_user_id_from_request()
+        if user_id != target_user_id:
+            logging.warning(f"SECURITY: User {user_id} attempted to delete connected account for {target_user_id}")
+            return jsonify({"error": "Not found"}), 404
         
-        if not authenticated_user_id:
-            logging.warning("No authenticated user found for delete connected account request")
-            return jsonify({"error": "Unauthorized"}), 401
-        
-        if authenticated_user_id != user_id:
-            logging.warning(f"SECURITY: User {authenticated_user_id} attempted to delete connected account for {user_id}")
-            return jsonify({"error": "Unauthorized access to user data"}), 403
-        
+        org_id = get_org_id_from_request()
+
         # Get secret_ref BEFORE deleting to clear cache properly
         secret_ref = None
         try:
             conn = connect_to_db_as_admin()
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT secret_ref FROM user_tokens WHERE user_id = %s AND provider = %s",
-                (user_id, provider)
+                "SELECT secret_ref FROM user_tokens WHERE user_id = %s AND (org_id = %s OR org_id IS NULL) AND provider = %s",
+                (user_id, org_id, provider)
             )
             result = cursor.fetchone()
             if result:
@@ -173,8 +180,8 @@ def delete_connected_account(user_id, provider):
             cursor = conn.cursor()
 
             cursor.execute(
-                "DELETE FROM user_tokens WHERE user_id = %s AND provider = %s",
-                (user_id, provider)
+                "DELETE FROM user_tokens WHERE user_id = %s AND (org_id = %s OR org_id IS NULL) AND provider = %s",
+                (user_id, org_id, provider)
             )
             deleted = cursor.rowcount
             conn.commit()
@@ -199,8 +206,8 @@ def delete_connected_account(user_id, provider):
                 conn = connect_to_db_as_admin()
                 cursor = conn.cursor()
                 cursor.execute(
-                    "DELETE FROM user_preferences WHERE user_id = %s AND preference_key = 'gcp_root_project'",
-                    (user_id,)
+                    "DELETE FROM user_preferences WHERE user_id = %s AND (org_id = %s OR org_id IS NULL) AND preference_key = 'gcp_root_project'",
+                    (user_id, org_id)
                 )
                 conn.commit()
                 if cursor.rowcount > 0:
@@ -250,8 +257,8 @@ def delete_connected_account(user_id, provider):
             cursor = conn.cursor()
 
             cursor.execute(
-                "DELETE FROM user_tokens WHERE user_id = %s AND provider = %s",
-                (user_id, provider)
+                "DELETE FROM user_tokens WHERE user_id = %s AND (org_id = %s OR org_id IS NULL) AND provider = %s",
+                (user_id, org_id, provider)
             )
 
             deleted = cursor.rowcount
@@ -285,21 +292,16 @@ def delete_connected_account(user_id, provider):
         return jsonify({"error": "Failed to delete connected account"}), 500
 
 
-@account_management_bp.route("/api/getUserId", methods=["GET", "OPTIONS"])
-def get_user_id():
+@account_management_bp.route("/api/getUserId", methods=["OPTIONS"])
+def get_user_id_options():
+    return create_cors_response()
+
+
+@account_management_bp.route("/api/getUserId", methods=["GET"])
+@require_auth_only
+def get_user_id(user_id):
     """Get the current user ID from session or request."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-    
     try:
-        # Get user_id from multiple sources: stateless auth (GCP) or session (AWS) or query parameter
-        user_id = get_user_id_from_request()
-        
-        # If no user_id found, return error instead of generating fallback
-        if not user_id:
-            logging.warning("No user ID found in request - user should authenticate via Auth.js")
-            return jsonify({"error": "No user ID found. Please authenticate via Auth.js."}), 401
-        
         return jsonify({"userId": user_id}), 200
         
     except Exception as e:
@@ -307,62 +309,52 @@ def get_user_id():
         return jsonify({"error": "Failed to get user ID"}), 500
 
 
-@account_management_bp.route("/user_tokens", methods=["GET", "OPTIONS"])
-def get_user_tokens():
-    """Fetch user tokens from user_tokens table."""
-    if request.method == 'OPTIONS':
-        return create_cors_response()
+@account_management_bp.route("/user_tokens", methods=["OPTIONS"])
+def get_user_tokens_options():
+    return create_cors_response()
 
+
+@account_management_bp.route("/user_tokens", methods=["GET"])
+@require_auth_only
+def get_user_tokens(user_id):
+    """Fetch user tokens from user_tokens table."""
     conn = None
     cursor = None
     try:
-        # Debug-level request details
         logging.debug(f"get_user_tokens called - method: {request.method}")
         
-        # SECURITY FIX: Validate user authentication properly
-        user_id_from_request = get_user_id_from_request()
         user_id_from_args = request.args.get("user_id")
         
         logging.debug(
-            "get_user_tokens - user_id from request: %s, from args: %s",
-            user_id_from_request,
+            "get_user_tokens - user_id from auth: %s, from args: %s",
+            user_id,
             user_id_from_args,
         )
-        
-        # SECURITY: Unified authentication using get_user_id_from_request()
-        authenticated_user_id = user_id_from_request
 
-        if authenticated_user_id:
-            logging.debug("Authenticated user: %s", authenticated_user_id)
-            # SECURITY: Clear any old Flask sessions when authenticated user is present
-            if session:
-                session.clear()
-                logging.debug("Cleared Flask session for authenticated user %s", authenticated_user_id)
-            
-            # SECURITY: Validate that requested user_id matches authenticated user
-            if user_id_from_args and user_id_from_args != authenticated_user_id:
-                logging.warning(f"SECURITY: User {authenticated_user_id} attempted to access data for {user_id_from_args}")
-                return jsonify({"error": "Unauthorized access to user data"}), 403
+        if user_id_from_args and user_id_from_args != user_id:
+            logging.warning(f"SECURITY: User {user_id} attempted to access data for {user_id_from_args}")
+            return jsonify({"error": "Unauthorized access to user data"}), 403
         
-        # Final validation: we must have an authenticated user
-        if not authenticated_user_id:
-            logging.warning("No authenticated user found, returning empty array")
-            return jsonify([]), 200
-        
-        user_id = authenticated_user_id
+        org_id = get_org_id_from_request()
         logging.debug("Final authenticated user_id: %s", user_id)
         
         conn = connect_to_db_as_user()
         cursor = conn.cursor()
         cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
+        if org_id:
+            cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
         conn.commit()
         cursor.execute(
             """
-            SELECT subscription_id, subscription_name, tenant_id, client_id, provider, email
+            SELECT DISTINCT ON (provider)
+                   subscription_id, subscription_name, tenant_id, client_id, provider, email
             FROM user_tokens 
-            WHERE user_id = %s AND is_active = TRUE AND secret_ref IS NOT NULL
+            WHERE (user_id = %s OR org_id = %s)
+              AND is_active = TRUE
+              AND secret_ref IS NOT NULL
+            ORDER BY provider, CASE WHEN user_id = %s THEN 0 ELSE 1 END
             """,
-            (user_id,)
+            (user_id, org_id, user_id)
         )
         tokens = cursor.fetchall()
 

@@ -16,7 +16,8 @@ from werkzeug.utils import secure_filename
 
 from utils.db.connection_pool import db_pool
 from utils.web.cors_utils import create_cors_response
-from utils.auth.stateless_auth import get_user_id_from_request
+from utils.auth.rbac_decorators import require_permission
+from utils.auth.stateless_auth import get_org_id_from_request
 
 logger = logging.getLogger(__name__)
 
@@ -63,28 +64,30 @@ def serialize_document(row: tuple) -> dict[str, Any]:
 # =============================================================================
 
 @knowledge_base_bp.route("/memory", methods=["GET", "OPTIONS"])
-def get_memory():
-    """Get user's knowledge base memory content."""
+@require_permission("knowledge_base", "read")
+def get_memory(user_id):
+    """Get the org's knowledge base memory content."""
     if request.method == "OPTIONS":
         return create_cors_response()
 
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "Authentication required"}), 401
+    org_id = get_org_id_from_request()
 
     try:
         with db_pool.get_user_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
+            cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
             conn.commit()
 
             cursor.execute(
                 """
                 SELECT content, updated_at
                 FROM knowledge_base_memory
-                WHERE user_id = %s
+                WHERE org_id = %s
+                ORDER BY updated_at DESC
+                LIMIT 1
                 """,
-                (user_id,)
+                (org_id,)
             )
             row = cursor.fetchone()
 
@@ -105,14 +108,11 @@ def get_memory():
 
 
 @knowledge_base_bp.route("/memory", methods=["PUT", "OPTIONS"])
-def update_memory():
+@require_permission("knowledge_base", "write")
+def update_memory(user_id):
     """Update user's knowledge base memory content."""
     if request.method == "OPTIONS":
         return create_cors_response()
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "Authentication required"}), 401
 
     try:
         data = request.get_json(force=True, silent=True) or {}
@@ -127,22 +127,25 @@ def update_memory():
             "error": f"Content exceeds maximum length of {MEMORY_MAX_LENGTH} characters"
         }), 400
 
+    org_id = get_org_id_from_request()
+
     try:
         with db_pool.get_user_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
+            cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
             conn.commit()
 
             # Upsert the memory content
             cursor.execute(
                 """
-                INSERT INTO knowledge_base_memory (user_id, content, updated_at)
-                VALUES (%s, %s, CURRENT_TIMESTAMP)
-                ON CONFLICT (user_id)
+                INSERT INTO knowledge_base_memory (user_id, org_id, content, updated_at)
+                VALUES (%s, %s, %s, CURRENT_TIMESTAMP)
+                ON CONFLICT (user_id, org_id)
                 DO UPDATE SET content = EXCLUDED.content, updated_at = CURRENT_TIMESTAMP
                 RETURNING updated_at
                 """,
-                (user_id, content)
+                (user_id, org_id, content)
             )
             row = cursor.fetchone()
             conn.commit()
@@ -165,19 +168,19 @@ def update_memory():
 # =============================================================================
 
 @knowledge_base_bp.route("/documents", methods=["GET", "OPTIONS"])
-def list_documents():
+@require_permission("knowledge_base", "read")
+def list_documents(user_id):
     """List all documents for the user."""
     if request.method == "OPTIONS":
         return create_cors_response()
 
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "Authentication required"}), 401
+    org_id = get_org_id_from_request()
 
     try:
         with db_pool.get_user_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
+            cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
             conn.commit()
 
             cursor.execute(
@@ -185,10 +188,10 @@ def list_documents():
                 SELECT id, filename, original_filename, file_type, file_size_bytes,
                        status, error_message, chunk_count, created_at, updated_at
                 FROM knowledge_base_documents
-                WHERE user_id = %s
+                WHERE org_id = %s
                 ORDER BY created_at DESC
                 """,
-                (user_id,)
+                (org_id,)
             )
             documents = [serialize_document(row) for row in cursor.fetchall()]
 
@@ -209,14 +212,13 @@ def list_documents():
 
 
 @knowledge_base_bp.route("/upload", methods=["POST", "OPTIONS"])
-def upload_document():
+@require_permission("knowledge_base", "write")
+def upload_document(user_id):
     """Upload a new document for processing."""
     if request.method == "OPTIONS":
         return create_cors_response()
 
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "Authentication required"}), 401
+    org_id = get_org_id_from_request()
 
     # Check if file is in request
     if 'file' not in request.files:
@@ -272,15 +274,16 @@ def upload_document():
         with db_pool.get_user_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
+            cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
             conn.commit()
 
             # Check if document with same original filename exists
             cursor.execute(
                 """
                 SELECT id FROM knowledge_base_documents
-                WHERE user_id = %s AND original_filename = %s
+                WHERE org_id = %s AND original_filename = %s
                 """,
-                (user_id, original_filename)
+                (org_id, original_filename)
             )
             existing = cursor.fetchone()
             if existing:
@@ -292,11 +295,11 @@ def upload_document():
             cursor.execute(
                 """
                 INSERT INTO knowledge_base_documents
-                (id, user_id, filename, original_filename, file_type, file_size_bytes, status)
-                VALUES (%s, %s, %s, %s, %s, %s, 'uploading')
+                (id, user_id, org_id, filename, original_filename, file_type, file_size_bytes, status)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, 'uploading')
                 RETURNING id, created_at
                 """,
-                (doc_id, user_id, filename, original_filename, file_type, file_size)
+                (doc_id, user_id, org_id, filename, original_filename, file_type, file_size)
             )
             row = cursor.fetchone()
             conn.commit()
@@ -313,15 +316,16 @@ def upload_document():
                 with db_pool.get_user_connection() as conn:
                     cursor = conn.cursor()
                     cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
+                    cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
                     conn.commit()
 
                     cursor.execute(
                         """
                         UPDATE knowledge_base_documents
                         SET storage_path = %s, status = 'processing', updated_at = CURRENT_TIMESTAMP
-                        WHERE id = %s AND user_id = %s
+                        WHERE id = %s AND org_id = %s
                         """,
-                        (storage_path, doc_id, user_id)
+                        (storage_path, doc_id, org_id)
                     )
                     conn.commit()
             except Exception as db_error:
@@ -346,15 +350,16 @@ def upload_document():
             with db_pool.get_user_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
+                cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
                 conn.commit()
 
                 cursor.execute(
                     """
                     UPDATE knowledge_base_documents
                     SET status = 'failed', error_message = %s, updated_at = CURRENT_TIMESTAMP
-                    WHERE id = %s AND user_id = %s
+                    WHERE id = %s AND org_id = %s
                     """,
-                    ("Document upload failed. Please try again.", doc_id, user_id)
+                    ("Document upload failed. Please try again.", doc_id, org_id)
                 )
                 conn.commit()
 
@@ -376,19 +381,19 @@ def upload_document():
 
 
 @knowledge_base_bp.route("/documents/<doc_id>", methods=["GET", "OPTIONS"])
-def get_document(doc_id: str):
+@require_permission("knowledge_base", "read")
+def get_document(user_id, doc_id: str):
     """Get a specific document's details."""
     if request.method == "OPTIONS":
         return create_cors_response()
 
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "Authentication required"}), 401
+    org_id = get_org_id_from_request()
 
     try:
         with db_pool.get_user_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
+            cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
             conn.commit()
 
             cursor.execute(
@@ -396,9 +401,9 @@ def get_document(doc_id: str):
                 SELECT id, filename, original_filename, file_type, file_size_bytes,
                        status, error_message, chunk_count, created_at, updated_at
                 FROM knowledge_base_documents
-                WHERE id = %s AND user_id = %s
+                WHERE id = %s AND org_id = %s
                 """,
-                (doc_id, user_id)
+                (doc_id, org_id)
             )
             row = cursor.fetchone()
 
@@ -413,19 +418,19 @@ def get_document(doc_id: str):
 
 
 @knowledge_base_bp.route("/documents/<doc_id>", methods=["DELETE", "OPTIONS"])
-def delete_document(doc_id: str):
+@require_permission("knowledge_base", "write")
+def delete_document(user_id, doc_id: str):
     """Delete a document and its chunks."""
     if request.method == "OPTIONS":
         return create_cors_response()
 
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "Authentication required"}), 401
+    org_id = get_org_id_from_request()
 
     try:
         with db_pool.get_user_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
+            cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
             conn.commit()
 
             # Get document info first
@@ -433,9 +438,9 @@ def delete_document(doc_id: str):
                 """
                 SELECT storage_path, original_filename
                 FROM knowledge_base_documents
-                WHERE id = %s AND user_id = %s
+                WHERE id = %s AND org_id = %s
                 """,
-                (doc_id, user_id)
+                (doc_id, org_id)
             )
             row = cursor.fetchone()
 
@@ -465,9 +470,9 @@ def delete_document(doc_id: str):
             cursor.execute(
                 """
                 DELETE FROM knowledge_base_documents
-                WHERE id = %s AND user_id = %s
+                WHERE id = %s AND org_id = %s
                 """,
-                (doc_id, user_id)
+                (doc_id, org_id)
             )
             conn.commit()
 
@@ -481,14 +486,11 @@ def delete_document(doc_id: str):
 
 
 @knowledge_base_bp.route("/search", methods=["POST", "OPTIONS"])
-def search_documents():
+@require_permission("knowledge_base", "read")
+def search_documents(user_id):
     """Search the knowledge base (for direct API usage, not agent tool)."""
     if request.method == "OPTIONS":
         return create_cors_response()
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "Authentication required"}), 401
 
     try:
         data = request.get_json(force=True, silent=True) or {}
@@ -506,7 +508,8 @@ def search_documents():
 
     try:
         from routes.knowledge_base.weaviate_client import search_knowledge_base
-        results = search_knowledge_base(user_id, query, limit)
+        org_id = get_org_id_from_request()
+        results = search_knowledge_base(user_id, query, limit, org_id=org_id)
 
         return jsonify({
             "query": query,
@@ -567,25 +570,27 @@ def _delete_file(storage_path: str) -> None:
     storage.delete_file(relative_path, user_id=user_id)
 
 
-def _check_user_limits(user_id: str, new_file_size: int) -> str | None:
+def _check_user_limits(user_id: str, file_size: int) -> str | None:
     """
-    Check if user has exceeded document or storage limits.
+    Check if org has exceeded document or storage limits.
 
     Returns error message if limit exceeded, None if OK.
     """
+    org_id = get_org_id_from_request()
     try:
         with db_pool.get_user_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
+            cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
+            conn.commit()
 
-            # Get document count and total storage for user
             cursor.execute(
                 """
                 SELECT COUNT(*), COALESCE(SUM(file_size_bytes), 0)
                 FROM knowledge_base_documents
-                WHERE user_id = %s
+                WHERE org_id = %s
                 """,
-                (user_id,)
+                (org_id,)
             )
             doc_count, total_bytes = cursor.fetchone()
 
@@ -596,7 +601,7 @@ def _check_user_limits(user_id: str, new_file_size: int) -> str | None:
             # Check storage limit (convert to MB for comparison)
             # Convert total_bytes to float to avoid Decimal + float type mismatch
             total_mb = float(total_bytes) / (1024 * 1024)
-            new_file_mb = new_file_size / (1024 * 1024)
+            new_file_mb = file_size / (1024 * 1024)
 
             if total_mb + new_file_mb > MAX_STORAGE_PER_USER_MB:
                 return f"Storage limit reached ({MAX_STORAGE_PER_USER_MB}MB). Delete some documents to free up space."

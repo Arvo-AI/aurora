@@ -6,6 +6,7 @@ import { corootService, CorootStatus } from "@/lib/services/coroot";
 import { CorootConnectionStep } from "@/components/coroot/CorootConnectionStep";
 import { CorootConnectedStatus } from "@/components/coroot/CorootConnectedStatus";
 import { getUserFriendlyError } from "@/lib/utils";
+import ConnectorAuthGuard from "@/components/connectors/ConnectorAuthGuard";
 
 const CACHE_KEY = "coroot_connection_status";
 
@@ -194,16 +195,17 @@ export default function CorootAuthPage() {
   const isConnected = Boolean(status?.connected);
 
   return (
-    <div className="container mx-auto py-8 px-4 max-w-5xl">
-      <div className="mb-6">
-        <h1 className="text-3xl font-bold">Coroot Integration</h1>
-        <p className="text-muted-foreground mt-1">
-          Connect your Coroot instance to access metrics, logs, traces, incidents, and more inside Aurora.
-        </p>
-      </div>
+    <ConnectorAuthGuard connectorName="Coroot">
+      <div className="container mx-auto py-8 px-4 max-w-5xl">
+        <div className="mb-6">
+          <h1 className="text-3xl font-bold">Coroot Integration</h1>
+          <p className="text-muted-foreground mt-1">
+            Connect your Coroot instance to access metrics, logs, traces, incidents, and more inside Aurora.
+          </p>
+        </div>
 
-      {!isConnected ? (
-        <CorootConnectionStep
+        {!isConnected ? (
+          <CorootConnectionStep
           url={url}
           setUrl={setUrl}
           email={email}
@@ -221,5 +223,6 @@ export default function CorootAuthPage() {
         />
       ) : null}
     </div>
+    </ConnectorAuthGuard>
   );
 }

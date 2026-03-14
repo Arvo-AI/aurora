@@ -6,6 +6,7 @@ import { thousandEyesService, ThousandEyesStatus } from "@/lib/services/thousand
 import { ThousandEyesConnectionStep } from "@/components/thousandeyes/ThousandEyesConnectionStep";
 import { ThousandEyesConnectedStatus } from "@/components/thousandeyes/ThousandEyesConnectedStatus";
 import { getUserFriendlyError } from "@/lib/utils";
+import ConnectorAuthGuard from "@/components/connectors/ConnectorAuthGuard";
 
 const CACHE_KEY = "thousandeyes_connection_status";
 
@@ -192,16 +193,17 @@ export default function ThousandEyesAuthPage() {
   const isConnected = Boolean(status?.connected);
 
   return (
-    <div className="container mx-auto py-8 px-4 max-w-5xl">
-      <div className="mb-6">
-        <h1 className="text-3xl font-bold">ThousandEyes Integration</h1>
-        <p className="text-muted-foreground mt-1">
-          Connect your ThousandEyes account to access network intelligence, test results, alerts, and Internet Insights inside Aurora.
-        </p>
-      </div>
+    <ConnectorAuthGuard connectorName="ThousandEyes">
+      <div className="container mx-auto py-8 px-4 max-w-5xl">
+        <div className="mb-6">
+          <h1 className="text-3xl font-bold">ThousandEyes Integration</h1>
+          <p className="text-muted-foreground mt-1">
+            Connect your ThousandEyes account to access network intelligence, test results, alerts, and Internet Insights inside Aurora.
+          </p>
+        </div>
 
-      {isConnected && status ? (
-        <ThousandEyesConnectedStatus
+        {isConnected && status ? (
+          <ThousandEyesConnectedStatus
           status={status}
           onDisconnect={handleDisconnect}
           loading={loading}
@@ -217,5 +219,6 @@ export default function ThousandEyesAuthPage() {
         />
       )}
     </div>
+    </ConnectorAuthGuard>
   );
 }

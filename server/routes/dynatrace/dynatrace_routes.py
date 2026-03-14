@@ -12,12 +12,13 @@ from routes.dynatrace.tasks import process_dynatrace_problem
 from utils.db.connection_pool import db_pool
 from utils.web.cors_utils import create_cors_response
 from utils.auth.stateless_auth import (
-    get_user_id_from_request,
+    get_org_id_from_request,
     get_user_preference,
     store_user_preference,
 )
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 from routes.dynatrace.config import DYNATRACE_TIMEOUT
+from utils.auth.rbac_decorators import require_permission
 
 logger = logging.getLogger(__name__)
 
@@ -96,14 +97,8 @@ def _get_stored_credentials(user_id: str) -> dict[str, Any] | None:
 
 
 @dynatrace_bp.route("/connect", methods=["POST", "OPTIONS"])
-def connect():
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
-
+@require_permission("connectors", "write")
+def connect(user_id):
     data = request.get_json(force=True, silent=True) or {}
     api_token = data.get("apiToken")
     raw_url = data.get("environmentUrl")
@@ -136,14 +131,8 @@ def connect():
 
 
 @dynatrace_bp.route("/status", methods=["GET", "OPTIONS"])
-def status():
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
-
+@require_permission("connectors", "read")
+def status(user_id):
     creds = _get_stored_credentials(user_id)
     if not creds or not creds.get("api_token") or not creds.get("environment_url"):
         return jsonify({"connected": False})
@@ -156,14 +145,8 @@ def status():
 
 
 @dynatrace_bp.route("/disconnect", methods=["POST", "DELETE", "OPTIONS"])
-def disconnect():
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
-
+@require_permission("connectors", "write")
+def disconnect(user_id):
     try:
         with db_pool.get_admin_connection() as conn:
             cursor = conn.cursor()
@@ -199,14 +182,9 @@ def webhook(user_id: str):
 
 
 @dynatrace_bp.route("/alerts", methods=["GET", "OPTIONS"])
-def get_alerts():
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
-
+@require_permission("connectors", "read")
+def get_alerts(user_id):
+    org_id = get_org_id_from_request()
     limit = request.args.get("limit", 50, type=int)
     offset = request.args.get("offset", 0, type=int)
     state_filter = request.args.get("state")
@@ -214,9 +192,10 @@ def get_alerts():
     try:
         with db_pool.get_admin_connection() as conn:
             cursor = conn.cursor()
+            cursor.execute("SET myapp.current_org_id = %s", (org_id,))
 
-            conditions = ["user_id = %s"]
-            params: list = [user_id]
+            conditions = ["org_id = %s"]
+            params: list = [org_id]
             if state_filter:
                 conditions.append("problem_state = %s")
                 params.append(state_filter)
@@ -252,14 +231,8 @@ def get_alerts():
 
 
 @dynatrace_bp.route("/webhook-url", methods=["GET", "OPTIONS"])
-def get_webhook_url():
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
-
+@require_permission("connectors", "read")
+def get_webhook_url(user_id):
     ngrok_url = os.getenv("NGROK_URL", "").rstrip("/")
     backend_url = os.getenv("NEXT_PUBLIC_BACKEND_URL", "").rstrip("/")
     base_url = ngrok_url if ngrok_url and backend_url.startswith("http://localhost") else backend_url
@@ -289,26 +262,14 @@ def get_webhook_url():
 
 
 @dynatrace_bp.route("/rca-settings", methods=["GET", "OPTIONS"])
-def get_rca_settings():
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
-
+@require_permission("connectors", "read")
+def get_rca_settings(user_id):
     return jsonify({"rcaEnabled": get_user_preference(user_id, "dynatrace_rca_enabled", default=False)})
 
 
 @dynatrace_bp.route("/rca-settings", methods=["PUT", "OPTIONS"])
-def update_rca_settings():
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
-
+@require_permission("connectors", "write")
+def update_rca_settings(user_id):
     data = request.get_json(force=True, silent=True) or {}
     rca_enabled = data.get("rcaEnabled", False)
     if not isinstance(rca_enabled, bool):

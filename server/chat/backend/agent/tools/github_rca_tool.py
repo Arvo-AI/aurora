@@ -16,17 +16,25 @@ logger = logging.getLogger(__name__)
 
 
 def _get_kb_memory_content(user_id: str) -> Optional[str]:
-    """Fetch Knowledge Base Memory content for a user."""
+    """Fetch Knowledge Base Memory content for the user's org."""
     try:
         from utils.db.connection_pool import db_pool
-        with db_pool.get_user_connection() as conn:
+        with db_pool.get_admin_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
-            conn.commit()
-            cursor.execute(
-                "SELECT content FROM knowledge_base_memory WHERE user_id = %s",
-                (user_id,)
-            )
+            cursor.execute("SELECT org_id FROM users WHERE id = %s", (user_id,))
+            user_row = cursor.fetchone()
+            org_id = user_row[0] if user_row else None
+
+            if org_id:
+                cursor.execute(
+                    "SELECT content FROM knowledge_base_memory WHERE org_id = %s ORDER BY updated_at DESC LIMIT 1",
+                    (org_id,)
+                )
+            else:
+                cursor.execute(
+                    "SELECT content FROM knowledge_base_memory WHERE user_id = %s ORDER BY updated_at DESC LIMIT 1",
+                    (user_id,)
+                )
             row = cursor.fetchone()
             if row and row[0]:
                 return row[0].strip()

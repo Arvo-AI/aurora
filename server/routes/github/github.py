@@ -4,7 +4,7 @@ import flask
 from flask import Blueprint, request, jsonify, Response
 import os
 from utils.web.cors_utils import create_cors_response
-from utils.auth.stateless_auth import get_user_id_from_request
+from utils.auth.rbac_decorators import require_permission
 
 github_bp = Blueprint("github", __name__)
 
@@ -12,17 +12,14 @@ github_bp = Blueprint("github", __name__)
 FRONTEND_URL = os.getenv("FRONTEND_URL")
 
 @github_bp.route("/login", methods=["POST", "OPTIONS"])
-def github_login():
+@require_permission("connectors", "write")
+def github_login(user_id):
     """Handle GitHub OAuth login initiation and manual token storage"""
     if request.method == 'OPTIONS':
         return create_cors_response()
     
     try:
         data = request.get_json()
-        user_id = data.get('userId') or get_user_id_from_request()
-        
-        if not user_id:
-            return jsonify({"error": "User ID is required"}), 400
         
         # Check if this is a manual token submission or OAuth initiation
         access_token = data.get('access_token')
@@ -111,15 +108,13 @@ def github_login():
         return jsonify({"error": "Failed to process GitHub login"}), 500
 
 @github_bp.route("/status", methods=["GET", "OPTIONS"])
-def github_status():
+@require_permission("connectors", "read")
+def github_status(user_id):
     """Check GitHub connection status for a user"""
     if request.method == 'OPTIONS':
         return create_cors_response()
     
     try:
-        user_id = get_user_id_from_request()
-        if not user_id:
-            return jsonify({"connected": False, "error": "User ID required"}), 400
         
         # Check if user has GitHub credentials stored
         from utils.auth.stateless_auth import get_credentials_from_db
@@ -149,15 +144,13 @@ def github_status():
         return jsonify({"connected": False, "error": "Failed to check GitHub status"}), 500
 
 @github_bp.route("/disconnect", methods=["POST", "OPTIONS"])
-def github_disconnect():
+@require_permission("connectors", "write")
+def github_disconnect(user_id):
     """Disconnect GitHub account for a user"""
     if request.method == 'OPTIONS':
         return create_cors_response()
     
     try:
-        user_id = get_user_id_from_request()
-        if not user_id:
-            return jsonify({"error": "User ID required"}), 400
         
         # Remove GitHub credentials from database and Vault
         from utils.secrets.secret_ref_utils import delete_user_secret
@@ -297,7 +290,8 @@ def github_callback():
                                     frontend_url=FRONTEND_URL)
 
 @github_bp.route("/repos", methods=["GET", "OPTIONS"])
-def get_github_repos():
+@require_permission("connectors", "read")
+def get_github_repos(user_id):
     """Fetch repositories for an authenticated GitHub user"""
     # Handle preflight OPTIONS request
     if request.method == 'OPTIONS':
@@ -403,7 +397,8 @@ def get_github_repos():
         return jsonify({"error": "Failed to fetch GitHub repositories"}), 500
 
 @github_bp.route("/token-info", methods=["GET", "OPTIONS"])
-def github_token_info():
+@require_permission("connectors", "read")
+def github_token_info(user_id):
     """Debug endpoint to check token information"""
     if request.method == 'OPTIONS':
         return create_cors_response()
@@ -464,7 +459,8 @@ def github_token_info():
         return jsonify({"error": "Failed to retrieve token info"}), 500
 
 @github_bp.route("/download-repo", methods=["POST", "OPTIONS"])
-def download_github_repo():
+@require_permission("connectors", "read")
+def download_github_repo(user_id):
     """Download a GitHub repository as a zip file and return it"""
     if request.method == 'OPTIONS':
         return create_cors_response()
@@ -477,11 +473,6 @@ def download_github_repo():
         
         if not repo_full_name:
             return jsonify({"error": "Missing repo_full_name parameter"}), 400
-            
-        # Get user ID and fetch stored GitHub credentials (reusing provider selector pattern)
-        user_id = get_user_id_from_request()
-        if not user_id:
-            return jsonify({"error": "User ID required"}), 400
         
         # Get GitHub credentials from database
         from utils.auth.stateless_auth import get_credentials_from_db

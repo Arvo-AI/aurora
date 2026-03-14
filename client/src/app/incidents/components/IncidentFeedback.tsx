@@ -21,6 +21,7 @@ import { useToast } from '@/hooks/use-toast';
 interface IncidentFeedbackProps {
   incidentId: string;
   existingFeedback?: FeedbackData | null;
+  readOnly?: boolean;
 }
 
 interface FeedbackButtonProps {
@@ -73,6 +74,7 @@ type FeedbackState = 'idle' | 'selecting' | 'submitting' | 'submitted';
 export default function IncidentFeedback({
   incidentId,
   existingFeedback,
+  readOnly = false,
 }: IncidentFeedbackProps): ReactNode {
   const { toast } = useToast();
   const [state, setState] = useState<FeedbackState>(existingFeedback ? 'submitted' : 'idle');
@@ -101,7 +103,7 @@ export default function IncidentFeedback({
   }, [incidentId, existingFeedback]);
 
   const handleThumbsClick = (type: FeedbackType) => {
-    if (state === 'submitted') return;
+    if (state === 'submitted' || readOnly) return;
 
     setSelectedType(type);
     if (type === 'helpful') {
@@ -234,26 +236,30 @@ export default function IncidentFeedback({
 
   // Default and submitted states - just show icons
   const isSubmitted = state === 'submitted';
+  const buttonsDisabled = isSubmitted || isLoading || readOnly;
 
   return (
     <div className="flex items-center gap-1">
       <FeedbackButton
         icon={ThumbsUp}
-        tooltip="Good analysis"
+        tooltip={readOnly ? 'Editor role required' : 'Good analysis'}
         onClick={() => handleThumbsClick('helpful')}
-        disabled={isSubmitted || isLoading}
+        disabled={buttonsDisabled}
         isLoading={isLoading && selectedType === 'helpful'}
         isSelected={isSubmitted && feedbackType === 'helpful'}
         variant="helpful"
       />
       <FeedbackButton
         icon={ThumbsDown}
-        tooltip="Bad analysis"
+        tooltip={readOnly ? 'Editor role required' : 'Bad analysis'}
         onClick={() => handleThumbsClick('not_helpful')}
-        disabled={isSubmitted || isLoading}
+        disabled={buttonsDisabled}
         isSelected={isSubmitted && feedbackType === 'not_helpful'}
         variant="not_helpful"
       />
+      {readOnly && (
+        <span className="text-xs text-zinc-500 ml-1">Read-only</span>
+      )}
     </div>
   );
 }

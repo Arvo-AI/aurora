@@ -11,6 +11,7 @@ Provides endpoints for:
 import logging
 from flask import request, jsonify, g
 from routes.tailscale import tailscale_bp, require_tailscale
+from utils.auth.rbac_decorators import require_permission
 from utils.web.limiter_ext import limiter
 
 logger = logging.getLogger(__name__)
@@ -18,8 +19,9 @@ logger = logging.getLogger(__name__)
 
 @tailscale_bp.route('/tailscale/devices', methods=['GET'])
 @limiter.limit("30 per minute")
+@require_permission("connectors", "read")
 @require_tailscale
-def list_devices():
+def list_devices(user_id):
     """
     List all devices in the user's tailnet.
 
@@ -61,8 +63,9 @@ def list_devices():
 
 @tailscale_bp.route('/tailscale/devices/<device_id>', methods=['GET', 'DELETE'])
 @limiter.limit("30 per minute")
+@require_permission("connectors", "write")
 @require_tailscale
-def device_detail(device_id: str):
+def device_detail(user_id, device_id: str):
     """
     Get or delete a specific device.
 
@@ -91,8 +94,9 @@ def device_detail(device_id: str):
 
 @tailscale_bp.route('/tailscale/devices/<device_id>/authorize', methods=['POST'])
 @limiter.limit("15 per minute")
+@require_permission("connectors", "write")
 @require_tailscale
-def authorize_device(device_id: str):
+def authorize_device(user_id, device_id: str):
     """Authorize a device to join the tailnet."""
     try:
         success, error = g.tailscale_client.authorize_device(device_id)
@@ -114,8 +118,9 @@ def authorize_device(device_id: str):
 
 @tailscale_bp.route('/tailscale/devices/<device_id>/tags', methods=['POST'])
 @limiter.limit("15 per minute")
+@require_permission("connectors", "write")
 @require_tailscale
-def set_device_tags(device_id: str):
+def set_device_tags(user_id, device_id: str):
     """
     Set tags on a device.
 
@@ -150,8 +155,9 @@ def set_device_tags(device_id: str):
 
 @tailscale_bp.route('/tailscale/devices/<device_id>/routes', methods=['POST'])
 @limiter.limit("15 per minute")
+@require_permission("connectors", "write")
 @require_tailscale
-def set_device_routes(device_id: str):
+def set_device_routes(user_id, device_id: str):
     """
     Enable routes for a device (subnet router).
 
@@ -186,8 +192,9 @@ def set_device_routes(device_id: str):
 
 @tailscale_bp.route('/tailscale/devices/<device_id>/key-expiry', methods=['POST'])
 @limiter.limit("15 per minute")
+@require_permission("connectors", "write")
 @require_tailscale
-def set_device_key_expiry(device_id: str):
+def set_device_key_expiry(user_id, device_id: str):
     """
     Enable or disable key expiry for a device.
 

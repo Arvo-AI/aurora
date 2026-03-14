@@ -10,6 +10,7 @@ import { useRouter } from "next/navigation";
 import { useToast } from "@/hooks/use-toast";
 import { providerPreferencesService } from '@/lib/services/providerPreferences';
 import { getEnv } from '@/lib/env';
+import ConnectorAuthGuard from "@/components/connectors/ConnectorAuthGuard";
 
 const backendUrl = getEnv('NEXT_PUBLIC_BACKEND_URL');
 
@@ -114,7 +115,8 @@ export default function ScalewayOnboardingPage() {
   };
 
   return (
-    <div className="container mx-auto py-8 px-4 max-w-3xl">
+    <ConnectorAuthGuard connectorName="Scaleway">
+      <div className="container mx-auto py-8 px-4 max-w-3xl">
       <div className="mb-6">
         <h1 className="text-3xl font-bold">Scaleway Integration</h1>
         <p className="text-muted-foreground mt-1">
@@ -257,5 +259,6 @@ export default function ScalewayOnboardingPage() {
         </Button>
       </div>
     </div>
+    </ConnectorAuthGuard>
   );
 }

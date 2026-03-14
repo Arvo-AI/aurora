@@ -19,8 +19,8 @@ from routes.netdata.helpers import (
     generate_alert_hash,
     normalize_netdata_payload,
     should_trigger_background_chat,
-    build_rca_prompt_from_alert,
 )
+from chat.background.rca_prompt_builder import build_netdata_rca_prompt
 from services.correlation.alert_correlator import AlertCorrelator
 from services.correlation import handle_correlated_alert
 
@@ -64,6 +64,11 @@ def process_netdata_alert(
         with db_pool.get_admin_connection() as conn:
             try:
                 with conn.cursor() as cursor:
+                    from utils.auth.stateless_auth import set_rls_context
+                    org_id = set_rls_context(cursor, conn, user_id, log_prefix="[NETDATA][ALERT]")
+                    if not org_id:
+                        return
+
                     # Use ON CONFLICT to make insert idempotent
                     cursor.execute(
                         """
@@ -148,6 +153,7 @@ def process_netdata_alert(
                                 alert_service=service,
                                 alert_severity=severity,
                                 alert_metadata=alert_metadata,
+                                org_id=org_id,
                             )
 
                             if correlation_result.is_correlated:
@@ -163,6 +169,7 @@ def process_netdata_alert(
                                     correlation_result=correlation_result,
                                     alert_metadata=alert_metadata,
                                     raw_payload=payload,
+                                    org_id=org_id,
                                 )
                                 conn.commit()
                                 return
@@ -175,10 +182,10 @@ def process_netdata_alert(
                         cursor.execute(
                             """
                             INSERT INTO incidents 
-                            (user_id, source_type, source_alert_id, alert_title, alert_service, 
+                            (user_id, org_id, source_type, source_alert_id, alert_title, alert_service, 
                              severity, status, started_at, alert_metadata)
-                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-                            ON CONFLICT (source_type, source_alert_id, user_id) DO UPDATE
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            ON CONFLICT (org_id, source_type, source_alert_id, user_id) DO UPDATE
                             SET updated_at = CURRENT_TIMESTAMP,
                                 started_at = CASE 
                                     WHEN incidents.status != 'analyzed' THEN EXCLUDED.started_at
@@ -189,6 +196,7 @@ def process_netdata_alert(
                             """,
                             (
                                 user_id,
+                                org_id,
                                 "netdata",
                                 alert_id,
                                 data["name"],
@@ -206,11 +214,12 @@ def process_netdata_alert(
                         try:
                             cursor.execute(
                                 """INSERT INTO incident_alerts
-                                   (user_id, incident_id, source_type, source_alert_id, alert_title, alert_service,
+                                   (user_id, org_id, incident_id, source_type, source_alert_id, alert_title, alert_service,
                                     alert_severity, correlation_strategy, correlation_score, alert_metadata)
-                                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
                                 (
                                     user_id,
+                                    org_id,
                                     incident_id,
                                     "netdata",
                                     alert_id,
@@ -291,7 +300,7 @@ def process_netdata_alert(
                                     )
 
                                     # Build simple RCA prompt with Aurora Learn context injection
-                                    rca_prompt = build_rca_prompt_from_alert(
+                                    rca_prompt = build_netdata_rca_prompt(
                                         data, user_id=user_id
                                     )
 
