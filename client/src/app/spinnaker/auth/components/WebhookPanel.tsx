@@ -5,6 +5,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Check, Copy, Webhook } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { copyToClipboard } from "@/lib/utils";
 import type { SpinnakerWebhookInfo } from "@/lib/services/spinnaker";
 
 interface WebhookPanelProps {
@@ -15,9 +16,9 @@ export function WebhookPanel({ webhookInfo }: WebhookPanelProps) {
   const [copied, setCopied] = useState(false);
   const { toast } = useToast();
 
-  const copyToClipboard = async (text: string) => {
+  const handleCopy = async (text: string) => {
     try {
-      await navigator.clipboard.writeText(text);
+      await copyToClipboard(text);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {
@@ -44,7 +45,7 @@ export function WebhookPanel({ webhookInfo }: WebhookPanelProps) {
               <code>{webhookInfo.webhookUrl}</code>
             </pre>
             <Button size="sm" variant="secondary" className="absolute top-2 right-2 h-8 gap-1.5"
-              onClick={() => copyToClipboard(webhookInfo.webhookUrl)}>
+              onClick={() => handleCopy(webhookInfo.webhookUrl)}>
               {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
               {copied ? "Copied!" : "Copy"}
             </Button>

@@ -14,7 +14,7 @@ import {
   Check, ChevronLeft, Copy, ExternalLink, Eye, EyeOff,
   Loader2, Rocket, ShieldCheck, Webhook, Zap,
 } from "lucide-react";
-import { getUserFriendlyError } from "@/lib/utils";
+import { getUserFriendlyError, copyToClipboard } from "@/lib/utils";
 import { formatTimeAgo, formatDuration } from "@/lib/utils/time-format";
 
 const toSafeExternalUrl = (value?: string): string | null => {
@@ -98,9 +98,9 @@ export default function CIProviderAuthPage({ config }: { config: CIProviderConfi
     }
   }, [status?.connected, service]);
 
-  const copyToClipboard = async (text: string) => {
+  const handleCopy = async (text: string) => {
     try {
-      await navigator.clipboard.writeText(text);
+      await copyToClipboard(text);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {
@@ -237,7 +237,7 @@ export default function CIProviderAuthPage({ config }: { config: CIProviderConfi
           loading={loading}
           copied={copied}
           onDisconnect={handleDisconnect}
-          onCopy={copyToClipboard}
+          onCopy={handleCopy}
         />
       ) : (
         <SetupView

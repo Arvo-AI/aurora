@@ -8,7 +8,7 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { Skeleton } from "@/components/ui/skeleton"
 import { useToast } from "@/components/ui/use-toast"
 import { configureMonaco } from "@/lib/monacoTerraform"
-import { cn } from "@/lib/utils"
+import { cn, copyToClipboard } from "@/lib/utils"
 import { AlertTriangle, ChevronsLeft, Copy, Download, File, Folder } from "lucide-react"
 
 const MonacoEditor = React.lazy(() => import("@monaco-editor/react"))
@@ -175,9 +175,9 @@ export function IaCWorkspace({ sessionId, onClose, onSave, onPlan }: IaCWorkspac
     }
   }, [onPlan, toast])
 
-  const handleCopy = React.useCallback(() => {
+  const handleCopy = React.useCallback(async () => {
     if (!fileContent) return
-    navigator.clipboard.writeText(fileContent)
+    await copyToClipboard(fileContent)
     toast({ title: "Copied to clipboard" })
   }, [fileContent, toast])
 

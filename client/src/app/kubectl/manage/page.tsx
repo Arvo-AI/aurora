@@ -8,6 +8,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { ArrowLeft, Loader2, LogOut, RefreshCw, Copy, Check } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { copyToClipboard } from "@/lib/utils";
 
 interface Connection {
   cluster_id: string;
@@ -101,7 +102,7 @@ export default function ManageKubectlClustersPage() {
   const copyCommand = async () => {
     if (!deleteCommand) return;
     try {
-      await navigator.clipboard.writeText(deleteCommand);
+      await copyToClipboard(deleteCommand);
       setCommandCopied(true);
       setTimeout(() => setCommandCopied(false), 2000);
     } catch (error) {

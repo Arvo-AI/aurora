@@ -12,6 +12,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { AlertTriangle, ExternalLink, Globe, Copy, Check } from "lucide-react";
 import { detectWebView, type WebViewDetectionResult } from "@/lib/webview-detection";
+import { copyToClipboard } from "@/lib/utils";
 
 /**
  * Attempts to open the current URL in the device's default browser.
@@ -122,19 +123,11 @@ export function WebViewWarning() {
 
   const handleCopyUrl = async () => {
     try {
-      await navigator.clipboard.writeText(window.location.href);
+      await copyToClipboard(window.location.href);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {
-      // Fallback for older browsers
-      const textArea = document.createElement("textarea");
-      textArea.value = window.location.href;
-      document.body.appendChild(textArea);
-      textArea.select();
-      document.execCommand("copy");
-      document.body.removeChild(textArea);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
+      // Silently fail
     }
   };
 
