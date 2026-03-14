@@ -95,19 +95,36 @@ nano .env
 
 ### Required Changes
 
-**LLM API Key** — set at least one (note that openAI and Gemini models are undergoing maintenance on our platform and are temporarily unavailable LLM providers.):
+**LLM API Key** — set at least one:
 
 ```bash
 OPENROUTER_API_KEY=sk-or-v1-...     # Recommended — one key, many models
 ANTHROPIC_API_KEY=sk-ant-...
+GOOGLE_AI_API_KEY=AIza...
+OPENAI_API_KEY=sk-...
 ```
 
-**LLM Provider Mode** — must match whichever key you set (see [LLM_PROVIDER_MODE](/docs/configuration/environment#llm_provider_mode) for all options):
+**LLM Provider Mode** — must match whichever key you set (see [LLM Providers](/docs/integrations/llm-providers) for all options):
 
 ```bash
 LLM_PROVIDER_MODE=openrouter   # for OPENROUTER_API_KEY (default)
-LLM_PROVIDER_MODE=direct       # for direct provider keys (Anthropic, OpenAI, etc.)
+LLM_PROVIDER_MODE=direct       # for direct provider keys (Anthropic, OpenAI, Google, etc.)
 ```
+
+**Model selection** — when using `LLM_PROVIDER_MODE=direct`, all model env vars must use the same provider as your API key. If omitted, Aurora defaults to Anthropic models:
+
+```bash
+# Example: Google AI
+MAIN_MODEL=google/gemini-3.1-pro-preview
+RCA_MODEL=google/gemini-2.5-flash
+SUMMARIZATION_MODEL=google/gemini-2.5-flash
+
+# Example: Anthropic (default, no need to set explicitly)
+MAIN_MODEL=anthropic/claude-sonnet-4.6
+RCA_MODEL=anthropic/claude-haiku-4.5
+```
+
+See [LLM Providers](/docs/integrations/llm-providers#supported-models) for the full list of valid model names per provider.
 
 **VM URLs** — replace `YOUR_VM_IP` with your VM's public IP (or internal/VPN IP — see note below):
 

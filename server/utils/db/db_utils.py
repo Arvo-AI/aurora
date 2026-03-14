@@ -776,6 +776,33 @@ def initialize_tables():
                     CREATE INDEX IF NOT EXISTS idx_jenkins_deploy_trace ON jenkins_deployment_events(trace_id) WHERE trace_id IS NOT NULL;
                     CREATE UNIQUE INDEX IF NOT EXISTS idx_jenkins_deploy_dedup ON jenkins_deployment_events(user_id, COALESCE(job_name, ''), COALESCE(build_number, -1));
                 """,
+                "spinnaker_deployment_events": """
+                    CREATE TABLE IF NOT EXISTS spinnaker_deployment_events (
+                        id SERIAL PRIMARY KEY,
+                        user_id VARCHAR(255) NOT NULL,
+                        event_type VARCHAR(50) DEFAULT 'pipeline',
+                        application VARCHAR(255),
+                        pipeline_name VARCHAR(255),
+                        execution_id VARCHAR(255),
+                        execution_url TEXT,
+                        status VARCHAR(50),
+                        trigger_type VARCHAR(100),
+                        trigger_user VARCHAR(255),
+                        start_time TIMESTAMP,
+                        end_time TIMESTAMP,
+                        duration_ms BIGINT,
+                        stages JSONB,
+                        parameters JSONB,
+                        payload JSONB NOT NULL,
+                        received_at TIMESTAMP NOT NULL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+
+                    CREATE INDEX IF NOT EXISTS idx_spinnaker_deploy_user ON spinnaker_deployment_events(user_id, received_at DESC);
+                    CREATE INDEX IF NOT EXISTS idx_spinnaker_deploy_app ON spinnaker_deployment_events(application, received_at DESC);
+                    CREATE INDEX IF NOT EXISTS idx_spinnaker_deploy_exec ON spinnaker_deployment_events(execution_id);
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_spinnaker_deploy_dedup ON spinnaker_deployment_events(user_id, COALESCE(application, ''), COALESCE(execution_id, ''));
+                """,
                 "dynatrace_problems": """
                     CREATE TABLE IF NOT EXISTS dynatrace_problems (
                         id SERIAL PRIMARY KEY,
@@ -1002,6 +1029,7 @@ def initialize_tables():
             rls_tables.append("splunk_alerts")
             rls_tables.append("bigpanda_events")
             rls_tables.append("jenkins_deployment_events")
+            rls_tables.append("spinnaker_deployment_events")
             rls_tables.append("dynatrace_problems")
 
             # Add incidents table

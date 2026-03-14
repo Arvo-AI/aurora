@@ -1,14 +1,15 @@
-from typing import Dict, Optional
-from langchain_core.language_models import LanguageModelInput
-from langchain_openai import ChatOpenAI
-from pydantic import BaseModel
-import os
 import logging
-import json
+import os
 import time
-from chat.backend.agent.utils.llm_usage_tracker import LLMUsageTracker
-from chat.backend.agent.providers import create_chat_model
+from typing import Dict, Optional
+
+from langchain_core.language_models import LanguageModelInput
+from langchain_core.language_models.chat_models import BaseChatModel
+from pydantic import BaseModel
+
 from chat.backend.agent.model_mapper import ModelMapper
+from chat.backend.agent.providers import create_chat_model
+from chat.backend.agent.utils.llm_usage_tracker import LLMUsageTracker
 
 logger = logging.getLogger(__name__)
 
@@ -20,25 +21,30 @@ class ModelConfig:
     Change these values to switch providers across the entire application.
     """
     
-    # Primary models for chat and operations
-    MAIN_MODEL = "anthropic/claude-sonnet-4.5"
-    VISION_MODEL = "anthropic/claude-sonnet-4.5"
-    
-    # Background RCA model - selected based on RCA_OPTIMIZE_COSTS env var (defaults to cost-optimized)
-    RCA_MODEL = "anthropic/claude-3-haiku" if os.getenv("RCA_OPTIMIZE_COSTS", "true").lower() == "true" else "anthropic/claude-opus-4.5"
-    
-    # Summarization models
-    INCIDENT_REPORT_SUMMARIZATION_MODEL = "anthropic/claude-sonnet-4.5"  # For incident reports and chat context
-    TOOL_OUTPUT_SUMMARIZATION_MODEL = "anthropic/claude-sonnet-4.5"  # For summarizing large tool outputs to reduce token usage
-    
-    # Visualization extraction model - always use Sonnet for reliable structured output
-    VISUALIZATION_MODEL = "anthropic/claude-sonnet-4.5"
-    
+    _DEFAULT_MODEL = "anthropic/claude-sonnet-4.6"
+
+    # Primary models - configurable via env vars
+    MAIN_MODEL = os.getenv("MAIN_MODEL") or _DEFAULT_MODEL
+    VISION_MODEL = os.getenv("VISION_MODEL") or os.getenv("MAIN_MODEL") or _DEFAULT_MODEL
+
+    # Background RCA model - configurable via RCA_MODEL env var, falls back to cost-based selection
+    RCA_MODEL = os.getenv("RCA_MODEL") or (
+        "anthropic/claude-haiku-4.5" if os.getenv("RCA_OPTIMIZE_COSTS", "true").lower() == "true"
+        else "anthropic/claude-opus-4.6"
+    )
+
+    # Summarization models - configurable via env vars, fall back to MAIN_MODEL
+    INCIDENT_REPORT_SUMMARIZATION_MODEL = os.getenv("SUMMARIZATION_MODEL") or os.getenv("MAIN_MODEL") or _DEFAULT_MODEL
+    TOOL_OUTPUT_SUMMARIZATION_MODEL = os.getenv("SUMMARIZATION_MODEL") or os.getenv("MAIN_MODEL") or _DEFAULT_MODEL
+
+    # Visualization extraction model
+    VISUALIZATION_MODEL = os.getenv("MAIN_MODEL") or _DEFAULT_MODEL
+
     # Suggestion extraction
-    SUGGESTION_MODEL = "anthropic/claude-sonnet-4.5"
-    
+    SUGGESTION_MODEL = os.getenv("MAIN_MODEL") or _DEFAULT_MODEL
+
     # Email report generation
-    EMAIL_REPORT_MODEL = "anthropic/claude-sonnet-4.5"
+    EMAIL_REPORT_MODEL = os.getenv("MAIN_MODEL") or _DEFAULT_MODEL
 
 
 class LLMManager:
@@ -76,7 +82,7 @@ class LLMManager:
         # Cache for dynamically created models
         self._model_cache = {}
 
-    def _get_or_create_model(self, model_name: str) -> ChatOpenAI:
+    def _get_or_create_model(self, model_name: str) -> BaseChatModel:
         """Get or create a model instance for the specified model using provider-aware factory."""
         if model_name in self._model_cache:
             return self._model_cache[model_name]
@@ -120,7 +126,7 @@ class LLMManager:
                     ):
                         return True
         except Exception as e:
-            logger.warning(f"Error checking for image content: {e}")
+            logger.debug(f"Error checking for image content: {e}")
         return False
 
     def _log_multimodal_content(self, prompt: LanguageModelInput):
@@ -180,7 +186,7 @@ class LLMManager:
         # Debug logging for multimodal content
         has_images = self._has_image_content(prompt)
         if has_images:
-            logger.info(" DETECTED MULTIMODAL CONTENT - Analyzing...")
+            logger.info("Detected multimodal content")
             self._log_multimodal_content(prompt)
 
         # Determine which model to use
@@ -188,19 +194,19 @@ class LLMManager:
             # For images, use vision model or selected model if it supports vision
             if selected_model:
                 # Use selected model for images if provided
-                logger.info(f" Using selected model for vision: {selected_model}")
+                logger.info(f"Using selected model for vision: {selected_model}")
                 model = self._get_or_create_model(selected_model)
             else:
                 logger.info(
-                    f" Using default vision model: {self.vision_llm.model_name}"
+                    f"Using default vision model: {self.vision_llm.model_name}"
                 )
                 model = self.vision_llm
         elif selected_model:
             # Use the model selected from frontend
-            logger.info(f" Using selected model: {selected_model}")
+            logger.info(f"Using selected model: {selected_model}")
             model = self._get_or_create_model(selected_model)
         else:
-            logger.info(f" Using default main model: {self.main_llm.model_name}")
+            logger.info(f"Using default main model: {self.main_llm.model_name}")
             model = self.main_llm
 
         # Log the actual prompt being sent
@@ -218,7 +224,7 @@ class LLMManager:
                     schema=output_struct
                 ).invoke(prompt)
                 result = dict(llm_response)
-                logger.info(f" Structured output result: {str(result)[:200]}...")
+                logger.info(f"Structured output result: {str(result)[:200]}...")
             else:
                 llm_response = model.invoke(prompt)
                 result = {"messages": [llm_response]}
@@ -227,46 +233,37 @@ class LLMManager:
                     if result.get("messages")
                     else "No response"
                 )
-                logger.info(f" LLM Response preview: {response_content}...")
+                logger.info(f"LLM response preview: {response_content}...")
 
         except Exception as e:
             error_message = str(e)
-            logger.error(f" Error invoking LLM: {error_message}")
+            logger.error(f"Error invoking LLM: {error_message}")
             raise
 
         finally:
-            # Track usage using OpenRouter response data
+            # Track token usage
             if user_id:
                 try:
-                    # Determine request type based on parameters
-                    if output_struct:
-                        actual_request_type = f"structured_{request_type}"
-                    else:
-                        actual_request_type = request_type
+                    actual_request_type = f"structured_{request_type}" if output_struct else request_type
 
-                    # Extract usage from OpenRouter response
                     input_tokens = 0
                     output_tokens = 0
 
-                    # Try to extract usage from the LLM response
+                    # Extract usage from LLM response metadata (works for OpenRouter, OpenAI, etc.)
                     if llm_response and hasattr(llm_response, "response_metadata"):
-                        # LangChain stores OpenRouter usage in response_metadata
                         usage = llm_response.response_metadata.get("token_usage", {})
                         if not usage:
-                            # Also try 'usage' key (OpenAI standard)
                             usage = llm_response.response_metadata.get("usage", {})
                         if usage:
                             input_tokens = usage.get("prompt_tokens", 0)
                             output_tokens = usage.get("completion_tokens", 0)
                             logger.info(
-                                f" OpenRouter usage: {input_tokens} + {output_tokens} tokens"
+                                f"Provider usage: {input_tokens} + {output_tokens} tokens"
                             )
 
-                    # Fallback to manual counting if no usage data
+                    # Fallback to manual counting if no usage data from provider
                     if input_tokens == 0 and output_tokens == 0:
-                        logger.info(
-                            " No usage data from OpenRouter, using manual counting"
-                        )
+                        logger.info("No usage data from provider, using manual counting")
                         input_tokens = LLMUsageTracker.count_tokens_from_messages(
                             prompt, model.model_name
                         )
@@ -286,10 +283,8 @@ class LLMManager:
                     )
                     response_time_ms = int((time.time() - start_time) * 1000)
 
-                    # Store usage directly in database
                     from chat.backend.agent.utils.llm_usage_tracker import LLMUsage
 
-                    # Detect actual provider from model name or provider mode
                     actual_provider = (
                         ModelMapper.detect_provider(model.model_name)
                         or self.provider_mode
@@ -309,9 +304,7 @@ class LLMManager:
                         request_metadata={
                             "has_images": has_images,
                             "provider_mode": self.provider_mode,
-                            "has_usage_data": bool(
-                                input_tokens > 0 and output_tokens > 0
-                            ),
+                            "has_usage_data": input_tokens > 0 and output_tokens > 0,
                         },
                     )
 
@@ -324,7 +317,7 @@ class LLMManager:
                         logger.warning("Failed to store usage data")
 
                 except Exception as tracking_error:
-                    logger.warning(f" Error tracking LLM usage: {tracking_error}")
+                    logger.warning(f"Error tracking LLM usage: {tracking_error}")
             else:
                 logger.debug("No user_id provided, skipping usage tracking")
 
@@ -343,23 +336,12 @@ class LLMManager:
         Returns:
             Summarized content
         """
+        summarization_model = model or ModelConfig.INCIDENT_REPORT_SUMMARIZATION_MODEL
+
         try:
-            # CRITICAL DEBUGGING: Log the call stack to see WHO is calling summarize
-            import traceback
+            logger.info(f"Summarizing {len(content)} chars using {summarization_model}")
 
-            call_stack = traceback.format_stack()
-            logger.error(f" SUMMARIZE CALLED! Call stack:")
-            for i, frame in enumerate(call_stack[-5:]):  # Last 5 frames
-                logger.error(f" Frame {i}: {frame.strip()}")
-
-            # Use centralized model config
-            summarization_model = model or ModelConfig.INCIDENT_REPORT_SUMMARIZATION_MODEL
-
-            logger.error(f" SUMMARIZING: {len(content)} chars -> {summarization_model}")
-            logger.error(f" CONTENT PREVIEW: {content[:200]}...")
-
-            # Create summarization prompt
-            summarization_prompt = f"""Please provide a concise summary of the following tool output. 
+            summarization_prompt = f"""Please provide a concise summary of the following tool output.
 Focus on the key information that would be useful for an AI assistant to understand the result.
 Keep the summary under 500 words while preserving important details and structure.
 
@@ -368,31 +350,24 @@ Content to summarize:
 
 Summary:"""
 
-            # CRITICAL: Create a completely isolated model instance without any callbacks or streaming
-            # This prevents the summary from being sent to WebSocket/frontend
+            # Create an isolated model instance without callbacks or streaming
+            # to prevent the summary from being sent to WebSocket/frontend
             isolated_summarizer = create_chat_model(
                 summarization_model,
                 temperature=0.4,
-                streaming=False,  # Explicitly disable streaming
-                callbacks=None,  # No callbacks to prevent WebSocket sending
+                streaming=False,
+                callbacks=None,
                 provider_mode=self.provider_mode,
             )
 
-            logger.error(
-                f" SUMMARIZATION: Using isolated model {summarization_model} (no streaming, no callbacks)"
-            )
-
-            # Invoke the isolated summarizer - this should NOT trigger any WebSocket sends
-            logger.error(f" ABOUT TO CALL isolated_summarizer.invoke()")
             response = isolated_summarizer.invoke(summarization_prompt)
-            logger.error(f" SUMMARIZER INVOKE COMPLETED")
 
             if hasattr(response, "content"):
-                content = response.content
+                response_content = response.content
                 # Handle Gemini thinking model responses (list with thinking/text blocks)
-                if isinstance(content, list):
+                if isinstance(response_content, list):
                     text_parts = []
-                    for part in content:
+                    for part in response_content:
                         if isinstance(part, dict):
                             part_type = part.get("type", "")
                             if part_type not in ("thinking", "reasoning"):
@@ -403,19 +378,14 @@ Summary:"""
                             text_parts.append(part)
                     summary = "".join(text_parts)
                 else:
-                    summary = str(content)
+                    summary = str(response_content)
             else:
                 summary = str(response)
 
-            logger.error(
-                f" GENERATED SUMMARY ({len(summary)} chars): {summary[:200]}..."
-            )
-            logger.error(f" RETURNING SUMMARY TO CALLER")
+            logger.info(f"Generated summary ({len(summary)} chars)")
             return summary
 
         except Exception as e:
-            logger.error(f" Error during summarization: {e}")
-            # Fallback to truncation if summarization fails
+            logger.error(f"Error during summarization: {e}")
             truncated = content[:2000] + "... [truncated due to summarization error]"
-            logger.error(f" FALLBACK: Returning truncated content")
             return truncated

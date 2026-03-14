@@ -339,6 +339,21 @@ def store_tokens_in_db(user_id: str, token_data: Dict, provider: str,
                     "is_active = TRUE",
                     (user_id, request_org_id, secret_ref, provider)
                 )
+            elif provider == "spinnaker":
+                # Spinnaker: Store base_url as client_id, auth_type as subscription_name
+                base_url = token_data.get("base_url") if isinstance(token_data, dict) else None
+                auth_type = token_data.get("auth_type", "token") if isinstance(token_data, dict) else None
+
+                cursor.execute(
+                    "INSERT INTO user_tokens (user_id, secret_ref, provider, client_id, subscription_name) "
+                    "VALUES (%s, %s, %s, %s, %s) ON CONFLICT (user_id, provider) DO UPDATE "
+                    "SET secret_ref = EXCLUDED.secret_ref, "
+                    "client_id = EXCLUDED.client_id, "
+                    "subscription_name = EXCLUDED.subscription_name, "
+                    "timestamp = CURRENT_TIMESTAMP, "
+                    "is_active = TRUE",
+                    (user_id, secret_ref, provider, base_url, auth_type)
+                )
             elif subscription_name is not None and subscription_id is not None:
                 cursor.execute(
                     "INSERT INTO user_tokens (user_id, org_id, secret_ref, provider, subscription_name, subscription_id) "

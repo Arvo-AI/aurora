@@ -137,10 +137,11 @@ class DatadogClient:
 
     def query_metrics(self, query: str, start_ms: int, end_ms: int, interval: Optional[int] = None) -> Dict[str, Any]:
         attributes: Dict[str, Any] = {
+            "formulas": [{"formula": "a"}],
             "queries": [
                 {
                     "data_source": "metrics",
-                    "name": "query",
+                    "name": "a",
                     "query": query,
                 }
             ],
@@ -151,12 +152,10 @@ class DatadogClient:
             attributes["interval"] = interval
 
         body = {
-            "data": [
-                {
-                    "type": "timeseries_request",
-                    "attributes": attributes,
-                }
-            ]
+            "data": {
+                "type": "timeseries_request",
+                "attributes": attributes,
+            }
         }
         return self._request("POST", "/api/v2/query/timeseries", json=body).json()
 
@@ -199,6 +198,45 @@ class DatadogClient:
             query_params["status"] = params["status"]
 
         return self._request("GET", "/api/v1/monitor", params=query_params).json()
+
+    def search_traces(self, query: str, start: str, end: str, limit: int) -> Dict[str, Any]:
+        """Search APM spans/traces via POST /api/v2/spans/events/search."""
+        payload = {
+            "data": {
+                "attributes": {
+                    "filter": {
+                        "query": query or "*",
+                        "from": start,
+                        "to": end,
+                    },
+                    "page": {"limit": max(1, min(limit, 500))},
+                    "sort": "desc",
+                },
+                "type": "search_request",
+            }
+        }
+        return self._request("POST", "/api/v2/spans/events/search", json=payload).json()
+
+    def list_hosts(self, query: Optional[str] = None, count: int = 100, from_ts: Optional[int] = None) -> Dict[str, Any]:
+        """List infrastructure hosts via GET /api/v1/hosts."""
+        params: Dict[str, Any] = {
+            "count": max(0, min(count, 1000)),
+            "include_muted_hosts_data": True,
+            "include_hosts_metadata": True,
+        }
+        if query:
+            params["filter"] = query
+        if from_ts is not None:
+            params["from"] = from_ts
+        return self._request("GET", "/api/v1/hosts", params=params).json()
+
+    def list_incidents(self, page_size: int = 25, page_offset: int = 0) -> Dict[str, Any]:
+        """List Datadog incidents via GET /api/v2/incidents."""
+        params: Dict[str, Any] = {
+            "page[size]": max(1, min(page_size, 100)),
+            "page[offset]": max(0, page_offset),
+        }
+        return self._request("GET", "/api/v2/incidents", params=params).json()
 
 
 def _get_stored_datadog_credentials(user_id: str) -> Optional[Dict[str, Any]]:

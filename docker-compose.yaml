@@ -46,7 +46,19 @@ x-common-env: &common-env
   LLM_PROVIDER_MODE: ${LLM_PROVIDER_MODE}
   SEARXNG_URL: ${SEARXNG_URL}
   RCA_OPTIMIZE_COSTS: ${RCA_OPTIMIZE_COSTS}
+  RCA_MODEL: ${RCA_MODEL}
+  MAIN_MODEL: ${MAIN_MODEL}
+  VISION_MODEL: ${VISION_MODEL}
+  SUMMARIZATION_MODEL: ${SUMMARIZATION_MODEL}
   AGENT_RECURSION_LIMIT: ${AGENT_RECURSION_LIMIT}
+
+  # Vertex AI (Google Cloud)
+  VERTEX_AI_PROJECT: ${VERTEX_AI_PROJECT}
+  VERTEX_AI_LOCATION: ${VERTEX_AI_LOCATION}
+  VERTEX_AI_SERVICE_ACCOUNT_JSON: ${VERTEX_AI_SERVICE_ACCOUNT_JSON}
+
+  # Ollama (local LLM inference)
+  OLLAMA_BASE_URL: ${OLLAMA_BASE_URL}
 
   # Pod Isolation
   ENABLE_POD_ISOLATION: ${ENABLE_POD_ISOLATION}
@@ -57,6 +69,7 @@ x-common-env: &common-env
   NEXT_PUBLIC_ENABLE_PAGERDUTY_OAUTH: ${NEXT_PUBLIC_ENABLE_PAGERDUTY_OAUTH}
   NEXT_PUBLIC_ENABLE_SCALEWAY: ${NEXT_PUBLIC_ENABLE_SCALEWAY}
   NEXT_PUBLIC_ENABLE_SHAREPOINT: ${NEXT_PUBLIC_ENABLE_SHAREPOINT}
+  NEXT_PUBLIC_ENABLE_SPINNAKER: ${NEXT_PUBLIC_ENABLE_SPINNAKER}
   # Slack OAuth (needed by celery_worker for formatting responses)
   SLACK_CLIENT_ID: ${SLACK_CLIENT_ID}
   SLACK_CLIENT_SECRET: ${SLACK_CLIENT_SECRET}
@@ -116,6 +129,8 @@ services:
       target: dev
     image: aurora_server:latest
     container_name: aurora-server
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "${FLASK_PORT:-5080}:${FLASK_PORT:-5080}"
     volumes:
@@ -194,6 +209,8 @@ services:
       dockerfile: Dockerfile
       target: dev
     image: aurora_celery-worker:latest
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./server:/app
       - terraform-workdir:/app/terraform_workdir
@@ -309,6 +326,8 @@ services:
       dockerfile: Dockerfile
       target: dev
     image: aurora_chatbot:latest
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     stdin_open: true
     tty: true
     command: ["python", "main_chatbot.py"]
@@ -422,6 +441,7 @@ services:
       NEXT_PUBLIC_ENABLE_PAGERDUTY_OAUTH: ${NEXT_PUBLIC_ENABLE_PAGERDUTY_OAUTH}
       NEXT_PUBLIC_ENABLE_SCALEWAY: ${NEXT_PUBLIC_ENABLE_SCALEWAY}
       NEXT_PUBLIC_ENABLE_SHAREPOINT: ${NEXT_PUBLIC_ENABLE_SHAREPOINT}
+      NEXT_PUBLIC_ENABLE_SPINNAKER: ${NEXT_PUBLIC_ENABLE_SPINNAKER}
       BACKEND_URL: ${BACKEND_URL}
       FRONTEND_URL: ${FRONTEND_URL}
 

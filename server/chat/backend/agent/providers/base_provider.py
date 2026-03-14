@@ -5,12 +5,60 @@ This module defines the interface that all LLM provider implementations must fol
 Each provider is responsible for creating properly configured LangChain chat model instances.
 """
 
-from abc import ABC, abstractmethod
-from typing import Optional, Dict, Any
-from langchain_core.language_models.chat_models import BaseChatModel
 import logging
+import os
+from abc import ABC, abstractmethod
+from typing import Any, Dict, Optional
+
+from langchain_core.language_models.chat_models import BaseChatModel
 
 logger = logging.getLogger(__name__)
+
+# Gemini model name fragments that indicate thinking support (2.5+, 3+)
+_GEMINI_THINKING_INDICATORS = (
+    "gemini-3", "gemini-2.5",
+    "2.5-pro", "2.5-flash",
+    "3-pro", "3-flash",
+)
+
+# Models that accept the thinking_level parameter (preview/experimental only).
+# GA models like gemini-2.5-pro think by default but reject thinking_level.
+_GEMINI_THINKING_LEVEL_INDICATORS = (
+    "preview", "exp",
+)
+
+
+def apply_gemini_thinking_config(config: dict, model_name: str) -> None:
+    """Apply thinking mode configuration for Gemini models that support it.
+
+    Mutates the config dict in place to add `include_thoughts` and optionally
+    `thinking_level` when the model supports thinking and it is not disabled
+    via env var.
+
+    Args:
+        config: Model configuration dict to update.
+        model_name: Native Gemini model name (e.g. "gemini-2.5-pro").
+    """
+    disable_thinking = os.getenv("GEMINI_DISABLE_THINKING", "").lower() in (
+        "true", "1", "yes",
+    )
+    if disable_thinking:
+        logger.info(f"Thinking mode disabled via GEMINI_DISABLE_THINKING for {model_name}")
+        return
+
+    name_lower = model_name.lower()
+    is_thinking_model = any(
+        indicator in name_lower for indicator in _GEMINI_THINKING_INDICATORS
+    )
+    if is_thinking_model:
+        config["include_thoughts"] = True
+        # Only set thinking_level for preview/experimental models.
+        # GA models (e.g. gemini-2.5-pro) think by default but reject this param.
+        if any(ind in name_lower for ind in _GEMINI_THINKING_LEVEL_INDICATORS):
+            config["thinking_level"] = "high"
+            logger.info(f"Enabled thinking mode (level=high) for {model_name}")
+        else:
+            logger.info(f"Enabled thinking mode (default level) for {model_name}")
 
 
 class BaseLLMProvider(ABC):

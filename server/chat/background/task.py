@@ -127,7 +127,7 @@ _RATE_LIMIT_WINDOW_SECONDS = 300  # 5 minute window
 _RATE_LIMIT_MAX_REQUESTS = 5  # Max 5 background chats per window
 
 # RCA sources that use rca_context in system prompt
-_RCA_SOURCES = {'grafana', 'datadog', 'netdata', 'splunk', 'slack', 'pagerduty', 'dynatrace', 'jenkins', 'cloudbees'}
+_RCA_SOURCES = {'grafana', 'datadog', 'netdata', 'splunk', 'slack', 'pagerduty', 'dynatrace', 'jenkins', 'cloudbees', 'spinnaker'}
 
 # Initialize Redis client at module load time - fails if Redis is unavailable
 _redis_client = get_redis_client()
@@ -171,12 +171,14 @@ def _get_connected_integrations(user_id: str) -> Dict[str, bool]:
     integrations = {
         'splunk': False,
         'dynatrace': False,
+        'datadog': False,
         'github': False,
         'confluence': False,
         'sharepoint': False,
         'coroot': False,
         'jenkins': False,
         'cloudbees': False,
+        'spinnaker': False,
     }
 
     try:
@@ -191,6 +193,12 @@ def _get_connected_integrations(user_id: str) -> Dict[str, bool]:
         integrations['dynatrace'] = is_dynatrace_connected(user_id)
     except Exception as e:
         logger.debug(f"[BackgroundChat] Error checking Dynatrace: {e}")
+
+    try:
+        from chat.backend.agent.tools.datadog_tool import is_datadog_connected
+        integrations['datadog'] = is_datadog_connected(user_id)
+    except Exception as e:
+        logger.debug(f"[BackgroundChat] Error checking Datadog: {e}")
 
     try:
         # Check GitHub
@@ -239,6 +247,14 @@ def _get_connected_integrations(user_id: str) -> Dict[str, bool]:
         integrations['cloudbees'] = bool(cloudbees_creds and cloudbees_creds.get("base_url"))
     except Exception as e:
         logger.debug(f"[BackgroundChat] Error checking CloudBees: {e}")
+
+    try:
+        from utils.flags.feature_flags import is_spinnaker_enabled
+        if is_spinnaker_enabled():
+            from chat.backend.agent.tools.spinnaker_rca_tool import is_spinnaker_connected
+            integrations['spinnaker'] = is_spinnaker_connected(user_id)
+    except Exception as e:
+        logger.debug(f"[BackgroundChat] Error checking Spinnaker: {e}")
 
     return integrations
 

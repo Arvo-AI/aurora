@@ -1068,6 +1068,37 @@ def build_cloudbees_rca_prompt(
     return build_rca_prompt('cloudbees', alert_details, providers, user_id)
 
 
+def build_spinnaker_rca_prompt(
+    payload: Dict[str, Any],
+    providers: Optional[List[str]] = None,
+    user_id: Optional[str] = None,
+) -> str:
+    """Build RCA prompt from a Spinnaker pipeline failure event."""
+    application = payload.get("application") or "Unknown Application"
+    pipeline_name = payload.get("pipeline_name") or payload.get("pipeline", "Unknown Pipeline")
+    status = payload.get("status", "TERMINAL")
+    trigger_type = payload.get("trigger_type", "unknown")
+    trigger_user = payload.get("trigger_user", "unknown")
+
+    alert_details = {
+        'title': f"Spinnaker Pipeline {status}: {application}/{pipeline_name}",
+        'status': status,
+        'message': f"Pipeline '{pipeline_name}' for application '{application}' ended with status {status}",
+        'labels': {
+            'service': application,
+            'pipeline': pipeline_name,
+            'trigger_type': trigger_type,
+            'trigger_user': trigger_user,
+        },
+    }
+
+    execution_id = payload.get("execution_id")
+    if execution_id:
+        alert_details['labels']['execution_id'] = execution_id
+
+    return build_rca_prompt('spinnaker', alert_details, providers, user_id)
+
+
 def build_bigpanda_rca_prompt(
     incident: Dict[str, Any],
     alerts: list,

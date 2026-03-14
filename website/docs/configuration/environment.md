@@ -183,7 +183,7 @@ docker logs vault-init 2>&1 | grep "Root Token:"
 
 ## LLM & AI Services
 
-At least one LLM provider API key is required.
+At least one LLM provider API key is required. See [LLM Providers](/docs/integrations/llm-providers) for detailed setup instructions.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -217,6 +217,30 @@ LLM_PROVIDER_MODE=openrouter   # or: direct
 AGENT_RECURSION_LIMIT=240
 ```
 
+### Vertex AI (Google Cloud)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `VERTEX_AI_PROJECT` | - | Google Cloud project ID |
+| `VERTEX_AI_LOCATION` | `global` | Vertex AI location |
+| `VERTEX_AI_SERVICE_ACCOUNT_JSON` | - | Service account key JSON string |
+
+```bash
+VERTEX_AI_PROJECT=my-gcp-project
+VERTEX_AI_LOCATION=global
+VERTEX_AI_SERVICE_ACCOUNT_JSON={"type":"service_account",...}
+```
+
+### Ollama (Local Models)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `OLLAMA_BASE_URL` | `http://host.docker.internal:11434` | Ollama server URL |
+
+```bash
+OLLAMA_BASE_URL=http://host.docker.internal:11434
+```
+
 ### Web Search
 
 | Variable | Default | Description |
@@ -230,7 +254,8 @@ AGENT_RECURSION_LIMIT=240
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `RCA_OPTIMIZE_COSTS` | `false` | Use cheaper models when possible |
+| `RCA_MODEL` | - | Model for background RCA (format: `provider/model`). Overrides `RCA_OPTIMIZE_COSTS` when set. |
+| `RCA_OPTIMIZE_COSTS` | `true` | Only used when `RCA_MODEL` is not set. `true` = `anthropic/claude-3-haiku`, `false` = `anthropic/claude-opus-4.5` |
 | `GEMINI_DISABLE_THINKING` | - | Disable Gemini thinking mode |
 
 ## Cloud Providers

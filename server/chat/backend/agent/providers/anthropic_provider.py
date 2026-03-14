@@ -5,11 +5,11 @@ Uses the official Anthropic API instead of going through OpenRouter.
 Requires ANTHROPIC_API_KEY environment variable.
 """
 
+import logging
 import os
-from typing import Optional
+
 from langchain_anthropic import ChatAnthropic
 from langchain_core.language_models.chat_models import BaseChatModel
-import logging
 
 from .base_provider import BaseLLMProvider
 from ..model_mapper import ModelMapper
@@ -56,7 +56,6 @@ class AnthropicProvider(BaseLLMProvider):
 
         logger.info(f"Creating Anthropic chat model: {native_model}")
 
-        # Build configuration for direct Anthropic access
         config = {
             "model": native_model,
             "temperature": temperature,
@@ -64,9 +63,6 @@ class AnthropicProvider(BaseLLMProvider):
             "max_retries": 3,
             "timeout": 30.0,
         }
-
-        # Add any additional kwargs
-        # Note: ChatAnthropic may have different parameter names than ChatOpenAI
         config.update(kwargs)
 
         return ChatAnthropic(**config)
@@ -85,6 +81,8 @@ class AnthropicProvider(BaseLLMProvider):
         Returns:
             True if this is an Anthropic model
         """
+        if "/" in model:
+            return model.split("/")[0] == "anthropic"
         return ModelMapper.is_model_supported_by_provider(model, 'anthropic')
 
     def get_native_model_name(self, model: str) -> str:

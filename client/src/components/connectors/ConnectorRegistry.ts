@@ -1,5 +1,5 @@
 import { Github, Server } from "lucide-react";
-import { isOvhEnabled, isSharePointEnabled } from "@/lib/feature-flags";
+import { isOvhEnabled, isSharePointEnabled, isSpinnakerEnabled } from "@/lib/feature-flags";
 import type { ConnectorConfig } from "./types";
 
 class ConnectorRegistry {
@@ -297,6 +297,19 @@ class ConnectorRegistry {
       path: "/cloudbees/auth",
       storageKey: "isCloudBeesConnected",
     });
+
+    if (isSpinnakerEnabled()) {
+      this.register({
+        id: "spinnaker",
+        name: "Spinnaker",
+        description: "Connect to Spinnaker for deployment pipeline visibility, application health monitoring, and automated incident correlation with CD events.",
+        iconPath: "/spinnaker.svg",
+        iconBgColor: "bg-white dark:bg-white",
+        category: "CI/CD",
+        path: "/spinnaker/auth",
+        storageKey: "isSpinnakerConnected",
+      });
+    }
   }
 
   register(connector: ConnectorConfig): void {

@@ -140,6 +140,14 @@ const logos = {
       onError={(e) => console.error('Failed to load CloudBees logo:', e)}
     />
   ),
+  spinnaker: (
+    <img
+      src="/spinnaker.svg"
+      className="w-4 h-4 min-w-4 min-h-4 object-contain"
+      alt="Spinnaker"
+      onError={(e) => console.error('Failed to load Spinnaker logo:', e)}
+    />
+  ),
   coroot: (
     <img
       src="/coroot.svg"
@@ -154,6 +162,14 @@ const logos = {
       className="w-4 h-4 min-w-4 min-h-4 object-contain"
       alt="Dynatrace"
       onError={(e) => console.error('Failed to load Dynatrace logo:', e)}
+    />
+  ),
+  datadog: (
+    <img
+      src="/datadog.svg"
+      className="w-4 h-4 min-w-4 min-h-4 object-contain"
+      alt="Datadog"
+      onError={(e) => console.error('Failed to load Datadog logo:', e)}
     />
   ),
   thousandeyes: (
@@ -256,6 +272,11 @@ const getLogoForCommand = (command: string | any, toolName: string, provider?: s
     return 'cloudbees'
   }
 
+  // Spinnaker tools
+  if (tool.includes('spinnaker')) {
+    return 'spinnaker'
+  }
+
   // Jenkins tools
   if (tool.includes('jenkins')) {
     return 'jenkins'
@@ -268,6 +289,11 @@ const getLogoForCommand = (command: string | any, toolName: string, provider?: s
 
   if (tool.includes('dynatrace') || tool === 'query_dynatrace') {
     return 'dynatrace'
+  }
+
+  // Datadog tools
+  if (tool.includes('datadog') || tool === 'query_datadog') {
+    return 'datadog'
   }
 
   // ThousandEyes tools

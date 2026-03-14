@@ -227,7 +227,7 @@ export function useConnectorStatus(connector: ConnectorConfig, userId: string | 
       return;
     }
 
-    // All other providers: use the unified API
+    // All other providers (including CI connectors): use the unified API
     checkApiConnectionStatus();
   };
 
