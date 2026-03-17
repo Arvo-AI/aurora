@@ -258,11 +258,20 @@ def _format_updates_for_prompt(updates: List[Dict[str, Any]]) -> str:
             # Try flat format (Datadog, Grafana, manual merge, etc): title at top level
             if not title:
                 title = payload.get("title", "")
+                # Spinnaker / Jenkins: synthesise title from application + pipeline
+                if not title and payload.get("application"):
+                    app = payload.get("application", "")
+                    pipe = payload.get("pipeline_name") or payload.get("pipeline") or payload.get("job_name", "")
+                    sts = payload.get("status", "")
+                    title = f"{app}/{pipe} [{sts}]" if pipe else f"{app} [{sts}]"
             if not body_details:
                 body_details = payload.get("body", "") or payload.get("message", "") or payload.get("description", "")
             if not service:
                 # Try direct service field first (manual merge)
                 service = payload.get("service", "")
+                if not service:
+                    # Spinnaker/Jenkins: application is the service
+                    service = payload.get("application", "")
                 if not service:
                     # Datadog: extract from tags or scope
                     tags = payload.get("tags", [])

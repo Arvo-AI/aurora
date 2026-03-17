@@ -780,6 +780,7 @@ def initialize_tables():
                     CREATE TABLE IF NOT EXISTS spinnaker_deployment_events (
                         id SERIAL PRIMARY KEY,
                         user_id VARCHAR(255) NOT NULL,
+                        org_id VARCHAR(255),
                         event_type VARCHAR(50) DEFAULT 'pipeline',
                         application VARCHAR(255),
                         pipeline_name VARCHAR(255),
