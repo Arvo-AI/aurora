@@ -194,7 +194,13 @@ def _truncate_oversized_content(messages: List, max_tokens: int) -> List:
                         name=getattr(msg, "name", None),
                     ))
                 elif isinstance(msg, AIMessage):
-                    squeezed.append(AIMessage(content=content[:chars_per_msg]))
+                    squeezed.append(AIMessage(
+                        content=content[:chars_per_msg],
+                        tool_calls=getattr(msg, "tool_calls", None) or [],
+                        additional_kwargs=getattr(msg, "additional_kwargs", {}),
+                        response_metadata=getattr(msg, "response_metadata", {}),
+                        id=msg.id,
+                    ))
                 else:
                     squeezed.append(msg)
             else:
