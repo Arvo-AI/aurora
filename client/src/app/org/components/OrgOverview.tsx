@@ -20,7 +20,6 @@ export default function OrgOverview({ org }: OrgOverviewProps) {
     members: number;
     incidents: number;
     chatSessions: number;
-    integrations: number;
   } | null>(null);
 
   useEffect(() => {
@@ -41,10 +40,9 @@ export default function OrgOverview({ org }: OrgOverviewProps) {
   return (
     <div className="space-y-10">
       {/* Compact stats — inline, not cards */}
-      <div className="grid grid-cols-4 gap-px bg-border rounded-lg overflow-hidden">
+      <div className="grid grid-cols-3 gap-px bg-border rounded-lg overflow-hidden">
         {[
           { label: "Members", value: stats?.members ?? org.members.length },
-          { label: "Integrations", value: stats?.integrations ?? 0 },
           { label: "Incidents", value: stats?.incidents ?? 0 },
           { label: "Conversations", value: stats?.chatSessions ?? 0 },
         ].map((s) => (

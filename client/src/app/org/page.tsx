@@ -12,7 +12,6 @@ import { Button } from "@/components/ui/button";
 import { toast } from "@/hooks/use-toast";
 import OrgOverview from "./components/OrgOverview";
 import OrgMembers from "./components/OrgMembers";
-import OrgIntegrations from "./components/OrgIntegrations";
 import OrgActivity from "./components/OrgActivity";
 
 interface OrgData {
@@ -168,7 +167,7 @@ export default function OrgPage() {
       <Tabs defaultValue="overview" className="w-full">
         <div className="border-b border-border mb-8">
           <TabsList className="h-auto p-0 bg-transparent rounded-none gap-6">
-            {["overview", "members", "integrations", "activity"].map((tab) => (
+            {["overview", "members", "activity"].map((tab) => (
               <TabsTrigger
                 key={tab}
                 value={tab}
@@ -185,9 +184,6 @@ export default function OrgPage() {
         </TabsContent>
         <TabsContent value="members">
           <OrgMembers org={org} currentUserId={user?.id || ""} isAdmin={isAdmin} onMembersChanged={fetchOrg} />
-        </TabsContent>
-        <TabsContent value="integrations">
-          <OrgIntegrations />
         </TabsContent>
         <TabsContent value="activity">
           <OrgActivity />
