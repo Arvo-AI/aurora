@@ -5,7 +5,7 @@ import { useToast } from "@/hooks/use-toast";
 import { datadogService, DatadogStatus } from "@/lib/services/datadog";
 import { DatadogConnectionStep } from "@/components/datadog/DatadogConnectionStep";
 import { DatadogWebhookStep } from "@/components/datadog/DatadogWebhookStep";
-import { getUserFriendlyError } from "@/lib/utils";
+import { getUserFriendlyError, copyToClipboard } from "@/lib/utils";
 import ConnectorAuthGuard from "@/components/connectors/ConnectorAuthGuard";
 
 const CACHE_KEYS = {
@@ -216,7 +216,7 @@ export default function DatadogAuthPage() {
 
   const handleCopyWebhook = () => {
     if (!webhookUrl) return;
-    navigator.clipboard.writeText(webhookUrl);
+    copyToClipboard(webhookUrl);
     setCopied(true);
     toast({ title: 'Copied', description: 'Webhook URL copied to clipboard' });
     setTimeout(() => setCopied(false), 2000);

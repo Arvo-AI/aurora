@@ -31,6 +31,7 @@ import {
 } from '@/components/ui/alert-dialog';
 import { getEnv } from '@/lib/env';
 import ConnectorAuthGuard from "@/components/connectors/ConnectorAuthGuard";
+import { copyToClipboard } from '@/lib/utils';
 import { useToast } from '@/hooks/use-toast';
 
 const BACKEND_URL = getEnv('NEXT_PUBLIC_BACKEND_URL');
@@ -650,8 +651,8 @@ export default function AWSOnboardingPage() {
     }
   };
 
-  const copyToClipboard = (text: string, key: string = 'default') => {
-    navigator.clipboard.writeText(text);
+  const handleCopy = (text: string, key: string = 'default') => {
+    copyToClipboard(text);
     setCopySuccess(prev => ({ ...prev, [key]: true }));
     setTimeout(() => setCopySuccess(prev => ({ ...prev, [key]: false })), 2000);
   };
@@ -703,7 +704,7 @@ export default function AWSOnboardingPage() {
                   <Button
                     variant="outline"
                     size="icon"
-                    onClick={() => copyToClipboard(JSON.stringify({
+                    onClick={() => handleCopy(JSON.stringify({
                       "Version": "2012-10-17",
                       "Statement": [
                         {
@@ -1096,13 +1097,13 @@ make dev`}</pre>
                     </p>
                     <div className="flex gap-2 items-center">
                       <Input value={onboardingData.externalId} readOnly className="font-mono text-xs bg-black/50 text-white border-white/10 focus-visible:ring-white/20" />
-                      <Button variant="outline" size="icon" onClick={() => copyToClipboard(onboardingData.externalId, 'externalId2')} className="border-white/10 hover:bg-white/5 text-white/70 h-8 w-8 shrink-0">
+                      <Button variant="outline" size="icon" onClick={() => handleCopy(onboardingData.externalId, 'externalId2')} className="border-white/10 hover:bg-white/5 text-white/70 h-8 w-8 shrink-0">
                         {copySuccess['externalId2'] ? <CheckCircle className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
                       </Button>
                     </div>
                     <div className="relative">
                       <pre className="text-white text-[10px] whitespace-pre-wrap font-mono bg-black/30 p-2 pr-8 rounded border border-white/10">{trustPolicyJson}</pre>
-                      <Button variant="outline" size="icon" onClick={() => copyToClipboard(trustPolicyJson, 'trustPolicy2')} className="absolute top-1.5 right-1.5 h-5 w-5 border-white/10 hover:bg-white/5 text-white/70">
+                      <Button variant="outline" size="icon" onClick={() => handleCopy(trustPolicyJson, 'trustPolicy2')} className="absolute top-1.5 right-1.5 h-5 w-5 border-white/10 hover:bg-white/5 text-white/70">
                         {copySuccess['trustPolicy2'] ? <CheckCircle className="w-2.5 h-2.5" /> : <Copy className="w-2.5 h-2.5" />}
                       </Button>
                     </div>
@@ -1164,7 +1165,7 @@ make dev`}</pre>
                           <Button
                             variant="outline"
                             size="icon"
-                            onClick={() => copyToClipboard(stackSetsCommand, 'stackSets')}
+                            onClick={() => handleCopy(stackSetsCommand, 'stackSets')}
                             className="absolute top-2 right-2 h-6 w-6 border-white/10 hover:bg-white/5 text-white/70"
                           >
                             {copySuccess['stackSets'] ? <CheckCircle className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
@@ -1267,7 +1268,7 @@ make dev`}</pre>
                       <label className="text-xs text-white/50">External ID</label>
                       <div className="flex gap-2">
                         <Input value={onboardingData.externalId} readOnly className="font-mono text-xs bg-white/5 text-white border-white/10 focus-visible:ring-white/20" />
-                        <Button variant="outline" size="icon" onClick={() => copyToClipboard(onboardingData.externalId, 'externalId')} className="border-white/10 hover:bg-white/5 text-white/70 h-8 w-8">
+                        <Button variant="outline" size="icon" onClick={() => handleCopy(onboardingData.externalId, 'externalId')} className="border-white/10 hover:bg-white/5 text-white/70 h-8 w-8">
                           {copySuccess['externalId'] ? <CheckCircle className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
                         </Button>
                       </div>
@@ -1277,7 +1278,7 @@ make dev`}</pre>
                       <label className="text-xs text-white/50">Trust Policy JSON</label>
                       <div className="relative">
                         <pre className="text-white text-xs whitespace-pre-wrap font-mono bg-black/30 p-3 pr-10 rounded border border-white/10">{trustPolicyJson}</pre>
-                        <Button variant="outline" size="icon" onClick={() => copyToClipboard(trustPolicyJson, 'trustPolicy')} className="absolute top-2 right-2 h-6 w-6 border-white/10 hover:bg-white/5 text-white/70">
+                        <Button variant="outline" size="icon" onClick={() => handleCopy(trustPolicyJson, 'trustPolicy')} className="absolute top-2 right-2 h-6 w-6 border-white/10 hover:bg-white/5 text-white/70">
                           {copySuccess['trustPolicy'] ? <CheckCircle className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
                         </Button>
                       </div>

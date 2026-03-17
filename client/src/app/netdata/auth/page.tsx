@@ -7,6 +7,7 @@ import { NetdataConnectionStep } from "@/components/netdata/NetdataConnectionSte
 import { NetdataWebhookStep } from "@/components/netdata/NetdataWebhookStep";
 import { Button } from "@/components/ui/button";
 import ConnectorAuthGuard from "@/components/connectors/ConnectorAuthGuard";
+import { copyToClipboard } from "@/lib/utils";
 
 export default function NetdataAuthPage() {
   const { toast } = useToast();
@@ -132,7 +133,7 @@ export default function NetdataAuthPage() {
   };
 
   const handleCopy = (text: string, field: "url" | "token") => {
-    navigator.clipboard.writeText(text).then(() => {
+    copyToClipboard(text).then(() => {
       setCopiedField(field);
       toast({ title: "Copied" });
       setTimeout(() => setCopiedField(null), 2000);

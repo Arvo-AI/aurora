@@ -9,6 +9,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Copy, Check, Terminal, Clock } from 'lucide-react';
+import { copyToClipboard } from '@/lib/utils';
 import { RenderOutput } from '@/components/tool-calls/tool-output-renderer';
 
 interface CitationModalProps {
@@ -35,7 +36,7 @@ export default function CitationModal({ citation, isOpen, onClose }: CitationMod
 
   const handleCopy = async () => {
     try {
-      await navigator.clipboard.writeText(citation.output);
+      await copyToClipboard(citation.output);
       setCopied(true);
       // Clear any existing timeout
       if (timeoutRef.current) {

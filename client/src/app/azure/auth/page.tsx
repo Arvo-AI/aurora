@@ -11,6 +11,7 @@ import { AuthCard } from "@/components/cloud-provider";
 import { CardDescription } from "@/components/ui/card";
 import { getEnv } from '@/lib/env';
 import ConnectorAuthGuard from "@/components/connectors/ConnectorAuthGuard";
+import { copyToClipboard } from '@/lib/utils';
 
 const backendUrl = getEnv('NEXT_PUBLIC_BACKEND_URL');
 
@@ -879,7 +880,7 @@ export default function AzureAuthPage() {
                          ? 'https://gist.githubusercontent.com/isiddharthsingh/45f810e9c82af2855b5b394b84567f21/raw/34a1a32317c14ee2bf4667a82adde4b7b166b226/gistfile1.sh'
                          : `${backendUrl}/azure/setup-script`;
                        const command = `curl -s ${scriptUrl} | bash`;
-                       navigator.clipboard.writeText(command);
+                       copyToClipboard(command);
                        
                        setCopyButtonText(' Copied!');
                        setTimeout(() => {

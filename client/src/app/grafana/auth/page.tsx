@@ -5,7 +5,7 @@ import { useToast } from "@/hooks/use-toast";
 import { grafanaService, GrafanaStatus } from "@/lib/services/grafana";
 import { GrafanaConnectionStep } from "@/components/grafana/GrafanaConnectionStep";
 import { GrafanaWebhookStep } from "@/components/grafana/GrafanaWebhookStep";
-import { getUserFriendlyError } from "@/lib/utils";
+import { getUserFriendlyError, copyToClipboard } from "@/lib/utils";
 import ConnectorAuthGuard from "@/components/connectors/ConnectorAuthGuard";
 
 // Cache keys for localStorage
@@ -220,7 +220,7 @@ export default function GrafanaAuthPage() {
 
   const handleCopyWebhook = () => {
     if (webhookUrl) {
-      navigator.clipboard.writeText(webhookUrl);
+      copyToClipboard(webhookUrl);
       setCopied(true);
       toast({
         title: "Success",

@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Loader2, ExternalLink, Copy, CheckCircle2 } from "lucide-react";
-import { getUserFriendlyError } from "@/lib/utils";
+import { getUserFriendlyError, copyToClipboard } from "@/lib/utils";
 import ConnectorAuthGuard from "@/components/connectors/ConnectorAuthGuard";
 
 function persistStatus(connected: boolean) {
@@ -91,7 +91,7 @@ export default function BigPandaAuthPage() {
   const handleCopyWebhookUrl = async () => {
     if (!webhookInfo?.webhookUrl) return;
     try {
-      await navigator.clipboard.writeText(webhookInfo.webhookUrl);
+      await copyToClipboard(webhookInfo.webhookUrl);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {

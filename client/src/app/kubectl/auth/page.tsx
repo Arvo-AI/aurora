@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { useToast } from "@/hooks/use-toast";
+import { copyToClipboard } from "@/lib/utils";
 import { KUBECTL_AGENT } from "@/lib/kubectl-constants";
 import { getEnv } from '@/lib/env';
 import ConnectorAuthGuard from "@/components/connectors/ConnectorAuthGuard";
@@ -63,7 +64,7 @@ export default function KubectlAuthPage() {
 
   const copyCommand = async (text: string, key: string) => {
     try {
-      await navigator.clipboard.writeText(text);
+      await copyToClipboard(text);
       setCopied(key);
       setTimeout(() => setCopied(null), KUBECTL_AGENT.COPY_FEEDBACK_DURATION);
     } catch (error) {
