@@ -304,8 +304,8 @@ def _build_rca_context(
 @celery_app.task(
     bind=True, 
     name="chat.background.run_background_chat",
-    time_limit=900,  # Hard timeout: 15 minutes (task killed)
-    soft_time_limit=900  # Soft timeout: 15 minutes (exception raised, allows cleanup)
+    time_limit=1800,  # Hard timeout: 30 minutes (task killed)
+    soft_time_limit=1800  # Soft timeout: 30 minutes (exception raised, allows cleanup)
 )
 def run_background_chat(
     self,

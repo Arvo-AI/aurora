@@ -7,10 +7,11 @@ what the LLM sees — the full message history is preserved in graph state.
 """
 
 import logging
-from typing import Awaitable, Callable
+from typing import Awaitable, Callable, List
 
 from langchain.agents.middleware import AgentMiddleware
 from langchain.agents.middleware.types import ModelRequest, ModelResponse
+from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.messages.utils import trim_messages, count_tokens_approximately
 
 from ..utils.chat_context_manager import ChatContextManager
@@ -21,6 +22,10 @@ logger = logging.getLogger(__name__)
 
 # Use 75% of the model's context limit, leaving headroom for the response
 _CONTEXT_USAGE_RATIO = 0.75
+
+# Max characters to keep per tool output when truncating oversized messages.
+# ~25K tokens — enough to preserve useful context from a single tool call.
+_MAX_TOOL_CONTENT_CHARS = 100_000
 
 
 class ContextTrimMiddleware(AgentMiddleware):
@@ -82,14 +87,31 @@ class ContextTrimMiddleware(AgentMiddleware):
             f"(limit: {self.max_tokens}) across {original_count} messages"
         )
 
+        # Step 1: Try trim_messages to keep the most recent messages that fit.
         trimmed = trim_messages(
             request.messages,
             strategy="last",
             token_counter=count_tokens_approximately,
             max_tokens=self.max_tokens,
-            start_on="human",
-            end_on=("human", "tool"),
         )
+
+        # Step 2: Drop orphaned ToolMessages from the front (no matching tool_use).
+        trimmed = _drop_orphaned_tool_messages(trimmed)
+
+        # Step 3: If empty (individual messages bigger than budget), take last 6
+        # messages and truncate their content to fit.
+        if not trimmed:
+            logger.warning("Trimming produced empty list, truncating last messages to fit")
+            trimmed = _drop_orphaned_tool_messages(request.messages[-6:])
+
+        # Step 4: If still over budget (huge tool outputs), truncate content.
+        trimmed_tokens = count_tokens_approximately(trimmed)
+        if trimmed_tokens > self.max_tokens:
+            logger.warning(
+                f"Trimmed messages still over budget ({trimmed_tokens} > {self.max_tokens}), "
+                "truncating oversized message content"
+            )
+            trimmed = _truncate_oversized_content(trimmed, self.max_tokens)
 
         trimmed_count = len(trimmed)
         trimmed_tokens = count_tokens_approximately(trimmed)
@@ -100,3 +122,83 @@ class ContextTrimMiddleware(AgentMiddleware):
         )
 
         return await handler(request.override(messages=trimmed))
+
+
+def _drop_orphaned_tool_messages(messages: List) -> List:
+    """Drop ToolMessages from the front that have no matching AIMessage with tool_calls.
+
+    After trim_messages cuts from the beginning, the first message(s) can be
+    ToolMessages whose parent AIMessage (containing tool_calls) was trimmed.
+    Sending these to the Anthropic API causes:
+      "Each tool_result block must have a corresponding tool_use block
+       in the previous message."
+    """
+    # Collect tool_call IDs from all AIMessages in the list
+    available_tool_call_ids: set = set()
+    for msg in messages:
+        if isinstance(msg, AIMessage) and getattr(msg, "tool_calls", None):
+            for tc in msg.tool_calls:
+                tc_id = tc.get("id") if isinstance(tc, dict) else getattr(tc, "id", None)
+                if tc_id:
+                    available_tool_call_ids.add(tc_id)
+
+    # Drop leading ToolMessages whose tool_call_id is not in the set
+    start = 0
+    for i, msg in enumerate(messages):
+        if isinstance(msg, ToolMessage):
+            tc_id = getattr(msg, "tool_call_id", None)
+            if tc_id not in available_tool_call_ids:
+                start = i + 1
+                continue
+        break
+
+    if start > 0:
+        logger.info(f"Dropped {start} orphaned ToolMessage(s) from trimmed context")
+
+    return messages[start:]
+
+
+def _truncate_oversized_content(messages: List, max_tokens: int) -> List:
+    """Truncate oversized message content (especially ToolMessages) to fit the budget.
+
+    When individual tool outputs are larger than the entire token budget,
+    trim_messages can't help — we must truncate the content itself.
+    """
+    result = []
+    for msg in messages:
+        if isinstance(msg, ToolMessage) and isinstance(msg.content, str):
+            if len(msg.content) > _MAX_TOOL_CONTENT_CHARS:
+                truncated = ToolMessage(
+                    content=msg.content[:_MAX_TOOL_CONTENT_CHARS] + "\n\n[Truncated for context window]",
+                    tool_call_id=msg.tool_call_id,
+                    name=getattr(msg, "name", None),
+                )
+                result.append(truncated)
+                continue
+        result.append(msg)
+
+    # If still over budget after truncating tool outputs, progressively
+    # shorten ALL message content until it fits.
+    tokens = count_tokens_approximately(result)
+    if tokens > max_tokens:
+        # Calculate how much we need to cut per-message
+        chars_per_msg = (max_tokens * 4) // max(len(result), 1)  # ~4 chars per token
+        squeezed = []
+        for msg in result:
+            content = msg.content if isinstance(msg.content, str) else str(msg.content)
+            if len(content) > chars_per_msg:
+                if isinstance(msg, ToolMessage):
+                    squeezed.append(ToolMessage(
+                        content=content[:chars_per_msg] + "\n\n[Truncated for context window]",
+                        tool_call_id=msg.tool_call_id,
+                        name=getattr(msg, "name", None),
+                    ))
+                elif isinstance(msg, AIMessage):
+                    squeezed.append(AIMessage(content=content[:chars_per_msg]))
+                else:
+                    squeezed.append(msg)
+            else:
+                squeezed.append(msg)
+        result = squeezed
+
+    return result

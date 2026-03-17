@@ -165,8 +165,16 @@ class ToolContextCapture:
             logger.info(f" Tool output length {content_tokens} tokens exceeds {SUMMARIZATION_THRESHOLD_TOKENS} token threshold, summarizing for LLM context")
             try:
                 from ..llm import ModelConfig
+                # Cap content before sending to summarization to prevent context overflow.
+                # LLMManager.summarize() also caps internally, but truncating here avoids
+                # passing multi-MB strings through the call stack unnecessarily.
+                MAX_SUMMARIZATION_INPUT_CHARS = 400_000  # ~100K tokens
+                content_to_summarize = original_content
+                if len(content_to_summarize) > MAX_SUMMARIZATION_INPUT_CHARS:
+                    logger.warning(f"Truncating tool output from {len(content_to_summarize)} to {MAX_SUMMARIZATION_INPUT_CHARS} chars before summarization")
+                    content_to_summarize = content_to_summarize[:MAX_SUMMARIZATION_INPUT_CHARS] + "\n\n[Truncated before summarization]"
                 llm = LLMManager()
-                summary = llm.summarize(original_content, model=ModelConfig.TOOL_OUTPUT_SUMMARIZATION_MODEL)
+                summary = llm.summarize(content_to_summarize, model=ModelConfig.TOOL_OUTPUT_SUMMARIZATION_MODEL)
                 summarized_content = summary + '\n\n[Summarized from longer output]'
                 summary_tokens = count_tokens(summarized_content)
                 logger.debug(f" SUMMARIZATION CREATED: {content_tokens} -> {summary_tokens} tokens")
