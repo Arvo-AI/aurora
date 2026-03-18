@@ -4,11 +4,19 @@ Wraps the Bitbucket 2.0 REST API with authentication and pagination support.
 """
 import base64
 import logging
+from urllib.parse import urlsplit
+
 import requests
 
 logger = logging.getLogger(__name__)
 
 BITBUCKET_API_BASE = "https://api.bitbucket.org/2.0"
+
+
+def _sanitize_url(url: str) -> str:
+    """Strip query params and credentials from a URL before logging."""
+    parts = urlsplit(url)
+    return parts._replace(query="", fragment="", netloc=parts.hostname or parts.netloc).geturl()
 
 
 class BitbucketAPIClient:
@@ -76,7 +84,7 @@ class BitbucketAPIClient:
         """Single-resource GET. Returns response JSON or error dict."""
         response = requests.get(url, headers=self._get_headers(), params=params, timeout=self.REQUEST_TIMEOUT)
         if response.status_code != 200:
-            logger.error(f"Bitbucket GET {url} failed: {response.status_code}")
+            logger.error(f"Bitbucket GET {_sanitize_url(url)} failed: {response.status_code}")
             return self._handle_error(response)
         return response.json()
 
@@ -86,7 +94,7 @@ class BitbucketAPIClient:
         headers["Accept"] = "text/plain"
         response = requests.get(url, headers=headers, params=params, timeout=self.REQUEST_TIMEOUT)
         if response.status_code != 200:
-            logger.error(f"Bitbucket GET (raw) {url} failed: {response.status_code}")
+            logger.error(f"Bitbucket GET (raw) {_sanitize_url(url)} failed: {response.status_code}")
             return self._handle_error(response)
         return response.text
 
@@ -97,7 +105,7 @@ class BitbucketAPIClient:
             headers["Content-Type"] = "application/json"
         response = requests.post(url, headers=headers, json=json_data, data=data, files=files, timeout=self.REQUEST_TIMEOUT)
         if response.status_code not in (200, 201):
-            logger.error(f"Bitbucket POST {url} failed: {response.status_code}")
+            logger.error(f"Bitbucket POST {_sanitize_url(url)} failed: {response.status_code}")
             return self._handle_error(response)
         try:
             return response.json()
@@ -110,7 +118,7 @@ class BitbucketAPIClient:
         headers["Content-Type"] = "application/json"
         response = requests.put(url, headers=headers, json=json_data, timeout=self.REQUEST_TIMEOUT)
         if response.status_code != 200:
-            logger.error(f"Bitbucket PUT {url} failed: {response.status_code}")
+            logger.error(f"Bitbucket PUT {_sanitize_url(url)} failed: {response.status_code}")
             return self._handle_error(response)
         return response.json()
 
@@ -118,7 +126,7 @@ class BitbucketAPIClient:
         """DELETE. Returns status dict."""
         response = requests.delete(url, headers=self._get_headers(), timeout=self.REQUEST_TIMEOUT)
         if response.status_code not in (200, 204):
-            logger.error(f"Bitbucket DELETE {url} failed: {response.status_code}")
+            logger.error(f"Bitbucket DELETE {_sanitize_url(url)} failed: {response.status_code}")
             return self._handle_error(response)
         return {"success": True, "status": response.status_code}
 
@@ -141,7 +149,7 @@ class BitbucketAPIClient:
         while url and page_count < page_limit:
             response = requests.get(url, headers=headers, params=params, timeout=self.REQUEST_TIMEOUT)
             if response.status_code != 200:
-                logger.error(f"Bitbucket API error {response.status_code}: {response.text}")
+                logger.error(f"Bitbucket API error {response.status_code} at {_sanitize_url(url)}")
                 if not all_values:
                     return self._handle_error(response)
                 logger.warning("Returning partial results due to mid-pagination error")
