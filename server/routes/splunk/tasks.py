@@ -340,6 +340,7 @@ def process_splunk_alert(
                                         "alert_id": alert_id,
                                         "search_name": search_name,
                                     },
+                                    incident_id=str(incident_id) if incident_id else None,
                                 )
 
                                 # Build comprehensive RCA prompt with provider context

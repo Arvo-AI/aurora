@@ -371,6 +371,7 @@ def _trigger_rca(
                     "build_number": build_number,
                     "result": result,
                 },
+                incident_id=str(incident_id),
             )
             rca_prompt = _build_rca_prompt(payload, user_id=user_id, source=source)
             task = run_background_chat.delay(

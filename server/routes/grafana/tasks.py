@@ -404,6 +404,7 @@ def process_grafana_alert(
                                         "alert_uid": alert_uid,
                                         "alert_state": alert_state,
                                     },
+                                    incident_id=str(incident_id) if incident_id else None,
                                 )
 
                                 # Build comprehensive RCA prompt with provider context

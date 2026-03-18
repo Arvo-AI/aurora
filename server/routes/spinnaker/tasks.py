@@ -339,6 +339,7 @@ def _trigger_rca(
                     "source": "spinnaker",
                     "status": status,
                 },
+                incident_id=str(incident_id),
             )
             rca_prompt = _build_rca_prompt(payload, user_id=user_id)
             task = run_background_chat.delay(

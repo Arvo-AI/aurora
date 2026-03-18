@@ -367,6 +367,7 @@ def process_datadog_event(
                                         or payload.get("alert_id"),
                                         "status": status,
                                     },
+                                    incident_id=str(incident_id),
                                 )
 
                                 # Build comprehensive RCA prompt with provider context

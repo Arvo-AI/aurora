@@ -297,6 +297,7 @@ def process_netdata_alert(
                                             "alert_status": data["status"],
                                             "host": data["host"],
                                         },
+                                        incident_id=str(incident_id) if incident_id else None,
                                     )
 
                                     # Build simple RCA prompt with Aurora Learn context injection

@@ -177,6 +177,7 @@ def process_dynatrace_problem(
                 user_id=user_id,
                 title=f"RCA: {title}",
                 trigger_metadata={"source": "dynatrace", "problem_id": payload.get("ProblemID")},
+                incident_id=str(incident_id),
             )
             task = run_background_chat.delay(
                 user_id=user_id, session_id=session_id,

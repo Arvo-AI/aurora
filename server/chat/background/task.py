@@ -350,6 +350,14 @@ def run_background_chat(
         if incident_id:
             try:
                 with db_pool.get_admin_connection() as conn:
+                    # Ensure chat_sessions.incident_id is set (single source of truth)
+                    with conn.cursor() as cursor:
+                        cursor.execute(
+                            "UPDATE chat_sessions SET incident_id = %s WHERE id = %s AND incident_id IS NULL",
+                            (incident_id, session_id)
+                        )
+                    conn.commit()
+
                     # Store session ID and Celery task ID (if not already set by webhook handler)
                     with conn.cursor() as cursor:
                         # First check if there's already a task ID set
