@@ -24,7 +24,6 @@ from utils.notifications.slack_notification_service import (
 )
 from utils.db.connection_pool import db_pool
 from langchain_core.messages import ToolMessage
-from chat.backend.agent.tools.cloud_tools import get_state_context
 from chat.background.visualization_generator import update_visualization
 from chat.backend.constants import MAX_TOOL_OUTPUT_CHARS, INFRASTRUCTURE_TOOLS
 
