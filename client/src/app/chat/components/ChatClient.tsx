@@ -168,7 +168,7 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
   }, [initialMode, setSelectedMode]);
 
   // Session loader for loading existing chat history
-  const { loadSessionData, isLoadingSession, lastIncidentId } = useSessionLoader({
+  const { loadSessionData } = useSessionLoader({
     onMessagesLoaded,
     onUiStateLoaded,
     onClearMessages,
