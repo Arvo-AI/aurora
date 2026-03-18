@@ -1,4 +1,4 @@
-import { useCallback } from 'react';
+import { useCallback, useRef } from 'react';
 import { Message } from '@/app/chat/types';
 import { useChatHistory } from '@/hooks/useChatHistory';
 import { SimpleChatUiState } from '@/hooks/useSessionPersistence';
@@ -15,6 +15,7 @@ export const useSessionLoader = ({
   onClearMessages,
 }: UseSessionLoaderProps) => {
   const { loadSession, isLoadingSession } = useChatHistory();
+  const lastIncidentIdRef = useRef<string | null>(null);
 
   const loadSessionData = useCallback(async (sessionId: string): Promise<boolean> => {
     try {
@@ -22,8 +23,11 @@ export const useSessionLoader = ({
       
       if (!sessionData) {
         console.warn(`Session ${sessionId} not found`);
+        lastIncidentIdRef.current = null;
         return false;
       }
+
+      lastIncidentIdRef.current = sessionData.incidentId || null;
 
       // Clear current messages first
       onClearMessages();
@@ -49,12 +53,14 @@ export const useSessionLoader = ({
       return true;
     } catch (error) {
       console.error(`Failed to load session ${sessionId}:`, error);
+      lastIncidentIdRef.current = null;
       return false;
     }
   }, [loadSession, onMessagesLoaded, onUiStateLoaded, onClearMessages]);
 
   return {
     loadSessionData,
-    isLoadingSession
+    isLoadingSession,
+    lastIncidentId: lastIncidentIdRef,
   };
 };

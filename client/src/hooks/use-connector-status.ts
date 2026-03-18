@@ -18,30 +18,8 @@ export function useConnectorStatus(connector: ConnectorConfig, userId: string | 
     checkConnectionStatus();
     
     const handleProviderChange = () => {
-      if (connector.id === "slack" && typeof window !== "undefined") {
-        const isSlackConnected = localStorage.getItem('isSlackConnected') === 'true';
-        if (isSlackConnected) {
-          setIsConnected(true);
-          setIsLoadingDetails(true);
-          if (userId) checkSlackStatus();
-          return;
-        }
-      }
-      if (connector.id === "pagerduty" && typeof window !== "undefined") {
-        const isPagerDutyConnected = localStorage.getItem('isPagerDutyConnected') === 'true';
-        if (isPagerDutyConnected) {
-          setIsConnected(true);
-          setIsLoadingDetails(true);
-          if (userId) checkPagerDutyStatus();
-          return;
-        }
-      }
       if (connector.id === "onprem" && typeof window !== "undefined") {
         checkVmConfigStatus();
-        return;
-      }
-      if (connector.useCustomConnection && (connector.id === "gcp" || connector.id === "slack")) {
-        checkApiConnectionStatus();
         return;
       }
       checkConnectionStatus();
@@ -56,30 +34,16 @@ export function useConnectorStatus(connector: ConnectorConfig, userId: string | 
       checkGitHubStatus();
     }
     if (connector.id === "slack" && userId) {
-      const isSlackConnected = typeof window !== "undefined" && localStorage.getItem('isSlackConnected') === 'true';
-      if (isSlackConnected) {
-        setIsConnected(true);
-        setIsLoadingDetails(true);
-      }
       checkSlackStatus();
     }
     if (connector.id === "pagerduty" && userId) {
-      const isPagerDutyConnected = typeof window !== "undefined" && localStorage.getItem('isPagerDutyConnected') === 'true';
-      if (isPagerDutyConnected) {
-        setIsConnected(true);
-        setIsLoadingDetails(true);
-      }
       checkPagerDutyStatus();
     }
     if (connector.id === "bitbucket" && userId) {
       checkBitbucketStatus();
     }
     if (connector.id === "onprem" && userId) {
-      // Don't trust localStorage - always verify with API
       checkVmConfigStatus();
-    }
-    if (connector.useCustomConnection && connector.id === "gcp") {
-      checkApiConnectionStatus();
     }
   }, [userId, connector.id]);
 
@@ -89,10 +53,6 @@ export function useConnectorStatus(connector: ConnectorConfig, userId: string | 
     try {
       const data = await GitHubIntegrationService.checkStatus(userId);
       setIsConnected(data.connected || false);
-      localStorage.setItem('github_cached_data', JSON.stringify(data));
-      localStorage.setItem('github_last_checked', Date.now().toString());
-      // Don't dispatch providerStateChanged here - it causes infinite loop on connectors page
-      // Only dispatch when explicitly disconnecting/connecting (handled in github-auth.tsx and github-settings.tsx)
     } catch (error) {
       console.error("Error checking GitHub status:", error);
       setIsConnected(false);
@@ -118,20 +78,10 @@ export function useConnectorStatus(connector: ConnectorConfig, userId: string | 
       const connected = data?.connected || false;
       setIsConnected(connected);
       setSlackStatus(data);
-      if (typeof window !== "undefined") {
-        if (connected) {
-          localStorage.setItem('isSlackConnected', 'true');
-        } else {
-          localStorage.removeItem('isSlackConnected');
-        }
-      }
     } catch (error) {
       console.error("Error checking Slack status:", error);
       setIsConnected(false);
       setSlackStatus(null);
-      if (typeof window !== "undefined") {
-        localStorage.removeItem('isSlackConnected');
-      }
     } finally {
       setIsLoadingDetails(false);
     }
@@ -143,19 +93,9 @@ export function useConnectorStatus(connector: ConnectorConfig, userId: string | 
       const data = await pagerdutyService.getStatus();
       const connected = data?.connected || false;
       setIsConnected(connected);
-      if (typeof window !== "undefined") {
-        if (connected) {
-          localStorage.setItem('isPagerDutyConnected', 'true');
-        } else {
-          localStorage.removeItem('isPagerDutyConnected');
-        }
-      }
     } catch (error) {
       console.error("Error checking PagerDuty status:", error);
       setIsConnected(false);
-      if (typeof window !== "undefined") {
-        localStorage.removeItem('isPagerDutyConnected');
-      }
     } finally {
       setIsLoadingDetails(false);
     }
@@ -173,9 +113,6 @@ export function useConnectorStatus(connector: ConnectorConfig, userId: string | 
         const hasVerifiedManualVm = (manualData.vms || []).some((vm: any) => vm.connectionVerified);
         if (hasVerifiedManualVm) {
           setIsConnected(true);
-          if (typeof window !== "undefined") {
-            localStorage.setItem('isOnPremConnected', 'true');
-          }
           return;
         }
       }
@@ -183,9 +120,6 @@ export function useConnectorStatus(connector: ConnectorConfig, userId: string | 
       const backendUrl = getEnv('NEXT_PUBLIC_BACKEND_URL');
       if (!backendUrl || !userId) {
         setIsConnected(false);
-        if (typeof window !== "undefined") {
-          localStorage.removeItem('isOnPremConnected');
-        }
         return;
       }
       
@@ -200,9 +134,6 @@ export function useConnectorStatus(connector: ConnectorConfig, userId: string | 
             const hasConfiguredOvhVm = (ovhData.instances || []).some((instance: any) => instance.sshConfig);
             if (hasConfiguredOvhVm) {
               setIsConnected(true);
-              if (typeof window !== "undefined") {
-                localStorage.setItem('isOnPremConnected', 'true');
-              }
               return;
             }
           }
@@ -222,9 +153,6 @@ export function useConnectorStatus(connector: ConnectorConfig, userId: string | 
             const hasConfiguredScwVm = (scwData.servers || []).some((server: any) => server.sshConfig);
             if (hasConfiguredScwVm) {
               setIsConnected(true);
-              if (typeof window !== "undefined") {
-                localStorage.setItem('isOnPremConnected', 'true');
-              }
               return;
             }
           }
@@ -234,126 +162,73 @@ export function useConnectorStatus(connector: ConnectorConfig, userId: string | 
       }
       
       setIsConnected(false);
-      if (typeof window !== "undefined") {
-        localStorage.removeItem('isOnPremConnected');
-      }
     } catch (error) {
       console.error("Error checking VM config status:", error);
       setIsConnected(false);
-      if (typeof window !== "undefined") {
-        localStorage.removeItem('isOnPremConnected');
-      }
     } finally {
       setIsCheckingConnection(false);
     }
   };
 
+  /**
+   * Unified API-based connection check. Fetches /api/connected-accounts
+   * (the single source of truth backed by the database) and checks if this
+   * connector's provider appears in the response. Works for all providers
+   * regardless of connection method (OAuth, STS, API key, etc.).
+   */
   const checkApiConnectionStatus = async () => {
-    if (connector.useCustomConnection && (connector.id === "gcp" || connector.id === "slack")) {
-      try {
-        const response = await fetch('/api/connected-accounts', {
-          credentials: 'include',
-        });
-        if (!response.ok) {
-          console.error('Failed to fetch connected accounts:', response.status);
-          const storageKey = connector.storageKey || `is${connector.name}Connected`;
-          const connected = typeof window !== "undefined" ? localStorage.getItem(storageKey) === "true" : false;
-          setIsConnected(connected);
-          return;
-        }
-        const data = await response.json();
-        const accounts = data.accounts || {};
-        const isConnectedInDb = Object.keys(accounts).some(
-          key => key.toLowerCase() === connector.id.toLowerCase()
-        );
-        setIsConnected(isConnectedInDb);
-        if (typeof window !== "undefined") {
-          const storageKey = connector.storageKey || `is${connector.name}Connected`;
-          if (isConnectedInDb) {
-            localStorage.setItem(storageKey, "true");
-          } else {
-            localStorage.removeItem(storageKey);
-          }
-        }
-      } catch (error) {
-        console.error('Error checking API connection status:', error);
-        const storageKey = connector.storageKey || `is${connector.name}Connected`;
-        const connected = typeof window !== "undefined" ? localStorage.getItem(storageKey) === "true" : false;
-        setIsConnected(connected);
-      }
-    }
-  };
-
-  const checkCIConnectionViaApi = async () => {
     try {
       const response = await fetch('/api/connected-accounts', {
         credentials: 'include',
       });
-      if (!response.ok) return;
+      if (!response.ok) {
+        console.error('Failed to fetch connected accounts:', response.status);
+        return;
+      }
       const data = await response.json();
       const accounts = data.accounts || {};
       const isConnectedInDb = Object.keys(accounts).some(
         key => key.toLowerCase() === connector.id.toLowerCase()
       );
-      const storageKey = connector.storageKey || `is${connector.name}Connected`;
-      if (isConnectedInDb) {
-        setIsConnected(true);
-        localStorage.setItem(storageKey, "true");
-      } else {
-        setIsConnected(false);
-        localStorage.removeItem(storageKey);
-      }
-    } catch {
-      // On error, keep existing localStorage state
+      setIsConnected(isConnectedInDb);
+    } catch (error) {
+      console.error('Error checking API connection status:', error);
     }
   };
 
+  /**
+   * Main entry point for checking connection status.
+   * Uses /api/connected-accounts as the single source of truth for all
+   * providers. Special-case connectors (github, bitbucket, onprem) that
+   * have their own dedicated status APIs fall through to those.
+   */
   const checkConnectionStatus = () => {
     if (typeof window === "undefined") return;
     
-    if (connector.useCustomConnection && connector.id === "gcp") {
-      checkApiConnectionStatus();
+    // Providers with dedicated status endpoints
+    if (connector.id === "github") {
+      checkGitHubStatus();
       return;
     }
-    
-    if (connector.id === "github") {
-      const cachedData = localStorage.getItem('github_cached_data');
-      if (cachedData) {
-        try {
-          const data = JSON.parse(cachedData);
-          setIsConnected(data.connected || false);
-          return;
-        } catch (error) {
-          console.error('Error parsing GitHub cached data:', error);
-        }
-      }
+    if (connector.id === "bitbucket") {
+      checkBitbucketStatus();
+      return;
     }
-    
+    if (connector.id === "onprem") {
+      checkVmConfigStatus();
+      return;
+    }
     if (connector.id === "slack") {
-      const isSlackConnected = localStorage.getItem('isSlackConnected') === 'true';
-      if (isSlackConnected) {
-        setIsConnected(true);
-        setIsLoadingDetails(true);
-        return;
-      }
+      checkSlackStatus();
+      return;
     }
-
     if (connector.id === "pagerduty") {
-      const isPagerDutyConnected = localStorage.getItem('isPagerDutyConnected') === 'true';
-      if (isPagerDutyConnected) {
-        setIsConnected(true);
-        setIsLoadingDetails(true);
-        return;
-      }
+      checkPagerDutyStatus();
+      return;
     }
-    
-    const storageKey = connector.storageKey || `is${connector.name}Connected`;
-    const connected = localStorage.getItem(storageKey) === "true";
-    setIsConnected(connected);
 
-    if (connector.id === "jenkins" || connector.id === "cloudbees" || connector.id === "spinnaker") {
-      checkCIConnectionViaApi();
-    }
+    // All other providers (including CI connectors): use the unified API
+    checkApiConnectionStatus();
   };
 
   return {

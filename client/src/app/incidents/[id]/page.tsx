@@ -7,6 +7,8 @@ import { incidentsService, Incident, StreamingThought } from '@/lib/services/inc
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { ArrowLeft, AlertTriangle, GitMerge } from 'lucide-react';
+import { useAuth } from '@/hooks/useAuthHooks';
+import { canWrite } from '@/lib/roles';
 
 import IncidentCard from '../components/IncidentCard';
 import ThoughtsPanel from '../components/ThoughtsPanel';
@@ -14,6 +16,7 @@ import ThoughtsPanel from '../components/ThoughtsPanel';
 export default function IncidentDetailPage() {
   const params = useParams();
   const router = useRouter();
+  const { role } = useAuth();
   const [incident, setIncident] = useState<Incident | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -243,6 +246,7 @@ export default function IncidentDetailPage() {
           thoughts={thoughts}
           incident={incident}
           isVisible={showThoughts}
+          canInteract={canWrite(role)}
         />
       </div>
     </div>

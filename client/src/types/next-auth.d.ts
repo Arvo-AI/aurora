@@ -1,12 +1,19 @@
 import { DefaultSession } from "next-auth"
 
+export type UserRole = "admin" | "editor" | "viewer";
+
 declare module "next-auth" {
   interface Session {
     userId: string
+    orgId?: string
     user: {
       id: string
       email: string
       name?: string
+      role?: UserRole
+      orgId?: string
+      orgName?: string
+      mustChangePassword?: boolean
     } & DefaultSession["user"]
   }
 
@@ -14,6 +21,10 @@ declare module "next-auth" {
     id: string
     email: string
     name?: string
+    role?: UserRole
+    orgId?: string
+    orgName?: string
+    mustChangePassword?: boolean
   }
 }
 
@@ -22,5 +33,10 @@ declare module "next-auth/jwt" {
     id: string
     email: string
     name?: string
+    role?: UserRole
+    orgId?: string
+    orgName?: string
+    mustChangePassword?: boolean
+    lastRefreshedAt?: number
   }
 }

@@ -10,6 +10,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Loader2, ExternalLink } from "lucide-react";
 import { getUserFriendlyError } from "@/lib/utils";
 import { SplunkWebhookStep } from "@/components/splunk/SplunkWebhookStep";
+import ConnectorAuthGuard from "@/components/connectors/ConnectorAuthGuard";
 
 const CACHE_KEY = "splunk_connection_status";
 
@@ -154,24 +155,27 @@ export default function SplunkAuthPage() {
 
   if (isCheckingStatus) {
     return (
-      <div className="container mx-auto py-8 px-4 max-w-2xl">
-        <div className="mb-6">
-          <h1 className="text-3xl font-bold">Splunk Integration</h1>
-          <p className="text-muted-foreground mt-1">
-            Connect your Splunk Cloud or Enterprise instance
-          </p>
+      <ConnectorAuthGuard connectorName="Splunk">
+        <div className="container mx-auto py-8 px-4 max-w-2xl">
+          <div className="mb-6">
+            <h1 className="text-3xl font-bold">Splunk Integration</h1>
+            <p className="text-muted-foreground mt-1">
+              Connect your Splunk Cloud or Enterprise instance
+            </p>
+          </div>
+          <Card>
+            <CardContent className="flex items-center justify-center py-12">
+              <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+            </CardContent>
+          </Card>
         </div>
-        <Card>
-          <CardContent className="flex items-center justify-center py-12">
-            <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-          </CardContent>
-        </Card>
-      </div>
+      </ConnectorAuthGuard>
     );
   }
 
   return (
-    <div className="container mx-auto py-8 px-4 max-w-2xl">
+    <ConnectorAuthGuard connectorName="Splunk">
+      <div className="container mx-auto py-8 px-4 max-w-2xl">
       <div className="mb-6">
         <h1 className="text-3xl font-bold">Splunk Integration</h1>
         <p className="text-muted-foreground mt-1">
@@ -272,5 +276,6 @@ export default function SplunkAuthPage() {
         />
       )}
     </div>
+    </ConnectorAuthGuard>
   );
 }

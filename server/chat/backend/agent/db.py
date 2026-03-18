@@ -14,13 +14,24 @@ class PostgreSQLClient:
         This replaces the previous connection-per-query approach with proper pooling.
         """
         self.current_user_id = "unknown_user"
+        self.current_org_id = None
 
-    def set_user_context(self, user_id: str) -> None:
+    def set_user_context(self, user_id: str, org_id: str = None) -> None:
         """
-        Set user context - this will be applied per query.
+        Set user and org context - applied per query for RLS enforcement.
+        If org_id is not provided, it will be resolved from the database.
         """
         self.current_user_id = user_id if user_id else "unknown_user"
-        logging.debug(f"Set user context to: {self.current_user_id}")
+        if org_id:
+            self.current_org_id = org_id
+        elif user_id and user_id != "unknown_user":
+            try:
+                from utils.auth.stateless_auth import get_org_id_for_user
+                self.current_org_id = get_org_id_for_user(user_id)
+            except Exception:
+                logging.warning(f"Could not resolve org_id for user {user_id}")
+                self.current_org_id = None
+        logging.debug(f"Set user context to: user={self.current_user_id}, org={self.current_org_id}")
 
     def execute_query(self, query: str, params: tuple = None) -> list:
         """
@@ -38,8 +49,10 @@ class PostgreSQLClient:
             # Use connection pool instead of creating new connections
             with db_pool.get_user_connection() as connection:
                 with connection.cursor() as cursor:
-                    # Set user context for RLS
+                    # Set user + org context for RLS
                     cursor.execute("SET myapp.current_user_id = %s;", (self.current_user_id,))
+                    if self.current_org_id:
+                        cursor.execute("SET myapp.current_org_id = %s;", (self.current_org_id,))
                     
                     # Execute the main query
                     if params:

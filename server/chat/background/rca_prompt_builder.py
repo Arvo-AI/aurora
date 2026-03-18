@@ -1144,3 +1144,44 @@ def build_bigpanda_rca_prompt(
     }
 
     return build_rca_prompt('bigpanda', alert_details, providers, user_id)
+
+
+def build_splunk_rca_prompt(
+    payload: Dict[str, Any],
+    providers: Optional[List[str]] = None,
+    user_id: Optional[str] = None,
+) -> str:
+    """Build RCA prompt from Splunk alert payload."""
+    search_name = payload.get("search_name") or payload.get("name") or "Unknown Alert"
+    result_count = payload.get("result_count") or payload.get("results_count") or 0
+    search_query = payload.get("search") or payload.get("search_query") or ""
+    app = payload.get("app") or payload.get("source") or ""
+    severity = payload.get("severity") or payload.get("alert_severity") or ""
+
+    results = payload.get("results") or payload.get("result") or []
+    results_str = ""
+    if results:
+        if isinstance(results, list):
+            results_str = ", ".join(str(r) for r in results[:5])
+        elif isinstance(results, dict):
+            results_str = str(results)
+
+    message_parts = [f"Search: {search_name}", f"Result count: {result_count}"]
+    if search_query:
+        message_parts.append(f"SPL: {search_query}")
+    if results_str:
+        message_parts.append(f"Sample: {results_str}")
+
+    alert_details = {
+        'title': search_name,
+        'status': f"triggered ({result_count} results)",
+        'message': ". ".join(message_parts),
+        'labels': {},
+    }
+
+    if app:
+        alert_details['labels']['app'] = app
+    if severity:
+        alert_details['labels']['severity'] = str(severity)
+
+    return build_rca_prompt('splunk', alert_details, providers, user_id)

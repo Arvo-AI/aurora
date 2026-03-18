@@ -10,6 +10,7 @@ from typing import Any, Dict, Optional
 from celery_config import celery_app
 from services.correlation.alert_correlator import AlertCorrelator
 from services.correlation import handle_correlated_alert
+from utils.auth.stateless_auth import set_rls_context
 
 logger = logging.getLogger(__name__)
 
@@ -128,20 +129,25 @@ def process_spinnaker_deployment(
         try:
             with db_pool.get_admin_connection() as conn:
                 with conn.cursor() as cursor:
+                    org_id = set_rls_context(cursor, conn, user_id, log_prefix=log_prefix)
+                    if not org_id:
+                        logger.error("%s Cannot resolve org_id for user %s, aborting", log_prefix, user_id)
+                        return
+
                     cursor.execute(
                         """INSERT INTO spinnaker_deployment_events
-                           (user_id, event_type, application, pipeline_name, execution_id,
+                           (user_id, org_id, event_type, application, pipeline_name, execution_id,
                             execution_url, status, trigger_type, trigger_user,
                             start_time, end_time, duration_ms, stages, parameters,
                             payload, received_at)
-                           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                            ON CONFLICT (user_id, COALESCE(application, ''), COALESCE(execution_id, '')) DO UPDATE
                            SET status = EXCLUDED.status,
                                payload = EXCLUDED.payload,
                                received_at = EXCLUDED.received_at
                            RETURNING id""",
                         (
-                            user_id,
+                            user_id, org_id,
                             payload.get("event_type", "pipeline"),
                             application, pipeline_name, execution_id,
                             execution_url, status, trigger_type, trigger_user,
@@ -204,6 +210,7 @@ def process_spinnaker_deployment(
                             alert_service=service,
                             alert_severity=severity,
                             alert_metadata=alert_metadata,
+                            org_id=org_id,
                         )
 
                         if correlation_result.is_correlated:
@@ -219,6 +226,7 @@ def process_spinnaker_deployment(
                                 correlation_result=correlation_result,
                                 alert_metadata=alert_metadata,
                                 raw_payload=payload,
+                                org_id=org_id,
                             )
                             conn.commit()
                             logger.info(
@@ -236,15 +244,15 @@ def process_spinnaker_deployment(
                     if status in ("TERMINAL", "CANCELED", "STOPPED"):
                         cursor.execute(
                             """INSERT INTO incidents
-                               (user_id, source_type, source_alert_id, alert_title, alert_service,
+                               (user_id, org_id, source_type, source_alert_id, alert_title, alert_service,
                                 severity, status, started_at, alert_metadata)
-                               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                                ON CONFLICT (source_type, source_alert_id, user_id) DO UPDATE
                                SET updated_at = CURRENT_TIMESTAMP,
                                    alert_metadata = EXCLUDED.alert_metadata
                                RETURNING id""",
                             (
-                                user_id, "spinnaker", alert_id, alert_title, service,
+                                user_id, org_id, "spinnaker", alert_id, alert_title, service,
                                 severity, "investigating", received_at,
                                 json.dumps(alert_metadata),
                             ),
@@ -255,13 +263,13 @@ def process_spinnaker_deployment(
                         if incident_id:
                             cursor.execute(
                                 """INSERT INTO incident_alerts
-                                   (user_id, incident_id, source_type, source_alert_id, alert_title,
+                                   (user_id, org_id, incident_id, source_type, source_alert_id, alert_title,
                                     alert_service, alert_severity, correlation_strategy, correlation_score,
                                     alert_metadata)
-                                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                                    ON CONFLICT DO NOTHING""",
                                 (
-                                    user_id, incident_id, "spinnaker", alert_id,
+                                    user_id, org_id, incident_id, "spinnaker", alert_id,
                                     alert_title, service, severity, "primary", 1.0,
                                     json.dumps(alert_metadata),
                                 ),
@@ -331,6 +339,7 @@ def _trigger_rca(
                     "source": "spinnaker",
                     "status": status,
                 },
+                incident_id=str(incident_id),
             )
             rca_prompt = _build_rca_prompt(payload, user_id=user_id)
             task = run_background_chat.delay(

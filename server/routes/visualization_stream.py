@@ -4,7 +4,8 @@ import logging
 import os
 from flask import Blueprint, Response, jsonify, stream_with_context
 import redis
-from utils.auth.stateless_auth import get_user_id_from_request
+from utils.auth.rbac_decorators import require_permission
+from utils.auth.stateless_auth import get_org_id_from_request
 from utils.db.connection_pool import db_pool
 
 logger = logging.getLogger(__name__)
@@ -13,17 +14,17 @@ visualization_bp = Blueprint('visualization', __name__)
 
 
 @visualization_bp.route('/api/incidents/<incident_id>/visualization/stream', methods=['GET'])
-def stream_visualization_updates(incident_id: str):
+@require_permission("incidents", "read")
+def stream_visualization_updates(user_id, incident_id: str):
     """SSE endpoint for real-time visualization updates."""
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return Response("Unauthorized", status=401)
-    
-    # Verify incident ownership
+    org_id = get_org_id_from_request()
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
-                cursor.execute("SELECT 1 FROM incidents WHERE id = %s AND user_id = %s", (incident_id, user_id))
+                cursor.execute(
+                    "SELECT 1 FROM incidents WHERE id = %s AND org_id = %s",
+                    (incident_id, org_id),
+                )
                 if not cursor.fetchone():
                     return Response("Forbidden", status=403)
     except Exception as e:
@@ -70,20 +71,18 @@ def stream_visualization_updates(incident_id: str):
 
 
 @visualization_bp.route('/api/incidents/<incident_id>/visualization', methods=['GET'])
-def get_current_visualization(incident_id: str):
+@require_permission("incidents", "read")
+def get_current_visualization(user_id, incident_id: str):
     """Fetch current visualization JSON."""
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "Unauthorized"}), 401
-    
+    org_id = get_org_id_from_request()
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
                 cursor.execute("""
                     SELECT visualization_code, visualization_updated_at
                     FROM incidents
-                    WHERE id = %s AND user_id = %s
-                """, (incident_id, user_id))
+                    WHERE id = %s AND org_id = %s
+                """, (incident_id, org_id))
                 
                 row = cursor.fetchone()
         

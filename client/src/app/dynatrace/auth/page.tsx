@@ -10,6 +10,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Loader2, ExternalLink } from "lucide-react";
 import { getUserFriendlyError } from "@/lib/utils";
 import { DynatraceWebhookStep } from "@/components/dynatrace/DynatraceWebhookStep";
+import ConnectorAuthGuard from "@/components/connectors/ConnectorAuthGuard";
 
 const CACHE_KEY = "dynatrace_connection_status";
 
@@ -96,19 +97,22 @@ export default function DynatraceAuthPage() {
 
   if (isCheckingStatus) {
     return (
-      <div className="container mx-auto py-8 px-4 max-w-2xl">
-        {pageHeader}
-        <Card>
-          <CardContent className="flex items-center justify-center py-12">
-            <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-          </CardContent>
-        </Card>
-      </div>
+      <ConnectorAuthGuard connectorName="Dynatrace">
+        <div className="container mx-auto py-8 px-4 max-w-2xl">
+          {pageHeader}
+          <Card>
+            <CardContent className="flex items-center justify-center py-12">
+              <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+            </CardContent>
+          </Card>
+        </div>
+      </ConnectorAuthGuard>
     );
   }
 
   return (
-    <div className="container mx-auto py-8 px-4 max-w-2xl">
+    <ConnectorAuthGuard connectorName="Dynatrace">
+      <div className="container mx-auto py-8 px-4 max-w-2xl">
       {pageHeader}
 
       {!status?.connected ? (
@@ -188,5 +192,6 @@ export default function DynatraceAuthPage() {
         <DynatraceWebhookStep status={status} onDisconnect={handleDisconnect} loading={loading} />
       )}
     </div>
+    </ConnectorAuthGuard>
   );
 }

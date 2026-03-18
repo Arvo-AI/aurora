@@ -6,6 +6,7 @@ import { grafanaService, GrafanaStatus } from "@/lib/services/grafana";
 import { GrafanaConnectionStep } from "@/components/grafana/GrafanaConnectionStep";
 import { GrafanaWebhookStep } from "@/components/grafana/GrafanaWebhookStep";
 import { getUserFriendlyError, copyToClipboard } from "@/lib/utils";
+import ConnectorAuthGuard from "@/components/connectors/ConnectorAuthGuard";
 
 // Cache keys for localStorage
 const CACHE_KEYS = {
@@ -230,58 +231,60 @@ export default function GrafanaAuthPage() {
   };
 
   return (
-    <div className="container mx-auto py-8 px-4 max-w-5xl">
-      <div className="mb-6">
-        <h1 className="text-3xl font-bold">Grafana Integration</h1>
-        <p className="text-muted-foreground mt-1">
-          Connect your Grafana instance and configure alert webhooks
-        </p>
-      </div>
+    <ConnectorAuthGuard connectorName="Grafana">
+      <div className="container mx-auto py-8 px-4 max-w-5xl">
+        <div className="mb-6">
+          <h1 className="text-3xl font-bold">Grafana Integration</h1>
+          <p className="text-muted-foreground mt-1">
+            Connect your Grafana instance and configure alert webhooks
+          </p>
+        </div>
 
-      {/* Step Progress Indicator */}
-      <div className="flex items-center justify-center mb-8">
-        <div className="flex items-center">
-          <div className={`flex items-center justify-center w-10 h-10 rounded-full ${!status?.connected ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-600'} font-bold`}>
-            1
-          </div>
-          <div className={`w-24 h-1 ${status?.connected ? 'bg-blue-600' : 'bg-gray-200'}`}></div>
-          <div className={`flex items-center justify-center w-10 h-10 rounded-full ${status?.connected ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-600'} font-bold`}>
-            2
+        {/* Step Progress Indicator */}
+        <div className="flex items-center justify-center mb-8">
+          <div className="flex items-center">
+            <div className={`flex items-center justify-center w-10 h-10 rounded-full ${!status?.connected ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-600'} font-bold`}>
+              1
+            </div>
+            <div className={`w-24 h-1 ${status?.connected ? 'bg-blue-600' : 'bg-gray-200'}`}></div>
+            <div className={`flex items-center justify-center w-10 h-10 rounded-full ${status?.connected ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-600'} font-bold`}>
+              2
+            </div>
           </div>
         </div>
-      </div>
 
-      <div className="flex items-center justify-center mb-6 text-sm font-medium">
-        <span className={!status?.connected ? 'text-blue-600' : 'text-muted-foreground'}>
-          Connect Grafana
-        </span>
-        <span className="mx-4 text-muted-foreground">→</span>
-        <span className={status?.connected ? 'text-blue-600' : 'text-muted-foreground'}>
-          Configure Webhook
-        </span>
-      </div>
+        <div className="flex items-center justify-center mb-6 text-sm font-medium">
+          <span className={!status?.connected ? 'text-blue-600' : 'text-muted-foreground'}>
+            Connect Grafana
+          </span>
+          <span className="mx-4 text-muted-foreground">→</span>
+          <span className={status?.connected ? 'text-blue-600' : 'text-muted-foreground'}>
+            Configure Webhook
+          </span>
+        </div>
 
-      {!status?.connected ? (
-        <GrafanaConnectionStep
-          baseUrl={baseUrl}
-          setBaseUrl={setBaseUrl}
-          apiToken={apiToken}
-          setApiToken={setApiToken}
-          stackSlug={stackSlug}
-          setStackSlug={setStackSlug}
-          loading={loading}
-          onConnect={handleConnect}
-        />
-      ) : status && webhookUrl ? (
-        <GrafanaWebhookStep
-          status={status}
-          webhookUrl={webhookUrl}
-          copied={copied}
-          onCopy={handleCopyWebhook}
-          onDisconnect={handleDisconnect}
-          loading={loading}
-        />
-      ) : null}
-    </div>
+        {!status?.connected ? (
+          <GrafanaConnectionStep
+            baseUrl={baseUrl}
+            setBaseUrl={setBaseUrl}
+            apiToken={apiToken}
+            setApiToken={setApiToken}
+            stackSlug={stackSlug}
+            setStackSlug={setStackSlug}
+            loading={loading}
+            onConnect={handleConnect}
+          />
+        ) : status && webhookUrl ? (
+          <GrafanaWebhookStep
+            status={status}
+            webhookUrl={webhookUrl}
+            copied={copied}
+            onCopy={handleCopyWebhook}
+            onDisconnect={handleDisconnect}
+            loading={loading}
+          />
+        ) : null}
+      </div>
+    </ConnectorAuthGuard>
   );
 }

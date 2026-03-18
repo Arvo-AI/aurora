@@ -16,8 +16,9 @@ from connectors.spinnaker_connector.client import (
 from utils.db.connection_pool import db_pool
 from utils.web.cors_utils import create_cors_response
 from utils.web.webhook_signature import SIGNATURE_HEADER, verify_webhook_signature
-from utils.auth.stateless_auth import get_user_id_from_request
+from utils.auth.stateless_auth import get_org_id_from_request
 from utils.auth.token_management import get_token_data, store_tokens_in_db
+from utils.auth.rbac_decorators import require_permission
 
 logger = logging.getLogger(__name__)
 
@@ -45,19 +46,13 @@ def _get_cached_client(user_id: str) -> Optional["SpinnakerClient"]:
 
 
 @spinnaker_bp.route("/connect", methods=["POST", "OPTIONS"])
-def connect():
+@require_permission("connectors", "write")
+def connect(user_id):
     """Validate and store Spinnaker credentials (token or x509)."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
     try:
         data = request.get_json(force=True, silent=True) or {}
     except Exception:
         data = {}
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
 
     auth_type = data.get("authType", "token").strip()
     base_url = data.get("baseUrl", "").strip().rstrip("/")
@@ -140,15 +135,9 @@ def connect():
 
 
 @spinnaker_bp.route("/status", methods=["GET", "OPTIONS"])
-def status():
+@require_permission("connectors", "read")
+def status(user_id):
     """Check whether Spinnaker is connected and return summary data."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
-
     creds = _get_stored_credentials(user_id)
     if not creds:
         return jsonify({"connected": False})
@@ -176,15 +165,9 @@ def status():
 
 
 @spinnaker_bp.route("/disconnect", methods=["POST", "DELETE", "OPTIONS"])
-def disconnect():
+@require_permission("connectors", "write")
+def disconnect(user_id):
     """Disconnect Spinnaker by removing stored credentials."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
-
     try:
         invalidate_spinnaker_client(user_id)
         with db_pool.get_admin_connection() as conn:
@@ -209,15 +192,9 @@ def disconnect():
 
 
 @spinnaker_bp.route("/applications", methods=["GET", "OPTIONS"])
-def list_applications():
+@require_permission("connectors", "read")
+def list_applications(user_id):
     """List Spinnaker applications."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
-
     client = _get_cached_client(user_id)
     if not client:
         return jsonify({"error": "Spinnaker not connected"}), 400
@@ -231,15 +208,9 @@ def list_applications():
 
 
 @spinnaker_bp.route("/applications/<app>/pipelines", methods=["GET", "OPTIONS"])
-def list_pipelines(app: str):
+@require_permission("connectors", "read")
+def list_pipelines(user_id, app: str):
     """List pipeline executions for an application."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
-
     client = _get_cached_client(user_id)
     if not client:
         return jsonify({"error": "Spinnaker not connected"}), 400
@@ -256,15 +227,9 @@ def list_pipelines(app: str):
 
 
 @spinnaker_bp.route("/applications/<app>/pipeline-configs", methods=["GET", "OPTIONS"])
-def list_pipeline_configs(app: str):
+@require_permission("connectors", "read")
+def list_pipeline_configs(user_id, app: str):
     """List pipeline definitions for an application."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
-
     client = _get_cached_client(user_id)
     if not client:
         return jsonify({"error": "Spinnaker not connected"}), 400
@@ -278,15 +243,9 @@ def list_pipeline_configs(app: str):
 
 
 @spinnaker_bp.route("/applications/<app>/pipelines/<name>/trigger", methods=["POST", "OPTIONS"])
-def trigger_pipeline(app: str, name: str):
+@require_permission("connectors", "write")
+def trigger_pipeline(user_id, app: str, name: str):
     """Trigger a named pipeline for an application."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
-
     client = _get_cached_client(user_id)
     if not client:
         return jsonify({"error": "Spinnaker not connected"}), 400
@@ -303,15 +262,9 @@ def trigger_pipeline(app: str, name: str):
 
 
 @spinnaker_bp.route("/applications/<app>/health", methods=["GET", "OPTIONS"])
-def application_health(app: str):
+@require_permission("connectors", "read")
+def application_health(user_id, app: str):
     """Get cluster + server group health for an application."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
-
     client = _get_cached_client(user_id)
     if not client:
         return jsonify({"error": "Spinnaker not connected"}), 400
@@ -401,15 +354,9 @@ def deployment_webhook(user_id: str):
 
 
 @spinnaker_bp.route("/webhook-url", methods=["GET", "OPTIONS"])
-def get_webhook_url():
+@require_permission("connectors", "read")
+def get_webhook_url(user_id):
     """Return the webhook URL and Spinnaker Echo config snippets."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
-
     backend_url = os.getenv("NEXT_PUBLIC_BACKEND_URL", "").rstrip("/")
     if not backend_url:
         backend_url = request.host_url.rstrip("/")
@@ -445,14 +392,10 @@ rest:
 
 
 @spinnaker_bp.route("/deployments", methods=["GET", "OPTIONS"])
-def list_deployments():
+@require_permission("connectors", "read")
+def list_deployments(user_id):
     """List recent Spinnaker deployment events for the authenticated user."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
+    org_id = get_org_id_from_request()
 
     limit = min(max(request.args.get("limit", 20, type=int), 1), 100)
     offset = max(request.args.get("offset", 0, type=int), 0)
@@ -463,34 +406,30 @@ def list_deployments():
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                base_where = "WHERE user_id = %s"
+                params: list = [user_id]
+                if org_id:
+                    base_where += " AND org_id = %s"
+                    params.append(org_id)
                 if app_filter:
-                    cursor.execute(
-                        """SELECT id, application, pipeline_name, execution_id, status,
-                                  trigger_type, trigger_user, start_time, end_time, duration_ms,
-                                  received_at
-                           FROM spinnaker_deployment_events
-                           WHERE user_id = %s AND application = %s
-                           ORDER BY received_at DESC
-                           LIMIT %s OFFSET %s""",
-                        (user_id, app_filter, limit, offset),
-                    )
-                else:
-                    cursor.execute(
-                        """SELECT id, application, pipeline_name, execution_id, status,
-                                  trigger_type, trigger_user, start_time, end_time, duration_ms,
-                                  received_at
-                           FROM spinnaker_deployment_events
-                           WHERE user_id = %s
-                           ORDER BY received_at DESC
-                           LIMIT %s OFFSET %s""",
-                        (user_id, limit, offset),
-                    )
+                    base_where += " AND application = %s"
+                    params.append(app_filter)
+
+                cursor.execute(
+                    f"""SELECT id, application, pipeline_name, execution_id, status,
+                              trigger_type, trigger_user, start_time, end_time, duration_ms,
+                              received_at
+                       FROM spinnaker_deployment_events
+                       {base_where}
+                       ORDER BY received_at DESC
+                       LIMIT %s OFFSET %s""",
+                    (*params, limit, offset),
+                )
                 rows = cursor.fetchall()
 
                 cursor.execute(
-                    "SELECT COUNT(*) FROM spinnaker_deployment_events WHERE user_id = %s"
-                    + (" AND application = %s" if app_filter else ""),
-                    (user_id, app_filter) if app_filter else (user_id,),
+                    f"SELECT COUNT(*) FROM spinnaker_deployment_events {base_where}",
+                    tuple(params),
                 )
                 total = cursor.fetchone()[0]
 

@@ -24,7 +24,6 @@ from utils.notifications.slack_notification_service import (
 )
 from utils.db.connection_pool import db_pool
 from langchain_core.messages import ToolMessage
-from chat.backend.agent.tools.cloud_tools import get_state_context
 from chat.background.visualization_generator import update_visualization
 from chat.backend.constants import MAX_TOOL_OUTPUT_CHARS, INFRASTRUCTURE_TOOLS
 
@@ -351,6 +350,14 @@ def run_background_chat(
         if incident_id:
             try:
                 with db_pool.get_admin_connection() as conn:
+                    # Ensure chat_sessions.incident_id is set (single source of truth)
+                    with conn.cursor() as cursor:
+                        cursor.execute(
+                            "UPDATE chat_sessions SET incident_id = %s WHERE id = %s AND incident_id IS NULL",
+                            (incident_id, session_id)
+                        )
+                    conn.commit()
+
                     # Store session ID and Celery task ID (if not already set by webhook handler)
                     with conn.cursor() as cursor:
                         # First check if there's already a task ID set
@@ -1289,8 +1296,17 @@ def create_background_chat_session(
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
-                # Set user context for RLS
+                # Look up org_id for this user
+                cursor.execute("SELECT org_id FROM users WHERE id = %s", (user_id,))
+                row = cursor.fetchone()
+                org_id = row[0] if row and row[0] else None
+
+                if not org_id:
+                    logger.warning("No org_id found for user %s in background task session creation", user_id)
+                
+                # Set user and org context for RLS
                 cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
+                cursor.execute("SET myapp.current_org_id = %s;", (org_id or '',))
                 conn.commit()
                 
                 # Create the session with initial metadata and in_progress status
@@ -1302,23 +1318,24 @@ def create_background_chat_session(
                     ui_state["triggerMetadata"] = trigger_metadata
                 
                 cursor.execute("""
-                    INSERT INTO chat_sessions (id, user_id, title, messages, ui_state, created_at, updated_at, is_active, status, incident_id)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    INSERT INTO chat_sessions (id, user_id, org_id, title, messages, ui_state, created_at, updated_at, is_active, status, incident_id)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """, (
                     session_id,
                     user_id,
+                    org_id,
                     title,
                     json.dumps([]),
                     json.dumps(ui_state),
                     datetime.now(),
                     datetime.now(),
                     True,
-                    "in_progress",  # Background chats start as in_progress
-                    incident_id,  # Link to incident if provided
+                    "in_progress",
+                    incident_id,
                 ))
             conn.commit()
             
-            logger.info(f"[BackgroundChat] Created session {session_id} for user {user_id} (status=in_progress, incident_id={incident_id})")
+            logger.info(f"[BackgroundChat] Created session {session_id} for user {user_id} org {org_id} (status=in_progress, incident_id={incident_id})")
             
     except Exception as e:
         logger.exception(f"[BackgroundChat] Failed to create session: {e}")

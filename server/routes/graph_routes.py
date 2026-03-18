@@ -3,9 +3,8 @@ Graph API Routes - /api/graph/* endpoints for the infrastructure dependency grap
 """
 
 import logging
-from functools import wraps
 from flask import Blueprint, request, jsonify
-from utils.auth.stateless_auth import get_user_id_from_request
+from utils.auth.rbac_decorators import require_permission
 from services.graph.memgraph_client import get_memgraph_client
 
 logger = logging.getLogger(__name__)
@@ -13,33 +12,12 @@ logger = logging.getLogger(__name__)
 graph_bp = Blueprint("graph", __name__, url_prefix="/api/graph")
 
 
-def require_auth(error_message):
-    """Decorator that handles authentication and top-level error handling.
-
-    Injects `user_id` as the first argument to the wrapped function.
-    Any unhandled exception is logged and returned as a 500 JSON response.
-    """
-    def decorator(fn):
-        @wraps(fn)
-        def wrapper(*args, **kwargs):
-            user_id = get_user_id_from_request()
-            if not user_id:
-                return jsonify({"error": "Unauthorized"}), 401
-            try:
-                return fn(user_id, *args, **kwargs)
-            except Exception as e:
-                logger.error(f"{error_message}: {e}")
-                return jsonify({"error": error_message}), 500
-        return wrapper
-    return decorator
-
-
 # =========================================================================
 # Full Graph
 # =========================================================================
 
 @graph_bp.route("", methods=["GET"])
-@require_auth("Failed to fetch graph")
+@require_permission("graph", "read")
 def get_graph(user_id):
     """GET /api/graph - Returns the full dependency graph for the authenticated user."""
     client = get_memgraph_client()
@@ -53,7 +31,7 @@ def get_graph(user_id):
 # =========================================================================
 
 @graph_bp.route("/services", methods=["GET"])
-@require_auth("Failed to list services")
+@require_permission("graph", "read")
 def list_services(user_id):
     """GET /api/graph/services - List all services with optional filters."""
     client = get_memgraph_client()
@@ -64,7 +42,7 @@ def list_services(user_id):
 
 
 @graph_bp.route("/services/<name>", methods=["GET"])
-@require_auth("Failed to fetch service")
+@require_permission("graph", "read")
 def get_service(user_id, name):
     """GET /api/graph/services/<name> - Get a service with dependencies."""
     client = get_memgraph_client()
@@ -75,7 +53,7 @@ def get_service(user_id, name):
 
 
 @graph_bp.route("/services/<name>/impact", methods=["GET"])
-@require_auth("Failed to fetch impact")
+@require_permission("graph", "read")
 def get_service_impact(user_id, name):
     """GET /api/graph/services/<name>/impact - Get blast radius."""
     client = get_memgraph_client()
@@ -84,7 +62,7 @@ def get_service_impact(user_id, name):
 
 
 @graph_bp.route("/services", methods=["POST"])
-@require_auth("Failed to create service")
+@require_permission("graph", "write")
 def create_service(user_id):
     """POST /api/graph/services - Manually add or update a service."""
     data = request.get_json()
@@ -114,7 +92,7 @@ def create_service(user_id):
 # =========================================================================
 
 @graph_bp.route("/dependencies", methods=["POST"])
-@require_auth("Failed to create dependency")
+@require_permission("graph", "write")
 def create_dependency(user_id):
     """POST /api/graph/dependencies - Manually add a dependency."""
     data = request.get_json()
@@ -136,7 +114,7 @@ def create_dependency(user_id):
 
 
 @graph_bp.route("/dependencies/<dep_id>", methods=["DELETE"])
-@require_auth("Failed to delete dependency")
+@require_permission("graph", "write")
 def delete_dependency(user_id, dep_id):
     """DELETE /api/graph/dependencies/<from>::<to> - Remove a dependency."""
     parts = dep_id.split("::")
@@ -155,7 +133,7 @@ def delete_dependency(user_id, dep_id):
 # =========================================================================
 
 @graph_bp.route("/discover", methods=["POST"])
-@require_auth("Failed to trigger discovery")
+@require_permission("graph", "write")
 def trigger_discovery(user_id):
     """POST /api/graph/discover - Trigger an on-demand discovery run."""
     from services.discovery.tasks import run_user_discovery
@@ -209,7 +187,7 @@ def trigger_discovery(user_id):
 # =========================================================================
 
 @graph_bp.route("/discover/status/<task_id>", methods=["GET"])
-@require_auth("Failed to fetch task status")
+@require_permission("graph", "read")
 def get_discovery_status(user_id, task_id):
     """GET /api/graph/discover/status/<task_id> - Poll Celery task progress."""
     from services.discovery.tasks import run_user_discovery
@@ -246,7 +224,7 @@ def get_discovery_status(user_id, task_id):
 # =========================================================================
 
 @graph_bp.route("/stats", methods=["GET"])
-@require_auth("Failed to fetch stats")
+@require_permission("graph", "read")
 def get_stats(user_id):
     """GET /api/graph/stats - Graph statistics."""
     client = get_memgraph_client()
