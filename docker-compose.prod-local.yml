@@ -476,6 +476,7 @@ services:
 
       # Auth.js configuration (required)
       AUTH_SECRET: ${AUTH_SECRET}
+      AUTH_URL: ${FRONTEND_URL}
     ports:
       - "3000:3000"
     depends_on:
