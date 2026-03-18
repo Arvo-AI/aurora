@@ -389,9 +389,8 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
   // Show empty state when no messages, otherwise show chat interface
   const hasMessages = memoizedMessages.length > 0;
 
-  // Viewers cannot interact with incident RCA sessions
-  const isIncidentSession = !!lastIncidentId.current;
-  const isReadOnly = isIncidentSession && !canWrite(role);
+  // Viewers cannot interact with chat
+  const isReadOnly = !canWrite(role);
 
   if (hasMessages) {
     // Standard chat interface with messages
@@ -415,7 +414,7 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
         <div className="p-4 relative z-10 bg-background flex-shrink-0">
           <div className="flex justify-center">
             {isReadOnly ? (
-              <p className="text-sm text-muted-foreground py-2">Read-only access. Editors and admins can interact with investigations.</p>
+              <p className="text-sm text-muted-foreground py-2">Read-only access. Editors and admins can interact with infrastructure.</p>
             ) : (
             <EnhancedChatInput
               input={input}
@@ -451,6 +450,10 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
         <div className="w-full max-w-5xl px-4 flex flex-col items-center mx-auto">
           <EmptyStateHeader />
           
+          {isReadOnly ? (
+            <p className="text-sm text-muted-foreground py-4">Read-only access. Editors and admins can interact with infrastructure.</p>
+          ) : (
+          <>
           <EnhancedChatInput
             input={input}
             setInput={setInput}
@@ -476,6 +479,8 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
               className=""
             />
           </div>
+          </>
+          )}
         </div>
       </div>
     </div>
