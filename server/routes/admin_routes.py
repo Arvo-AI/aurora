@@ -6,6 +6,7 @@ All endpoints require the ``(users, manage)`` permission (admin-only).
 import logging
 
 import bcrypt
+import psycopg2.errors
 from flask import Blueprint, request, jsonify
 
 from utils.auth.rbac_decorators import require_permission
@@ -75,17 +76,21 @@ def create_user(user_id):
                 cur.execute("SET myapp.current_org_id = %s;", (org_id,))
             conn.commit()
 
-            cur.execute("SELECT id FROM users WHERE email = %s AND org_id IS NOT DISTINCT FROM %s", (email, org_id))
+            cur.execute("SELECT id FROM users WHERE email = %s", (email,))
             if cur.fetchone():
-                return jsonify({"error": "User with this email already exists"}), 409
+                return jsonify({"error": "A user with this email already exists"}), 409
 
-            cur.execute(
-                """INSERT INTO users (email, password_hash, name, role, org_id, must_change_password, created_at)
-                   VALUES (%s, %s, %s, %s, %s, TRUE, NOW())
-                   RETURNING id, email, name, role, created_at""",
-                (email, password_hash, name or None, role, org_id),
-            )
-            row = cur.fetchone()
+            try:
+                cur.execute(
+                    """INSERT INTO users (email, password_hash, name, role, org_id, must_change_password, created_at)
+                       VALUES (%s, %s, %s, %s, %s, TRUE, NOW())
+                       RETURNING id, email, name, role, created_at""",
+                    (email, password_hash, name or None, role, org_id),
+                )
+                row = cur.fetchone()
+            except psycopg2.errors.UniqueViolation:
+                conn.rollback()
+                return jsonify({"error": "A user with this email already exists"}), 409
         conn.commit()
 
         new_user_id = row[0]
