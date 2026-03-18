@@ -204,7 +204,8 @@ def get_chat_session(user_id, session_id):
             SELECT id, title, messages, created_at, updated_at,
                    CASE WHEN ui_state IS NULL THEN '{}'::jsonb ELSE ui_state END as ui_state,
                    COALESCE(status, 'active') as status,
-                   user_id
+                   user_id,
+                   incident_id
             FROM chat_sessions 
             WHERE id = %s AND org_id = %s AND is_active = true AND status != 'cancelled'
         """, (session_id, org_id))
@@ -280,6 +281,7 @@ def get_chat_session(user_id, session_id):
             'status': session_data[6] if session_data[6] else 'active',
             'user_id': session_data[7],
             'is_own': session_data[7] == user_id,
+            'incident_id': str(session_data[8]) if session_data[8] else None,
         }
         
         return jsonify(result), 200

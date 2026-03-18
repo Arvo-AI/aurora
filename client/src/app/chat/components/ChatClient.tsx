@@ -1,7 +1,8 @@
 "use client";
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import { useUser } from '@/hooks/useAuthHooks';
+import { useUser, useAuth } from '@/hooks/useAuthHooks';
+import { canWrite } from '@/lib/roles';
 import { getEnv } from '@/lib/env';
 import { useRouter } from "next/navigation";
 import { Loader2 } from "lucide-react";
@@ -39,6 +40,7 @@ interface ChatClientProps {
 
 export default function ChatClient({ initialSessionId, shouldStartNewChat, initialMessage, incidentContext, initialMode }: ChatClientProps) {
   const { user, isLoaded } = useUser();
+  const { role } = useAuth();
   const router = useRouter();
   
   // Core state
@@ -166,7 +168,7 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
   }, [initialMode, setSelectedMode]);
 
   // Session loader for loading existing chat history
-  const { loadSessionData, isLoadingSession } = useSessionLoader({
+  const { loadSessionData, isLoadingSession, lastIncidentId } = useSessionLoader({
     onMessagesLoaded,
     onUiStateLoaded,
     onClearMessages,
@@ -387,6 +389,10 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
   // Show empty state when no messages, otherwise show chat interface
   const hasMessages = memoizedMessages.length > 0;
 
+  // Viewers cannot interact with incident RCA sessions
+  const isIncidentSession = !!lastIncidentId.current;
+  const isReadOnly = isIncidentSession && !canWrite(role);
+
   if (hasMessages) {
     // Standard chat interface with messages
     return (
@@ -408,6 +414,9 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
         {/* Enhanced Input */}
         <div className="p-4 relative z-10 bg-background flex-shrink-0">
           <div className="flex justify-center">
+            {isReadOnly ? (
+              <p className="text-sm text-muted-foreground py-2">Read-only access. Editors and admins can interact with investigations.</p>
+            ) : (
             <EnhancedChatInput
               input={input}
               setInput={setInput}
@@ -426,6 +435,7 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
               images={images}
               onImagesChange={setImages}
             />
+            )}
           </div>
         </div>
       </div>

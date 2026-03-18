@@ -895,7 +895,7 @@ def update_incident(user_id, incident_id: str):
 
 
 @incidents_bp.route("/api/incidents/<incident_id>/chat", methods=["POST"])
-@require_permission("chat", "write")
+@require_permission("incidents", "write")
 def incident_chat(user_id, incident_id: str):
 
     if not _validate_uuid(incident_id):

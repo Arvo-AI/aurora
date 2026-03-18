@@ -833,6 +833,33 @@ async def handle_connection(websocket) -> None:
 
             # Resolve org for tenant-scoped DB queries
             org_id = get_org_id_for_user(user_id) if user_id else None
+
+            # RBAC: block viewers from sending messages in incident-linked sessions
+            if session_id and user_id and org_id:
+                try:
+                    from utils.db.connection_pool import db_pool
+                    with db_pool.get_admin_connection() as conn:
+                        with conn.cursor() as cur:
+                            cur.execute(
+                                "SELECT incident_id FROM chat_sessions WHERE id = %s AND org_id = %s",
+                                (session_id, org_id),
+                            )
+                            row = cur.fetchone()
+                    if row and row[0]:
+                        from utils.auth.enforcer import get_enforcer
+                        enforcer = get_enforcer()
+                        if not enforcer.enforce(user_id, org_id, "incidents", "write"):
+                            logger.warning(
+                                "RBAC denied: viewer user=%s tried to chat in incident session=%s",
+                                user_id, session_id,
+                            )
+                            await websocket.send(json.dumps({
+                                "type": "error",
+                                "data": {"text": "You do not have permission to interact with incident investigations."}
+                            }))
+                            continue
+                except Exception as e:
+                    logger.error("Error checking incident session RBAC: %s", e)
             
             # Get connected providers from database instead of relying on frontend preferences
             from utils.auth.stateless_auth import get_connected_providers
