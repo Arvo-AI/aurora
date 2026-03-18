@@ -16,7 +16,7 @@ from connectors.spinnaker_connector.client import (
 from utils.db.connection_pool import db_pool
 from utils.web.cors_utils import create_cors_response
 from utils.web.webhook_signature import SIGNATURE_HEADER, verify_webhook_signature
-from utils.auth.stateless_auth import get_user_id_from_request, get_org_id_from_request
+from utils.auth.stateless_auth import get_org_id_from_request
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.auth.rbac_decorators import require_permission
 
