@@ -149,7 +149,7 @@ function AddUserDialog({ onCreated }: { onCreated: () => void }) {
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div className="grid gap-1.5">
-                <Label htmlFor="add-pw" className="text-xs">Password</Label>
+                <Label htmlFor="add-pw" className="text-xs">Temporary Password</Label>
                 <Input id="add-pw" type="password" placeholder="Min 8 chars" required value={password} onChange={(e) => setPassword(e.target.value)} className="h-9" />
               </div>
               <div className="grid gap-1.5">
@@ -157,6 +157,7 @@ function AddUserDialog({ onCreated }: { onCreated: () => void }) {
                 <Input id="add-cpw" type="password" placeholder="Re-enter" required value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} className="h-9" />
               </div>
             </div>
+            <p className="text-xs text-muted-foreground">The user will be required to change this password on their first login.</p>
             <div className="grid gap-1.5">
               <Label className="text-xs">Role</Label>
               <Select value={role} onValueChange={setRole}>
