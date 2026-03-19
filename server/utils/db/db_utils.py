@@ -1809,28 +1809,29 @@ def initialize_tables():
                         f"Migrated {orphan_count} users into default organization."
                     )
                     conn.commit()
-
-                    # Assign Casbin roles for migrated users so RBAC works
-                    try:
-                        from utils.auth.enforcer import assign_role_to_user
-                        cursor.execute(
-                            "SELECT id, role, org_id FROM users WHERE org_id = "
-                            "(SELECT id FROM organizations WHERE slug = 'default')"
-                        )
-                        for uid, urole, uorg in cursor.fetchall():
-                            try:
-                                assign_role_to_user(uid, urole or "viewer", uorg)
-                            except Exception as casbin_err:
-                                logging.warning(
-                                    "Failed to assign Casbin role for migrated user %s: %s",
-                                    uid, casbin_err,
-                                )
-                        logging.info("Casbin roles assigned for migrated users.")
-                    except Exception as e:
-                        logging.warning(f"Error assigning Casbin roles during migration: {e}")
             except Exception as e:
                 logging.warning(f"Error creating default org migration: {e}")
                 conn.rollback()
+
+            # Repair: ensure every user with an org has a Casbin role assignment.
+            # Covers partial failures from a previous startup crash mid-loop.
+            try:
+                from utils.auth.enforcer import assign_role_to_user, get_user_roles_in_org
+                cursor.execute(
+                    "SELECT id, role, org_id FROM users WHERE org_id IS NOT NULL"
+                )
+                for uid, urole, uorg in cursor.fetchall():
+                    if not get_user_roles_in_org(uid, uorg):
+                        try:
+                            assign_role_to_user(uid, urole or "viewer", uorg)
+                            logging.info("Repaired missing Casbin role for user %s", uid)
+                        except Exception as casbin_err:
+                            logging.warning(
+                                "Failed to repair Casbin role for user %s: %s",
+                                uid, casbin_err,
+                            )
+            except Exception as e:
+                logging.warning(f"Error in Casbin role repair: {e}")
 
             # Create org_id indexes for performance
             for tbl in org_id_tables:
