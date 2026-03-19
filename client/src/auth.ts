@@ -8,7 +8,7 @@ async function refreshUserFromBackend(userId: string): Promise<{
   orgId: string | null
   orgName: string | null
   mustChangePassword: boolean
-} | null> {
+} | null | "not_found"> {
   const backendUrl = process.env.BACKEND_URL
   if (!backendUrl) return null
 
@@ -21,6 +21,7 @@ async function refreshUserFromBackend(userId: string): Promise<{
       signal: controller.signal,
     })
     clearTimeout(timeout)
+    if (res.status === 404) return "not_found"
     if (!res.ok) return null
     return await res.json()
   } catch (err) {
@@ -104,6 +105,15 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
 
       if (trigger === "update" || now - lastRefreshed > ROLE_REVALIDATE_SECONDS) {
         const fresh = await refreshUserFromBackend(token.id as string)
+        if (fresh === "not_found") {
+          // User no longer exists in DB (stale session after DB reset).
+          // Wipe the token so the session callback produces an empty
+          // session, which middleware treats as logged-out.
+          token.id = undefined
+          token.email = undefined
+          token.name = undefined
+          return token
+        }
         if (fresh) {
           token.role = fresh.role
           token.orgId = fresh.orgId

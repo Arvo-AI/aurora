@@ -1685,27 +1685,35 @@ def initialize_tables():
                 policies = cursor.fetchall()
                 logging.info(f"RLS policies for table '{table_name}': {policies}")
 
+            # Commit table creation and RLS before running migrations
+            conn.commit()
+
             # Migration: Add role column to users table for RBAC
             try:
+                cursor.execute("SAVEPOINT sp_role_col")
                 cursor.execute(
                     "ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(50) DEFAULT 'viewer';"
                 )
+                cursor.execute("RELEASE SAVEPOINT sp_role_col")
                 logging.info(
                     "Added role column to users table (if not exists)."
                 )
             except Exception as e:
                 logging.warning(f"Error adding role column to users: {e}")
-                conn.rollback()
+                cursor.execute("ROLLBACK TO SAVEPOINT sp_role_col")
 
             # Migration: Add must_change_password column to users table
             try:
+                cursor.execute("SAVEPOINT sp_mcp_col")
                 cursor.execute(
                     "ALTER TABLE users ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN DEFAULT FALSE;"
                 )
-                conn.commit()
+                cursor.execute("RELEASE SAVEPOINT sp_mcp_col")
             except Exception as e:
                 logging.warning(f"Error adding must_change_password column: {e}")
-                conn.rollback()
+                cursor.execute("ROLLBACK TO SAVEPOINT sp_mcp_col")
+
+            conn.commit()
 
             # Migration: Add org_id column to users and all org-scoped tables
             org_id_tables = [
@@ -1738,6 +1746,7 @@ def initialize_tables():
 
             # Add FK from users.org_id -> organizations.id (if not exists)
             try:
+                cursor.execute("SAVEPOINT sp_org_fk")
                 cursor.execute("""
                     DO $$
                     BEGIN
@@ -1751,9 +1760,10 @@ def initialize_tables():
                         END IF;
                     END $$;
                 """)
+                cursor.execute("RELEASE SAVEPOINT sp_org_fk")
             except Exception as e:
                 logging.warning(f"Error adding users.org_id FK: {e}")
-                conn.rollback()
+                cursor.execute("ROLLBACK TO SAVEPOINT sp_org_fk")
 
             # Migration: Create default org for existing users that have no org
             try:
@@ -1798,7 +1808,26 @@ def initialize_tables():
                     logging.info(
                         f"Migrated {orphan_count} users into default organization."
                     )
-                conn.commit()
+                    conn.commit()
+
+                    # Assign Casbin roles for migrated users so RBAC works
+                    try:
+                        from utils.auth.enforcer import assign_role_to_user
+                        cursor.execute(
+                            "SELECT id, role, org_id FROM users WHERE org_id = "
+                            "(SELECT id FROM organizations WHERE slug = 'default')"
+                        )
+                        for uid, urole, uorg in cursor.fetchall():
+                            try:
+                                assign_role_to_user(uid, urole or "viewer", uorg)
+                            except Exception as casbin_err:
+                                logging.warning(
+                                    "Failed to assign Casbin role for migrated user %s: %s",
+                                    uid, casbin_err,
+                                )
+                        logging.info("Casbin roles assigned for migrated users.")
+                    except Exception as e:
+                        logging.warning(f"Error assigning Casbin roles during migration: {e}")
             except Exception as e:
                 logging.warning(f"Error creating default org migration: {e}")
                 conn.rollback()
