@@ -1,9 +1,13 @@
 """
-Context trimming middleware for LangChain create_agent.
+Context safety-net middleware for LangChain create_agent.
 
-Prevents context overflow during long-running ReAct loops (e.g., RCA investigations
-with 240 recursion limit) by trimming messages before each LLM call. Only affects
-what the LLM sees — the full message history is preserved in graph state.
+Primary context management happens upstream — tool outputs are capped/summarized
+before entering the ReAct message list (see utils/tool_output_cap.py).
+
+This middleware provides two functions:
+1. Injects correlated RCA context updates into background sessions.
+2. Safety net: if accumulated messages still exceed the model's context window
+   (e.g., 200+ iterations on a 200K model), trims to the most recent messages.
 """
 
 import logging
@@ -20,38 +24,29 @@ from chat.background.context_updates import apply_rca_context_updates
 
 logger = logging.getLogger(__name__)
 
-# Use 75% of the model's context limit, leaving headroom for the response
-_CONTEXT_USAGE_RATIO = 0.75
-
-# Max characters to keep per tool output when truncating oversized messages.
-# ~25K tokens — enough to preserve useful context from a single tool call.
-_MAX_TOOL_CONTENT_CHARS = 100_000
+# Safety net triggers at 80% of context limit — should rarely fire now that
+# tool outputs are capped upstream.
+_SAFETY_NET_RATIO = 0.80
 
 
-class ContextTrimMiddleware(AgentMiddleware):
-    """Trims messages before each LLM call to prevent context overflow.
+class ContextSafetyMiddleware(AgentMiddleware):
+    """Lightweight safety net for context overflow.
 
-    During a ReAct agent loop, tool outputs accumulate in the message list
-    without any trimming between iterations. With a high recursion limit
-    (e.g., 240 for RCA), the context can grow far beyond the model's limit.
-
-    This middleware intercepts each LLM call via awrap_model_call and trims
-    the ModelRequest.messages to fit within the model's context window.
-    Because it modifies the request (not the graph state), the full message
-    history is preserved for persistence.
+    With tool output capping in place, this should rarely trigger. It exists
+    to protect small-context models (200K) during long runs (240 iterations)
+    where even capped messages can accumulate past the limit.
 
     Args:
-        model_name: Model name in OpenRouter format (e.g., "anthropic/claude-opus-4.5").
-            Used to look up the context limit from ChatContextManager.MODEL_CONTEXT_LIMITS.
+        model_name: Model name for context limit lookup.
     """
 
     def __init__(self, model_name: str):
         self.model_name = model_name
         self.max_tokens = int(
-            ChatContextManager.get_context_limit(model_name) * _CONTEXT_USAGE_RATIO
+            ChatContextManager.get_context_limit(model_name) * _SAFETY_NET_RATIO
         )
         logger.info(
-            f"ContextTrimMiddleware initialized: model={model_name}, "
+            f"ContextSafetyMiddleware initialized: model={model_name}, "
             f"max_tokens={self.max_tokens}"
         )
 
@@ -60,34 +55,29 @@ class ContextTrimMiddleware(AgentMiddleware):
         request: ModelRequest,
         handler: Callable[[ModelRequest], Awaitable[ModelResponse]],
     ) -> ModelResponse:
-        # Inject correlated incident updates into background RCA sessions.
-        # Strategy: Append at the END as the most recent message (highest priority).
-        # Only inject ONCE when the update first arrives.
+        # 1. Inject correlated incident updates into background RCA sessions.
         state = get_state_context()
         update_message = apply_rca_context_updates(state)
         if update_message:
             try:
-                # Append at end - most recent message has highest priority
                 request = request.override(messages=[*request.messages, update_message])
                 logger.info(
-                    "[ContextTrimMiddleware] Appended context update to request "
+                    f"[ContextSafety] Appended RCA context update "
                     f"(messages={len(request.messages)})"
                 )
             except Exception as e:
-                logger.warning("[ContextTrimMiddleware] Failed to append context update: %s", e)
+                logger.warning(f"[ContextSafety] Failed to append context update: {e}")
 
-        original_count = len(request.messages)
+        # 2. Safety net — trim if still over budget despite upstream capping.
         estimated_tokens = count_tokens_approximately(request.messages)
-
         if estimated_tokens <= self.max_tokens:
             return await handler(request)
 
         logger.warning(
-            f"Context trimming triggered: {estimated_tokens} tokens "
-            f"(limit: {self.max_tokens}) across {original_count} messages"
+            f"[ContextSafety] Safety net triggered: {estimated_tokens} tokens "
+            f"(limit: {self.max_tokens}) across {len(request.messages)} messages"
         )
 
-        # Step 1: Try trim_messages to keep the most recent messages that fit.
         trimmed = trim_messages(
             request.messages,
             strategy="last",
@@ -95,45 +85,23 @@ class ContextTrimMiddleware(AgentMiddleware):
             max_tokens=self.max_tokens,
         )
 
-        # Step 2: Drop orphaned ToolMessages from the front (no matching tool_use).
+        # Drop orphaned ToolMessages whose AIMessage (tool_use) was trimmed.
         trimmed = _drop_orphaned_tool_messages(trimmed)
 
-        # Step 3: If empty (individual messages bigger than budget), take last 6
-        # messages and truncate their content to fit.
         if not trimmed:
-            logger.warning("Trimming produced empty list, truncating last messages to fit")
+            logger.warning("[ContextSafety] Trim produced empty list, keeping last 6 messages")
             trimmed = _drop_orphaned_tool_messages(request.messages[-6:])
 
-        # Step 4: If still over budget (huge tool outputs), truncate content.
-        trimmed_tokens = count_tokens_approximately(trimmed)
-        if trimmed_tokens > self.max_tokens:
-            logger.warning(
-                f"Trimmed messages still over budget ({trimmed_tokens} > {self.max_tokens}), "
-                "truncating oversized message content"
-            )
-            trimmed = _truncate_oversized_content(trimmed, self.max_tokens)
-
-        trimmed_count = len(trimmed)
-        trimmed_tokens = count_tokens_approximately(trimmed)
-
         logger.info(
-            f"Context trimmed: {original_count} -> {trimmed_count} messages, "
-            f"~{estimated_tokens} -> ~{trimmed_tokens} tokens"
+            f"[ContextSafety] Trimmed: {len(request.messages)} -> {len(trimmed)} messages, "
+            f"~{estimated_tokens} -> ~{count_tokens_approximately(trimmed)} tokens"
         )
 
         return await handler(request.override(messages=trimmed))
 
 
 def _drop_orphaned_tool_messages(messages: List) -> List:
-    """Drop ToolMessages from the front that have no matching AIMessage with tool_calls.
-
-    After trim_messages cuts from the beginning, the first message(s) can be
-    ToolMessages whose parent AIMessage (containing tool_calls) was trimmed.
-    Sending these to the Anthropic API causes:
-      "Each tool_result block must have a corresponding tool_use block
-       in the previous message."
-    """
-    # Collect tool_call IDs from all AIMessages in the list
+    """Drop ToolMessages from the front that have no matching AIMessage with tool_calls."""
     available_tool_call_ids: set = set()
     for msg in messages:
         if isinstance(msg, AIMessage) and getattr(msg, "tool_calls", None):
@@ -142,7 +110,6 @@ def _drop_orphaned_tool_messages(messages: List) -> List:
                 if tc_id:
                     available_tool_call_ids.add(tc_id)
 
-    # Drop leading ToolMessages whose tool_call_id is not in the set
     start = 0
     for i, msg in enumerate(messages):
         if isinstance(msg, ToolMessage):
@@ -153,58 +120,6 @@ def _drop_orphaned_tool_messages(messages: List) -> List:
         break
 
     if start > 0:
-        logger.info(f"Dropped {start} orphaned ToolMessage(s) from trimmed context")
+        logger.info(f"[ContextSafety] Dropped {start} orphaned ToolMessage(s)")
 
     return messages[start:]
-
-
-def _truncate_oversized_content(messages: List, max_tokens: int) -> List:
-    """Truncate oversized message content (especially ToolMessages) to fit the budget.
-
-    When individual tool outputs are larger than the entire token budget,
-    trim_messages can't help — we must truncate the content itself.
-    """
-    result = []
-    for msg in messages:
-        if isinstance(msg, ToolMessage) and isinstance(msg.content, str):
-            if len(msg.content) > _MAX_TOOL_CONTENT_CHARS:
-                truncated = ToolMessage(
-                    content=msg.content[:_MAX_TOOL_CONTENT_CHARS] + "\n\n[Truncated for context window]",
-                    tool_call_id=msg.tool_call_id,
-                    name=getattr(msg, "name", None),
-                )
-                result.append(truncated)
-                continue
-        result.append(msg)
-
-    # If still over budget after truncating tool outputs, progressively
-    # shorten ALL message content until it fits.
-    tokens = count_tokens_approximately(result)
-    if tokens > max_tokens:
-        # Calculate how much we need to cut per-message
-        chars_per_msg = (max_tokens * 4) // max(len(result), 1)  # ~4 chars per token
-        squeezed = []
-        for msg in result:
-            content = msg.content if isinstance(msg.content, str) else str(msg.content)
-            if len(content) > chars_per_msg:
-                if isinstance(msg, ToolMessage):
-                    squeezed.append(ToolMessage(
-                        content=content[:chars_per_msg] + "\n\n[Truncated for context window]",
-                        tool_call_id=msg.tool_call_id,
-                        name=getattr(msg, "name", None),
-                    ))
-                elif isinstance(msg, AIMessage):
-                    squeezed.append(AIMessage(
-                        content=content[:chars_per_msg],
-                        tool_calls=getattr(msg, "tool_calls", None) or [],
-                        additional_kwargs=getattr(msg, "additional_kwargs", {}),
-                        response_metadata=getattr(msg, "response_metadata", {}),
-                        id=msg.id,
-                    ))
-                else:
-                    squeezed.append(msg)
-            else:
-                squeezed.append(msg)
-        result = squeezed
-
-    return result

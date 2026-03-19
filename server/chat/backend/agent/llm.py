@@ -341,9 +341,7 @@ class LLMManager:
         try:
             # Cap content to fit within the summarization model's context window.
             # Without this, huge tool outputs (e.g. multi-MB log dumps) get embedded
-            # verbatim in the prompt and blow past the model's context limit (the
-            # ContextTrimMiddleware only guards the ReAct agent loop, not direct
-            # .invoke() calls like this one).
+            # verbatim in the prompt and blow past the model's context limit.
             from chat.backend.agent.utils.chat_context_manager import ChatContextManager
             context_limit = ChatContextManager.get_context_limit(summarization_model)
             # Leave room for the prompt template (~200 tokens) and response (~800 tokens)
