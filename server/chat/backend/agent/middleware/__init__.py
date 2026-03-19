@@ -1,3 +1,6 @@
-from .context_trim import ContextTrimMiddleware
+from .context_trim import ContextSafetyMiddleware
 
-__all__ = ["ContextTrimMiddleware"]
+# Backward-compatible alias
+ContextTrimMiddleware = ContextSafetyMiddleware
+
+__all__ = ["ContextSafetyMiddleware", "ContextTrimMiddleware"]

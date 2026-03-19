@@ -303,8 +303,8 @@ def _build_rca_context(
 @celery_app.task(
     bind=True, 
     name="chat.background.run_background_chat",
-    time_limit=900,  # Hard timeout: 15 minutes (task killed)
-    soft_time_limit=900  # Soft timeout: 15 minutes (exception raised, allows cleanup)
+    time_limit=1800,  # Hard timeout: 30 minutes (task killed)
+    soft_time_limit=1740  # Soft timeout: 29 minutes (exception raised, 60s grace for cleanup before hard kill)
 )
 def run_background_chat(
     self,
@@ -324,7 +324,7 @@ def run_background_chat(
     - Sets is_background=True to skip confirmations and user questions
     - Saves all messages to the database (same as regular chats)
     - Appears in the frontend chat history
-    - Times out after 15 minutes to prevent hanging indefinitely
+    - Times out after 30 minutes to prevent hanging indefinitely
 
     Args:
         user_id: The user ID to run the chat for
@@ -513,14 +513,14 @@ def run_background_chat(
         return result
     
     except SoftTimeLimitExceeded:
-        logger.error(f"[BackgroundChat] Timeout after 15 minutes for session {session_id}")
+        logger.error(f"[BackgroundChat] Timeout after 30 minutes for session {session_id}")
         _update_session_status(session_id, "failed")
         if incident_id:
             _update_incident_aurora_status(incident_id, "error")
         return {
             "session_id": session_id,
             "status": "failed",
-            "error": "Background chat exceeded 15 minute timeout",
+            "error": "Background chat exceeded 30 minute timeout",
         }
         
     except Exception as e:

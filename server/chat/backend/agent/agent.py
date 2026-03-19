@@ -490,9 +490,9 @@ class Agent:
                 )
             
             # Create the agent using new LangChain 1.2.6+ API
-            # ContextTrimMiddleware prevents context overflow during long ReAct loops
-            # (e.g., RCA with 240 iterations) by trimming messages before each LLM call.
-            # Only affects what the LLM sees — full history is preserved in graph state.
+            # Tool outputs are capped/summarized upstream (utils/tool_output_cap.py).
+            # ContextSafetyMiddleware is a lightweight safety net that also injects
+            # correlated RCA context updates into background sessions.
             agent_graph = create_agent(
                 model=streaming_llm,
                 tools=tools,

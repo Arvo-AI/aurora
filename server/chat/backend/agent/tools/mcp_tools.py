@@ -1378,8 +1378,13 @@ def create_mcp_langchain_tools(real_mcp_tools: List, tool_capture=None, send_too
                     except Exception as notification_error:
                         logging.warning(f"Failed to send completion notification for {tool_name}: {notification_error}")
                     
+                    # Cap tool output before returning to LangChain so the ReAct
+                    # loop never accumulates oversized ToolMessages.
+                    from chat.backend.agent.utils.tool_output_cap import cap_tool_output
+                    final_result = cap_tool_output(final_result, tool_name)
+
                     return final_result
-                        
+
                 except Exception as e:
                     error_msg = f"Error calling MCP tool {original_tool_name}: {str(e)}"
                     logging.error(error_msg)

@@ -1033,6 +1033,12 @@ def get_cloud_tools():
                     # Note: send_tool_completion was already called above (line 588), so the WebSocket
                     # notification should still be sent even if backend tracking is lost
                 
+                # Cap tool output before returning to LangChain so the ReAct
+                # loop never accumulates oversized ToolMessages.
+                from chat.backend.agent.utils.tool_output_cap import cap_tool_output
+                result_str = json.dumps(result) if isinstance(result, dict) else str(result)
+                result = cap_tool_output(result_str, tool_name)
+
                 return result
             except Exception as e:
                 # Find matching tool call for error reporting
