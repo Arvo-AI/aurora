@@ -211,10 +211,14 @@ def process_grafana_alert(
 
                         # A single Grafana webhook can contain multiple alerts (different fingerprints).
                         # Each gets its own incident/resolution handling.
-                        individual_alerts = payload.get("alerts") or [{}]
+                        individual_alerts = payload.get("alerts")
+                        if not individual_alerts:
+                            logger.info("[GRAFANA][ALERT] No alerts array in payload for user %s, skipping incident creation", user_id)
+                            return
                         for single_alert in individual_alerts:
-                            alert_payload = _merge_alert_into_payload(payload, single_alert) if single_alert else payload
+                            alert_payload = _merge_alert_into_payload(payload, single_alert)
                             fingerprint = single_alert.get("fingerprint")
+                            per_alert_source_id = f"{alert_id}:{fingerprint}" if fingerprint else str(alert_id)
 
                             # If resolved webhook, find the original incident by fingerprint and attach this alert to it as a correlated event and skip RCA.
                             if _is_resolved_alert(alert_payload):
@@ -258,7 +262,7 @@ def process_grafana_alert(
                                             alert_severity, correlation_strategy, correlation_score, alert_metadata)
                                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
                                         (
-                                            user_id, original_incident_id, "grafana", alert_id,
+                                            user_id, original_incident_id, "grafana", per_alert_source_id,
                                             alert_title, _extract_service(alert_payload),
                                             _extract_severity(alert_payload), "resolved_webhook", 1.0,
                                             json.dumps({"resolved_webhook": True, "fingerprint": fingerprint}),
@@ -318,7 +322,7 @@ def process_grafana_alert(
                                 correlator = AlertCorrelator()
                                 correlation_result = correlator.correlate(
                                     cursor=cursor, user_id=user_id, source_type="grafana",
-                                    source_alert_id=alert_id, alert_title=alert_title,
+                                    source_alert_id=per_alert_source_id, alert_title=alert_title,
                                     alert_service=service, alert_severity=severity,
                                     alert_metadata=alert_metadata,
                                 )
@@ -326,7 +330,7 @@ def process_grafana_alert(
                                     handle_correlated_alert(
                                         cursor=cursor, user_id=user_id,
                                         incident_id=correlation_result.incident_id,
-                                        source_type="grafana", source_alert_id=alert_id,
+                                        source_type="grafana", source_alert_id=per_alert_source_id,
                                         alert_title=alert_title, alert_service=service,
                                         alert_severity=severity,
                                         correlation_result=correlation_result,
@@ -349,7 +353,7 @@ def process_grafana_alert(
                                            THEN EXCLUDED.started_at ELSE incidents.started_at END,
                                        alert_metadata = EXCLUDED.alert_metadata
                                    RETURNING id""",
-                                (user_id, "grafana", alert_id, alert_title, service,
+                                (user_id, "grafana", per_alert_source_id, alert_title, service,
                                  severity, "investigating", received_at, json.dumps(alert_metadata)),
                             )
                             incident_row = cursor.fetchone()
@@ -363,7 +367,7 @@ def process_grafana_alert(
                                        (user_id, incident_id, source_type, source_alert_id, alert_title, alert_service,
                                         alert_severity, correlation_strategy, correlation_score, alert_metadata)
                                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
-                                    (user_id, incident_id, "grafana", alert_id, alert_title,
+                                    (user_id, incident_id, "grafana", per_alert_source_id, alert_title,
                                      service, severity, "primary", 1.0, json.dumps(alert_metadata)),
                                 )
                                 cursor.execute(
@@ -377,7 +381,7 @@ def process_grafana_alert(
                             if not incident_id:
                                 continue
 
-                            logger.info("[GRAFANA][ALERT] Created incident %s for alert %s (fp=%s)", incident_id, alert_id, fingerprint)
+                            logger.info("[GRAFANA][ALERT] Created incident %s for alert %s (fp=%s)", incident_id, per_alert_source_id, fingerprint)
 
                             # Push real-time update to frontend
                             try:
@@ -389,12 +393,15 @@ def process_grafana_alert(
                                 logger.warning("[GRAFANA][ALERT] Failed to notify SSE: %s", e)
 
                             # Generate a quick summary (fast, always runs)
-                            from chat.background.summarization import generate_incident_summary
-                            generate_incident_summary.delay(
-                                incident_id=str(incident_id), user_id=user_id, source_type="grafana",
-                                alert_title=alert_title or "Unknown Alert", severity=severity,
-                                service=service, raw_payload=alert_payload, alert_metadata=alert_metadata,
-                            )
+                            try:
+                                from chat.background.summarization import generate_incident_summary
+                                generate_incident_summary.delay(
+                                    incident_id=str(incident_id), user_id=user_id, source_type="grafana",
+                                    alert_title=alert_title or "Unknown Alert", severity=severity,
+                                    service=service, raw_payload=alert_payload, alert_metadata=alert_metadata,
+                                )
+                            except Exception as summary_exc:
+                                logger.warning("[GRAFANA][ALERT] Failed to enqueue summary for incident %s (%s): %s", incident_id, alert_title, summary_exc)
 
                             # Trigger full RCA background chat
                             if _should_trigger_background_chat(user_id, alert_payload):

@@ -531,7 +531,11 @@ Grafana sends grouped webhook payloads containing an `alerts[]` array. Each aler
 
 Aurora processes each alert in the array individually:
 
-- **Firing** (`status: "firing"`): Creates an incident and triggers RCA per fingerprint.
+- **Firing** (`status: "firing"`): Processed independently per fingerprint. AlertCorrelator
+  checks whether the alert matches an existing open incident (by fingerprint, service
+  similarity, and time proximity, selecting the newest by `started_at DESC`). If a match
+  is found the alert is attached to that incident; otherwise a new incident is created
+  and RCA is triggered.
 - **Resolved** (`status: "resolved"`): Matches the original incident by fingerprint and
   attaches the resolution as a correlated alert. No new incident or RCA is created.
 
@@ -540,7 +544,7 @@ Aurora processes each alert in the array individually:
 | Scenario | Behavior |
 |----------|----------|
 | Single alert fires then resolves | Matched by fingerprint, resolution grouped with original incident |
-| Multiple alerts in one webhook | Each fingerprint gets its own incident and RCA |
+| Multiple alerts in one webhook | Each fingerprint is processed independently; correlated alerts attach to an existing incident, uncorrelated ones create a new incident and RCA |
 | Partial resolution (some firing, some resolved) | Each alert handled independently by its status |
 | Same alert re-fires weeks later | New incident created; resolution matches newest by `started_at DESC` |
 | No matching incident for resolution | Logged and skipped; alert still persisted in `grafana_alerts` |
