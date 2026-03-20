@@ -1,4 +1,4 @@
-.PHONY: help dev down logs rebuild-server restart prod prod-build prod-logs prod-down clean nuke build-no-cache dev-fresh prod-clean prod-nuke prod-build-no-cache prod-fresh prod-prebuilt prod-local init prod-local-logs prod-local-down prod-local-clean prod-local-nuke deploy-build deploy package-airtight prod-airtight prod-airtight-logs vm-deploy
+.PHONY: help dev down logs rebuild-server restart prod prod-build prod-logs prod-down clean nuke build-no-cache dev-fresh prod-clean prod-nuke prod-build-no-cache prod-fresh prod-prebuilt prod-local init prod-local-logs prod-local-down prod-local-clean prod-local-nuke deploy-build deploy package-airtight prod-airtight vm-deploy
 
 help:
 	@echo "Available commands:"
@@ -39,7 +39,6 @@ help:
 	@echo "                             Run this on a machine with internet access"
 	@echo "  make prod-airtight       - Load images from tarball and start (no internet needed)"
 	@echo "                             Use AIRTIGHT_BUNDLE=<file> to specify the tarball"
-	@echo "  make prod-airtight-logs  - Show logs for airtight deployment"
 	@echo ""
 	@echo "VM Deployment (single server / cloud VM):"
 	@echo "  make vm-deploy          - Interactive setup: installs Docker, configures .env, and starts Aurora"
@@ -242,8 +241,11 @@ prod-airtight:
 		exit 1; \
 	fi
 	@if [ -n "$(AIRTIGHT_BUNDLE)" ]; then \
-		echo "Loading images from $(AIRTIGHT_BUNDLE)..."; \
-		docker load < "$(AIRTIGHT_BUNDLE)"; \
+		_bundle="$(AIRTIGHT_BUNDLE)"; \
+		_bundle="$${_bundle#\~/}"; \
+		if [ "$$_bundle" != "$(AIRTIGHT_BUNDLE)" ]; then _bundle="$(HOME)/$$_bundle"; fi; \
+		echo "Loading images from $$_bundle..."; \
+		docker load < "$$_bundle"; \
 		echo ""; \
 	fi
 	@echo "Starting Aurora in airtight mode (pre-built images, no registry pulls)..."
@@ -256,14 +258,7 @@ prod-airtight:
 	@echo "  - Backend API: $$(v=$$(grep -E '^NEXT_PUBLIC_BACKEND_URL=' .env | cut -d= -f2- | tr -d '"'); echo $${v:-http://localhost:5080})"
 	@echo "  - Chatbot WebSocket: $$(v=$$(grep -E '^NEXT_PUBLIC_WEBSOCKET_URL=' .env | cut -d= -f2- | tr -d '"'); echo $${v:-ws://localhost:5006})"
 	@echo ""
-	@echo "View logs with: make prod-airtight-logs"
-
-prod-airtight-logs:
-	@if [ -z "$(filter-out $@,$(MAKECMDGOALS))" ]; then \
-		docker compose -f docker-compose.airtight.yml logs --tail 50 -f; \
-	else \
-		docker compose -f docker-compose.airtight.yml logs --tail 50 -f $(filter-out $@,$(MAKECMDGOALS)); \
-	fi
+	@echo "View logs with: docker compose -f docker-compose.airtight.yml logs --tail 50 -f"
 
 # Kubernetes deployment commands
 deploy-build:
