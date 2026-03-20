@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Loader2, Copy, CheckCircle2, AlertCircle, Terminal, Key, ArrowLeft } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useToast } from "@/hooks/use-toast";
+import { copyToClipboard } from "@/lib/utils";
 
 interface SSHSetupData {
   sshPublicKey: string;
@@ -55,9 +56,9 @@ export default function TailscaleSSHSetupPage() {
     }
   };
 
-  const copyToClipboard = async (text: string, type: 'key' | 'command') => {
+  const handleCopyToClipboard = async (text: string, type: 'key' | 'command') => {
     try {
-      await navigator.clipboard.writeText(text);
+      await copyToClipboard(text);
       setCopied(type);
       toast({
         title: "Copied!",
@@ -154,7 +155,7 @@ export default function TailscaleSSHSetupPage() {
               size="sm"
               variant="secondary"
               className="absolute top-2 right-2"
-              onClick={() => copyToClipboard(sshData?.sshPublicKey || '', 'key')}
+              onClick={() => handleCopyToClipboard(sshData?.sshPublicKey || '', 'key')}
             >
               {copied === 'key' ? (
                 <CheckCircle2 className="h-4 w-4 text-green-500" />
@@ -183,7 +184,7 @@ export default function TailscaleSSHSetupPage() {
               size="sm"
               variant="secondary"
               className="absolute top-2 right-2"
-              onClick={() => copyToClipboard(sshData?.command || '', 'command')}
+              onClick={() => handleCopyToClipboard(sshData?.command || '', 'command')}
             >
               {copied === 'command' ? (
                 <CheckCircle2 className="h-4 w-4 text-green-500" />

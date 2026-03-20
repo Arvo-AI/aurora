@@ -1195,6 +1195,37 @@ def build_cloudbees_rca_prompt(
     return build_rca_prompt('cloudbees', alert_details, providers, user_id)
 
 
+def build_spinnaker_rca_prompt(
+    payload: Dict[str, Any],
+    providers: Optional[List[str]] = None,
+    user_id: Optional[str] = None,
+) -> str:
+    """Build RCA prompt from a Spinnaker pipeline failure event."""
+    application = payload.get("application") or "Unknown Application"
+    pipeline_name = payload.get("pipeline_name") or payload.get("pipeline", "Unknown Pipeline")
+    status = payload.get("status", "TERMINAL")
+    trigger_type = payload.get("trigger_type", "unknown")
+    trigger_user = payload.get("trigger_user", "unknown")
+
+    alert_details = {
+        'title': f"Spinnaker Pipeline {status}: {application}/{pipeline_name}",
+        'status': status,
+        'message': f"Pipeline '{pipeline_name}' for application '{application}' ended with status {status}",
+        'labels': {
+            'service': application,
+            'pipeline': pipeline_name,
+            'trigger_type': trigger_type,
+            'trigger_user': trigger_user,
+        },
+    }
+
+    execution_id = payload.get("execution_id")
+    if execution_id:
+        alert_details['labels']['execution_id'] = execution_id
+
+    return build_rca_prompt('spinnaker', alert_details, providers, user_id)
+
+
 def build_bigpanda_rca_prompt(
     incident: Dict[str, Any],
     alerts: list,
@@ -1240,3 +1271,44 @@ def build_bigpanda_rca_prompt(
     }
 
     return build_rca_prompt('bigpanda', alert_details, providers, user_id)
+
+
+def build_splunk_rca_prompt(
+    payload: Dict[str, Any],
+    providers: Optional[List[str]] = None,
+    user_id: Optional[str] = None,
+) -> str:
+    """Build RCA prompt from Splunk alert payload."""
+    search_name = payload.get("search_name") or payload.get("name") or "Unknown Alert"
+    result_count = payload.get("result_count") or payload.get("results_count") or 0
+    search_query = payload.get("search") or payload.get("search_query") or ""
+    app = payload.get("app") or payload.get("source") or ""
+    severity = payload.get("severity") or payload.get("alert_severity") or ""
+
+    results = payload.get("results") or payload.get("result") or []
+    results_str = ""
+    if results:
+        if isinstance(results, list):
+            results_str = ", ".join(str(r) for r in results[:5])
+        elif isinstance(results, dict):
+            results_str = str(results)
+
+    message_parts = [f"Search: {search_name}", f"Result count: {result_count}"]
+    if search_query:
+        message_parts.append(f"SPL: {search_query}")
+    if results_str:
+        message_parts.append(f"Sample: {results_str}")
+
+    alert_details = {
+        'title': search_name,
+        'status': f"triggered ({result_count} results)",
+        'message': ". ".join(message_parts),
+        'labels': {},
+    }
+
+    if app:
+        alert_details['labels']['app'] = app
+    if severity:
+        alert_details['labels']['severity'] = str(severity)
+
+    return build_rca_prompt('splunk', alert_details, providers, user_id)

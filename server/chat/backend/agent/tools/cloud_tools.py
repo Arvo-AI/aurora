@@ -30,6 +30,7 @@ from .github_rca_tool import github_rca, GitHubRCAArgs
 from .github_fix_tool import github_fix, GitHubFixArgs
 from .jenkins_rca_tool import jenkins_rca, JenkinsRCAArgs
 from .cloudbees_rca_tool import cloudbees_rca, CloudBeesRCAArgs
+from .spinnaker_rca_tool import spinnaker_rca, SpinnakerRCAArgs
 
 # Visualization trigger caching
 from cachetools import TTLCache
@@ -107,6 +108,11 @@ from .dynatrace_tool import (
     query_dynatrace,
     is_dynatrace_connected,
     QueryDynatraceArgs,
+)
+from .datadog_tool import (
+    query_datadog,
+    is_datadog_connected,
+    QueryDatadogArgs,
 )
 from .thousandeyes_tool import (
     thousandeyes_list_tests,
@@ -1027,6 +1033,12 @@ def get_cloud_tools():
                     # Note: send_tool_completion was already called above (line 588), so the WebSocket
                     # notification should still be sent even if backend tracking is lost
                 
+                # Cap tool output before returning to LangChain so the ReAct
+                # loop never accumulates oversized ToolMessages.
+                from chat.backend.agent.utils.tool_output_cap import cap_tool_output
+                result_str = json.dumps(result) if isinstance(result, dict) else str(result)
+                result = cap_tool_output(result_str, tool_name)
+
                 return result
             except Exception as e:
                 # Find matching tool call for error reporting
@@ -1127,6 +1139,7 @@ Once you identify which account has the issue, pass account_id (e.g. '1510256343
         (github_fix, "github_fix"),
         (jenkins_rca, "jenkins_rca"),
         (cloudbees_rca, "cloudbees_rca"),
+        (spinnaker_rca, "spinnaker_rca"),
         (github_apply_fix, "github_apply_fix"),
         (cloud_exec_wrapper, "cloud_exec"),
         (terminal_exec, "terminal_exec"),
@@ -1240,6 +1253,23 @@ Once you identify which account has the issue, pass account_id (e.g. '1510256343
                     "pipeline_name+run_number for Blue Ocean. service is optional for recent_deployments."
                 ),
                 args_schema=CloudBeesRCAArgs
+            )
+        elif name == 'spinnaker_rca':
+            tool = StructuredTool.from_function(
+                func=final_func,
+                name=name,
+                description=(
+                    "Query Spinnaker CD platform for root cause analysis and interactive investigation. "
+                    "Actions: "
+                    "'recent_pipelines' (list recent pipeline executions; optional application filter and limit), "
+                    "'pipeline_detail' (get full execution with stage-by-stage status; requires execution_id), "
+                    "'application_health' (cluster + server group health; requires application), "
+                    "'list_pipeline_configs' (available pipeline definitions; requires application), "
+                    "'trigger_pipeline' (trigger a pipeline e.g. rollback; requires application + pipeline_name, optional parameters), "
+                    "'execution_logs' (detailed logs for failed stages; requires execution_id). "
+                    "Use during RCA to check if deployments correlate with incidents."
+                ),
+                args_schema=SpinnakerRCAArgs
             )
         elif name == 'github_apply_fix':
             tool = StructuredTool.from_function(
@@ -1386,6 +1416,25 @@ Once you identify which account has the issue, pass account_id (e.g. '1510256343
         ))
         logging.info(f"Added Dynatrace tool for user {user_id}")
 
+    # Add Datadog tool if connected
+    if user_id and is_datadog_connected(user_id):
+        context_wrapped_dd = with_user_context(query_datadog)
+        notification_wrapped_dd = with_completion_notification(context_wrapped_dd)
+        final_dd_func = wrap_func_with_capture(notification_wrapped_dd, "query_datadog") if tool_capture else notification_wrapped_dd
+
+        tools.append(StructuredTool.from_function(
+            func=final_dd_func,
+            name="query_datadog",
+            description=(
+                "Query Datadog for logs, metrics, monitors, events, traces, hosts, or incidents. "
+                "Set resource_type to 'logs', 'metrics', 'monitors', 'events', 'traces', 'hosts', or 'incidents'. "
+                "Examples: query_datadog(resource_type='logs', query='service:web status:error', time_from='-1h') "
+                "or query_datadog(resource_type='metrics', query='avg:system.cpu.user{*}', time_from='-2h')"
+            ),
+            args_schema=QueryDatadogArgs,
+        ))
+        logging.info(f"Added Datadog tool for user {user_id}")
+
     # Add Bitbucket tools if connected
     try:
         from .bitbucket import is_bitbucket_connected
@@ -1431,9 +1480,8 @@ Once you identify which account has the issue, pass account_id (e.g. '1510256343
 
     # Add Confluence search tools if enabled
     try:
-        from utils.flags.feature_flags import is_confluence_enabled
-
-        if is_confluence_enabled() and user_id:
+        from utils.auth.token_management import get_token_data
+        if user_id and get_token_data(user_id, "confluence"):
             _confluence_tools = [
                 (confluence_search_similar, "confluence_search_similar", ConfluenceSearchSimilarArgs,
                  "Search Confluence for pages related to an incident (postmortems, RCA docs). "

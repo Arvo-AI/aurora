@@ -13,15 +13,18 @@ data:
   CHATBOT_INTERNAL_URL: {{ default (printf "http://%s-chatbot:5007" (include "aurora.fullname" .)) .Values.config.CHATBOT_INTERNAL_URL | quote }}
   VAULT_ADDR: {{ default (printf "http://%s-vault:8200" (include "aurora.fullname" .)) .Values.config.VAULT_ADDR | quote }}
   SEARXNG_URL: {{ default (printf "http://%s-searxng:8080" (include "aurora.fullname" .)) .Values.config.SEARXNG_URL | quote }}
+  {{- if and .Values.services.minio.enabled (not .Values.config.STORAGE_ENDPOINT_URL) }}
+  STORAGE_ENDPOINT_URL: {{ printf "http://%s-minio:9000" (include "aurora.fullname" .) | quote }}
+  {{- end }}
 
   # Backend needs this for OAuth callbacks (derived from ingress if not set)
   NEXT_PUBLIC_BACKEND_URL: {{ default (printf "https://%s" .Values.ingress.hosts.api) .Values.config.NEXT_PUBLIC_BACKEND_URL | quote }}
-  
+
   # All other config values from .Values.config (excluding keys with computed defaults above)
   # NOTE: NEXT_PUBLIC_* vars are included because the backend reads feature flags like
-  # NEXT_PUBLIC_ENABLE_SLACK, NEXT_PUBLIC_ENABLE_OVH, etc. to conditionally register routes.
+  # NEXT_PUBLIC_ENABLE_OVH, NEXT_PUBLIC_ENABLE_SCALEWAY, etc. to conditionally register routes.
   {{- range $key, $value := .Values.config }}
-  {{- if not (has $key (list "POSTGRES_HOST" "REDIS_URL" "WEAVIATE_HOST" "BACKEND_URL" "CHATBOT_INTERNAL_URL" "VAULT_ADDR" "SEARXNG_URL" "NEXT_PUBLIC_BACKEND_URL")) }}
+  {{- if not (has $key (list "POSTGRES_HOST" "REDIS_URL" "WEAVIATE_HOST" "BACKEND_URL" "CHATBOT_INTERNAL_URL" "VAULT_ADDR" "SEARXNG_URL" "NEXT_PUBLIC_BACKEND_URL" (ternary "STORAGE_ENDPOINT_URL" "" (and $.Values.services.minio.enabled (not $.Values.config.STORAGE_ENDPOINT_URL))))) }}
   {{ $key }}: {{ $value | quote }}
   {{- end }}
   {{- end }}

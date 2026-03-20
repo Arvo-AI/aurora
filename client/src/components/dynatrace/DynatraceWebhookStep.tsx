@@ -8,6 +8,7 @@ import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { CheckCircle2, Copy, ExternalLink, Loader2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { copyToClipboard } from "@/lib/utils";
 import { dynatraceService, DynatraceStatus, DynatraceWebhookUrlResponse } from "@/lib/services/dynatrace";
 
 interface DynatraceWebhookStepProps {
@@ -55,9 +56,9 @@ export function DynatraceWebhookStep({ status, onDisconnect, loading }: Dynatrac
     }
   };
 
-  const copyToClipboard = async (text: string, label: string) => {
+  const handleCopy = async (text: string, label: string) => {
     try {
-      await navigator.clipboard.writeText(text);
+      await copyToClipboard(text);
       toast({ title: "Copied", description: `${label} copied to clipboard` });
     } catch {
       toast({ title: "Copy failed", variant: "destructive" });
@@ -120,7 +121,7 @@ export function DynatraceWebhookStep({ status, onDisconnect, loading }: Dynatrac
                   <Label className="text-sm font-medium">Webhook URL</Label>
                   <div className="flex gap-2 mt-1">
                     <code className="flex-1 p-2 bg-muted rounded text-xs break-all">{webhookData.webhookUrl}</code>
-                    <Button variant="outline" size="icon" onClick={() => copyToClipboard(webhookData.webhookUrl, "Webhook URL")}>
+                    <Button variant="outline" size="icon" onClick={() => handleCopy(webhookData.webhookUrl, "Webhook URL")}>
                       <Copy className="h-4 w-4" />
                     </Button>
                   </div>
@@ -129,7 +130,7 @@ export function DynatraceWebhookStep({ status, onDisconnect, loading }: Dynatrac
                 <div>
                   <div className="flex items-center justify-between">
                     <Label className="text-sm font-medium">Custom Payload Template</Label>
-                    <Button variant="ghost" size="sm" onClick={() => copyToClipboard(webhookData.suggestedPayload, "Payload template")} className="h-7 text-xs">
+                    <Button variant="ghost" size="sm" onClick={() => handleCopy(webhookData.suggestedPayload, "Payload template")} className="h-7 text-xs">
                       <Copy className="h-3 w-3 mr-1" /> Copy
                     </Button>
                   </div>

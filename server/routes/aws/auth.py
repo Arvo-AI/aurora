@@ -7,7 +7,8 @@ import flask
 import boto3
 from botocore.exceptions import ClientError
 from utils.web.cors_utils import create_cors_response
-from utils.auth.stateless_auth import get_user_id_from_request
+from utils.auth.rbac_decorators import require_permission
+from utils.auth.stateless_auth import get_org_id_from_request
 from utils.logging.secure_logging import mask_credential_value
 from utils.workspace.workspace_utils import (
     get_or_create_workspace,
@@ -18,38 +19,39 @@ from utils.workspace.workspace_utils import (
 auth_bp = Blueprint("aws_auth_bp", __name__)
 
 @auth_bp.route('/get-credentials', methods=['POST', 'OPTIONS'])
-def aws_get_credentials():
+@require_permission("connectors", "read")
+def aws_get_credentials(user_id):
     """Retrieve AWS credentials stored for the user."""
-    if request.method == 'OPTIONS':
-        return create_cors_response()
-
     try:
         data = request.get_json()
-        user_id = data.get("userId")
-        if not user_id:
+        requested_user_id = data.get("userId")
+        if not requested_user_id:
             return jsonify({"error": "Missing userId"}), 400
 
-        # Authorize caller
-        authenticated_user_id = get_user_id_from_request()
-        if not authenticated_user_id or authenticated_user_id != user_id:
+        if user_id != requested_user_id:
             logging.warning("Unauthorized access to AWS creds")
             return jsonify({"error": "Unauthorized"}), 401
 
-        # Try session cache first
+        org_id = get_org_id_from_request()
+
+        # Validate session cache belongs to current org
         aws_credentials = session.get('aws_credentials')
+        if aws_credentials and aws_credentials.get('org_id') != org_id:
+            session.pop('aws_credentials', None)
+            aws_credentials = None
+
         if not aws_credentials:
             try:
-                # Single source of truth: read from user_connections
                 from utils.db.connection_utils import get_user_aws_connection
                 aws_conn = get_user_aws_connection(user_id)
                 
                 if aws_conn:
-                    # Get external_id from workspace (needed for STS)
                     workspace = get_or_create_workspace(user_id, "default")
                     session['aws_credentials'] = {
                         'role_arn': aws_conn.get('role_arn'),
                         'external_id': workspace.get('aws_external_id'),
-                        'aws_account_id': aws_conn.get('account_id', 'Unknown')
+                        'aws_account_id': aws_conn.get('account_id', 'Unknown'),
+                        'org_id': org_id,
                     }
                     aws_credentials = session['aws_credentials']
                     logging.info(f"Retrieved AWS role credentials from user_connections for user {user_id}")
@@ -76,7 +78,8 @@ def aws_get_credentials():
 
 
 @auth_bp.route('/auth', methods=['POST', 'OPTIONS'])
-def auth():
+@require_permission("connectors", "write")
+def auth(user_id):
     """
     AWS authentication endpoint using IAM role assumption.
     
@@ -92,11 +95,7 @@ def auth():
         role_arn = data.get('role_arn')
         read_only_role_arn = data.get('read_only_role_arn') or data.get('readOnlyRoleArn')
         external_id = data.get('external_id')
-        user_id = data.get('userId')
 
-        # Validate inputs
-        if not user_id:
-            return jsonify({"status": "error", "message": "Missing userId"}), 400
         if not role_arn:
             return jsonify({"status": "error", "message": "Missing role_arn"}), 400
 

@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from celery_config import celery_app
+from chat.background.rca_prompt_builder import build_dynatrace_rca_prompt
 from services.correlation.alert_correlator import AlertCorrelator
 from services.correlation import handle_correlated_alert
 from utils.auth.stateless_auth import get_user_preference
@@ -33,31 +34,6 @@ def _extract_service(payload: dict[str, Any]) -> str:
 
 def _should_trigger_rca(user_id: str) -> bool:
     return get_user_preference(user_id, "dynatrace_rca_enabled", default=False)
-
-
-def _build_rca_prompt(payload: dict[str, Any], user_id: str | None = None) -> str:
-    title = payload.get("ProblemTitle") or "Unknown Problem"
-    parts = [
-        "A Dynatrace problem has been detected and requires Root Cause Analysis.",
-        "",
-        "PROBLEM DETAILS:",
-        f"- Title: {title}",
-        f"- Severity: {payload.get('ProblemSeverity') or 'unknown'}",
-        f"- Impact: {payload.get('ProblemImpact') or 'unknown'}",
-        f"- Impacted Entity: {payload.get('ImpactedEntity') or 'unknown'}",
-    ]
-    if url := payload.get("ProblemURL"):
-        parts.append(f"- Problem URL: {url}")
-    if tags := payload.get("Tags"):
-        parts.append(f"- Tags: {tags}")
-
-    try:
-        from chat.background.rca_prompt_builder import inject_aurora_learn_context
-        inject_aurora_learn_context(parts, user_id, title, _extract_service(payload), "dynatrace")
-    except Exception as exc:
-        logger.warning("[AURORA LEARN] Failed to get context: %s", exc)
-
-    return "\n".join(parts)
 
 
 @celery_app.task(bind=True, max_retries=3, default_retry_delay=30, name="dynatrace.process_problem")
@@ -94,6 +70,11 @@ def process_dynatrace_problem(
         with db_pool.get_admin_connection() as conn:
             cursor = conn.cursor()
 
+            from utils.auth.stateless_auth import set_rls_context
+            org_id = set_rls_context(cursor, conn, user_id, log_prefix="[DYNATRACE][ALERT]")
+            if not org_id:
+                return
+
             cursor.execute(
                 """INSERT INTO dynatrace_problems
                    (user_id, problem_id, pid, problem_title, problem_state, severity,
@@ -120,7 +101,7 @@ def process_dynatrace_problem(
                     cursor=cursor, user_id=user_id, source_type="dynatrace",
                     source_alert_id=alert_db_id, alert_title=title,
                     alert_service=service, alert_severity=severity,
-                    alert_metadata=alert_metadata,
+                    alert_metadata=alert_metadata, org_id=org_id,
                 )
                 if result.is_correlated:
                     handle_correlated_alert(
@@ -128,7 +109,7 @@ def process_dynatrace_problem(
                         source_type="dynatrace", source_alert_id=alert_db_id,
                         alert_title=title, alert_service=service, alert_severity=severity,
                         correlation_result=result, alert_metadata=alert_metadata,
-                        raw_payload=payload,
+                        raw_payload=payload, org_id=org_id,
                     )
                     conn.commit()
                     return
@@ -142,16 +123,16 @@ def process_dynatrace_problem(
 
             cursor.execute(
                 """INSERT INTO incidents
-                   (user_id, source_type, source_alert_id, alert_title, alert_service,
+                   (user_id, org_id, source_type, source_alert_id, alert_title, alert_service,
                     severity, status, started_at, alert_metadata)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-                   ON CONFLICT (source_type, source_alert_id, user_id) DO UPDATE
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (org_id, source_type, source_alert_id, user_id) DO UPDATE
                    SET updated_at = CURRENT_TIMESTAMP,
                        started_at = CASE WHEN incidents.status != 'analyzed'
                                     THEN EXCLUDED.started_at ELSE incidents.started_at END,
                        alert_metadata = EXCLUDED.alert_metadata
                    RETURNING id""",
-                (user_id, "dynatrace", alert_db_id, title, service,
+                (user_id, org_id, "dynatrace", alert_db_id, title, service,
                  severity, "investigating", received_at, json.dumps(alert_metadata)),
             )
             incident_row = cursor.fetchone()
@@ -160,10 +141,10 @@ def process_dynatrace_problem(
             if incident_id:
                 cursor.execute(
                     """INSERT INTO incident_alerts
-                       (user_id, incident_id, source_type, source_alert_id, alert_title,
+                       (user_id, org_id, incident_id, source_type, source_alert_id, alert_title,
                         alert_service, alert_severity, correlation_strategy, correlation_score, alert_metadata)
-                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
-                    (user_id, incident_id, "dynatrace", alert_db_id, title,
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                    (user_id, org_id, incident_id, "dynatrace", alert_db_id, title,
                      service, severity, "primary", 1.0, json.dumps(alert_metadata)),
                 )
                 cursor.execute(
@@ -196,10 +177,11 @@ def process_dynatrace_problem(
                 user_id=user_id,
                 title=f"RCA: {title}",
                 trigger_metadata={"source": "dynatrace", "problem_id": payload.get("ProblemID")},
+                incident_id=str(incident_id),
             )
             task = run_background_chat.delay(
                 user_id=user_id, session_id=session_id,
-                initial_message=_build_rca_prompt(payload, user_id=user_id),
+                initial_message=build_dynatrace_rca_prompt(payload, user_id=user_id),
                 trigger_metadata={"source": "dynatrace", "problem_id": payload.get("ProblemID")},
                 incident_id=str(incident_id),
             )

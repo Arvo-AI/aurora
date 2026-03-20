@@ -9,6 +9,7 @@ import { Label } from "@/components/ui/label";
 import { CheckCircle2, Copy, ExternalLink, Loader2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { splunkService, SplunkStatus, SplunkWebhookUrlResponse } from "@/lib/services/splunk";
+import { copyToClipboard } from "@/lib/utils";
 
 interface SplunkWebhookStepProps {
   status: SplunkStatus;
@@ -86,7 +87,7 @@ export function SplunkWebhookStep({ status, onDisconnect, loading }: SplunkWebho
     if (!webhookData?.webhookUrl) return;
 
     try {
-      await navigator.clipboard.writeText(webhookData.webhookUrl);
+      await copyToClipboard(webhookData.webhookUrl);
       toast({
         title: "Copied",
         description: "Webhook URL copied to clipboard",

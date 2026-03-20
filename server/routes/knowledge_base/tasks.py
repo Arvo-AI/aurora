@@ -12,6 +12,7 @@ import logging
 
 from celery_config import celery_app
 from utils.db.connection_pool import db_pool
+from utils.auth.stateless_auth import get_org_id_for_user
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +79,7 @@ def process_document(
             document_id=document_id,
             source_filename=original_filename,
             chunks=chunks,
+            org_id=get_org_id_for_user(user_id),
         )
 
         logger.info(f"[KB Task] Stored {inserted_count} chunks in Weaviate")

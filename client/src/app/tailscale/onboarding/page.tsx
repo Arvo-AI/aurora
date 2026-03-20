@@ -9,6 +9,7 @@ import { Loader2, ExternalLink, CheckCircle2, AlertCircle, Info } from "lucide-r
 import { useRouter } from "next/navigation";
 import { useToast } from "@/hooks/use-toast";
 import { providerPreferencesService } from '@/lib/services/providerPreferences';
+import ConnectorAuthGuard from "@/components/connectors/ConnectorAuthGuard";
 
 export default function TailscaleOnboardingPage() {
   const [isLoading, setIsLoading] = useState(false);
@@ -77,8 +78,9 @@ export default function TailscaleOnboardingPage() {
   };
 
   return (
-    <div className="min-h-screen bg-background py-12 px-4 sm:px-6 lg:px-8">
-      <div className="max-w-2xl mx-auto">
+    <ConnectorAuthGuard connectorName="Tailscale">
+      <div className="min-h-screen bg-background py-12 px-4 sm:px-6 lg:px-8">
+        <div className="max-w-2xl mx-auto">
         <div className="text-center mb-8">
           <Image
             src="/tailscale.svg"
@@ -221,5 +223,6 @@ export default function TailscaleOnboardingPage() {
         </div>
       </div>
     </div>
+    </ConnectorAuthGuard>
   );
 }

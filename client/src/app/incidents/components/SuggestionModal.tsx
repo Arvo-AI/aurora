@@ -11,6 +11,7 @@ import {
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Copy, Check, Play, Terminal, AlertTriangle, Shield, MessageSquare, Loader2 } from 'lucide-react';
+import { copyToClipboard } from '@/lib/utils';
 
 interface SuggestionModalProps {
   suggestion: Suggestion | null;
@@ -77,7 +78,7 @@ export default function SuggestionModal({
   const handleCopy = async () => {
     if (!suggestion.command) return;
     try {
-      await navigator.clipboard.writeText(suggestion.command);
+      await copyToClipboard(suggestion.command);
       setCopied(true);
       if (timeoutRef.current) {
         clearTimeout(timeoutRef.current);

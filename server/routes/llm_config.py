@@ -5,19 +5,25 @@ This module provides endpoints for managing and querying LLM provider configurat
 Allows users to check which providers are available and test API key validity.
 """
 
-from flask import Blueprint, jsonify, request
-from chat.backend.agent.providers import get_registry, get_available_providers
-from chat.backend.agent.model_mapper import ModelMapper
 import logging
 import os
 
+from flask import Blueprint, jsonify, request
+
+from chat.backend.agent.model_mapper import ModelMapper
+from chat.backend.agent.providers import get_available_providers, get_registry
+from utils.auth.rbac_decorators import require_permission
+
 logger = logging.getLogger(__name__)
+
+PROVIDER_NAMES = ["openrouter", "openai", "anthropic", "google", "vertex", "ollama"]
 
 llm_config_bp = Blueprint("llm_config", __name__, url_prefix="/api/llm-config")
 
 
 @llm_config_bp.route("/available-providers", methods=["GET"])
-def get_llm_providers():
+@require_permission("llm_config", "read")
+def get_llm_providers(user_id):
     """
     Get list of available LLM providers and their status.
 
@@ -38,7 +44,7 @@ def get_llm_providers():
 
         # Build detailed provider info
         provider_info = {}
-        for provider_name in ["openrouter", "openai", "anthropic", "google"]:
+        for provider_name in PROVIDER_NAMES:
             is_available = available_providers.get(provider_name, False)
             provider_info[provider_name] = {
                 "available": is_available,
@@ -59,7 +65,8 @@ def get_llm_providers():
 
 
 @llm_config_bp.route("/provider-details", methods=["GET"])
-def get_provider_details():
+@require_permission("llm_config", "read")
+def get_provider_details(user_id):
     """
     Get detailed information about each provider including supported models.
 
@@ -94,7 +101,8 @@ def get_provider_details():
 
 
 @llm_config_bp.route("/test-provider", methods=["POST"])
-def test_provider():
+@require_permission("llm_config", "write")
+def test_provider(user_id):
     """
     Test a specific provider's API key validity by making a minimal API call.
 
@@ -169,7 +177,8 @@ def test_provider():
 
 
 @llm_config_bp.route("/model-info", methods=["GET"])
-def get_model_info():
+@require_permission("llm_config", "read")
+def get_model_info(user_id):
     """
     Get information about a specific model including which provider it belongs to.
 
@@ -198,13 +207,18 @@ def get_model_info():
 
         # Get native names for all providers
         native_names = {}
-        for p in ["openrouter", "openai", "anthropic", "google"]:
+        for p in PROVIDER_NAMES:
             try:
                 native_name = ModelMapper.get_native_name(model_name, p)
                 if native_name != model_name or p == provider:
                     native_names[p] = native_name
-            except:
-                pass
+            except Exception as e:
+                logger.debug(
+                    "Failed to resolve native name for model '%s' with provider '%s': %s",
+                    model_name,
+                    p,
+                    e,
+                )
 
         return jsonify(
             {
@@ -221,7 +235,8 @@ def get_model_info():
 
 
 @llm_config_bp.route("/supported-models", methods=["GET"])
-def get_supported_models():
+@require_permission("llm_config", "read")
+def get_supported_models(user_id):
     """
     Get list of all supported models, optionally filtered by provider.
 

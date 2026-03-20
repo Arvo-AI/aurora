@@ -9,7 +9,6 @@ The mapper supports bidirectional translation and automatic provider detection.
 """
 
 from typing import Dict, Optional, Tuple
-import re
 
 # Model name mappings from OpenRouter format to native provider formats
 MODEL_MAPPINGS = {
@@ -40,9 +39,9 @@ MODEL_MAPPINGS = {
         "anthropic": "claude-opus-4-5",
         "provider": "anthropic",
     },
-    "google/gemini-3-pro-preview": {
-        "openrouter": "google/gemini-3-pro-preview",
-        "google": "gemini-3-pro-preview",
+    "google/gemini-3.1-pro-preview": {
+        "openrouter": "google/gemini-3.1-pro-preview",
+        "google": "gemini-3.1-pro-preview",
         "provider": "google",
     },
     "anthropic/claude-3-haiku": {
@@ -77,12 +76,10 @@ class ModelMapper:
         # Check if it's in OpenRouter format (provider/model)
         if "/" in model_name:
             provider_prefix = model_name.split("/")[0]
-            provider_map = {
-                "openai": "openai",
-                "anthropic": "anthropic",
-                "google": "google",
-            }
-            return provider_map.get(provider_prefix, "openrouter")
+            known_providers = {"openai", "anthropic", "google", "vertex", "ollama"}
+            if provider_prefix in known_providers:
+                return provider_prefix
+            return "openrouter"
 
         # Check native format mappings
         for mappings in MODEL_MAPPINGS.values():
@@ -125,6 +122,12 @@ class ModelMapper:
             or_name = _NATIVE_TO_OPENROUTER.get((source_provider, model_name))
             if or_name and or_name in MODEL_MAPPINGS:
                 return MODEL_MAPPINGS[or_name].get(target_provider, model_name)
+
+        # Dynamic fallback: if model has provider/ prefix matching target, strip prefix
+        if "/" in model_name:
+            prefix, name = model_name.split("/", 1)
+            if prefix == target_provider:
+                return name
 
         # If no mapping found, return as-is (passthrough)
         return model_name

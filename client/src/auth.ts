@@ -1,10 +1,41 @@
 import NextAuth from "next-auth"
 import Credentials from "next-auth/providers/credentials"
 
+const ROLE_REVALIDATE_SECONDS = 60 // re-check role/org every 60 seconds
+
+async function refreshUserFromBackend(userId: string): Promise<{
+  role: string
+  orgId: string | null
+  orgName: string | null
+  mustChangePassword: boolean
+} | null | "not_found"> {
+  const backendUrl = process.env.BACKEND_URL
+  if (!backendUrl) return null
+
+  try {
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 5000)
+    const res = await fetch(`${backendUrl}/api/auth/me`, {
+      headers: { "X-User-ID": userId },
+      cache: "no-store",
+      signal: controller.signal,
+    })
+    clearTimeout(timeout)
+    if (res.status === 404) return "not_found"
+    if (!res.ok) return null
+    return await res.json()
+  } catch (err) {
+    // Intentionally return null on failure so the JWT keeps its current
+    // values and the user isn't logged out by a transient backend error.
+    console.error("Failed to refresh user from backend:", err)
+    return null
+  }
+}
+
 export const { handlers, signIn, signOut, auth } = NextAuth({
   // trustHost: true in development, false in production
   // In production, Auth.js will use FRONTEND_URL or infer from request headers
-  trustHost: process.env.NODE_ENV !== 'prod',
+  trustHost: true,
   secret: process.env.AUTH_SECRET,
   providers: [
     Credentials({
@@ -24,14 +55,18 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
           return null
         }
 
+        const loginController = new AbortController()
+        const loginTimeout = setTimeout(() => loginController.abort(), 10000)
         const response = await fetch(`${backendUrl}/api/auth/login`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             email: credentials.email,
             password: credentials.password
-          })
+          }),
+          signal: loginController.signal,
         })
+        clearTimeout(loginTimeout)
         
         if (!response.ok) {
           console.error("Login failed:", response.status)
@@ -39,7 +74,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
         }
         
         const user = await response.json()
-        return user // { id, email, name }
+        return user // { id, email, name, role, orgId, orgName }
       }
     })
   ],
@@ -52,21 +87,56 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
     error: "/sign-in"
   },
   callbacks: {
-    jwt({ token, user }) {
+    async jwt({ token, user, trigger }) {
       if (user) {
         token.id = user.id
         token.email = user.email
         token.name = user.name
+        token.role = user.role
+        token.orgId = user.orgId
+        token.orgName = user.orgName
+        token.mustChangePassword = user.mustChangePassword
+        token.lastRefreshedAt = Math.floor(Date.now() / 1000)
+        return token
       }
+
+      const lastRefreshed = (token.lastRefreshedAt as number) || 0
+      const now = Math.floor(Date.now() / 1000)
+
+      if (trigger === "update" || now - lastRefreshed > ROLE_REVALIDATE_SECONDS) {
+        const fresh = await refreshUserFromBackend(token.id as string)
+        if (fresh === "not_found") {
+          // User no longer exists in DB (stale session after DB reset).
+          // Wipe the token so the session callback produces an empty
+          // session, which middleware treats as logged-out.
+          token.id = undefined
+          token.email = undefined
+          token.name = undefined
+          return token
+        }
+        if (fresh) {
+          token.role = fresh.role
+          token.orgId = fresh.orgId
+          token.orgName = fresh.orgName
+          token.mustChangePassword = fresh.mustChangePassword
+        }
+        token.lastRefreshedAt = now
+      }
+
       return token
     },
     session({ session, token }) {
       if (token) {
         session.userId = token.id as string
+        session.orgId = (token.orgId as string) ?? undefined
         if (session.user) {
           session.user.id = token.id as string
           session.user.email = token.email as string
           session.user.name = token.name as string
+          session.user.role = token.role as string
+          session.user.orgId = (token.orgId as string) ?? undefined
+          session.user.orgName = (token.orgName as string) ?? undefined
+          session.user.mustChangePassword = token.mustChangePassword as boolean
         }
       }
       return session

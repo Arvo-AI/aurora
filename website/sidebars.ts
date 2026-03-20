@@ -32,6 +32,7 @@ const sidebars: SidebarsConfig = {
       items: [
         'deployment/docker-compose',
         'deployment/vm-deployment',
+        'deployment/install-docker',
         'deployment/kubernetes',
         'deployment/vault-kms-setup',
         'deployment/vault-kms-gcp',
@@ -50,6 +51,7 @@ const sidebars: SidebarsConfig = {
       label: 'Integrations',
       items: [
         'integrations/connectors',
+        'integrations/spinnaker',
         'integrations/llm-providers',
       ],
     },

@@ -26,10 +26,9 @@ from connectors.confluence_connector.client import (
 )
 from connectors.jira_connector.client import JiraClient
 from utils.auth.oauth2_state_cache import retrieve_oauth2_state, store_oauth2_state
-from utils.auth.stateless_auth import get_user_id_from_request
+from utils.auth.rbac_decorators import require_permission
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.db.connection_pool import db_pool
-from utils.web.cors_utils import create_cors_response
 
 logger = logging.getLogger(__name__)
 
@@ -95,15 +94,9 @@ def _validate_jira(access_token: str, base_url: str, auth_type: str, cloud_id: O
 # ------------------------------------------------------------------
 
 @atlassian_bp.route("/connect", methods=["POST", "OPTIONS"])
-def connect():
+@require_permission("connectors", "write")
+def connect(user_id):
     """Unified connect for Atlassian products (Confluence/Jira/both)."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
-
     try:
         data = request.get_json(force=True, silent=True) or {}
     except Exception:
@@ -238,15 +231,9 @@ def connect():
 # ------------------------------------------------------------------
 
 @atlassian_bp.route("/status", methods=["GET", "OPTIONS"])
-def status():
+@require_permission("connectors", "read")
+def status(user_id):
     """Return connection status for all Atlassian products."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
-
     result: Dict[str, Any] = {}
 
     for product in VALID_PRODUCTS:
@@ -298,15 +285,9 @@ def status():
 # ------------------------------------------------------------------
 
 @atlassian_bp.route("/disconnect", methods=["POST", "OPTIONS"])
-def disconnect():
+@require_permission("connectors", "write")
+def disconnect(user_id):
     """Disconnect one or all Atlassian products."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
-
     try:
         data = request.get_json(force=True, silent=True) or {}
     except Exception:

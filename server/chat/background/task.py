@@ -18,14 +18,12 @@ from langchain_core.messages import HumanMessage
 from utils.cache.redis_client import get_redis_client
 from utils.notifications.email_service import get_email_service
 from utils.auth.stateless_auth import get_user_email
-from utils.flags.feature_flags import is_slack_enabled
 from utils.notifications.slack_notification_service import (
     send_slack_investigation_started_notification,
     send_slack_investigation_completed_notification,
 )
 from utils.db.connection_pool import db_pool
 from langchain_core.messages import ToolMessage
-from chat.backend.agent.tools.cloud_tools import get_state_context
 from chat.background.visualization_generator import update_visualization
 from chat.backend.constants import MAX_TOOL_OUTPUT_CHARS, INFRASTRUCTURE_TOOLS
 
@@ -128,7 +126,7 @@ _RATE_LIMIT_WINDOW_SECONDS = 300  # 5 minute window
 _RATE_LIMIT_MAX_REQUESTS = 5  # Max 5 background chats per window
 
 # RCA sources that use rca_context in system prompt
-_RCA_SOURCES = {'grafana', 'datadog', 'netdata', 'splunk', 'slack', 'pagerduty', 'dynatrace', 'jenkins', 'cloudbees'}
+_RCA_SOURCES = {'grafana', 'datadog', 'netdata', 'splunk', 'slack', 'pagerduty', 'dynatrace', 'jenkins', 'cloudbees', 'spinnaker'}
 
 # Initialize Redis client at module load time - fails if Redis is unavailable
 _redis_client = get_redis_client()
@@ -172,6 +170,7 @@ def _get_connected_integrations(user_id: str) -> Dict[str, bool]:
     integrations = {
         'splunk': False,
         'dynatrace': False,
+        'datadog': False,
         'github': False,
         'confluence': False,
         'jira': False,
@@ -179,6 +178,7 @@ def _get_connected_integrations(user_id: str) -> Dict[str, bool]:
         'coroot': False,
         'jenkins': False,
         'cloudbees': False,
+        'spinnaker': False,
     }
 
     try:
@@ -193,6 +193,12 @@ def _get_connected_integrations(user_id: str) -> Dict[str, bool]:
         integrations['dynatrace'] = is_dynatrace_connected(user_id)
     except Exception as e:
         logger.debug(f"[BackgroundChat] Error checking Dynatrace: {e}")
+
+    try:
+        from chat.backend.agent.tools.datadog_tool import is_datadog_connected
+        integrations['datadog'] = is_datadog_connected(user_id)
+    except Exception as e:
+        logger.debug(f"[BackgroundChat] Error checking Datadog: {e}")
 
     try:
         # Check GitHub
@@ -256,6 +262,14 @@ def _get_connected_integrations(user_id: str) -> Dict[str, bool]:
     except Exception as e:
         logger.debug(f"[BackgroundChat] Error checking CloudBees: {e}")
 
+    try:
+        from utils.flags.feature_flags import is_spinnaker_enabled
+        if is_spinnaker_enabled():
+            from chat.backend.agent.tools.spinnaker_rca_tool import is_spinnaker_connected
+            integrations['spinnaker'] = is_spinnaker_connected(user_id)
+    except Exception as e:
+        logger.debug(f"[BackgroundChat] Error checking Spinnaker: {e}")
+
     return integrations
 
 
@@ -304,8 +318,8 @@ def _build_rca_context(
 @celery_app.task(
     bind=True, 
     name="chat.background.run_background_chat",
-    time_limit=900,  # Hard timeout: 15 minutes (task killed)
-    soft_time_limit=900  # Soft timeout: 15 minutes (exception raised, allows cleanup)
+    time_limit=1800,  # Hard timeout: 30 minutes (task killed)
+    soft_time_limit=1740  # Soft timeout: 29 minutes (exception raised, 60s grace for cleanup before hard kill)
 )
 def run_background_chat(
     self,
@@ -325,7 +339,7 @@ def run_background_chat(
     - Sets is_background=True to skip confirmations and user questions
     - Saves all messages to the database (same as regular chats)
     - Appears in the frontend chat history
-    - Times out after 15 minutes to prevent hanging indefinitely
+    - Times out after 30 minutes to prevent hanging indefinitely
 
     Args:
         user_id: The user ID to run the chat for
@@ -351,6 +365,14 @@ def run_background_chat(
         if incident_id:
             try:
                 with db_pool.get_admin_connection() as conn:
+                    # Ensure chat_sessions.incident_id is set (single source of truth)
+                    with conn.cursor() as cursor:
+                        cursor.execute(
+                            "UPDATE chat_sessions SET incident_id = %s WHERE id = %s AND incident_id IS NULL",
+                            (incident_id, session_id)
+                        )
+                    conn.commit()
+
                     # Store session ID and Celery task ID (if not already set by webhook handler)
                     with conn.cursor() as cursor:
                         # First check if there's already a task ID set
@@ -403,7 +425,7 @@ def run_background_chat(
                     email_start_enabled = _is_rca_email_start_notification_enabled(user_id)
                     email_start_notification_enabled = email_general_enabled and email_start_enabled
                     
-                    slack_notification_enabled = is_slack_enabled() and _has_slack_connected(user_id)
+                    slack_notification_enabled = _has_slack_connected(user_id)
                     
                     if send_notifications and (email_start_notification_enabled or slack_notification_enabled):
                         _send_rca_notification(user_id, incident_id, 'started', 
@@ -506,14 +528,14 @@ def run_background_chat(
         return result
     
     except SoftTimeLimitExceeded:
-        logger.error(f"[BackgroundChat] Timeout after 15 minutes for session {session_id}")
+        logger.error(f"[BackgroundChat] Timeout after 30 minutes for session {session_id}")
         _update_session_status(session_id, "failed")
         if incident_id:
             _update_incident_aurora_status(incident_id, "error")
         return {
             "session_id": session_id,
             "status": "failed",
-            "error": "Background chat exceeded 15 minute timeout",
+            "error": "Background chat exceeded 30 minute timeout",
         }
         
     except Exception as e:
@@ -1388,8 +1410,17 @@ def create_background_chat_session(
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
-                # Set user context for RLS
+                # Look up org_id for this user
+                cursor.execute("SELECT org_id FROM users WHERE id = %s", (user_id,))
+                row = cursor.fetchone()
+                org_id = row[0] if row and row[0] else None
+
+                if not org_id:
+                    logger.warning("No org_id found for user %s in background task session creation", user_id)
+                
+                # Set user and org context for RLS
                 cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
+                cursor.execute("SET myapp.current_org_id = %s;", (org_id or '',))
                 conn.commit()
                 
                 # Create the session with initial metadata and in_progress status
@@ -1401,23 +1432,24 @@ def create_background_chat_session(
                     ui_state["triggerMetadata"] = trigger_metadata
                 
                 cursor.execute("""
-                    INSERT INTO chat_sessions (id, user_id, title, messages, ui_state, created_at, updated_at, is_active, status, incident_id)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    INSERT INTO chat_sessions (id, user_id, org_id, title, messages, ui_state, created_at, updated_at, is_active, status, incident_id)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """, (
                     session_id,
                     user_id,
+                    org_id,
                     title,
                     json.dumps([]),
                     json.dumps(ui_state),
                     datetime.now(),
                     datetime.now(),
                     True,
-                    "in_progress",  # Background chats start as in_progress
-                    incident_id,  # Link to incident if provided
+                    "in_progress",
+                    incident_id,
                 ))
             conn.commit()
             
-            logger.info(f"[BackgroundChat] Created session {session_id} for user {user_id} (status=in_progress, incident_id={incident_id})")
+            logger.info(f"[BackgroundChat] Created session {session_id} for user {user_id} org {org_id} (status=in_progress, incident_id={incident_id})")
             
     except Exception as e:
         logger.exception(f"[BackgroundChat] Failed to create session: {e}")

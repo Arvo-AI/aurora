@@ -32,7 +32,7 @@ def is_bitbucket_enabled() -> bool:
     """Check if Bitbucket integration is enabled via environment variable."""
     return os.getenv("NEXT_PUBLIC_ENABLE_BITBUCKET", "false").lower() == "true"
 
-  
+
 def is_dynatrace_enabled() -> bool:
     """Check if Dynatrace integration is enabled via environment variable."""
     return os.getenv("NEXT_PUBLIC_ENABLE_DYNATRACE", "false").lower() == "true"
@@ -51,3 +51,8 @@ def is_thousandeyes_enabled() -> bool:
 def is_sharepoint_enabled() -> bool:
     """Check if SharePoint integration is enabled via environment variable."""
     return os.getenv("NEXT_PUBLIC_ENABLE_SHAREPOINT", "false").lower() == "true"
+
+
+def is_spinnaker_enabled() -> bool:
+    """Check if Spinnaker integration is enabled via environment variable."""
+    return os.getenv("NEXT_PUBLIC_ENABLE_SPINNAKER", "false").lower() == "true"

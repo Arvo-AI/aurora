@@ -11,9 +11,9 @@ from flask import Blueprint, jsonify, request
 from connectors.atlassian_auth.auth import refresh_access_token
 from connectors.jira_connector.client import JiraClient
 from connectors.jira_connector.adf_converter import markdown_to_adf, text_to_adf
-from utils.auth.stateless_auth import get_user_id_from_request, get_user_preference, store_user_preference
+from utils.auth.rbac_decorators import require_permission
+from utils.auth.stateless_auth import get_user_preference, store_user_preference
 from utils.auth.token_management import get_token_data, store_tokens_in_db
-from utils.web.cors_utils import create_cors_response
 
 logger = logging.getLogger(__name__)
 
@@ -75,14 +75,8 @@ def _refresh_jira_credentials(user_id: str, creds: Dict[str, Any]) -> Optional[D
 # ------------------------------------------------------------------
 
 @jira_bp.route("/search", methods=["POST", "OPTIONS"])
-def search():
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
-
+@require_permission("connectors", "read")
+def search(user_id):
     client, creds, error = _get_jira_client(user_id)
     if error:
         return jsonify({"error": error}), 404 if not creds else 400
@@ -104,14 +98,8 @@ def search():
 # ------------------------------------------------------------------
 
 @jira_bp.route("/issue/<issue_key>", methods=["GET", "OPTIONS"])
-def get_issue(issue_key):
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
-
+@require_permission("connectors", "read")
+def get_issue(user_id, issue_key):
     client, creds, error = _get_jira_client(user_id)
     if error:
         return jsonify({"error": error}), 404 if not creds else 400
@@ -129,14 +117,8 @@ def get_issue(issue_key):
 # ------------------------------------------------------------------
 
 @jira_bp.route("/issue", methods=["POST", "OPTIONS"])
-def create_issue():
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
-
+@require_permission("connectors", "write")
+def create_issue(user_id):
     client, creds, error = _get_jira_client(user_id)
     if error:
         return jsonify({"error": error}), 404 if not creds else 400
@@ -173,14 +155,8 @@ def create_issue():
 # ------------------------------------------------------------------
 
 @jira_bp.route("/issue/<issue_key>", methods=["PATCH", "OPTIONS"])
-def update_issue(issue_key):
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
-
+@require_permission("connectors", "write")
+def update_issue(user_id, issue_key):
     client, creds, error = _get_jira_client(user_id)
     if error:
         return jsonify({"error": error}), 404 if not creds else 400
@@ -203,14 +179,8 @@ def update_issue(issue_key):
 # ------------------------------------------------------------------
 
 @jira_bp.route("/issue/<issue_key>/comment", methods=["POST", "OPTIONS"])
-def add_comment(issue_key):
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
-
+@require_permission("connectors", "write")
+def add_comment(user_id, issue_key):
     client, creds, error = _get_jira_client(user_id)
     if error:
         return jsonify({"error": error}), 404 if not creds else 400
@@ -235,14 +205,8 @@ def add_comment(issue_key):
 # ------------------------------------------------------------------
 
 @jira_bp.route("/issue/link", methods=["POST", "OPTIONS"])
-def link_issues():
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
-
+@require_permission("connectors", "write")
+def link_issues(user_id):
     client, creds, error = _get_jira_client(user_id)
     if error:
         return jsonify({"error": error}), 404 if not creds else 400
@@ -272,14 +236,8 @@ VALID_MODES = ("full", "comment_only")
 
 
 @jira_bp.route("/settings", methods=["GET", "OPTIONS"])
-def get_settings():
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
-
+@require_permission("connectors", "read")
+def get_settings(user_id):
     mode = get_user_preference(user_id, JIRA_MODE_KEY, default="full")
     return jsonify({"jiraMode": mode})
 
@@ -289,14 +247,8 @@ def get_settings():
 # ------------------------------------------------------------------
 
 @jira_bp.route("/settings", methods=["PUT", "OPTIONS"])
-def update_settings():
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
-
+@require_permission("connectors", "write")
+def update_settings(user_id):
     data = request.get_json(force=True, silent=True) or {}
     mode = data.get("jiraMode")
 

@@ -39,6 +39,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useUserId } from "@/hooks/use-user-id";
 import { isOvhEnabled } from "@/lib/feature-flags";
 import { getEnv } from '@/lib/env';
+import ConnectorAuthGuard from "@/components/connectors/ConnectorAuthGuard";
 
 type VMSource = "auto" | "manual";
 const CACHE_KEY = "vm-config-cache";
@@ -756,6 +757,7 @@ export default function VMConfig() {
   }
 
   return (
+    <ConnectorAuthGuard connectorName="VM SSH Access">
     <div className="min-h-screen bg-background">
       <div className="bg-background">
         <div className="mx-auto max-w-7xl px-6 pb-6 pt-10">
@@ -1405,5 +1407,6 @@ export default function VMConfig() {
         </Collapsible>
       </div>
     </div>
+    </ConnectorAuthGuard>
   );
 }

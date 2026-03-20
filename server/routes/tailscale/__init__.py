@@ -16,38 +16,33 @@ def handle_options_request():
 
 def require_tailscale(f):
     """
-    Decorator that handles Tailscale authentication boilerplate.
+    Decorator that handles Tailscale client setup.
 
-    Sets g.user_id, g.tailscale_client, and g.tailnet for use in the route.
-    Returns 401 if user is not authenticated or Tailscale is not connected.
+    Must be used AFTER @require_permission (which injects user_id as the
+    first positional arg).  Sets g.user_id, g.tailscale_client, and
+    g.tailnet for use in the route.  Returns 401 if Tailscale is not
+    connected.
 
     Usage:
         @tailscale_bp.route('/tailscale/example', methods=['GET'])
+        @require_permission("connectors", "read")
         @require_tailscale
-        def example_route():
+        def example_route(user_id):
             client = g.tailscale_client
             tailnet = g.tailnet
-            user_id = g.user_id
             # ... route logic
     """
     @wraps(f)
-    def decorated_function(*args, **kwargs):
-        from utils.auth.stateless_auth import get_user_id_from_request
-
-        user_id = get_user_id_from_request()
-        if not user_id:
-            return jsonify({"error": "Missing user_id"}), 401
-
+    def decorated_function(user_id, *args, **kwargs):
         client, tailnet, error_response = get_tailscale_client(user_id)
         if error_response:
             return error_response
 
-        # Store in Flask's g object for access in route
         g.user_id = user_id
         g.tailscale_client = client
         g.tailnet = tailnet
 
-        return f(*args, **kwargs)
+        return f(user_id, *args, **kwargs)
     return decorated_function
 
 

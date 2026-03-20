@@ -32,22 +32,40 @@ class LLMUsageTracker:
     """Tracks LLM usage including token counting and cost calculation"""
 
     MODEL_PRICING = {
-        "openai/gpt-5.2": {
-            "input": 0.00175,
-            "output": 0.014,
-        },
-        "anthropic/claude-sonnet-4-5": {
-            "input": 0.003,
-            "output": 0.015,
-        },
-        "anthropic/claude-opus-4-5": {
-            "input": 0.005,
-            "output": 0.025,
-        },
-        "google/gemini-3-pro-preview": {
-            "input": 0.00125,
-            "output": 0.01,
-        },
+        # OpenAI (direct API pricing per 1K tokens)
+        "openai/gpt-5.4": {"input": 0.0025, "output": 0.015},
+        "openai/gpt-5.2": {"input": 0.00175, "output": 0.014},
+        "openai/o3": {"input": 0.002, "output": 0.008},
+        "openai/o3-mini": {"input": 0.0011, "output": 0.0044},
+        "openai/o4-mini": {"input": 0.0011, "output": 0.0044},
+        "openai/gpt-4.1": {"input": 0.002, "output": 0.008},
+        "openai/gpt-4.1-mini": {"input": 0.0004, "output": 0.0016},
+        "openai/gpt-4o": {"input": 0.0025, "output": 0.01},
+        "openai/gpt-4o-mini": {"input": 0.00015, "output": 0.0006},
+        # Anthropic
+        "anthropic/claude-opus-4-6": {"input": 0.005, "output": 0.025},
+        "anthropic/claude-sonnet-4-6": {"input": 0.003, "output": 0.015},
+        "anthropic/claude-opus-4-5": {"input": 0.005, "output": 0.025},
+        "anthropic/claude-sonnet-4-5": {"input": 0.003, "output": 0.015},
+        "anthropic/claude-haiku-4-5": {"input": 0.001, "output": 0.005},
+        "anthropic/claude-3.5-sonnet": {"input": 0.003, "output": 0.015},
+        "anthropic/claude-3-haiku": {"input": 0.00025, "output": 0.00125},
+        # Google AI / Vertex AI
+        "google/gemini-3.1-pro-preview": {"input": 0.00125, "output": 0.01},
+        "google/gemini-3-flash": {"input": 0.0005, "output": 0.003},
+        "google/gemini-3-pro-preview": {"input": 0.00125, "output": 0.01},
+        "google/gemini-2.5-pro": {"input": 0.00125, "output": 0.01},
+        "google/gemini-2.5-flash": {"input": 0.0003, "output": 0.0025},
+        "google/gemini-2.5-flash-lite": {"input": 0.0001, "output": 0.0004},
+        "vertex/gemini-3.1-pro-preview": {"input": 0.00125, "output": 0.01},
+        "vertex/gemini-3-flash": {"input": 0.0005, "output": 0.003},
+        "vertex/gemini-2.5-pro": {"input": 0.00125, "output": 0.01},
+        "vertex/gemini-2.5-flash": {"input": 0.0003, "output": 0.0025},
+        "vertex/gemini-2.5-flash-lite": {"input": 0.0001, "output": 0.0004},
+        # Ollama (local, free)
+        "ollama/llama3.1": {"input": 0.0, "output": 0.0},
+        "ollama/qwen2.5": {"input": 0.0, "output": 0.0},
+        # Default fallback
         "default": {"input": 0.001, "output": 0.002},
     }
 

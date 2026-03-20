@@ -4,9 +4,10 @@ GitHub repository selection storage endpoints
 import logging
 import json
 from flask import Blueprint, jsonify, request
-from utils.auth.stateless_auth import get_credentials_from_db, get_user_id_from_request
+from utils.auth.stateless_auth import get_credentials_from_db
 from utils.auth.token_management import store_tokens_in_db
 from utils.db.db_utils import connect_to_db_as_user
+from utils.auth.rbac_decorators import require_permission
 
 github_repo_selection_bp = Blueprint('github_repo_selection', __name__)
 logger = logging.getLogger(__name__)
@@ -20,21 +21,14 @@ def create_cors_response(data=None, status=200):
     response.headers['Access-Control-Allow-Headers'] = 'Content-Type, X-User-ID, Authorization'
     return response
 
-def get_user_id_from_request():
-    """Extract user ID from request headers"""
-    return request.headers.get('X-User-ID') or request.headers.get('X-User-ID')
-
 @github_repo_selection_bp.route("/repo-selection", methods=["GET", "OPTIONS"])
-def get_repo_selection():
+@require_permission("connectors", "read")
+def get_repo_selection(user_id):
     """Get the stored GitHub repository selection for a user"""
     if request.method == 'OPTIONS':
         return create_cors_response()
     
     try:
-        user_id = get_user_id_from_request()
-        if not user_id:
-            return create_cors_response({"error": "User ID required"}, 400)
-        
         # Get stored GitHub repo selection
         repo_selection = get_credentials_from_db(user_id, "github_repo_selection")
         
@@ -54,13 +48,10 @@ def get_repo_selection():
         return create_cors_response({"error": "Failed to get repository selection"}, 500)
 
 @github_repo_selection_bp.route("/repo-selection", methods=["POST", "PUT"])
-def save_repo_selection():
+@require_permission("connectors", "write")
+def save_repo_selection(user_id):
     """Save the GitHub repository selection for a user"""
     try:
-        user_id = get_user_id_from_request()
-        if not user_id:
-            return create_cors_response({"error": "User ID required"}, 400)
-        
         data = request.get_json()
         if not data:
             return create_cors_response({"error": "Request body required"}, 400)
@@ -105,13 +96,10 @@ def save_repo_selection():
         return create_cors_response({"error": "Failed to save repository selection"}, 500)
 
 @github_repo_selection_bp.route("/repo-selection", methods=["DELETE"])
-def clear_repo_selection():
+@require_permission("connectors", "write")
+def clear_repo_selection(user_id):
     """Clear the GitHub repository selection for a user"""
     try:
-        user_id = get_user_id_from_request()
-        if not user_id:
-            return create_cors_response({"error": "User ID required"}, 400)
-        
         # Clear the stored selection by deleting the record
         conn = connect_to_db_as_user()
         cursor = conn.cursor()

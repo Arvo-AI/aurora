@@ -1,127 +1,71 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 
 /**
- * Hook to check if user is logged into any cloud provider
- * @returns Object containing login status for each provider and if any provider is connected
+ * Hook to check if user is logged into any cloud provider.
+ * Uses /api/connected-accounts as the single source of truth (database-backed,
+ * org-aware) instead of localStorage, so org-shared connections are visible
+ * to all members.
  */
 export function useCloudProviderStatus() {
-  const [isGCPConnected, setIsGCPConnected] = useState(false);
-  const [isAWSConnected, setIsAWSConnected] = useState(false);
-  const [isAzureConnected, setIsAzureConnected] = useState(false);
-  const [isOVHConnected, setIsOVHConnected] = useState(false);
-  const [isScalewayConnected, setIsScalewayConnected] = useState(false);
-  const [isTailscaleConnected, setIsTailscaleConnected] = useState(false);
-  const [isGrafanaConnected, setIsGrafanaConnected] = useState(false);
-  const [isDatadogConnected, setIsDatadogConnected] = useState(false);
-  const [isGitHubConnected, setIsGitHubConnected] = useState(false);
-  const [isNetdataConnected, setIsNetdataConnected] = useState(false);
-  const [isSplunkConnected, setIsSplunkConnected] = useState(false);
-  const [isDynatraceConnected, setIsDynatraceConnected] = useState(false);
-  const [isPagerDutyConnected, setIsPagerDutyConnected] = useState(false);
-  const [isKubectlConnected, setIsKubectlConnected] = useState(false);
-  const [anyProviderConnected, setAnyProviderConnected] = useState(false);
+  const [connectedProviders, setConnectedProviders] = useState<Record<string, boolean>>({});
+  const [isLoading, setIsLoading] = useState(true);
+
+  const fetchStatus = useCallback(async () => {
+    try {
+      const response = await fetch('/api/connected-accounts', {
+        credentials: 'include',
+      });
+      if (!response.ok) {
+        console.error('Failed to fetch connected accounts:', response.status);
+        return;
+      }
+      const data = await response.json();
+      const accounts = data.accounts || {};
+
+      const status: Record<string, boolean> = {};
+      for (const key of Object.keys(accounts)) {
+        status[key.toLowerCase()] = true;
+      }
+      setConnectedProviders(status);
+    } catch (error) {
+      console.error('Error fetching cloud provider status:', error);
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
-    if (typeof window === 'undefined') return;
-
-    const updateProviderStatus = () => {
-      const getGitHubConnected = () => {
-        const cachedData = localStorage.getItem('github_cached_data');
-        if (!cachedData) return false;
-        try {
-          const parsed = JSON.parse(cachedData);
-          return Boolean(parsed?.connected);
-        } catch (error) {
-          console.warn('Failed to parse github_cached_data:', error);
-          return false;
-        }
-      };
-
-      const gcpConnected = localStorage.getItem('isGCPConnected') === 'true';
-      const awsConnected = localStorage.getItem('isAWSConnected') === 'true';
-      const azureConnected = localStorage.getItem('isAzureConnected') === 'true';
-      const ovhConnected = localStorage.getItem('isOVHConnected') === 'true';
-      const scalewayConnected = localStorage.getItem('isScalewayConnected') === 'true';
-      const tailscaleConnected = localStorage.getItem('isTailscaleConnected') === 'true';
-      const grafanaConnected = localStorage.getItem('isGrafanaConnected') === 'true';
-      const datadogConnected = localStorage.getItem('isDatadogConnected') === 'true';
-      const netdataConnected = localStorage.getItem('isNetdataConnected') === 'true';
-      const splunkConnected = localStorage.getItem('isSplunkConnected') === 'true';
-      const dynatraceConnected = localStorage.getItem('isDynatraceConnected') === 'true';
-      const pagerdutyConnected = localStorage.getItem('isPagerDutyConnected') === 'true';
-      const kubectlConnected = localStorage.getItem('isKubectlConnected') === 'true';
-      const githubConnected = getGitHubConnected();
-      
-      setIsGCPConnected(gcpConnected);
-      setIsAWSConnected(awsConnected);
-      setIsAzureConnected(azureConnected);
-      setIsOVHConnected(ovhConnected);
-      setIsScalewayConnected(scalewayConnected);
-      setIsTailscaleConnected(tailscaleConnected);
-      setIsGrafanaConnected(grafanaConnected);
-      setIsDatadogConnected(datadogConnected);
-      setIsNetdataConnected(netdataConnected);
-      setIsSplunkConnected(splunkConnected);
-      setIsDynatraceConnected(dynatraceConnected);
-      setIsPagerDutyConnected(pagerdutyConnected);
-      setIsKubectlConnected(kubectlConnected);
-      setIsGitHubConnected(githubConnected);
-      setAnyProviderConnected(
-        gcpConnected ||
-        awsConnected ||
-        azureConnected ||
-        ovhConnected ||
-        scalewayConnected ||
-        tailscaleConnected ||
-        grafanaConnected ||
-        datadogConnected ||
-        netdataConnected ||
-        splunkConnected ||
-        dynatraceConnected ||
-        pagerdutyConnected ||
-        kubectlConnected ||
-        githubConnected
-      );
-    };
-
-    // Initial check on mount
-    updateProviderStatus();
-
-    // Event listeners for changes (no polling)
-    const handleStorageChange = (e: StorageEvent) => {
-      if (
-        e.key?.includes('Connected') ||
-        e.key === 'isGrafanaConnected' ||
-        e.key === 'github_cached_data' ||
-        e.key === 'github_last_checked'
-      ) {
-        updateProviderStatus();
-      }
-    };
+    fetchStatus();
 
     const handleProviderStateChange = () => {
-      updateProviderStatus();
+      fetchStatus();
     };
 
-    const handleProviderConnectionAction = () => {
-      updateProviderStatus();
-    };
-
-    // Listen for localStorage changes from other tabs
-    window.addEventListener('storage', handleStorageChange);
-    
-    // Listen for provider state changes from same tab
     window.addEventListener('providerStateChanged', handleProviderStateChange);
-    
-    // Listen for provider connection actions
-    window.addEventListener('providerConnectionAction', handleProviderConnectionAction);
+    window.addEventListener('providerConnectionAction', handleProviderStateChange);
 
     return () => {
-      window.removeEventListener('storage', handleStorageChange);
       window.removeEventListener('providerStateChanged', handleProviderStateChange);
-      window.removeEventListener('providerConnectionAction', handleProviderConnectionAction);
+      window.removeEventListener('providerConnectionAction', handleProviderStateChange);
     };
-  }, []); // Empty dependency array - only run once on mount
+  }, [fetchStatus]);
+
+  const isGCPConnected = connectedProviders['gcp'] ?? false;
+  const isAWSConnected = connectedProviders['aws'] ?? false;
+  const isAzureConnected = connectedProviders['azure'] ?? false;
+  const isOVHConnected = connectedProviders['ovh'] ?? false;
+  const isScalewayConnected = connectedProviders['scaleway'] ?? false;
+  const isTailscaleConnected = connectedProviders['tailscale'] ?? false;
+  const isGrafanaConnected = connectedProviders['grafana'] ?? false;
+  const isDatadogConnected = connectedProviders['datadog'] ?? false;
+  const isNetdataConnected = connectedProviders['netdata'] ?? false;
+  const isSplunkConnected = connectedProviders['splunk'] ?? false;
+  const isDynatraceConnected = connectedProviders['dynatrace'] ?? false;
+  const isPagerDutyConnected = connectedProviders['pagerduty'] ?? false;
+  const isKubectlConnected = connectedProviders['kubectl'] ?? false;
+  const isGitHubConnected = connectedProviders['github'] ?? false;
+
+  const anyProviderConnected = Object.values(connectedProviders).some(Boolean);
 
   return {
     isGCPConnected,
@@ -138,6 +82,7 @@ export function useCloudProviderStatus() {
     isPagerDutyConnected,
     isKubectlConnected,
     isGitHubConnected,
-    anyProviderConnected
+    anyProviderConnected,
+    isLoading,
   };
-} 
+}

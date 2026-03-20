@@ -2,15 +2,10 @@ import { useState, createElement } from "react";
 import { useToast } from "@/hooks/use-toast";
 import { GitHubIntegrationService } from "@/components/github-provider-integration";
 import { BitbucketIntegrationService } from "@/components/bitbucket-provider-integration";
-import { isSlackEnabled } from "@/lib/feature-flags";
 import type { ConnectorConfig } from "@/components/connectors/types";
 import { ToastAction } from "@/components/ui/toast";
 import { ExternalLink } from "lucide-react";
-
-import { getEnv } from '@/lib/env';
-
-const slackService = isSlackEnabled() ? require("@/lib/services/slack").slackService : null;
-const BACKEND_URL = getEnv('NEXT_PUBLIC_BACKEND_URL');
+import { slackService } from "@/lib/services/slack";
 
 export function useConnectorOAuth(connector: ConnectorConfig, userId: string | null) {
   const { toast } = useToast();
@@ -176,10 +171,9 @@ export function useConnectorOAuth(connector: ConnectorConfig, userId: string | n
   const handleGCPOAuth = async () => {
     await withOAuthHandler(
       async () => {
-        const response = await fetch(`${BACKEND_URL}/login`, {
+        const response = await fetch("/api/gcp/oauth/login", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ userId: userId! }),
         });
 
         if (!response.ok) {
@@ -189,9 +183,6 @@ export function useConnectorOAuth(connector: ConnectorConfig, userId: string | n
         const data = await response.json();
         
         if (data.login_url) {
-          // Signal the frontend discovery hook to start showing status.
-          // For GCP, the actual discovery task is chained from the backend
-          // after post-auth completes (gcp_post_auth_tasks.py).
           localStorage.setItem("aurora_graph_discovery_trigger", "1");
           window.location.href = data.login_url;
         } else {
