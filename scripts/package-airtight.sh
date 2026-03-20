@@ -78,11 +78,13 @@ echo ""
 
 # Step 4: Generate checksum
 echo "[4/4] Generating checksum..."
+pushd "$(dirname "$OUTPUT")" > /dev/null
 if command -v sha256sum &>/dev/null; then
-  sha256sum "$OUTPUT" > "${OUTPUT}.sha256"
+  sha256sum "$(basename "$OUTPUT")" > "${OUTPUT}.sha256"
 elif command -v shasum &>/dev/null; then
-  shasum -a 256 "$OUTPUT" > "${OUTPUT}.sha256"
+  shasum -a 256 "$(basename "$OUTPUT")" > "${OUTPUT}.sha256"
 fi
+popd > /dev/null
 echo ""
 
 SIZE=$(du -h "$OUTPUT" | cut -f1)

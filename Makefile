@@ -242,8 +242,11 @@ prod-airtight:
 	fi
 	@if [ -n "$(AIRTIGHT_BUNDLE)" ]; then \
 		_bundle="$(AIRTIGHT_BUNDLE)"; \
-		_bundle="$${_bundle#\~/}"; \
-		if [ "$$_bundle" != "$(AIRTIGHT_BUNDLE)" ]; then _bundle="$(HOME)/$$_bundle"; fi; \
+		case "$$_bundle" in \
+			~/*) _home=$${SUDO_USER:+$$(eval echo ~$$SUDO_USER)}; \
+			     _home=$${_home:-$$HOME}; \
+			     _bundle="$$_home/$${_bundle#\~/}";; \
+		esac; \
 		echo "Loading images from $$_bundle..."; \
 		docker load < "$$_bundle"; \
 		echo ""; \

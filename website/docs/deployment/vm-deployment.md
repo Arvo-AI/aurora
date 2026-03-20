@@ -84,6 +84,10 @@ docker compose version
 
 If `docker` gives "permission denied" after `newgrp`, log out and back in (`exit` then SSH again).
 
+:::tip Restricted Environments
+If `curl` is blocked or the Docker convenience script fails, see **[Installing Docker](./install-docker)** for manual installation instructions covering Debian, Ubuntu, CentOS/RHEL, Amazon Linux on both amd64 and arm64, including fully airgapped environments.
+:::
+
 :::caution Run Commands Individually
 `newgrp docker` opens a new shell session. If you paste all commands at once, everything after `newgrp` will not execute in the current session. Run it separately, then continue with the remaining commands.
 :::
@@ -302,7 +306,7 @@ Use this path when the target VM has restricted or no outbound internet access (
 
 - You have received the airtight bundle (`aurora-airtight-<version>.tar.gz`) and its checksum file (`aurora-airtight-<version>.tar.gz.sha256`)
 - The target VM meets the [hardware requirements](#1-provision-a-vm) (4+ CPU, 8+ GB RAM, 60 GB SSD)
-- Docker and Docker Compose are installed on the VM (see [Install Dependencies](#3-install-dependencies) — `apt` / `yum` access to OS package repos is typically allowed even on restricted networks)
+- Docker and Docker Compose are installed on the VM (see [Installing Docker](./install-docker) for all OS/architecture combinations, including environments where `curl` and `wget` are blocked)
 - You can SSH into the VM
 
 ### 1. Transfer the Bundle to the VM
