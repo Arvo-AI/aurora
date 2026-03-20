@@ -9,7 +9,7 @@ Deploy Aurora on a single VM using Docker Compose.
 **Choose your deployment path:**
 
 - [Standard Deployment](#standard-deployment) — the VM has unrestricted internet access
-- [Secure Deployment (Air-Tight)](#secure-deployment-airtight) — the VM has restricted or no outbound internet (enterprise, government, private infrastructure)
+- [Secure Deployment (Air-Tight)](#secure-deployment-air-tight) — the VM has restricted or no outbound internet (enterprise, government, private infrastructure)
 
 ---
 
