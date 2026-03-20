@@ -6,6 +6,7 @@ import { netdataService, NetdataStatus } from "@/lib/services/netdata";
 import { NetdataConnectionStep } from "@/components/netdata/NetdataConnectionStep";
 import { NetdataWebhookStep } from "@/components/netdata/NetdataWebhookStep";
 import { Button } from "@/components/ui/button";
+import ConnectorAuthGuard from "@/components/connectors/ConnectorAuthGuard";
 import { copyToClipboard } from "@/lib/utils";
 
 export default function NetdataAuthPage() {
@@ -182,22 +183,25 @@ export default function NetdataAuthPage() {
   // Show loading while checking initial status
   if (isInitialLoading) {
     return (
-      <div className="container mx-auto py-8 px-4 max-w-3xl">
-        <div className="mb-6">
-          <h1 className="text-3xl font-bold">Netdata Integration</h1>
-          <p className="text-muted-foreground mt-1">
-            Connect Netdata Cloud and receive alerts in Aurora
-          </p>
+      <ConnectorAuthGuard connectorName="Netdata">
+        <div className="container mx-auto py-8 px-4 max-w-3xl">
+          <div className="mb-6">
+            <h1 className="text-3xl font-bold">Netdata Integration</h1>
+            <p className="text-muted-foreground mt-1">
+              Connect Netdata Cloud and receive alerts in Aurora
+            </p>
+          </div>
+          <div className="flex items-center justify-center py-12">
+            <p className="text-muted-foreground">Loading...</p>
+          </div>
         </div>
-        <div className="flex items-center justify-center py-12">
-          <p className="text-muted-foreground">Loading...</p>
-        </div>
-      </div>
+      </ConnectorAuthGuard>
     );
   }
 
   return (
-    <div className="container mx-auto py-8 px-4 max-w-3xl">
+    <ConnectorAuthGuard connectorName="Netdata">
+      <div className="container mx-auto py-8 px-4 max-w-3xl">
       <div className="mb-6">
         <h1 className="text-3xl font-bold">Netdata Integration</h1>
         <p className="text-muted-foreground mt-1">
@@ -218,5 +222,6 @@ export default function NetdataAuthPage() {
         renderWebhookContent()
       )}
     </div>
+    </ConnectorAuthGuard>
   );
 }

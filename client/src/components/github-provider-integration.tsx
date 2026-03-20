@@ -77,7 +77,7 @@ export class GitHubIntegrationService {
     try {
       const response = await fetch(`${BACKEND_URL}/github/login`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { ...this.getAuthHeaders(userId), 'Content-Type': 'application/json' },
         body: JSON.stringify({ userId }),
       });
 

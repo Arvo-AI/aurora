@@ -13,14 +13,20 @@ export async function GET(request: NextRequest) {
 
     const userId = session.userId
 
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      'X-User-ID': userId,
+    }
+
+    if (session.orgId) {
+      headers['X-Org-ID'] = session.orgId
+    }
+
     const backendResp = await fetch(
       `${API_BASE_URL}/user_tokens?user_id=${userId}`,
       {
         method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-User-ID': userId,
-        },
+        headers,
         credentials: 'include',
       }
     )

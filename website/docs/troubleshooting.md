@@ -207,8 +207,9 @@ docker logs aurora-frontend
 ### Authentication Errors
 
 1. Verify `AUTH_SECRET` is set in `.env`
-2. Check `NEXTAUTH_URL` matches your URL
-3. Restart frontend:
+2. Ensure `FRONTEND_URL` is correct — Auth.js uses it as `AUTH_URL` to validate requests
+3. If you see `UntrustedHost` errors in frontend logs, check that `FRONTEND_URL` matches the URL you're accessing (e.g. `http://localhost:3000`)
+4. Restart frontend:
 ```bash
 docker compose restart frontend
 ```

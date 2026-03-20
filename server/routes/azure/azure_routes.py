@@ -3,20 +3,21 @@ from flask import Blueprint, request, jsonify, Response
 import flask
 from azure.identity import ClientSecretCredential
 from utils.web.cors_utils import create_cors_response
-from utils.auth.stateless_auth import get_user_id_from_request
+from utils.auth.rbac_decorators import require_permission
 from connectors.azure_connector.auth import azure_login, azure_callback
 from connectors.azure_connector.k8s_client import (
     get_sp_object_id, get_aks_clusters, extract_resource_group,
 )
 from utils.logging.secure_logging import mask_credential_value
-from utils.auth.token_management import get_token_data, store_tokens_in_db  # Using same util for DB storage
+from utils.auth.token_management import get_token_data
 import json
 
 azure_bp = Blueprint("azure_bp", __name__)
 
 # ---- Azure Routes ------------------------------------------------------#
 @azure_bp.route("/azure/login", methods=["POST", "GET", "OPTIONS"])
-def azure_login_route():
+@require_permission("connectors", "write")
+def azure_login_route(user_id):
     if flask.request.method == 'OPTIONS':
         return create_cors_response()
     return azure_login()
@@ -76,14 +77,11 @@ def azure_callback_route():
 
 
 @azure_bp.route("/azure/fetch_data", methods=["GET", "POST", "OPTIONS"])
-def fetch_data():
+@require_permission("connectors", "read")
+def fetch_data(user_id):
     if flask.request.method == 'OPTIONS':
         return create_cors_response()
     try:
-        user_id = get_user_id_from_request()
-        if not user_id:
-            return jsonify({"error": "Missing user_id"}), 400
-
         from utils.auth.stateless_auth import get_credentials_from_db
         credentials = get_credentials_from_db(user_id, "azure")
         if credentials:
@@ -118,13 +116,11 @@ def fetch_data():
 
 
 @azure_bp.route("/azure/clusters", methods=["GET", "OPTIONS"])
-def azure_clusters():
+@require_permission("connectors", "read")
+def azure_clusters(user_id):
     if flask.request.method == 'OPTIONS':
         return create_cors_response()
     try:
-        user_id = get_user_id_from_request()
-        if not user_id:
-            return jsonify({"error": "Missing user_id"}), 400
         from utils.auth.stateless_auth import get_credentials_from_db
         credentials = get_credentials_from_db(user_id, "azure")
         if not credentials:
@@ -152,15 +148,15 @@ def azure_clusters():
 
 
 @azure_bp.route("/api/azure-subscriptions", methods=["GET", "POST", "OPTIONS"])
-def azure_subscriptions():
+@require_permission("connectors", "read")
+def azure_subscriptions(user_id):
     if request.method == "OPTIONS":
         return create_cors_response()
     try:
         if request.method == "GET":
-            user_id = get_user_id_from_request()
-            if not user_id:
-                return jsonify({"error": "Missing user_id"}), 400
-            token_data = get_token_data(user_id, "azure")
+            from utils.auth.stateless_auth import get_org_id_from_request
+            org_id = get_org_id_from_request()
+            token_data = get_token_data(user_id, "azure", org_id=org_id)
             if not token_data:
                 logging.warning(f"[AZURE API] No Azure token data found for user {user_id}")
                 return jsonify({"error": "No Azure credentials found. Please authenticate with Azure."}), 401

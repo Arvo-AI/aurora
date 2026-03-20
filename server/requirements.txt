@@ -33,7 +33,7 @@ langchain_community==0.3.31
 langchain_core==1.2.11
 langchain_openai==1.1.7
 langchain-anthropic>=0.3.0
-google-genai==1.58.0 # Pin below 1.67 — extra_items TypedDict requires Python 3.13+
+google-genai==1.58.0  # Pin to avoid interactions module using extra_items TypedDict (requires Python 3.13+)
 langchain-google-genai>=4.0.0,<5.0.0
 langchain-ollama>=0.3.0,<1.0.0
 langgraph==1.0.6
@@ -56,7 +56,7 @@ python-dotenv==1.0.1
 requests==2.32.5
 rsa==4.9
 six==1.17.0
-typing_extensions==4.12.2
+typing_extensions>=4.12.2
 urllib3==2.6.3
 Werkzeug==3.1.6
 weaviate_client>=4.15.0  # Updated for httpx>=0.28 compatibility
@@ -88,6 +88,11 @@ paramiko>=3.4.0
 
 # Memgraph graph database driver (Bolt protocol, pure Python)
 neo4j>=5.0
+
+# RBAC (Casbin with PostgreSQL storage)
+casbin>=1.36.0,<2.0.0
+casbin-sqlalchemy-adapter>=1.0.0,<2.0.0
+sqlalchemy>=2.0.0
 
 # SharePoint connector (document parsing)
 python-docx>=1.1.0

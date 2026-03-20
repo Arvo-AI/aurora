@@ -4,9 +4,20 @@ sidebar_position: 2
 
 # VM Deployment
 
-Deploy Aurora on a single VM using Docker Compose. This guide covers every step from provisioning the VM to accessing Aurora in your browser, on any cloud provider.
+Deploy Aurora on a single VM using Docker Compose.
 
-## 1. Provision a VM
+**Choose your deployment path:**
+
+- [Standard Deployment](#standard-deployment) — the VM has unrestricted internet access
+- [Secure Deployment (Air-Tight)](#secure-deployment-air-tight) — the VM has restricted or no outbound internet (enterprise, government, private infrastructure)
+
+---
+
+## Standard Deployment
+
+This path covers every step from provisioning the VM to accessing Aurora in your browser, on any cloud provider with unrestricted internet.
+
+### 1. Provision a VM
 
 Create a VM on your cloud provider of choice (AWS EC2, GCP Compute Engine, Azure VM, DigitalOcean Droplet, Hetzner, etc.).
 
@@ -23,7 +34,7 @@ Aurora's Docker images, containers, and volumes require significant space.
 
 After creation, note the VM's **public/external IP address** — you'll need it later.
 
-## 2. SSH Into the VM
+### 2. SSH Into the VM
 
 ```bash
 ssh -i /path/to/your-key.pem YOUR_USERNAME@YOUR_VM_IP
@@ -31,11 +42,11 @@ ssh -i /path/to/your-key.pem YOUR_USERNAME@YOUR_VM_IP
 
 Most cloud providers also offer a browser-based SSH console in their web UI.
 
-## 3. Install Dependencies
+### 3. Install Dependencies
 
 Run these commands **one at a time** (not as a single pasted block — `newgrp` opens a sub-shell that prevents subsequent commands from running).
 
-### Ubuntu / Debian
+#### Ubuntu / Debian
 
 ```bash
 # Update packages
@@ -57,7 +68,7 @@ newgrp docker
 docker compose version
 ```
 
-### CentOS / RHEL / Amazon Linux
+#### CentOS / RHEL / Amazon Linux
 
 ```bash
 sudo yum update -y
@@ -73,11 +84,15 @@ docker compose version
 
 If `docker` gives "permission denied" after `newgrp`, log out and back in (`exit` then SSH again).
 
+:::tip Restricted Environments
+If `curl` is blocked or the Docker convenience script fails, see **[Installing Docker](./install-docker)** for manual installation instructions covering Debian, Ubuntu, CentOS/RHEL, Amazon Linux on both amd64 and arm64, including fully airgapped environments.
+:::
+
 :::caution Run Commands Individually
 `newgrp docker` opens a new shell session. If you paste all commands at once, everything after `newgrp` will not execute in the current session. Run it separately, then continue with the remaining commands.
 :::
 
-## 4. Clone and Initialize
+### 4. Clone and Initialize
 
 ```bash
 git clone https://github.com/arvo-ai/aurora.git
@@ -87,13 +102,13 @@ make init
 
 `make init` creates `.env` from `.env.example` and generates random values for `POSTGRES_PASSWORD`, `FLASK_SECRET_KEY`, and `AUTH_SECRET`.
 
-## 5. Configure .env
+### 5. Configure .env
 
 ```bash
 nano .env
 ```
 
-### Required Changes
+#### Required Changes
 
 **LLM API Key** — set at least one:
 
@@ -147,7 +162,7 @@ Save and exit (`Ctrl+X`, `Y`, `Enter` in nano).
 Most cloud providers assign ephemeral public IPs by default — they change if you stop and restart the VM. Reserve a static/elastic IP through your provider's console so you only need to configure the URLs once.
 :::
 
-## 6. Build and Start
+### 6. Build and Start
 
 Choose one:
 
@@ -163,7 +178,7 @@ make prod-prebuilt
 ```
 Pulls prebuilt images from GHCR instead of building locally. Faster to start, but uses the last published release.
 
-## 7. Get and Set the Vault Token
+### 7. Get and Set the Vault Token
 
 After the stack is running, the `vault-init` sidecar initializes Vault and generates a root token. Extract it and write it into `.env`:
 
@@ -182,7 +197,7 @@ If the command fails (container not ready yet), wait and retry. Check vault-init
 docker logs aurora-vault-init
 ```
 
-## 8. Restart to Apply Vault Token
+### 8. Restart to Apply Vault Token
 
 ```bash
 # Use whichever command you chose in step 6
@@ -190,7 +205,7 @@ make down && make prod-local      # if you built from source
 make down && make prod-prebuilt   # if you pulled prebuilt images
 ```
 
-## 9. Open Firewall Ports
+### 9. Open Firewall Ports
 
 Aurora needs three ports accessible from outside the VM:
 
@@ -229,7 +244,7 @@ sudo firewall-cmd --permanent --add-port=3000/tcp --add-port=5080/tcp --add-port
 sudo firewall-cmd --reload
 ```
 
-## 10. Access Aurora
+### 10. Access Aurora
 
 Open in your browser:
 
@@ -239,7 +254,7 @@ http://YOUR_VM_IP:3000
 
 You must include the `:3000` port — plain `http://YOUR_VM_IP/` (port 80) will not work.
 
-## Verify Health
+### Verify Health
 
 ```bash
 # From inside the VM
@@ -249,7 +264,7 @@ curl http://localhost:5080/health/liveness
 docker compose -f docker-compose.prod-local.yml ps
 ```
 
-## Ongoing Operations
+### Ongoing Operations
 
 ```bash
 # View logs
@@ -268,13 +283,10 @@ make prod-local-clean
 make prod-local-nuke
 ```
 
-## Deploying Code Updates
+### Deploying Code Updates
 
 ```bash
-# Pull latest code
 git pull
-
-# Rebuild and restart
 make down && make prod-local
 ```
 
@@ -283,6 +295,171 @@ The `NEXT_PUBLIC_*` environment variables are injected at container startup, not
 ```bash
 docker compose -f docker-compose.prod-local.yml up -d frontend
 ```
+
+---
+
+## Secure Deployment (Air-Tight)
+
+Use this path when the target VM has restricted or no outbound internet access (enterprise, government, private infrastructure). All Docker images are pre-built and bundled into a single tarball on a machine with internet access, then transferred to the VM. Nothing is fetched from the internet during deployment.
+
+**Prerequisites:**
+
+- You have received the airtight bundle (`aurora-airtight-<version>-<arch>.tar.gz`) and its checksum file (`aurora-airtight-<version>-<arch>.tar.gz.sha256`)
+- The target VM meets the [hardware requirements](#1-provision-a-vm) (4+ CPU, 8+ GB RAM, 60 GB SSD)
+- Docker and Docker Compose are installed on the VM (see [Installing Docker](./install-docker) for all OS/architecture combinations, including environments where `curl` and `wget` are blocked)
+- You can SSH into the VM
+
+### 1. Transfer the Bundle to the VM
+
+Move the `.tar.gz` and `.sha256` files to the VM using whatever transfer method your organization permits:
+
+```bash
+# SCP
+scp aurora-airtight-*.tar.gz aurora-airtight-*.sha256 user@VM_IP:~/
+
+# GCS bucket (GCP)
+gcloud storage cp aurora-airtight-*.tar.gz aurora-airtight-*.sha256 gs://YOUR_BUCKET/
+# Then on the VM:
+gcloud storage cp gs://YOUR_BUCKET/aurora-airtight-* ~/
+
+# Azure Blob / AWS S3 / internal file server — use your org's standard method
+```
+
+### 2. Verify the Bundle Integrity
+
+```bash
+cd ~
+sha256sum -c aurora-airtight-*.sha256
+```
+
+You should see `OK`. If the check fails, the file was corrupted during transfer — re-transfer it.
+
+### 3. Clone the Repository
+
+The repo contains configuration files (`docker-compose.airtight.yml`, `Makefile`, `.env.example`) needed to run the stack. No images are pulled during this step.
+
+```bash
+git clone https://github.com/arvo-ai/aurora.git
+cd aurora
+make init
+```
+
+### 4. Configure .env
+
+```bash
+nano .env
+```
+
+**LLM API Key** — set at least one:
+
+```bash
+OPENROUTER_API_KEY=sk-or-v1-...     # Recommended — one key, many models
+ANTHROPIC_API_KEY=sk-ant-...
+GOOGLE_AI_API_KEY=AIza...
+OPENAI_API_KEY=sk-...
+```
+
+**LLM Provider Mode** — must match whichever key you set (see [LLM Providers](/docs/integrations/llm-providers) for all options):
+
+```bash
+LLM_PROVIDER_MODE=openrouter   # for OPENROUTER_API_KEY (default)
+LLM_PROVIDER_MODE=direct       # for direct provider keys (Anthropic, OpenAI, Google, etc.)
+```
+
+**VM URLs** — replace `YOUR_VM_IP` with the VM's public IP (or internal/VPN IP):
+
+```bash
+FRONTEND_URL=http://YOUR_VM_IP:3000
+NEXT_PUBLIC_BACKEND_URL=http://YOUR_VM_IP:5080
+NEXT_PUBLIC_WEBSOCKET_URL=ws://YOUR_VM_IP:5006
+SEARXNG_URL=http://YOUR_VM_IP:8082
+```
+
+Leave `BACKEND_URL=http://aurora-server:5080` as-is — that's for internal container-to-container communication.
+
+:::tip Private/Internal Network
+If accessing via VPN, private subnet, or reverse proxy, use that IP/hostname instead of the public IP (e.g., `10.8.0.1` for a WireGuard tunnel, `192.168.x.x` for a private subnet, `https://aurora.internal` for a reverse proxy). `BACKEND_URL` always stays as the internal Docker name regardless.
+:::
+
+Save and exit (`Ctrl+X`, `Y`, `Enter` in nano).
+
+### 5. Load Images and Start
+
+```bash
+make prod-airtight AIRTIGHT_BUNDLE=~/aurora-airtight-<version>-<arch>.tar.gz
+```
+
+This loads every Docker image from the tarball into the local Docker daemon and starts the full Aurora stack. No outbound network calls are made. First run takes a few minutes while images are loaded.
+
+On subsequent restarts (images already loaded):
+
+```bash
+make prod-airtight
+```
+
+### 6. Get and Set the Vault Token
+
+```bash
+# Wait ~30 seconds for vault-init to finish, then:
+VAULT_TOKEN=$(docker exec aurora-vault cat /vault/init/keys.json | jq -r '.root_token') \
+  && sed -i "s|^VAULT_TOKEN=.*|VAULT_TOKEN=$VAULT_TOKEN|" .env
+
+grep VAULT_TOKEN .env
+```
+
+### 7. Restart to Apply Vault Token
+
+```bash
+make down && make prod-airtight
+```
+
+### 8. Open Firewall Ports
+
+Same as the [standard deployment firewall step](#9-open-firewall-ports) — allow inbound TCP on ports 3000, 5080, and 5006.
+
+### 9. Access Aurora
+
+```
+http://YOUR_VM_IP:3000
+```
+
+### Deploying Updates (Air-Tight)
+
+Each new Aurora release requires a fresh bundle. On the connected machine:
+
+```bash
+git pull && make package-airtight
+```
+
+Transfer the new tarball and checksum to the VM, then:
+
+```bash
+make down
+make prod-airtight AIRTIGHT_BUNDLE=~/aurora-airtight-<version>-<arch>.tar.gz
+```
+
+The `.env` file stays on the VM and is never part of the bundle.
+
+### Creating the Air-Tight Bundle
+
+This section is for the person building the bundle on a machine with internet access.
+
+```bash
+git clone https://github.com/arvo-ai/aurora.git && cd aurora
+make package-airtight
+```
+
+This builds all Aurora images, pulls all third-party images, and saves everything into `aurora-airtight-<version>-<arch>.tar.gz` with a SHA-256 checksum. The default target architecture is `linux/amd64`.
+
+To target ARM servers:
+
+```bash
+PLATFORM=linux/arm64 make package-airtight
+```
+
+If building on Apple Silicon for an x86 server, the default `linux/amd64` cross-compiles automatically — no extra flags needed.
+
+---
 
 ## Troubleshooting
 

@@ -49,6 +49,7 @@ class ConnectorRegistry {
       alertsLabel: "View Events",
       overviewPath: "/datadog/overview",
       overviewLabel: "Overview",
+      useCustomConnection: true,
     });
 
     this.register({

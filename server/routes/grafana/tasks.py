@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from celery_config import celery_app
+from chat.background.rca_prompt_builder import build_grafana_rca_prompt
 from services.correlation.alert_correlator import AlertCorrelator
 from services.correlation import handle_correlated_alert
 
@@ -40,68 +41,6 @@ def _should_trigger_background_chat(user_id: str, payload: Dict[str, Any]) -> bo
         True if a background chat should be triggered
     """
     return not _is_resolved_alert(payload)
-
-
-def _build_rca_prompt_from_alert(
-    payload: Dict[str, Any], user_id: Optional[str] = None
-) -> str:
-    """Build an RCA analysis prompt from a Grafana alert payload.
-
-    Args:
-        payload: The Grafana alert payload
-        user_id: Optional user ID for Aurora Learn context injection
-
-    Returns:
-        A prompt string for the background chat agent
-    """
-    title = payload.get("title") or payload.get("ruleName") or "Unknown Alert"
-    state = payload.get("state") or payload.get("status") or "unknown"
-    message = (
-        payload.get("message")
-        or payload.get("annotations", {}).get("description")
-        or ""
-    )
-
-    # Extract labels for context
-    labels = payload.get("commonLabels", {}) or payload.get("labels", {})
-    labels_str = ", ".join(f"{k}={v}" for k, v in labels.items()) if labels else "none"
-
-    # Extract any values/metrics
-    values = payload.get("values") or payload.get("evalMatches", [])
-    values_str = ""
-    if values:
-        if isinstance(values, list):
-            values_str = "\n".join(f"  - {v}" for v in values[:5])  # Limit to 5
-        elif isinstance(values, dict):
-            values_str = "\n".join(f"  - {k}: {v}" for k, v in list(values.items())[:5])
-
-    # Build the prompt parts separately to avoid f-string backslash issues
-    prompt_parts = [
-        "A Grafana alert has been triggered and requires Root Cause Analysis.",
-        "",
-        "ALERT DETAILS:",
-        f"- Title: {title}",
-        f"- State: {state}",
-        f"- Labels: {labels_str}",
-    ]
-
-    if message:
-        prompt_parts.append(f"- Message: {message}")
-
-    if values_str:
-        prompt_parts.append("- Values/Metrics:")
-        prompt_parts.append(values_str)
-
-    # Add Aurora Learn context if available
-    try:
-        from chat.background.rca_prompt_builder import inject_aurora_learn_context
-
-        service = labels.get("service") or labels.get("job") or ""
-        inject_aurora_learn_context(prompt_parts, user_id, title, service, "grafana")
-    except Exception as e:
-        logger.warning(f"[AURORA LEARN] Failed to get context: {e}")
-
-    return "\n".join(prompt_parts)
 
 
 def _extract_severity(payload: Dict[str, Any]) -> str:
@@ -209,6 +148,12 @@ def process_grafana_alert(
                 with db_pool.get_admin_connection() as conn:
                     with conn.cursor() as cursor:
                         received_at = datetime.now(timezone.utc)
+
+                        from utils.auth.stateless_auth import set_rls_context
+                        org_id = set_rls_context(cursor, conn, user_id, log_prefix="[GRAFANA][ALERT]")
+                        if not org_id:
+                            return
+
                         # Extract relevant fields from Grafana payload
                         alert_uid = payload.get("ruleUID") or payload.get("ruleUid")
                         if not alert_uid and payload.get("alerts"):
@@ -230,12 +175,13 @@ def process_grafana_alert(
                         cursor.execute(
                             """
                             INSERT INTO grafana_alerts 
-                            (user_id, alert_uid, alert_title, alert_state, rule_name, rule_url, dashboard_url, panel_url, payload, received_at)
-                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            (user_id, org_id, alert_uid, alert_title, alert_state, rule_name, rule_url, dashboard_url, panel_url, payload, received_at)
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                             RETURNING id
                             """,
                             (
                                 user_id,
+                                org_id,
                                 alert_uid,
                                 alert_title,
                                 alert_state,
@@ -275,7 +221,6 @@ def process_grafana_alert(
                                 original_incident_id = None
 
                                 if fingerprint:
-                                    # Check if fingerprint matches an incident directly (ordered by most recent if we need to reinvestigate same alert as we did before)
                                     cursor.execute(
                                         """SELECT id FROM incidents
                                            WHERE user_id = %s AND source_type = 'grafana'

@@ -8,6 +8,41 @@ from utils.db.db_utils import connect_to_db_as_user
 # Configure logging
 logger = logging.getLogger(__name__)
 
+
+def resolve_org_id(user_id: str) -> Optional[str]:
+    """Resolve org_id for a user, working both inside and outside Flask request context.
+
+    Priority:
+      1. Flask request header X-Org-ID (if in request context)
+      2. flask.g cache (if in request context)
+      3. DB lookup from users table (always works)
+
+    Safe to call from Celery tasks, background threads, etc.
+    """
+    # Try request-context path first (fast, cached)
+    try:
+        org_id = get_org_id_from_request()
+        if org_id:
+            return org_id
+    except Exception:
+        logger.debug("resolve_org_id: no request context available")
+
+    # Fallback: direct DB lookup (works outside request context)
+    if not user_id:
+        return None
+    try:
+        from utils.db.connection_pool import db_pool
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT org_id FROM users WHERE id = %s", (user_id,))
+                row = cursor.fetchone()
+                if row and row[0]:
+                    return row[0]
+    except Exception as e:
+        logger.debug("resolve_org_id: DB lookup failed for user: %s", e)
+
+    return None
+
 # ---------------------------------------------------------------------------
 # AWS credential cache (per-process, 55-minute TTL)
 # ---------------------------------------------------------------------------
@@ -48,6 +83,25 @@ def is_valid_user_id(user_id: str) -> bool:
     return bool(user_id and isinstance(user_id, str))
 
 
+def validate_user_exists(user_id: str) -> bool:
+    """Check that a user_id actually exists in the database.
+
+    Use this for trust boundaries where user_id comes from an untrusted
+    source (e.g. WebSocket messages) rather than the auth middleware.
+    """
+    if not user_id or not isinstance(user_id, str) or len(user_id) > 255:
+        return False
+    try:
+        from utils.db.connection_pool import db_pool
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT 1 FROM users WHERE id = %s", (user_id,))
+                return cursor.fetchone() is not None
+    except Exception as e:
+        logger.warning("Failed to validate user_id %s: %s", user_id, e)
+        return False
+
+
 def get_user_id_from_request() -> Optional[str]:
     """Extract user ID from X-User-ID header (set by Auth.js middleware).
     
@@ -63,6 +117,49 @@ def get_user_id_from_request() -> Optional[str]:
     
     logger.debug("No user_id found in request - user not authenticated")
     return None
+
+
+def get_org_id_from_request() -> Optional[str]:
+    """Extract org ID from X-Org-ID header (set by Auth.js middleware).
+    
+    Trusts the header value since it's set server-side by the Next.js
+    middleware from the JWT session (same trust boundary as X-User-ID).
+    Falls back to looking up the user's org from the database if the
+    header is not present. Result is cached on flask.g for the duration
+    of the request.
+    
+    Returns None if no org context is available.
+    """
+    from flask import g
+    cached = getattr(g, '_org_id_resolved', None)
+    if cached is not None:
+        return cached if cached != '' else None
+
+    org_id = request.headers.get('X-Org-ID')
+    if org_id:
+        g._org_id_resolved = org_id
+        return org_id
+
+    user_id = request.headers.get('X-User-ID')
+    if user_id:
+        try:
+            from utils.db.connection_pool import db_pool
+            with db_pool.get_admin_connection() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        "SELECT org_id FROM users WHERE id = %s",
+                        (user_id,)
+                    )
+                    row = cursor.fetchone()
+                    if row and row[0]:
+                        g._org_id_resolved = row[0]
+                        return row[0]
+        except Exception as e:
+            logger.warning(f"Error looking up org_id for user {user_id}: {e}")
+
+    g._org_id_resolved = ''
+    return None
+
 
 def get_credentials_from_db(user_id: str, provider: str) -> Optional[Dict[str, Any]]:
     """
@@ -82,13 +179,17 @@ def get_credentials_from_db(user_id: str, provider: str) -> Optional[Dict[str, A
                 cur.execute("SET myapp.current_user_id = %s;", (user_id,))
                 conn.commit()
 
+                org_id = resolve_org_id(user_id)
+
                 cur.execute(
                     """
                     SELECT role_arn, account_id FROM user_connections
-                    WHERE user_id = %s AND provider = 'aws' AND status = 'active'
-                    ORDER BY last_verified_at DESC NULLS LAST LIMIT 1;
+                    WHERE (user_id = %s OR org_id = %s) AND provider = 'aws' AND status = 'active'
+                    ORDER BY CASE WHEN user_id = %s THEN 0 ELSE 1 END,
+                             last_verified_at DESC NULLS LAST
+                    LIMIT 1;
                     """,
-                    (user_id,),
+                    (user_id, org_id, user_id),
                 )
                 row = cur.fetchone()
             finally:
@@ -138,9 +239,14 @@ def get_credentials_from_db(user_id: str, provider: str) -> Optional[Dict[str, A
                     cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
                     conn.commit()
                     
+                    org_id = resolve_org_id(user_id)
                     cursor.execute(
-                        "SELECT subscription_id, subscription_name FROM user_tokens WHERE user_id = %s AND provider = %s ORDER BY timestamp DESC LIMIT 1",
-                        (user_id, provider)
+                        """SELECT subscription_id, subscription_name
+                           FROM user_tokens
+                           WHERE (user_id = %s OR org_id = %s) AND provider = %s
+                           ORDER BY CASE WHEN user_id = %s THEN 0 ELSE 1 END, timestamp DESC
+                           LIMIT 1""",
+                        (user_id, org_id, provider, user_id)
                     )
                     result = cursor.fetchone()
                     
@@ -239,18 +345,34 @@ def get_deployment_task(user_id: str, task_id: str = None) -> Optional[Dict]:
 def store_user_preference(user_id: str, key: str, value: Any):
     """Store user preference in database."""
     try:
+        org_id = None
+        try:
+            org_id = get_org_id_from_request()
+        except Exception:
+            logger.debug("No request context for org_id in store_user_preference")
+
         conn = connect_to_db_as_user()
         cursor = conn.cursor()
         cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
         conn.commit()
         
-        cursor.execute("""
-            INSERT INTO user_preferences (user_id, preference_key, preference_value)
-            VALUES (%s, %s, %s)
-            ON CONFLICT (user_id, preference_key) DO UPDATE SET
-                preference_value = EXCLUDED.preference_value,
-                updated_at = CURRENT_TIMESTAMP
-        """, (user_id, key, json.dumps(value)))
+        if org_id:
+            cursor.execute("""
+                INSERT INTO user_preferences (user_id, org_id, preference_key, preference_value)
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT (user_id, org_id, preference_key) DO UPDATE SET
+                    preference_value = EXCLUDED.preference_value,
+                    updated_at = CURRENT_TIMESTAMP
+            """, (user_id, org_id, key, json.dumps(value)))
+        else:
+            cursor.execute("""
+                DELETE FROM user_preferences
+                WHERE user_id = %s AND org_id IS NULL AND preference_key = %s
+            """, (user_id, key))
+            cursor.execute("""
+                INSERT INTO user_preferences (user_id, org_id, preference_key, preference_value)
+                VALUES (%s, NULL, %s, %s)
+            """, (user_id, key, json.dumps(value)))
         conn.commit()
         logger.debug(f"Stored preference {key} for user {user_id}")
     except Exception as e:
@@ -303,6 +425,7 @@ def get_connected_providers(user_id: str) -> List[str]:
     
     Checks both user_tokens (OAuth/secret-based) and user_connections (role-based)
     to determine which providers are actually connected.
+    Includes org-shared connections so all org members see the same providers.
     
     Args:
         user_id: The user ID to check
@@ -313,6 +436,7 @@ def get_connected_providers(user_id: str) -> List[str]:
     if not user_id:
         return []
     
+    org_id = resolve_org_id(user_id)
     connected_providers = []
     
     try:
@@ -326,9 +450,10 @@ def get_connected_providers(user_id: str) -> List[str]:
             """
             SELECT DISTINCT provider
             FROM user_tokens 
-            WHERE user_id = %s AND secret_ref IS NOT NULL AND is_active = TRUE
+            WHERE (user_id = %s OR org_id = %s)
+              AND secret_ref IS NOT NULL AND is_active = TRUE
             """,
-            (user_id,)
+            (user_id, org_id)
         )
         token_providers = [row[0] for row in cursor.fetchall()]
         connected_providers.extend(token_providers)
@@ -338,9 +463,9 @@ def get_connected_providers(user_id: str) -> List[str]:
             """
             SELECT DISTINCT provider
             FROM user_connections
-            WHERE user_id = %s AND status = 'active'
+            WHERE (user_id = %s OR org_id = %s) AND status = 'active'
             """,
-            (user_id,)
+            (user_id, org_id)
         )
         connection_providers = [row[0] for row in cursor.fetchall()]
         connected_providers.extend(connection_providers)
@@ -393,9 +518,66 @@ def get_user_email(user_id: str) -> Optional[str]:
 
 def create_cors_response():
     """Create a CORS response for OPTIONS requests."""
-    from flask import make_response
+    from flask import make_response, request as flask_request
+    import os
     response = make_response()
-    response.headers['Access-Control-Allow-Origin'] = '*'
+    frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
+    origin = flask_request.headers.get("Origin", frontend_url)
+    allowed_origins = {frontend_url, "http://localhost:3000"}
+    if origin in allowed_origins:
+        response.headers['Access-Control-Allow-Origin'] = origin
+    else:
+        response.headers['Access-Control-Allow-Origin'] = frontend_url
     response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
-    response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-User-ID'
-    return response 
+    response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-User-ID, X-Org-ID'
+    response.headers['Access-Control-Allow-Credentials'] = 'true'
+    return response
+
+
+import time as _time
+
+# Cache for user_id -> org_id mapping used by background tasks (with TTL)
+_user_org_cache: dict[str, tuple[str | None, float]] = {}
+_USER_ORG_CACHE_TTL = 300  # 5 minutes
+
+
+def get_org_id_for_user(user_id: str) -> Optional[str]:
+    """Look up org_id for a user by querying the DB. Cached in-memory for task batches.
+
+    Use this in Celery tasks where there is no Flask request context.
+    """
+    entry = _user_org_cache.get(user_id)
+    if entry is not None:
+        cached_org_id, cached_at = entry
+        if _time.monotonic() - cached_at < _USER_ORG_CACHE_TTL:
+            return cached_org_id
+
+    try:
+        from utils.db.connection_pool import db_pool
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT org_id FROM users WHERE id = %s", (user_id,))
+                row = cursor.fetchone()
+                org_id = row[0] if row and row[0] else None
+                _user_org_cache[user_id] = (org_id, _time.monotonic())
+                return org_id
+    except Exception as e:
+        logger.warning("Error looking up org_id for user %s: %s", user_id, e)
+        return None
+
+
+def set_rls_context(cursor, conn, user_id: str, *, log_prefix: str = "") -> Optional[str]:
+    """Resolve org_id and configure RLS session variables on a DB connection.
+
+    Returns the org_id on success, or None (and logs an error) when the org
+    cannot be resolved — callers should abort persistence in that case.
+    """
+    org_id = get_org_id_for_user(user_id)
+    if not org_id:
+        logger.error("%s Missing org_id for user %s; cannot set RLS context", log_prefix, user_id)
+        return None
+
+    cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
+    cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
+    conn.commit()
+    return org_id

@@ -305,7 +305,7 @@ services:
       retries: 3
 
   vault-init:
-    image: busybox:latest
+    image: busybox:1.37.0
     container_name: aurora-vault-init
     restart: "no"
     volumes:
@@ -447,6 +447,7 @@ services:
 
       # Auth.js configuration (required)
       AUTH_SECRET: ${AUTH_SECRET}
+      AUTH_URL: ${FRONTEND_URL}
     ports:
       - "3000:3000"
     volumes:
@@ -539,7 +540,7 @@ services:
       start_period: 15s
 
   seaweedfs-init:
-    image: amazon/aws-cli:latest
+    image: amazon/aws-cli:2.34.6
     container_name: aurora-seaweedfs-init
     restart: "no"
     entrypoint: /bin/sh
@@ -563,7 +564,7 @@ services:
   # ═══════════════════════════════════════════════════════════════════════════
 
   memgraph:
-    image: memgraph/memgraph-mage:latest
+    image: memgraph/memgraph-mage:3.8.1
     container_name: aurora-memgraph
     ports:
       - "7687:7687"
@@ -582,10 +583,11 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 120s
     restart: unless-stopped
 
   memgraph-lab:
-    image: memgraph/lab:latest
+    image: memgraph/lab:3.8.0
     container_name: aurora-memgraph-lab
     ports:
       - "3001:3000"

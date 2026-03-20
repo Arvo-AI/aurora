@@ -9,6 +9,7 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Loader2, ExternalLink, Copy, CheckCircle2 } from "lucide-react";
 import { getUserFriendlyError, copyToClipboard } from "@/lib/utils";
+import ConnectorAuthGuard from "@/components/connectors/ConnectorAuthGuard";
 
 function persistStatus(connected: boolean) {
   if (connected) {
@@ -107,19 +108,22 @@ export default function BigPandaAuthPage() {
 
   if (isCheckingStatus) {
     return (
-      <div className="container mx-auto py-8 px-4 max-w-2xl">
-        {pageHeader}
-        <Card>
-          <CardContent className="flex items-center justify-center py-12">
-            <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-          </CardContent>
-        </Card>
-      </div>
+      <ConnectorAuthGuard connectorName="BigPanda">
+        <div className="container mx-auto py-8 px-4 max-w-2xl">
+          {pageHeader}
+          <Card>
+            <CardContent className="flex items-center justify-center py-12">
+              <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+            </CardContent>
+          </Card>
+        </div>
+      </ConnectorAuthGuard>
     );
   }
 
   return (
-    <div className="container mx-auto py-8 px-4 max-w-2xl">
+    <ConnectorAuthGuard connectorName="BigPanda">
+      <div className="container mx-auto py-8 px-4 max-w-2xl">
       {pageHeader}
 
       {!status?.connected ? (
@@ -221,5 +225,6 @@ export default function BigPandaAuthPage() {
         </div>
       )}
     </div>
+    </ConnectorAuthGuard>
   );
 }

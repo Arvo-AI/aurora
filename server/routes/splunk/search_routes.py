@@ -8,8 +8,8 @@ import requests
 from flask import Blueprint, Response, jsonify, request, stream_with_context
 
 from utils.web.cors_utils import create_cors_response
-from utils.auth.stateless_auth import get_user_id_from_request
 from utils.auth.token_management import get_token_data
+from utils.auth.rbac_decorators import require_permission
 
 SPLUNK_TIMEOUT = 30
 SPLUNK_SEARCH_TIMEOUT = 120
@@ -59,15 +59,9 @@ def _splunk_headers(api_token: str) -> Dict[str, str]:
 
 
 @search_bp.route("/search", methods=["POST", "OPTIONS"])
-def search_sync():
+@require_permission("connectors", "read")
+def search_sync(user_id):
     """Execute a synchronous SPL search (oneshot mode)."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
-
     creds = _get_splunk_client_for_user(user_id)
     if not creds:
         return jsonify({"error": "Splunk not connected"}), 400
@@ -153,15 +147,9 @@ def search_sync():
 
 
 @search_bp.route("/search/jobs", methods=["POST", "OPTIONS"])
-def create_search_job():
+@require_permission("connectors", "read")
+def create_search_job(user_id):
     """Create an asynchronous search job."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
-
     creds = _get_splunk_client_for_user(user_id)
     if not creds:
         return jsonify({"error": "Splunk not connected"}), 400
@@ -225,19 +213,13 @@ def create_search_job():
 
 
 @search_bp.route("/search/jobs/<sid>", methods=["GET", "OPTIONS"])
-def get_job_status(sid: str):
+@require_permission("connectors", "read")
+def get_job_status(user_id, sid: str):
     """Get the status of a search job."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
     # Validate SID format
     valid, error = _validate_sid(sid)
     if not valid:
         return jsonify({"error": error}), 400
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
 
     creds = _get_splunk_client_for_user(user_id)
     if not creds:
@@ -284,19 +266,13 @@ def get_job_status(sid: str):
 
 
 @search_bp.route("/search/jobs/<sid>/results", methods=["GET", "OPTIONS"])
-def get_job_results(sid: str):
+@require_permission("connectors", "read")
+def get_job_results(user_id, sid: str):
     """Get the results of a completed search job."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
     # Validate SID format
     valid, error = _validate_sid(sid)
     if not valid:
         return jsonify({"error": error}), 400
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
 
     creds = _get_splunk_client_for_user(user_id)
     if not creds:
@@ -344,19 +320,13 @@ def get_job_results(sid: str):
 
 
 @search_bp.route("/search/jobs/<sid>", methods=["DELETE", "OPTIONS"])
-def cancel_job(sid: str):
+@require_permission("connectors", "write")
+def cancel_job(user_id, sid: str):
     """Cancel a running search job."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
     # Validate SID format
     valid, error = _validate_sid(sid)
     if not valid:
         return jsonify({"error": error}), 400
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
 
     creds = _get_splunk_client_for_user(user_id)
     if not creds:

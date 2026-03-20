@@ -12,6 +12,7 @@ import { useToast } from "@/hooks/use-toast";
 import { copyToClipboard } from "@/lib/utils";
 import { KUBECTL_AGENT } from "@/lib/kubectl-constants";
 import { getEnv } from '@/lib/env';
+import ConnectorAuthGuard from "@/components/connectors/ConnectorAuthGuard";
 
 const backendUrl = getEnv('NEXT_PUBLIC_BACKEND_URL') || '';
 const wsUrl = getEnv('NEXT_PUBLIC_WEBSOCKET_URL') || '';
@@ -182,8 +183,9 @@ export default function KubectlAuthPage() {
   };
 
   return (
-    <div className="min-h-screen bg-black">
-      <div className="container mx-auto py-12 px-4 max-w-4xl">
+    <ConnectorAuthGuard connectorName="Kubectl">
+      <div className="min-h-screen bg-black">
+        <div className="container mx-auto py-12 px-4 max-w-4xl">
         {/* Manage Clusters Button - Top Right */}
         <div className="flex justify-end mb-6">
           <Button
@@ -437,6 +439,7 @@ export default function KubectlAuthPage() {
         </div>
       </div>
     </div>
+    </ConnectorAuthGuard>
   );
 }
 

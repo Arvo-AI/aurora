@@ -30,6 +30,7 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { getEnv } from '@/lib/env';
+import ConnectorAuthGuard from "@/components/connectors/ConnectorAuthGuard";
 import { copyToClipboard } from '@/lib/utils';
 import { useToast } from '@/hooks/use-toast';
 
@@ -658,18 +659,21 @@ export default function AWSOnboardingPage() {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-black flex items-center justify-center">
-        <div className="text-center">
-          <Loader2 className="w-12 h-12 animate-spin mx-auto mb-6 text-blue-400" />
-          <p className="text-slate-300 text-lg">Loading AWS onboarding...</p>
+      <ConnectorAuthGuard connectorName="AWS">
+        <div className="min-h-screen bg-black flex items-center justify-center">
+          <div className="text-center">
+            <Loader2 className="w-12 h-12 animate-spin mx-auto mb-6 text-blue-400" />
+            <p className="text-slate-300 text-lg">Loading AWS onboarding...</p>
+          </div>
         </div>
-      </div>
+      </ConnectorAuthGuard>
     );
   }
 
   if (credentialsConfigured === false) {
     return (
-      <div className="min-h-screen bg-black flex items-center justify-center p-4 sm:p-6">
+      <ConnectorAuthGuard connectorName="AWS">
+        <div className="min-h-screen bg-black flex items-center justify-center p-4 sm:p-6">
         <Card className="w-full max-w-2xl bg-black border-white/10 overflow-hidden">
           <CardHeader className="pb-4">
             <CardTitle className="text-white flex items-center space-x-2 text-lg sm:text-xl">
@@ -781,13 +785,14 @@ make dev`}</pre>
           </CardContent>
         </Card>
       </div>
+      </ConnectorAuthGuard>
     );
   }
 
-  // Show error page if credentials are configured but account ID cannot be retrieved (invalid credentials)
   if (onboardingData && !onboardingData.auroraAccountId && !isConfigured) {
     return (
-      <div className="min-h-screen bg-black flex items-center justify-center p-4 sm:p-6">
+      <ConnectorAuthGuard connectorName="AWS">
+        <div className="min-h-screen bg-black flex items-center justify-center p-4 sm:p-6">
         <Card className="w-full max-w-2xl bg-black border-white/10 overflow-hidden">
           <CardHeader className="pb-4">
             <CardTitle className="text-white flex items-center space-x-2 text-lg sm:text-xl">
@@ -841,13 +846,15 @@ make dev`}</pre>
           </CardContent>
         </Card>
       </div>
+      </ConnectorAuthGuard>
     );
   }
 
   if (error && !isConfigured) {
     const formattedError = formatAWSErrorMessage(error);
     return (
-      <div className="min-h-screen bg-black flex items-center justify-center p-6">
+      <ConnectorAuthGuard connectorName="AWS">
+        <div className="min-h-screen bg-black flex items-center justify-center p-6">
         <Card className="w-full max-w-2xl bg-slate-900 border-slate-700">
           <CardHeader>
             <CardTitle className="text-red-400 flex items-center space-x-2">
@@ -888,14 +895,17 @@ make dev`}</pre>
           </CardContent>
         </Card>
       </div>
+      </ConnectorAuthGuard>
     );
   }
 
   if (!onboardingData) {
     return (
-      <div className="min-h-screen bg-black flex items-center justify-center">
-        <p className="text-slate-400">No onboarding data available.</p>
-      </div>
+      <ConnectorAuthGuard connectorName="AWS">
+        <div className="min-h-screen bg-black flex items-center justify-center">
+          <p className="text-slate-400">No onboarding data available.</p>
+        </div>
+      </ConnectorAuthGuard>
     );
   }
 
@@ -938,7 +948,8 @@ make dev`}</pre>
   );
 
   return (
-    <div className="min-h-screen bg-black flex flex-col items-center justify-center p-6">
+    <ConnectorAuthGuard connectorName="AWS">
+      <div className="min-h-screen bg-black flex flex-col items-center justify-center p-6">
       <div className="w-full max-w-4xl space-y-8">
         {/* Header */}
         <div className="text-center space-y-3">
@@ -1391,5 +1402,6 @@ make dev`}</pre>
           </AlertDialogContent>
         </AlertDialog>
     </div>
+    </ConnectorAuthGuard>
   );
 }

@@ -87,3 +87,7 @@ helm-charts/.worktrees/
 
 # SearXNG local config
 config/searxng/
+
+# Airtight deployment bundles
+aurora-airtight-*.tar.gz
+aurora-airtight-*.tar.gz.sha256

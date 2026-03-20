@@ -51,6 +51,7 @@ from chat.backend.agent.tools.cloud_tools import register_websocket_connection, 
 from chat.backend.agent.access import ModeAccessController
 from utils.text.text_utils import clean_markdown
 from utils.internal.api_handler import handle_http_request
+from utils.auth.stateless_auth import validate_user_exists, get_org_id_for_user
 
 
 class RateLimiter:
@@ -95,7 +96,16 @@ async def handle_init(data, websocket, current_user_id, deployment_listener_task
     """Handle connection initialization message and return updated state."""
 
     user_id = data.get('user_id')
+
     if user_id and current_user_id != user_id:
+        if not validate_user_exists(user_id):
+            logger.warning(f"WebSocket init rejected: invalid user_id {user_id!r}")
+            await websocket.send(json.dumps({
+                "type": "error",
+                "data": {"text": "Authentication failed: invalid user identity."}
+            }))
+            return current_user_id, deployment_listener_task
+
         logger.info(f"Initializing connection for user {user_id}")
         current_user_id = user_id
 
@@ -809,6 +819,47 @@ async def handle_connection(websocket) -> None:
             
             user_id = data.get('user_id')  # Extract user_id from the incoming data
             session_id = data.get('session_id')  # Extract session_id from the incoming data
+
+            # Server-side validation: reject unverified user_ids
+            if user_id and user_id != current_user_id:
+                if not validate_user_exists(user_id):
+                    logger.warning(f"Message rejected: unverified user_id {user_id!r}")
+                    await websocket.send(json.dumps({
+                        "type": "error",
+                        "data": {"text": "Authentication failed: invalid user identity."}
+                    }))
+                    continue
+                current_user_id = user_id
+
+            # Resolve org for tenant-scoped DB queries
+            org_id = get_org_id_for_user(user_id) if user_id else None
+
+            # RBAC: block viewers from sending messages in incident-linked sessions
+            if session_id and user_id and org_id:
+                try:
+                    from utils.db.connection_pool import db_pool
+                    with db_pool.get_admin_connection() as conn:
+                        with conn.cursor() as cur:
+                            cur.execute(
+                                "SELECT incident_id FROM chat_sessions WHERE id = %s AND org_id = %s",
+                                (session_id, org_id),
+                            )
+                            row = cur.fetchone()
+                    if row and row[0]:
+                        from utils.auth.enforcer import get_enforcer
+                        enforcer = get_enforcer()
+                        if not enforcer.enforce(user_id, org_id, "incidents", "write"):
+                            logger.warning(
+                                "RBAC denied: viewer user=%s tried to chat in incident session=%s",
+                                user_id, session_id,
+                            )
+                            await websocket.send(json.dumps({
+                                "type": "error",
+                                "data": {"text": "You do not have permission to interact with incident investigations."}
+                            }))
+                            continue
+                except Exception as e:
+                    logger.error("Error checking incident session RBAC: %s", e)
             
             # Get connected providers from database instead of relying on frontend preferences
             from utils.auth.stateless_auth import get_connected_providers
@@ -1015,9 +1066,9 @@ async def handle_connection(websocket) -> None:
                 current_user_id = user_id
                 # Deployment listener removed
 
-            # Set the session variable for RLS enforcement
+            # Set the session variable for RLS enforcement (user + org)
             try:
-                postgres_client.set_user_context(user_id)
+                postgres_client.set_user_context(user_id, org_id=org_id)
             except Exception as e:
                 logger.error("Failed to set user context: %s", e, exc_info=True)
                 await websocket.send(json.dumps({

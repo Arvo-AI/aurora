@@ -339,6 +339,20 @@ class LLMManager:
         summarization_model = model or ModelConfig.INCIDENT_REPORT_SUMMARIZATION_MODEL
 
         try:
+            # Cap content to fit within the summarization model's context window.
+            # Without this, huge tool outputs (e.g. multi-MB log dumps) get embedded
+            # verbatim in the prompt and blow past the model's context limit.
+            from chat.backend.agent.utils.chat_context_manager import ChatContextManager
+            context_limit = ChatContextManager.get_context_limit(summarization_model)
+            # Leave room for the prompt template (~200 tokens) and response (~800 tokens)
+            max_content_chars = (context_limit - 1000) * 4  # ~4 chars per token
+            if len(content) > max_content_chars:
+                logger.warning(
+                    f"Truncating content from {len(content)} to {max_content_chars} chars "
+                    f"for summarization (model limit: {context_limit} tokens)"
+                )
+                content = content[:max_content_chars] + "\n\n[Content truncated to fit summarization model context window]"
+
             logger.info(f"Summarizing {len(content)} chars using {summarization_model}")
 
             summarization_prompt = f"""Please provide a concise summary of the following tool output.
