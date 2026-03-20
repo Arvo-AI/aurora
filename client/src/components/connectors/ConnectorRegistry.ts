@@ -136,6 +136,17 @@ class ConnectorRegistry {
       });
 
     this.register({
+        id: "rootly",
+        name: "Rootly",
+        description: "Connect Rootly for incident management. Receive incident notifications, track resolution workflows, and trigger automated root cause analysis.",
+        iconPath: "/rootly.svg",
+        iconBgColor: "bg-white dark:bg-white",
+        category: "Incident Management",
+        path: "/rootly/auth",
+        storageKey: "isRootlyConnected",
+      });
+
+    this.register({
         id: "confluence",
         name: "Confluence",
         description: "Fetch runbooks and documentation from Confluence pages to automate incident response workflows.",

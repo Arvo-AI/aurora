@@ -327,6 +327,11 @@ app.register_blueprint(bigpanda_bp, url_prefix="/bigpanda")
 from routes.pagerduty.pagerduty_routes import pagerduty_bp  # noqa: F401
 app.register_blueprint(pagerduty_bp, url_prefix="/pagerduty")
 
+# --- Rootly Integration Routes ---
+from routes.rootly import bp as rootly_bp  # noqa: F401
+import routes.rootly.tasks  # noqa: F401
+app.register_blueprint(rootly_bp, url_prefix="/rootly")
+
 # --- Knowledge Base Routes ---
 from routes.knowledge_base import bp as knowledge_base_bp  # noqa: F401
 app.register_blueprint(knowledge_base_bp, url_prefix="/api/knowledge-base")

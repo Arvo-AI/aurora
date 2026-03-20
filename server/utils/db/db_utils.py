@@ -851,6 +851,27 @@ def initialize_tables():
                     CREATE INDEX IF NOT EXISTS idx_bigpanda_events_status ON bigpanda_events(incident_status);
                     CREATE INDEX IF NOT EXISTS idx_bigpanda_events_received_at ON bigpanda_events(received_at DESC);
                 """,
+                "rootly_events": """
+                    CREATE TABLE IF NOT EXISTS rootly_events (
+                        id SERIAL PRIMARY KEY,
+                        user_id VARCHAR(255) NOT NULL,
+                        org_id VARCHAR(255),
+                        event_type VARCHAR(100),
+                        incident_id VARCHAR(255),
+                        incident_title TEXT,
+                        incident_status VARCHAR(50),
+                        incident_severity VARCHAR(100),
+                        service_name VARCHAR(255),
+                        payload JSONB NOT NULL,
+                        received_at TIMESTAMP NOT NULL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+
+                    CREATE INDEX IF NOT EXISTS idx_rootly_events_user_id ON rootly_events(user_id, received_at DESC);
+                    CREATE INDEX IF NOT EXISTS idx_rootly_events_incident_id ON rootly_events(incident_id);
+                    CREATE INDEX IF NOT EXISTS idx_rootly_events_status ON rootly_events(incident_status);
+                    CREATE INDEX IF NOT EXISTS idx_rootly_events_received_at ON rootly_events(received_at DESC);
+                """,
                 "kubectl_agent_tokens": """
                     CREATE TABLE IF NOT EXISTS kubectl_agent_tokens (
                         id SERIAL PRIMARY KEY,
@@ -1029,6 +1050,7 @@ def initialize_tables():
             rls_tables.append("netdata_verification_tokens")
             rls_tables.append("splunk_alerts")
             rls_tables.append("bigpanda_events")
+            rls_tables.append("rootly_events")
             rls_tables.append("jenkins_deployment_events")
             rls_tables.append("spinnaker_deployment_events")
             rls_tables.append("dynatrace_problems")
@@ -1725,7 +1747,7 @@ def initialize_tables():
                 "pagerduty_events", "incidents", "incident_alerts",
                 "rca_notification_emails", "splunk_alerts",
                 "jenkins_deployment_events", "dynatrace_problems",
-                "bigpanda_events", "kubectl_agent_tokens",
+                "bigpanda_events", "rootly_events", "kubectl_agent_tokens",
                 "k8s_pods", "k8s_nodes", "k8s_node_conditions",
                 "k8s_services", "k8s_deployments", "k8s_ingresses",
                 "k8s_pod_metrics", "k8s_node_metrics",

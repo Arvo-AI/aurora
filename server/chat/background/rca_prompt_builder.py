@@ -1146,6 +1146,62 @@ def build_bigpanda_rca_prompt(
     return build_rca_prompt('bigpanda', alert_details, providers, user_id)
 
 
+def build_rootly_rca_prompt(
+    incident: Dict[str, Any],
+    providers: Optional[List[str]] = None,
+    user_id: Optional[str] = None,
+) -> str:
+    """Build RCA prompt from Rootly incident payload."""
+    title = (
+        incident.get("title")
+        or incident.get("summary")
+        or f"Rootly Incident {incident.get('id', 'unknown')}"
+    )
+
+    services = incident.get("services") or []
+    service = "unknown"
+    if services and isinstance(services, list):
+        first = services[0]
+        if isinstance(first, dict):
+            service = first.get("name") or first.get("slug") or "unknown"
+
+    rootly_status = incident.get("status", "started")
+    severity = incident.get("severity", "unknown")
+
+    message_parts = []
+    if summary := incident.get("summary"):
+        message_parts.append(f"Summary: {summary}")
+    if envs := incident.get("environments"):
+        env_names = [e.get("name") for e in envs if isinstance(e, dict) and e.get("name")]
+        if env_names:
+            message_parts.append(f"Environments: {', '.join(env_names)}")
+    if groups := incident.get("groups"):
+        group_names = [g.get("name") for g in groups if isinstance(g, dict) and g.get("name")]
+        if group_names:
+            message_parts.append(f"Groups: {', '.join(group_names)}")
+    if types := incident.get("incident_types"):
+        type_names = [t.get("name") for t in types if isinstance(t, dict) and t.get("name")]
+        if type_names:
+            message_parts.append(f"Types: {', '.join(type_names)}")
+    if labels := incident.get("labels"):
+        message_parts.append(f"Labels: {labels}")
+
+    alert_details = {
+        'title': title,
+        'status': rootly_status,
+        'message': ". ".join(message_parts) if message_parts else title,
+        'labels': {
+            'service': service,
+            'severity': severity,
+        },
+    }
+
+    if url := incident.get("url"):
+        alert_details['labels']['incident_url'] = url
+
+    return build_rca_prompt('rootly', alert_details, providers, user_id)
+
+
 def build_splunk_rca_prompt(
     payload: Dict[str, Any],
     providers: Optional[List[str]] = None,

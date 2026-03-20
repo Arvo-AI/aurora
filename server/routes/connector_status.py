@@ -168,6 +168,7 @@ PROVIDER_CHECKERS = {
     "dynatrace": _check_credentials_only,
     "thousandeyes": _check_credentials_only,
     "bigpanda": _check_credentials_only,
+    "rootly": _check_credentials_only,
     "slack": _check_credentials_only,
     "bitbucket": _check_credentials_only,
 }

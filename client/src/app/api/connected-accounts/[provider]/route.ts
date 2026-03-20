@@ -24,7 +24,7 @@ export async function DELETE(
     const { provider } = await context.params
 
     // Validate provider
-    if (!['gcp', 'azure', 'aws', 'github', 'grafana', 'datadog', 'netdata', 'ovh', 'scaleway', 'tailscale', 'slack', 'splunk', 'dynatrace', 'confluence', 'sharepoint', 'coroot', 'thousandeyes', 'jenkins', 'cloudbees', 'bigpanda', 'spinnaker'].includes(provider)) {
+    if (!['gcp', 'azure', 'aws', 'github', 'grafana', 'datadog', 'netdata', 'ovh', 'scaleway', 'tailscale', 'slack', 'splunk', 'dynatrace', 'confluence', 'sharepoint', 'coroot', 'thousandeyes', 'jenkins', 'cloudbees', 'bigpanda', 'rootly', 'spinnaker'].includes(provider)) {
       return NextResponse.json(
         { error: 'Invalid provider' },
         { status: 400 }
@@ -393,6 +393,26 @@ export async function DELETE(
         console.error('Backend error disconnecting BigPanda:', errorText)
         return NextResponse.json(
           { error: 'Failed to disconnect BigPanda' },
+          { status: response.status }
+        )
+      }
+
+      const data = await response.json()
+      return NextResponse.json(data)
+    }
+
+    // Special handling for Rootly
+    if (provider === 'rootly') {
+      const response = await fetch(`${API_BASE_URL}/rootly/disconnect`, {
+        method: 'DELETE',
+        headers: authHeaders,
+      })
+
+      if (!response.ok) {
+        const errorText = await response.text()
+        console.error('Backend error disconnecting Rootly:', errorText)
+        return NextResponse.json(
+          { error: 'Failed to disconnect Rootly' },
           { status: response.status }
         )
       }
