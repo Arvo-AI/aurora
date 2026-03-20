@@ -304,7 +304,7 @@ Use this path when the target VM has restricted or no outbound internet access (
 
 **Prerequisites:**
 
-- You have received the airtight bundle (`aurora-airtight-<version>.tar.gz`) and its checksum file (`aurora-airtight-<version>.tar.gz.sha256`)
+- You have received the airtight bundle (`aurora-airtight-<version>-<arch>.tar.gz`) and its checksum file (`aurora-airtight-<version>-<arch>.tar.gz.sha256`)
 - The target VM meets the [hardware requirements](#1-provision-a-vm) (4+ CPU, 8+ GB RAM, 60 GB SSD)
 - Docker and Docker Compose are installed on the VM (see [Installing Docker](./install-docker) for all OS/architecture combinations, including environments where `curl` and `wget` are blocked)
 - You can SSH into the VM
@@ -386,7 +386,7 @@ Save and exit (`Ctrl+X`, `Y`, `Enter` in nano).
 ### 5. Load Images and Start
 
 ```bash
-make prod-airtight AIRTIGHT_BUNDLE=~/aurora-airtight-<version>.tar.gz
+make prod-airtight AIRTIGHT_BUNDLE=~/aurora-airtight-<version>-<arch>.tar.gz
 ```
 
 This loads every Docker image from the tarball into the local Docker daemon and starts the full Aurora stack. No outbound network calls are made. First run takes a few minutes while images are loaded.
@@ -435,7 +435,7 @@ Transfer the new tarball and checksum to the VM, then:
 
 ```bash
 make down
-make prod-airtight AIRTIGHT_BUNDLE=~/aurora-airtight-<version>.tar.gz
+make prod-airtight AIRTIGHT_BUNDLE=~/aurora-airtight-<version>-<arch>.tar.gz
 ```
 
 The `.env` file stays on the VM and is never part of the bundle.
@@ -449,7 +449,7 @@ git clone https://github.com/arvo-ai/aurora.git && cd aurora
 make package-airtight
 ```
 
-This builds all Aurora images, pulls all third-party images, and saves everything into `aurora-airtight-<version>.tar.gz` with a SHA-256 checksum. The default target architecture is `linux/amd64`.
+This builds all Aurora images, pulls all third-party images, and saves everything into `aurora-airtight-<version>-<arch>.tar.gz` with a SHA-256 checksum. The default target architecture is `linux/amd64`.
 
 To target ARM servers:
 
