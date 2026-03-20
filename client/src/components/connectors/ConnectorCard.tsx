@@ -200,6 +200,15 @@ export default function ConnectorCard({ connector, connectedOverride }: Connecto
   const IconComponent = connector.icon;
 
   function renderStatusBadge() {
+    if (connector.id === "gcp" && localStorage.getItem("gcpSetupError")) {
+      return (
+        <div className="flex items-center gap-1 text-red-600 dark:text-red-500">
+          <AlertCircle className="h-4 w-4" />
+          <span className="text-xs font-medium">Setup Failed</span>
+        </div>
+      );
+    }
+
     // GitHub and Bitbucket use two-tier status (authenticated vs fully connected)
     const devToolStatus =
       connector.id === "github" ? githubStatus :
@@ -270,7 +279,11 @@ export default function ConnectorCard({ connector, connectedOverride }: Connecto
         </CardHeader>
         
         <CardContent className="flex-1">
-          {connector.id === "slack" && isConnected ? (
+          {connector.id === "gcp" && localStorage.getItem("gcpSetupError") ? (
+            <p className="text-sm text-red-600 dark:text-red-400">
+              {localStorage.getItem("gcpSetupError")}
+            </p>
+          ) : connector.id === "slack" && isConnected ? (
             <ConnectorCardContent
               isLoading={isLoadingDetails}
               slackStatus={slackStatus}

@@ -94,8 +94,13 @@ export default function ConnectorsClient() {
   }, [allConnectors, searchQuery, selectedCategories]);
 
   const { installedConnectors, availableConnectors } = useMemo(() => {
-    const installed = filteredConnectors.filter((connector) => connectedStatus[connector.id]);
-    const available = filteredConnectors.filter((connector) => !connectedStatus[connector.id]);
+    const hasGcpSetupError = !!localStorage.getItem("gcpSetupError");
+    const installed = filteredConnectors.filter(
+      (connector) => connectedStatus[connector.id] || (connector.id === "gcp" && hasGcpSetupError)
+    );
+    const available = filteredConnectors.filter(
+      (connector) => !connectedStatus[connector.id] && !(connector.id === "gcp" && hasGcpSetupError)
+    );
     
     return {
       installedConnectors: installed,

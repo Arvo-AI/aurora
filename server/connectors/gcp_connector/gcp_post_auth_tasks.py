@@ -8,6 +8,7 @@ from .auth_compatibility import (
     enable_all_required_apis_for_all_projects, ensure_aurora_full_access,
     allow_public_access_for_all_projects, get_project_list
 )
+from .auth.service_accounts import ServiceAccountQuotaError
 from .billing import has_active_billing
 from .gcp.projects import select_best_project
 from .gcp.apis import enable_single_api
@@ -147,6 +148,12 @@ def gcp_post_auth_setup_task(self, user_id, selected_project_ids=None):
             ensure_aurora_full_access(credentials, user_id, projects_to_setup, root_project_id_override=root_project_id)
             logging.info("Aurora full-access setup completed successfully")
             setup_success = True
+        except ServiceAccountQuotaError as quota_error:
+            logging.error(f"Service account quota exceeded: {quota_error}")
+            return {
+                'status': 'FAILED',
+                'error': str(quota_error),
+            }
         except ValueError as permission_error:
             # Permission-related errors - log but continue (some projects may work)
             logging.warning(f"Permission validation failed (will continue with accessible projects): {permission_error}")
