@@ -171,6 +171,9 @@ export function useConnectorOAuth(connector: ConnectorConfig, userId: string | n
   const handleGCPOAuth = async () => {
     await withOAuthHandler(
       async () => {
+        // Clear any previous setup error before starting new connection
+        localStorage.removeItem("gcpSetupError");
+
         const response = await fetch("/api/gcp/oauth/login", {
           method: "POST",
           headers: { "Content-Type": "application/json" },

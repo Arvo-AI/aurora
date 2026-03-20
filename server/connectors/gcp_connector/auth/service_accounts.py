@@ -20,6 +20,11 @@ from connectors.gcp_connector.gcp.project_selection import (
 logger = logging.getLogger(__name__)
 
 
+class ServiceAccountQuotaError(ValueError):
+    """Raised when a GCP project has reached the service account quota limit."""
+    pass
+
+
 def _get_user_sa_suffix(user_id: str, sa_type: str = 'full') -> str:
     """Generate a stable, short hash from user_id for SA naming.
 
@@ -291,6 +296,8 @@ def _ensure_service_account(iam_service, project_id: str, account_id: str, displ
                 # Service account was created concurrently, that's OK
                 logger.info("Service account %s already exists", sa_email)
                 time.sleep(3)
+            elif create_error.resp.status == 429:
+                raise ServiceAccountQuotaError(f"Service account quota exceeded in project {project_id}")
             else:
                 error_msg = f"Failed to create service account {sa_email}: {create_error}"
                 logger.error(error_msg)
