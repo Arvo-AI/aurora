@@ -17,8 +17,23 @@ from utils.auth.cloud_auth import generate_azure_access_token
 from .output_sanitizer import sanitize_command_output, filter_error_messages, truncate_json_fields
 from utils.cloud.infrastructure_confirmation import wait_for_user_confirmation
 from .cloud_provider_utils import determine_target_provider_from_context
+from chat.backend.agent.prompt.prompt_builder import CLOUD_EXEC_PROVIDERS
 from chat.backend.agent.access import ModeAccessController
 from utils.cloud.cloud_utils import get_mode_from_context
+
+
+def _normalize_cloud_exec_provider(raw: Optional[str]) -> str:
+    """Turn CLI nicknames (e.g. gcloud, az) into the standard provider id from CLOUD_EXEC_PROVIDERS."""
+    p = (raw or "").strip().lower()
+    if p == "gcloud":
+        return "gcp"
+    if p == "az":
+        return "azure"
+    if p == "amazon":
+        return "aws"
+    if p == "scw":
+        return "scaleway"
+    return p
 
 
 # --------------------------------------------------------------------------------------
@@ -1529,17 +1544,19 @@ Security & Compliance
         else:
             selected_project_id = None
         logger.info(f"Provider preference: {provider_preference}")
+
+        normalized_provider = _normalize_cloud_exec_provider(provider)
         
         # Set up ISOLATED environment based on provider - NO GLOBAL STATE!
         isolated_env = None
         auth_command = None
-        if provider.lower() in ['azure', 'az']:
+        if normalized_provider == 'azure':
             # Azure isolated setup
             success, subscription_id, auth_method, isolated_env, auth_command = setup_azure_environment_isolated(user_id, selected_project_id)
             if not success:
                 return json.dumps({"error": f"Failed to setup Azure environment with {provider_preference} authentication", "final_command": command})
             resource_id = subscription_id
-        elif provider.lower() == 'aws':
+        elif normalized_provider == 'aws':
             # AWS multi-account: fan out only if no specific account_id given
             if not account_id:
                 from utils.db.connection_utils import get_all_user_aws_connections
@@ -1563,24 +1580,32 @@ Security & Compliance
             if not success:
                 return json.dumps({"error": f"Failed to setup AWS environment with {provider_preference} authentication", "final_command": command})
             resource_id = region
-        elif provider.lower() == 'ovh':
+        elif normalized_provider == 'ovh':
             # OVH isolated setup
             success, project_id, auth_method, isolated_env = setup_ovh_environment_isolated(user_id, selected_project_id)
             if not success:
                 return json.dumps({"error": f"Failed to setup OVH environment with {provider_preference} authentication. Please connect your OVH account first.", "final_command": command, "requires_connection": True})
             resource_id = project_id
-        elif provider.lower() == 'scaleway':
+        elif normalized_provider == 'scaleway':
             # Scaleway isolated setup
             success, project_id, auth_method, isolated_env = setup_scaleway_environment_isolated(user_id, selected_project_id)
             if not success:
                 return json.dumps({"error": f"Failed to setup Scaleway environment with {provider_preference} authentication. Please connect your Scaleway account first.", "final_command": command, "requires_connection": True})
             resource_id = project_id
-        elif provider.lower() == 'tailscale':
+        elif normalized_provider == 'tailscale':
             # Tailscale isolated setup - uses REST API, not CLI
             success, tailnet, auth_method, isolated_env = setup_tailscale_environment_isolated(user_id, selected_project_id)
             if not success:
                 return json.dumps({"error": f"Failed to setup Tailscale environment. Please connect your Tailscale account first.", "final_command": command, "requires_connection": True})
             resource_id = tailnet
+        elif normalized_provider not in CLOUD_EXEC_PROVIDERS:
+            return json.dumps({
+                "success": False,
+                "error": f"Provider '{normalized_provider}' does not support CLI execution through cloud_exec. "
+                         f"Supported providers: {', '.join(sorted(CLOUD_EXEC_PROVIDERS))}.",
+                "final_command": command,
+                "provider": normalized_provider,
+            })
         else:
             # GCP isolated setup (default)
             success, project_id, auth_method, isolated_env = setup_gcp_environment_isolated(user_id, selected_project_id, provider_preference)

@@ -524,6 +524,32 @@ Users enter the token and Grafana URL via the Aurora UI.
 3. URL: `https://your-aurora-domain/grafana/alerts/webhook/{user_id}`
 4. In **Notification policies**, route alerts to the Aurora contact point
 
+#### How Aurora Processes Grafana Webhooks
+
+Grafana sends grouped webhook payloads containing an `alerts[]` array. Each alert has a
+**fingerprint** (hash of rule + labels) that uniquely identifies an alert instance.
+
+Aurora processes each alert in the array individually:
+
+- **Firing** (`status: "firing"`): Processed independently per fingerprint. AlertCorrelator
+  checks whether the alert matches an existing open incident (by fingerprint, service
+  similarity, and time proximity, selecting the newest by `started_at DESC`). If a match
+  is found the alert is attached to that incident; otherwise a new incident is created
+  and RCA is triggered.
+- **Resolved** (`status: "resolved"`): Matches the original incident by fingerprint and
+  attaches the resolution as a correlated alert. No new incident or RCA is created.
+
+**Key behaviors:**
+
+| Scenario | Behavior |
+|----------|----------|
+| Single alert fires then resolves | Matched by fingerprint, resolution grouped with original incident |
+| Multiple alerts in one webhook | Each fingerprint is processed independently; correlated alerts attach to an existing incident, uncorrelated ones create a new incident and RCA |
+| Partial resolution (some firing, some resolved) | Each alert handled independently by its status |
+| Same alert re-fires weeks later | New incident created; resolution matches newest by `started_at DESC` |
+| No matching incident for resolution | Logged and skipped; alert still persisted in `grafana_alerts` |
+| Labels change mid-incident | Fingerprint changes, so resolution won't match (labels shouldn't change mid-incident) |
+
 ---
 
 ### Netdata

@@ -1,4 +1,12 @@
-"""Celery tasks for Grafana integrations."""
+"""Celery tasks for Grafana alert webhook processing.
+
+Each webhook contains an ``alerts[]`` array of individual alert instances. We process
+each alert separately by fingerprint (hash of rule + labels):
+- Firing alerts: create an incident and trigger RCA.
+- Resolved alerts: match to the original incident by fingerprint, skip RCA.
+
+See docs/oss/GRAFANA_ALERTS.md for edge cases and matching details.
+"""
 
 from __future__ import annotations
 
@@ -15,6 +23,13 @@ from services.correlation import handle_correlated_alert
 logger = logging.getLogger(__name__)
 
 
+def _is_resolved_alert(payload: Dict[str, Any]) -> bool:
+    """If state is ok, all individual alerts in the webhook are resolved."""
+    state = (payload.get("state") or "").lower()
+    status = (payload.get("status") or "").lower()
+    return state == "ok" or status == "resolved"
+
+
 def _should_trigger_background_chat(user_id: str, payload: Dict[str, Any]) -> bool:
     """Determine if a background chat should be triggered for this alert.
 
@@ -25,16 +40,7 @@ def _should_trigger_background_chat(user_id: str, payload: Dict[str, Any]) -> bo
     Returns:
         True if a background chat should be triggered
     """
-    # Check user preference for automated RCA
-    # from utils.auth.stateless_auth import get_user_preference
-    # rca_enabled = get_user_preference(user_id, "automated_rca_enabled", default=False)
-    #
-    # if not rca_enabled:
-    #     logger.debug("[GRAFANA] Skipping background RCA - disabled in user preferences for user %s", user_id)
-    #     return False
-
-    # Always trigger RCA for any webhook received
-    return True
+    return not _is_resolved_alert(payload)
 
 
 def _extract_severity(payload: Dict[str, Any]) -> str:
@@ -76,6 +82,26 @@ def _extract_service(payload: Dict[str, Any]) -> str:
         labels.get("service") or labels.get("job") or labels.get("alertname", "unknown")
     )
     return str(service)[:255]  # Truncate to fit DB column
+
+
+def _merge_alert_into_payload(payload: Dict[str, Any], alert: Dict[str, Any]) -> Dict[str, Any]:
+    """Overlay a single alert's fields onto the webhook envelope so existing helpers
+    (which expect a webhook-shaped dict) can process each alert individually."""
+    merged = dict(payload)
+    merged["fingerprint"] = alert.get("fingerprint")
+    merged["ruleUID"] = alert.get("ruleUID") or alert.get("ruleUid")
+    if alert.get("labels"):
+        merged["commonLabels"] = {**merged.get("commonLabels", {}), **alert["labels"]}
+    if alert.get("annotations"):
+        merged["commonAnnotations"] = {**merged.get("commonAnnotations", {}), **alert["annotations"]}
+    if alert.get("values"):
+        merged["values"] = alert["values"]
+    for key in ("dashboardURL", "panelURL", "silenceURL", "imageURL", "generatorURL"):
+        if alert.get(key):
+            merged[key] = alert[key]
+    merged["status"] = alert.get("status") or merged.get("status")
+    merged["state"] = alert.get("state") or merged.get("state")
+    return merged
 
 
 def _format_alert_summary(payload: Dict[str, Any]) -> str:
@@ -130,6 +156,9 @@ def process_grafana_alert(
 
                         # Extract relevant fields from Grafana payload
                         alert_uid = payload.get("ruleUID") or payload.get("ruleUid")
+                        if not alert_uid and payload.get("alerts"):
+                            first_alert = payload["alerts"][0] #Alert uid is the same for all alerts in the webhook
+                            alert_uid = first_alert.get("ruleUID") or first_alert.get("ruleUid")
                         alert_title = payload.get("title") or payload.get(
                             "commonLabels", {}
                         ).get("alertname")
@@ -180,274 +209,230 @@ def process_grafana_alert(
                             user_id,
                         )
 
-                        # Create incident record
-                        severity = _extract_severity(payload)
-                        service = _extract_service(payload)
+                        # A single Grafana webhook can contain multiple alerts (different fingerprints).
+                        # Each gets its own incident/resolution handling.
+                        individual_alerts = payload.get("alerts")
+                        if not individual_alerts:
+                            logger.info("[GRAFANA][ALERT] No alerts array in payload for user %s, skipping incident creation", user_id)
+                            return
+                        for single_alert in individual_alerts:
+                            alert_payload = _merge_alert_into_payload(payload, single_alert)
+                            fingerprint = single_alert.get("fingerprint")
+                            per_alert_source_id = f"{alert_id}:{fingerprint}" if fingerprint else str(alert_id)
 
-                        # Build alert metadata with Grafana-specific fields
-                        alert_metadata = {}
-                        if dashboard_url:
-                            alert_metadata["dashboardUrl"] = dashboard_url
-                        if panel_url:
-                            alert_metadata["panelUrl"] = panel_url
-                        if rule_url:
-                            alert_metadata["alertUrl"] = rule_url
+                            # If resolved webhook, find the original incident by fingerprint and attach this alert to it as a correlated event and skip RCA.
+                            if _is_resolved_alert(alert_payload):
+                                original_incident_id = None
 
-                        # Extract from labels
-                        labels = (
-                            payload.get("labels") or payload.get("commonLabels") or {}
-                        )
-                        if labels:
-                            alert_metadata["labels"] = labels
-
-                        # Extract from annotations
-                        annotations = (
-                            payload.get("annotations")
-                            or payload.get("commonAnnotations")
-                            or {}
-                        )
-                        if annotations.get("summary"):
-                            alert_metadata["summary"] = annotations.get("summary")
-                        if annotations.get("description"):
-                            alert_metadata["description"] = annotations.get(
-                                "description"
-                            )
-                        if annotations.get("runbook_url"):
-                            alert_metadata["runbookUrl"] = annotations.get(
-                                "runbook_url"
-                            )
-
-                        # Extract values/metrics
-                        if payload.get("values"):
-                            alert_metadata["values"] = payload.get("values")
-
-                        # Image URL if available
-                        if payload.get("imageURL"):
-                            alert_metadata["imageUrl"] = payload.get("imageURL")
-
-                        # Silence URL
-                        if payload.get("silenceURL"):
-                            alert_metadata["silenceUrl"] = payload.get("silenceURL")
-
-                        # Fingerprint as incident ID
-                        if payload.get("fingerprint"):
-                            alert_metadata["fingerprint"] = payload.get("fingerprint")
-
-                        try:
-                            correlator = AlertCorrelator()
-                            correlation_result = correlator.correlate(
-                                cursor=cursor,
-                                user_id=user_id,
-                                source_type="grafana",
-                                source_alert_id=alert_id,
-                                alert_title=alert_title,
-                                alert_service=service,
-                                alert_severity=severity,
-                                alert_metadata=alert_metadata,
-                                org_id=org_id,
-                            )
-
-                            if correlation_result.is_correlated:
-                                handle_correlated_alert(
-                                    cursor=cursor,
-                                    user_id=user_id,
-                                    incident_id=correlation_result.incident_id,
-                                    source_type="grafana",
-                                    source_alert_id=alert_id,
-                                    alert_title=alert_title,
-                                    alert_service=service,
-                                    alert_severity=severity,
-                                    correlation_result=correlation_result,
-                                    alert_metadata=alert_metadata,
-                                    raw_payload=payload,
-                                    org_id=org_id,
-                                )
-                                conn.commit()
-                                return
-                        except Exception as corr_exc:
-                            logger.warning(
-                                "[GRAFANA] Correlation check failed, proceeding with normal flow: %s",
-                                corr_exc,
-                            )
-
-                        cursor.execute(
-                            """
-                            INSERT INTO incidents 
-                            (user_id, org_id, source_type, source_alert_id, alert_title, alert_service, 
-                             severity, status, started_at, alert_metadata)
-                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                            ON CONFLICT (org_id, source_type, source_alert_id, user_id) DO UPDATE
-                            SET updated_at = CURRENT_TIMESTAMP,
-                                started_at = CASE 
-                                    WHEN incidents.status != 'analyzed' THEN EXCLUDED.started_at
-                                    ELSE incidents.started_at
-                                END,
-                                alert_metadata = EXCLUDED.alert_metadata
-                            RETURNING id
-                            """,
-                            (
-                                user_id,
-                                org_id,
-                                "grafana",
-                                alert_id,
-                                alert_title,
-                                service,
-                                severity,
-                                "investigating",
-                                received_at,
-                                json.dumps(alert_metadata),
-                            ),
-                        )
-                        incident_row = cursor.fetchone()
-                        incident_id = incident_row[0] if incident_row else None
-                        conn.commit()
-
-                        try:
-                            cursor.execute(
-                                """INSERT INTO incident_alerts
-                                   (user_id, org_id, incident_id, source_type, source_alert_id, alert_title, alert_service,
-                                    alert_severity, correlation_strategy, correlation_score, alert_metadata)
-                                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
-                                (
-                                    user_id,
-                                    org_id,
-                                    incident_id,
-                                    "grafana",
-                                    alert_id,
-                                    alert_title,
-                                    service,
-                                    severity,
-                                    "primary",
-                                    1.0,
-                                    json.dumps(alert_metadata),
-                                ),
-                            )
-                            cursor.execute(
-                                "UPDATE incidents SET affected_services = ARRAY[%s] WHERE id = %s",
-                                (service, incident_id),
-                            )
-                            conn.commit()
-                        except Exception as e:
-                            logger.warning(
-                                "[GRAFANA] Failed to record primary alert: %s", e
-                            )
-
-                    if incident_id:
-                        logger.info(
-                            "[GRAFANA][ALERT] Created incident %s for alert %s",
-                            incident_id,
-                            alert_id,
-                        )
-
-                        # Notify SSE connections about incident update
-                        try:
-                            from routes.incidents_sse import (
-                                broadcast_incident_update_to_user_connections,
-                            )
-
-                            broadcast_incident_update_to_user_connections(
-                                user_id,
-                                {
-                                    "type": "incident_update",
-                                    "incident_id": str(incident_id),
-                                    "source": "grafana",
-                                },
-                            )
-                        except Exception as e:
-                            logger.warning(
-                                f"[GRAFANA][ALERT] Failed to notify SSE: {e}"
-                            )
-
-                        # Trigger summary generation (always, fast)
-                        from chat.background.summarization import (
-                            generate_incident_summary,
-                        )
-
-                        generate_incident_summary.delay(
-                            incident_id=str(incident_id),
-                            user_id=user_id,
-                            source_type="grafana",
-                            alert_title=alert_title or "Unknown Alert",
-                            severity=severity,
-                            service=service,
-                            raw_payload=payload,
-                            alert_metadata=alert_metadata,
-                        )
-                        logger.info(
-                            "[GRAFANA][ALERT] Triggered summary generation for incident %s",
-                            incident_id,
-                        )
-
-                    # Trigger background chat for RCA if enabled
-                    if _should_trigger_background_chat(user_id, payload):
-                        try:
-                            from chat.background.task import (
-                                run_background_chat,
-                                create_background_chat_session,
-                                is_background_chat_allowed,
-                            )
-
-                            # Rate limit check - max 1 background chat per user per 5 minutes
-                            if not is_background_chat_allowed(user_id):
-                                logger.info(
-                                    "[GRAFANA][ALERT] Skipping background RCA - rate limited for user %s",
-                                    user_id,
-                                )
-                            else:
-                                # Create a chat session for the background analysis
-                                chat_title = f"RCA: {alert_title or 'Grafana Alert'}"
-                                session_id = create_background_chat_session(
-                                    user_id=user_id,
-                                    title=chat_title,
-                                    trigger_metadata={
-                                        "source": "grafana",
-                                        "alert_uid": alert_uid,
-                                        "alert_state": alert_state,
-                                    },
-                                    incident_id=str(incident_id) if incident_id else None,
-                                )
-
-                                # Build comprehensive RCA prompt with provider context
-                                rca_prompt = build_grafana_rca_prompt(
-                                    payload, user_id=user_id
-                                )
-
-                                # Start RCA task and immediately store task ID
-                                task = run_background_chat.delay(
-                                    user_id=user_id,
-                                    session_id=session_id,
-                                    initial_message=rca_prompt,
-                                    trigger_metadata={
-                                        "source": "grafana",
-                                        "alert_uid": alert_uid,
-                                        "alert_title": alert_title,
-                                        "alert_state": alert_state,
-                                    },
-                                    incident_id=str(incident_id)
-                                    if incident_id
-                                    else None,
-                                )
-                                
-                                # Store Celery task ID immediately for cancellation support
-                                if incident_id:
+                                if fingerprint:
                                     cursor.execute(
-                                        "UPDATE incidents SET rca_celery_task_id = %s WHERE id = %s",
-                                        (task.id, str(incident_id))
+                                        """SELECT id FROM incidents
+                                           WHERE user_id = %s AND source_type = 'grafana'
+                                             AND alert_metadata::jsonb ->> 'fingerprint' = %s
+                                           ORDER BY started_at DESC LIMIT 1""",
+                                        (user_id, fingerprint),
+                                    )
+                                    row = cursor.fetchone()
+                                    if row:
+                                        original_incident_id = row[0]
+
+                                    # Fallback: if the firing alert was correlated to an existing
+                                    # incident (via AlertCorrelator), its fingerprint lives in
+                                    # incident_alerts.alert_metadata, not in incidents.alert_metadata.
+                                    # Ex: Alert B is corrlated to alert A. Alert B's resolve won't find 
+                                    # alert B's fingerprint in incidents.alert_metadata, but in incident_alerts.alert_metadata.
+                                    if not original_incident_id:
+                                        cursor.execute(
+                                            """SELECT ia.incident_id FROM incident_alerts ia
+                                               JOIN incidents i ON i.id = ia.incident_id
+                                               WHERE ia.user_id = %s AND ia.source_type = 'grafana'
+                                                 AND ia.alert_metadata::jsonb ->> 'fingerprint' = %s
+                                               ORDER BY ia.received_at DESC LIMIT 1""",
+                                            (user_id, fingerprint),
+                                        )
+                                        row = cursor.fetchone()
+                                        if row:
+                                            original_incident_id = row[0]
+
+                                # Attach resolved alert to the original incident
+                                if original_incident_id:
+                                    cursor.execute(
+                                        """INSERT INTO incident_alerts
+                                           (user_id, incident_id, source_type, source_alert_id, alert_title, alert_service,
+                                            alert_severity, correlation_strategy, correlation_score, alert_metadata)
+                                           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                                        (
+                                            user_id, original_incident_id, "grafana", per_alert_source_id,
+                                            alert_title, _extract_service(alert_payload),
+                                            _extract_severity(alert_payload), "resolved_webhook", 1.0,
+                                            json.dumps({"resolved_webhook": True, "fingerprint": fingerprint}),
+                                        ),
                                     )
                                     conn.commit()
-                                
-                                logger.info(
-                                    "[GRAFANA][ALERT] Triggered background RCA chat for session %s (task_id=%s)",
-                                    session_id,
-                                    task.id,
-                                )
+                                    logger.info(
+                                        "[GRAFANA][ALERT] Correlated resolved alert (fp=%s) to incident %s",
+                                        fingerprint, original_incident_id,
+                                    )
+                                else:
+                                    logger.info(
+                                        "[GRAFANA][ALERT] Resolved alert for user %s, no matching incident (fp=%s). Skipping.",
+                                        user_id, fingerprint,
+                                    )
+                                continue
 
-                        except Exception as chat_exc:
-                            logger.exception(
-                                "[GRAFANA][ALERT] Failed to trigger background chat: %s",
-                                chat_exc,
+                            # -- Firing: create incident and trigger RCA --
+                            severity = _extract_severity(alert_payload)
+                            service = _extract_service(alert_payload)
+
+                            # Build alert metadata from the per-alert payload
+                            alert_metadata = {}
+                            if dashboard_url:
+                                alert_metadata["dashboardUrl"] = dashboard_url
+                            if panel_url:
+                                alert_metadata["panelUrl"] = panel_url
+                            if rule_url:
+                                alert_metadata["alertUrl"] = rule_url
+
+                            a_labels = alert_payload.get("commonLabels") or alert_payload.get("labels") or {}
+                            if a_labels:
+                                alert_metadata["labels"] = a_labels
+
+                            a_annotations = alert_payload.get("commonAnnotations") or alert_payload.get("annotations") or {}
+                            if a_annotations.get("summary"):
+                                alert_metadata["summary"] = a_annotations["summary"]
+                            if a_annotations.get("description"):
+                                alert_metadata["description"] = a_annotations["description"]
+                            if a_annotations.get("runbook_url"):
+                                alert_metadata["runbookUrl"] = a_annotations["runbook_url"]
+
+                            if alert_payload.get("values"):
+                                alert_metadata["values"] = alert_payload["values"]
+                            if alert_payload.get("imageURL"):
+                                alert_metadata["imageUrl"] = alert_payload["imageURL"]
+                            if alert_payload.get("silenceURL"):
+                                alert_metadata["silenceUrl"] = alert_payload["silenceURL"]
+                            if fingerprint:
+                                alert_metadata["fingerprint"] = fingerprint
+                            per_alert_rule_uid = single_alert.get("ruleUID") or single_alert.get("ruleUid")
+                            if per_alert_rule_uid:
+                                alert_metadata["ruleUID"] = per_alert_rule_uid
+
+                            # Try to correlate with an existing open incident (time/similarity/topology based)
+                            try:
+                                correlator = AlertCorrelator()
+                                correlation_result = correlator.correlate(
+                                    cursor=cursor, user_id=user_id, source_type="grafana",
+                                    source_alert_id=per_alert_source_id, alert_title=alert_title,
+                                    alert_service=service, alert_severity=severity,
+                                    alert_metadata=alert_metadata,
+                                )
+                                if correlation_result.is_correlated:
+                                    handle_correlated_alert(
+                                        cursor=cursor, user_id=user_id,
+                                        incident_id=correlation_result.incident_id,
+                                        source_type="grafana", source_alert_id=per_alert_source_id,
+                                        alert_title=alert_title, alert_service=service,
+                                        alert_severity=severity,
+                                        correlation_result=correlation_result,
+                                        alert_metadata=alert_metadata, raw_payload=alert_payload,
+                                    )
+                                    conn.commit()
+                                    continue
+                            except Exception as corr_exc:
+                                logger.warning("[GRAFANA] Correlation check failed: %s", corr_exc)
+
+                            # No correlation found — create a new incident
+                            cursor.execute(
+                                """INSERT INTO incidents
+                                   (user_id, source_type, source_alert_id, alert_title, alert_service,
+                                    severity, status, started_at, alert_metadata)
+                                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                                   ON CONFLICT (source_type, source_alert_id, user_id) DO UPDATE
+                                   SET updated_at = CURRENT_TIMESTAMP,
+                                       started_at = CASE WHEN incidents.status != 'analyzed'
+                                           THEN EXCLUDED.started_at ELSE incidents.started_at END,
+                                       alert_metadata = EXCLUDED.alert_metadata
+                                   RETURNING id""",
+                                (user_id, "grafana", per_alert_source_id, alert_title, service,
+                                 severity, "investigating", received_at, json.dumps(alert_metadata)),
                             )
-                            # Don't raise - alert was still stored successfully
+                            incident_row = cursor.fetchone()
+                            incident_id = incident_row[0] if incident_row else None
+                            conn.commit()
+
+                            # Record as the primary alert for this incident
+                            try:
+                                cursor.execute(
+                                    """INSERT INTO incident_alerts
+                                       (user_id, incident_id, source_type, source_alert_id, alert_title, alert_service,
+                                        alert_severity, correlation_strategy, correlation_score, alert_metadata)
+                                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                                    (user_id, incident_id, "grafana", per_alert_source_id, alert_title,
+                                     service, severity, "primary", 1.0, json.dumps(alert_metadata)),
+                                )
+                                cursor.execute(
+                                    "UPDATE incidents SET affected_services = ARRAY[%s] WHERE id = %s",
+                                    (service, incident_id),
+                                )
+                                conn.commit()
+                            except Exception as e:
+                                logger.warning("[GRAFANA] Failed to record primary alert: %s", e)
+
+                            if not incident_id:
+                                continue
+
+                            logger.info("[GRAFANA][ALERT] Created incident %s for alert %s (fp=%s)", incident_id, per_alert_source_id, fingerprint)
+
+                            # Push real-time update to frontend
+                            try:
+                                from routes.incidents_sse import broadcast_incident_update_to_user_connections
+                                broadcast_incident_update_to_user_connections(
+                                    user_id, {"type": "incident_update", "incident_id": str(incident_id), "source": "grafana"},
+                                )
+                            except Exception as e:
+                                logger.warning("[GRAFANA][ALERT] Failed to notify SSE: %s", e)
+
+                            # Generate a quick summary (fast, always runs)
+                            try:
+                                from chat.background.summarization import generate_incident_summary
+                                generate_incident_summary.delay(
+                                    incident_id=str(incident_id), user_id=user_id, source_type="grafana",
+                                    alert_title=alert_title or "Unknown Alert", severity=severity,
+                                    service=service, raw_payload=alert_payload, alert_metadata=alert_metadata,
+                                )
+                            except Exception as summary_exc:
+                                logger.warning("[GRAFANA][ALERT] Failed to enqueue summary for incident %s (%s): %s", incident_id, alert_title, summary_exc)
+
+                            # Trigger full RCA background chat
+                            if _should_trigger_background_chat(user_id, alert_payload):
+                                try:
+                                    from chat.background.task import (
+                                        run_background_chat, create_background_chat_session, is_background_chat_allowed,
+                                    )
+                                    if not is_background_chat_allowed(user_id):
+                                        logger.info("[GRAFANA][ALERT] Skipping background RCA - rate limited for user %s", user_id)
+                                    else:
+                                        chat_title = f"RCA: {alert_title or 'Grafana Alert'}"
+                                        session_id = create_background_chat_session(
+                                            user_id=user_id, title=chat_title,
+                                            trigger_metadata={"source": "grafana", "alert_uid": alert_uid, "alert_state": alert_state},
+                                        )
+                                        rca_prompt = _build_rca_prompt_from_alert(alert_payload, user_id=user_id)
+                                        task = run_background_chat.delay(
+                                            user_id=user_id, session_id=session_id, initial_message=rca_prompt,
+                                            trigger_metadata={"source": "grafana", "alert_uid": alert_uid,
+                                                              "alert_title": alert_title, "alert_state": alert_state},
+                                            incident_id=str(incident_id) if incident_id else None,
+                                        )
+                                        if incident_id:
+                                            cursor.execute(
+                                                "UPDATE incidents SET rca_celery_task_id = %s WHERE id = %s",
+                                                (task.id, str(incident_id)),
+                                            )
+                                            conn.commit()
+                                        logger.info("[GRAFANA][ALERT] Triggered background RCA for session %s (task_id=%s)", session_id, task.id)
+                                except Exception as chat_exc:
+                                    logger.exception("[GRAFANA][ALERT] Failed to trigger background chat: %s", chat_exc)
 
             except Exception as db_exc:
                 logger.exception(
