@@ -238,7 +238,7 @@ VALID_MODES = ("full", "comment_only")
 @jira_bp.route("/settings", methods=["GET", "OPTIONS"])
 @require_permission("connectors", "read")
 def get_settings(user_id):
-    mode = get_user_preference(user_id, JIRA_MODE_KEY, default="full")
+    mode = get_user_preference(user_id, JIRA_MODE_KEY, default="comment_only")
     return jsonify({"jiraMode": mode})
 
 
