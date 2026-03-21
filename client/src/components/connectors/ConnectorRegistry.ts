@@ -277,6 +277,17 @@ class ConnectorRegistry {
     });
 
     this.register({
+      id: "cloudflare",
+      name: "Cloudflare",
+      description: "Connect to Cloudflare for DNS management, cache purging, WAF & firewall rules, traffic analytics, Workers monitoring, and load balancer control.",
+      iconPath: "/cloudflare.svg",
+      iconBgColor: "bg-white dark:bg-white",
+      category: "Infrastructure",
+      path: "/cloudflare/auth",
+      storageKey: "isCloudflareConnected",
+    });
+
+    this.register({
       id: "jenkins",
       name: "Jenkins",
       description: "Connect to Jenkins to view jobs, builds, pipeline status, and build agents. Read-only access to your CI/CD server.",
