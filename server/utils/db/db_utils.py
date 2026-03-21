@@ -1560,6 +1560,20 @@ def initialize_tables():
                     logging.warning(f"Error creating index: {e}")
                     conn.rollback()
 
+            # Migration: Add Jira columns to postmortems table
+            try:
+                cursor.execute("""
+                    ALTER TABLE postmortems ADD COLUMN IF NOT EXISTS jira_issue_id TEXT;
+                    ALTER TABLE postmortems ADD COLUMN IF NOT EXISTS jira_issue_key TEXT;
+                    ALTER TABLE postmortems ADD COLUMN IF NOT EXISTS jira_issue_url TEXT;
+                    ALTER TABLE postmortems ADD COLUMN IF NOT EXISTS jira_exported_at TIMESTAMP;
+                """)
+                logging.info("Added Jira columns to postmortems table (if not exist).")
+                conn.commit()
+            except Exception as e:
+                logging.warning(f"Error adding Jira columns to postmortems: {e}")
+                conn.rollback()
+
             # View creation moved to after org_id migration (see below)
 
             # Early migration: ensure org_id column exists on all tables
@@ -1685,27 +1699,35 @@ def initialize_tables():
                 policies = cursor.fetchall()
                 logging.info(f"RLS policies for table '{table_name}': {policies}")
 
+            # Commit table creation and RLS before running migrations
+            conn.commit()
+
             # Migration: Add role column to users table for RBAC
             try:
+                cursor.execute("SAVEPOINT sp_role_col")
                 cursor.execute(
                     "ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(50) DEFAULT 'viewer';"
                 )
+                cursor.execute("RELEASE SAVEPOINT sp_role_col")
                 logging.info(
                     "Added role column to users table (if not exists)."
                 )
             except Exception as e:
                 logging.warning(f"Error adding role column to users: {e}")
-                conn.rollback()
+                cursor.execute("ROLLBACK TO SAVEPOINT sp_role_col")
 
             # Migration: Add must_change_password column to users table
             try:
+                cursor.execute("SAVEPOINT sp_mcp_col")
                 cursor.execute(
                     "ALTER TABLE users ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN DEFAULT FALSE;"
                 )
-                conn.commit()
+                cursor.execute("RELEASE SAVEPOINT sp_mcp_col")
             except Exception as e:
                 logging.warning(f"Error adding must_change_password column: {e}")
-                conn.rollback()
+                cursor.execute("ROLLBACK TO SAVEPOINT sp_mcp_col")
+
+            conn.commit()
 
             # Migration: Add org_id column to users and all org-scoped tables
             org_id_tables = [
@@ -1738,6 +1760,7 @@ def initialize_tables():
 
             # Add FK from users.org_id -> organizations.id (if not exists)
             try:
+                cursor.execute("SAVEPOINT sp_org_fk")
                 cursor.execute("""
                     DO $$
                     BEGIN
@@ -1751,9 +1774,10 @@ def initialize_tables():
                         END IF;
                     END $$;
                 """)
+                cursor.execute("RELEASE SAVEPOINT sp_org_fk")
             except Exception as e:
                 logging.warning(f"Error adding users.org_id FK: {e}")
-                conn.rollback()
+                cursor.execute("ROLLBACK TO SAVEPOINT sp_org_fk")
 
             # Migration: Create default org for existing users that have no org
             try:
@@ -1798,10 +1822,30 @@ def initialize_tables():
                     logging.info(
                         f"Migrated {orphan_count} users into default organization."
                     )
-                conn.commit()
+                    conn.commit()
             except Exception as e:
                 logging.warning(f"Error creating default org migration: {e}")
                 conn.rollback()
+
+            # Repair: ensure every user with an org has a Casbin role assignment.
+            # Covers partial failures from a previous startup crash mid-loop.
+            try:
+                from utils.auth.enforcer import assign_role_to_user, get_user_roles_in_org
+                cursor.execute(
+                    "SELECT id, role, org_id FROM users WHERE org_id IS NOT NULL"
+                )
+                for uid, urole, uorg in cursor.fetchall():
+                    if not get_user_roles_in_org(uid, uorg):
+                        try:
+                            assign_role_to_user(uid, urole or "viewer", uorg)
+                            logging.info("Repaired missing Casbin role for user %s", uid)
+                        except Exception as casbin_err:
+                            logging.warning(
+                                "Failed to repair Casbin role for user %s: %s",
+                                uid, casbin_err,
+                            )
+            except Exception as e:
+                logging.warning(f"Error in Casbin role repair: {e}")
 
             # Create org_id indexes for performance
             for tbl in org_id_tables:
