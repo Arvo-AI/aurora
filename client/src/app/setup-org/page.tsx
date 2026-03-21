@@ -37,6 +37,10 @@ export default function SetupOrgPage() {
       const data = await response.json()
 
       if (!response.ok) {
+        if (response.status === 404) {
+          await signOut({ callbackUrl: "/sign-in" })
+          return
+        }
         setError(data.error || "Failed to create organization")
         setIsLoading(false)
         return

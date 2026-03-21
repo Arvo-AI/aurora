@@ -9,11 +9,31 @@ import { CodeBlock } from "./code-block";
 import { processTextWithKeywords } from "./keyword-highlight";
 import { getLanguageFromCode } from "@/utils/language-detection";
 import { cn } from "@/lib/utils";
+import { ExternalLink } from "lucide-react";
 
 interface MarkdownRendererProps {
   content: string;
   className?: string;
   severity?: "info" | "error" | "success";
+}
+
+const jiraUrlRe = /\/browse\/([A-Z][A-Z0-9_]+-\d+)/;
+const jiraCommentRe = /[?&]focusedId=(\d+)/;
+
+function JiraLinkChip({ href, issueKey, isComment }: { href: string; issueKey: string; isComment: boolean }) {
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-800 text-blue-700 dark:text-blue-300 text-xs font-medium no-underline hover:bg-blue-100 dark:hover:bg-blue-900/50 transition-colors align-middle"
+    >
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img src="/jira.svg" alt="" className="w-3 h-3 flex-shrink-0" />
+      <span>{issueKey}{isComment ? " (comment)" : ""}</span>
+      <ExternalLink className="w-2.5 h-2.5 opacity-50 flex-shrink-0" />
+    </a>
+  );
 }
 
 // Custom components for ReactMarkdown
@@ -141,6 +161,21 @@ const components = {
       >
         {children}
       </pre>
+    );
+  },
+  a: ({ href, children, ...props }: any) => {
+    if (href) {
+      const jiraMatch = jiraUrlRe.exec(href);
+      if (jiraMatch) {
+        const issueKey = jiraMatch[1];
+        const isComment = jiraCommentRe.test(href);
+        return <JiraLinkChip href={href} issueKey={issueKey} isComment={isComment} />;
+      }
+    }
+    return (
+      <a href={href} target="_blank" rel="noopener noreferrer" {...props}>
+        {children}
+      </a>
     );
   },
 };
