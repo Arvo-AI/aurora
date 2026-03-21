@@ -45,6 +45,9 @@ class JiraClient:
 
         if auth_type == "oauth" and cloud_id:
             self.api_base = build_jira_oauth_api_base(cloud_id)
+        elif auth_type == "oauth":
+            logger.warning("OAuth auth_type without cloud_id; Cloud API calls will fail.")
+            self.api_base = build_jira_dc_api_base(self.base_url)
         else:
             self.api_base = build_jira_dc_api_base(self.base_url)
 
@@ -123,6 +126,7 @@ class JiraClient:
             "jql": jql,
             "maxResults": max_results,
             "fields": search_fields,
+            "startAt": start_at,
         }
 
         try:

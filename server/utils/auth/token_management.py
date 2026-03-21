@@ -74,7 +74,7 @@ def store_tokens_in_db(user_id: str, token_data: Dict, provider: str,
             logger.error("[STORE-TOKENS] Failed to store credentials in Vault: %s", type(secret_error).__name__)
             if "not available" in str(secret_error):
                 logger.error("[STORE-TOKENS] Please ensure VAULT_ADDR and VAULT_TOKEN environment variables are configured")
-            raise Exception(f"Vault storage failed: {type(secret_error).__name__}") from secret_error
+            raise
         
         with db_pool.get_admin_connection() as conn:
             cursor = conn.cursor()
