@@ -24,20 +24,43 @@ def text_to_adf(plain_text: str) -> Dict[str, Any]:
     }
 
 
+def _try_parse_link(text: str, start: int) -> tuple:
+    """Try to parse a markdown link at ``text[start]`` (which should be '[').
+
+    Returns ``(link_text, url, end_pos)`` on success or ``None`` if the
+    text at *start* is not a valid ``[text](url)`` link.  Uses simple
+    index scanning instead of regex to avoid polynomial backtracking.
+    """
+    close_bracket = text.find("]", start + 1)
+    if close_bracket == -1:
+        return None
+    if close_bracket + 1 >= len(text) or text[close_bracket + 1] != "(":
+        return None
+    close_paren = text.find(")", close_bracket + 2)
+    if close_paren == -1:
+        return None
+    link_text = text[start + 1 : close_bracket]
+    url = text[close_bracket + 2 : close_paren]
+    if not link_text or not url:
+        return None
+    return link_text, url, close_paren + 1
+
+
+_SIMPLE_MARKS_RE = re.compile(
+    r"(?P<bold_s>\*\*|__)"
+    r"|(?P<italic_s>[*_])"
+    r"|(?P<code>`)"
+    r"|(?P<bracket>\[)"
+)
+
+
 def _inline_marks(text: str) -> List[Dict[str, Any]]:
     """Parse inline markdown (bold, italic, code, links) into ADF inline nodes."""
     nodes: List[Dict[str, Any]] = []
     pos = 0
 
-    pattern = re.compile(
-        r"(?P<bold_s>\*\*|__)"
-        r"|(?P<italic_s>[*_])"
-        r"|(?P<code>`)"
-        r"|(?P<link>\[(?P<link_text>[^\]]+)\]\((?P<link_url>[^)]+)\))"
-    )
-
     while pos < len(text):
-        m = pattern.search(text, pos)
+        m = _SIMPLE_MARKS_RE.search(text, pos)
         if not m:
             remainder = text[pos:]
             if remainder:
@@ -47,13 +70,19 @@ def _inline_marks(text: str) -> List[Dict[str, Any]]:
         if m.start() > pos:
             nodes.append({"type": "text", "text": text[pos:m.start()]})
 
-        if m.group("link"):
-            nodes.append({
-                "type": "text",
-                "text": m.group("link_text"),
-                "marks": [{"type": "link", "attrs": {"href": m.group("link_url")}}],
-            })
-            pos = m.end()
+        if m.group("bracket"):
+            link = _try_parse_link(text, m.start())
+            if link:
+                link_text, url, end_pos = link
+                nodes.append({
+                    "type": "text",
+                    "text": link_text,
+                    "marks": [{"type": "link", "attrs": {"href": url}}],
+                })
+                pos = end_pos
+            else:
+                nodes.append({"type": "text", "text": "["})
+                pos = m.start() + 1
 
         elif m.group("code"):
             end = text.find("`", m.end())

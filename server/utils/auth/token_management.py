@@ -36,7 +36,7 @@ def store_tokens_in_db(user_id: str, token_data: Dict, provider: str,
             logging.debug("Could not resolve org_id: %s", e)
 
     if not org_id:
-        logging.warning(
+        logger.warning(
             "[STORE-TOKENS] No org_id resolved, provider %s - token will lack org scope",
             provider,
         )
@@ -45,30 +45,23 @@ def store_tokens_in_db(user_id: str, token_data: Dict, provider: str,
 
     try:
         logger.info("[STORE-TOKENS] Starting credential storage for provider: %s", provider)
-        logger.info(f"[STORE-TOKENS] Has subscription info: {bool(subscription_name or subscription_id)}")
 
         from utils.secrets.secret_ref_utils import SecretRefManager
 
         secret_manager = SecretRefManager()
 
-        # Create secret name
         safe_user_id = ''.join(c for c in user_id if c.isalnum() or c in '-_')
         secret_name = f"aurora-dev-{safe_user_id}-{provider}-token"
 
-        logger.info(f"[STORE-TOKENS] Generated secret name: {secret_name}")
-        logger.debug(f"[STORE-TOKENS] Token data keys: {list(token_data.keys()) if isinstance(token_data, dict) else 'string'}")
-
-        # Store credentials in Vault
         token_json = json.dumps(token_data) if isinstance(token_data, dict) else str(token_data)
-        logger.info(f"[STORE-TOKENS] Storing credentials in Vault (size: {len(token_json)} bytes)")
 
         try:
             secret_ref = secret_manager.store_secret(secret_name, token_json)
         except Exception as secret_error:
-            logger.error(f"[STORE-TOKENS] Failed to store credentials in Vault: {secret_error}")
+            logger.error("[STORE-TOKENS] Failed to store credentials in Vault: %s", type(secret_error).__name__)
             if "not available" in str(secret_error):
                 logger.error("[STORE-TOKENS] Please ensure VAULT_ADDR and VAULT_TOKEN environment variables are configured")
-            raise Exception(f"Vault storage failed: {secret_error}")
+            raise Exception(f"Vault storage failed: {type(secret_error).__name__}") from secret_error
         
         with db_pool.get_admin_connection() as conn:
             cursor = conn.cursor()
@@ -387,13 +380,11 @@ def store_tokens_in_db(user_id: str, token_data: Dict, provider: str,
             logger.warning(f"[STORE-TOKENS] Failed to clear secret cache: {cache_error}")
 
         elapsed_time = (time.perf_counter() - start_time) * 1000
-        logger.info("[STORE-TOKENS] Successfully stored credentials for provider: %s", provider)
-        logger.info(f"[STORE-TOKENS] Secret reference stored in database")
-        logger.info(f"[STORE-TOKENS] Total operation completed in {elapsed_time:.2f}ms")
+        logger.info("[STORE-TOKENS] Successfully stored credentials for provider %s in %.2fms", provider, elapsed_time)
 
     except Exception as e:
         elapsed_time = (time.perf_counter() - start_time) * 1000
-        logger.error("[STORE-TOKENS] Failed to store credentials for provider %s after %.2fms: %s", provider, elapsed_time, e)
+        logger.error("[STORE-TOKENS] Failed to store credentials for provider %s after %.2fms: %s", provider, elapsed_time, type(e).__name__)
         raise
 
 

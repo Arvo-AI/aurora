@@ -79,6 +79,11 @@ class JiraClient:
             return response.json()
         except requests.RequestException as exc:
             status_code = getattr(getattr(exc, "response", None), "status_code", None)
+            if getattr(exc, "request", None) is not None:
+                exc.request.headers = {
+                    k: ("***" if k.lower() == "authorization" else v)
+                    for k, v in (exc.request.headers or {}).items()
+                }
             logger.error("Jira API request failed: %s %s (%s) status=%s", method, path, type(exc).__name__, status_code)
             raise
 
