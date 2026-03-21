@@ -6,7 +6,7 @@ User API Key authentication for querying New Relic via NerdGraph (GraphQL).
 
 ### 1. Create a User API Key
 
-1. Log in to [one.newrelic.com](https://one.newrelic.com) and go to the profile menu > **API keys** (or visit `one.newrelic.com/api-keys`)
+1. Log in to [one.newrelic.com](https://one.newrelic.com) and go to **Administration > API keys** (or visit [one.newrelic.com/admin-portal/api-keys](https://one.newrelic.com/admin-portal/api-keys/))
 2. Click **Create a key** and select **User** as the key type
 3. Name the key (e.g., `Aurora Integration`) and save it
 4. Copy the key — it starts with `NRAK-`

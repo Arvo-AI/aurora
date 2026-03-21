@@ -55,7 +55,7 @@ export function NewRelicConnectionStep({
               Aurora uses the NerdGraph GraphQL API (User API Key) to query metrics, logs, traces, and incidents from your account.
             </p>
             <ol className="space-y-2 list-decimal list-inside">
-              <li>Log in to <strong>one.newrelic.com</strong> and navigate to the API Keys page (profile menu &rarr; API keys, or visit <code>one.newrelic.com/api-keys</code>).</li>
+              <li>Log in to <strong>one.newrelic.com</strong> and go to <strong>Administration &rarr; API keys</strong> (or visit <a href="https://one.newrelic.com/admin-portal/api-keys/" target="_blank" rel="noopener noreferrer" className="underline">one.newrelic.com/admin-portal/api-keys</a>).</li>
               <li>Click <strong>Create a key</strong> and select <strong>User</strong> as the key type.</li>
               <li>Name the key (e.g., &ldquo;Aurora Integration&rdquo;) and save it.</li>
               <li>Copy the key &mdash; it starts with <code>NRAK-</code>.</li>
