@@ -55,15 +55,15 @@ export default function AtlassianCallbackPage() {
         const jiraError = results.jira?.error;
         const confluenceError = results.confluence?.error;
 
+        if (!jiraConnected && !confluenceConnected) {
+          const detail = jiraError || confluenceError || "Token may lack required scopes.";
+          throw new Error(`No products connected. ${detail}`);
+        }
+
         if (typeof window !== "undefined") {
           if (confluenceConnected) localStorage.setItem("isConfluenceConnected", "true");
           if (jiraConnected) localStorage.setItem("isJiraConnected", "true");
           window.dispatchEvent(new CustomEvent("providerStateChanged"));
-        }
-
-        if (!jiraConnected && !confluenceConnected) {
-          const detail = jiraError || confluenceError || "Token may lack required scopes.";
-          throw new Error(`No products connected. ${detail}`);
         }
 
         setStatus("success");

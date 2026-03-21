@@ -47,8 +47,8 @@ def _try_parse_link(text: str, start: int) -> tuple:
 
 
 _SIMPLE_MARKS_RE = re.compile(
-    r"(?P<bold_s>\*\*|__)"
-    r"|(?P<italic_s>[*_])"
+    r"(?P<bold_s>\*\*)"
+    r"|(?P<italic_s>\*)"
     r"|(?P<code>`)"
     r"|(?P<bracket>\[)"
 )
@@ -251,9 +251,17 @@ def extract_action_items(markdown_text: str) -> List[Dict[str, Any]]:
     """Extract ``- [ ]`` task list items from markdown.
 
     Returns a list of dicts with keys ``text`` and ``checked``.
+    Fenced code blocks are skipped to avoid false positives.
     """
     items: List[Dict[str, Any]] = []
+    in_fence = False
     for line in markdown_text.split("\n"):
+        stripped = line.strip()
+        if stripped.startswith("```"):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
         m = re.match(r"^[-*]\s+\[([ xX])\]\s+(.*)", line)
         if m:
             items.append({

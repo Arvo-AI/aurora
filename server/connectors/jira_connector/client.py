@@ -138,9 +138,8 @@ class JiraClient:
                     "jql": jql,
                     "maxResults": max_results,
                     "startAt": start_at,
+                    "fields": search_fields,
                 }
-                if fields:
-                    legacy_body["fields"] = fields
                 return self._request("POST", "/search", json_body=legacy_body)
             raise
 

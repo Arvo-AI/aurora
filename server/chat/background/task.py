@@ -867,7 +867,8 @@ async def _execute_background_chat(
 
         # --- Phase 2: Jira action ---
         # Investigation is done. Now deterministically file in Jira.
-        if rca_context and rca_context.get('integrations', {}).get('jira'):
+        if rca_context and rca_context.get('integrations', {}).get('jira') \
+                and not _session_has_successful_jira_action(session_id):
             await _run_jira_action(
                 session_id=session_id,
                 user_id=user_id,

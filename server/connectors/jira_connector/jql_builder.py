@@ -7,8 +7,9 @@ from typing import List, Optional
 
 def _escape_jql_value(value: str) -> str:
     """Escape special JQL characters in a value."""
-    for ch in ('"', "'", "\\"):
-        value = value.replace(ch, f"\\{ch}")
+    value = value.replace("\\", "\\\\")
+    value = value.replace('"', '\\"')
+    value = value.replace("'", "\\'")
     return value
 
 
@@ -47,7 +48,7 @@ def build_incident_search_jql(
     if text:
         clauses.append(f'text ~ "{_escape_jql_value(text)}"')
 
-    if max_days_back:
+    if max_days_back is not None:
         max_days_back = max(max_days_back, 0)
         clauses.append(f"created >= -{max_days_back}d")
 

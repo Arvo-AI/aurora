@@ -42,5 +42,15 @@ def exchange_code_for_token(code: str) -> Dict[str, Any]:
 def select_confluence_resource(
     resources: List[Dict[str, Any]],
 ) -> Optional[Dict[str, Any]]:
-    """Pick a Confluence resource from accessible resources."""
-    return select_resource_for_product(resources, "confluence")
+    """Pick a Confluence resource from accessible resources.
+
+    Returns None when no resource has a matching Confluence scope,
+    rather than falling back to an unrelated product resource.
+    """
+    result = select_resource_for_product(resources, "confluence")
+    if result is None:
+        return None
+    scopes = result.get("scopes") or []
+    if not any("confluence" in s for s in scopes):
+        return None
+    return result

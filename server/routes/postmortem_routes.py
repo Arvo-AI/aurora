@@ -505,7 +505,7 @@ def export_to_jira(user_id, incident_id):
     action_items = extract_action_items(content)
     subtask_keys = []
     for item in action_items:
-        if not item.get("text"):
+        if not item.get("text") or item.get("checked"):
             continue
         try:
             sub_result = client.create_subtask(
