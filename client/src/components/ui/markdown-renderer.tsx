@@ -26,12 +26,12 @@ function JiraLinkChip({ href, issueKey, isComment }: { href: string; issueKey: s
       href={href}
       target="_blank"
       rel="noopener noreferrer"
-      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-800 text-blue-700 dark:text-blue-300 text-sm font-medium no-underline hover:bg-blue-100 dark:hover:bg-blue-900/50 transition-colors"
+      className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-800 text-blue-700 dark:text-blue-300 text-xs font-medium no-underline hover:bg-blue-100 dark:hover:bg-blue-900/50 transition-colors align-middle"
     >
       {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img src="/jira.svg" alt="" className="w-4 h-4 flex-shrink-0" />
+      <img src="/jira.svg" alt="" className="w-3 h-3 flex-shrink-0" />
       <span>{issueKey}{isComment ? " (comment)" : ""}</span>
-      <ExternalLink className="w-3 h-3 opacity-50 flex-shrink-0" />
+      <ExternalLink className="w-2.5 h-2.5 opacity-50 flex-shrink-0" />
     </a>
   );
 }

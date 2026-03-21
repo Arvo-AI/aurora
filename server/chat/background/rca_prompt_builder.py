@@ -423,16 +423,6 @@ def _has_jira_connected(user_id: str) -> bool:
         return False
 
 
-def _get_jira_mode(user_id: str) -> str:
-    """Return the user's Jira mode preference: 'full' or 'comment_only'."""
-    try:
-        from utils.auth.stateless_auth import get_user_preference
-        return get_user_preference(user_id, "jira_mode", default="full") or "full"
-    except Exception as e:
-        logger.warning(f"Error getting Jira mode: {e}")
-        return "full"
-
-
 def _has_confluence_connected(user_id: str) -> bool:
     """Check if user has Confluence connected and the feature flag is enabled."""
     try:
@@ -680,6 +670,10 @@ def build_rca_prompt(
                 "- Linked PRs/commits → exact code changes to correlate with the failure",
                 "",
                 "**Use Jira findings to NARROW your infrastructure investigation.** If a ticket mentions a DB migration, focus on DB connectivity. If a ticket mentions a config change, check configs first.",
+                "",
+                "**CRITICAL: During this investigation phase, ONLY use jira_search_issues and jira_get_issue.**",
+                "Do NOT use jira_create_issue, jira_add_comment, jira_update_issue, or jira_link_issues.",
+                "Jira filing happens automatically in a separate step after your investigation completes.",
             ])
 
         if has_confluence:
@@ -802,92 +796,6 @@ def build_rca_prompt(
         )
         if similar_context:
             prompt_parts.append(similar_context)
-
-    # Post-RCA actions: Jira ticket creation or comment
-    post_rca_actions = []
-    if user_id and has_jira:
-        jira_mode = _get_jira_mode(user_id)
-
-        if jira_mode == "comment_only":
-            post_rca_actions.extend([
-                "",
-                "## POST-ANALYSIS ACTIONS (REQUIRED):",
-                "After completing your investigation and documenting findings:",
-                "",
-                "### Jira — Add Findings to Existing Issue:",
-                "- Search for an existing issue: `jira_search_issues(jql='text ~ \"ALERT_TITLE\" AND type in (Bug, Incident) ORDER BY created DESC')`",
-                "- Add your RCA findings as a comment using the template below",
-                "- **NOTE: You are configured to COMMENT ONLY. Do NOT create new issues or link issues.**",
-                "- **IMPORTANT**: After adding a comment, the tool returns a `url` field. You MUST include this link in your final summary so the user can click through to the Jira comment. Format it as a markdown link: [View Jira Comment](URL)",
-                "",
-                "### Jira Comment Format:",
-                "Write the comment as SHORT, CLEAN plain text. No markdown syntax (no #, no **, no ```, no bullet dashes).",
-                "Use this structure — around 10-15 lines total:",
-                "",
-                "```",
-                "Aurora RCA — {Short Title}",
-                "",
-                "Root Cause: {1-2 sentences. Be specific — what broke and why.}",
-                "",
-                "Impact: {1 sentence. What users/services were affected and for how long.}",
-                "",
-                "Evidence: {1-2 key data points. e.g. 'connection pool at 0/50 available, 5xx rate 8.3%'}",
-                "",
-                "Remediation:",
-                "1. {Immediate fix applied or needed}",
-                "2. {Follow-up to prevent recurrence}",
-                "```",
-                "",
-                "RULES:",
-                "- Keep the entire comment under 15 lines",
-                "- No markdown formatting whatsoever — just plain text",
-                "- No investigation logs, no 'I analyzed...', no tool output dumps",
-                "- Third person, factual, like a postmortem note",
-                "- Use specific numbers, timestamps, and service names",
-                "",
-            ])
-        else:
-            post_rca_actions.extend([
-                "",
-                "## POST-ANALYSIS ACTIONS (REQUIRED):",
-                "After completing your investigation and documenting findings:",
-                "",
-                "### Jira — Create or Update Tracking Issue:",
-                "- Search for an existing issue: `jira_search_issues(jql='text ~ \"ALERT_TITLE\" AND type in (Bug, Incident) ORDER BY created DESC')`",
-                "- If NO existing issue, create one with your RCA findings:",
-                "  `jira_create_issue(project_key='PROJECT', summary='Incident: TITLE', description='...', issue_type='Bug')`",
-                "- If an existing issue IS found, add your findings as a comment: `jira_add_comment(issue_key='PROJ-123', comment='...')`",
-                "- **IMPORTANT**: After creating an issue or adding a comment, the tool returns a `url` field. You MUST include this link in your final summary so the user can click through to the Jira issue/comment. Format it as a markdown link: [View in Jira](URL)",
-                "",
-                "### Jira Comment/Description Format:",
-                "Write as SHORT, CLEAN plain text. No markdown syntax (no #, no **, no ```, no bullet dashes).",
-                "Use this structure — around 10-15 lines total:",
-                "",
-                "```",
-                "Aurora RCA — {Short Title}",
-                "",
-                "Root Cause: {1-2 sentences. Be specific — what broke and why.}",
-                "",
-                "Impact: {1 sentence. What users/services were affected and for how long.}",
-                "",
-                "Evidence: {1-2 key data points. e.g. 'connection pool at 0/50 available, 5xx rate 8.3%'}",
-                "",
-                "Remediation:",
-                "1. {Immediate fix applied or needed}",
-                "2. {Follow-up to prevent recurrence}",
-                "```",
-                "",
-                "RULES:",
-                "- Keep the entire comment under 15 lines",
-                "- No markdown formatting whatsoever — just plain text",
-                "- No investigation logs, no 'I analyzed...', no tool output dumps",
-                "- Third person, factual, like a postmortem note",
-                "- Use specific numbers, timestamps, and service names",
-                "",
-            ])
-
-    if post_rca_actions:
-        prompt_parts.extend(post_rca_actions)
 
     # Critical persistence instructions
     prompt_parts.extend([
