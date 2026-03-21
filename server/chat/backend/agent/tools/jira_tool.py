@@ -250,8 +250,13 @@ def jira_add_comment(
             ensure_ascii=False,
         )
 
+    comment_id = result.get("id")
+    browse_url = f"{client.base_url}/browse/{issue_key}"
+    if comment_id:
+        browse_url += f"?focusedId={comment_id}&page=com.atlassian.jira.plugin.system.issuetabpanels:comment-tabpanel#comment-{comment_id}"
+
     return json.dumps(
-        {"status": "success", "commentId": result.get("id"), "issueKey": issue_key},
+        {"status": "success", "commentId": comment_id, "issueKey": issue_key, "url": browse_url},
         ensure_ascii=False,
     )
 
@@ -307,8 +312,11 @@ def jira_create_issue(
             ensure_ascii=False,
         )
 
+    issue_key = result.get("key")
+    browse_url = f"{client.base_url}/browse/{issue_key}" if issue_key else None
+
     return json.dumps(
-        {"status": "success", "key": result.get("key"), "id": result.get("id")},
+        {"status": "success", "key": issue_key, "id": result.get("id"), "url": browse_url},
         ensure_ascii=False,
     )
 

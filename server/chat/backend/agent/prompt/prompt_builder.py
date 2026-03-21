@@ -1611,12 +1611,16 @@ def build_background_mode_segment(state: Optional[Any]) -> str:
                 "Post-analysis (comment on existing issues only):",
                 "- jira_add_comment(issue_key='PROJ-123', comment='update') - Add findings to existing issue",
                 "NOTE: You are configured to COMMENT ONLY. Do NOT create new issues or link issues.",
+                "After adding a comment or creating an issue, the tool returns a `url` field. Always share this link with the user as a markdown link so they can click through to Jira.",
+                "Write comments as short, clean plain text. No markdown syntax. Structure: Title, Root Cause, Impact, Evidence, Remediation. Under 15 lines.",
             ])
         else:
             parts.extend([
                 "Post-analysis (create tracking issue):",
                 "- jira_create_issue(project_key='PROJ', summary='title', description='details', issue_type='Bug') - Create incident tracking issue",
                 "- jira_add_comment(issue_key='PROJ-123', comment='update') - Add findings to existing issue",
+                "After adding a comment or creating an issue, the tool returns a `url` field. Always share this link with the user as a markdown link so they can click through to Jira.",
+                "Write comments as short, clean plain text. No markdown syntax. Structure: Title, Root Cause, Impact, Evidence, Remediation. Under 15 lines.",
             ])
 
     # SharePoint search tools (if connected)
