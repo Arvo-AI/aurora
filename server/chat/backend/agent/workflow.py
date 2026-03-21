@@ -673,6 +673,144 @@ class Workflow:
         
         return final_messages
 
+    @staticmethod
+    def _get_rca_context_for_session(session_id: str, user_id: str) -> Optional[dict]:
+        """Check if this session is linked to an incident and return its RCA context.
+
+        Returns a dict with summary/alert metadata or None if not an RCA session.
+        We do a single JOIN query rather than importing _get_incident_data from
+        chat.background.task (which is a private helper for notifications and would
+        create a dependency from the agent layer into the background task layer).
+        """
+        from utils.db.connection_pool import db_pool
+        try:
+            with db_pool.get_admin_connection() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """SELECT i.aurora_summary, i.alert_title, i.severity, i.alert_service,
+                                  i.aurora_status, i.source_type, cs.messages
+                           FROM chat_sessions cs
+                           JOIN incidents i ON i.id = cs.incident_id
+                           WHERE cs.id = %s AND cs.user_id = %s AND cs.incident_id IS NOT NULL""",
+                        (session_id, user_id),
+                    )
+                    row = cursor.fetchone()
+                    if row:
+                        return {
+                            "summary": row[0],
+                            "alert_title": row[1],
+                            "severity": row[2],
+                            "service": row[3],
+                            "aurora_status": row[4],
+                            "source_type": row[5],
+                            "ui_messages": row[6],
+                        }
+        except Exception as e:
+            logger.error(f"[RCA-Context] Failed to fetch RCA context for session {session_id}: {e}")
+        return None
+
+    @staticmethod
+    def _compress_rca_context(
+        existing_context: list,
+        rca_info: dict,
+        recent_tail_size: int = 8,
+    ) -> list:
+        """Replace full RCA llm_context_history with a compressed representation.
+
+        All RCA follow-ups (background Jira pass AND interactive user messages)
+        flow through here. Context sources, in priority order:
+          1. incidents.aurora_summary  (best — generated after RCA completes)
+          2. Last substantial bot message from chat_sessions.messages (UI field)
+          3. Last AIMessage from llm_context_history (least reliable — often sparse)
+
+        Returns a list of LangChain messages:
+          1. The original user prompt (first HumanMessage)
+          2. A synthetic AIMessage containing the RCA summary
+          3. The last `recent_tail_size` messages for conversational continuity
+        """
+        from langchain_core.messages import HumanMessage, AIMessage
+
+        alert_title = rca_info.get("alert_title") or "Unknown Alert"
+        severity = rca_info.get("severity") or "unknown"
+        service = rca_info.get("service") or "unknown"
+        source_type = rca_info.get("source_type") or "unknown"
+
+        # --- Resolve the best available summary text ---
+        summary_text = rca_info.get("summary") or ""
+        summary_source = "aurora_summary" if summary_text else None
+
+        if not summary_text:
+            # Fallback: extract last substantial bot response from UI messages
+            ui_messages = rca_info.get("ui_messages") or []
+            if isinstance(ui_messages, str):
+                import json as _json
+                try:
+                    ui_messages = _json.loads(ui_messages)
+                except Exception:
+                    ui_messages = []
+
+            for msg in reversed(ui_messages):
+                if isinstance(msg, dict) and msg.get("sender") in ("bot", "assistant"):
+                    text = msg.get("text") or msg.get("content") or ""
+                    if len(text) > 200:
+                        summary_text = text
+                        summary_source = "ui_messages"
+                        break
+
+        if not summary_text:
+            # Last resort: pull from llm_context_history
+            for msg in reversed(existing_context):
+                if isinstance(msg, AIMessage):
+                    content = msg.content if isinstance(msg.content, str) else str(msg.content)
+                    if len(content) > 100:
+                        summary_text = content
+                        summary_source = "llm_context_history"
+                        break
+
+        # If no summary could be found from any source, skip compression entirely.
+        # This happens during the initial RCA pass (no investigation has run yet).
+        if not summary_text:
+            logger.info(f"[RCA-Context] No summary content available — skipping compression")
+            return None
+
+        # 1. Find the original prompt (first HumanMessage)
+        original_prompt = None
+        for msg in existing_context:
+            if isinstance(msg, HumanMessage):
+                original_prompt = msg
+                break
+
+        # 2. Build the compressed summary message
+        compressed_summary = (
+            f"[RCA Investigation Summary — {source_type.title()} Alert]\n"
+            f"Alert: {alert_title}\n"
+            f"Service: {service} | Severity: {severity}\n\n"
+            f"{summary_text}\n\n"
+            f"[End of RCA summary. The full investigation above was conducted automatically. "
+            f"You may now continue the conversation with full knowledge of these findings.]"
+        )
+        summary_msg = AIMessage(content=compressed_summary)
+
+        # 3. Take the recent tail (last N messages for conversational flow)
+        recent_tail = existing_context[-recent_tail_size:] if len(existing_context) > recent_tail_size else existing_context
+
+        # 4. Assemble: original prompt + summary + recent tail (deduplicated)
+        compressed = []
+        if original_prompt:
+            compressed.append(original_prompt)
+        compressed.append(summary_msg)
+
+        for msg in recent_tail:
+            if msg is original_prompt:
+                continue
+            compressed.append(msg)
+
+        logger.info(
+            f"[RCA-Context] Compressed {len(existing_context)} messages to {len(compressed)} "
+            f"(source={summary_source}, summary_len={len(summary_text)}, tail={len(recent_tail)})"
+        )
+        return compressed
+
     async def stream(self, input_state: State):
         """Stream the workflow with enhanced tool interaction capture"""
         # Import here to avoid circular dependency
@@ -702,12 +840,26 @@ class Workflow:
             logger.info(f"Context load took {_ctx_ms:.1f} ms for session {input_state.session_id}")
             
             if existing_context:
-                # Combine existing context with new messages
-                combined_messages = []
-                combined_messages.extend(existing_context)
-                combined_messages.extend(input_state.messages)
-                input_state.messages = combined_messages
-                logger.info(f"Loaded {len(existing_context)} existing messages for session {input_state.session_id}, total messages: {len(input_state.messages)}")
+                rca_info = self._get_rca_context_for_session(
+                    input_state.session_id, input_state.user_id
+                )
+                compressed = self._compress_rca_context(existing_context, rca_info) if rca_info else None
+
+                if compressed:
+                    combined_messages = []
+                    combined_messages.extend(compressed)
+                    combined_messages.extend(input_state.messages)
+                    input_state.messages = combined_messages
+                    logger.info(
+                        f"[RCA-Context] Using compressed context for session {input_state.session_id}: "
+                        f"{len(existing_context)} raw → {len(compressed)} compressed + {len(input_state.messages) - len(compressed)} new"
+                    )
+                else:
+                    combined_messages = []
+                    combined_messages.extend(existing_context)
+                    combined_messages.extend(input_state.messages)
+                    input_state.messages = combined_messages
+                    logger.info(f"Loaded {len(existing_context)} existing messages for session {input_state.session_id}, total messages: {len(input_state.messages)}")
                 
                 # Handle attachments
                 original_attachments = getattr(input_state, 'attachments', None)
@@ -721,19 +873,34 @@ class Workflow:
                     input_state.attachments = previous_attachments
                     logger.info(f"Carried forward {len(previous_attachments)} attachments from previous context")
             else:
-                # Check for legacy session migration
-                if self._handle_legacy_session_migration(input_state, LLMContextManager):
-                    # Try loading context again after migration
-                    existing_context = LLMContextManager.load_context_history(
-                        input_state.session_id, 
-                        input_state.user_id
+                # llm_context_history is empty — check if this is an RCA session
+                # where we can still inject context from the incident summary / UI messages.
+                rca_info = self._get_rca_context_for_session(
+                    input_state.session_id, input_state.user_id
+                )
+                compressed = self._compress_rca_context([], rca_info) if rca_info else None
+                if compressed:
+                    combined_messages = []
+                    combined_messages.extend(compressed)
+                    combined_messages.extend(input_state.messages)
+                    input_state.messages = combined_messages
+                    logger.info(
+                        f"[RCA-Context] Injected RCA context into empty session {input_state.session_id}: "
+                        f"{len(compressed)} context msgs + {len(input_state.messages) - len(compressed)} new"
                     )
-                    if existing_context:
-                        combined_messages = []
-                        combined_messages.extend(existing_context)
-                        combined_messages.extend(input_state.messages)
-                        input_state.messages = combined_messages
-                        logger.info(f"Migrated and loaded {len(existing_context)} messages for legacy session {input_state.session_id}")
+                else:
+                    # Not an RCA session or no summary available yet — try legacy migration
+                    if self._handle_legacy_session_migration(input_state, LLMContextManager):
+                        existing_context = LLMContextManager.load_context_history(
+                            input_state.session_id, 
+                            input_state.user_id
+                        )
+                        if existing_context:
+                            combined_messages = []
+                            combined_messages.extend(existing_context)
+                            combined_messages.extend(input_state.messages)
+                            input_state.messages = combined_messages
+                            logger.info(f"Migrated and loaded {len(existing_context)} messages for legacy session {input_state.session_id}")
         
         # Log initial state
         logger.info(f"Starting workflow with session_id={input_state.session_id}, user_id={input_state.user_id}")

@@ -1592,6 +1592,37 @@ def build_background_mode_segment(state: Optional[Any]) -> str:
             "Cross-reference Confluence findings with live infrastructure state.",
         ])
 
+    # Jira integration (if connected)
+    if integrations.get('jira'):
+        jira_mode = integrations.get('jira_mode', 'comment_only')
+        parts.extend([
+            "",
+            "JIRA INTEGRATION:",
+            "Jira is connected. Use Jira tools to gain context during investigation AND to track the incident afterward:",
+            "",
+            "Investigation (use EARLY to narrow scope):",
+            "- jira_search_issues(jql='text ~ \"service\" AND updated >= -7d ORDER BY updated DESC') - Find recent work on the affected service",
+            "- jira_search_issues(jql='type in (Bug, Incident) AND status != Done ORDER BY updated DESC') - Find open bugs/incidents",
+            "- jira_get_issue(issue_key='PROJ-123') - Read issue details, linked PRs, comments for change context",
+            "",
+        ])
+        if jira_mode == "comment_only":
+            parts.extend([
+                "Post-analysis (comment on existing issues only):",
+                "- jira_add_comment(issue_key='PROJ-123', comment='update') - Add findings to existing issue",
+                "NOTE: You are configured to COMMENT ONLY. Do NOT create new issues or link issues.",
+                "After adding a comment or creating an issue, the tool returns a `url` field. Always share this link with the user as a markdown link so they can click through to Jira.",
+                "Write comments as short, clean plain text. No markdown syntax. Structure: Title, Root Cause, Impact, Evidence, Remediation. Under 15 lines.",
+            ])
+        else:
+            parts.extend([
+                "Post-analysis (create tracking issue):",
+                "- jira_create_issue(project_key='PROJ', summary='title', description='details', issue_type='Bug') - Create incident tracking issue",
+                "- jira_add_comment(issue_key='PROJ-123', comment='update') - Add findings to existing issue",
+                "After adding a comment or creating an issue, the tool returns a `url` field. Always share this link with the user as a markdown link so they can click through to Jira.",
+                "Write comments as short, clean plain text. No markdown syntax. Structure: Title, Root Cause, Impact, Evidence, Remediation. Under 15 lines.",
+            ])
+
     # SharePoint search tools (if connected)
     if integrations.get('sharepoint'):
         parts.extend([
