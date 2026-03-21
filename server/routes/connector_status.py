@@ -163,6 +163,7 @@ PROVIDER_CHECKERS = {
     "azure": _check_credentials_only,
     "tailscale": _check_credentials_only,
     "scaleway": _check_credentials_only,
+    "cloudflare": _check_credentials_only,
     "ovh": _check_credentials_only,
     "confluence": _check_credentials_only,
     "dynatrace": _check_credentials_only,
