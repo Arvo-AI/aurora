@@ -11,11 +11,19 @@ from typing import Any, Dict, List, Optional
 
 from connectors.atlassian_auth.auth import (
     exchange_code_for_token as _exchange,
-    fetch_accessible_resources,  # noqa: F401 – re-exported
+    fetch_accessible_resources,
     get_auth_url as _get_auth_url,
-    refresh_access_token,  # noqa: F401 – re-exported
+    refresh_access_token,
     select_resource_for_product,
 )
+
+__all__ = [
+    "get_auth_url",
+    "exchange_code_for_token",
+    "fetch_accessible_resources",
+    "refresh_access_token",
+    "select_confluence_resource",
+]
 
 FRONTEND_URL = os.getenv("FRONTEND_URL", "")
 REDIRECT_URI = f"{FRONTEND_URL}/confluence/callback"

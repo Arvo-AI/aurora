@@ -78,6 +78,7 @@ export function AtlassianConnectPage({ product, sibling }: AtlassianConnectPageP
   };
 
   const saveJiraMode = async (mode: "full" | "comment_only") => {
+    const previousMode = jiraMode;
     setJiraMode(mode);
     setIsSavingSettings(true);
     try {
@@ -89,8 +90,12 @@ export function AtlassianConnectPage({ product, sibling }: AtlassianConnectPageP
       });
       if (res.ok) {
         toast({ title: "Settings saved", description: mode === "full" ? "Aurora can create issues and comment" : "Aurora will only comment on existing issues" });
+      } else {
+        setJiraMode(previousMode);
+        toast({ title: "Failed to save settings", variant: "destructive" });
       }
     } catch {
+      setJiraMode(previousMode);
       toast({ title: "Failed to save settings", variant: "destructive" });
     } finally { setIsSavingSettings(false); }
   };

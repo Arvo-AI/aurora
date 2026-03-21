@@ -227,7 +227,7 @@ def _get_connected_integrations(user_id: str) -> Dict[str, bool]:
             )
             if integrations['jira']:
                 from utils.auth.stateless_auth import get_user_preference
-                integrations['jira_mode'] = get_user_preference(user_id, "jira_mode", default="full") or "full"
+                integrations['jira_mode'] = get_user_preference(user_id, "jira_mode", default="comment_only") or "comment_only"
     except Exception as e:
         logger.debug(f"[BackgroundChat] Error checking Jira: {e}")
 

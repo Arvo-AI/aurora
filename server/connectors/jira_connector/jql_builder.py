@@ -48,6 +48,7 @@ def build_incident_search_jql(
         clauses.append(f'text ~ "{_escape_jql_value(text)}"')
 
     if max_days_back:
+        max_days_back = max(max_days_back, 0)
         clauses.append(f"created >= -{max_days_back}d")
 
     query = " AND ".join(clauses)
@@ -62,7 +63,7 @@ def build_recent_issues_jql(
     """Build a JQL query for recent issues in a project."""
     clauses = [
         f'project = "{_escape_jql_value(project)}"',
-        f"created >= -{days_back}d",
+        f"created >= -{max(days_back, 0)}d",
     ]
     if status:
         clauses.append(f'status = "{_escape_jql_value(status)}"')

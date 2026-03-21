@@ -1594,7 +1594,7 @@ def build_background_mode_segment(state: Optional[Any]) -> str:
 
     # Jira integration (if connected)
     if integrations.get('jira'):
-        jira_mode = integrations.get('jira_mode', 'full')
+        jira_mode = integrations.get('jira_mode', 'comment_only')
         parts.extend([
             "",
             "JIRA INTEGRATION:",

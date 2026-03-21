@@ -298,12 +298,12 @@ def jira_create_issue(
             try:
                 detail = exc.__cause__.response.text[:500]
             except Exception:
-                pass
+                pass  # secondary extraction failure — already logged above
         elif hasattr(exc, "response"):
             try:
                 detail = exc.response.text[:500]
             except Exception:
-                pass
+                pass  # secondary extraction failure — already logged above
         return json.dumps(
             {"status": "error",
              "error": f"Failed to create Jira issue: {exc}. {detail}".strip(),

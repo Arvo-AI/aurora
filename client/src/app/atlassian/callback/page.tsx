@@ -90,8 +90,8 @@ export default function AtlassianCallbackPage() {
             setTimeout(() => router.replace(returnTo), 500);
             return;
           }
-        } catch {
-          // ignore
+        } catch (statusErr) {
+          console.warn('[AtlassianCallback] Status check failed:', statusErr);
         }
 
         setStatus("error");

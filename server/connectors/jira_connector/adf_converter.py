@@ -7,7 +7,7 @@ This module converts basic markdown into the ADF JSON structure.
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 
 def text_to_adf(plain_text: str) -> Dict[str, Any]:

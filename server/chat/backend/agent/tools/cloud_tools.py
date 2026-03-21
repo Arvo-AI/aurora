@@ -1522,7 +1522,7 @@ Once you identify which account has the issue, pass account_id (e.g. '1510256343
             _jira_creds = _get_jira_creds(user_id, "jira")
             if _jira_creds:
                 from utils.auth.stateless_auth import get_user_preference
-                _jira_mode = get_user_preference(user_id, "jira_mode", default="full") or "full"
+                _jira_mode = get_user_preference(user_id, "jira_mode", default="comment_only") or "comment_only"
 
                 _jira_tools = [
                     (jira_search_issues, "jira_search_issues", JiraSearchIssuesArgs,

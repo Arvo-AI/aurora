@@ -415,15 +415,18 @@ def export_to_jira(user_id, incident_id):
 
     issue_type = data.get("issueType", "Task")
 
+    org_id = get_org_id_from_request()
+
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
                 cursor.execute("SET myapp.current_user_id = %s", (user_id,))
+                cursor.execute("SET myapp.current_org_id = %s", (org_id,))
                 conn.commit()
                 cursor.execute(
                     """SELECT id, content FROM postmortems
-                       WHERE incident_id = %s AND user_id = %s""",
-                    (incident_id, user_id),
+                       WHERE incident_id = %s AND org_id = %s""",
+                    (incident_id, org_id),
                 )
                 row = cursor.fetchone()
     except Exception as e:
@@ -519,6 +522,7 @@ def export_to_jira(user_id, incident_id):
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
                 cursor.execute("SET myapp.current_user_id = %s", (user_id,))
+                cursor.execute("SET myapp.current_org_id = %s", (org_id,))
                 conn.commit()
                 cursor.execute(
                     """UPDATE postmortems
@@ -526,8 +530,8 @@ def export_to_jira(user_id, incident_id):
                            jira_issue_key = %s,
                            jira_issue_url = %s,
                            jira_exported_at = CURRENT_TIMESTAMP
-                       WHERE id = %s AND user_id = %s""",
-                    (str(parent_id), parent_key, parent_url, str(postmortem_id), user_id),
+                       WHERE id = %s AND org_id = %s""",
+                    (str(parent_id), parent_key, parent_url, str(postmortem_id), org_id),
                 )
                 conn.commit()
     except Exception as e:
