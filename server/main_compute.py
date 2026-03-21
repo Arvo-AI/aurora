@@ -337,7 +337,7 @@ from routes.confluence import bp as confluence_bp  # noqa: F401
 app.register_blueprint(confluence_bp, url_prefix="/confluence")
 
 # --- Unified Atlassian Routes (Confluence + Jira OAuth) ---
-from utils.flags.feature_flags import is_jira_enabled
+from utils.flags.feature_flags import is_jira_enabled, is_confluence_enabled
 if is_confluence_enabled() or is_jira_enabled():
     from routes.atlassian import bp as atlassian_bp  # noqa: F401
     app.register_blueprint(atlassian_bp, url_prefix="/atlassian")

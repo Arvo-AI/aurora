@@ -1,5 +1,5 @@
 import { Github, Server } from "lucide-react";
-import { isSlackEnabled, isOvhEnabled, isConfluenceEnabled, isSharePointEnabled, isBitbucketEnabled, isDynatraceEnabled, isThousandEyesEnabled, isBigPandaEnabled, isJiraEnabled, isSpinnakerEnabled } from "@/lib/feature-flags";
+import { isOvhEnabled, isSharePointEnabled, isJiraEnabled, isSpinnakerEnabled } from "@/lib/feature-flags";
 import type { ConnectorConfig } from "./types";
 
 class ConnectorRegistry {
