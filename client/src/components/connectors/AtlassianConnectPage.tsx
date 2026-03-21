@@ -120,10 +120,10 @@ export function AtlassianConnectPage({ product, sibling }: AtlassianConnectPageP
     if (!patUrl || !patToken) return;
     setIsPatConnecting(true);
     try {
-      const payload: Record<string, unknown> = { products: [product.key], authType: "pat" };
+      const payload: Record<string, unknown> = { products: [product.key], authType: "pat" as const };
       payload[`${product.key}BaseUrl`] = patUrl;
       payload[`${product.key}PatToken`] = patToken;
-      await atlassianService.connect(payload as Parameters<typeof atlassianService.connect>[0]);
+      await atlassianService.connect(payload as unknown as Parameters<typeof atlassianService.connect>[0]);
       await loadStatus();
       toast({ title: `${product.name} connected via PAT` });
       localStorage.setItem(product.storageKey, "true");

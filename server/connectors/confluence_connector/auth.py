@@ -1,55 +1,24 @@
 """Authentication helpers for the Confluence connector.
 
-Delegates to the shared atlassian_auth module for OAuth operations while
-preserving the existing Confluence-specific public API.
+Thin delegation layer over the shared atlassian_auth module, preserving the
+public API that existing callers (confluence_routes, runbook_utils, etc.) rely on.
 """
 
 from __future__ import annotations
 
-import logging
 import os
 from typing import Any, Dict, List, Optional
 
-from dotenv import load_dotenv
-
 from connectors.atlassian_auth.auth import (
     exchange_code_for_token as _exchange,
-    fetch_accessible_resources,
-    get_atlassian_oauth_config,
+    fetch_accessible_resources,  # noqa: F401 – re-exported
     get_auth_url as _get_auth_url,
-    refresh_access_token,
+    refresh_access_token,  # noqa: F401 – re-exported
     select_resource_for_product,
 )
 
-logger = logging.getLogger(__name__)
-
-load_dotenv()
-
-CONFLUENCE_AUTH_URL = "https://auth.atlassian.com/authorize"
-CONFLUENCE_TOKEN_URL = "https://auth.atlassian.com/oauth/token"
-CONFLUENCE_RESOURCES_URL = "https://api.atlassian.com/oauth/token/accessible-resources"
-
-CONFLUENCE_SCOPES = "read:page:confluence read:space:confluence read:user:confluence search:confluence offline_access"
-CONFLUENCE_AUDIENCE = "api.atlassian.com"
-
 FRONTEND_URL = os.getenv("FRONTEND_URL", "")
 REDIRECT_URI = f"{FRONTEND_URL}/confluence/callback"
-
-
-def _get_oauth_config() -> Dict[str, str]:
-    config = get_atlassian_oauth_config(redirect_uri=REDIRECT_URI)
-    config["scopes"] = CONFLUENCE_SCOPES
-    return config
-
-
-def _validate_oauth_config() -> Dict[str, str]:
-    config = _get_oauth_config()
-    missing = [key for key in ("client_id", "client_secret") if not config[key]]
-    if missing:
-        raise ValueError(
-            f"Confluence OAuth configuration missing: {', '.join(missing)}"
-        )
-    return config
 
 
 def get_auth_url(state: str) -> str:

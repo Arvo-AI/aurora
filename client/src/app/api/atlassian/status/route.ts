@@ -1,9 +1,9 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextResponse } from 'next/server';
 import { getAuthenticatedUser } from '@/lib/auth-helper';
 
 const API_BASE_URL = process.env.BACKEND_URL;
 
-export async function GET(request: NextRequest) {
+export async function GET() {
   try {
     const authResult = await getAuthenticatedUser();
     if (authResult instanceof NextResponse) return authResult;

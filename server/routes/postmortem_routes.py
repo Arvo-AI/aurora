@@ -544,5 +544,30 @@ def export_to_jira(user_id, incident_id):
 
 def _refresh_jira_credentials(user_id: str, creds: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Attempt to refresh OAuth Jira credentials."""
-    from routes.jira.jira_routes import _refresh_jira_credentials as _refresh
-    return _refresh(user_id, creds)
+    from connectors.atlassian_auth.auth import refresh_access_token as _refresh_token
+
+    refresh_token = creds.get("refresh_token")
+    if not refresh_token:
+        return None
+    try:
+        token_data = _refresh_token(refresh_token)
+    except Exception as exc:
+        logger.warning("[POSTMORTEM] Jira OAuth refresh failed for user %s: %s", user_id, exc)
+        return None
+
+    access_token = token_data.get("access_token")
+    if not access_token:
+        return None
+
+    updated = dict(creds)
+    updated["access_token"] = access_token
+    new_refresh = token_data.get("refresh_token")
+    if new_refresh:
+        updated["refresh_token"] = new_refresh
+    expires_in = token_data.get("expires_in")
+    if expires_in:
+        updated["expires_in"] = expires_in
+        updated["expires_at"] = int(time.time()) + int(expires_in)
+
+    store_tokens_in_db(user_id, updated, "jira")
+    return updated
