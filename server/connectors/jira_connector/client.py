@@ -12,6 +12,10 @@ logger = logging.getLogger(__name__)
 JIRA_OAUTH_API_BASE = "https://api.atlassian.com/ex/jira"
 
 
+def _log_unknown_auth_type(auth_type: str) -> None:
+    logger.warning("Unknown Jira auth_type=%s; defaulting to Bearer token.", auth_type)
+
+
 def build_jira_oauth_api_base(cloud_id: str) -> str:
     """Cloud REST API v3 base via Atlassian gateway."""
     return f"{JIRA_OAUTH_API_BASE}/{cloud_id}/rest/api/3"
@@ -37,7 +41,6 @@ class JiraClient:
         self.base_url = base_url.rstrip("/") if base_url else ""
         self.cloud_id = cloud_id
         self.auth_type = auth_type
-        self.access_token = access_token
         self.timeout = timeout
 
         if auth_type == "oauth" and cloud_id:
@@ -45,12 +48,9 @@ class JiraClient:
         else:
             self.api_base = build_jira_dc_api_base(self.base_url)
 
-        self.headers = {
-            "Authorization": f"Bearer {access_token}",
-            "Accept": "application/json",
-        }
+        self._auth_header = f"Bearer {access_token}"
         if auth_type not in {"oauth", "pat"}:
-            logger.warning("Unknown Jira auth_type=%s; defaulting to Bearer token.", auth_type)
+            _log_unknown_auth_type(auth_type)
 
     # ------------------------------------------------------------------
     # Low-level helpers
@@ -64,11 +64,12 @@ class JiraClient:
         json_body: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         url = f"{self.api_base}{path}"
+        headers = {"Authorization": self._auth_header, "Accept": "application/json"}
         try:
             response = requests.request(
                 method,
                 url,
-                headers=self.headers,
+                headers=headers,
                 params=params,
                 json=json_body,
                 timeout=self.timeout,

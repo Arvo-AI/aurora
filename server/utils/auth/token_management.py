@@ -12,6 +12,22 @@ from utils.db.connection_pool import db_pool
 logger = logging.getLogger(__name__)
 
 
+def _log_no_org(provider: str) -> None:
+    logger.warning("[STORE-TOKENS] No org_id resolved, provider %s - token will lack org scope", provider)
+
+
+def _log_store_start(provider: str) -> None:
+    logger.info("[STORE-TOKENS] Starting credential storage for provider: %s", provider)
+
+
+def _log_store_ok(provider: str, elapsed_ms: float) -> None:
+    logger.info("[STORE-TOKENS] Successfully stored credentials for provider %s in %.2fms", provider, elapsed_ms)
+
+
+def _log_store_fail(provider: str, elapsed_ms: float, exc: Exception) -> None:
+    logger.error("[STORE-TOKENS] Failed to store credentials for provider %s after %.2fms: %s", provider, elapsed_ms, type(exc).__name__)
+
+
 def store_tokens_in_db(user_id: str, token_data: Dict, provider: str,
                       subscription_name: str = None, subscription_id: str = None,
                       org_id: str = None) -> None:
@@ -36,15 +52,12 @@ def store_tokens_in_db(user_id: str, token_data: Dict, provider: str,
             logging.debug("Could not resolve org_id: %s", e)
 
     if not org_id:
-        logger.warning(
-            "[STORE-TOKENS] No org_id resolved, provider %s - token will lack org scope",
-            provider,
-        )
+        _log_no_org(provider)
 
     request_org_id = org_id
 
     try:
-        logger.info("[STORE-TOKENS] Starting credential storage for provider: %s", provider)
+        _log_store_start(provider)
 
         from utils.secrets.secret_ref_utils import SecretRefManager
 
@@ -380,11 +393,11 @@ def store_tokens_in_db(user_id: str, token_data: Dict, provider: str,
             logger.warning(f"[STORE-TOKENS] Failed to clear secret cache: {cache_error}")
 
         elapsed_time = (time.perf_counter() - start_time) * 1000
-        logger.info("[STORE-TOKENS] Successfully stored credentials for provider %s in %.2fms", provider, elapsed_time)
+        _log_store_ok(provider, elapsed_time)
 
     except Exception as e:
         elapsed_time = (time.perf_counter() - start_time) * 1000
-        logger.error("[STORE-TOKENS] Failed to store credentials for provider %s after %.2fms: %s", provider, elapsed_time, type(e).__name__)
+        _log_store_fail(provider, elapsed_time, e)
         raise
 
 
