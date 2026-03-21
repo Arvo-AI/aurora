@@ -328,12 +328,12 @@ const getLogoForCommand = (command: string | any, toolName: string, provider?: s
   }
 
   // Jira tools
-  if (tool.includes('jira')) {
+  if (tool.startsWith('jira_') || tool === 'jira') {
     return 'jira'
   }
 
   // Confluence tools
-  if (tool.includes('confluence')) {
+  if (tool.startsWith('confluence_') || tool === 'confluence') {
     return 'confluence'
   }
 

@@ -10,7 +10,7 @@ export async function GET() {
     const { headers: authHeaders } = authResult;
     const response = await fetch(`${API_BASE_URL}/jira/settings`, {
       method: 'GET',
-      headers: { ...authHeaders, 'Content-Type': 'application/json' },
+      headers: { ...authHeaders },
       credentials: 'include',
     });
     if (!response.ok) {

@@ -424,6 +424,9 @@ Data Center short links work correctly.
 | "Confluence page URL does not match configured base URL" | Verify the page is from your connected Confluence instance |
 | "Confluence credentials expired" | Reconnect via the Connectors page |
 | "Failed to validate Confluence PAT" | Verify PAT is valid and not expired |
+| "Jira credentials expired" | Reconnect via the Connectors page |
+| "Failed to validate Jira PAT" | Verify PAT is valid and not expired |
+| "Insufficient Jira scopes" | Ensure OAuth app has `read:jira-work` and `write:jira-work` scopes |
 
 ---
 

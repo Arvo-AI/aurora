@@ -17,8 +17,8 @@ interface MarkdownRendererProps {
   severity?: "info" | "error" | "success";
 }
 
-const JIRA_URL_RE = /\/browse\/([A-Z][A-Z0-9_]+-\d+)/;
-const JIRA_COMMENT_RE = /[?&]focusedId=(\d+)/;
+const jiraUrlRe = /\/browse\/([A-Z][A-Z0-9_]+-\d+)/;
+const jiraCommentRe = /[?&]focusedId=(\d+)/;
 
 function JiraLinkChip({ href, issueKey, isComment }: { href: string; issueKey: string; isComment: boolean }) {
   return (
@@ -165,10 +165,10 @@ const components = {
   },
   a: ({ href, children, ...props }: any) => {
     if (href) {
-      const jiraMatch = JIRA_URL_RE.exec(href);
+      const jiraMatch = jiraUrlRe.exec(href);
       if (jiraMatch) {
         const issueKey = jiraMatch[1];
-        const isComment = JIRA_COMMENT_RE.test(href);
+        const isComment = jiraCommentRe.test(href);
         return <JiraLinkChip href={href} issueKey={issueKey} isComment={isComment} />;
       }
     }

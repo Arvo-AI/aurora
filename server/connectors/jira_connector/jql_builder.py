@@ -40,7 +40,7 @@ def build_incident_search_jql(
 
     if labels:
         label_clauses = " AND ".join(
-            f'labels = "{_escape_jql_value(l)}"' for l in labels
+            f'labels = "{_escape_jql_value(label)}"' for label in labels
         )
         clauses.append(f"({label_clauses})")
 
