@@ -46,7 +46,7 @@ export function AtlassianConnectPage({ product, sibling }: AtlassianConnectPageP
   const [patUrl, setPatUrl] = useState("");
   const [patToken, setPatToken] = useState("");
   const [isPatConnecting, setIsPatConnecting] = useState(false);
-  const [jiraMode, setJiraMode] = useState<"full" | "comment_only">("full");
+  const [jiraMode, setJiraMode] = useState<"full" | "comment_only">("comment_only");
   const [isLoadingSettings, setIsLoadingSettings] = useState(false);
   const [isSavingSettings, setIsSavingSettings] = useState(false);
 
@@ -205,55 +205,63 @@ export function AtlassianConnectPage({ product, sibling }: AtlassianConnectPageP
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-2 pt-0">
-                <button
-                  onClick={() => saveJiraMode("full")}
-                  disabled={isSavingSettings}
-                  className={`w-full flex items-start gap-3 p-3 rounded-lg border text-left transition-colors ${
-                    jiraMode === "full"
-                      ? "border-[#2684FF] bg-[#2684FF]/[0.04]"
-                      : "border-border hover:bg-muted/50"
-                  }`}
-                >
-                  <div className={`mt-0.5 h-5 w-5 rounded-full border-2 flex items-center justify-center flex-shrink-0 ${
-                    jiraMode === "full" ? "border-[#2684FF]" : "border-muted-foreground/30"
-                  }`}>
-                    {jiraMode === "full" && <div className="h-2.5 w-2.5 rounded-full bg-[#2684FF]" />}
+                {isLoadingSettings ? (
+                  <div className="flex items-center justify-center py-6">
+                    <Loader2 className="h-5 w-5 animate-spin text-[#2684FF]" />
                   </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <FilePlus2 className="h-3.5 w-3.5 text-muted-foreground" />
-                      <span className="text-sm font-medium">Create & comment</span>
-                    </div>
-                    <p className="text-xs text-muted-foreground mt-0.5">
-                      Create new issues, link related issues, and comment on existing ones
-                    </p>
-                  </div>
-                </button>
+                ) : (
+                  <>
+                    <button
+                      onClick={() => saveJiraMode("comment_only")}
+                      disabled={isSavingSettings}
+                      className={`w-full flex items-start gap-3 p-3 rounded-lg border text-left transition-colors ${
+                        jiraMode === "comment_only"
+                          ? "border-[#2684FF] bg-[#2684FF]/[0.04]"
+                          : "border-border hover:bg-muted/50"
+                      }`}
+                    >
+                      <div className={`mt-0.5 h-5 w-5 rounded-full border-2 flex items-center justify-center flex-shrink-0 ${
+                        jiraMode === "comment_only" ? "border-[#2684FF]" : "border-muted-foreground/30"
+                      }`}>
+                        {jiraMode === "comment_only" && <div className="h-2.5 w-2.5 rounded-full bg-[#2684FF]" />}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <PenLine className="h-3.5 w-3.5 text-muted-foreground" />
+                          <span className="text-sm font-medium">Comment only</span>
+                        </div>
+                        <p className="text-xs text-muted-foreground mt-0.5">
+                          Only add comments to existing issues — no new issues or links
+                        </p>
+                      </div>
+                    </button>
 
-                <button
-                  onClick={() => saveJiraMode("comment_only")}
-                  disabled={isSavingSettings}
-                  className={`w-full flex items-start gap-3 p-3 rounded-lg border text-left transition-colors ${
-                    jiraMode === "comment_only"
-                      ? "border-[#2684FF] bg-[#2684FF]/[0.04]"
-                      : "border-border hover:bg-muted/50"
-                  }`}
-                >
-                  <div className={`mt-0.5 h-5 w-5 rounded-full border-2 flex items-center justify-center flex-shrink-0 ${
-                    jiraMode === "comment_only" ? "border-[#2684FF]" : "border-muted-foreground/30"
-                  }`}>
-                    {jiraMode === "comment_only" && <div className="h-2.5 w-2.5 rounded-full bg-[#2684FF]" />}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <PenLine className="h-3.5 w-3.5 text-muted-foreground" />
-                      <span className="text-sm font-medium">Comment only</span>
-                    </div>
-                    <p className="text-xs text-muted-foreground mt-0.5">
-                      Only add comments to existing issues — no new issues or links
-                    </p>
-                  </div>
-                </button>
+                    <button
+                      onClick={() => saveJiraMode("full")}
+                      disabled={isSavingSettings}
+                      className={`w-full flex items-start gap-3 p-3 rounded-lg border text-left transition-colors ${
+                        jiraMode === "full"
+                          ? "border-[#2684FF] bg-[#2684FF]/[0.04]"
+                          : "border-border hover:bg-muted/50"
+                      }`}
+                    >
+                      <div className={`mt-0.5 h-5 w-5 rounded-full border-2 flex items-center justify-center flex-shrink-0 ${
+                        jiraMode === "full" ? "border-[#2684FF]" : "border-muted-foreground/30"
+                      }`}>
+                        {jiraMode === "full" && <div className="h-2.5 w-2.5 rounded-full bg-[#2684FF]" />}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <FilePlus2 className="h-3.5 w-3.5 text-muted-foreground" />
+                          <span className="text-sm font-medium">Create & comment</span>
+                        </div>
+                        <p className="text-xs text-muted-foreground mt-0.5">
+                          Create new issues, link related issues, and comment on existing ones
+                        </p>
+                      </div>
+                    </button>
+                  </>
+                )}
               </CardContent>
             </Card>
           )}
