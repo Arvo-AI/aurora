@@ -103,6 +103,20 @@ class ConnectorRegistry {
     });
 
     this.register({
+      id: "newrelic",
+      name: "New Relic",
+      description: "Full-stack observability with New Relic. Query metrics, logs, traces, and alert issues via NerdGraph for automated root cause analysis.",
+      iconPath: "/newrelic.svg",
+      iconBgColor: "bg-white dark:bg-white",
+      category: "Monitoring",
+      path: "/newrelic/auth",
+      storageKey: "isNewRelicConnected",
+      alertsPath: "/newrelic/events",
+      alertsLabel: "View Issues",
+      useCustomConnection: true,
+    });
+
+    this.register({
         id: "thousandeyes",
         name: "ThousandEyes",
         description: "Connect Cisco ThousandEyes for network intelligence: tests, alerts, path visualization, BGP monitoring, and Internet Insights outage detection.",

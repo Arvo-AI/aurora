@@ -851,6 +851,28 @@ def initialize_tables():
                     CREATE INDEX IF NOT EXISTS idx_bigpanda_events_status ON bigpanda_events(incident_status);
                     CREATE INDEX IF NOT EXISTS idx_bigpanda_events_received_at ON bigpanda_events(received_at DESC);
                 """,
+                "newrelic_events": """
+                    CREATE TABLE IF NOT EXISTS newrelic_events (
+                        id SERIAL PRIMARY KEY,
+                        user_id VARCHAR(255) NOT NULL,
+                        org_id VARCHAR(255),
+                        issue_id VARCHAR(255),
+                        issue_title TEXT,
+                        priority VARCHAR(20),
+                        state VARCHAR(50),
+                        entity_names TEXT,
+                        payload JSONB NOT NULL,
+                        received_at TIMESTAMP NOT NULL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE(org_id, issue_id)
+                    );
+
+                    CREATE INDEX IF NOT EXISTS idx_newrelic_events_user_id ON newrelic_events(user_id, received_at DESC);
+                    CREATE INDEX IF NOT EXISTS idx_newrelic_events_issue_id ON newrelic_events(issue_id);
+                    CREATE INDEX IF NOT EXISTS idx_newrelic_events_state ON newrelic_events(state);
+                    CREATE INDEX IF NOT EXISTS idx_newrelic_events_priority ON newrelic_events(priority);
+                    CREATE INDEX IF NOT EXISTS idx_newrelic_events_received_at ON newrelic_events(received_at DESC);
+                """,
                 "kubectl_agent_tokens": """
                     CREATE TABLE IF NOT EXISTS kubectl_agent_tokens (
                         id SERIAL PRIMARY KEY,
@@ -1032,6 +1054,7 @@ def initialize_tables():
             rls_tables.append("jenkins_deployment_events")
             rls_tables.append("spinnaker_deployment_events")
             rls_tables.append("dynatrace_problems")
+            rls_tables.append("newrelic_events")
 
             # Add incidents table
             # Note: incident_suggestions and incident_thoughts are child tables with CASCADE DELETE
@@ -1725,7 +1748,7 @@ def initialize_tables():
                 "pagerduty_events", "incidents", "incident_alerts",
                 "rca_notification_emails", "splunk_alerts",
                 "jenkins_deployment_events", "dynatrace_problems",
-                "bigpanda_events", "kubectl_agent_tokens",
+                "bigpanda_events", "newrelic_events", "kubectl_agent_tokens",
                 "k8s_pods", "k8s_nodes", "k8s_node_conditions",
                 "k8s_services", "k8s_deployments", "k8s_ingresses",
                 "k8s_pod_metrics", "k8s_node_metrics",

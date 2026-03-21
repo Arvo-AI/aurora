@@ -149,6 +149,30 @@ def _check_credentials_only(creds: Dict[str, Any]) -> Dict[str, Any]:
     return {"connected": True}
 
 
+def _check_newrelic(creds: Dict[str, Any]) -> Dict[str, Any]:
+    """Validate New Relic credentials via NerdGraph user query."""
+    api_key = creds.get("api_key")
+    account_id = creds.get("account_id")
+    if not api_key or not account_id:
+        return {"connected": False}
+    region = creds.get("region", "us")
+    endpoint = "https://api.eu.newrelic.com/graphql" if region == "eu" else "https://api.newrelic.com/graphql"
+    try:
+        r = requests.post(
+            endpoint,
+            json={"query": "{ actor { user { email } } }"},
+            headers={"Content-Type": "application/json", "API-Key": api_key},
+            timeout=HTTP_TIMEOUT,
+        )
+        data = r.json()
+        email = data.get("data", {}).get("actor", {}).get("user", {}).get("email")
+        if email:
+            return {"connected": True, "accountId": account_id, "region": region}
+        return {"connected": False}
+    except Exception:
+        return {"connected": False}
+
+
 PROVIDER_CHECKERS = {
     "grafana": _check_grafana,
     "datadog": _check_datadog,
@@ -170,6 +194,7 @@ PROVIDER_CHECKERS = {
     "bigpanda": _check_credentials_only,
     "slack": _check_credentials_only,
     "bitbucket": _check_credentials_only,
+    "newrelic": _check_newrelic,
 }
 
 
