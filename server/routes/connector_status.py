@@ -237,8 +237,8 @@ def _check_bitbucket(creds: Dict[str, Any]) -> Dict[str, Any]:
                 uid = creds.get("_user_id")
                 if uid:
                     store_tokens_in_db(uid, refreshed, "bitbucket")
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("[CONNECTOR_STATUS] Bitbucket token refresh failed, using existing token: %s", exc)
 
     try:
         from connectors.bitbucket_connector.api_client import BitbucketAPIClient
@@ -409,8 +409,8 @@ def _check_pagerduty(creds: Dict[str, Any]) -> Dict[str, Any]:
             if uid:
                 try:
                     store_tokens_in_db(uid, creds, "pagerduty")
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("[CONNECTOR_STATUS] PagerDuty token persist failed (non-fatal): %s", exc)
         access_token = creds.get("access_token")
         if not access_token:
             return {"connected": False}

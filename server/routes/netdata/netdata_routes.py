@@ -116,13 +116,13 @@ def disconnect(user_id):
                 )
                 conn.commit()
 
-        logger.info("[NETDATA] Disconnected user %s (tokens=%d, alerts=%d)", user_id, deleted, alert_rows)
+        logger.info("[NETDATA] Disconnected user (tokens=%d, alerts=%d)", deleted, alert_rows)
         return jsonify({
             "success": True,
             "message": "Netdata disconnected successfully",
         })
     except Exception as exc:
-        logger.exception(f"[NETDATA] Failed to disconnect user {user_id}: {exc}")
+        logger.exception("[NETDATA] Failed to disconnect user: %s", exc)
         return jsonify({"error": "Failed to disconnect Netdata"}), 500
 
 

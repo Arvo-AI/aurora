@@ -7,8 +7,6 @@ interface CacheState {
 }
 
 const DEBOUNCE_MS = 2_000;
-const RETRY_DELAY_MS = 3_000;
-const MAX_RETRIES = 2;
 
 let state: CacheState = { accounts: {}, providerIds: [], fetchedAt: 0 };
 let inflight: Promise<CacheState> | null = null;
@@ -82,19 +80,10 @@ export function subscribe(listener: Listener): () => void {
   return () => { listeners.delete(listener); };
 }
 
-function refresh() { fetchConnectedAccounts(true); }
-
-async function refreshWithRetry() {
-  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-    try {
-      await fetchConnectedAccounts(true);
-      return;
-    } catch {
-      if (attempt < MAX_RETRIES) {
-        await new Promise(r => setTimeout(r, RETRY_DELAY_MS * (attempt + 1)));
-      }
-    }
-  }
+function refresh() {
+  fetchConnectedAccounts(true).catch((err) => {
+    console.error('[connected-accounts-cache] refresh failed:', err);
+  });
 }
 
 if (typeof window !== 'undefined') {
