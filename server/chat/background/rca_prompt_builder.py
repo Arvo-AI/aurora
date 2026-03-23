@@ -359,36 +359,14 @@ Use the actual tool names (cloud_exec, terminal_exec) when making calls.""")
     return "\n".join(sections)
 
 
-def _get_github_context(user_id: str) -> Optional[list]:
-    """Get all connected GitHub repos with metadata for this user."""
+def _get_github_connected(user_id: str) -> bool:
+    """Check if user has GitHub connected."""
     try:
-        from utils.db.connection_pool import db_pool
         from utils.auth.stateless_auth import get_credentials_from_db
-
-        github_creds = get_credentials_from_db(user_id, "github")
-        if not github_creds or not github_creds.get("access_token"):
-            return None
-
-        with db_pool.get_admin_connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """SELECT repo_full_name, default_branch, metadata_summary
-                       FROM github_connected_repos
-                       WHERE user_id = %s ORDER BY repo_full_name""",
-                    (user_id,),
-                )
-                rows = cur.fetchall()
-
-        if not rows:
-            return None
-
-        return [
-            {"repo": r[0], "branch": r[1] or "main", "summary": r[2] or ""}
-            for r in rows
-        ]
-    except Exception as e:
-        logger.warning(f"Error checking GitHub context: {e}")
-        return None
+        creds = get_credentials_from_db(user_id, "github")
+        return bool(creds and creds.get("access_token"))
+    except Exception:
+        return False
 
 
 def _has_jenkins_connected(user_id: str) -> bool:
@@ -538,45 +516,18 @@ def build_rca_prompt(
     ])
 
     # GitHub Integration
-    if user_id:
-        github_repos = _get_github_context(user_id)
-        if github_repos:
-            prompt_parts.extend(["", "## GITHUB REPOSITORIES:"])
-
-            if len(github_repos) == 1:
-                r = github_repos[0]
-                prompt_parts.extend([
-                    f"- **Connected Repository**: {r['repo']} (branch: {r['branch']})",
-                    f"- **Description**: {r['summary']}" if r['summary'] else "",
-                ])
-            else:
-                prompt_parts.append("You have multiple repositories connected. Choose the most relevant based on the alert.")
-                prompt_parts.append("")
-                for r in github_repos:
-                    desc = f" -- {r['summary']}" if r['summary'] else ""
-                    prompt_parts.append(f"- **{r['repo']}** (branch: {r['branch']}){desc}")
-
-            prompt_parts.extend([
-                "",
-                "### GITHUB RCA TOOL:",
-                "Use `github_rca` with `repo='owner/repo'` to investigate a specific repository.",
-                "If unsure which repo is relevant, call `get_connected_repos` first.",
-                "",
-                "**Investigation Commands:**",
-                "1. `github_rca(repo='owner/repo', action='deployment_check')` -- recent workflow runs",
-                "2. `github_rca(repo='owner/repo', action='commits')` -- recent commits",
-                "3. `github_rca(repo='owner/repo', action='pull_requests')` -- merged PRs",
-                "4. `github_rca(repo='owner/repo', action='diff', commit_sha='SHA')` -- commit diff",
-                "",
-                "IMPORTANT: Always pass `repo=` explicitly. Do NOT use terminal commands for GitHub.",
-                "ALWAYS check GitHub BEFORE diving into infrastructure commands.",
-                "",
-                "### FIX SUGGESTIONS:",
-                "When you identify a code issue, use `github_fix` to suggest a fix:",
-                "- Only suggest fixes with HIGH CONFIDENCE in the root cause",
-                "- Provide COMPLETE file content, not just the diff",
-                "- The fix is stored for user review, never applied automatically",
-            ])
+    if user_id and _get_github_connected(user_id):
+        prompt_parts.extend([
+            "",
+            "## GITHUB:",
+            "GitHub is connected. Call `get_connected_repos` to list available repositories with descriptions,",
+            "then use `github_rca(repo='owner/repo', action=...)` to investigate code changes.",
+            "",
+            "**Actions:** deployment_check, commits, pull_requests, diff (with commit_sha).",
+            "ALWAYS check GitHub BEFORE diving into infrastructure commands.",
+            "",
+            "When you identify a code issue, use `github_fix` to suggest a fix.",
+        ])
 
     # Provider-specific investigation section
     provider_section = _build_provider_investigation_section(providers, user_id)

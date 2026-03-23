@@ -10,11 +10,10 @@ from celery_config import celery_app
 logger = logging.getLogger(__name__)
 
 METADATA_PROMPT = (
-    "You are summarizing a GitHub repository for an SRE/DevOps team. "
-    "Based on the available information below, write a 2-3 sentence summary of: "
-    "what this repo does, what services or infrastructure it manages, "
-    "and key technologies used. Be concise and specific. "
-    "If no README is provided, infer from the file and directory names.\n\n"
+    "Write a 2-3 sentence summary of this GitHub repository. "
+    "State what it does, what services/infrastructure it contains, and key technologies. "
+    "Infer from file names if no README is available. "
+    "Output ONLY the summary. No notes, caveats, warnings, or markdown headers.\n\n"
     "{context}"
 )
 

@@ -480,66 +480,24 @@ def build_failure_recovery_segment(state: Optional[Any]) -> str:
 
 
 def build_github_context_segment(user_id: Optional[str]) -> str:
-    """Build GitHub context segment with connected repos and metadata summaries."""
-    import logging
-
+    """Build GitHub context segment -- lightweight, repos are fetched via tool call."""
     if not user_id:
         return ""
-
     try:
         from utils.auth.stateless_auth import get_credentials_from_db
-
         github_creds = get_credentials_from_db(user_id, 'github')
         if not github_creds or not github_creds.get('username'):
             return ""
 
-        username = github_creds.get('username', '')
-        logging.info(f"Building GitHub context for user {user_id}, username: {username}")
-
-        parts: List[str] = []
-        parts.append("GITHUB INTEGRATION CONTEXT:\n")
-        parts.append(f"- Connected GitHub account: {username}\n")
-
-        # Load connected repos from new multi-repo table
-        from utils.db.connection_pool import db_pool
-        with db_pool.get_admin_connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """SELECT repo_full_name, default_branch, metadata_summary
-                       FROM github_connected_repos
-                       WHERE user_id = %s ORDER BY repo_full_name""",
-                    (user_id,),
-                )
-                rows = cur.fetchall()
-
-        if rows:
-            parts.append(f"\nConnected repositories ({len(rows)}):\n")
-            for r in rows:
-                full_name, branch, summary = r[0], r[1] or "main", r[2] or ""
-                desc = f" -- {summary}" if summary else ""
-                parts.append(f"- {full_name} (branch: {branch}){desc}\n")
-            parts.append("\n")
-        else:
-            parts.append("- No repositories connected yet.\n\n")
-
-        parts.append("GITHUB MCP TOOLS AVAILABLE (Official GitHub MCP Server):\n")
-        parts.append("Full access to the Official GitHub MCP Server tools for all GitHub operations.\n\n")
-
-        parts.append("**Key tool categories:** Repository & Files, Issues, Pull Requests, ")
-        parts.append("GitHub Actions/Workflows, Security & Scanning, Discussions & Projects, ")
-        parts.append("Gists & Notifications, Users & Search.\n\n")
-
-        parts.append("GITHUB TOOL USAGE RULES:\n")
-        parts.append("- Always pass repo='owner/repo' to specify which repository.\n")
-        parts.append("- If unsure which repo is relevant, call get_connected_repos first.\n")
-        parts.append("- Use github_rca for RCA investigation (deployment_check, commits, diff, pull_requests).\n")
-        parts.append("- Use MCP tools (prefixed with 'mcp_') for direct GitHub API operations.\n")
-
-        return "".join(parts)
-
-    except Exception as e:
-        import logging
-        logging.warning(f"Error building GitHub context segment: {e}")
+        return (
+            "GITHUB INTEGRATION:\n"
+            f"- Connected account: {github_creds['username']}\n"
+            "- Call get_connected_repos to list available repositories with descriptions.\n"
+            "- Always pass repo='owner/repo' to github_rca and MCP tools.\n"
+            "- Use github_rca for RCA (deployment_check, commits, diff, pull_requests).\n"
+            "- Use MCP tools (mcp_*) for direct GitHub API operations.\n"
+        )
+    except Exception:
         return ""
 
 
