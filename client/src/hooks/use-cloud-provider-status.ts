@@ -1,54 +1,32 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect } from 'react';
+import {
+  fetchConnectedAccounts,
+  getConnectedAccounts,
+  subscribe,
+} from '@/lib/connected-accounts-cache';
 
 /**
  * Hook to check if user is logged into any cloud provider.
- * Uses /api/connected-accounts as the single source of truth (database-backed,
- * org-aware) instead of localStorage, so org-shared connections are visible
- * to all members.
+ * Reads from a shared in-memory cache (single fetch for all consumers).
  */
 export function useCloudProviderStatus() {
   const [connectedProviders, setConnectedProviders] = useState<Record<string, boolean>>({});
   const [isLoading, setIsLoading] = useState(true);
 
-  const fetchStatus = useCallback(async () => {
-    try {
-      const response = await fetch('/api/connected-accounts', {
-        credentials: 'include',
-      });
-      if (!response.ok) {
-        console.error('Failed to fetch connected accounts:', response.status);
-        return;
-      }
-      const data = await response.json();
-      const accounts = data.accounts || {};
-
-      const status: Record<string, boolean> = {};
-      for (const key of Object.keys(accounts)) {
-        status[key.toLowerCase()] = true;
-      }
-      setConnectedProviders(status);
-    } catch (error) {
-      console.error('Error fetching cloud provider status:', error);
-    } finally {
-      setIsLoading(false);
-    }
-  }, []);
-
   useEffect(() => {
-    fetchStatus();
-
-    const handleProviderStateChange = () => {
-      fetchStatus();
+    const sync = () => {
+      const { providerIds } = getConnectedAccounts();
+      const status: Record<string, boolean> = {};
+      for (const id of providerIds) status[id] = true;
+      setConnectedProviders(status);
+      setIsLoading(false);
     };
 
-    window.addEventListener('providerStateChanged', handleProviderStateChange);
-    window.addEventListener('providerConnectionAction', handleProviderStateChange);
+    fetchConnectedAccounts().then(sync).catch(() => setIsLoading(false));
 
-    return () => {
-      window.removeEventListener('providerStateChanged', handleProviderStateChange);
-      window.removeEventListener('providerConnectionAction', handleProviderStateChange);
-    };
-  }, [fetchStatus]);
+    const unsub = subscribe(sync);
+    return unsub;
+  }, []);
 
   const isGCPConnected = connectedProviders['gcp'] ?? false;
   const isAWSConnected = connectedProviders['aws'] ?? false;

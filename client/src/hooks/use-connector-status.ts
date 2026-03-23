@@ -5,6 +5,7 @@ import { isOvhEnabled, isScalewayEnabled } from "@/lib/feature-flags";
 import { getEnv } from '@/lib/env';
 import type { ConnectorConfig } from "@/components/connectors/types";
 import { slackService } from "@/lib/services/slack";
+import { fetchConnectedAccounts } from '@/lib/connected-accounts-cache';
 
 const pagerdutyService = require("@/lib/services/pagerduty").pagerdutyService;
 
@@ -181,25 +182,12 @@ export function useConnectorStatus(connector: ConnectorConfig, userId: string | 
   };
 
   /**
-   * Unified API-based connection check. Fetches /api/connected-accounts
-   * (the single source of truth backed by the database) and checks if this
-   * connector's provider appears in the response. Works for all providers
-   * regardless of connection method (OAuth, STS, API key, etc.).
+   * Unified connection check using the shared connected-accounts cache.
    */
   const checkApiConnectionStatus = async () => {
     try {
-      const response = await fetch('/api/connected-accounts', {
-        credentials: 'include',
-      });
-      if (!response.ok) {
-        console.error('Failed to fetch connected accounts:', response.status);
-        return;
-      }
-      const data = await response.json();
-      const accounts = data.accounts || {};
-      const isConnectedInDb = Object.keys(accounts).some(
-        key => key.toLowerCase() === connector.id.toLowerCase()
-      );
+      const { providerIds } = await fetchConnectedAccounts();
+      const isConnectedInDb = providerIds.includes(connector.id.toLowerCase());
       setIsConnected(isConnectedInDb);
     } catch (error) {
       console.error('Error checking API connection status:', error);

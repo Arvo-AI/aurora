@@ -1,5 +1,10 @@
 import { Provider } from '../types';
 import { getEnv } from '@/lib/env';
+import {
+  fetchConnectedAccounts,
+  getConnectedAccounts,
+  subscribe,
+} from '@/lib/connected-accounts-cache';
 
 const BACKEND_URL = getEnv('NEXT_PUBLIC_BACKEND_URL');
 
@@ -30,7 +35,6 @@ export class ProviderPolling {
 
   // Fetch actual connection status from backend API (source of truth)
   private async fetchConnectionStatusFromAPI(): Promise<Record<string, boolean>> {
-    // Avoid fetching too frequently (debounce to 2 seconds)
     const now = Date.now();
     if (this.isFetching || (now - this.lastFetchTime < 2000)) {
       return this.connectionStatus;
@@ -40,9 +44,9 @@ export class ProviderPolling {
     this.lastFetchTime = now;
 
     try {
-      const [tokensResponse, accountsResponse] = await Promise.all([
+      const [tokensResponse] = await Promise.all([
         fetch('/api/user-tokens'),
-        fetch('/api/connected-accounts'),
+        fetchConnectedAccounts(),
       ]);
 
       const newStatus: Record<string, boolean> = {};
@@ -60,15 +64,12 @@ export class ProviderPolling {
         }
       }
 
-      // 2) Role-based connections (connected-accounts, e.g. AWS STS)
-      if (accountsResponse.ok) {
-        const accountsData = await accountsResponse.json();
-        const accounts = accountsData.accounts || {};
-        for (const provider of Object.keys(accounts)) {
-          const normalized = provider.toLowerCase();
-          if (accounts[provider]?.isConnected) {
-            newStatus[normalized] = true;
-          }
+      // 2) Role-based connections from shared cache
+      const { accounts } = getConnectedAccounts();
+      for (const provider of Object.keys(accounts)) {
+        const normalized = provider.toLowerCase();
+        if (accounts[provider]?.isConnected) {
+          newStatus[normalized] = true;
         }
       }
 

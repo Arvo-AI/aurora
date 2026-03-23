@@ -1,11 +1,15 @@
 /**
- * Shared hook for getting connected providers from database
- * Fetches all connected providers via /api/connected-accounts
- * No longer uses "selected" providers - all connected providers are shown
+ * Shared hook for getting connected providers from database.
+ * Reads from a shared in-memory cache (single fetch for all consumers).
  */
 
 import { useState, useEffect } from 'react';
 import { isOvhEnabled } from '@/lib/feature-flags';
+import {
+  fetchConnectedAccounts,
+  getConnectedAccounts,
+  subscribe,
+} from '@/lib/connected-accounts-cache';
 
 export interface SelectedProvider {
   id: string;
@@ -13,7 +17,6 @@ export interface SelectedProvider {
   icon: string;
 }
 
-// Only show Infrastructure category connectors in the chat panel
 const PROVIDER_CONFIG = {
   gcp: { name: 'Google Cloud', icon: '/google-cloud-svgrepo-com.svg' },
   aws: { name: 'AWS', icon: '/aws.ico' },
@@ -26,57 +29,23 @@ const PROVIDER_CONFIG = {
 export const useSelectedProviders = () => {
   const [connectedProviderIds, setConnectedProviderIds] = useState<string[]>([]);
 
-  // Fetch connected providers from database via /api/connected-accounts
   useEffect(() => {
-    const fetchConnectedProviders = async () => {
-      try {
-        const response = await fetch('/api/connected-accounts');
-        if (!response.ok) {
-          console.error('Failed to fetch connected accounts:', response.status);
-          setConnectedProviderIds([]);
-          return;
-        }
-
-        const data = await response.json();
-        // Extract provider IDs from the accounts object keys
-        // Normalize to lowercase to handle any case mismatches
-        const providers = Object.keys(data.accounts || {}).map(p => p.toLowerCase());
-        setConnectedProviderIds(providers);
-      } catch (error) {
-        console.error('Failed to load connected providers:', error);
-        setConnectedProviderIds([]);
-      }
+    const sync = () => {
+      const { providerIds } = getConnectedAccounts();
+      setConnectedProviderIds(providerIds);
     };
 
-    fetchConnectedProviders();
+    fetchConnectedAccounts().then(sync).catch(() => setConnectedProviderIds([]));
 
-    // Listen for provider state changes to refresh
-    const handleProviderChange = () => {
-      fetchConnectedProviders();
-    };
-    window.addEventListener('providerStateChanged', handleProviderChange);
-    window.addEventListener('providerConnectionAction', handleProviderChange);
-    
-    return () => {
-      window.removeEventListener('providerStateChanged', handleProviderChange);
-      window.removeEventListener('providerConnectionAction', handleProviderChange);
-    };
+    const unsub = subscribe(sync);
+    return unsub;
   }, []);
 
-  // Map connected providers to display format, excluding disabled features
-  // Only show providers that are in PROVIDER_CONFIG (have proper icons/names configured)
-  // and are enabled via feature flags
   const connectedProviders: SelectedProvider[] = connectedProviderIds
     .filter(id => {
-      // Only include providers that are in PROVIDER_CONFIG (case-insensitive check)
       const normalizedId = id.toLowerCase();
-      if (!(normalizedId in PROVIDER_CONFIG)) {
-        return false;
-      }
-
-      // Check feature flags for providers that can be disabled
+      if (!(normalizedId in PROVIDER_CONFIG)) return false;
       if (normalizedId === 'ovh' && !isOvhEnabled()) return false;
-
       return true;
     })
     .map(id => {
