@@ -7,114 +7,11 @@ wrapping existing GitHub MCP tools with timeline correlation and intelligent rep
 
 import json
 import logging
-import re
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Any, Optional, Tuple, List, Literal
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
-
-
-def _get_kb_memory_content(user_id: str) -> Optional[str]:
-    """Fetch Knowledge Base Memory content for the user's org."""
-    try:
-        from utils.db.connection_pool import db_pool
-        with db_pool.get_admin_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT org_id FROM users WHERE id = %s", (user_id,))
-            user_row = cursor.fetchone()
-            org_id = user_row[0] if user_row else None
-
-            if org_id:
-                cursor.execute(
-                    "SELECT content FROM knowledge_base_memory WHERE org_id = %s ORDER BY updated_at DESC LIMIT 1",
-                    (org_id,)
-                )
-            else:
-                cursor.execute(
-                    "SELECT content FROM knowledge_base_memory WHERE user_id = %s ORDER BY updated_at DESC LIMIT 1",
-                    (user_id,)
-                )
-            row = cursor.fetchone()
-            if row and row[0]:
-                return row[0].strip()
-    except Exception as e:
-        logger.warning(f"Error fetching KB memory for user {user_id}: {e}")
-    return None
-
-
-def _search_kb_documents_for_repos(user_id: str) -> List[Tuple[str, str]]:
-    """
-    Search Knowledge Base Documents for GitHub repository references.
-
-    Searches for common terms like 'github', 'repository', 'repo' in user's
-    uploaded documents (runbooks, etc.) and extracts repo references.
-
-    Returns: List of (owner, repo_name) tuples
-    """
-    try:
-        from routes.knowledge_base.weaviate_client import search_knowledge_base
-
-        # Search for documents mentioning GitHub repos
-        results = search_knowledge_base(
-            user_id=user_id,
-            query="github repository repo source code",
-            limit=5,
-            alpha=0.3,  # Favor keyword matching for this use case
-            min_score=0.0,
-        )
-
-        if not results:
-            return []
-
-        # Combine all result content and parse for repos
-        all_content = "\n".join(r.get("content", "") for r in results)
-        return _parse_repos_from_text(all_content)
-
-    except Exception as e:
-        logger.warning(f"Error searching KB documents for repos: {e}")
-        return []
-
-
-def _parse_repos_from_text(text: str) -> List[Tuple[str, str]]:
-    """
-    Extract GitHub repository references from text.
-
-    Looks for patterns like:
-    - github.com/owner/repo
-    - owner/repo (when preceded by common indicators)
-
-    Returns: List of (owner, repo_name) tuples
-    """
-    repos: List[Tuple[str, str]] = []
-    seen: set[str] = set()
-
-    def add_repo(owner: str, repo: str) -> None:
-        """Add repo to results if not already seen."""
-        key = f"{owner}/{repo}".lower()
-        if key not in seen:
-            repos.append((owner, repo))
-            seen.add(key)
-
-    # Pattern 1: github.com/owner/repo (with optional branch info)
-    github_url_pattern = r'github\.com/([a-zA-Z0-9_.-]+)/([a-zA-Z0-9_.-]+)'
-    for match in re.finditer(github_url_pattern, text, re.IGNORECASE):
-        owner, repo = match.group(1), match.group(2)
-        # Clean up repo name (remove .git suffix, parentheses, etc.)
-        repo = re.sub(r'\.git$', '', repo)
-        repo = re.sub(r'\).*$', '', repo)
-        add_repo(owner, repo)
-
-    # Pattern 2: explicit owner/repo format (common in markdown lists)
-    # Match patterns like "- service: owner/repo" or "repo: owner/repo"
-    explicit_pattern = r'(?:^|\s|:)\s*([a-zA-Z0-9_.-]+)/([a-zA-Z0-9_.-]+)(?:\s|$|\(|,)'
-    false_positives = {'http', 'https', 'git', 'ssh', 'file'}
-    for match in re.finditer(explicit_pattern, text, re.MULTILINE):
-        owner, repo = match.group(1), match.group(2)
-        if owner.lower() not in false_positives:
-            add_repo(owner, repo)
-
-    return repos
 
 
 class GitHubRCAArgs(BaseModel):
@@ -160,18 +57,6 @@ class GitHubRCAArgs(BaseModel):
     )
 
 
-def _select_first_repo(
-    repos: List[Tuple[str, str]],
-    source: str
-) -> Tuple[str, str]:
-    """Select first repo from list and log if multiple found."""
-    owner, repo_name = repos[0]
-    if len(repos) > 1:
-        repo_list = ", ".join(f"{o}/{r}" for o, r in repos)
-        logger.info(f"Multiple repos found in {source} ({repo_list}), using first: {owner}/{repo_name}")
-    return owner, repo_name
-
-
 def _parse_owner_repo(full_name: str) -> Optional[Tuple[str, str]]:
     """Parse 'owner/repo' string into tuple, returns None if invalid format."""
     parts = full_name.split('/')
@@ -187,51 +72,41 @@ def _resolve_repository(
     """
     Resolve repository using priority order:
     1. Explicit repo parameter
-    2. Knowledge Base Memory (repos mentioned by user)
-    3. Knowledge Base Documents (search runbooks, docs for repo refs)
-    4. Connected repo from github_repo_selection
+    2. Single connected repo (auto-select if only one)
+    3. Error if multiple repos and none specified
 
     Returns: (owner, repo_name, source_description)
     """
-    # 1. Explicit repo parameter
     if explicit_repo:
         parsed = _parse_owner_repo(explicit_repo)
         if parsed:
             return parsed[0], parsed[1], "explicit parameter"
         logger.warning(f"Invalid repo format: {explicit_repo}")
 
-    # 2. Knowledge Base Memory - check if user has documented repos
-    kb_memory = _get_kb_memory_content(user_id)
-    if kb_memory:
-        repos = _parse_repos_from_text(kb_memory)
-        if repos:
-            owner, repo_name = _select_first_repo(repos, "KB Memory")
-            return owner, repo_name, "Knowledge Base Memory"
-
-    # 3. Knowledge Base Documents - search uploaded docs (runbooks, etc.)
-    doc_repos = _search_kb_documents_for_repos(user_id)
-    if doc_repos:
-        owner, repo_name = _select_first_repo(doc_repos, "KB Documents")
-        return owner, repo_name, "Knowledge Base Documents"
-
-    # 4. Connected repo from user settings (fallback)
     try:
-        from utils.auth.stateless_auth import get_credentials_from_db
-        selection = get_credentials_from_db(user_id, "github_repo_selection")
-        if selection:
-            full_name = selection.get("repository", {}).get("full_name")
-            if full_name:
-                parsed = _parse_owner_repo(full_name)
-                if parsed:
-                    if kb_memory:
-                        logger.warning(
-                            f"No GitHub repo found in Knowledge Base, falling back to connected repo: {full_name}"
-                        )
-                    return parsed[0], parsed[1], "connected repository (fallback)"
-    except Exception as e:
-        logger.warning(f"Error getting connected repo: {e}")
+        from utils.db.connection_pool import db_pool
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT repo_full_name FROM github_connected_repos WHERE user_id = %s",
+                    (user_id,),
+                )
+                rows = cur.fetchall()
 
-    return None, None, "no repository found"
+        if not rows:
+            return None, None, "no repository found"
+
+        if len(rows) == 1:
+            parsed = _parse_owner_repo(rows[0][0])
+            if parsed:
+                return parsed[0], parsed[1], "connected repository"
+
+        repo_list = ", ".join(r[0] for r in rows)
+        logger.info(f"Multiple repos connected ({repo_list}), agent must specify repo= explicitly")
+        return None, None, f"multiple repos connected ({repo_list}). Call get_connected_repos and pass repo='owner/repo' explicitly"
+    except Exception as e:
+        logger.warning(f"Error resolving repository: {e}")
+        return None, None, "no repository found"
 
 
 def _calculate_time_windows(

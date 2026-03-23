@@ -63,6 +63,7 @@ celery_app.conf.update(
         'routes.knowledge_base.tasks',
         'services.discovery.tasks',
         'utils.aws.credential_refresh',
+        'routes.github.github_repo_metadata',
     ],
     # Periodic task schedule
     beat_schedule={
@@ -154,6 +155,12 @@ try:
     logging.info("AWS credential refresh task imported successfully")
 except ImportError as e:
     logging.warning(f"Failed to import AWS credential refresh task: {e}")
+
+try:
+    import routes.github.github_repo_metadata  # noqa: F401
+    logging.info("GitHub repo metadata task imported successfully")
+except ImportError as e:
+    logging.warning(f"Failed to import GitHub repo metadata task: {e}")
 
 # Log the number of registered tasks for debugging
 if hasattr(celery_app, 'tasks'):

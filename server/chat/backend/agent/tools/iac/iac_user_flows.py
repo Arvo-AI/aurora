@@ -82,31 +82,24 @@ def prepare_github_commit_suggestion(
         branch = "main"
 
         try:
-            credentials = get_user_cloud_credentials(user_id)
-
-            if credentials and "github_repo_selection" in credentials:
-                repo_selection = credentials["github_repo_selection"]
-
-                if repo_selection.get("repository") and repo_selection.get("branch"):
-                    repo_data = repo_selection["repository"]
-                    branch_data = repo_selection["branch"]
-
-                    repo = repo_data.get("full_name", repo)
-                    branch = branch_data.get("name", branch)
-
-                    logger.info(
-                        f"Found stored GitHub selection for user {user_id}: {repo} / {branch}"
+            from utils.db.connection_pool import db_pool
+            with db_pool.get_admin_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """SELECT repo_full_name, default_branch
+                           FROM github_connected_repos
+                           WHERE user_id = %s ORDER BY created_at LIMIT 1""",
+                        (user_id,),
                     )
-                else:
-                    logger.info(
-                        f"No GitHub repo selection found for user {user_id}, using defaults"
-                    )
+                    row = cur.fetchone()
+            if row:
+                repo = row[0]
+                branch = row[1] or "main"
+                logger.info(f"Found GitHub repo for user {user_id}: {repo} / {branch}")
             else:
-                logger.info(
-                    f"No GitHub repo selection found for user {user_id}, using defaults"
-                )
+                logger.info(f"No GitHub repos connected for user {user_id}, using defaults")
         except Exception as e:
-            logger.warning(f"Error fetching GitHub repo selection: {e}")
+            logger.warning(f"Error fetching GitHub repo: {e}")
 
         commit_message = f"Apply Terraform changes from Aurora session {session_id[:8]}"
 

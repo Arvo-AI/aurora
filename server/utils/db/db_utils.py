@@ -291,6 +291,23 @@ def initialize_tables():
                         UNIQUE(user_id, provider)
                     );
                 """,
+                "github_connected_repos": """
+                    CREATE TABLE IF NOT EXISTS github_connected_repos (
+                        id SERIAL PRIMARY KEY,
+                        user_id VARCHAR(255) NOT NULL,
+                        org_id VARCHAR(255),
+                        repo_full_name VARCHAR(512) NOT NULL,
+                        repo_id INTEGER,
+                        default_branch VARCHAR(255),
+                        is_private BOOLEAN DEFAULT false,
+                        metadata_summary TEXT,
+                        metadata_status VARCHAR(20) DEFAULT 'pending',
+                        repo_data JSONB,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE(user_id, repo_full_name)
+                    );
+                """,
                 "user_manual_vms": """
                     CREATE TABLE IF NOT EXISTS user_manual_vms (
                         id SERIAL PRIMARY KEY,

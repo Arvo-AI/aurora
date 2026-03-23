@@ -40,7 +40,7 @@ class GitHubFixArgs(BaseModel):
     )
     repo: Optional[str] = Field(
         default=None,
-        description="Repository in 'owner/repo' format. If not provided, uses Knowledge Base mapping or connected repo."
+        description="Repository in 'owner/repo' format. Required when multiple repos are connected."
     )
     branch: Optional[str] = Field(
         default=None,
