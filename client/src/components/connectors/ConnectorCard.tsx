@@ -39,9 +39,17 @@ export default function ConnectorCard({ connector, connectedOverride }: Connecto
   const [showAzureDialog, setShowAzureDialog] = useState(false);
   const [isConnectingOAuth, setIsConnectingOAuth] = useState(false);
   
-  // Single source of truth for GitHub status
-  const githubStatus = useGitHubStatus(connector.id === "github" ? userId : null);
-  const bitbucketStatus = useBitbucketStatus(connector.id === "bitbucket" ? userId : null);
+  const hasOverride = connectedOverride !== undefined;
+
+  // GitHub/Bitbucket two-tier status (authenticated vs fully connected)
+  // Only instantiate when this card IS the github/bitbucket card AND
+  // no batch override was provided (i.e., on individual manage pages).
+  const githubStatus = useGitHubStatus(
+    !hasOverride && connector.id === "github" ? userId : null
+  );
+  const bitbucketStatus = useBitbucketStatus(
+    !hasOverride && connector.id === "bitbucket" ? userId : null
+  );
 
   const {
     isConnected,
