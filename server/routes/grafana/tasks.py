@@ -227,6 +227,12 @@ def process_grafana_alert(
                             fingerprint = single_alert.get("fingerprint")
                             per_alert_source_id = alert_id
 
+                            per_alert_title = (
+                                alert_payload.get("commonLabels", {}).get("alertname")
+                                or alert_payload.get("labels", {}).get("alertname")
+                                or alert_title
+                            )
+
                             # If resolved webhook, find the original incident by fingerprint and attach this alert to it as a correlated event and skip RCA.
                             if _is_resolved_alert(alert_payload):
                                 original_incident_id = None
@@ -270,7 +276,7 @@ def process_grafana_alert(
                                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
                                         (
                                             user_id, original_incident_id, "grafana", per_alert_source_id,
-                                            alert_title, _extract_service(alert_payload),
+                                            per_alert_title, _extract_service(alert_payload),
                                             _extract_severity(alert_payload), "resolved_webhook", 1.0,
                                             json.dumps({"resolved_webhook": True, "fingerprint": fingerprint}),
                                         ),
@@ -340,7 +346,7 @@ def process_grafana_alert(
                                 correlator = AlertCorrelator()
                                 correlation_result = correlator.correlate(
                                     cursor=cursor, user_id=user_id, source_type="grafana",
-                                    source_alert_id=per_alert_source_id, alert_title=alert_title,
+                                    source_alert_id=per_alert_source_id, alert_title=per_alert_title,
                                     alert_service=service, alert_severity=severity,
                                     alert_metadata=alert_metadata,
                                 )
@@ -349,7 +355,7 @@ def process_grafana_alert(
                                         cursor=cursor, user_id=user_id,
                                         incident_id=correlation_result.incident_id,
                                         source_type="grafana", source_alert_id=per_alert_source_id,
-                                        alert_title=alert_title, alert_service=service,
+                                        alert_title=per_alert_title, alert_service=service,
                                         alert_severity=severity,
                                         correlation_result=correlation_result,
                                         alert_metadata=alert_metadata, raw_payload=alert_payload,
@@ -371,7 +377,7 @@ def process_grafana_alert(
                                            THEN EXCLUDED.started_at ELSE incidents.started_at END,
                                        alert_metadata = EXCLUDED.alert_metadata
                                    RETURNING id""",
-                                (user_id, org_id, "grafana", per_alert_source_id, alert_title, service,
+                                (user_id, org_id, "grafana", per_alert_source_id, per_alert_title, service,
                                  severity, "investigating", received_at, json.dumps(alert_metadata)),
                             )
                             incident_row = cursor.fetchone()
@@ -385,7 +391,7 @@ def process_grafana_alert(
                                        (user_id, incident_id, source_type, source_alert_id, alert_title, alert_service,
                                         alert_severity, correlation_strategy, correlation_score, alert_metadata)
                                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
-                                    (user_id, incident_id, "grafana", per_alert_source_id, alert_title,
+                                    (user_id, incident_id, "grafana", per_alert_source_id, per_alert_title,
                                      service, severity, "primary", 1.0, json.dumps(alert_metadata)),
                                 )
                                 cursor.execute(
@@ -415,11 +421,11 @@ def process_grafana_alert(
                                 from chat.background.summarization import generate_incident_summary
                                 generate_incident_summary.delay(
                                     incident_id=str(incident_id), user_id=user_id, source_type="grafana",
-                                    alert_title=alert_title or "Unknown Alert", severity=severity,
+                                    alert_title=per_alert_title or "Unknown Alert", severity=severity,
                                     service=service, raw_payload=alert_payload, alert_metadata=alert_metadata,
                                 )
                             except Exception as summary_exc:
-                                logger.warning("[GRAFANA][ALERT] Failed to enqueue summary for incident %s (%s): %s", incident_id, alert_title, summary_exc)
+                                logger.warning("[GRAFANA][ALERT] Failed to enqueue summary for incident %s (%s): %s", incident_id, per_alert_title, summary_exc)
 
                             # Trigger full RCA background chat
                             if _should_trigger_background_chat(user_id, alert_payload):
@@ -430,7 +436,7 @@ def process_grafana_alert(
                                     if not is_background_chat_allowed(user_id):
                                         logger.info("[GRAFANA][ALERT] Skipping background RCA - rate limited for user %s", user_id)
                                     else:
-                                        chat_title = f"RCA: {alert_title or 'Grafana Alert'}"
+                                        chat_title = f"RCA: {per_alert_title or 'Grafana Alert'}"
                                         session_id = create_background_chat_session(
                                             user_id=user_id, title=chat_title,
                                             trigger_metadata={"source": "grafana", "alert_uid": alert_uid, "alert_state": alert_state},
@@ -439,7 +445,7 @@ def process_grafana_alert(
                                         task = run_background_chat.delay(
                                             user_id=user_id, session_id=session_id, initial_message=rca_prompt,
                                             trigger_metadata={"source": "grafana", "alert_uid": alert_uid,
-                                                              "alert_title": alert_title, "alert_state": alert_state},
+                                                              "alert_title": per_alert_title, "alert_state": alert_state},
                                             incident_id=str(incident_id) if incident_id else None,
                                         )
                                         if incident_id:
@@ -463,4 +469,7 @@ def process_grafana_alert(
             )
     except Exception as exc:  # pragma: no cover - Celery handles retries
         logger.exception("[GRAFANA][ALERT] Failed to process alert payload")
-        raise self.retry(exc=exc)
+        if not user_id:
+            raise self.retry(exc=exc)
+        # If user_id was set, DB writes may have partially committed — don't
+        # retry the whole webhook or we risk duplicate grafana_alerts rows.
