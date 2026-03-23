@@ -399,7 +399,7 @@ def disconnect(user_id):
             event_rows = cursor.rowcount
             conn.commit()
 
-        logger.info("[DATADOG] Disconnected user %s (tokens=%s, events=%s)", user_id, token_rows, event_rows)
+        logger.info("[DATADOG] Disconnected provider (tokens=%s, events=%s)", token_rows, event_rows)
         return jsonify({
             "success": True,
             "message": "Datadog disconnected successfully",

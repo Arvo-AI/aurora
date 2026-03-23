@@ -211,10 +211,10 @@ def disconnect(user_id):
         if not success:
             logger.warning("[JENKINS] Failed to clean up secrets for user %s", user_id)
 
-        logger.info("[JENKINS] Disconnected user %s (deleted %d token rows)", user_id, deleted)
+        logger.info("[JENKINS] Disconnected provider (deleted %d token rows)", deleted)
         return jsonify({"success": True, "message": "Jenkins disconnected successfully"})
     except Exception as exc:
-        logger.exception("[JENKINS] Failed to disconnect user %s: %s", user_id, exc)
+        logger.exception("[JENKINS] Failed to disconnect provider")
         return jsonify({"error": "Failed to disconnect Jenkins"}), 500
 
 

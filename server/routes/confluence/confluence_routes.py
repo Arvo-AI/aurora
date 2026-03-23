@@ -339,10 +339,10 @@ def disconnect(user_id):
         if not success:
             logger.warning("[CONFLUENCE] Failed to clean up secrets for user %s", user_id)
 
-        logger.info("[CONFLUENCE] Disconnected user %s (deleted %s token rows)", user_id, deleted_count)
+        logger.info("[CONFLUENCE] Disconnected provider (deleted %s token rows)", deleted_count)
         return jsonify({"success": True, "message": "Confluence disconnected successfully"})
     except Exception as exc:
-        logger.exception("[CONFLUENCE] Failed to disconnect user %s: %s", user_id, exc)
+        logger.exception("[CONFLUENCE] Failed to disconnect provider")
         return jsonify({"error": "Failed to disconnect Confluence"}), 500
 
 

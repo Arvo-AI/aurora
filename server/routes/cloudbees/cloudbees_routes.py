@@ -216,10 +216,10 @@ def disconnect(user_id):
         if not success:
             logger.warning("[CLOUDBEES] Failed to clean up secrets for user %s", user_id)
 
-        logger.info("[CLOUDBEES] Disconnected user %s (deleted %d token rows)", user_id, deleted)
+        logger.info("[CLOUDBEES] Disconnected provider (deleted %d token rows)", deleted)
         return jsonify({"success": True, "message": "CloudBees CI disconnected successfully"})
     except Exception as exc:
-        logger.exception("[CLOUDBEES] Failed to disconnect user %s", user_id)
+        logger.exception("[CLOUDBEES] Failed to disconnect provider")
         return jsonify({"error": "Failed to disconnect CloudBees CI"}), 500
 
 

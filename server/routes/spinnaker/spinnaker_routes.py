@@ -175,10 +175,10 @@ def disconnect(user_id):
         if not success:
             logger.warning("[SPINNAKER] Failed to clean up secrets for user %s", user_id)
 
-        logger.info("[SPINNAKER] Disconnected user %s (deleted %d token rows)", user_id, deleted)
+        logger.info("[SPINNAKER] Disconnected provider (deleted %d token rows)", deleted)
         return jsonify({"success": True, "message": "Spinnaker disconnected successfully"})
     except Exception as exc:
-        logger.exception("[SPINNAKER] Failed to disconnect user %s: %s", user_id, exc)
+        logger.exception("[SPINNAKER] Failed to disconnect provider")
         return jsonify({"error": "Failed to disconnect Spinnaker"}), 500
 
 

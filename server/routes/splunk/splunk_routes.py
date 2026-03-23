@@ -242,7 +242,7 @@ def disconnect(user_id):
         if not success:
             logger.warning("[SPLUNK] Failed to clean up secrets for user %s", user_id)
 
-        logger.info(f"[SPLUNK] Disconnected user {user_id} (deleted {deleted_count} token entries)")
+        logger.info("[SPLUNK] Disconnected provider (deleted %s token entries)", deleted_count)
 
         return jsonify({
             "success": True,
