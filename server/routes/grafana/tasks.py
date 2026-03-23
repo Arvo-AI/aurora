@@ -100,7 +100,14 @@ def _merge_alert_into_payload(payload: Dict[str, Any], alert: Dict[str, Any]) ->
         if alert.get(key):
             merged[key] = alert[key]
     merged["status"] = alert.get("status") or merged.get("status")
-    merged["state"] = alert.get("state") or merged.get("state")
+    if alert.get("state") is not None:
+        merged["state"] = alert["state"]
+    elif (alert.get("status") or "").lower() == "resolved":
+        merged["state"] = "ok"
+    elif (alert.get("status") or "").lower() == "firing":
+        merged["state"] = "alerting"
+    else:
+        merged["state"] = None
     return merged
 
 
@@ -286,12 +293,23 @@ def process_grafana_alert(
 
                             # Build alert metadata from the per-alert payload
                             alert_metadata = {}
-                            if dashboard_url:
-                                alert_metadata["dashboardUrl"] = dashboard_url
-                            if panel_url:
-                                alert_metadata["panelUrl"] = panel_url
-                            if rule_url:
-                                alert_metadata["alertUrl"] = rule_url
+                            per_alert_dashboard_url = (
+                                alert_payload.get("dashboardURL") or alert_payload.get("dashboardUrl")
+                            )
+                            per_alert_panel_url = (
+                                alert_payload.get("panelURL") or alert_payload.get("panelUrl")
+                            )
+                            per_alert_rule_url = (
+                                alert_payload.get("generatorURL")
+                                or alert_payload.get("ruleURL")
+                                or alert_payload.get("ruleUrl")
+                            )
+                            if per_alert_dashboard_url:
+                                alert_metadata["dashboardUrl"] = per_alert_dashboard_url
+                            if per_alert_panel_url:
+                                alert_metadata["panelUrl"] = per_alert_panel_url
+                            if per_alert_rule_url:
+                                alert_metadata["alertUrl"] = per_alert_rule_url
 
                             a_labels = alert_payload.get("commonLabels") or alert_payload.get("labels") or {}
                             if a_labels:
@@ -417,7 +435,7 @@ def process_grafana_alert(
                                             user_id=user_id, title=chat_title,
                                             trigger_metadata={"source": "grafana", "alert_uid": alert_uid, "alert_state": alert_state},
                                         )
-                                        rca_prompt = _build_rca_prompt_from_alert(alert_payload, user_id=user_id)
+                                        rca_prompt = build_grafana_rca_prompt(alert_payload, user_id=user_id)
                                         task = run_background_chat.delay(
                                             user_id=user_id, session_id=session_id, initial_message=rca_prompt,
                                             trigger_metadata={"source": "grafana", "alert_uid": alert_uid,

@@ -1546,7 +1546,7 @@ Security & Compliance
         logger.info(f"Provider preference: {provider_preference}")
 
         normalized_provider = _normalize_cloud_exec_provider(provider)
-        
+        provider = normalized_provider
         # Set up ISOLATED environment based on provider - NO GLOBAL STATE!
         isolated_env = None
         auth_command = None
