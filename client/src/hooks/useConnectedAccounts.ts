@@ -1,4 +1,4 @@
-import { useSyncExternalStore } from 'react';
+import { useEffect, useSyncExternalStore } from 'react';
 import { isOvhEnabled } from '@/lib/feature-flags';
 import {
   fetchConnectedAccounts,
@@ -39,10 +39,9 @@ function getServerSnapshot() {
 export function useConnectedAccounts() {
   const state = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
 
-  // Kick off the initial fetch (deduped + debounced internally)
-  if (typeof window !== 'undefined' && state.fetchedAt === 0) {
+  useEffect(() => {
     fetchConnectedAccounts();
-  }
+  }, []);
 
   const isProviderConnected = (id: string) =>
     state.providerIds.includes(id.toLowerCase());
