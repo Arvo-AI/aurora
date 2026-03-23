@@ -8,13 +8,21 @@ import { slackService } from "@/lib/services/slack";
 
 const pagerdutyService = require("@/lib/services/pagerduty").pagerdutyService;
 
-export function useConnectorStatus(connector: ConnectorConfig, userId: string | null) {
+export function useConnectorStatus(connector: ConnectorConfig, userId: string | null, connectedOverride?: boolean) {
   const [isConnected, setIsConnected] = useState(false);
   const [isCheckingConnection, setIsCheckingConnection] = useState(true);
   const [isLoadingDetails, setIsLoadingDetails] = useState(false);
   const [slackStatus, setSlackStatus] = useState<any>(null);
 
+  const hasOverride = connectedOverride !== undefined;
+
   useEffect(() => {
+    if (hasOverride) {
+      setIsConnected(connectedOverride);
+      setIsCheckingConnection(false);
+      return;
+    }
+
     checkConnectionStatus();
     
     const handleProviderChange = () => {
@@ -27,9 +35,11 @@ export function useConnectorStatus(connector: ConnectorConfig, userId: string | 
 
     window.addEventListener("providerStateChanged", handleProviderChange);
     return () => window.removeEventListener("providerStateChanged", handleProviderChange);
-  }, [connector.id, userId]);
+  }, [connector.id, userId, hasOverride, connectedOverride]);
 
   useEffect(() => {
+    if (hasOverride) return;
+
     if (connector.id === "github" && userId) {
       checkGitHubStatus();
     }
@@ -45,7 +55,7 @@ export function useConnectorStatus(connector: ConnectorConfig, userId: string | 
     if (connector.id === "onprem" && userId) {
       checkVmConfigStatus();
     }
-  }, [userId, connector.id]);
+  }, [userId, connector.id, hasOverride]);
 
   const checkGitHubStatus = async () => {
     if (!userId) return;
