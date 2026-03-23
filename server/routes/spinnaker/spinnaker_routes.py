@@ -173,7 +173,7 @@ def disconnect(user_id):
         invalidate_spinnaker_client(user_id)
         success, deleted = delete_user_secret(user_id, SPINNAKER_PROVIDER)
         if not success:
-            logger.warning("[SPINNAKER] Failed to clean up secrets for user %s", user_id)
+            logger.warning("[SPINNAKER] Failed to clean up secrets during disconnect")
 
         logger.info("[SPINNAKER] Disconnected provider (deleted %d token rows)", deleted)
         return jsonify({"success": True, "message": "Spinnaker disconnected successfully"})

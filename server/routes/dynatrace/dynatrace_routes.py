@@ -151,10 +151,10 @@ def disconnect(user_id):
     try:
         success, deleted = delete_user_secret(user_id, "dynatrace")
         if not success:
-            logger.warning("[DYNATRACE] Failed to clean up secrets for user %s", user_id)
+            logger.warning("[DYNATRACE] Failed to clean up secrets during disconnect")
         return jsonify({"success": True, "message": "Dynatrace disconnected successfully"})
     except Exception as exc:
-        logger.exception("[DYNATRACE] Failed to disconnect user %s: %s", user_id, exc)
+        logger.exception("[DYNATRACE] Failed to disconnect provider")
         return jsonify({"error": "Failed to disconnect Dynatrace"}), 500
 
 

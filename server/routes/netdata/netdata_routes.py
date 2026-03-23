@@ -100,7 +100,7 @@ def disconnect(user_id):
     try:
         success, deleted = delete_user_secret(user_id, "netdata")
         if not success:
-            logger.warning("[NETDATA] Failed to clean up secrets for user %s", user_id)
+            logger.warning("[NETDATA] Failed to clean up secrets during disconnect")
 
         alert_rows = 0
         with db_pool.get_admin_connection() as conn:

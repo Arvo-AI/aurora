@@ -86,10 +86,10 @@ def disconnect(user_id):
     try:
         success, deleted = delete_user_secret(user_id, "bigpanda")
         if not success:
-            logger.warning("[BIGPANDA] Failed to clean up secrets for user %s", user_id)
+            logger.warning("[BIGPANDA] Failed to clean up secrets during disconnect")
         return jsonify({"success": True, "message": "BigPanda disconnected successfully"})
     except Exception as exc:
-        logger.exception("[BIGPANDA] Failed to disconnect user %s: %s", user_id, exc)
+        logger.exception("[BIGPANDA] Failed to disconnect provider")
         return jsonify({"error": "Failed to disconnect BigPanda"}), 500
 
 

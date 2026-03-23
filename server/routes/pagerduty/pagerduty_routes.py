@@ -130,10 +130,10 @@ def pagerduty_disconnect(user_id):
     try:
         success, deleted = delete_user_secret(user_id, "pagerduty")
         if not success:
-            logger.warning("[PAGERDUTY] Failed to clean up secrets for user %s", user_id)
+            logger.warning("[PAGERDUTY] Failed to clean up secrets during disconnect")
         return jsonify({"success": True})
     except Exception:
-        logger.exception("[PAGERDUTY] Disconnect failed for user %s", user_id)
+        logger.exception("[PAGERDUTY] Disconnect failed")
         return jsonify({"error": "Disconnect failed"}), 500
 
 

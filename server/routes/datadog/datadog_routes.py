@@ -388,7 +388,7 @@ def disconnect(user_id):
     try:
         success, token_rows = delete_user_secret(user_id, "datadog")
         if not success:
-            logger.warning("[DATADOG] Failed to clean up secrets for user %s", user_id)
+            logger.warning("[DATADOG] Failed to clean up secrets during disconnect")
 
         with db_pool.get_admin_connection() as conn:
             cursor = conn.cursor()
@@ -407,7 +407,7 @@ def disconnect(user_id):
             "eventsDeleted": event_rows,
         })
     except Exception as exc:
-        logger.exception("[DATADOG] Failed to disconnect user %s: %s", user_id, exc)
+        logger.exception("[DATADOG] Failed to disconnect provider")
         return jsonify({"error": "Failed to disconnect Datadog"}), 500
 
 

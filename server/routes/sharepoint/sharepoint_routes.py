@@ -240,7 +240,7 @@ def disconnect():
         logger.info("[SHAREPOINT] Disconnected user %s (deleted %s token rows)", user_id, deleted_count)
         return jsonify({"success": True, "message": "SharePoint disconnected successfully"})
     except Exception as exc:
-        logger.exception("[SHAREPOINT] Failed to disconnect user %s: %s", user_id, exc)
+        logger.exception("[SHAREPOINT] Failed to disconnect provider")
         return jsonify({"error": "Failed to disconnect SharePoint"}), 500
 
 

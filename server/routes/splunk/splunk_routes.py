@@ -240,7 +240,7 @@ def disconnect(user_id):
     try:
         success, deleted_count = delete_user_secret(user_id, "splunk")
         if not success:
-            logger.warning("[SPLUNK] Failed to clean up secrets for user %s", user_id)
+            logger.warning("[SPLUNK] Failed to clean up secrets during disconnect")
 
         logger.info("[SPLUNK] Disconnected provider (deleted %s token entries)", deleted_count)
 
@@ -250,7 +250,7 @@ def disconnect(user_id):
         }), 200
 
     except Exception as exc:
-        logger.exception(f"[SPLUNK] Failed to disconnect user {user_id}: {exc}")
+        logger.exception("[SPLUNK] Failed to disconnect provider")
         return jsonify({"error": "Failed to disconnect Splunk"}), 500
 
 
