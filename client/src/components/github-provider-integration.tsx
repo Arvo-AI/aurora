@@ -211,12 +211,18 @@ export default function GitHubProviderIntegration() {
     } catch { setSavedRepos([]); }
   }, [userId, startMetadataPolling]);
 
-  // Load repos and saved selections when authenticated
+  // Load saved repos when authenticated (fast DB query only)
   useEffect(() => {
     if (!githubStatus.isAuthenticated || !userId) return;
-    fetchAllRepos();
     loadSavedRepos();
-  }, [githubStatus.isAuthenticated, userId, fetchAllRepos, loadSavedRepos]);
+  }, [githubStatus.isAuthenticated, userId, loadSavedRepos]);
+
+  // Lazy-load full repo list only when user expands the picker
+  useEffect(() => {
+    if (expanded && githubStatus.isAuthenticated && userId && allRepos.length === 0 && !isLoadingRepos) {
+      fetchAllRepos();
+    }
+  }, [expanded, githubStatus.isAuthenticated, userId, allRepos.length, isLoadingRepos, fetchAllRepos]);
 
   useEffect(() => () => { if (pollingRef.current) clearInterval(pollingRef.current); }, []);
 

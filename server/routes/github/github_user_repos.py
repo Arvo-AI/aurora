@@ -34,6 +34,8 @@ def get_user_repos(user_id):
     if request.method == 'OPTIONS':
         return create_cors_response()
     
+    import time
+    t0 = time.time()
     try:
         # Get stored GitHub credentials for this user
         github_creds = get_credentials_from_db(user_id, "github")
@@ -82,7 +84,7 @@ def get_user_repos(user_id):
                 logger.warning(f"Hit pagination safety limit for user repositories")
                 break
         
-        logger.info(f"Fetched {len(all_repos)} repositories for user")
+        logger.info(f"Fetched {len(all_repos)} repositories for user in {(time.time()-t0)*1000:.0f}ms")
         
         # Filter and simplify repository data
         simplified_repos = []

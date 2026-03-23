@@ -6,7 +6,6 @@ import base64
 import logging
 import requests
 from celery_config import celery_app
-from langchain_core.messages import HumanMessage
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +96,7 @@ def generate_repo_metadata(self, user_id: str, repo_full_name: str):
 
         from chat.backend.agent.providers import create_chat_model
         from chat.backend.agent.llm import ModelConfig
+        from langchain_core.messages import HumanMessage
 
         llm = create_chat_model(
             ModelConfig.INCIDENT_REPORT_SUMMARIZATION_MODEL,
