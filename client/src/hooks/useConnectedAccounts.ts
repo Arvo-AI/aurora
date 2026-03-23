@@ -18,6 +18,7 @@ const INFRA_PROVIDERS: Record<string, { name: string; icon: string }> = {
   azure: { name: 'Azure', icon: '/azure.ico' },
   ovh: { name: 'OVH Cloud', icon: '/ovh.svg' },
   scaleway: { name: 'Scaleway', icon: '/scaleway.svg' },
+  tailscale: { name: 'Tailscale', icon: '/tailscale.svg' },
   kubectl: { name: 'Kubernetes', icon: '/kubernetes-svgrepo-com.svg' },
 };
 

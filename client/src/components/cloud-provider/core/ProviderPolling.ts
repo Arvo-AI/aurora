@@ -3,7 +3,6 @@ import { getEnv } from '@/lib/env';
 import {
   fetchConnectedAccounts,
   getConnectedAccounts,
-  subscribe,
 } from '@/lib/connected-accounts-cache';
 
 const BACKEND_URL = getEnv('NEXT_PUBLIC_BACKEND_URL');

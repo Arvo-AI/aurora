@@ -18,15 +18,22 @@ function notify() {
 }
 
 async function doFetch(): Promise<CacheState> {
-  const response = await fetch('/api/connected-accounts', { credentials: 'include' });
-  if (!response.ok) throw new Error(`connected-accounts ${response.status}`);
-  const data = await response.json();
-  const accounts = data.accounts || {};
-  const providerIds = Object.keys(accounts).map(k => k.toLowerCase());
-  state = { accounts, providerIds, fetchedAt: Date.now() };
-  initialized = true;
-  notify();
-  return state;
+  try {
+    const response = await fetch('/api/connected-accounts', { credentials: 'include' });
+    if (!response.ok) throw new Error(`connected-accounts ${response.status}`);
+    const data = await response.json();
+    const accounts = data.accounts || {};
+    const providerIds = Object.keys(accounts).map(k => k.toLowerCase());
+    state = { accounts, providerIds, fetchedAt: Date.now() };
+    initialized = true;
+    notify();
+    return state;
+  } catch (err) {
+    state = { ...state, fetchedAt: Date.now() };
+    initialized = true;
+    notify();
+    throw err;
+  }
 }
 
 export function getConnectedAccounts(): CacheState {
@@ -55,8 +62,11 @@ export function subscribe(listener: Listener): () => void {
   return () => { listeners.delete(listener); };
 }
 
+function refresh() { fetchConnectedAccounts(true); }
+
 if (typeof window !== 'undefined') {
-  const refresh = () => fetchConnectedAccounts(true);
+  window.removeEventListener('providerStateChanged', refresh);
+  window.removeEventListener('providerConnectionAction', refresh);
   window.addEventListener('providerStateChanged', refresh);
   window.addEventListener('providerConnectionAction', refresh);
 }
