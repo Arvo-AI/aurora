@@ -13,6 +13,24 @@ import os
 account_management_bp = Blueprint("account_management", __name__)
 
 
+def _validate_provider_connection(provider: str, token_data: dict) -> bool:
+    """Return True only if the stored credentials actually work.
+
+    Delegates to the unified PROVIDER_CHECKERS in connector_status so that
+    both /api/connected-accounts and /api/connectors/status agree.
+    """
+    from routes.connector_status import PROVIDER_CHECKERS
+
+    checker = PROVIDER_CHECKERS.get(provider)
+    if checker is None:
+        return True
+    try:
+        result = checker(token_data)
+        return result.get("connected", False)
+    except Exception:
+        return False
+
+
 @account_management_bp.route("/api/connected-accounts/<target_user_id>", methods=["OPTIONS"])
 def get_connected_accounts_options(target_user_id):
     return create_cors_response()
@@ -54,14 +72,17 @@ def get_connected_accounts(user_id, target_user_id):
 
         accounts: dict = {}
 
-        for provider, subscription_id, subscription_name, timestamp, token_owner_id in rows:
-            
+        # Validate all providers in parallel to avoid serial latency
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        def _resolve_row(row):
+            provider, subscription_id, subscription_name, timestamp, token_owner_id = row
             token_data = get_token_data(token_owner_id, provider)
             if not token_data:
-                continue
-            
+                return None
+            if not _validate_provider_connection(provider, token_data):
+                return None
             account_info = {"isConnected": True}
-            
             if provider == "gcp":
                 account_info["email"] = token_data.get("email", "Unknown")
                 account_info["name"] = token_data.get("name", "Google Cloud")
@@ -78,8 +99,18 @@ def get_connected_accounts(user_id, target_user_id):
             else:
                 account_info["name"] = provider.capitalize()
                 account_info["displayText"] = subscription_name or subscription_id or provider.capitalize()
-            
-            accounts[provider] = account_info
+            return (provider, account_info)
+
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            futures = {pool.submit(_resolve_row, row): row[0] for row in rows}
+            for future in as_completed(futures):
+                try:
+                    result = future.result(timeout=12)
+                    if result:
+                        provider, account_info = result
+                        accounts[provider] = account_info
+                except Exception as exc:
+                    logging.warning("connected-accounts check for %s raised: %s", futures[future], exc)
         
         # ------------------------------
         # 2) Role-based connections (user_connections – AWS today)
@@ -251,29 +282,6 @@ def delete_connected_account(user_id, target_user_id, provider):
             
             return jsonify({"success": True, "message": "AWS connection(s) removed"}), 200
         
-        # Handle other providers (Aurora and anything not handled above)
-        try:
-            conn = connect_to_db_as_admin()
-            cursor = conn.cursor()
-
-            cursor.execute(
-                "DELETE FROM user_tokens WHERE user_id = %s AND (org_id = %s OR org_id IS NULL) AND provider = %s",
-                (user_id, org_id, provider)
-            )
-
-            deleted = cursor.rowcount
-            conn.commit()
-            cursor.close()
-            conn.close()
-        except Exception as db_err:
-            logging.error(f"Database error during {provider} disconnect: {db_err}")
-            raise
-
-        # Remove from Vault
-        if provider_lc in SUPPORTED_SECRET_PROVIDERS:
-            deletion_ok, _ = delete_user_secret(user_id, provider_lc)
-
-        
         # Idempotent behaviour: If there were no credentials stored in the first place
         # treat the request as successfully processed. This prevents unnecessary 404
         # errors that bubble up to the frontend when a user disconnects a provider
@@ -282,7 +290,6 @@ def delete_connected_account(user_id, target_user_id, provider):
             return jsonify({"success": True, "message": "No tokens found for provider – nothing to delete"}), 200
         
         if not deletion_ok:
-            # Secret deletion failed but DB cleaned up – warn client
             return jsonify({"success": True, "message": f"Removed local reference for {provider}. Failed to delete cloud secret."}), 206
 
         return jsonify({"success": True, "message": f"Removed {provider} credentials"}), 200

@@ -10,13 +10,13 @@ import os
 import urllib.parse
 from flask import Blueprint, jsonify, request, redirect
 
-from utils.db.connection_pool import db_pool
 from utils.web.cors_utils import create_cors_response
 from utils.flags.feature_flags import is_pagerduty_oauth_enabled
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.auth.rbac_decorators import require_permission
 from routes.pagerduty.oauth_utils import get_auth_url, exchange_code_for_token, refresh_token_if_needed
 from routes.pagerduty.pagerduty_helpers import PagerDutyClient, PagerDutyAPIError, validate_token, error_response
+from utils.secrets.secret_ref_utils import delete_user_secret
 
 logger = logging.getLogger(__name__)
 pagerduty_bp = Blueprint("pagerduty", __name__)
@@ -126,10 +126,9 @@ def pagerduty_connect(user_id):
 def pagerduty_disconnect(user_id):
     """Disconnect PagerDuty."""
     try:
-        with db_pool.get_admin_connection() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute("DELETE FROM user_tokens WHERE user_id = %s AND provider = %s", (user_id, "pagerduty"))
-            conn.commit()
+        success, deleted = delete_user_secret(user_id, "pagerduty")
+        if not success:
+            logger.warning("[PAGERDUTY] Failed to clean up secrets for user %s", user_id)
         return jsonify({"success": True})
     except Exception:
         logger.exception("[PAGERDUTY] Disconnect failed for user %s", user_id)

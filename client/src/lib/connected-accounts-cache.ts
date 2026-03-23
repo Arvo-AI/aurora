@@ -7,9 +7,12 @@ interface CacheState {
 }
 
 const DEBOUNCE_MS = 2_000;
+const RETRY_DELAY_MS = 3_000;
+const MAX_RETRIES = 2;
 
 let state: CacheState = { accounts: {}, providerIds: [], fetchedAt: 0 };
 let inflight: Promise<CacheState> | null = null;
+let pendingForceRefresh = false;
 let listeners: Set<Listener> = new Set();
 let initialized = false;
 
@@ -29,7 +32,9 @@ async function doFetch(): Promise<CacheState> {
     notify();
     return state;
   } catch (err) {
-    state = { ...state, fetchedAt: Date.now() };
+    if (state.providerIds.length > 0) {
+      state = { ...state, fetchedAt: Date.now() };
+    }
     initialized = true;
     notify();
     throw err;
@@ -46,14 +51,29 @@ export function isProviderConnected(providerId: string): boolean {
 
 /**
  * Fetch connected accounts. Deduplicates concurrent calls and skips
- * if the cache was refreshed within DEBOUNCE_MS.
+ * if the cache was refreshed within DEBOUNCE_MS. When force=true and
+ * a request is already in flight, schedules a follow-up fetch after
+ * the current one completes so state changes aren't lost.
  */
 export async function fetchConnectedAccounts(force = false): Promise<CacheState> {
   if (!force && initialized && Date.now() - state.fetchedAt < DEBOUNCE_MS) {
     return state;
   }
-  if (inflight) return inflight;
-  inflight = doFetch().finally(() => { inflight = null; });
+  if (inflight) {
+    if (force) {
+      pendingForceRefresh = true;
+    }
+    return inflight;
+  }
+  inflight = doFetch()
+    .catch(() => state)
+    .finally(() => {
+      inflight = null;
+      if (pendingForceRefresh) {
+        pendingForceRefresh = false;
+        fetchConnectedAccounts(true);
+      }
+    });
   return inflight;
 }
 
@@ -63,6 +83,19 @@ export function subscribe(listener: Listener): () => void {
 }
 
 function refresh() { fetchConnectedAccounts(true); }
+
+async function refreshWithRetry() {
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      await fetchConnectedAccounts(true);
+      return;
+    } catch {
+      if (attempt < MAX_RETRIES) {
+        await new Promise(r => setTimeout(r, RETRY_DELAY_MS * (attempt + 1)));
+      }
+    }
+  }
+}
 
 if (typeof window !== 'undefined') {
   window.removeEventListener('providerStateChanged', refresh);

@@ -22,11 +22,11 @@ from connectors.confluence_connector.client import (
     parse_confluence_page_id,
 )
 from connectors.confluence_connector.runbook_parser import parse_confluence_runbook
-from utils.db.connection_pool import db_pool
 from utils.web.cors_utils import create_cors_response
 from utils.auth.oauth2_state_cache import retrieve_oauth2_state, store_oauth2_state
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.auth.rbac_decorators import require_permission
+from utils.secrets.secret_ref_utils import delete_user_secret
 
 logger = logging.getLogger(__name__)
 
@@ -335,14 +335,9 @@ def disconnect(user_id):
         return create_cors_response()
 
     try:
-        with db_pool.get_admin_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "DELETE FROM user_tokens WHERE user_id = %s AND provider = %s",
-                (user_id, "confluence"),
-            )
-            deleted_count = cursor.rowcount
-            conn.commit()
+        success, deleted_count = delete_user_secret(user_id, "confluence")
+        if not success:
+            logger.warning("[CONFLUENCE] Failed to clean up secrets for user %s", user_id)
 
         logger.info("[CONFLUENCE] Disconnected user %s (deleted %s token rows)", user_id, deleted_count)
         return jsonify({"success": True, "message": "Confluence disconnected successfully"})
