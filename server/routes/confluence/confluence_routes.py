@@ -117,7 +117,7 @@ def _fetch_page_payload(
         client = ConfluenceClient(base_url, token, auth_type=auth_type, cloud_id=cloud_id)
         page_payload = client.get_page(page_id)
     except requests.HTTPError as exc:
-        status_code = exc.response.status_code if exc.response else None
+        status_code = exc.response.status_code if exc.response is not None else None
         if status_code == 401 and auth_type == "oauth":
             refreshed = _refresh_confluence_credentials(user_id, creds)
             if refreshed:
@@ -295,7 +295,7 @@ def status(user_id):
         client = ConfluenceClient(base_url, token, auth_type=auth_type, cloud_id=cloud_id)
         user_payload = client.get_current_user()
     except requests.HTTPError as exc:
-        status_code = exc.response.status_code if exc.response else None
+        status_code = exc.response.status_code if exc.response is not None else None
         if status_code == 401 and auth_type == "oauth":
             refreshed = _refresh_confluence_credentials(user_id, creds)
             if refreshed:

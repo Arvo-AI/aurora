@@ -155,7 +155,7 @@ def _check_confluence(creds: Dict[str, Any]) -> Dict[str, Any]:
         client.get_current_user()
         return {"connected": True, "baseUrl": base_url}
     except requests.HTTPError as exc:
-        status_code = exc.response.status_code if exc.response else None
+        status_code = exc.response.status_code if exc.response is not None else None
         if status_code == 401 and auth_type == "oauth":
             refresh_tok = creds.get("refresh_token")
             if not refresh_tok:
@@ -350,7 +350,7 @@ def _check_sharepoint(creds: Dict[str, Any]) -> Dict[str, Any]:
         client.get_current_user()
         return {"connected": True}
     except requests.HTTPError as exc:
-        status_code = exc.response.status_code if exc.response else None
+        status_code = exc.response.status_code if exc.response is not None else None
         if status_code == 401:
             refresh_tok = creds.get("refresh_token")
             if not refresh_tok:
