@@ -65,7 +65,9 @@ def pagerduty_status(user_id):
 
     if creds.get("auth_type") == "oauth":
         success, refreshed = refresh_token_if_needed(creds)
-        if success and refreshed:
+        if not success:
+            return jsonify({"connected": False, "error": "OAuth token expired, please reconnect"})
+        if refreshed:
             try:
                 store_tokens_in_db(user_id, {**creds, **refreshed}, "pagerduty")
                 creds.update(refreshed)

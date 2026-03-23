@@ -80,6 +80,7 @@ def get_connected_accounts(user_id, target_user_id):
             token_data = get_token_data(token_owner_id, provider)
             if not token_data:
                 return None
+            token_data["_user_id"] = token_owner_id
             if not _validate_provider_connection(provider, token_data):
                 return None
             account_info = {"isConnected": True}

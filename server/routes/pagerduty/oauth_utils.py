@@ -85,7 +85,7 @@ def refresh_token_if_needed(token_data: Dict) -> Tuple[bool, Optional[Dict]]:
     
     # Check if still valid (> 5 min remaining)
     if token_data.get("expires_at", 0) > int(time()) + 300:
-        return True, token_data
+        return True, None
     
     if not all([PAGERDUTY_CLIENT_ID, PAGERDUTY_CLIENT_SECRET]):
         return False, None

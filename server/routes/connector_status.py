@@ -285,8 +285,7 @@ def _check_scaleway(creds: Dict[str, Any]) -> Dict[str, Any]:
         from connectors.scaleway_connector.auth import get_account_info
         success, _, error = get_account_info(secret_key)
         if not success:
-            if error and any(s in str(error) for s in ("401", "403", "Invalid", "Unauthorized")):
-                return {"connected": False}
+            return {"connected": False}
         return {"connected": True}
     except Exception:
         return {"connected": False}
