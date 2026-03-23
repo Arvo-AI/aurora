@@ -225,7 +225,7 @@ def process_grafana_alert(
                         for single_alert in individual_alerts:
                             alert_payload = _merge_alert_into_payload(payload, single_alert)
                             fingerprint = single_alert.get("fingerprint")
-                            per_alert_source_id = f"{alert_id}:{fingerprint}" if fingerprint else str(alert_id)
+                            per_alert_source_id = alert_id
 
                             # If resolved webhook, find the original incident by fingerprint and attach this alert to it as a correlated event and skip RCA.
                             if _is_resolved_alert(alert_payload):
@@ -362,16 +362,16 @@ def process_grafana_alert(
                             # No correlation found — create a new incident
                             cursor.execute(
                                 """INSERT INTO incidents
-                                   (user_id, source_type, source_alert_id, alert_title, alert_service,
+                                   (user_id, org_id, source_type, source_alert_id, alert_title, alert_service,
                                     severity, status, started_at, alert_metadata)
-                                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-                                   ON CONFLICT (source_type, source_alert_id, user_id) DO UPDATE
+                                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                                   ON CONFLICT (org_id, source_type, source_alert_id, user_id) DO UPDATE
                                    SET updated_at = CURRENT_TIMESTAMP,
                                        started_at = CASE WHEN incidents.status != 'analyzed'
                                            THEN EXCLUDED.started_at ELSE incidents.started_at END,
                                        alert_metadata = EXCLUDED.alert_metadata
                                    RETURNING id""",
-                                (user_id, "grafana", per_alert_source_id, alert_title, service,
+                                (user_id, org_id, "grafana", per_alert_source_id, alert_title, service,
                                  severity, "investigating", received_at, json.dumps(alert_metadata)),
                             )
                             incident_row = cursor.fetchone()
