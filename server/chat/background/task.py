@@ -439,6 +439,9 @@ def run_background_chat(
         
         logger.info(f"[BackgroundChat] Workflow execution completed for session {session_id}")
         
+        # Check if agent encountered an error during execution
+        agent_had_error = result.get('agent_error', False) if result else False
+        
         # Update session status to completed
         _update_session_status(session_id, "completed")
         
@@ -457,7 +460,11 @@ def run_background_chat(
                 logger.warning(f"[BackgroundChat] Failed to clear task ID for incident {incident_id}: {e}")
             
             _update_incident_status(incident_id, "analyzed")
-            _update_incident_aurora_status(incident_id, "complete")
+            if agent_had_error:
+                _update_incident_aurora_status(incident_id, "error")
+                logger.warning(f"[BackgroundChat] Incident {incident_id} marked aurora_status='error' due to agent error")
+            else:
+                _update_incident_aurora_status(incident_id, "complete")
             
             # Determine severity from RCA if currently unknown
             try:
@@ -666,6 +673,14 @@ async def _execute_background_chat(
         if hasattr(wf, '_wait_for_ongoing_tool_calls'):
             await wf._wait_for_ongoing_tool_calls()
         
+        # Detect if the agent flagged an error during execution
+        agent_had_error = getattr(state, 'agent_error', False)
+        if agent_had_error:
+            logger.warning(
+                f"[BackgroundChat] Agent flagged error for session {session_id} "
+                f"(incident {incident_id}) - investigation may be partial"
+            )
+        
         if incident_id:
             # Check if status was already set to complete (shouldn't happen, but log if it does)
             with db_pool.get_admin_connection() as conn:
@@ -686,6 +701,7 @@ async def _execute_background_chat(
             "status": "completed",
             "trigger_metadata": trigger_metadata,
             "tool_calls": tool_calls,
+            "agent_error": agent_had_error,
         }
         
     except Exception as e:

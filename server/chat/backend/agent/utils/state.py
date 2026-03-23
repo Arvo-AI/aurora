@@ -31,5 +31,6 @@ class State(BaseModel):
     rca_ui_updates: Optional[List[Dict[str, Any]]] = (
         None  # Pending RCA context updates for UI injection
     )
+    agent_error: bool = False  # True when the agent hit a fatal error during execution
 
     model_config = ConfigDict(arbitrary_types_allowed=True)

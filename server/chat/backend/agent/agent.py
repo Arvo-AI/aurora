@@ -726,9 +726,20 @@ class Agent:
                                 raise
                                 
                 except Exception as e:
-                    logging.error(f"Agent execution failed after retries: {e}", exc_info=True)
-                    # Create error response message
-                    error_msg = AIMessage(content=f"Error: {str(e)}\n\nTry a different approach.")
+                    error_type = type(e).__name__
+                    error_str = str(e).strip() or repr(e)
+                    logging.error(
+                        f"Agent execution failed after retries ({error_type}): {error_str}",
+                        exc_info=True,
+                    )
+                    state.agent_error = True
+                    error_content = (
+                        f"The investigation encountered an error after processing "
+                        f"{event_count} events and {token_count} tokens.\n\n"
+                        f"**Error ({error_type}):** {error_str}\n\n"
+                        f"Partial investigation results may be available in the thoughts panel."
+                    )
+                    error_msg = AIMessage(content=error_content)
                     state.messages.append(error_msg)
                     return state
                 
