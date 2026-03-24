@@ -122,7 +122,9 @@ Aurora doesn't just find the root cause — it suggests code fixes and can gener
 | **Code Fix PRs** | Yes | Not verified | No | Yes | Yes |
 | **Pricing** | **Free** (self-hosted) | From $20/user/mo | From $9,600/yr | From $15/user/mo | Free (open source) |
 
-> Data verified from official websites and repositories as of March 2026. See sources: [rootly.com](https://rootly.com), [firehydrant.com](https://firehydrant.com), [incident.io](https://incident.io), [holmesgpt.dev](https://holmesgpt.dev)
+> Data verified from official websites and repositories. Last reviewed: March 2026. Reviewed quarterly.
+>
+> Sources: [Rootly AI SRE](https://rootly.com/ai-sre) | [Rootly Pricing](https://rootly.com/pricing) | [FireHydrant AI](https://firehydrant.com/ai/) | [FireHydrant Pricing](https://firehydrant.com/pricing) | [incident.io AI SRE](https://incident.io/ai-sre) | [incident.io Pricing](https://incident.io/pricing) | [HolmesGPT Docs](https://holmesgpt.dev) | [HolmesGPT Toolsets](https://holmesgpt.dev/data-sources/builtin-toolsets/)
 
 ## How It Works
 
@@ -219,7 +221,10 @@ The first user to register becomes the admin. After that, registration is closed
 
 > **Note**: Aurora works **without any cloud provider accounts**! The LLM API key is the only external requirement. Connectors are optional and can be enabled later if needed via the env file.
 
-Open http://localhost:3000 (API: http://localhost:5080, Chatbot WS: ws://localhost:5006)
+**Endpoints:**
+- **Frontend** (open in browser): http://localhost:3000
+- **API**: http://localhost:5080
+- **Chatbot WebSocket**: ws://localhost:5006
 
 To stop: `make down` | Logs: `make logs`
 
@@ -256,7 +261,7 @@ For detailed deployment guides, see the **[Documentation](https://arvo-ai.github
 | **Secrets** | HashiCorp Vault |
 | **Storage** | PostgreSQL, Redis, SeaweedFS |
 
-```
+```text
 aurora/
 ├── server/      # Python API, chatbot, Celery workers
 ├── client/      # Next.js frontend
@@ -292,7 +297,7 @@ Aurora is fully self-hosted — **your incident data never leaves your environme
 - No telemetry or usage data sent to Arvo AI
 - Secrets stored in HashiCorp Vault with encryption at rest
 - LLM API calls go directly from your infrastructure to your chosen provider
-- Run fully air-gapped with local models via Ollama — zero external network calls
+- Use Ollama for local LLM inference to avoid LLM provider API calls (note: web search, cloud integrations, and Terraform registry still require network access)
 - RBAC enforced at both API and UI layers
 
 ## Community
