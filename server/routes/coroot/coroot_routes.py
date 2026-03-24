@@ -160,5 +160,5 @@ def disconnect(user_id):
             "tokensDeleted": rows,
         })
     except Exception as exc:
-        logger.exception("[COROOT] Failed to disconnect user %s: %s", user_id, exc)
+        logger.exception("[COROOT] Failed to disconnect provider")
         return jsonify({"error": "Failed to disconnect Coroot"}), 500

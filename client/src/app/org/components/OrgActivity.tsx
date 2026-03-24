@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Loader2, Clock, AlertTriangle, Plug, ChevronDown, ChevronUp } from "lucide-react";
+import { useQuery, jsonFetcher } from "@/lib/query";
 
 interface ActivityEvent {
   type: string;
@@ -236,19 +237,17 @@ function formatRelativeTime(iso: string): string {
 }
 
 export default function OrgActivity() {
-  const [events, setEvents] = useState<ActivityEvent[]>([]);
-  const [loading, setLoading] = useState(true);
   const [showAll, setShowAll] = useState(false);
 
-  useEffect(() => {
-    fetch("/api/orgs/activity")
-      .then((r) => r.json())
-      .then((data) => setEvents(data.events || []))
-      .catch(() => {})
-      .finally(() => setLoading(false));
-  }, []);
+  const { data, isLoading } = useQuery<{ events: ActivityEvent[] }>(
+    '/api/orgs/activity',
+    jsonFetcher,
+    { staleTime: 30_000, retryCount: 2 },
+  );
 
-  if (loading) {
+  const events = data?.events ?? [];
+
+  if (isLoading) {
     return (
       <div className="flex items-center justify-center py-16 text-muted-foreground gap-2 text-sm">
         <Loader2 className="h-4 w-4 animate-spin" />

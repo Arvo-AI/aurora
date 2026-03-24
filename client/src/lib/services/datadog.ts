@@ -1,5 +1,7 @@
 'use client';
 
+import { apiRequest } from '@/lib/services/api-client';
+
 type UnknownRecord = Record<string, unknown>;
 
 export interface DatadogStatus {
@@ -44,40 +46,12 @@ export interface DatadogIngestedEventsResponse {
 
 const API_BASE = '/api/datadog';
 
-async function parseJsonResponse<T>(response: Response): Promise<T | null> {
-  const text = await response.text();
-  if (!text) {
-    return null;
-  }
-
-  return JSON.parse(text) as T;
-}
-
-async function handleJsonFetch<T>(input: RequestInfo, init?: RequestInit): Promise<T> {
-  const response = await fetch(input, {
-    ...init,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(init?.headers ?? {}),
-    },
-    cache: 'no-store',
-  });
-
-  if (!response.ok) {
-    type ErrorBody = { error?: string; details?: string };
-    const parsed = await parseJsonResponse<ErrorBody>(response).catch(() => null);
-    const message = parsed?.error || parsed?.details || response.statusText || `Request failed with status ${response.status}`;
-    throw new Error(message);
-  }
-
-  const parsed = await parseJsonResponse<T>(response);
-  return parsed ?? ({} as T);
-}
-
 export const datadogService = {
   async getStatus(): Promise<DatadogStatus | null> {
     try {
-      const data = await handleJsonFetch<UnknownRecord>(`${API_BASE}/status`);
+      const data = await apiRequest<UnknownRecord>(`${API_BASE}/status`, {
+        cache: 'no-store',
+      });
       return {
         connected: Boolean(data?.connected),
         site: data?.site,
@@ -94,9 +68,10 @@ export const datadogService = {
   },
 
   async connect(payload: DatadogConnectPayload): Promise<DatadogStatus> {
-    const data = await handleJsonFetch<UnknownRecord>(`${API_BASE}/connect`, {
+    const data = await apiRequest<UnknownRecord>(`${API_BASE}/connect`, {
       method: 'POST',
       body: JSON.stringify(payload),
+      cache: 'no-store',
     });
     return {
       connected: Boolean(data?.success ?? true),
@@ -109,38 +84,42 @@ export const datadogService = {
   },
 
   async searchLogs(body: { query?: string; from?: string; to?: string; limit?: number; cursor?: string }): Promise<UnknownRecord> {
-    return handleJsonFetch<UnknownRecord>(`${API_BASE}/logs/search`, {
+    return apiRequest<UnknownRecord>(`${API_BASE}/logs/search`, {
       method: 'POST',
       body: JSON.stringify(body),
+      cache: 'no-store',
     });
   },
 
   async queryMetrics(body: { query: string; fromMs?: number; toMs?: number; interval?: number }): Promise<UnknownRecord> {
-    return handleJsonFetch<UnknownRecord>(`${API_BASE}/metrics/query`, {
+    return apiRequest<UnknownRecord>(`${API_BASE}/metrics/query`, {
       method: 'POST',
       body: JSON.stringify(body),
+      cache: 'no-store',
     });
   },
 
   async getEvents(params: URLSearchParams): Promise<UnknownRecord> {
     const qs = params.toString();
     const url = qs ? `${API_BASE}/events?${qs}` : `${API_BASE}/events`;
-    return handleJsonFetch<UnknownRecord>(url);
+    return apiRequest<UnknownRecord>(url, { cache: 'no-store' });
   },
 
   async getMonitors(params: URLSearchParams): Promise<UnknownRecord> {
     const qs = params.toString();
     const url = qs ? `${API_BASE}/monitors?${qs}` : `${API_BASE}/monitors`;
-    return handleJsonFetch<UnknownRecord>(url);
+    return apiRequest<UnknownRecord>(url, { cache: 'no-store' });
   },
 
   async getWebhookUrl(): Promise<DatadogWebhookInfo> {
-    return handleJsonFetch<DatadogWebhookInfo>(`${API_BASE}/webhook-url`);
+    return apiRequest<DatadogWebhookInfo>(`${API_BASE}/webhook-url`, {
+      cache: 'no-store',
+    });
   },
 
   async getIngestedEvents(params: URLSearchParams): Promise<DatadogIngestedEventsResponse> {
     const qs = params.toString();
     const url = qs ? `${API_BASE}/events/ingested?${qs}` : `${API_BASE}/events/ingested`;
-    return handleJsonFetch<DatadogIngestedEventsResponse>(url);
+    return apiRequest<DatadogIngestedEventsResponse>(url, { cache: 'no-store' });
   },
 };

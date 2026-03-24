@@ -1,3 +1,5 @@
+import { apiRequest } from '@/lib/services/api-client';
+
 interface SplunkServer {
   name?: string;
   version?: string;
@@ -86,38 +88,12 @@ export interface SplunkRcaSettings {
 
 const API_BASE = '/api/splunk';
 
-async function parseJsonResponse<T>(response: Response): Promise<T | null> {
-  const text = await response.text();
-  if (!text) {
-    return null;
-  }
-  return JSON.parse(text) as T;
-}
-
-async function handleJsonFetch<T>(input: RequestInfo, init?: RequestInit): Promise<T | null> {
-  const response = await fetch(input, {
-    ...init,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(init?.headers ?? {}),
-    },
-    cache: 'no-store',
-  });
-
-  if (!response.ok) {
-    type ErrorBody = { error?: string; details?: string };
-    const parsed = await parseJsonResponse<ErrorBody>(response).catch(() => null);
-    const message = parsed?.error || parsed?.details || response.statusText || `Request failed with status ${response.status}`;
-    throw new Error(message);
-  }
-
-  return parseJsonResponse<T>(response);
-}
-
 export const splunkService = {
   async getStatus(): Promise<SplunkStatus | null> {
     try {
-      const raw = await handleJsonFetch<Record<string, unknown>>(`${API_BASE}/status`);
+      const raw = await apiRequest<Record<string, unknown>>(`${API_BASE}/status`, {
+        cache: 'no-store',
+      });
       if (!raw) {
         return null;
       }
@@ -135,9 +111,10 @@ export const splunkService = {
   },
 
   async connect(payload: SplunkConnectPayload): Promise<SplunkStatus> {
-    const raw = await handleJsonFetch<Record<string, unknown>>(`${API_BASE}/connect`, {
+    const raw = await apiRequest<Record<string, unknown>>(`${API_BASE}/connect`, {
       method: 'POST',
       body: JSON.stringify(payload),
+      cache: 'no-store',
     });
     return {
       connected: Boolean(raw?.success),
@@ -151,13 +128,17 @@ export const splunkService = {
     const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
     if (state) params.append('state', state);
 
-    const raw = await handleJsonFetch<SplunkAlertsResponse>(`${API_BASE}/alerts?${params}`);
+    const raw = await apiRequest<SplunkAlertsResponse>(`${API_BASE}/alerts?${params}`, {
+      cache: 'no-store',
+    });
     return raw ?? { alerts: [], total: 0, limit, offset };
   },
 
   async getWebhookUrl(): Promise<SplunkWebhookUrlResponse | null> {
     try {
-      return await handleJsonFetch<SplunkWebhookUrlResponse>(`${API_BASE}/alerts/webhook-url`);
+      return await apiRequest<SplunkWebhookUrlResponse>(`${API_BASE}/alerts/webhook-url`, {
+        cache: 'no-store',
+      });
     } catch (error) {
       console.error('[splunkService] Failed to fetch webhook URL:', error);
       return null;
@@ -165,42 +146,52 @@ export const splunkService = {
   },
 
   async search(payload: SplunkSearchPayload): Promise<SplunkSearchResult> {
-    const raw = await handleJsonFetch<SplunkSearchResult>(`${API_BASE}/search`, {
+    const raw = await apiRequest<SplunkSearchResult>(`${API_BASE}/search`, {
       method: 'POST',
       body: JSON.stringify(payload),
+      cache: 'no-store',
     });
     return raw ?? { success: false, results: [], count: 0 };
   },
 
   async createSearchJob(payload: SplunkSearchPayload): Promise<SplunkJobResponse> {
-    const raw = await handleJsonFetch<SplunkJobResponse>(`${API_BASE}/search/jobs`, {
+    const raw = await apiRequest<SplunkJobResponse>(`${API_BASE}/search/jobs`, {
       method: 'POST',
       body: JSON.stringify(payload),
+      cache: 'no-store',
     });
     return raw ?? { success: false };
   },
 
   async getJobStatus(sid: string): Promise<SplunkJobStatus> {
-    const raw = await handleJsonFetch<SplunkJobStatus>(`${API_BASE}/search/jobs/${sid}`);
+    const raw = await apiRequest<SplunkJobStatus>(`${API_BASE}/search/jobs/${sid}`, {
+      cache: 'no-store',
+    });
     return raw ?? { sid, isDone: false, isFailed: true, resultCount: 0 };
   },
 
   async getJobResults(sid: string, options?: { offset?: number; count?: number }): Promise<SplunkJobResultsResponse> {
     const offset = options?.offset ?? 0;
     const count = options?.count ?? 1000;
-    const raw = await handleJsonFetch<SplunkJobResultsResponse>(
-      `${API_BASE}/search/jobs/${sid}?results=true&offset=${offset}&count=${count}`
+    const raw = await apiRequest<SplunkJobResultsResponse>(
+      `${API_BASE}/search/jobs/${sid}?results=true&offset=${offset}&count=${count}`,
+      { cache: 'no-store' },
     );
     return raw ?? { results: [], count: 0, offset };
   },
 
   async cancelJob(sid: string): Promise<void> {
-    await handleJsonFetch(`${API_BASE}/search/jobs/${sid}`, { method: 'DELETE' });
+    await apiRequest(`${API_BASE}/search/jobs/${sid}`, {
+      method: 'DELETE',
+      cache: 'no-store',
+    });
   },
 
   async getRcaSettings(): Promise<SplunkRcaSettings> {
     try {
-      const raw = await handleJsonFetch<SplunkRcaSettings>(`${API_BASE}/rca-settings`);
+      const raw = await apiRequest<SplunkRcaSettings>(`${API_BASE}/rca-settings`, {
+        cache: 'no-store',
+      });
       return raw ?? { rcaEnabled: false };
     } catch (error) {
       console.error('[splunkService] Failed to fetch RCA settings:', error);
@@ -209,9 +200,10 @@ export const splunkService = {
   },
 
   async updateRcaSettings(rcaEnabled: boolean): Promise<SplunkRcaSettings> {
-    const raw = await handleJsonFetch<SplunkRcaSettings>(`${API_BASE}/rca-settings`, {
+    const raw = await apiRequest<SplunkRcaSettings>(`${API_BASE}/rca-settings`, {
       method: 'PUT',
       body: JSON.stringify({ rcaEnabled }),
+      cache: 'no-store',
     });
     return raw ?? { rcaEnabled };
   },

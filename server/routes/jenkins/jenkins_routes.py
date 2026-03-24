@@ -12,6 +12,7 @@ from utils.web.webhook_signature import SIGNATURE_HEADER, verify_webhook_signatu
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import get_org_id_from_request
+from utils.secrets.secret_ref_utils import delete_user_secret
 
 logger = logging.getLogger(__name__)
 
@@ -206,19 +207,15 @@ def status(user_id):
 def disconnect(user_id):
     """Disconnect Jenkins by removing stored credentials."""
     try:
-        with db_pool.get_admin_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "DELETE FROM user_tokens WHERE user_id = %s AND provider = %s",
-                (user_id, JENKINS_PROVIDER),
-            )
-            conn.commit()
-            deleted = cursor.rowcount
+        success, deleted = delete_user_secret(user_id, JENKINS_PROVIDER)
+        if not success:
+            logger.warning("[JENKINS] Failed to clean up secrets during disconnect")
+            return jsonify({"success": False, "error": "Failed to delete stored credentials"}), 500
 
-        logger.info("[JENKINS] Disconnected user %s (deleted %d token rows)", user_id, deleted)
-        return jsonify({"success": True, "message": "Jenkins disconnected successfully"})
+        logger.info("[JENKINS] Disconnected provider (deleted %d token rows)", deleted)
+        return jsonify({"success": True, "message": "Jenkins disconnected successfully", "deleted": deleted})
     except Exception as exc:
-        logger.exception("[JENKINS] Failed to disconnect user %s: %s", user_id, exc)
+        logger.exception("[JENKINS] Failed to disconnect provider")
         return jsonify({"error": "Failed to disconnect Jenkins"}), 500
 
 

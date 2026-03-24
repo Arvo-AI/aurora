@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle, CardContent, CardFooter } from "@/components/ui/card";
@@ -30,29 +30,35 @@ export default function ConnectorCard({ connector, connectedOverride }: Connecto
   const { toast } = useToast();
   const { user } = useUser();
   const canWrite = checkCanWrite(user?.role);
+  const userId = user?.id ?? null;
   const [showGitHubDialog, setShowGitHubDialog] = useState(false);
   const [showBitbucketDialog, setShowBitbucketDialog] = useState(false);
   const [showGcpDialog, setShowGcpDialog] = useState(false);
   const [showOvhDialog, setShowOvhDialog] = useState(false);
   const [showScalewayDialog, setShowScalewayDialog] = useState(false);
   const [showAzureDialog, setShowAzureDialog] = useState(false);
-  const [userId, setUserId] = useState<string | null>(null);
   const [isConnectingOAuth, setIsConnectingOAuth] = useState(false);
   
-  // Single source of truth for GitHub status
-  const githubStatus = useGitHubStatus(connector.id === "github" ? userId : null);
-  const bitbucketStatus = useBitbucketStatus(connector.id === "bitbucket" ? userId : null);
+  const hasOverride = connectedOverride !== undefined;
+
+  // GitHub/Bitbucket two-tier status (authenticated vs fully connected)
+  // Only instantiate when this card IS the github/bitbucket card AND
+  // no batch override was provided (i.e., on individual manage pages).
+  const githubStatus = useGitHubStatus(
+    !hasOverride && connector.id === "github" ? userId : null
+  );
+  const bitbucketStatus = useBitbucketStatus(
+    !hasOverride && connector.id === "bitbucket" ? userId : null
+  );
 
   const {
-    isConnected: hookIsConnected,
+    isConnected,
     setIsConnected,
     isCheckingConnection,
     isLoadingDetails,
     slackStatus,
     checkGitHubStatus,
-  } = useConnectorStatus(connector, userId);
-
-  const isConnected = connectedOverride !== undefined ? connectedOverride : hookIsConnected;
+  } = useConnectorStatus(connector, userId, connectedOverride);
 
   // Graph discovery status (only active for supported cloud providers)
   const { syncStatus } = useGraphDiscoveryStatus(connector.id, isConnected, userId);
@@ -65,22 +71,6 @@ export default function ConnectorCard({ connector, connectedOverride }: Connecto
   } = useConnectorOAuth(connector, userId);
 
   const isConnecting = isConnectingOAuth || isConnectingOAuthHandler;
-
-  useEffect(() => {
-    const fetchUserId = async () => {
-      try {
-        const response = await fetch('/api/getUserId');
-        if (response.ok) {
-          const data = await response.json();
-          setUserId(data.userId);
-        }
-      } catch (error) {
-        console.error('Error fetching user ID:', error);
-      }
-    };
-    
-    fetchUserId();
-  }, []);
 
   const handleDisconnect = async () => {
     if (connector.id === "slack") {
