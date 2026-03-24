@@ -90,9 +90,7 @@ export default function SetupOrgPage() {
       }
 
       setJoinSuccess(`Successfully joined ${data.name || "the organization"}! Redirecting to sign in...`)
-      setTimeout(() => {
-        signOut({ callbackUrl: "/sign-in" })
-      }, 2000)
+      await signOut({ callbackUrl: "/sign-in" })
     } catch {
       setJoinError("An error occurred. Please try again.")
       setIsJoining(false)

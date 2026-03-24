@@ -7,7 +7,13 @@ export async function POST(request: NextRequest) {
   const authResult = await getAuthenticatedUser()
   if (authResult instanceof NextResponse) return authResult
 
-  const body = await request.json()
+  let body: Record<string, unknown>
+  try {
+    body = await request.json()
+  } catch {
+    return NextResponse.json({ error: 'Invalid request body' }, { status: 400 })
+  }
+
   const safeBody: Record<string, string> = {}
   if (body.invitation_id) safeBody.invitation_id = String(body.invitation_id)
 
@@ -17,6 +23,12 @@ export async function POST(request: NextRequest) {
     body: JSON.stringify(safeBody),
   })
 
-  const data = await response.json()
+  let data: unknown
+  try {
+    data = await response.json()
+  } catch {
+    return NextResponse.json({ error: 'Backend returned invalid response' }, { status: 502 })
+  }
+
   return NextResponse.json(data, { status: response.status })
 }
