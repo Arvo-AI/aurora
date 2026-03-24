@@ -534,16 +534,20 @@ export default function CloudflareAuthPage() {
                     </div>
                     <div className="flex items-start gap-2">
                       <span className="text-muted-foreground mt-0.5">3.</span>
-                      <p>Click <strong>&quot;+ Add more&quot;</strong> and add <strong>Account — API Tokens — Read</strong></p>
+                      <p>Click <strong>&quot;Create Token&quot;</strong></p>
                     </div>
                     <div className="flex items-start gap-2">
                       <span className="text-muted-foreground mt-0.5">4.</span>
-                      <p>Select your zone(s) under <strong>Zone Resources</strong></p>
+                      <p>Under <strong>Permissions</strong>, click <strong>&quot;+ Add more&quot;</strong> and add <strong>Account — API Tokens — Read</strong></p>
                     </div>
                     <div className="flex items-start gap-2">
                       <span className="text-muted-foreground mt-0.5">5.</span>
+                      <p>Select your zone(s) under <strong>Zone Resources</strong></p>
+                    </div>
+                    <div className="flex items-start gap-2">
+                      <span className="text-muted-foreground mt-0.5">6.</span>
                       <div>
-                        <p><em>Optional</em> — To let Aurora take action during incidents, also add:</p>
+                        <p><em>Optional</em> — Under <strong>Permissions</strong>, also add these to let Aurora take action during incidents:</p>
                         <ul className="text-xs text-muted-foreground mt-1 list-disc list-inside space-y-0.5">
                           <li>Zone — DNS — Edit</li>
                           <li>Zone — Cache Purge — Purge</li>
@@ -553,11 +557,11 @@ export default function CloudflareAuthPage() {
                       </div>
                     </div>
                     <div className="flex items-start gap-2">
-                      <span className="text-muted-foreground mt-0.5">6.</span>
+                      <span className="text-muted-foreground mt-0.5">7.</span>
                       <p>Click <strong>&quot;Continue to summary&quot;</strong> → <strong>&quot;Create Token&quot;</strong></p>
                     </div>
                     <div className="flex items-start gap-2">
-                      <span className="text-muted-foreground mt-0.5">7.</span>
+                      <span className="text-muted-foreground mt-0.5">8.</span>
                       <p>Copy the token and paste it below</p>
                     </div>
                   </div>
