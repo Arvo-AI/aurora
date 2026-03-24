@@ -351,20 +351,26 @@ For Atlassian Cloud (`*.atlassian.net`):
 2. Click **Create** > **OAuth 2.0 integration**
 3. Name: `Aurora`
 4. Click **Create**
-5. Go to **Permissions** and add scopes for the products you want:
-   - **Confluence API** > **Add** > **Configure**:
+5. Go to **Distribution**, set Distribution Status to **Sharing**, fill in the required vendor fields (name, privacy policy URL), set Personal Data Declaration to **Yes**, and save. Without this, non-owner users will see "You don't have access to this app."
+6. Go to **Permissions** and add scopes for the products you want:
+   - **Confluence API** > **Add** > **Configure** > click **Edit Scopes** then **Add granular scopes**:
      - `read:page:confluence`
      - `read:space:confluence`
      - `read:user:confluence`
      - `search:confluence`
+
+     :::warning Use Granular Scopes
+     You must add these as **granular scopes**, not classic scopes. Click "Add granular scopes" under Confluence API in the Permissions tab. If only classic scopes are added, the OAuth flow will fail with "scopes not added to the app."
+     :::
+
    - **Jira platform REST API** > **Add** > **Configure**:
      - `read:jira-work`
      - `write:jira-work`
      - `read:jira-user`
-6. Go to **Authorization** > **Add** callback URL:
+7. Go to **Authorization** > **Add** callback URL:
    - `http://localhost:3000/atlassian/callback` (development)
    - `https://your-domain.com/atlassian/callback` (production)
-7. Go to **Settings** and copy **Client ID** and **Secret**
+8. Go to **Settings** and copy **Client ID** and **Secret**
 
 ##### 2. Configure Environment
 
@@ -430,6 +436,8 @@ Data Center short links work correctly.
 | "Failed to validate Jira PAT" | Verify PAT is valid and not expired |
 | "Insufficient Jira scopes" | Ensure OAuth app has `read:jira-work`, `write:jira-work`, and `read:jira-user` scopes |
 | "Atlassian OAuth configuration missing" | Set `ATLASSIAN_CLIENT_ID` and `ATLASSIAN_CLIENT_SECRET` in `.env` |
+| "You don't have access to this app" | Enable **Sharing** in the Distribution tab of your Atlassian OAuth app |
+| "Scopes not added to the app" | Add **granular** Confluence scopes (not classic) in the Permissions tab |
 
 ---
 
