@@ -24,6 +24,34 @@ from utils.auth.enforcer import get_enforcer
 logger = logging.getLogger(__name__)
 
 
+def _try_repair_casbin_role(user_id: str, org_id: str) -> bool:
+    """Check the DB for the user's role and create the missing Casbin binding."""
+    try:
+        from utils.db.connection_pool import db_pool
+        from utils.auth.enforcer import assign_role_to_user, get_user_roles_in_org
+
+        if get_user_roles_in_org(user_id, org_id):
+            return False
+
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT role FROM users WHERE id = %s AND org_id = %s",
+                    (user_id, org_id),
+                )
+                row = cur.fetchone()
+
+        if not row or not row[0]:
+            return False
+
+        assign_role_to_user(user_id, row[0], org_id)
+        logger.info("Auto-repaired missing Casbin role %s for user %s in org %s", row[0], user_id, org_id)
+        return True
+    except Exception as exc:
+        logger.warning("Casbin role auto-repair failed for user %s: %s", user_id, exc)
+        return False
+
+
 def require_permission(resource: str, action: str):
     """Decorator that enforces Casbin domain-based RBAC on a Flask route.
 
@@ -58,11 +86,16 @@ def require_permission(resource: str, action: str):
 
             enforcer = get_enforcer()
             if not enforcer.enforce(user_id, org_id, resource, action):
-                logger.warning(
-                    "RBAC denied: user=%s org=%s resource=%s action=%s endpoint=%s",
-                    user_id, org_id, resource, action, fn.__name__,
-                )
-                return jsonify({"error": "Forbidden"}), 403
+                # Self-heal: if the user has a role in the DB but no Casbin
+                # binding (e.g. assign_role_to_user failed during registration),
+                # create the binding now and retry.
+                repaired = _try_repair_casbin_role(user_id, org_id)
+                if not repaired or not enforcer.enforce(user_id, org_id, resource, action):
+                    logger.warning(
+                        "RBAC denied: user=%s org=%s resource=%s action=%s endpoint=%s",
+                        user_id, org_id, resource, action, fn.__name__,
+                    )
+                    return jsonify({"error": "Forbidden"}), 403
 
             try:
                 return fn(user_id, *args, **kwargs)

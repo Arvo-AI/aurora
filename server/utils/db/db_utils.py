@@ -1765,52 +1765,56 @@ def initialize_tables():
                 logging.warning(f"Error adding users.org_id FK: {e}")
                 cursor.execute("ROLLBACK TO SAVEPOINT sp_org_fk")
 
-            # Migration: Create default org for existing users that have no org
+            # Migration: Detach users stuck in the "Default Organization" so
+            # they are prompted to create their own org on next sign-in.
+            # Also handles brand-new orphan users (org_id IS NULL) by leaving
+            # them as-is — the frontend middleware redirects to /setup-org.
             try:
-                cursor.execute("SELECT COUNT(*) FROM users WHERE org_id IS NULL;")
-                orphan_count = cursor.fetchone()[0]
-                if orphan_count > 0:
-                    cursor.execute("""
-                        INSERT INTO organizations (id, name, slug, created_by)
-                        SELECT gen_random_uuid()::TEXT, 'Default Organization', 'default',
-                               (SELECT id FROM users ORDER BY created_at ASC LIMIT 1)
-                        WHERE NOT EXISTS (SELECT 1 FROM organizations WHERE slug = 'default');
-                    """)
-                    cursor.execute("""
-                        UPDATE users SET org_id = (
-                            SELECT id FROM organizations WHERE slug = 'default'
-                        ) WHERE org_id IS NULL;
-                    """)
-                    # Backfill org_id on all data tables from the user's org
-                    for tbl in org_id_tables:
-                        if tbl == "users":
-                            continue
-                        try:
-                            cursor.execute(f"""
-                                UPDATE {tbl} t SET org_id = u.org_id
-                                FROM users u WHERE t.user_id = u.id
-                                AND t.org_id IS NULL;
-                            """)
-                            rows_backfilled = cursor.rowcount
-                            cursor.execute(f"""
-                                SELECT COUNT(*) FROM {tbl} WHERE org_id IS NULL;
-                            """)
-                            remaining = cursor.fetchone()[0]
-                            if remaining > 0:
-                                logging.warning(
-                                    "Backfill: %d rows in %s still have NULL org_id "
-                                    "(user_id may not match users.id)", remaining, tbl
-                                )
-                            elif rows_backfilled > 0:
-                                logging.info("Backfilled %d rows in %s with org_id", rows_backfilled, tbl)
-                        except Exception as e:
-                            logging.warning(f"Error backfilling org_id for {tbl}: {e}")
-                    logging.info(
-                        f"Migrated {orphan_count} users into default organization."
+                cursor.execute(
+                    "SELECT id FROM organizations WHERE slug = 'default'"
+                )
+                default_org_row = cursor.fetchone()
+                if default_org_row:
+                    default_org_id = default_org_row[0]
+                    cursor.execute(
+                        "SELECT id, role FROM users WHERE org_id = %s",
+                        (default_org_id,),
                     )
+                    default_org_users = cursor.fetchall()
+                    if default_org_users:
+                        from utils.auth.enforcer import remove_role_from_user, get_user_roles_in_org
+
+                        for uid, urole in default_org_users:
+                            # Remove Casbin role bindings for the default org
+                            for existing_role in get_user_roles_in_org(uid, default_org_id):
+                                try:
+                                    remove_role_from_user(uid, existing_role, default_org_id)
+                                except Exception:
+                                    pass
+                            # NULL out org_id and role so the user goes through setup-org
+                            cursor.execute(
+                                "UPDATE users SET org_id = NULL, role = NULL WHERE id = %s",
+                                (uid,),
+                            )
+                        logging.info(
+                            "Detached %d users from Default Organization — "
+                            "they will be prompted to create their own org.",
+                            len(default_org_users),
+                        )
+                    # Remove the default org itself if no users remain
+                    cursor.execute(
+                        "SELECT COUNT(*) FROM users WHERE org_id = %s",
+                        (default_org_id,),
+                    )
+                    if cursor.fetchone()[0] == 0:
+                        cursor.execute(
+                            "DELETE FROM organizations WHERE id = %s",
+                            (default_org_id,),
+                        )
+                        logging.info("Deleted empty Default Organization.")
                     conn.commit()
             except Exception as e:
-                logging.warning(f"Error creating default org migration: {e}")
+                logging.warning(f"Error in default-org detach migration: {e}")
                 conn.rollback()
 
             # Repair: ensure every user with an org has a Casbin role assignment.

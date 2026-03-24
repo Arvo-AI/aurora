@@ -149,6 +149,9 @@ def setup_org():
 
     Body: { org_name }
     Header: X-User-ID (set by the frontend proxy)
+
+    Also migrates any pre-existing data rows (from before orgs existed)
+    into the newly created organization.
     """
     if request.method == 'OPTIONS':
         return create_cors_response()
@@ -208,6 +211,37 @@ def setup_org():
                     "UPDATE users SET org_id = %s, role = 'admin' WHERE id = %s",
                     (org_id, user_id)
                 )
+
+                # Migrate pre-existing data rows that belong to this user
+                # but still have NULL or stale org_id (from before orgs existed).
+                _data_tables = [
+                    "user_tokens", "user_connections", "user_manual_vms",
+                    "user_preferences", "workspaces", "aurora_deployments",
+                    "deployment_tasks", "deployments", "chat_sessions",
+                    "llm_usage_tracking", "cloud_feed_metadata", "cloud_ingestion_state",
+                    "grafana_alerts", "datadog_events", "netdata_alerts",
+                    "pagerduty_events", "incidents", "incident_alerts",
+                    "rca_notification_emails", "splunk_alerts",
+                    "jenkins_deployment_events", "dynatrace_problems",
+                    "bigpanda_events", "kubectl_agent_tokens",
+                    "k8s_pods", "k8s_nodes", "k8s_node_conditions",
+                    "k8s_services", "k8s_deployments", "k8s_ingresses",
+                    "k8s_pod_metrics", "k8s_node_metrics",
+                    "cloud_billing_usage", "provider_metrics",
+                    "knowledge_base_memory", "knowledge_base_documents",
+                    "incident_feedback", "postmortems",
+                ]
+                for tbl in _data_tables:
+                    try:
+                        cursor.execute(
+                            f"UPDATE {tbl} SET org_id = %s "
+                            f"WHERE user_id = %s AND (org_id IS NULL OR org_id = ("
+                            f"  SELECT id FROM organizations WHERE slug = 'default'"
+                            f"))",
+                            (org_id, user_id),
+                        )
+                    except Exception:
+                        logging.debug("Skipping data migration for table %s", tbl)
 
                 conn.commit()
 
