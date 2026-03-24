@@ -5,13 +5,14 @@ each alert separately by fingerprint (hash of rule + labels):
 - Firing alerts: create an incident and trigger RCA.
 - Resolved alerts: match to the original incident by fingerprint, skip RCA.
 
-See docs/oss/GRAFANA_ALERTS.md for edge cases and matching details.
+This module implements the edge-case handling and matching logic directly.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import zlib
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
@@ -218,6 +219,8 @@ def process_grafana_alert(
 
                         # A single Grafana webhook can contain multiple alerts (different fingerprints).
                         # Each gets its own incident/resolution handling.
+                        # Intentionally falsy check: Grafana test notifications send
+                        # alerts as [] (empty list), which we also want to skip.
                         individual_alerts = payload.get("alerts")
                         if not individual_alerts:
                             logger.info("[GRAFANA][ALERT] No alerts array in payload for user %s, skipping incident creation", user_id)
@@ -225,7 +228,9 @@ def process_grafana_alert(
                         for single_alert in individual_alerts:
                             alert_payload = _merge_alert_into_payload(payload, single_alert)
                             fingerprint = single_alert.get("fingerprint")
-                            per_alert_source_id = alert_id
+                            # source_alert_id is INTEGER; CRC32 the hex fingerprint to a signed 32-bit int
+                            crc = zlib.crc32(fingerprint.encode())
+                            per_alert_source_id = crc - (1 << 32) if crc >= (1 << 31) else crc
 
                             per_alert_title = (
                                 alert_payload.get("commonLabels", {}).get("alertname")
@@ -342,7 +347,9 @@ def process_grafana_alert(
                                 alert_metadata["ruleUID"] = per_alert_rule_uid
 
                             # Try to correlate with an existing open incident (time/similarity/topology based)
+                            correlation_result = None
                             try:
+                                cursor.execute("SAVEPOINT sp_correlation")
                                 correlator = AlertCorrelator()
                                 correlation_result = correlator.correlate(
                                     cursor=cursor, user_id=user_id, source_type="grafana",
@@ -350,7 +357,14 @@ def process_grafana_alert(
                                     alert_service=service, alert_severity=severity,
                                     alert_metadata=alert_metadata,
                                 )
-                                if correlation_result.is_correlated:
+                                cursor.execute("RELEASE SAVEPOINT sp_correlation")
+                            except Exception as exc:
+                                cursor.execute("ROLLBACK TO SAVEPOINT sp_correlation")
+                                logger.warning("[GRAFANA] Correlation check failed: %s", exc)
+
+                            if correlation_result and correlation_result.is_correlated:
+                                try:
+                                    cursor.execute("SAVEPOINT sp_handle_correlated")
                                     handle_correlated_alert(
                                         cursor=cursor, user_id=user_id,
                                         incident_id=correlation_result.incident_id,
@@ -360,10 +374,12 @@ def process_grafana_alert(
                                         correlation_result=correlation_result,
                                         alert_metadata=alert_metadata, raw_payload=alert_payload,
                                     )
+                                    cursor.execute("RELEASE SAVEPOINT sp_handle_correlated")
                                     conn.commit()
                                     continue
-                            except Exception as corr_exc:
-                                logger.warning("[GRAFANA] Correlation check failed: %s", corr_exc)
+                                except Exception as exc:
+                                    cursor.execute("ROLLBACK TO SAVEPOINT sp_handle_correlated")
+                                    logger.warning("[GRAFANA] handle_correlated_alert failed: %s", exc)
 
                             # No correlation found — create a new incident
                             cursor.execute(
@@ -386,6 +402,7 @@ def process_grafana_alert(
 
                             # Record as the primary alert for this incident
                             try:
+                                cursor.execute("SAVEPOINT sp_incident_alerts")
                                 cursor.execute(
                                     """INSERT INTO incident_alerts
                                        (user_id, incident_id, source_type, source_alert_id, alert_title, alert_service,
@@ -398,9 +415,11 @@ def process_grafana_alert(
                                     "UPDATE incidents SET affected_services = ARRAY[%s] WHERE id = %s",
                                     (service, incident_id),
                                 )
+                                cursor.execute("RELEASE SAVEPOINT sp_incident_alerts")
                                 conn.commit()
-                            except Exception as e:
-                                logger.warning("[GRAFANA] Failed to record primary alert: %s", e)
+                            except Exception as exc:
+                                cursor.execute("ROLLBACK TO SAVEPOINT sp_incident_alerts")
+                                logger.warning("[GRAFANA] Failed to record primary alert: %s", exc)
 
                             if not incident_id:
                                 continue
