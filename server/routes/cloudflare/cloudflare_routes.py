@@ -92,6 +92,7 @@ def cloudflare_connect(user_id):
             "email": email,
             "account_name": account_name,
             "account_id": account_id,
+            "accounts": [{"id": account_id, "name": account_name}],
         }
 
         store_tokens_in_db(user_id, token_data, "cloudflare")
