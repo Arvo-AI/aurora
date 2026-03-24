@@ -286,12 +286,12 @@ export default function CloudflareAuthPage() {
         permissions: data.permissions,
         tokenType: data.tokenType,
       });
-      setIsLoading(false);
       fetchZones();
     } catch (err: unknown) {
       console.error('Cloudflare connect error:', err);
       const errorMessage = err instanceof Error ? err.message : 'Failed to connect to Cloudflare';
       setError(errorMessage);
+    } finally {
       setIsLoading(false);
     }
   };
@@ -460,7 +460,7 @@ export default function CloudflareAuthPage() {
                         className="text-blue-600 dark:text-blue-400 hover:underline"
                       >
                         Cloudflare Dashboard
-                      </a>{" "}and reconnect to update.
+                      </a>{" "}and refresh the page to update.
                     </p>
                   </div>
                 ) : (

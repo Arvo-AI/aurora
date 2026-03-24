@@ -66,12 +66,12 @@ def cloudflare_connect(user_id):
         zones = client.list_zones()
 
         account_name = None
-        account_id = token_info.get("account_id", "unknown")  # already set for account tokens (cfat_)
+        account_id = token_info.get("account_id")
         accounts = client.list_accounts()
         if accounts:
             account_name = accounts[0].get("name")
-            if account_id == "unknown":  # user tokens need account_id discovered
-                account_id = accounts[0].get("id", "unknown")
+            if not account_id:
+                account_id = accounts[0].get("id")
 
         permissions = client.get_token_permissions(
             token_info.get("token_id", ""),
@@ -265,9 +265,9 @@ def cloudflare_disconnect(user_id):
     """Disconnect the Cloudflare account."""
     try:
         token_data = get_token_data(user_id, "cloudflare")
-        account_id = "unknown"
+        account_id = None
         if token_data:
-            account_id = token_data.get("account_id", "unknown")
+            account_id = token_data.get("account_id")
 
         delete_user_secret(user_id, "cloudflare")
         set_connection_status(user_id, "cloudflare", account_id, "disconnected")

@@ -234,8 +234,8 @@ def store_tokens_in_db(user_id: str, token_data: Dict, provider: str,
                 # API token stored in Vault (via secret_ref)
                 cf_email = token_data.get("email") if isinstance(token_data, dict) else None
                 cf_accounts = token_data.get("accounts", []) if isinstance(token_data, dict) else []
-                cf_account_id = cf_accounts[0]["id"] if cf_accounts else None
-                cf_account_name = cf_accounts[0]["name"] if cf_accounts else None
+                cf_account_id = cf_accounts[0].get("id") if cf_accounts else None
+                cf_account_name = cf_accounts[0].get("name") if cf_accounts else None
 
                 cursor.execute(
                     "INSERT INTO user_tokens (user_id, org_id, secret_ref, provider, email, subscription_id, subscription_name) "
