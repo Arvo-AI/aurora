@@ -50,6 +50,31 @@ def _check_grafana(creds: Dict[str, Any]) -> Dict[str, Any]:
         return {"connected": False}
 
 
+def _check_loki(creds: Dict[str, Any]) -> Dict[str, Any]:
+    api_token = creds.get("api_token")
+    base_url = creds.get("base_url")
+    username = creds.get("username")
+    if not api_token or not base_url:
+        return {"connected": False}
+    try:
+        headers = {"Accept": "application/json"}
+        if username:
+            import base64
+            encoded = base64.b64encode(f"{username}:{api_token}".encode()).decode()
+            headers["Authorization"] = f"Basic {encoded}"
+        else:
+            headers["Authorization"] = f"Bearer {api_token}"
+        r = requests.get(
+            f"{base_url}/loki/api/v1/labels",
+            headers=headers,
+            timeout=HTTP_TIMEOUT,
+        )
+        r.raise_for_status()
+        return {"connected": True, "baseUrl": base_url}
+    except Exception:
+        return {"connected": False}
+
+
 def _check_datadog(creds: Dict[str, Any]) -> Dict[str, Any]:
     api_key = creds.get("api_key")
     app_key = creds.get("app_key")
@@ -498,6 +523,7 @@ def _check_netdata(creds: Dict[str, Any]) -> Dict[str, Any]:
 PROVIDER_CHECKERS = {
     # Live API validation
     "grafana": _check_grafana,
+    "loki": _check_loki,
     "datadog": _check_datadog,
     "jenkins": _check_ci_provider,
     "cloudbees": _check_ci_provider,

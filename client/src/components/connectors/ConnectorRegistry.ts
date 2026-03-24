@@ -79,6 +79,17 @@ class ConnectorRegistry {
     });
 
     this.register({
+      id: "loki",
+      name: "Loki",
+      description: "Connect to Grafana Loki for log aggregation and querying. Search and correlate logs across your infrastructure using LogQL.",
+      iconPath: "/loki.svg",
+      iconBgColor: "bg-white dark:bg-white",
+      category: "Monitoring",
+      path: "/loki/auth",
+      storageKey: "isLokiConnected",
+    });
+
+    this.register({
         id: "dynatrace",
         name: "Dynatrace",
         description: "Connect to Dynatrace for full-stack observability. Receive problem notifications and query metrics, logs, and entities for root cause analysis.",

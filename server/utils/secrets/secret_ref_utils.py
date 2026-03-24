@@ -39,6 +39,7 @@ SUPPORTED_SECRET_PROVIDERS: Set[str] = {
     "github",   # GitHub tokens
     "github_repo_selection",  # GitHub selected repository and branch
     "grafana",  # Grafana connector tokens
+    "loki",     # Grafana Loki log aggregation
     "datadog",  # Datadog connector tokens
     "netdata",  # Netdata connector tokens
     "pagerduty", # PagerDuty connector tokens
