@@ -1777,7 +1777,7 @@ def initialize_tables():
                 try:
                     cursor.execute("ROLLBACK TO SAVEPOINT sp_discover_child")
                 except Exception:
-                    pass
+                    logging.debug("ROLLBACK TO SAVEPOINT also failed for sp_discover_child")
                 incident_child_tables = ["incident_thoughts", "incident_citations", "incident_suggestions"]
             for tbl in incident_child_tables:
                 try:
@@ -1821,7 +1821,7 @@ def initialize_tables():
                     try:
                         cursor.execute(f"ROLLBACK TO SAVEPOINT sp_trg_{tbl}")
                     except Exception:
-                        pass
+                        logging.debug(f"ROLLBACK TO SAVEPOINT also failed for sp_trg_{tbl}")
 
             # Add FK from users.org_id -> organizations.id (if not exists)
             try:

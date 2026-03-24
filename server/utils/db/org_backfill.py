@@ -77,7 +77,7 @@ def _safe_update(cursor, label: str, sql: str, params: tuple) -> int:
         try:
             cursor.execute(f"ROLLBACK TO SAVEPOINT {sp}")
         except Exception:
-            pass
+            logger.debug("ROLLBACK TO SAVEPOINT also failed for %s", label)
         return 0
 
 
