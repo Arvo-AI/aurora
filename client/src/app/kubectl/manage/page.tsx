@@ -1,14 +1,15 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { ArrowLeft, Loader2, LogOut, RefreshCw, Copy, Check } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { copyToClipboard } from "@/lib/utils";
+import { useQuery, jsonFetcher } from "@/lib/query";
 
 interface Connection {
   cluster_id: string;
@@ -22,8 +23,6 @@ interface Connection {
 export default function ManageKubectlClustersPage() {
   const router = useRouter();
   const { toast } = useToast();
-  const [connections, setConnections] = useState<Connection[]>([]);
-  const [loading, setLoading] = useState(true);
   const [disconnecting, setDisconnecting] = useState<string | null>(null);
   const [deleteCommand, setDeleteCommand] = useState<string | null>(null);
   const [showCommandDialog, setShowCommandDialog] = useState(false);
@@ -31,35 +30,13 @@ export default function ManageKubectlClustersPage() {
   const [clusterToDelete, setClusterToDelete] = useState<{ id: string; name: string } | null>(null);
   const [commandCopied, setCommandCopied] = useState(false);
 
-  const loadConnections = async () => {
-    try {
-      setLoading(true);
-      const res = await fetch('/api/kubectl/connections');
-      if (!res.ok) {
-        throw new Error('Failed to load connections');
-      }
-      const data = await res.json();
-      const conns = data.connections || [];
-      setConnections(conns);
-      // Trigger graph discovery if there are active clusters
-      if (conns.some((c: Connection) => c.status === 'active')) {
-        localStorage.setItem("aurora_graph_discovery_trigger", "1");
-      }
-    } catch (error) {
-      console.error('Error loading connections:', error);
-      toast({
-        title: "Error",
-        description: "Failed to load connected clusters",
-        variant: "destructive",
-      });
-    } finally {
-      setLoading(false);
-    }
-  };
+  const { data, isLoading: loading, mutate: loadConnections } = useQuery<{ connections: Connection[] }>(
+    '/api/kubectl/connections',
+    jsonFetcher,
+    { staleTime: 10_000, retryCount: 2, revalidateOnFocus: true },
+  );
 
-  useEffect(() => {
-    loadConnections();
-  }, []);
+  const connections = data?.connections ?? [];
 
   const handleDisconnect = async (clusterId: string, clusterName: string) => {
     setClusterToDelete({ id: clusterId, name: clusterName });

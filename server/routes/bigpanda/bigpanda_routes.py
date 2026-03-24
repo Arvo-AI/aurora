@@ -16,6 +16,7 @@ from utils.db.connection_pool import db_pool
 from utils.web.cors_utils import create_cors_response
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.auth.rbac_decorators import require_permission
+from utils.secrets.secret_ref_utils import delete_user_secret
 
 logger = logging.getLogger(__name__)
 
@@ -83,16 +84,15 @@ def status(user_id):
 @require_permission("connectors", "write")
 def disconnect(user_id):
     try:
-        with db_pool.get_admin_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "DELETE FROM user_tokens WHERE user_id = %s AND provider = %s",
-                (user_id, "bigpanda"),
-            )
-            conn.commit()
-        return jsonify({"success": True, "message": "BigPanda disconnected successfully"})
+        success, deleted = delete_user_secret(user_id, "bigpanda")
+        if not success:
+            logger.warning("[BIGPANDA] Failed to clean up secrets during disconnect")
+            return jsonify({"success": False, "error": "Failed to delete stored credentials"}), 500
+
+        logger.info("[BIGPANDA] Disconnected provider (deleted %d token rows)", deleted)
+        return jsonify({"success": True, "message": "BigPanda disconnected successfully", "deleted": deleted})
     except Exception as exc:
-        logger.exception("[BIGPANDA] Failed to disconnect user %s: %s", user_id, exc)
+        logger.exception("[BIGPANDA] Failed to disconnect provider")
         return jsonify({"error": "Failed to disconnect BigPanda"}), 500
 
 

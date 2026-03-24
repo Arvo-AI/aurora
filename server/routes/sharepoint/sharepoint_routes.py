@@ -167,7 +167,7 @@ def status():
         client = SharePointClient(access_token)
         user_profile = client.get_current_user()
     except requests.HTTPError as exc:
-        status_code = exc.response.status_code if exc.response else None
+        status_code = exc.response.status_code if exc.response is not None else None
         if status_code == 401:
             refreshed = _refresh_sharepoint_credentials(user_id, creds)
             if refreshed:
@@ -240,7 +240,7 @@ def disconnect():
         logger.info("[SHAREPOINT] Disconnected user %s (deleted %s token rows)", user_id, deleted_count)
         return jsonify({"success": True, "message": "SharePoint disconnected successfully"})
     except Exception as exc:
-        logger.exception("[SHAREPOINT] Failed to disconnect user %s: %s", user_id, exc)
+        logger.exception("[SHAREPOINT] Failed to disconnect provider")
         return jsonify({"error": "Failed to disconnect SharePoint"}), 500
 
 
@@ -278,7 +278,7 @@ def search():
         svc = SharePointSearchService(user_id)
         results = svc.search(query=query, site_id=site_id, max_results=max_results)
     except requests.HTTPError as exc:
-        status_code = exc.response.status_code if exc.response else None
+        status_code = exc.response.status_code if exc.response is not None else None
         if status_code == 401:
             return jsonify({"error": "SharePoint credentials expired"}), 401
         logger.exception("[SHAREPOINT] Search failed for user %s", user_id)
@@ -322,7 +322,7 @@ def fetch_page():
         svc = SharePointSearchService(user_id)
         result = svc.fetch_page_markdown(site_id=site_id, page_id=page_id)
     except requests.HTTPError as exc:
-        status_code = exc.response.status_code if exc.response else None
+        status_code = exc.response.status_code if exc.response is not None else None
         if status_code == 401:
             return jsonify({"error": "SharePoint credentials expired"}), 401
         logger.exception("[SHAREPOINT] Fetch page failed for user %s", user_id)
@@ -366,7 +366,7 @@ def fetch_document():
         svc = SharePointSearchService(user_id)
         result = svc.fetch_document_text(drive_id=drive_id, item_id=item_id)
     except requests.HTTPError as exc:
-        status_code = exc.response.status_code if exc.response else None
+        status_code = exc.response.status_code if exc.response is not None else None
         if status_code == 401:
             return jsonify({"error": "SharePoint credentials expired"}), 401
         logger.exception("[SHAREPOINT] Fetch document failed for user %s", user_id)
@@ -412,7 +412,7 @@ def create_page():
         svc = SharePointSearchService(user_id)
         result = svc.create_page(title=title, markdown_content=content, site_id=site_id)
     except requests.HTTPError as exc:
-        status_code = exc.response.status_code if exc.response else None
+        status_code = exc.response.status_code if exc.response is not None else None
         if status_code == 401:
             return jsonify({"error": "SharePoint credentials expired"}), 401
         logger.exception("[SHAREPOINT] Create page failed for user %s", user_id)
@@ -448,7 +448,7 @@ def list_sites():
         client = SharePointClient(access_token)
         sites = client.search_sites(search_query)
     except requests.HTTPError as exc:
-        status_code = exc.response.status_code if exc.response else None
+        status_code = exc.response.status_code if exc.response is not None else None
         if status_code == 401:
             refreshed = _refresh_sharepoint_credentials(user_id, creds)
             if refreshed:

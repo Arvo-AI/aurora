@@ -18,6 +18,7 @@ from utils.auth.stateless_auth import (
 )
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.auth.rbac_decorators import require_permission
+from utils.secrets.secret_ref_utils import delete_user_secret
 SPLUNK_TIMEOUT = 15
 
 logger = logging.getLogger(__name__)
@@ -237,24 +238,21 @@ def status(user_id):
 def disconnect(user_id):
     """Disconnect Splunk by removing stored credentials."""
     try:
-        with db_pool.get_admin_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "DELETE FROM user_tokens WHERE user_id = %s AND provider = %s",
-                (user_id, "splunk")
-            )
-            conn.commit()
-            deleted_count = cursor.rowcount
+        success, deleted_count = delete_user_secret(user_id, "splunk")
+        if not success:
+            logger.warning("[SPLUNK] Failed to clean up secrets during disconnect")
+            return jsonify({"success": False, "error": "Failed to delete stored credentials"}), 500
 
-        logger.info(f"[SPLUNK] Disconnected user {user_id} (deleted {deleted_count} token entries)")
+        logger.info("[SPLUNK] Disconnected provider (deleted %s token entries)", deleted_count)
 
         return jsonify({
             "success": True,
-            "message": "Splunk disconnected successfully"
+            "message": "Splunk disconnected successfully",
+            "deleted": deleted_count
         }), 200
 
     except Exception as exc:
-        logger.exception(f"[SPLUNK] Failed to disconnect user {user_id}: {exc}")
+        logger.exception("[SPLUNK] Failed to disconnect provider")
         return jsonify({"error": "Failed to disconnect Splunk"}), 500
 
 
