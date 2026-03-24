@@ -116,7 +116,15 @@ export function AtlassianConnectPage({ product, sibling }: AtlassianConnectPageP
         window.dispatchEvent(new CustomEvent("providerStateChanged"));
       }
     } catch (err) {
-      toast({ title: "Connection failed", description: err instanceof Error ? err.message : "OAuth failed", variant: "destructive" });
+      const msg = err instanceof Error ? err.message : "OAuth failed";
+      const isConfigMissing = msg.toLowerCase().includes("configuration missing") || msg.toLowerCase().includes("client_id");
+      toast({
+        title: isConfigMissing ? "Atlassian OAuth not configured" : "Connection failed",
+        description: isConfigMissing
+          ? "Set ATLASSIAN_CLIENT_ID and ATLASSIAN_CLIENT_SECRET in .env — see docs for setup steps."
+          : msg,
+        variant: "destructive",
+      });
     } finally { setIsConnecting(false); }
   };
 

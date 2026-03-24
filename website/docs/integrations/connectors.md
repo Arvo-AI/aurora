@@ -356,9 +356,11 @@ For Atlassian Cloud (`*.atlassian.net`):
      - `read:page:confluence`
      - `read:space:confluence`
      - `read:user:confluence`
+     - `search:confluence`
    - **Jira platform REST API** > **Add** > **Configure**:
      - `read:jira-work`
      - `write:jira-work`
+     - `read:jira-user`
 6. Go to **Authorization** > **Add** callback URL:
    - `http://localhost:3000/atlassian/callback` (development)
    - `https://your-domain.com/atlassian/callback` (production)
@@ -426,7 +428,8 @@ Data Center short links work correctly.
 | "Failed to validate Confluence PAT" | Verify PAT is valid and not expired |
 | "Jira credentials expired" | Reconnect via the Connectors page |
 | "Failed to validate Jira PAT" | Verify PAT is valid and not expired |
-| "Insufficient Jira scopes" | Ensure OAuth app has `read:jira-work` and `write:jira-work` scopes |
+| "Insufficient Jira scopes" | Ensure OAuth app has `read:jira-work`, `write:jira-work`, and `read:jira-user` scopes |
+| "Atlassian OAuth configuration missing" | Set `ATLASSIAN_CLIENT_ID` and `ATLASSIAN_CLIENT_SECRET` in `.env` |
 
 ---
 

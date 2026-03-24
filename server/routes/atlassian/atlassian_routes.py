@@ -154,7 +154,11 @@ def connect(user_id):
         # Encode products in the endpoint field (e.g. "atlassian:confluence,jira")
         endpoint_key = "atlassian:" + ",".join(sorted(products))
         store_oauth2_state(state, user_id, endpoint_key)
-        auth_url = get_auth_url(state=state, products=products)
+        try:
+            auth_url = get_auth_url(state=state, products=products)
+        except ValueError as exc:
+            logger.error("[ATLASSIAN] OAuth config error: %s", exc)
+            return jsonify({"error": str(exc)}), 500
         return jsonify({"authUrl": auth_url})
 
     # Step 2: exchange code for token
