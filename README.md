@@ -179,31 +179,52 @@ Aurora integrates with 22+ tools across your stack:
 
 ## Quick Start
 
+Get Aurora running locally for testing and evaluation:
+
 ```bash
 # 1. Clone the repository
 git clone https://github.com/arvo-ai/aurora.git
 cd aurora
 
-# 2. Initialize configuration
+# 2. Initialize configuration (generates secure secrets automatically)
 make init
 
-# 3. Add your LLM API key
+# 3. Edit .env and add your LLM API key
+#    Get one from: https://openrouter.ai/keys or https://platform.openai.com/api-keys
 nano .env  # Add OPENROUTER_API_KEY=sk-or-v1-...
 
-# 4. Start Aurora
-make prod-prebuilt
+# 4. Start Aurora (prebuilt from GHCR, or build from source)
+make prod-prebuilt   # or: make prod-local to build images locally
 
-# 5. Get Vault token and add to .env
+# 5. Get Vault root token and add to .env
+#    Check the vault-init container logs for the root token:
 docker logs vault-init 2>&1 | grep "Root Token:"
-nano .env  # Add VAULT_TOKEN=hvs.xxx...
+#    You'll see output like:
+#    ===================================================
+#    Vault initialization complete!
+#    Root Token: hvs.xxxxxxxxxxxxxxxxxxxxxxxxxxxx
+#    IMPORTANT: Set VAULT_TOKEN=hvs.xxxxxxxxxxxxxxxxxxxxxxxxxxxx in your .env file
+#               to connect Aurora services to Vault.
+#    ===================================================
+#    Copy the root token value and add it to your .env file:
+nano .env  # Add VAULT_TOKEN=hvs.xxxxxxxxxxxxxxxxxxxxxxxxxxxx
 
-# 6. Restart to load Vault token
-make down && make prod-prebuilt
+# 6. Restart Aurora to load the Vault token
+make down
+make prod-prebuilt   # or: make prod-local to build from source
 ```
 
-Open **http://localhost:3000** in your browser. The first user to register becomes admin.
+**That's it!** Open **http://localhost:3000** in your browser.
 
-> **Note**: Aurora works without any cloud provider accounts. The LLM API key is the only external requirement. Connectors are optional.
+The first user to register becomes the admin. After that, registration is closed — admins invite new users from the Organization page.
+
+> **Note**: Aurora works **without any cloud provider accounts**! The LLM API key is the only external requirement. Connectors are optional and can be enabled later if needed via the env file.
+
+Open http://localhost:3000 (API: http://localhost:5080, Chatbot WS: ws://localhost:5006)
+
+To stop: `make down` | Logs: `make logs`
+
+If you want cloud connectors, add provider credentials referenced in `.env.example`.
 
 ### Pin a specific version
 
@@ -256,9 +277,11 @@ Aurora uses **Casbin RBAC** with three roles enforced at both the API and UI lay
 | **Editor** | Write access — connectors, SSH keys, VMs, knowledge base, incidents, chat |
 | **Viewer** | Read-only — view incidents, postmortems, dashboards, chat |
 
-- Registration is closed after the first (admin) user. New accounts are created by admins only.
-- Backend RBAC via `@require_permission` decorators on all write endpoints.
-- CORS restricted to `FRONTEND_URL` — no wildcard origins.
+- **Registration** is closed after the first (admin) user. New accounts are created by admins only.
+- **Backend RBAC** via `@require_permission` decorators on all write endpoints (Casbin policy enforcement).
+- **Frontend guards** via `ConnectorAuthGuard` on sensitive pages (SSH keys, VM config, connector auth).
+- **CORS** is restricted to `FRONTEND_URL` — no wildcard origins on any endpoint.
+- The Flask API (port 5080) is exposed to the host because the frontend makes direct browser calls to it for some features (OVH/Scaleway VMs, cloud graph). CORS and RBAC protect it.
 
 For more details, see [SECURITY.md](SECURITY.md).
 
