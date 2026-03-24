@@ -114,10 +114,12 @@ class JiraClient:
         fields: Optional[List[str]] = None,
         max_results: int = 20,
         start_at: int = 0,
+        next_page_token: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Search issues via JQL.
 
         Uses /search/jql (Atlassian migrated from /search — CHANGE-2046, March 2026).
+        The new endpoint does NOT accept ``startAt``; use ``nextPageToken`` instead.
         Falls back to /search for Data Center instances that may not have the new endpoint.
         """
         search_fields = fields or self._DEFAULT_SEARCH_FIELDS
@@ -126,8 +128,9 @@ class JiraClient:
             "jql": jql,
             "maxResults": max_results,
             "fields": search_fields,
-            "startAt": start_at,
         }
+        if next_page_token:
+            new_body["nextPageToken"] = next_page_token
 
         try:
             result = self._request("POST", "/search/jql", json_body=new_body)
