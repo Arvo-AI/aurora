@@ -112,6 +112,7 @@ export class ProviderPolling {
     const isScalewayConnected = this.getConnectionStatus('scaleway');
     const isScalewayFetching = localStorage.getItem("isScalewayFetching") === "true";
     const isTailscaleConnected = this.getConnectionStatus('tailscale');
+    const isCloudflareConnected = this.getConnectionStatus('cloudflare');
     const isGrafanaConnected = this.getConnectionStatus('grafana');
     const isDatadogConnected = this.getConnectionStatus('datadog');
     const isNetdataConnected = this.getConnectionStatus('netdata');
@@ -234,6 +235,15 @@ export class ProviderPolling {
             };
             if (JSON.stringify(newDynatraceState) !== JSON.stringify(provider)) hasChanges = true;
             return newDynatraceState;
+
+          case 'cloudflare':
+            const newCloudflareState = {
+              ...provider,
+              isConnected: isCloudflareConnected,
+              status: isCloudflareConnected ? ('connected' as const) : ('disconnected' as const)
+            };
+            if (JSON.stringify(newCloudflareState) !== JSON.stringify(provider)) hasChanges = true;
+            return newCloudflareState;
 
           default:
             return provider;

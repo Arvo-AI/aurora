@@ -10,6 +10,7 @@ Backend configuration guides for Aurora connectors.
 | **AWS** | IAM Role + External ID | [Setup](./aws_connector/README.md) |
 | **Azure** | Service Principal | [Setup](./azure_connector/README.md) |
 | **OVH** | OAuth 2.0 (multi-region) | [Setup](./ovh_connector/README.md) |
+| **Cloudflare** | API Token | [Setup](./cloudflare_connector/README.md) |
 
 ## Source Control & Collaboration
 

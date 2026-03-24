@@ -173,10 +173,14 @@ CORS(app, origins=FRONTEND_URL, supports_credentials=True,
                             "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
                                               "Authorization", "X-Provider-Preference"],
                             "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"]},
-        r"/tailscale_api/*": {"origins": FRONTEND_URL, "supports_credentials": True,
+       r"/tailscale_api/*": {"origins": FRONTEND_URL, "supports_credentials": True,
                              "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
                                                "Authorization", "X-Provider-Preference"],
                              "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"]},
+       r"/cloudflare_api/*": {"origins": FRONTEND_URL, "supports_credentials": True,
+                              "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
+                                                "Authorization", "X-Provider-Preference"],
+                              "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"]},
         r"/api/ssh-keys*": {"origins": FRONTEND_URL, "supports_credentials": True,
                             "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
                                               "Authorization", "X-Provider-Preference"],
@@ -431,6 +435,10 @@ app.register_blueprint(scaleway_bp, url_prefix="/scaleway_api")
 # --- Tailscale Routes ---
 from routes.tailscale import tailscale_bp
 app.register_blueprint(tailscale_bp, url_prefix="/tailscale_api")
+
+# --- Cloudflare Routes ---
+from routes.cloudflare import cloudflare_bp
+app.register_blueprint(cloudflare_bp, url_prefix="/cloudflare_api")
 
 from routes.terraform import terraform_workspace_bp
 app.register_blueprint(terraform_workspace_bp)

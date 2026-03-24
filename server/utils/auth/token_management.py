@@ -229,6 +229,26 @@ def store_tokens_in_db(user_id: str, token_data: Dict, provider: str,
                     "is_active = TRUE",
                     (user_id, request_org_id, secret_ref, provider, client_id, tailnet, tailnet_name)
                 )
+            elif provider == "cloudflare":
+                # Cloudflare: Store email, primary account_id as subscription_id, account_name as subscription_name
+                # API token stored in Vault (via secret_ref)
+                cf_email = token_data.get("email") if isinstance(token_data, dict) else None
+                cf_accounts = token_data.get("accounts", []) if isinstance(token_data, dict) else []
+                cf_account_id = cf_accounts[0].get("id") if cf_accounts else None
+                cf_account_name = cf_accounts[0].get("name") if cf_accounts else None
+
+                cursor.execute(
+                    "INSERT INTO user_tokens (user_id, org_id, secret_ref, provider, email, subscription_id, subscription_name) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s) ON CONFLICT (user_id, provider) DO UPDATE "
+                    "SET secret_ref = EXCLUDED.secret_ref, "
+                    "org_id = COALESCE(EXCLUDED.org_id, user_tokens.org_id), "
+                    "email = EXCLUDED.email, "
+                    "subscription_id = EXCLUDED.subscription_id, "
+                    "subscription_name = EXCLUDED.subscription_name, "
+                    "timestamp = CURRENT_TIMESTAMP, "
+                    "is_active = TRUE",
+                    (user_id, request_org_id, secret_ref, provider, cf_email, cf_account_id, cf_account_name)
+                )
             elif provider == "splunk":
                 # Splunk: Store base_url as client_id, server_name as subscription_name, username as email
                 base_url = token_data.get("base_url") if isinstance(token_data, dict) else None
