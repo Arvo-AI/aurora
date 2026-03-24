@@ -97,7 +97,7 @@ def connect(user_id):
     except Exception:
         data = {}
 
-    api_token = data.get("apiToken") or data.get("token")
+    api_token = (data.get("apiToken") or data.get("token") or "").strip()
     raw_base_url = data.get("baseUrl")
     stack_slug = data.get("stackSlug")
 
@@ -118,7 +118,7 @@ def connect(user_id):
         user_profile = client.get_user()
     except GrafanaAPIError as exc:
         logger.error(f"[GRAFANA] Connection validation failed for user {user_id}: {exc}")
-        return jsonify({"error": "Failed to validate Grafana credentials"}), 502
+        return jsonify({"error": "Failed to validate Grafana credentials. Ensure the service account has the Admin role."}), 502
 
     org_name = org_data.get("name") or "Grafana"
     org_id = str(org_data.get("id")) if org_data.get("id") is not None else None
@@ -166,19 +166,10 @@ def status(user_id):
         logger.warning(f"[GRAFANA] Incomplete credentials for user {user_id}")
         return jsonify({"connected": False})
 
-    client = GrafanaClient(base_url, api_token)
-
-    try:
-        org_data = client.get_org()
-        user_profile = client.get_user()
-    except GrafanaAPIError as exc:
-        logger.warning(f"[GRAFANA] Status check failed for user {user_id}: {exc}")
-        return jsonify({"connected": False, "error": "Failed to validate stored Grafana credentials"})
-
     return jsonify({
         "connected": True,
-        "org": org_data,
-        "user": user_profile,
+        "org": {"name": creds.get("org_name"), "id": creds.get("org_id")},
+        "user": {"email": creds.get("user_email")} if creds.get("user_email") else None,
         "baseUrl": base_url,
         "stackSlug": creds.get("stack_slug"),
     })

@@ -150,7 +150,7 @@ def _check_credentials_only(creds: Dict[str, Any]) -> Dict[str, Any]:
 
 
 PROVIDER_CHECKERS = {
-    "grafana": _check_grafana,
+    "grafana": _check_credentials_only,
     "datadog": _check_datadog,
     "jenkins": _check_ci_provider,
     "cloudbees": _check_ci_provider,
