@@ -319,7 +319,7 @@ export default function GitHubProviderIntegration() {
     } catch {}
   };
 
-  if (githubStatus.hasReposConnected === null && !userId) {
+  if (!userId || githubStatus.hasReposConnected === null) {
     return (
       <div className="flex items-center gap-2 text-sm text-muted-foreground p-3 border border-border rounded-lg">
         <Loader2 className="w-4 h-4 animate-spin" />Checking GitHub connection...

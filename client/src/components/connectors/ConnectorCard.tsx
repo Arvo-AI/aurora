@@ -200,13 +200,17 @@ export default function ConnectorCard({ connector, connectedOverride }: Connecto
   const IconComponent = connector.icon;
 
   function renderStatusBadge() {
-    // GitHub and Bitbucket use two-tier status (authenticated vs fully connected)
+    // GitHub and Bitbucket use dedicated two-tier status hooks as the sole
+    // source of truth. Never fall through to the generic isConnected path
+    // for these connectors — that would flash "Connected" while the
+    // dedicated hook is still loading.
     const devToolStatus =
       connector.id === "github" ? githubStatus :
       connector.id === "bitbucket" ? bitbucketStatus :
       null;
 
-    if (devToolStatus?.isAuthenticated) {
+    if (devToolStatus) {
+      if (!devToolStatus.isAuthenticated) return null;
       return devToolStatus.isConnected ? (
         <div className="flex items-center gap-1 text-green-600 dark:text-green-500">
           <Check className="h-4 w-4" />
