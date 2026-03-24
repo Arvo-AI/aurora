@@ -175,9 +175,13 @@ export default function CloudflareAuthPage() {
       if (response.ok) {
         const data = await response.json();
         setZones(data.zones || []);
+      } else {
+        console.error("Failed to fetch zones:", response.status);
+        setZones([]);
       }
     } catch (err) {
       console.error("Failed to fetch zones:", err);
+      setZones([]);
     } finally {
       setIsLoadingZones(false);
     }

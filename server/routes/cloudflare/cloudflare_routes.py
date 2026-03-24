@@ -50,6 +50,9 @@ def cloudflare_connect(user_id):
         if not api_token:
             return jsonify({"error": "API token is required"}), 400
 
+        if not isinstance(api_token, str):
+            return jsonify({"error": "API token must be a string"}), 400
+
         api_token = api_token.strip()
 
         if len(api_token) < 20:
@@ -189,6 +192,8 @@ def cloudflare_zones_post(user_id):
             return jsonify({"error": "Invalid or missing JSON body"}), 400
 
         zones = data.get("zones", [])
+        if not isinstance(zones, list):
+            return jsonify({"error": "zones must be a list"}), 400
 
         from utils.auth.stateless_auth import store_user_preference
         store_user_preference(user_id, 'cloudflare_zones', zones)
