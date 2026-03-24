@@ -271,11 +271,17 @@ CRITICAL - DO:
 
 TONE: Professional, factual, incident-record style (not investigative process documentation)
 
-After the summary, add a separate paragraph titled "## Suggested Next Steps" that:
-- Lists 2-4 specific areas the SRE should investigate based on the findings
-- Provides actionable guidance for further troubleshooting
-- References specific metrics, logs, or infrastructure components mentioned in the investigation
-- Keep it concise and targeted
+After the summary, add two separate sections:
+
+"## Immediate Mitigation" that:
+- Lists 1-3 quick actions to stop or reduce incident impact right now
+- Focus on fast, tactical steps: restart services, scale resources, rollback deployments, increase limits, failover
+- These should be things an SRE can do in minutes, not hours
+
+"## Remediation" that:
+- Lists 1-3 actions to investigate and fix the underlying root cause
+- Focus on deeper work: examine logs, fix code, tune configurations, address architectural issues
+- These are longer-term actions that prevent recurrence
 """
     else:
         # Fallback to transcript-based prompt
@@ -305,11 +311,17 @@ SUMMARY RULES:
 - Tone: neutral, factual, incident-record style
 - Style: descriptive, not advisory
 
-After the summary, add a separate paragraph titled "## Suggested Next Steps" that:
-- Lists 2-4 specific areas the SRE should investigate based on the findings
-- Provides actionable guidance for further troubleshooting
-- References specific metrics, logs, or infrastructure components mentioned in the investigation
-- Keep it concise and targeted
+After the summary, add two separate sections:
+
+"## Immediate Mitigation" that:
+- Lists 1-3 quick actions to stop or reduce incident impact right now
+- Focus on fast, tactical steps: restart services, scale resources, rollback deployments, increase limits, failover
+- These should be things an SRE can do in minutes, not hours
+
+"## Remediation" that:
+- Lists 1-3 actions to investigate and fix the underlying root cause
+- Focus on deeper work: examine logs, fix code, tune configurations, address architectural issues
+- These are longer-term actions that prevent recurrence
 """
     return prompt
 

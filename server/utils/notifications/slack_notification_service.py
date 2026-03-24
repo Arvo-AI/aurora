@@ -225,7 +225,7 @@ def send_slack_investigation_completed_notification(
         # Format data
         incident_url = _get_incident_url(incident_id)
         
-        # Extract summary section (before "Suggested Next Steps") and format for Slack
+        # Extract summary section (before mitigation/remediation headings) and format for Slack
         from routes.slack.slack_events_helpers import (
             format_response_for_slack, 
             extract_summary_section,

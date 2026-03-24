@@ -10,7 +10,7 @@ export type AlertSource = 'netdata' | 'datadog' | 'grafana' | 'prometheus' | 'pa
 export type IncidentStatus = 'investigating' | 'analyzed' | 'merged' | 'resolved';
 export type AuroraStatus = 'running' | 'complete' | 'error';
 export type SuggestionRisk = 'safe' | 'low' | 'medium' | 'high';
-export type SuggestionType = 'diagnostic' | 'mitigation' | 'communication' | 'fix';
+export type SuggestionType = 'diagnostic' | 'mitigation' | 'remediation' | 'communication' | 'fix';
 
 export interface AlertMetadata {
   // Common fields

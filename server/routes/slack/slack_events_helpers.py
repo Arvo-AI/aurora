@@ -471,11 +471,13 @@ def extract_summary_section(text: str) -> str:
     # Section markers that indicate end of summary (most specific first)
     end_markers = [
         'Suggested Next Steps',
+        'Immediate Mitigation',
         'Next Steps',
         'Recommendations',
         'Action Items',
         'Proposed Actions',
-        'Remediation Steps', #Added the other ones in case the prompt is not followed.
+        'Remediation Steps',
+        'Remediation',
     ]
     
     # Find the earliest end marker
@@ -782,9 +784,48 @@ def validate_slack_blocks(blocks: list) -> bool:
         return False
 
 
+def _build_suggestion_block(incident_id: str, suggestion: dict) -> list:
+    """Build Slack blocks for a single suggestion (section + actions)."""
+    title = suggestion.get('title', 'Action') or 'Action'
+    command = suggestion.get('command', '')
+
+    command_display = command[:COMMAND_FULL_DISPLAY_LENGTH] + '... (click More details for full command)' if len(command) > COMMAND_FULL_DISPLAY_LENGTH else command
+
+    text = f"*{title}*\n`{command_display}`"
+    if len(text) > SLACK_SECTION_TEXT_BUFFER:
+        text = text[:SLACK_SECTION_TEXT_BUFFER] + "..."
+
+    run_button = {
+        "type": "button",
+        "text": {"type": "plain_text", "text": "Run"},
+        "value": f"{incident_id}:{suggestion['id']}",
+        "action_id": f"run_suggestion_{suggestion['id']}",
+        "style": "primary"
+    }
+
+    details_button = {
+        "type": "button",
+        "text": {"type": "plain_text", "text": "More details"},
+        "value": f"{incident_id}:{suggestion['id']}:details",
+        "action_id": f"suggestion_details_{suggestion['id']}"
+    }
+
+    return [
+        {
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": text}
+        },
+        {
+            "type": "actions",
+            "elements": [run_button, details_button]
+        }
+    ]
+
+
 def build_suggestions_blocks(incident_id: str, suggestions: list, max_suggestions: int = 5) -> list:
     """
-    Build Slack Block Kit blocks for runnable suggestions.
+    Build Slack Block Kit blocks for runnable suggestions, grouped by
+    Immediate Mitigation vs Remediation.
     
     Args:
         incident_id: The incident UUID
@@ -797,80 +838,38 @@ def build_suggestions_blocks(incident_id: str, suggestions: list, max_suggestion
     if not suggestions:
         return []
     
+    actionable = [s for s in suggestions if s.get('command')][:max_suggestions]
+    if not actionable:
+        return []
+
+    mitigation_types = {'mitigation', 'communication'}
+    remediation_types = {'remediation', 'diagnostic'}
+
+    mitigation = [s for s in actionable if s.get('type', '') in mitigation_types]
+    remediation = [s for s in actionable if s.get('type', '') in remediation_types]
+    other = [s for s in actionable if s.get('type', '') not in mitigation_types and s.get('type', '') not in remediation_types]
+
     blocks = []
-    
-    # Header
-    blocks.append({
-        "type": "header",
-        "text": {
-            "type": "plain_text",
-            "text": "Suggested Next Steps"
-        }
-    })
-    
-    # Show up to max_suggestions
-    for i, suggestion in enumerate(suggestions[:max_suggestions]):
-        if not suggestion.get('command'):
-            continue  # Skip suggestions without commands
-        
-        # Validate required fields
-        title = suggestion.get('title', 'Action')
-        if not title:
-            title = 'Action'
-        
-        command = suggestion.get('command', '')
-        
-        # Truncate command for display (Slack has limits)
-        # Show more context - users can click "More details" for full command
-        command_display = command[:COMMAND_FULL_DISPLAY_LENGTH] + '... (click More details for full command)' if len(command) > COMMAND_FULL_DISPLAY_LENGTH else command
-        
-        # Build compact text with just title and command (no description)
-        text = f"*{title}*\n`{command_display}`"
-        if len(text) > SLACK_SECTION_TEXT_BUFFER:  # Leave buffer for Slack
-            text = text[:SLACK_SECTION_TEXT_BUFFER] + "..."
-        
-        # Build the run button (always green/primary)
-        run_button = {
-            "type": "button",
-            "text": {
-                "type": "plain_text",
-                "text": "Run"
-            },
-            "value": f"{incident_id}:{suggestion['id']}",
-            "action_id": f"run_suggestion_{suggestion['id']}",
-            "style": "primary"  # Always green
-        }
-        
-        # Build actions with Run button and More details button
-        action_elements = [run_button]
-        
-        # Add "More details" button
-        details_button = {
-            "type": "button",
-            "text": {
-                "type": "plain_text",
-                "text": "More details"
-            },
-            "value": f"{incident_id}:{suggestion['id']}:details",
-            "action_id": f"suggestion_details_{suggestion['id']}"
-        }
-        action_elements.append(details_button)
-        
-        # Build the block with section and actions
+
+    if mitigation:
         blocks.append({
-            "type": "section",
-            "text": {
-                "type": "mrkdwn",
-                "text": text
-            }
+            "type": "header",
+            "text": {"type": "plain_text", "text": "Immediate Mitigation"}
         })
-        
+        for suggestion in mitigation:
+            blocks.extend(_build_suggestion_block(incident_id, suggestion))
+
+    if remediation or other:
         blocks.append({
-            "type": "actions",
-            "elements": action_elements
+            "type": "header",
+            "text": {"type": "plain_text", "text": "Remediation"}
         })
-    
-    # Divider
+        for suggestion in remediation + other:
+            blocks.extend(_build_suggestion_block(incident_id, suggestion))
+
+    if not mitigation and not remediation and not other:
+        return []
+
     blocks.append({"type": "divider"})
     
     return blocks

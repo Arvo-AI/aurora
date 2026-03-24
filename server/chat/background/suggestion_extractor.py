@@ -72,7 +72,7 @@ class Suggestion:
 
     title: str
     description: str
-    type: str  # 'diagnostic', 'mitigation', 'communication'
+    type: str  # 'diagnostic', 'mitigation', 'remediation', 'communication'
     risk: str  # 'safe', 'low', 'medium', 'high'
     command: Optional[str]
 
@@ -172,21 +172,28 @@ INVESTIGATION EVIDENCE (tools and commands that were used):
 Generate suggestions as a JSON array. Each suggestion MUST have:
 - "title": Short action title (e.g., "Check pod logs", "Restart deployment")
 - "description": 1-2 sentence explanation of what this will help diagnose or fix
-- "type": One of "diagnostic" (read-only investigation), "mitigation" (fix the issue), or "communication" (notify stakeholders)
+- "type": One of "diagnostic" (read-only investigation), "mitigation" (immediate action to stop/reduce impact), "remediation" (fix the underlying root cause), or "communication" (notify stakeholders)
 - "risk": One of "safe" (read-only), "low" (minor changes), "medium" (service restart), "high" (data loss risk)
 - "command": The exact CLI command to run (kubectl, gcloud, aws, az, splunk search, etc.)
 
-GUIDELINES:
+TYPE GUIDELINES:
+- "mitigation": Quick tactical actions an SRE can do in minutes to stop bleeding (restart, scale up, rollback, increase limits, failover)
+- "remediation": Longer-term actions to fix the root cause and prevent recurrence (investigate logs, fix code, tune configs, address architectural issues)
+- "diagnostic": Read-only investigation commands
+- "communication": Stakeholder notifications
+
+COMMAND GUIDELINES:
 - For diagnostic suggestions, use read-only commands (get, describe, logs, list, search)
-- For mitigation suggestions, include the actual remediation command but mark appropriately by risk
+- For mitigation suggestions, include the actual quick-fix command but mark appropriately by risk
+- For remediation suggestions, include the investigative or fix command
 - Commands should be complete and executable (include namespaces, resource names from the investigation)
 - Reference specific resources mentioned in the investigation evidence
 - Prefer kubectl, gcloud, aws, az commands based on what tools were used in the investigation
 
 Return ONLY a valid JSON array, no markdown formatting, no explanation:
 [
-  {{"title": "...", "description": "...", "type": "diagnostic", "risk": "safe", "command": "kubectl logs ..."}},
-  {{"title": "...", "description": "...", "type": "mitigation", "risk": "medium", "command": "kubectl rollout restart ..."}}
+  {{"title": "...", "description": "...", "type": "mitigation", "risk": "medium", "command": "kubectl rollout restart ..."}},
+  {{"title": "...", "description": "...", "type": "remediation", "risk": "safe", "command": "kubectl logs ..."}}
 ]"""
 
     def _parse_suggestions_response(self, content: Any) -> List[Suggestion]:
