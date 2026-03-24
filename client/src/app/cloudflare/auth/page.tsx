@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, ExternalLink, AlertCircle, CheckCircle2, Globe, Shield, LogOut, RefreshCw } from "lucide-react";
+import { Loader2, ExternalLink, AlertCircle, CheckCircle2, Globe, Shield, LogOut, ChevronDown, ChevronUp } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useToast } from "@/hooks/use-toast";
 import { providerPreferencesService } from '@/lib/services/providerPreferences';
@@ -27,6 +27,118 @@ interface CloudflareStatus {
   connected: boolean;
   email?: string;
   accountName?: string;
+  permissions?: string[];
+  tokenType?: "account" | "user";
+}
+
+const REQUIRED_READ_PERMISSIONS: Record<string, string> = {
+  "Zone Read": "Zone — Zone — Read",
+  "DNS Read": "Zone — DNS — Read",
+  "Analytics Read": "Zone — Analytics — Read",
+  "Firewall Services Read": "Zone — Firewall Services — Read",
+  "Load Balancers Account Read": "Account — Load Balancing: Account Load Balancers — Read",
+  "Account API Tokens Read": "Account — API Tokens — Read",
+};
+
+const RECOMMENDED_WRITE_PERMISSIONS: Record<string, string> = {
+  "DNS Write": "Zone — DNS — Edit",
+  "Cache Purge": "Zone — Cache Purge — Purge",
+  "Firewall Services Write": "Zone — Firewall Services — Edit",
+  "Load Balancers Account Write": "Account — Load Balancing: Account Load Balancers — Edit",
+};
+
+function PermissionStatus({ permissions }: { permissions: string[] }) {
+  const [showAll, setShowAll] = useState(false);
+  const permSet = new Set(permissions);
+
+  const missingReadEntries = Object.entries(REQUIRED_READ_PERMISSIONS).filter(
+    ([key]) => !permSet.has(key)
+  );
+
+  const grantedWriteKeys = Object.keys(RECOMMENDED_WRITE_PERMISSIONS).filter(key => permSet.has(key));
+  const missingWriteEntries = Object.entries(RECOMMENDED_WRITE_PERMISSIONS).filter(
+    ([key]) => !permSet.has(key)
+  );
+  const hasWrite = grantedWriteKeys.length > 0;
+  const hasAllWrite = missingWriteEntries.length === 0;
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center gap-2">
+        {hasAllWrite ? (
+          <>
+            <CheckCircle2 className="h-4 w-4 text-green-500" />
+            <span className="text-sm font-medium">Full access</span>
+          </>
+        ) : hasWrite ? (
+          <>
+            <CheckCircle2 className="h-4 w-4 text-green-500" />
+            <span className="text-sm font-medium">Read + partial write</span>
+          </>
+        ) : (
+          <>
+            <Shield className="h-4 w-4 text-yellow-500" />
+            <span className="text-sm font-medium">Read-only</span>
+          </>
+        )}
+      </div>
+
+      {missingReadEntries.length > 0 && (
+        <div className="p-3 bg-red-500/10 border border-red-500/20 rounded-lg space-y-2">
+          <p className="text-xs font-medium text-red-600 dark:text-red-400">Missing required read permissions:</p>
+          <ul className="text-xs text-muted-foreground list-disc list-inside space-y-0.5">
+            {missingReadEntries.map(([, cfName]) => (
+              <li key={cfName}>{cfName}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {grantedWriteKeys.length > 0 && (
+        <div className="space-y-1">
+          <p className="text-xs text-muted-foreground">Write permissions granted:</p>
+          {grantedWriteKeys.map(key => (
+            <div key={key} className="flex items-center gap-2">
+              <CheckCircle2 className="h-3.5 w-3.5 text-green-500 flex-shrink-0" />
+              <span className="text-xs">{key}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {missingWriteEntries.length > 0 && (
+        <div className="p-3 bg-muted/50 rounded-lg space-y-2">
+          <p className="text-xs text-muted-foreground">
+            {hasWrite
+              ? "Missing write permissions — add for full control:"
+              : "To let Aurora take action during incidents, edit the token and add:"}
+          </p>
+          <ul className="text-xs text-muted-foreground list-disc list-inside space-y-0.5">
+            {missingWriteEntries.map(([, cfName]) => (
+              <li key={cfName}>{cfName}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      <button
+        type="button"
+        onClick={() => setShowAll(!showAll)}
+        className="text-xs text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1"
+      >
+        {showAll ? "Hide" : "Show"} all {permissions.length} permissions
+        {showAll ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+      </button>
+
+      {showAll && (
+        <div className="border rounded-lg divide-y max-h-48 overflow-y-auto">
+          {permissions.map(p => (
+            <div key={p} className="px-3 py-1.5 text-xs text-muted-foreground">{p}</div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
 
 export default function CloudflareAuthPage() {
@@ -94,6 +206,8 @@ export default function CloudflareAuthPage() {
           connected: isConnected,
           email: data.email,
           accountName: data.accountName,
+          permissions: data.permissions,
+          tokenType: data.tokenType,
         });
         if (isConnected) {
           fetchZones();
@@ -159,14 +273,11 @@ export default function CloudflareAuthPage() {
       window.dispatchEvent(new CustomEvent('providerStateChanged'));
       window.dispatchEvent(new CustomEvent('providerConnectionAction'));
 
-      const parts = [];
-      if (data.accountCount) parts.push(`${data.accountCount} account(s)`);
-      if (data.zonesCount) parts.push(`${data.zonesCount} zone(s)`);
-      const summary = parts.length > 0 ? `Found ${parts.join(", ")}.` : "Connected.";
-
       toast({
         title: "Cloudflare Connected",
-        description: `Successfully connected. ${summary}`,
+        description: data.zonesCount
+          ? `Successfully connected. Found ${data.zonesCount} zone(s).`
+          : "Successfully connected.",
       });
 
       setApiToken("");
@@ -174,6 +285,8 @@ export default function CloudflareAuthPage() {
         connected: true,
         email: data.email,
         accountName: data.accountName,
+        permissions: data.permissions,
+        tokenType: data.tokenType,
       });
       setIsLoading(false);
       fetchZones();
@@ -255,27 +368,15 @@ export default function CloudflareAuthPage() {
         </div>
 
         {status?.connected ? (
-          /* ---- Connected state ---- */
           <div className="space-y-4">
             <Card>
               <CardHeader>
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <CheckCircle2 className="h-5 w-5 text-green-500" />
-                    <div>
-                      <CardTitle>Cloudflare Connected</CardTitle>
-                      <CardDescription>Your Cloudflare account is linked to Aurora</CardDescription>
-                    </div>
+                <div className="flex items-center gap-3">
+                  <CheckCircle2 className="h-5 w-5 text-green-500" />
+                  <div>
+                    <CardTitle>Cloudflare Connected</CardTitle>
+                    <CardDescription>Your Cloudflare account is linked to Aurora</CardDescription>
                   </div>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={fetchZones}
-                    disabled={isLoadingZones}
-                    className="text-muted-foreground"
-                  >
-                    <RefreshCw className={`h-4 w-4 ${isLoadingZones ? 'animate-spin' : ''}`} />
-                  </Button>
                 </div>
               </CardHeader>
               <CardContent className="space-y-5">
@@ -300,7 +401,19 @@ export default function CloudflareAuthPage() {
                   )}
                 </div>
 
-                {/* Zones list */}
+                {status.tokenType === "user" && (
+                  <div className="p-3 bg-yellow-500/10 border border-yellow-500/20 rounded-lg flex items-start gap-2.5">
+                    <AlertCircle className="h-4 w-4 text-yellow-600 dark:text-yellow-400 flex-shrink-0 mt-0.5" />
+                    <div className="text-xs text-muted-foreground">
+                      <p className="font-medium text-yellow-600 dark:text-yellow-400">Using a personal token</p>
+                      <p className="mt-0.5">
+                        This token is tied to an individual user account. If that user leaves the organization, Aurora will lose access.
+                        For a more durable setup, use an <strong>Account API Token</strong> instead (Manage Account → Account API Tokens).
+                      </p>
+                    </div>
+                  </div>
+                )}
+
                 {isLoadingZones ? (
                   <div className="flex items-center gap-2 py-4 justify-center text-muted-foreground">
                     <Loader2 className="h-4 w-4 animate-spin" />
@@ -336,18 +449,37 @@ export default function CloudflareAuthPage() {
                   </div>
                 )}
 
-                <div className="p-3 bg-blue-50 dark:bg-blue-950/20 border border-blue-200 dark:border-blue-800 rounded text-xs text-muted-foreground">
-                  No webhook required — Aurora queries the Cloudflare API on demand. To change token permissions, edit the token in the{" "}
-                  <a
-                    href="https://dash.cloudflare.com/profile/api-tokens"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-blue-600 dark:text-blue-400 hover:underline inline-flex items-center gap-1"
-                  >
-                    Cloudflare Dashboard
-                    <ExternalLink className="w-3 h-3" />
-                  </a>.
-                </div>
+                {status.permissions && status.permissions.length > 0 ? (
+                  <div>
+                    <p className="text-sm font-medium mb-2">Token Permissions</p>
+                    <PermissionStatus permissions={status.permissions} />
+                    <p className="text-xs text-muted-foreground mt-3">
+                      Edit the token in the{" "}
+                      <a
+                        href="https://dash.cloudflare.com/profile/api-tokens"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-blue-600 dark:text-blue-400 hover:underline"
+                      >
+                        Cloudflare Dashboard
+                      </a>{" "}and reconnect to update.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="text-sm text-muted-foreground p-3 bg-muted/50 rounded-lg">
+                    <p>
+                      Token permissions not available. To see them here, edit the token in the{" "}
+                      <a
+                        href="https://dash.cloudflare.com/profile/api-tokens"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-blue-600 dark:text-blue-400 hover:underline"
+                      >
+                        Cloudflare Dashboard
+                      </a>, add <strong>Account — API Tokens — Read</strong>, then reconnect.
+                    </p>
+                  </div>
+                )}
 
                 <div className="flex items-center justify-end pt-2">
                   <Button
@@ -372,118 +504,107 @@ export default function CloudflareAuthPage() {
             </Card>
           </div>
         ) : (
-          /* ---- Not connected state ---- */
-          <>
-            <Card>
-              <CardHeader>
-                <CardTitle>Connect Your Cloudflare Account</CardTitle>
-                <CardDescription>Create an API token in the Cloudflare dashboard and paste it below</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-6">
-                <div className="space-y-3 text-sm">
-                  <p className="text-muted-foreground">
-                    Aurora uses a scoped API token to interact with your Cloudflare account. The token&apos;s
-                    permissions determine what Aurora can do — from read-only monitoring to active incident response.
-                  </p>
+          <Card>
+            <CardHeader>
+              <CardTitle>Connect Your Cloudflare Account</CardTitle>
+              <CardDescription>Create an API token in the Cloudflare dashboard and paste it below</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              <div className="space-y-4 text-sm">
+                <p className="text-muted-foreground">
+                  Aurora uses a scoped API token to interact with your Cloudflare account. This must be set up by an account administrator.
+                </p>
 
+                <div className="p-4 bg-muted/50 border border-border rounded-lg space-y-3">
+                  <p className="font-medium text-foreground">Setup</p>
                   <div className="space-y-2">
                     <div className="flex items-start gap-2">
                       <span className="text-muted-foreground mt-0.5">1.</span>
-                      <p>Go to the <a href="https://dash.cloudflare.com/profile/api-tokens" target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">Cloudflare API Tokens</a> page</p>
+                      <div>
+                        <p>
+                          In the{" "}
+                          <a href="https://dash.cloudflare.com" target="_blank" rel="noopener noreferrer" className="text-blue-600 dark:text-blue-400 hover:underline inline-flex items-center gap-1">
+                            Cloudflare Dashboard <ExternalLink className="w-3 h-3" />
+                          </a>
+                          , go to <strong>Manage Account</strong> → <strong>Account API Tokens</strong>
+                        </p>
+                      </div>
                     </div>
                     <div className="flex items-start gap-2">
                       <span className="text-muted-foreground mt-0.5">2.</span>
-                      <p>Click <strong>&quot;Create Token&quot;</strong></p>
+                      <p>Next to <strong>&quot;Read all resources&quot;</strong>, click <strong>&quot;Use template&quot;</strong></p>
                     </div>
                     <div className="flex items-start gap-2">
                       <span className="text-muted-foreground mt-0.5">3.</span>
-                      <p>Select <strong>&quot;Create Custom Token&quot;</strong> and add permissions based on your needs (see below)</p>
+                      <p>Click <strong>&quot;+ Add more&quot;</strong> and add <strong>Account — API Tokens — Read</strong></p>
                     </div>
                     <div className="flex items-start gap-2">
                       <span className="text-muted-foreground mt-0.5">4.</span>
-                      <p>Under <strong>&quot;Zone Resources&quot;</strong>, select the zones (domains) you want Aurora to access</p>
+                      <p>Select your zone(s) under <strong>Zone Resources</strong></p>
                     </div>
                     <div className="flex items-start gap-2">
                       <span className="text-muted-foreground mt-0.5">5.</span>
-                      <p>Click <strong>&quot;Continue to summary&quot;</strong> → <strong>&quot;Create Token&quot;</strong></p>
+                      <div>
+                        <p><em>Optional</em> — To let Aurora take action during incidents, also add:</p>
+                        <ul className="text-xs text-muted-foreground mt-1 list-disc list-inside space-y-0.5">
+                          <li>Zone — DNS — Edit</li>
+                          <li>Zone — Cache Purge — Purge</li>
+                          <li>Zone — Firewall Services — Edit</li>
+                          <li>Account — Load Balancing: Account Load Balancers — Edit</li>
+                        </ul>
+                      </div>
                     </div>
                     <div className="flex items-start gap-2">
                       <span className="text-muted-foreground mt-0.5">6.</span>
-                      <p>Copy the token (it&apos;s only shown once)</p>
+                      <p>Click <strong>&quot;Continue to summary&quot;</strong> → <strong>&quot;Create Token&quot;</strong></p>
+                    </div>
+                    <div className="flex items-start gap-2">
+                      <span className="text-muted-foreground mt-0.5">7.</span>
+                      <p>Copy the token and paste it below</p>
                     </div>
                   </div>
+                  <p className="text-xs text-muted-foreground">
+                    Requires <strong>Super Administrator</strong> permission. You can start read-only and add write permissions later.
+                  </p>
+                </div>
+              </div>
 
-                  <div className="mt-4 space-y-3">
-                    <p className="font-medium text-foreground">Recommended permissions:</p>
-                    <div className="space-y-2">
-                      <div className="p-3 bg-muted/50 border border-border rounded">
-                        <p className="font-medium text-xs text-foreground mb-1">Monitoring (read-only)</p>
-                        <p className="text-xs text-muted-foreground">
-                          Zone — Read, Analytics — Read, DNS — Read, Firewall — Read, Load Balancers — Read, Workers — Read
-                        </p>
-                      </div>
-                      <div className="p-3 bg-muted/50 border border-border rounded">
-                        <p className="font-medium text-xs text-foreground mb-1">Incident response (read + write)</p>
-                        <p className="text-xs text-muted-foreground">
-                          All of the above, plus: DNS — Edit, Cache Purge — Purge, Firewall — Edit, Workers — Edit, Page Rules — Edit, Load Balancers — Edit
-                        </p>
-                      </div>
-                    </div>
-                    <p className="text-xs text-muted-foreground">
-                      You can start with read-only and update the token permissions later in the Cloudflare dashboard.
-                    </p>
-                  </div>
+              {error && (
+                <div className="bg-destructive/10 border border-destructive/20 rounded-lg p-4 flex items-start gap-3">
+                  <AlertCircle className="h-5 w-5 text-destructive flex-shrink-0 mt-0.5" />
+                  <p className="text-sm text-destructive">{error}</p>
+                </div>
+              )}
 
-                  <div className="mt-4 p-3 bg-blue-50 dark:bg-blue-950/20 border border-blue-200 dark:border-blue-800 rounded">
-                    <a
-                      href="https://dash.cloudflare.com/profile/api-tokens"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-xs text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-1"
-                    >
-                      Open Cloudflare Dashboard
-                      <ExternalLink className="w-3 h-3" />
-                    </a>
-                  </div>
+              <form onSubmit={handleConnect} className="space-y-4">
+                <div className="grid gap-2">
+                  <Label htmlFor="apiToken">API Token *</Label>
+                  <Input
+                    id="apiToken"
+                    type="password"
+                    placeholder="Paste your Cloudflare API token"
+                    value={apiToken}
+                    onChange={(e) => setApiToken(e.target.value)}
+                    required
+                    disabled={isLoading}
+                  />
                 </div>
 
-                {error && (
-                  <div className="bg-destructive/10 border border-destructive/20 rounded-lg p-4 flex items-start gap-3">
-                    <AlertCircle className="h-5 w-5 text-destructive flex-shrink-0 mt-0.5" />
-                    <p className="text-sm text-destructive">{error}</p>
-                  </div>
-                )}
-
-                <form onSubmit={handleConnect} className="space-y-4">
-                  <div className="grid gap-2">
-                    <Label htmlFor="apiToken">API Token *</Label>
-                    <Input
-                      id="apiToken"
-                      type="password"
-                      placeholder="Paste your Cloudflare API token"
-                      value={apiToken}
-                      onChange={(e) => setApiToken(e.target.value)}
-                      required
-                      disabled={isLoading}
-                    />
-                  </div>
-
-                  <div className="flex items-center justify-end pt-4">
-                    <Button type="submit" disabled={isLoading || !apiToken.trim()}>
-                      {isLoading ? (
-                        <>
-                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                          Connecting...
-                        </>
-                      ) : (
-                        "Connect Cloudflare"
-                      )}
-                    </Button>
-                  </div>
-                </form>
-              </CardContent>
-            </Card>
-          </>
+                <div className="flex items-center justify-end pt-4">
+                  <Button type="submit" disabled={isLoading || !apiToken.trim()}>
+                    {isLoading ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Connecting...
+                      </>
+                    ) : (
+                      "Connect Cloudflare"
+                    )}
+                  </Button>
+                </div>
+              </form>
+            </CardContent>
+          </Card>
         )}
       </div>
     </ConnectorAuthGuard>

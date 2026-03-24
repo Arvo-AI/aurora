@@ -14,7 +14,6 @@ Security:
 """
 
 import logging
-import json
 from flask import request, jsonify
 
 from routes.cloudflare import cloudflare_bp
@@ -23,7 +22,6 @@ from utils.auth.token_management import store_tokens_in_db, get_token_data
 from utils.secrets.secret_ref_utils import has_user_credentials, delete_user_secret
 from utils.db.connection_utils import set_connection_status
 from utils.web.limiter_ext import limiter
-from utils.logging.secure_logging import mask_credential_value
 from connectors.cloudflare_connector.auth import validate_api_token
 from connectors.cloudflare_connector.api_client import CloudflareClient
 
@@ -57,49 +55,54 @@ def cloudflare_connect(user_id):
         logger.info(f"Cloudflare connect attempt for user {user_id}")
 
         success, token_info, error = validate_api_token(api_token)
-
         if not success:
             logger.warning(f"Cloudflare credential validation failed for user {user_id}: {error}")
             return jsonify({"error": error}), 401
 
         client = CloudflareClient(api_token)
 
-        accounts_raw = client.list_accounts()
-        accounts = [
-            {"id": a.get("id"), "name": a.get("name"), "type": a.get("type")}
-            for a in accounts_raw
-        ]
-        primary_account_id = accounts[0]["id"] if accounts else "unknown"
-        primary_account_name = accounts[0]["name"] if accounts else None
+        zones = client.list_zones()
 
-        zones_count = len(client.list_zones())
+        account_name = None
+        account_id = token_info.get("account_id", "unknown")  # already set for account tokens (cfat_)
+        accounts = client.list_accounts()
+        if accounts:
+            account_name = accounts[0].get("name")
+            if account_id == "unknown":  # user tokens need account_id discovered
+                account_id = accounts[0].get("id", "unknown")
 
-        email = None
-        try:
-            user = client.get_current_user()
-            email = user.get("email")
-        except Exception:
-            logger.warning("Could not fetch Cloudflare user email")
+        permissions = client.get_token_permissions(
+            token_info.get("token_id", ""),
+            account_id=account_id,
+        )
+
+        email = client.get_current_user().get("email")
+
+        token_type = "account" if api_token.startswith("cfat_") else "user"
 
         token_data = {
             "api_token": api_token,
             "token_id": token_info.get("token_id"),
-            "accounts": accounts,
+            "token_type": token_type,
+            "permissions": permissions,
             "email": email,
+            "account_name": account_name,
+            "account_id": account_id,
         }
 
         store_tokens_in_db(user_id, token_data, "cloudflare")
-        set_connection_status(user_id, "cloudflare", primary_account_id, "connected")
+        set_connection_status(user_id, "cloudflare", account_id, "connected")
 
-        logger.info(f"Cloudflare connected for user {user_id}")
+        logger.info(f"Cloudflare connected for user {user_id}, type: {token_type}, permissions: {permissions}")
 
         return jsonify({
             "success": True,
             "message": "Cloudflare connected successfully",
-            "accountName": primary_account_name,
-            "accountCount": len(accounts),
-            "zonesCount": zones_count,
+            "accountName": account_name,
             "email": email,
+            "zonesCount": len(zones),
+            "permissions": permissions,
+            "tokenType": token_type,
         })
 
     except Exception as e:
@@ -142,7 +145,6 @@ def cloudflare_zones_get(user_id):
             for z in raw_zones
         ]
 
-        # Merge saved preferences if any
         from utils.auth.stateless_auth import get_user_preference
         saved_prefs = get_user_preference(user_id, 'cloudflare_zones') or []
         saved_selections = {}
@@ -211,29 +213,39 @@ def cloudflare_status(user_id):
         if not api_token:
             return jsonify({"connected": False, "provider": "cloudflare"})
 
-        success, _, error = validate_api_token(api_token)
+        success, token_info, error = validate_api_token(api_token)
 
         if not success:
-            if error and any(kw in str(error) for kw in ("401", "403", "Unauthorized")):
+            if error and any(kw in str(error).lower() for kw in ("invalid", "revoked", "denied", "expired")):
                 logger.warning(f"Cloudflare credentials invalid for user {user_id}: {error}")
                 delete_user_secret(user_id, "cloudflare")
                 return jsonify({"connected": False, "provider": "cloudflare"})
             logger.warning(f"Cloudflare API check failed (non-auth error): {error}")
 
-        response = {
+        # Re-fetch permissions from Cloudflare so changes made on their dashboard
+        # are picked up on every page load without requiring a reconnect.
+        token_id = token_data.get("token_id")
+        if not token_id and token_info:
+            token_id = token_info.get("token_id")
+            token_data["token_id"] = token_id
+        if token_id and api_token:
+            client = CloudflareClient(api_token)
+            acct_id = token_data.get("account_id")
+            fresh_permissions = client.get_token_permissions(token_id, account_id=acct_id)
+            stored_permissions = token_data.get("permissions", [])
+            if fresh_permissions != stored_permissions:
+                token_data["permissions"] = fresh_permissions
+                store_tokens_in_db(user_id, token_data, "cloudflare")
+                logger.info(f"Cloudflare permissions updated for user {user_id}")
+
+        return jsonify({
             "connected": True,
             "provider": "cloudflare",
-        }
-
-        email = token_data.get("email")
-        if email:
-            response["email"] = email
-
-        accounts = token_data.get("accounts", [])
-        if accounts:
-            response["accountName"] = accounts[0].get("name")
-
-        return jsonify(response)
+            "email": token_data.get("email"),
+            "accountName": token_data.get("account_name"),
+            "permissions": token_data.get("permissions", []),
+            "tokenType": token_data.get("token_type", "unknown"),
+        })
 
     except Exception as e:
         logger.error(f"Error checking Cloudflare status: {e}", exc_info=True)
@@ -248,13 +260,13 @@ def cloudflare_disconnect(user_id):
     """Disconnect the Cloudflare account."""
     try:
         token_data = get_token_data(user_id, "cloudflare")
-        accounts = token_data.get("accounts", []) if token_data else []
-        account_id = accounts[0]["id"] if accounts else "unknown"
+        account_id = "unknown"
+        if token_data:
+            account_id = token_data.get("account_id", "unknown")
 
         delete_user_secret(user_id, "cloudflare")
         set_connection_status(user_id, "cloudflare", account_id, "disconnected")
 
-        # Clear zone preferences
         from utils.auth.stateless_auth import store_user_preference
         try:
             store_user_preference(user_id, 'cloudflare_zones', None)

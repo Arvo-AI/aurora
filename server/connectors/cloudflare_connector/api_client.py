@@ -66,3 +66,46 @@ class CloudflareClient:
             page += 1
 
         return all_zones
+
+    def _extract_permission_names(self, policies: List[Dict]) -> List[str]:
+        names: List[str] = []
+        for policy in policies:
+            if policy.get("effect") != "allow":
+                continue
+            for group in policy.get("permission_groups", []):
+                name = group.get("name")
+                if name:
+                    names.append(name)
+        return sorted(set(names))
+
+    def get_token_permissions(self, token_id: str, account_id: Optional[str] = None) -> List[str]:
+        """
+        Fetch permission group names granted to this token.
+
+        Tries the account-level endpoint first (for account-owned tokens),
+        then falls back to the user-level endpoint (for user-owned tokens).
+        """
+        if account_id:
+            try:
+                data = self._request("GET", f"/accounts/{account_id}/tokens/{token_id}")
+                return self._extract_permission_names(
+                    data.get("result", {}).get("policies", []))
+            except requests.exceptions.HTTPError as e:
+                if e.response is not None and e.response.status_code in (403, 404):
+                    logger.info("Account token lookup failed, trying user token endpoint")
+                else:
+                    logger.warning(f"Failed to fetch account token permissions: {e}")
+
+        try:
+            data = self._request("GET", f"/user/tokens/{token_id}")
+            return self._extract_permission_names(
+                data.get("result", {}).get("policies", []))
+        except requests.exceptions.HTTPError as e:
+            if e.response is not None and e.response.status_code == 403:
+                logger.warning("Token lacks permission to read its own details")
+            else:
+                logger.warning(f"Failed to fetch token permissions: {e}")
+            return []
+        except Exception as e:
+            logger.warning(f"Failed to fetch token permissions: {e}")
+            return []
