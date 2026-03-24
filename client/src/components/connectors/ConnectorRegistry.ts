@@ -272,7 +272,7 @@ class ConnectorRegistry {
       iconPath: "/tailscale.svg",
       iconBgColor: "bg-muted",
       category: "Networking",
-      path: "/tailscale/onboarding",
+      path: "/tailscale/manage",
       storageKey: "isTailscaleConnected",
     });
 
