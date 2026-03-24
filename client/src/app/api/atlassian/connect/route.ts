@@ -27,7 +27,12 @@ export async function POST(request: NextRequest) {
     if (!response.ok) {
       const text = await response.text();
       console.error('[api/atlassian/connect] Backend error:', text);
-      return NextResponse.json({ error: 'Failed to connect Atlassian' }, { status: response.status });
+      let errorMessage = 'Failed to connect Atlassian';
+      try {
+        const parsed = JSON.parse(text);
+        if (parsed?.error) errorMessage = parsed.error;
+      } catch { /* use default */ }
+      return NextResponse.json({ error: errorMessage }, { status: response.status });
     }
     const data = await response.json();
     return NextResponse.json(data);

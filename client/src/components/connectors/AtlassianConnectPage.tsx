@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Image from "next/image";
-import { Loader2, CheckCircle, ExternalLink, PenLine, FilePlus2 } from "lucide-react";
+import { Loader2, CheckCircle, ExternalLink, PenLine, FilePlus2, AlertTriangle } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { atlassianService, AtlassianStatus } from "@/lib/services/atlassian";
 import { Button } from "@/components/ui/button";
@@ -49,6 +49,7 @@ export function AtlassianConnectPage({ product, sibling }: AtlassianConnectPageP
   const [jiraMode, setJiraMode] = useState<"full" | "comment_only">("comment_only");
   const [isLoadingSettings, setIsLoadingSettings] = useState(false);
   const [isSavingSettings, setIsSavingSettings] = useState(false);
+  const [oauthConfigError, setOauthConfigError] = useState(false);
 
   const connected = status?.[product.key]?.connected ?? false;
   const siblingConnected = sibling ? (status?.[sibling.key]?.connected ?? false) : true;
@@ -118,13 +119,11 @@ export function AtlassianConnectPage({ product, sibling }: AtlassianConnectPageP
     } catch (err) {
       const msg = err instanceof Error ? err.message : "OAuth failed";
       const isConfigMissing = msg.toLowerCase().includes("configuration missing") || msg.toLowerCase().includes("client_id");
-      toast({
-        title: isConfigMissing ? "Atlassian OAuth not configured" : "Connection failed",
-        description: isConfigMissing
-          ? "Set ATLASSIAN_CLIENT_ID and ATLASSIAN_CLIENT_SECRET in .env — see docs for setup steps."
-          : msg,
-        variant: "destructive",
-      });
+      if (isConfigMissing) {
+        setOauthConfigError(true);
+      } else {
+        toast({ title: "Connection failed", description: msg, variant: "destructive" });
+      }
     } finally { setIsConnecting(false); }
   };
 
@@ -322,6 +321,50 @@ export function AtlassianConnectPage({ product, sibling }: AtlassianConnectPageP
         </div>
       ) : (
         <div className="space-y-4">
+          {oauthConfigError && (
+            <Card className="border-amber-500/40 bg-amber-500/[0.04]">
+              <CardHeader className="pb-2">
+                <div className="flex items-start gap-3">
+                  <div className="h-8 w-8 rounded-full bg-amber-500/10 flex items-center justify-center flex-shrink-0 mt-0.5">
+                    <AlertTriangle className="h-4 w-4 text-amber-600 dark:text-amber-400" />
+                  </div>
+                  <div className="space-y-1.5">
+                    <CardTitle className="text-sm text-amber-700 dark:text-amber-300">Atlassian OAuth not configured</CardTitle>
+                    <CardDescription className="text-xs leading-relaxed">
+                      To connect via OAuth you need an Atlassian OAuth app. Add these to your <code className="px-1 py-0.5 rounded bg-muted text-[11px] font-mono">.env</code> file:
+                    </CardDescription>
+                    <div className="rounded-md bg-muted/80 px-3 py-2 font-mono text-[11px] leading-relaxed text-muted-foreground">
+                      ATLASSIAN_CLIENT_ID=your-client-id<br />
+                      ATLASSIAN_CLIENT_SECRET=your-client-secret
+                    </div>
+                    <p className="text-xs text-muted-foreground">Then restart Aurora with <code className="px-1 py-0.5 rounded bg-muted text-[11px] font-mono">make down && make dev</code></p>
+                  </div>
+                </div>
+              </CardHeader>
+              <CardFooter className="pt-0 pl-14">
+                <a
+                  href="https://developer.atlassian.com/console/myapps/"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1.5 text-xs font-medium text-[#2684FF] hover:underline"
+                >
+                  Create Atlassian OAuth app
+                  <ExternalLink className="h-3 w-3" />
+                </a>
+                <span className="mx-2 text-muted-foreground/40">|</span>
+                <a
+                  href="https://github.com/Arvo-AI/aurora/blob/main/website/docs/integrations/connectors.md#atlassian-confluence--jira"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground hover:underline"
+                >
+                  Setup guide
+                  <ExternalLink className="h-3 w-3" />
+                </a>
+              </CardFooter>
+            </Card>
+          )}
+
           <Card>
             <CardHeader>
               <CardTitle className="text-base">{product.cloudLabel}</CardTitle>
