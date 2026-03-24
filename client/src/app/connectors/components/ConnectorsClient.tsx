@@ -37,7 +37,7 @@ export default function ConnectorsClient() {
 
   const allConnectors = useMemo(() => connectorRegistry.getAll(), []);
 
-  const { data: connectedStatus, isLoading, mutate } = useQuery<Record<string, boolean>>(
+  const { data: connectedStatus, isLoading } = useQuery<Record<string, boolean>>(
     "/api/connectors/status",
     statusFetcher,
     {
