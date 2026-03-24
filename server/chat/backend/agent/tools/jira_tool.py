@@ -8,7 +8,7 @@ from typing import Dict, List, Optional
 from pydantic import BaseModel, Field
 
 from connectors.jira_connector.client import JiraClient
-from connectors.jira_connector.adf_converter import text_to_adf, markdown_to_adf
+from connectors.jira_connector.adf_converter import markdown_to_adf
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 
 logger = logging.getLogger(__name__)
