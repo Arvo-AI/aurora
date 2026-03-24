@@ -21,6 +21,7 @@ from utils.auth.rbac_decorators import require_permission
 from utils.auth.token_management import store_tokens_in_db, get_token_data
 from utils.secrets.secret_ref_utils import has_user_credentials, delete_user_secret
 from utils.db.connection_utils import set_connection_status
+from utils.db.connection_pool import db_pool
 from utils.web.limiter_ext import limiter
 from connectors.cloudflare_connector.auth import validate_api_token
 from connectors.cloudflare_connector.api_client import CloudflareClient
@@ -264,13 +265,16 @@ def cloudflare_status(user_id):
 def cloudflare_disconnect(user_id):
     """Disconnect the Cloudflare account."""
     try:
-        token_data = get_token_data(user_id, "cloudflare")
-        account_id = None
-        if token_data:
-            account_id = token_data.get("account_id")
-
         delete_user_secret(user_id, "cloudflare")
-        set_connection_status(user_id, "cloudflare", account_id, "disconnected")
+
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE user_connections SET status = 'disconnected', last_verified_at = NOW() "
+                    "WHERE user_id = %s AND provider = 'cloudflare'",
+                    (user_id,),
+                )
+            conn.commit()
 
         from utils.auth.stateless_auth import store_user_preference
         try:
