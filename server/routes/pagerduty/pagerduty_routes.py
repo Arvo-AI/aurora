@@ -10,13 +10,13 @@ import os
 import urllib.parse
 from flask import Blueprint, jsonify, request, redirect
 
-from utils.db.connection_pool import db_pool
 from utils.web.cors_utils import create_cors_response
 from utils.flags.feature_flags import is_pagerduty_oauth_enabled
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.auth.rbac_decorators import require_permission
 from routes.pagerduty.oauth_utils import get_auth_url, exchange_code_for_token, refresh_token_if_needed
 from routes.pagerduty.pagerduty_helpers import PagerDutyClient, PagerDutyAPIError, validate_token, error_response
+from utils.secrets.secret_ref_utils import delete_user_secret
 
 logger = logging.getLogger(__name__)
 pagerduty_bp = Blueprint("pagerduty", __name__)
@@ -64,13 +64,17 @@ def pagerduty_status(user_id):
         return jsonify({"connected": False})
 
     if creds.get("auth_type") == "oauth":
-        success, refreshed = refresh_token_if_needed(creds)
-        if success and refreshed:
-            try:
-                store_tokens_in_db(user_id, {**creds, **refreshed}, "pagerduty")
-                creds.update(refreshed)
-            except Exception:
-                logger.exception("[PAGERDUTY] Failed to persist refreshed OAuth token for user %s", user_id)
+        from routes.pagerduty.oauth_utils import is_pagerduty_oauth_enabled
+        if is_pagerduty_oauth_enabled():
+            success, refreshed = refresh_token_if_needed(creds)
+            if not success:
+                return jsonify({"connected": False, "error": "OAuth token expired, please reconnect"})
+            if refreshed:
+                try:
+                    store_tokens_in_db(user_id, {**creds, **refreshed}, "pagerduty")
+                    creds.update(refreshed)
+                except Exception:
+                    logger.exception("[PAGERDUTY] Failed to persist refreshed OAuth token")
 
     return jsonify({"connected": True, "displayName": creds.get("display_name", "PagerDuty"), "validatedAt": creds.get("validated_at"), "authType": creds.get("auth_type", "api_token"), "capabilities": creds.get("capabilities", {}), "externalUserEmail": creds.get("external_user_email"), "externalUserName": creds.get("external_user_name"), "accountSubdomain": creds.get("account_subdomain")})
 
@@ -126,13 +130,15 @@ def pagerduty_connect(user_id):
 def pagerduty_disconnect(user_id):
     """Disconnect PagerDuty."""
     try:
-        with db_pool.get_admin_connection() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute("DELETE FROM user_tokens WHERE user_id = %s AND provider = %s", (user_id, "pagerduty"))
-            conn.commit()
-        return jsonify({"success": True})
+        success, deleted = delete_user_secret(user_id, "pagerduty")
+        if not success:
+            logger.warning("[PAGERDUTY] Failed to clean up secrets during disconnect")
+            return jsonify({"success": False, "error": "Failed to delete stored credentials"}), 500
+
+        logger.info("[PAGERDUTY] Disconnected provider (deleted %d token rows)", deleted)
+        return jsonify({"success": True, "deleted": deleted})
     except Exception:
-        logger.exception("[PAGERDUTY] Disconnect failed for user %s", user_id)
+        logger.exception("[PAGERDUTY] Disconnect failed")
         return jsonify({"error": "Disconnect failed"}), 500
 
 

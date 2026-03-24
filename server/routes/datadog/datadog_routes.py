@@ -13,6 +13,7 @@ from utils.logging.secure_logging import mask_credential_value
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import get_org_id_from_request
+from utils.secrets.secret_ref_utils import delete_user_secret
 logger = logging.getLogger(__name__)
 
 datadog_bp = Blueprint("datadog", __name__)
@@ -385,13 +386,12 @@ def status(user_id):
 @require_permission("connectors", "write")
 def disconnect(user_id):
     try:
+        success, token_rows = delete_user_secret(user_id, "datadog")
+        if not success:
+            logger.warning("[DATADOG] Failed to clean up secrets during disconnect")
+
         with db_pool.get_admin_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute(
-                "DELETE FROM user_tokens WHERE user_id = %s AND provider = %s",
-                (user_id, "datadog")
-            )
-            token_rows = cursor.rowcount
             cursor.execute(
                 "DELETE FROM datadog_events WHERE user_id = %s",
                 (user_id,)
@@ -399,7 +399,7 @@ def disconnect(user_id):
             event_rows = cursor.rowcount
             conn.commit()
 
-        logger.info("[DATADOG] Disconnected user %s (tokens=%s, events=%s)", user_id, token_rows, event_rows)
+        logger.info("[DATADOG] Disconnected provider (tokens=%s, events=%s)", token_rows, event_rows)
         return jsonify({
             "success": True,
             "message": "Datadog disconnected successfully",
@@ -407,7 +407,7 @@ def disconnect(user_id):
             "eventsDeleted": event_rows,
         })
     except Exception as exc:
-        logger.exception("[DATADOG] Failed to disconnect user %s: %s", user_id, exc)
+        logger.exception("[DATADOG] Failed to disconnect provider")
         return jsonify({"error": "Failed to disconnect Datadog"}), 500
 
 

@@ -1,9 +1,9 @@
 "use client";
 
-import { MutableRefObject, useCallback, useEffect, useRef, useState, startTransition } from "react";
+import { MutableRefObject, useCallback, useEffect, useMemo, useRef, useState, startTransition } from "react";
 import { useToast } from "@/hooks/use-toast";
 import { providerPreferencesService } from "@/lib/services/providerPreferences";
-import { useCloudProviderStatus } from "@/hooks/use-cloud-provider-status";
+import { useConnectedAccounts } from "@/hooks/useConnectedAccounts";
 import { Message } from "../types";
 import { AppRouterInstance } from "next/dist/shared/lib/app-router-context.shared-runtime";
 
@@ -63,14 +63,7 @@ export function useChatSendHandlers({
   images = [],
 }: ChatSendHandlerParams): ChatSendHandlerResult {
   const { toast } = useToast();
-  const { 
-    anyProviderConnected,
-    isGCPConnected,
-    isAWSConnected,
-    isAzureConnected,
-    isOVHConnected,
-    isScalewayConnected
-  } = useCloudProviderStatus();
+  const { providerIds, isProviderConnected } = useConnectedAccounts();
 
   const [selectedModel, setSelectedModel] = useState("openai/gpt-5.2");
   const [selectedMode, setSelectedMode] = useState("agent");
@@ -78,16 +71,15 @@ export function useChatSendHandlers({
   const [isSending, setIsSending] = useState(false);
   const isSyncingRef = useRef(false);
 
-  // Get list of connected providers
   const getConnectedProviders = useCallback(() => {
-    const connected: string[] = [];
-    if (isGCPConnected) connected.push('gcp');
-    if (isAWSConnected) connected.push('aws');
-    if (isAzureConnected) connected.push('azure');
-    if (isOVHConnected) connected.push('ovh');
-    if (isScalewayConnected) connected.push('scaleway');
-    return connected;
-  }, [isGCPConnected, isAWSConnected, isAzureConnected, isOVHConnected, isScalewayConnected]);
+    const infra = ['gcp', 'aws', 'azure', 'ovh', 'scaleway', 'tailscale', 'kubectl'];
+    return infra.filter(id => isProviderConnected(id));
+  }, [providerIds, isProviderConnected]);
+
+  const anyProviderConnected = useMemo(
+    () => getConnectedProviders().length > 0,
+    [getConnectedProviders],
+  );
 
   const syncProvidersWithMode = useCallback((modeValue: string, providers: string[]) => {
     // Prevent infinite loop - if we're already syncing, skip

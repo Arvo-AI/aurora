@@ -12,6 +12,7 @@ from utils.web.cors_utils import create_cors_response
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import get_org_id_from_request
+from utils.secrets.secret_ref_utils import delete_user_secret
 
 logger = logging.getLogger(__name__)
 
@@ -97,31 +98,31 @@ def status(user_id):
 def disconnect(user_id):
     """Disconnect Netdata by removing stored credentials."""
     try:
-        with db_pool.get_admin_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "DELETE FROM user_tokens WHERE user_id = %s AND provider = %s",
-                (user_id, "netdata")
-            )
-            token_rows = cursor.rowcount
-            cursor.execute(
-                "DELETE FROM netdata_alerts WHERE user_id = %s",
-                (user_id,)
-            )
-            alert_rows = cursor.rowcount
-            cursor.execute(
-                "DELETE FROM netdata_verification_tokens WHERE user_id = %s",
-                (user_id,)
-            )
-            conn.commit()
+        success, deleted = delete_user_secret(user_id, "netdata")
+        if not success:
+            logger.warning("[NETDATA] Failed to clean up secrets during disconnect")
 
-        logger.info(f"[NETDATA] Disconnected user {user_id} (tokens={token_rows}, alerts={alert_rows})")
+        alert_rows = 0
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "DELETE FROM netdata_alerts WHERE user_id = %s",
+                    (user_id,)
+                )
+                alert_rows = cursor.rowcount
+                cursor.execute(
+                    "DELETE FROM netdata_verification_tokens WHERE user_id = %s",
+                    (user_id,)
+                )
+                conn.commit()
+
+        logger.info("[NETDATA] Disconnected user (tokens=%d, alerts=%d)", deleted, alert_rows)
         return jsonify({
             "success": True,
             "message": "Netdata disconnected successfully",
         })
     except Exception as exc:
-        logger.exception(f"[NETDATA] Failed to disconnect user {user_id}: {exc}")
+        logger.exception("[NETDATA] Failed to disconnect user: %s", exc)
         return jsonify({"error": "Failed to disconnect Netdata"}), 500
 
 

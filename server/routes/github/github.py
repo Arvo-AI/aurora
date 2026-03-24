@@ -8,8 +8,8 @@ from utils.auth.rbac_decorators import require_permission
 
 github_bp = Blueprint("github", __name__)
 
-# Get frontend URL from environment with fallback
 FRONTEND_URL = os.getenv("FRONTEND_URL")
+GITHUB_TIMEOUT = 20
 
 @github_bp.route("/login", methods=["POST", "OPTIONS"])
 @require_permission("connectors", "write")
@@ -29,7 +29,7 @@ def github_login(user_id):
             try:
                 # Validate the token by getting user info
                 headers = {"Authorization": f"token {access_token}"}
-                user_response = requests.get("https://api.github.com/user", headers=headers)
+                user_response = requests.get("https://api.github.com/user", headers=headers, timeout=GITHUB_TIMEOUT)
                 
                 if user_response.status_code != 200:
                     return jsonify({"error": "Invalid GitHub access token"}), 400
@@ -82,7 +82,7 @@ def github_login(user_id):
                 }), 400
             
             # Build redirect URI from NEXT_PUBLIC_BACKEND_URL (same pattern as GCP/Slack)
-            backend_url = os.environ.get('NEXT_PUBLIC_BACKEND_URL').rstrip('/')
+            backend_url = os.getenv('NEXT_PUBLIC_BACKEND_URL', '').rstrip('/')
             if backend_url:
                 redirect_uri = f"{backend_url}/github/callback"
             else:
@@ -125,7 +125,7 @@ def github_status(user_id):
         
         # Validate the stored token by making a test API call
         headers = {"Authorization": f"token {github_creds['access_token']}"}
-        user_response = requests.get("https://api.github.com/user", headers=headers)
+        user_response = requests.get("https://api.github.com/user", headers=headers, timeout=GITHUB_TIMEOUT)
         
         if user_response.status_code == 200:
             user_data = user_response.json()
@@ -204,7 +204,7 @@ def github_callback():
         headers = {"Accept": "application/json"}
         
         logging.info("Requesting GitHub OAuth token exchange")
-        response = requests.post(token_url, json=payload, headers=headers)
+        response = requests.post(token_url, json=payload, headers=headers, timeout=GITHUB_TIMEOUT)
         logging.info(f"Token response status: {response.status_code}")
         
         if response.status_code != 200:
@@ -229,7 +229,7 @@ def github_callback():
         
         # Get user information to identify the user
         user_response = requests.get("https://api.github.com/user", 
-                                    headers={"Authorization": f"token {access_token}"})
+                                    headers={"Authorization": f"token {access_token}"}, timeout=GITHUB_TIMEOUT)
         
         logging.info(f"User info response status: {user_response.status_code}")
         
@@ -331,7 +331,7 @@ def get_github_repos(user_id):
         # Get both user repos and orgs the user belongs to
         api_url = "https://api.github.com/user/repos?sort=updated&per_page=100"
         logging.info(f"Fetching repositories from: {api_url}")
-        response = requests.get(api_url, headers=headers)
+        response = requests.get(api_url, headers=headers, timeout=GITHUB_TIMEOUT)
         
         # Log the response details
         logging.info(f"GitHub API response status: {response.status_code}")
@@ -376,7 +376,7 @@ def get_github_repos(user_id):
                 logging.error(f"Missing key in repository data: {e}")
         
         # Get user info to return with repos
-        user_response = requests.get("https://api.github.com/user", headers=headers)
+        user_response = requests.get("https://api.github.com/user", headers=headers, timeout=GITHUB_TIMEOUT)
         user_info = {}
         if user_response.status_code == 200:
             user_data = user_response.json()
@@ -428,7 +428,7 @@ def github_token_info(user_id):
             if token:
                 user_response = requests.get(
                     "https://api.github.com/user", 
-                    headers={"Authorization": f"token {token}"}
+                    headers={"Authorization": f"token {token}"}, timeout=GITHUB_TIMEOUT
                 )
                 if user_response.status_code == 200:
                     user_data = user_response.json()
@@ -495,7 +495,7 @@ def download_github_repo(user_id):
             "Accept": "application/vnd.github.v3+json"
         }
         
-        response = requests.get(download_url, headers=headers, stream=True)
+        response = requests.get(download_url, headers=headers, stream=True, timeout=60)
         
         if response.status_code != 200:
             logging.error(f"Failed to download repository: {response.status_code}, {response.text}")
@@ -518,9 +518,9 @@ def download_github_repo(user_id):
         
         # Allow requests from frontend URL
         origin = request.headers.get('Origin', '')
-        allowed_origins = os.getenv("FRONTEND_URL")
+        allowed_origins = os.getenv("FRONTEND_URL", "")
         
-        if origin in allowed_origins:
+        if origin and origin == allowed_origins:
             response_data.headers['Access-Control-Allow-Origin'] = origin
         else:
             # Default to the frontend URL

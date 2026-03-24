@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useQuery, jsonFetcher } from "@/lib/query";
 import type { OrgMember } from "../page";
 
 interface OrgOverviewProps {
@@ -16,18 +16,11 @@ interface OrgOverviewProps {
 }
 
 export default function OrgOverview({ org }: OrgOverviewProps) {
-  const [stats, setStats] = useState<{
+  const { data: stats } = useQuery<{
     members: number;
     incidents: number;
     chatSessions: number;
-  } | null>(null);
-
-  useEffect(() => {
-    fetch("/api/orgs/stats")
-      .then((r) => r.json())
-      .then(setStats)
-      .catch(() => {});
-  }, []);
+  }>('/api/orgs/stats', jsonFetcher, { staleTime: 60_000 });
 
   const roleCounts = org.members.reduce(
     (acc, m) => {

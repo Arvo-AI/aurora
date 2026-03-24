@@ -2,7 +2,7 @@
 
 import ModelSelector from "@/components/ModelSelector";
 import ModeSelector from "@/components/ModeSelector";
-import { useSelectedProviders } from "@/hooks/useSelectedProviders";
+import { useConnectedAccounts } from "@/hooks/useConnectedAccounts";
 
 interface ChatControlsProps {
   selectedModel: string;
@@ -23,7 +23,7 @@ export default function ChatControls({
   className = ""
 }: ChatControlsProps) {
   // Get all connected providers from database
-  const selectedConnectedProviders = useSelectedProviders();
+  const { infraProviders } = useConnectedAccounts();
 
   return (
     <div className={`flex items-center justify-between ${className}`}>
@@ -45,9 +45,9 @@ export default function ChatControls({
           disabled={disabled}
           className="h-7 text-sm"
         />
-        {selectedConnectedProviders.length > 0 && (
+        {infraProviders.length > 0 && (
           <div className="flex items-center space-x-1 ml-1">
-            {selectedConnectedProviders.map((provider, index) => (
+            {infraProviders.map((provider, index) => (
               <div
                 key={`${provider.id}-${index}`}
                 className="relative w-6 h-6 flex-shrink-0"
