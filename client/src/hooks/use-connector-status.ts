@@ -6,10 +6,10 @@ import { getEnv } from '@/lib/env';
 import type { ConnectorConfig } from "@/components/connectors/types";
 import { slackService } from "@/lib/services/slack";
 import {
-  fetchConnectedAccounts,
   getConnectedAccounts,
   subscribe,
 } from '@/lib/connected-accounts-cache';
+import { fetchR } from '@/lib/query';
 
 const pagerdutyService = require("@/lib/services/pagerduty").pagerdutyService;
 
@@ -18,12 +18,9 @@ const SPECIAL_CONNECTORS = new Set(["github", "bitbucket", "onprem", "slack", "p
 /**
  * Connection status for a single connector card.
  *
- * - When `connectedOverride` is provided (connectors grid page), skips
- *   all fetching — the parent already batch-fetched via /api/connectors/status.
- * - For standard connectors, reads from the shared connected-accounts cache
- *   (zero extra network requests).
- * - For special connectors (github, bitbucket, slack, pagerduty, onprem),
- *   falls through to their dedicated status APIs.
+ * - connectedOverride present  → parent batch-fetched, skip all fetching
+ * - standard connector          → reads from shared connected-accounts cache
+ * - special connector            → dedicated status API (only on manage pages)
  */
 export function useConnectorStatus(
   connector: ConnectorConfig,
@@ -38,33 +35,25 @@ export function useConnectorStatus(
   const hasOverride = connectedOverride !== undefined;
   const isSpecial = SPECIAL_CONNECTORS.has(connector.id);
 
-  // ── Standard connectors: read from shared cache ──────────────────
   useEffect(() => {
     if (hasOverride || isSpecial) return;
-
     const sync = () => {
       const { providerIds } = getConnectedAccounts();
       setIsConnected(providerIds.includes(connector.id.toLowerCase()));
       setIsCheckingConnection(false);
     };
-
-    fetchConnectedAccounts().then(sync).catch(() => {
-      setIsCheckingConnection(false);
-    });
+    sync();
     return subscribe(sync);
   }, [connector.id, hasOverride, isSpecial]);
 
-  // ── Override from parent ─────────────────────────────────────────
   useEffect(() => {
     if (!hasOverride) return;
     setIsConnected(connectedOverride);
     setIsCheckingConnection(false);
   }, [hasOverride, connectedOverride]);
 
-  // ── Special connectors: dedicated status APIs ────────────────────
   useEffect(() => {
     if (hasOverride || !isSpecial) return;
-
     const check = () => {
       if (connector.id === "github") checkGitHubStatus();
       else if (connector.id === "bitbucket") checkBitbucketStatus();
@@ -72,14 +61,10 @@ export function useConnectorStatus(
       else if (connector.id === "pagerduty") checkPagerDutyStatus();
       else if (connector.id === "onprem") checkVmConfigStatus();
     };
-
     check();
-
     window.addEventListener("providerStateChanged", check);
     return () => window.removeEventListener("providerStateChanged", check);
   }, [connector.id, userId, hasOverride, isSpecial]);
-
-  // ── Status check implementations ────────────────────────────────
 
   const checkGitHubStatus = async () => {
     if (!userId) return;
@@ -136,9 +121,9 @@ export function useConnectorStatus(
   const checkVmConfigStatus = async () => {
     setIsCheckingConnection(true);
     try {
-      const manualResponse = await fetch('/api/vms/manual', { credentials: 'include' });
-      if (manualResponse.ok) {
-        const manualData = await manualResponse.json();
+      const manualRes = await fetchR('/api/vms/manual', { credentials: 'include' });
+      if (manualRes.ok) {
+        const manualData = await manualRes.json();
         if ((manualData.vms || []).some((vm: any) => vm.connectionVerified)) {
           setIsConnected(true);
           return;
@@ -150,7 +135,7 @@ export function useConnectorStatus(
 
       if (isOvhEnabled()) {
         try {
-          const r = await fetch(`${backendUrl}/ovh_api/ovh/instances`, {
+          const r = await fetchR(`${backendUrl}/ovh_api/ovh/instances`, {
             headers: { "X-User-ID": userId }, credentials: "include",
           });
           if (r.ok) {
@@ -162,7 +147,7 @@ export function useConnectorStatus(
 
       if (isScalewayEnabled()) {
         try {
-          const r = await fetch(`${backendUrl}/scaleway_api/scaleway/instances`, {
+          const r = await fetchR(`${backendUrl}/scaleway_api/scaleway/instances`, {
             headers: { "X-User-ID": userId }, credentials: "include",
           });
           if (r.ok) {
@@ -180,21 +165,16 @@ export function useConnectorStatus(
     }
   };
 
-  const checkApiConnectionStatus = async () => {
-    const { providerIds } = await fetchConnectedAccounts();
-    setIsConnected(providerIds.includes(connector.id.toLowerCase()));
-  };
-
   const checkConnectionStatus = () => {
     if (typeof window === "undefined") return;
-    if (isSpecial) {
-      if (connector.id === "github") checkGitHubStatus();
-      else if (connector.id === "bitbucket") checkBitbucketStatus();
-      else if (connector.id === "onprem") checkVmConfigStatus();
-      else if (connector.id === "slack") checkSlackStatus();
-      else if (connector.id === "pagerduty") checkPagerDutyStatus();
-    } else {
-      checkApiConnectionStatus();
+    if (connector.id === "github") checkGitHubStatus();
+    else if (connector.id === "bitbucket") checkBitbucketStatus();
+    else if (connector.id === "onprem") checkVmConfigStatus();
+    else if (connector.id === "slack") checkSlackStatus();
+    else if (connector.id === "pagerduty") checkPagerDutyStatus();
+    else {
+      const { providerIds } = getConnectedAccounts();
+      setIsConnected(providerIds.includes(connector.id.toLowerCase()));
     }
   };
 
@@ -209,7 +189,6 @@ export function useConnectorStatus(
     checkSlackStatus,
     checkPagerDutyStatus,
     checkVmConfigStatus,
-    checkApiConnectionStatus,
     checkConnectionStatus,
   };
 }

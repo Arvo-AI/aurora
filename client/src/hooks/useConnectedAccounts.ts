@@ -1,9 +1,10 @@
-import { useEffect, useSyncExternalStore } from 'react';
 import { isOvhEnabled } from '@/lib/feature-flags';
+import { useQuery } from '@/lib/query';
 import {
-  fetchConnectedAccounts,
-  getConnectedAccounts,
-  subscribe,
+  CACHE_KEY,
+  STALE_TIME,
+  fetcher,
+  type ConnectedAccountsData,
 } from '@/lib/connected-accounts-cache';
 
 export interface ConnectedProvider {
@@ -22,32 +23,34 @@ const INFRA_PROVIDERS: Record<string, { name: string; icon: string }> = {
   kubectl: { name: 'Kubernetes', icon: '/kubernetes-svgrepo-com.svg' },
 };
 
-function getSnapshot() {
-  return getConnectedAccounts();
-}
-
-function getServerSnapshot() {
-  return { accounts: {}, providerIds: [], fetchedAt: 0 };
-}
-
 /**
  * Single hook for all connected-accounts data.
  *
- * Every consumer in the app reads from the same in-memory cache
- * (connected-accounts-cache.ts), so there is at most one network
- * request regardless of how many components mount this hook.
+ * Backed by the global query cache — at most one network request
+ * regardless of how many components mount this hook. Retries with
+ * exponential backoff, deduplicates in-flight requests, and
+ * revalidates on window focus and providerStateChanged events.
  */
 export function useConnectedAccounts() {
-  const state = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
+  const { data, error, isLoading, mutate } = useQuery<ConnectedAccountsData>(
+    CACHE_KEY,
+    fetcher,
+    {
+      staleTime: STALE_TIME,
+      retryCount: 3,
+      retryDelay: 2000,
+      revalidateOnFocus: true,
+      revalidateOnEvents: ['providerStateChanged', 'providerConnectionAction'],
+    },
+  );
 
-  useEffect(() => {
-    fetchConnectedAccounts();
-  }, []);
+  const providerIds = data?.providerIds ?? [];
+  const accounts = data?.accounts ?? {};
 
   const isProviderConnected = (id: string) =>
-    state.providerIds.includes(id.toLowerCase());
+    providerIds.includes(id.toLowerCase());
 
-  const infraProviders: ConnectedProvider[] = state.providerIds
+  const infraProviders: ConnectedProvider[] = providerIds
     .filter(id => {
       if (!(id in INFRA_PROVIDERS)) return false;
       if (id === 'ovh' && !isOvhEnabled()) return false;
@@ -60,10 +63,12 @@ export function useConnectedAccounts() {
     }));
 
   return {
-    accounts: state.accounts,
-    providerIds: state.providerIds,
-    isLoading: state.fetchedAt === 0,
+    accounts,
+    providerIds,
+    isLoading,
+    hasError: !!error,
     isProviderConnected,
     infraProviders,
+    refetch: mutate,
   };
 }

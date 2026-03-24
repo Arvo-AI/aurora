@@ -1,107 +1,59 @@
-type Listener = () => void;
+/**
+ * Connected-accounts constants and fetcher.
+ *
+ * The actual caching, retry, dedup, and subscription logic lives
+ * entirely in queryClient (lib/query.ts). This module only defines
+ * the cache key, fetcher, and thin imperative helpers for non-React
+ * callers (e.g. ProviderPolling).
+ */
 
-interface CacheState {
+import { queryClient, type Fetcher } from '@/lib/query';
+
+// ─── Types ──────────────────────────────────────────────────────────
+
+export interface ConnectedAccountsData {
   accounts: Record<string, any>;
   providerIds: string[];
-  fetchedAt: number;
 }
 
-const DEBOUNCE_MS = 2_000;
+// ─── Constants ──────────────────────────────────────────────────────
 
-let state: CacheState = { accounts: {}, providerIds: [], fetchedAt: 0 };
-let inflight: Promise<CacheState> | null = null;
-let pendingForceRefresh = false;
-let listeners: Set<Listener> = new Set();
-let initialized = false;
+export const CACHE_KEY = '/api/connected-accounts';
+export const STALE_TIME = 5_000;
+const EMPTY: ConnectedAccountsData = { accounts: {}, providerIds: [] };
 
-function notify() {
-  listeners.forEach(fn => fn());
-}
+// ─── Fetcher ────────────────────────────────────────────────────────
 
-async function doFetch(): Promise<CacheState> {
-  try {
-    const response = await fetch('/api/connected-accounts', { credentials: 'include' });
-    if (!response.ok) throw new Error(`connected-accounts ${response.status}`);
-    const data = await response.json();
-    const accounts = data.accounts || {};
-    const providerIds = Object.keys(accounts).map(k => k.toLowerCase());
-    state = { accounts, providerIds, fetchedAt: Date.now() };
-    initialized = true;
-    notify();
-    return state;
-  } catch (err) {
-    state = { ...state, fetchedAt: Date.now() };
-    initialized = true;
-    notify();
-    throw err;
-  }
-}
+export const fetcher: Fetcher<ConnectedAccountsData> = async (_key, signal) => {
+  const res = await fetch(CACHE_KEY, { credentials: 'include', signal });
+  if (!res.ok) throw new Error(`connected-accounts ${res.status}`);
+  const data = await res.json();
+  const accounts = data.accounts || {};
+  const providerIds = Object.keys(accounts).map(k => k.toLowerCase());
+  return { accounts, providerIds };
+};
 
-export function getConnectedAccounts(): CacheState {
-  return state;
+// ─── Imperative API (for non-React code) ────────────────────────────
+
+export function getConnectedAccounts(): ConnectedAccountsData {
+  return queryClient.read<ConnectedAccountsData>(CACHE_KEY) ?? EMPTY;
 }
 
 export function isProviderConnected(providerId: string): boolean {
-  return state.providerIds.includes(providerId.toLowerCase());
+  return getConnectedAccounts().providerIds.includes(providerId.toLowerCase());
 }
 
-/**
- * Fetch connected accounts. Deduplicates concurrent calls and skips
- * if the cache was refreshed within DEBOUNCE_MS. When force=true and
- * a request is already in flight, schedules a follow-up fetch after
- * the current one completes so state changes aren't lost.
- */
-export async function fetchConnectedAccounts(force = false): Promise<CacheState> {
-  if (!force && initialized && Date.now() - state.fetchedAt < DEBOUNCE_MS) {
-    return state;
-  }
-  if (inflight) {
+export async function fetchConnectedAccounts(force = false): Promise<ConnectedAccountsData> {
+  try {
     if (force) {
-      pendingForceRefresh = true;
+      return await queryClient.invalidate(CACHE_KEY, fetcher, { staleTime: STALE_TIME });
     }
-    return inflight;
-  }
-  inflight = doFetch()
-    .catch(() => state)
-    .finally(() => {
-      inflight = null;
-      if (pendingForceRefresh) {
-        pendingForceRefresh = false;
-        fetchConnectedAccounts(true);
-      }
-    });
-  return inflight;
-}
-
-export function subscribe(listener: Listener): () => void {
-  listeners.add(listener);
-  return () => { listeners.delete(listener); };
-}
-
-declare global {
-  interface Window {
-    __connectedAccountsRefresh?: () => void;
-    __connectedAccountsCleanup?: () => void;
+    return await queryClient.fetch(CACHE_KEY, fetcher, { staleTime: STALE_TIME });
+  } catch {
+    return queryClient.read<ConnectedAccountsData>(CACHE_KEY) ?? EMPTY;
   }
 }
 
-if (typeof window !== 'undefined') {
-  if (window.__connectedAccountsCleanup) {
-    window.__connectedAccountsCleanup();
-  }
-
-  const refresh = () => {
-    fetchConnectedAccounts(true).catch((err) => {
-      console.error('[connected-accounts-cache] refresh failed:', err);
-    });
-  };
-
-  window.__connectedAccountsRefresh = refresh;
-  window.addEventListener('providerStateChanged', refresh);
-  window.addEventListener('providerConnectionAction', refresh);
-
-  window.__connectedAccountsCleanup = () => {
-    window.removeEventListener('providerStateChanged', refresh);
-    window.removeEventListener('providerConnectionAction', refresh);
-  };
+export function subscribe(listener: () => void): () => void {
+  return queryClient.subscribe(CACHE_KEY, listener);
 }

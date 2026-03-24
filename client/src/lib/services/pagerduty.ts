@@ -1,5 +1,7 @@
 'use client';
 
+import { apiRequest } from '@/lib/services/api-client';
+
 export interface PagerDutyStatus {
   connected: boolean;
   displayName?: string;
@@ -16,49 +18,40 @@ export interface PagerDutyStatus {
 
 const API_BASE = '/api/pagerduty';
 
-async function apiCall<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(path, {
-    ...init,
-    headers: { 'Content-Type': 'application/json', ...init?.headers },
-    cache: 'no-store',
-  });
-
-  if (!response.ok) {
-    const err = await response.json().catch(() => ({}));
-    throw new Error(err.error || err.message || response.statusText);
-  }
-
-  return response.json();
-}
-
 export const pagerdutyService = {
   async getStatus(): Promise<PagerDutyStatus | null> {
     try {
-      return await apiCall<PagerDutyStatus>(API_BASE);
+      return await apiRequest<PagerDutyStatus>(API_BASE, { cache: 'no-store' });
     } catch {
       return null;
     }
   },
 
   async connect(token: string, displayName = 'PagerDuty'): Promise<PagerDutyStatus> {
-    return apiCall<PagerDutyStatus>(API_BASE, {
+    return apiRequest<PagerDutyStatus>(API_BASE, {
       method: 'POST',
       body: JSON.stringify({ token, displayName }),
+      cache: 'no-store',
     });
   },
 
   async oauthLogin(): Promise<{ oauth_url: string }> {
-    return apiCall(`${API_BASE}/oauth/login`, { method: 'POST', body: '{}' });
+    return apiRequest<{ oauth_url: string }>(`${API_BASE}/oauth/login`, {
+      method: 'POST',
+      body: '{}',
+      cache: 'no-store',
+    });
   },
 
   async changeToken(token: string): Promise<PagerDutyStatus> {
-    return apiCall<PagerDutyStatus>(API_BASE, {
+    return apiRequest<PagerDutyStatus>(API_BASE, {
       method: 'PATCH',
       body: JSON.stringify({ token }),
+      cache: 'no-store',
     });
   },
 
   async disconnect(): Promise<void> {
-    await apiCall(API_BASE, { method: 'DELETE' });
+    await apiRequest(API_BASE, { method: 'DELETE', cache: 'no-store' });
   },
 };

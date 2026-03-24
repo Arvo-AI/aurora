@@ -4,22 +4,23 @@ import React, { useState, useMemo, useEffect } from "react";
 import ConnectorGrid from "@/components/connectors/ConnectorGrid";
 import ConnectorHeader from "@/components/connectors/ConnectorHeader";
 import { connectorRegistry } from "@/components/connectors/ConnectorRegistry";
+import { useQuery, type Fetcher } from "@/lib/query";
 
-async function fetchAllStatuses(): Promise<Record<string, boolean>> {
-  try {
-    const res = await fetch("/api/connectors/status", { credentials: "include" });
-    if (!res.ok) return {};
-    const data = await res.json();
-    const connectors: Record<string, { connected?: boolean }> = data.connectors || {};
-    const result: Record<string, boolean> = {};
-    for (const [id, info] of Object.entries(connectors)) {
-      result[id] = info.connected === true;
-    }
-    return result;
-  } catch {
-    return {};
-  }
+interface StatusPayload {
+  connectors: Record<string, { connected?: boolean }>;
 }
+
+const statusFetcher: Fetcher<Record<string, boolean>> = async (_key, signal) => {
+  const res = await fetch("/api/connectors/status", { credentials: "include", signal });
+  if (!res.ok) throw new Error(`connectors/status ${res.status}`);
+  const data: StatusPayload = await res.json();
+  const connectors = data.connectors || {};
+  const result: Record<string, boolean> = {};
+  for (const [id, info] of Object.entries(connectors)) {
+    result[id] = info.connected === true;
+  }
+  return result;
+};
 
 function syncLocalStorage(connectorId: string, connectorName: string, isConnected: boolean, storageKey?: string): void {
   const key = storageKey || `is${connectorName}Connected`;
@@ -33,33 +34,30 @@ function syncLocalStorage(connectorId: string, connectorName: string, isConnecte
 export default function ConnectorsClient() {
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
-  const [connectedStatus, setConnectedStatus] = useState<Record<string, boolean>>({});
-  const [isLoading, setIsLoading] = useState(true);
 
   const allConnectors = useMemo(() => connectorRegistry.getAll(), []);
 
+  const { data: connectedStatus, isLoading, mutate } = useQuery<Record<string, boolean>>(
+    "/api/connectors/status",
+    statusFetcher,
+    {
+      staleTime: 10_000,
+      retryCount: 3,
+      retryDelay: 2000,
+      revalidateOnFocus: true,
+      revalidateOnEvents: ["providerStateChanged"],
+    },
+  );
+
+  const statuses = connectedStatus ?? {};
+
   useEffect(() => {
-    const loadStatuses = async () => {
-      if (typeof window === "undefined") return;
-      setIsLoading(true);
-
-      const statuses = await fetchAllStatuses();
-
-      for (const connector of allConnectors) {
-        const connected = statuses[connector.id] ?? false;
-        syncLocalStorage(connector.id, connector.name, connected, connector.storageKey);
-      }
-
-      setConnectedStatus(statuses);
-      setIsLoading(false);
-    };
-
-    loadStatuses();
-
-    const handleProviderChange = () => loadStatuses();
-    window.addEventListener("providerStateChanged", handleProviderChange);
-    return () => window.removeEventListener("providerStateChanged", handleProviderChange);
-  }, [allConnectors]);
+    if (!connectedStatus) return;
+    for (const connector of allConnectors) {
+      const connected = connectedStatus[connector.id] ?? false;
+      syncLocalStorage(connector.id, connector.name, connected, connector.storageKey);
+    }
+  }, [connectedStatus, allConnectors]);
 
   const availableCategories = useMemo(() => {
     const categories = new Set<string>();
@@ -94,14 +92,14 @@ export default function ConnectorsClient() {
   }, [allConnectors, searchQuery, selectedCategories]);
 
   const { installedConnectors, availableConnectors } = useMemo(() => {
-    const installed = filteredConnectors.filter((connector) => connectedStatus[connector.id]);
-    const available = filteredConnectors.filter((connector) => !connectedStatus[connector.id]);
+    const installed = filteredConnectors.filter((connector) => statuses[connector.id]);
+    const available = filteredConnectors.filter((connector) => !statuses[connector.id]);
     
     return {
       installedConnectors: installed,
       availableConnectors: available,
     };
-  }, [filteredConnectors, connectedStatus]);
+  }, [filteredConnectors, statuses]);
 
   const handleCategoryToggle = (category: string) => {
     setSelectedCategories((prev) =>
@@ -136,14 +134,14 @@ export default function ConnectorsClient() {
                     Installed
                   </h2>
                 </div>
-                <ConnectorGrid connectors={installedConnectors} connectedStatus={connectedStatus} />
+                <ConnectorGrid connectors={installedConnectors} connectedStatus={statuses} />
               </div>
             )}
             
             {availableConnectors.length > 0 && (
               <div>
                 <h2 className="text-xl font-semibold mb-4">Available</h2>
-                <ConnectorGrid connectors={availableConnectors} connectedStatus={connectedStatus} />
+                <ConnectorGrid connectors={availableConnectors} connectedStatus={statuses} />
               </div>
             )}
             
