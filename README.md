@@ -126,7 +126,7 @@ Aurora doesn't just find the root cause — it suggests code fixes and can gener
 
 ## How It Works
 
-```
+```text
 Alert fires (PagerDuty, Datadog, Grafana, etc.)
         │
         ▼
