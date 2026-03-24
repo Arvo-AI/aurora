@@ -9,9 +9,10 @@ It handles two categories of tables:
   2. Incident child tables — have (incident_id, org_id) but no user_id.
      Org is inherited from the parent incident row.
 
-Three entry points call into this module:
+Four entry points call into this module:
   • /setup-org   — user creates their first org      → backfill_user_org_data()
   • add-member   — user is added to an existing org  → backfill_user_org_data()
+  • org transfer — user moves to a different org     → migrate_user_to_org()
   • server boot  — catch-up for any rows still NULL  → backfill_all_users_at_boot()
 
 No other file should contain org_id backfill logic.
@@ -134,6 +135,63 @@ def backfill_user_org_data(cursor, user_id: str, org_id: str) -> dict:
         )
     else:
         logger.info("No orphaned data to backfill for user %s", user_id)
+
+    return results
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Cross-org migration  (called when a user transfers between organizations)
+# ────────────────────────────────────────────────────────────────────────────
+
+def migrate_user_to_org(cursor, user_id: str, new_org_id: str) -> dict:
+    """Move ALL of a user's data from their current org to a new org.
+
+    Unlike backfill_user_org_data (which only stamps NULL → value), this
+    function re-stamps existing org_id values. Used when a user transfers
+    between organizations (e.g. joining a team's org after creating their own).
+
+    Args:
+        cursor: An open psycopg2 cursor (caller owns the transaction).
+        user_id: The user whose data should be moved.
+        new_org_id: The destination org_id.
+
+    Returns:
+        dict {table_name: rows_updated}
+    """
+    results = {}
+
+    # Phase 1 — user-scoped tables (move ALL rows, not just NULL org_id)
+    cursor.execute(_USER_SCOPED_TABLES_SQL)
+    for (tbl,) in cursor.fetchall():
+        n = _safe_update(
+            cursor, f"migrate_{tbl}",
+            f'UPDATE "{tbl}" SET org_id = %s WHERE user_id = %s',
+            (new_org_id, user_id),
+        )
+        if n:
+            results[tbl] = n
+
+    # Phase 2 — incident child tables (no user_id; inherit from parent incident)
+    cursor.execute(_INCIDENT_CHILD_TABLES_SQL)
+    for (tbl,) in cursor.fetchall():
+        n = _safe_update(
+            cursor, f"migrate_child_{tbl}",
+            f'UPDATE "{tbl}" c SET org_id = %s '
+            f"FROM incidents i WHERE c.incident_id = i.id "
+            f"AND i.user_id = %s",
+            (new_org_id, user_id),
+        )
+        if n:
+            results[tbl] = n
+
+    if results:
+        total = sum(results.values())
+        logger.info(
+            "Migrated user %s to org %s across %d table(s): %d row(s) total — %s",
+            user_id, new_org_id, len(results), total, results,
+        )
+    else:
+        logger.info("No data to migrate for user %s to org %s", user_id, new_org_id)
 
     return results
 
