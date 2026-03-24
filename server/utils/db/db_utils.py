@@ -1702,6 +1702,26 @@ def initialize_tables():
                 logging.warning(f"Error adding role column to users: {e}")
                 cursor.execute("ROLLBACK TO SAVEPOINT sp_role_col")
 
+            # Fix: Promote org creators back to admin.
+            # The ALTER TABLE DEFAULT 'viewer' sets all existing rows to viewer,
+            # so we explicitly restore admin for anyone who created their org.
+            try:
+                cursor.execute("SAVEPOINT sp_role_fix")
+                cursor.execute("""
+                    UPDATE users u SET role = 'admin'
+                    FROM organizations o
+                    WHERE u.org_id = o.id
+                      AND o.created_by = u.id
+                      AND u.role != 'admin';
+                """)
+                promoted = cursor.rowcount
+                if promoted > 0:
+                    logging.info("Promoted %d org creator(s) back to admin role.", promoted)
+                cursor.execute("RELEASE SAVEPOINT sp_role_fix")
+            except Exception as e:
+                logging.warning(f"Error promoting org creators to admin: {e}")
+                cursor.execute("ROLLBACK TO SAVEPOINT sp_role_fix")
+
             # Migration: Add must_change_password column to users table
             try:
                 cursor.execute("SAVEPOINT sp_mcp_col")
@@ -1799,18 +1819,32 @@ def initialize_tables():
                 logging.warning(f"Error in org_id backfill migration: {e}")
                 conn.rollback()
 
-            # Repair: ensure every user with an org has a Casbin role assignment.
-            # Covers partial failures from a previous startup crash mid-loop.
+            # Repair: ensure every user with an org has the correct Casbin role.
+            # Self-healing: org creators are promoted to admin even if role was viewer.
             try:
                 from utils.auth.enforcer import assign_role_to_user, get_user_roles_in_org
-                cursor.execute(
-                    "SELECT id, role, org_id FROM users WHERE org_id IS NOT NULL"
-                )
-                for uid, urole, uorg in cursor.fetchall():
-                    if not get_user_roles_in_org(uid, uorg):
+                cursor.execute("""
+                    SELECT u.id, u.role, u.org_id,
+                           CASE WHEN o.created_by = u.id THEN TRUE ELSE FALSE END AS is_creator
+                    FROM users u
+                    LEFT JOIN organizations o ON u.org_id = o.id
+                    WHERE u.org_id IS NOT NULL
+                """)
+                for uid, urole, uorg, is_creator in cursor.fetchall():
+                    expected_role = "admin" if is_creator else (urole or "viewer")
+                    current_casbin = get_user_roles_in_org(uid, uorg)
+                    if not current_casbin or current_casbin != [expected_role]:
                         try:
-                            assign_role_to_user(uid, urole or "viewer", uorg)
-                            logging.info("Repaired missing Casbin role for user %s", uid)
+                            assign_role_to_user(uid, expected_role, uorg)
+                            if is_creator and urole != "admin":
+                                cursor.execute(
+                                    "UPDATE users SET role = 'admin' WHERE id = %s",
+                                    (uid,),
+                                )
+                            logging.info(
+                                "Repaired Casbin role for user %s: %s -> %s (creator=%s)",
+                                uid, current_casbin, expected_role, is_creator,
+                            )
                         except Exception as casbin_err:
                             logging.warning(
                                 "Failed to repair Casbin role for user %s: %s",

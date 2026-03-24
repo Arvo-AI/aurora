@@ -36,6 +36,11 @@ export default function SignUpPage() {
       return
     }
 
+    if (orgName.trim().length > 100) {
+      setError("Organization name must be 100 characters or less")
+      return
+    }
+
     setIsLoading(true)
 
     try {
