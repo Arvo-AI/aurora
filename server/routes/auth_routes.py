@@ -82,6 +82,13 @@ def register():
 
                 slug = _name_to_slug(org_name)
                 cursor.execute(
+                    "SELECT id FROM organizations WHERE LOWER(name) = LOWER(%s)",
+                    (org_name,)
+                )
+                if cursor.fetchone():
+                    return jsonify({"error": "An organization with this name already exists"}), 409
+
+                cursor.execute(
                     "SELECT id FROM organizations WHERE slug = %s",
                     (slug,)
                 )
@@ -185,6 +192,13 @@ def setup_org():
                     return jsonify({"error": "You already belong to an organization"}), 409
 
                 slug = _name_to_slug(org_name)
+                cursor.execute(
+                    "SELECT id FROM organizations WHERE LOWER(name) = LOWER(%s)",
+                    (org_name,)
+                )
+                if cursor.fetchone():
+                    return jsonify({"error": "An organization with this name already exists"}), 409
+
                 cursor.execute(
                     "SELECT id FROM organizations WHERE slug = %s",
                     (slug,)

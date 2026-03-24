@@ -114,6 +114,14 @@ def update_org(user_id):
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                if name:
+                    cursor.execute(
+                        "SELECT id FROM organizations WHERE LOWER(name) = LOWER(%s) AND id != %s",
+                        (name, org_id)
+                    )
+                    if cursor.fetchone():
+                        return jsonify({"error": "An organization with this name already exists"}), 409
+
                 updates = []
                 params = []
                 if name:
