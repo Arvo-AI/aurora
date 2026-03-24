@@ -14,7 +14,8 @@
   <a href="https://github.com/Arvo-AI/aurora/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" alt="License" /></a>
   <a href="https://github.com/Arvo-AI/aurora/actions/workflows/publish-images.yml"><img src="https://img.shields.io/github/actions/workflow/status/Arvo-AI/aurora/publish-images.yml?label=build" alt="Build Status" /></a>
   <a href="https://github.com/Arvo-AI/aurora/network/members"><img src="https://img.shields.io/github/forks/Arvo-AI/aurora?style=flat" alt="Forks" /></a>
-  <a href="https://discord.gg/9vkXrTc4"><img src="https://img.shields.io/badge/Discord-Join%20us-5865F2?logo=discord&logoColor=white" alt="Discord" /></a>
+  <a href="https://discord.com/invite/ccbN4FwHxM"><img src="https://img.shields.io/badge/Discord-Join%20us-5865F2?logo=discord&logoColor=white" alt="Discord" /></a>
+  <a href="https://cal.com/arvo-ai"><img src="https://img.shields.io/badge/Book%20a%20Demo-cal.com-FF6B4A?logo=googlecalendar&logoColor=white" alt="Book a Demo" /></a>
 </p>
 
 <p align="center">
@@ -23,9 +24,7 @@
   <a href="#integrations">Integrations</a> &middot;
   <a href="#quick-start">Quick Start</a> &middot;
   <a href="https://arvo-ai.github.io/aurora/">Docs</a> &middot;
-  <a href="https://www.arvoai.ca">Website</a> &middot;
-  <a href="https://discord.gg/9vkXrTc4">Discord</a> &middot;
-  <a href="https://cal.com/arvo-ai">Book a Demo</a>
+  <a href="https://www.arvoai.ca">Website</a>
 </p>
 
 ---
@@ -300,7 +299,7 @@ Aurora is fully self-hosted — **your incident data never leaves your environme
 
 We'd love your help making Aurora better.
 
-- **[Discord](https://discord.gg/9vkXrTc4)** — Ask questions, share feedback, get help
+- **[Discord](https://discord.com/invite/ccbN4FwHxM)** — Ask questions, share feedback, get help
 - **[GitHub Issues](https://github.com/Arvo-AI/aurora/issues)** — Report bugs or request features
 - **[GitHub Discussions](https://github.com/Arvo-AI/aurora/discussions)** — General discussion and ideas
 - **[Book a Demo](https://cal.com/arvo-ai)** — See Aurora in action with our team
