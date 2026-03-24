@@ -64,15 +64,17 @@ def pagerduty_status(user_id):
         return jsonify({"connected": False})
 
     if creds.get("auth_type") == "oauth":
-        success, refreshed = refresh_token_if_needed(creds)
-        if not success:
-            return jsonify({"connected": False, "error": "OAuth token expired, please reconnect"})
-        if refreshed:
-            try:
-                store_tokens_in_db(user_id, {**creds, **refreshed}, "pagerduty")
-                creds.update(refreshed)
-            except Exception:
-                logger.exception("[PAGERDUTY] Failed to persist refreshed OAuth token for user %s", user_id)
+        from routes.pagerduty.oauth_utils import is_pagerduty_oauth_enabled
+        if is_pagerduty_oauth_enabled():
+            success, refreshed = refresh_token_if_needed(creds)
+            if not success:
+                return jsonify({"connected": False, "error": "OAuth token expired, please reconnect"})
+            if refreshed:
+                try:
+                    store_tokens_in_db(user_id, {**creds, **refreshed}, "pagerduty")
+                    creds.update(refreshed)
+                except Exception:
+                    logger.exception("[PAGERDUTY] Failed to persist refreshed OAuth token")
 
     return jsonify({"connected": True, "displayName": creds.get("display_name", "PagerDuty"), "validatedAt": creds.get("validated_at"), "authType": creds.get("auth_type", "api_token"), "capabilities": creds.get("capabilities", {}), "externalUserEmail": creds.get("external_user_email"), "externalUserName": creds.get("external_user_name"), "accountSubdomain": creds.get("account_subdomain")})
 
@@ -131,7 +133,10 @@ def pagerduty_disconnect(user_id):
         success, deleted = delete_user_secret(user_id, "pagerduty")
         if not success:
             logger.warning("[PAGERDUTY] Failed to clean up secrets during disconnect")
-        return jsonify({"success": True})
+            return jsonify({"success": False, "error": "Failed to delete stored credentials"}), 500
+
+        logger.info("[PAGERDUTY] Disconnected provider (deleted %d token rows)", deleted)
+        return jsonify({"success": True, "deleted": deleted})
     except Exception:
         logger.exception("[PAGERDUTY] Disconnect failed")
         return jsonify({"error": "Disconnect failed"}), 500

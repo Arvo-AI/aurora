@@ -193,12 +193,14 @@ def disconnect(user_id):
         success, deleted_count = delete_user_secret(user_id, "grafana")
         if not success:
             logger.warning("[GRAFANA] Failed to clean up secrets during disconnect")
+            return jsonify({"success": False, "error": "Failed to delete stored credentials"}), 500
 
         logger.info("[GRAFANA] Disconnected provider (deleted %s token entries)", deleted_count)
 
         return jsonify({
             "success": True,
-            "message": "Grafana disconnected successfully"
+            "message": "Grafana disconnected successfully",
+            "deleted": deleted_count
         }), 200
 
     except Exception as exc:

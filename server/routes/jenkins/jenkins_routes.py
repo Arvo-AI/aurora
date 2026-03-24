@@ -210,9 +210,10 @@ def disconnect(user_id):
         success, deleted = delete_user_secret(user_id, JENKINS_PROVIDER)
         if not success:
             logger.warning("[JENKINS] Failed to clean up secrets during disconnect")
+            return jsonify({"success": False, "error": "Failed to delete stored credentials"}), 500
 
         logger.info("[JENKINS] Disconnected provider (deleted %d token rows)", deleted)
-        return jsonify({"success": True, "message": "Jenkins disconnected successfully"})
+        return jsonify({"success": True, "message": "Jenkins disconnected successfully", "deleted": deleted})
     except Exception as exc:
         logger.exception("[JENKINS] Failed to disconnect provider")
         return jsonify({"error": "Failed to disconnect Jenkins"}), 500

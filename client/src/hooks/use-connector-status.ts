@@ -48,7 +48,9 @@ export function useConnectorStatus(
       setIsCheckingConnection(false);
     };
 
-    fetchConnectedAccounts().then(sync);
+    fetchConnectedAccounts().then(sync).catch(() => {
+      setIsCheckingConnection(false);
+    });
     return subscribe(sync);
   }, [connector.id, hasOverride, isSpecial]);
 
@@ -86,6 +88,8 @@ export function useConnectorStatus(
       setIsConnected(data.connected || false);
     } catch {
       setIsConnected(false);
+    } finally {
+      setIsCheckingConnection(false);
     }
   };
 
@@ -96,6 +100,8 @@ export function useConnectorStatus(
       setIsConnected(data.connected || false);
     } catch {
       setIsConnected(false);
+    } finally {
+      setIsCheckingConnection(false);
     }
   };
 
@@ -110,6 +116,7 @@ export function useConnectorStatus(
       setSlackStatus(null);
     } finally {
       setIsLoadingDetails(false);
+      setIsCheckingConnection(false);
     }
   };
 
@@ -122,6 +129,7 @@ export function useConnectorStatus(
       setIsConnected(false);
     } finally {
       setIsLoadingDetails(false);
+      setIsCheckingConnection(false);
     }
   };
 

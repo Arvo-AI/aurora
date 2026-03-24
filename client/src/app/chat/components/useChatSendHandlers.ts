@@ -1,6 +1,6 @@
 "use client";
 
-import { MutableRefObject, useCallback, useEffect, useRef, useState, startTransition } from "react";
+import { MutableRefObject, useCallback, useEffect, useMemo, useRef, useState, startTransition } from "react";
 import { useToast } from "@/hooks/use-toast";
 import { providerPreferencesService } from "@/lib/services/providerPreferences";
 import { useConnectedAccounts } from "@/hooks/useConnectedAccounts";
@@ -64,7 +64,6 @@ export function useChatSendHandlers({
 }: ChatSendHandlerParams): ChatSendHandlerResult {
   const { toast } = useToast();
   const { providerIds, isProviderConnected } = useConnectedAccounts();
-  const anyProviderConnected = providerIds.length > 0;
 
   const [selectedModel, setSelectedModel] = useState("openai/gpt-5.2");
   const [selectedMode, setSelectedMode] = useState("agent");
@@ -73,9 +72,14 @@ export function useChatSendHandlers({
   const isSyncingRef = useRef(false);
 
   const getConnectedProviders = useCallback(() => {
-    const infra = ['gcp', 'aws', 'azure', 'ovh', 'scaleway', 'tailscale'];
+    const infra = ['gcp', 'aws', 'azure', 'ovh', 'scaleway', 'tailscale', 'kubectl'];
     return infra.filter(id => isProviderConnected(id));
-  }, [providerIds]);
+  }, [providerIds, isProviderConnected]);
+
+  const anyProviderConnected = useMemo(
+    () => getConnectedProviders().length > 0,
+    [getConnectedProviders],
+  );
 
   const syncProvidersWithMode = useCallback((modeValue: string, providers: string[]) => {
     // Prevent infinite loop - if we're already syncing, skip

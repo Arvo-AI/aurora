@@ -30,9 +30,7 @@ async function doFetch(): Promise<CacheState> {
     notify();
     return state;
   } catch (err) {
-    if (state.providerIds.length > 0) {
-      state = { ...state, fetchedAt: Date.now() };
-    }
+    state = { ...state, fetchedAt: Date.now() };
     initialized = true;
     notify();
     throw err;
@@ -80,15 +78,30 @@ export function subscribe(listener: Listener): () => void {
   return () => { listeners.delete(listener); };
 }
 
-function refresh() {
-  fetchConnectedAccounts(true).catch((err) => {
-    console.error('[connected-accounts-cache] refresh failed:', err);
-  });
+declare global {
+  interface Window {
+    __connectedAccountsRefresh?: () => void;
+    __connectedAccountsCleanup?: () => void;
+  }
 }
 
 if (typeof window !== 'undefined') {
-  window.removeEventListener('providerStateChanged', refresh);
-  window.removeEventListener('providerConnectionAction', refresh);
+  if (window.__connectedAccountsCleanup) {
+    window.__connectedAccountsCleanup();
+  }
+
+  const refresh = () => {
+    fetchConnectedAccounts(true).catch((err) => {
+      console.error('[connected-accounts-cache] refresh failed:', err);
+    });
+  };
+
+  window.__connectedAccountsRefresh = refresh;
   window.addEventListener('providerStateChanged', refresh);
   window.addEventListener('providerConnectionAction', refresh);
+
+  window.__connectedAccountsCleanup = () => {
+    window.removeEventListener('providerStateChanged', refresh);
+    window.removeEventListener('providerConnectionAction', refresh);
+  };
 }

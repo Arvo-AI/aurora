@@ -80,6 +80,7 @@ def get_connected_accounts(user_id, target_user_id):
             token_data = get_token_data(token_owner_id, provider)
             if not token_data:
                 return None
+            token_data = dict(token_data)
             token_data["_user_id"] = token_owner_id
             if not _validate_provider_connection(provider, token_data):
                 return None
@@ -102,8 +103,9 @@ def get_connected_accounts(user_id, target_user_id):
                 account_info["displayText"] = subscription_name or subscription_id or provider.capitalize()
             return (provider, account_info)
 
-        with ThreadPoolExecutor(max_workers=8) as pool:
-            futures = {pool.submit(_resolve_row, row): row[0] for row in rows}
+        executor = ThreadPoolExecutor(max_workers=8)
+        try:
+            futures = {executor.submit(_resolve_row, row): row[0] for row in rows}
             for future in as_completed(futures):
                 try:
                     result = future.result(timeout=12)
@@ -112,6 +114,8 @@ def get_connected_accounts(user_id, target_user_id):
                         accounts[provider] = account_info
                 except Exception as exc:
                     logging.warning("connected-accounts check for %s raised: %s", futures[future], exc)
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
         
         # ------------------------------
         # 2) Role-based connections (user_connections – AWS today)
