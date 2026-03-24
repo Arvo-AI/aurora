@@ -120,6 +120,7 @@ def _ensure_collection(client: weaviate.WeaviateClient):
             properties=[
                 # Metadata - stored but not vectorized
                 Property(name="user_id", data_type=DataType.TEXT, skip_vectorization=True),
+                Property(name="org_id", data_type=DataType.TEXT, skip_vectorization=True),
                 Property(name="incident_id", data_type=DataType.TEXT, skip_vectorization=True),
                 Property(name="feedback_id", data_type=DataType.TEXT, skip_vectorization=True),
                 # Core matching signals - vectorized
@@ -155,6 +156,7 @@ def store_good_rca(
     aurora_summary: str,
     thoughts: List[Dict[str, Any]],
     citations: List[Dict[str, Any]],
+    org_id: str = None,
 ) -> bool:
     """
     Store a positively-rated RCA in Weaviate for future reference.
@@ -198,6 +200,7 @@ Investigation:
 
         properties = {
             "user_id": user_id,
+            "org_id": org_id or "",
             "incident_id": incident_id,
             "feedback_id": feedback_id,
             "alert_title": alert_title,
@@ -230,6 +233,7 @@ def search_similar_good_rcas(
     source_type: str,
     limit: int = 2,
     min_score: float = 0.7,
+    org_id: str = None,
 ) -> List[Dict[str, Any]]:
     """
     Search for similar past incidents with positive feedback.
@@ -251,14 +255,17 @@ def search_similar_good_rcas(
         # Build search query combining alert details
         search_query = f"Alert: {alert_title} Service: {alert_service} Source: {source_type}"
 
-        # Build user filter
-        user_filter = Filter.by_property("user_id").equal(user_id)
+        # Build org filter — search across the entire org's learnings
+        if org_id:
+            search_filter = Filter.by_property("org_id").equal(org_id)
+        else:
+            search_filter = Filter.by_property("user_id").equal(user_id)
 
         # Perform vector search
         response = collection.query.near_text(
             query=search_query,
             limit=limit,
-            filters=user_filter,
+            filters=search_filter,
             return_metadata=MetadataQuery(distance=True),
         )
 

@@ -1764,6 +1764,65 @@ def initialize_tables():
                     logging.warning(f"Error adding org_id to {tbl}: {e}")
                     cursor.execute(f"ROLLBACK TO SAVEPOINT sp_org_id_{tbl}")
 
+            # Migration: Add org_id to incident child tables (linked via incident_id, not user_id)
+            # Uses the same discovery query defined in org_backfill.py — single source of truth.
+            from utils.db.org_backfill import _INCIDENT_CHILD_TABLES_SQL
+            try:
+                cursor.execute("SAVEPOINT sp_discover_child")
+                cursor.execute(_INCIDENT_CHILD_TABLES_SQL)
+                incident_child_tables = [row[0] for row in cursor.fetchall()]
+                cursor.execute("RELEASE SAVEPOINT sp_discover_child")
+            except Exception as e:
+                logging.warning(f"Error discovering incident child tables: {e}")
+                try:
+                    cursor.execute("ROLLBACK TO SAVEPOINT sp_discover_child")
+                except Exception:
+                    pass
+                incident_child_tables = ["incident_thoughts", "incident_citations", "incident_suggestions"]
+            for tbl in incident_child_tables:
+                try:
+                    cursor.execute(f"SAVEPOINT sp_org_id_{tbl}")
+                    cursor.execute(
+                        f"ALTER TABLE {tbl} ADD COLUMN IF NOT EXISTS org_id VARCHAR(255);"
+                    )
+                    cursor.execute(f"RELEASE SAVEPOINT sp_org_id_{tbl}")
+                except Exception as e:
+                    logging.warning(f"Error adding org_id to {tbl}: {e}")
+                    cursor.execute(f"ROLLBACK TO SAVEPOINT sp_org_id_{tbl}")
+
+            # DB triggers: auto-inherit org_id from parent incident on INSERT.
+            # This means no INSERT statement in the codebase ever needs to set
+            # org_id on these tables — the trigger handles it unconditionally.
+            for tbl in incident_child_tables:
+                fn_name = f"fn_{tbl}_inherit_org_id"
+                trg_name = f"trg_{tbl}_inherit_org_id"
+                try:
+                    cursor.execute(f"SAVEPOINT sp_trg_{tbl}")
+                    cursor.execute(f"""
+                        CREATE OR REPLACE FUNCTION {fn_name}()
+                        RETURNS TRIGGER AS $trg$
+                        BEGIN
+                            NEW.org_id := (
+                                SELECT org_id FROM incidents WHERE id = NEW.incident_id
+                            );
+                            RETURN NEW;
+                        END;
+                        $trg$ LANGUAGE plpgsql;
+
+                        DROP TRIGGER IF EXISTS {trg_name} ON {tbl};
+                        CREATE TRIGGER {trg_name}
+                            BEFORE INSERT ON {tbl}
+                            FOR EACH ROW
+                            EXECUTE FUNCTION {fn_name}();
+                    """)
+                    cursor.execute(f"RELEASE SAVEPOINT sp_trg_{tbl}")
+                except Exception as e:
+                    logging.warning(f"Error creating org_id trigger for {tbl}: {e}")
+                    try:
+                        cursor.execute(f"ROLLBACK TO SAVEPOINT sp_trg_{tbl}")
+                    except Exception:
+                        pass
+
             # Add FK from users.org_id -> organizations.id (if not exists)
             try:
                 cursor.execute("SAVEPOINT sp_org_fk")
@@ -1785,38 +1844,15 @@ def initialize_tables():
                 logging.warning(f"Error adding users.org_id FK: {e}")
                 cursor.execute("ROLLBACK TO SAVEPOINT sp_org_fk")
 
-            # Migration: Backfill org_id on data tables for users that HAVE an org.
-            # Org-less users are handled at login time — middleware redirects them
-            # to /setup-org where they create their own org and become admin.
+            # Backfill org_id on all data tables — single source of truth
+            # in utils/db/org_backfill.py.  Covers user-scoped tables (dynamic
+            # discovery) AND incident child tables (via incident_id FK).
             try:
-                cursor.execute("SELECT COUNT(*) FROM users WHERE org_id IS NOT NULL;")
-                users_with_org = cursor.fetchone()[0]
-                if users_with_org > 0:
-                    for tbl in org_id_tables:
-                        if tbl == "users":
-                            continue
-                        try:
-                            cursor.execute(f"""
-                                UPDATE {tbl} t SET org_id = u.org_id
-                                FROM users u WHERE t.user_id = u.id
-                                AND t.org_id IS NULL;
-                            """)
-                            rows_backfilled = cursor.rowcount
-                            if rows_backfilled > 0:
-                                logging.info("Backfilled %d rows in %s with org_id", rows_backfilled, tbl)
-                        except Exception as e:
-                            logging.warning(f"Error backfilling org_id for {tbl}: {e}")
-                    conn.commit()
-
-                cursor.execute("SELECT COUNT(*) FROM users WHERE org_id IS NULL;")
-                orphan_count = cursor.fetchone()[0]
-                if orphan_count > 0:
-                    logging.info(
-                        "%d user(s) without an org — they will be prompted to "
-                        "create one at next login via /setup-org.", orphan_count
-                    )
+                from utils.db.org_backfill import backfill_all_users_at_boot
+                backfill_all_users_at_boot(cursor)
+                conn.commit()
             except Exception as e:
-                logging.warning(f"Error in org_id backfill migration: {e}")
+                logging.warning(f"Error in org_id boot backfill: {e}")
                 conn.rollback()
 
             # Repair: ensure every user with an org has the correct Casbin role.

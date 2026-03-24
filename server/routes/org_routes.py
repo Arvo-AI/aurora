@@ -189,10 +189,15 @@ def add_member(user_id):
                     (org_id, role, target_user_id),
                 )
                 row = cursor.fetchone()
-                conn.commit()
 
                 if not row:
+                    conn.rollback()
                     return jsonify({"error": "User not found"}), 404
+
+                from utils.db.org_backfill import backfill_user_org_data
+                backfill_user_org_data(cursor, target_user_id, org_id)
+
+                conn.commit()
 
                 from utils.auth.enforcer import assign_role_to_user
                 assign_role_to_user(target_user_id, role, org_id)

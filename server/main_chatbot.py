@@ -283,7 +283,8 @@ async def process_workflow_async(wf, state, websocket, user_id, incident_id=None
                             with db_pool.get_admin_connection() as conn:
                                 with conn.cursor() as cursor:
                                     cursor.execute(
-                                        "INSERT INTO incident_thoughts (incident_id, timestamp, content, thought_type) VALUES (%s, %s, %s, %s)",
+                                        "INSERT INTO incident_thoughts (incident_id, timestamp, content, thought_type) "
+                                        "VALUES (%s, %s, %s, %s)",
                                         (incident_id, datetime.now(), cleaned_text, "analysis")
                                     )
                                 conn.commit()

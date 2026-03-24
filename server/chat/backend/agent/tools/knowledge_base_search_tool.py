@@ -64,8 +64,9 @@ def knowledge_base_search(
             user_id=user_id,
             query=query.strip(),
             limit=limit,
-            alpha=0.5,  # Balanced hybrid search
-            min_score=0.0,  # Return all results, let agent decide relevance
+            alpha=0.5,
+            min_score=0.0,
+            org_id=kwargs.get("org_id"),
         )
 
         if not results:

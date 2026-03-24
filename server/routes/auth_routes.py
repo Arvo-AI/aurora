@@ -223,6 +223,9 @@ def setup_org():
                     (org_id, user_id)
                 )
 
+                from utils.db.org_backfill import backfill_user_org_data
+                backfill_user_org_data(cursor, user_id, org_id)
+
                 conn.commit()
 
                 try:

@@ -40,6 +40,7 @@ def inject_aurora_learn_context(
     alert_title: str,
     alert_service: str,
     source_type: str,
+    org_id: Optional[str] = None,
 ) -> None:
     """
     Append Aurora Learn context to prompt_parts if similar RCAs are found.
@@ -62,6 +63,7 @@ def inject_aurora_learn_context(
         alert_title=alert_title,
         alert_service=alert_service,
         source_type=source_type,
+        org_id=org_id,
     )
     if similar_context:
         prompt_parts.append(similar_context)
@@ -72,6 +74,7 @@ def _get_similar_good_rcas_context(
     alert_title: str,
     alert_service: str,
     source_type: str,
+    org_id: str = None,
 ) -> str:
     """
     Check if Aurora Learn is enabled and search for similar good RCAs.
@@ -97,6 +100,7 @@ def _get_similar_good_rcas_context(
             source_type=source_type,
             limit=2,
             min_score=0.7,
+            org_id=org_id,
         )
 
         if not matches:
