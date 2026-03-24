@@ -1765,23 +1765,13 @@ def initialize_tables():
                 logging.warning(f"Error adding users.org_id FK: {e}")
                 cursor.execute("ROLLBACK TO SAVEPOINT sp_org_fk")
 
-            # Migration: Create default org for existing users that have no org
+            # Migration: Backfill org_id on data tables for users that HAVE an org.
+            # Org-less users are handled at login time — middleware redirects them
+            # to /setup-org where they create their own org and become admin.
             try:
-                cursor.execute("SELECT COUNT(*) FROM users WHERE org_id IS NULL;")
-                orphan_count = cursor.fetchone()[0]
-                if orphan_count > 0:
-                    cursor.execute("""
-                        INSERT INTO organizations (id, name, slug, created_by)
-                        SELECT gen_random_uuid()::TEXT, 'Default Organization', 'default',
-                               (SELECT id FROM users ORDER BY created_at ASC LIMIT 1)
-                        WHERE NOT EXISTS (SELECT 1 FROM organizations WHERE slug = 'default');
-                    """)
-                    cursor.execute("""
-                        UPDATE users SET org_id = (
-                            SELECT id FROM organizations WHERE slug = 'default'
-                        ) WHERE org_id IS NULL;
-                    """)
-                    # Backfill org_id on all data tables from the user's org
+                cursor.execute("SELECT COUNT(*) FROM users WHERE org_id IS NOT NULL;")
+                users_with_org = cursor.fetchone()[0]
+                if users_with_org > 0:
                     for tbl in org_id_tables:
                         if tbl == "users":
                             continue
@@ -1792,25 +1782,21 @@ def initialize_tables():
                                 AND t.org_id IS NULL;
                             """)
                             rows_backfilled = cursor.rowcount
-                            cursor.execute(f"""
-                                SELECT COUNT(*) FROM {tbl} WHERE org_id IS NULL;
-                            """)
-                            remaining = cursor.fetchone()[0]
-                            if remaining > 0:
-                                logging.warning(
-                                    "Backfill: %d rows in %s still have NULL org_id "
-                                    "(user_id may not match users.id)", remaining, tbl
-                                )
-                            elif rows_backfilled > 0:
+                            if rows_backfilled > 0:
                                 logging.info("Backfilled %d rows in %s with org_id", rows_backfilled, tbl)
                         except Exception as e:
                             logging.warning(f"Error backfilling org_id for {tbl}: {e}")
-                    logging.info(
-                        f"Migrated {orphan_count} users into default organization."
-                    )
                     conn.commit()
+
+                cursor.execute("SELECT COUNT(*) FROM users WHERE org_id IS NULL;")
+                orphan_count = cursor.fetchone()[0]
+                if orphan_count > 0:
+                    logging.info(
+                        "%d user(s) without an org — they will be prompted to "
+                        "create one at next login via /setup-org.", orphan_count
+                    )
             except Exception as e:
-                logging.warning(f"Error creating default org migration: {e}")
+                logging.warning(f"Error in org_id backfill migration: {e}")
                 conn.rollback()
 
             # Repair: ensure every user with an org has a Casbin role assignment.
