@@ -11,6 +11,7 @@ import { useToast } from "@/hooks/use-toast";
 import AppLayout from "@/app/components/AppLayout";
 import GlobalProjectSelectionMonitor from "@/components/cloud-provider/GlobalProjectSelectionMonitor";
 import { WebViewWarning } from "@/components/WebViewWarning";
+import { useGcpSetupPolling } from "@/hooks/use-gcp-setup-polling";
 
 type WorkspaceConfig = {
   type: "iac"
@@ -136,7 +137,8 @@ export default function ClientShell({ children }: ClientShellProps) {
         'gcpSetupTaskId',
         'gcpPollingActive',
         'gcpSetupInProgress_timestamp',
-        'gcpPollingIntervalId'
+        'gcpPollingIntervalId',
+        'gcpSetupError'
       ];
       
       gcpKeys.forEach(key => localStorage.removeItem(key));
@@ -177,6 +179,8 @@ export default function ClientShell({ children }: ClientShellProps) {
       localStorage.setItem(GCP_AUTH_VERSION_KEY, GCP_AUTH_VERSION);
     }
   }, [toast]);
+
+  useGcpSetupPolling(user?.id ?? null);
 
   // Save sidebar state to localStorage (moved from layout.tsx)
   useEffect(() => {

@@ -2,7 +2,6 @@
 export { default as AuthCard } from './ui/AuthCard';
 export { default as ProviderSelector } from './ui/providerSelector';
 export { default as GcpProjectSelector } from './projects/GcpProjectSelector';
-export { ProviderPolling } from './core/ProviderPolling';
 
 // Export types
 export type { Provider, Project, ProviderTokens, ProviderPreferences } from './types';
