@@ -64,7 +64,7 @@ function PermissionStatus({ permissions }: { permissions: string[] }) {
   return (
     <div className="space-y-3">
       <div className="flex items-center gap-2">
-        {hasAllWrite ? (
+        {hasAllWrite && missingReadEntries.length === 0 ? (
           <>
             <CheckCircle2 className="h-4 w-4 text-green-500" />
             <span className="text-sm font-medium">Full access</span>

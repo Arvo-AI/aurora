@@ -78,9 +78,11 @@ def cloudflare_connect(user_id):
             account_id=account_id,
         )
 
-        email = client.get_current_user().get("email")
-
         token_type = "account" if api_token.startswith("cfat_") else "user"
+
+        email = None
+        if token_type == "user":
+            email = client.get_current_user().get("email")
 
         token_data = {
             "api_token": api_token,
