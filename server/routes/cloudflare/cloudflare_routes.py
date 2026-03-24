@@ -42,6 +42,8 @@ def cloudflare_connect(user_id):
     """
     try:
         data = request.get_json() or {}
+        if not isinstance(data, dict):
+            return jsonify({"error": "Invalid request body"}), 400
         api_token = data.get('apiToken') or data.get('api_token')
 
         if not api_token:
@@ -179,7 +181,7 @@ def cloudflare_zones_post(user_id):
             }), 401
 
         data = request.get_json(silent=True)
-        if data is None:
+        if not isinstance(data, dict):
             return jsonify({"error": "Invalid or missing JSON body"}), 400
 
         zones = data.get("zones", [])
@@ -270,8 +272,8 @@ def cloudflare_disconnect(user_id):
         from utils.auth.stateless_auth import store_user_preference
         try:
             store_user_preference(user_id, 'cloudflare_zones', None)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Failed to clear zone preferences for user {user_id}: {e}")
 
         logger.info(f"Cloudflare disconnected for user {user_id}")
 

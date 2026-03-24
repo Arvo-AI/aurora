@@ -11,6 +11,7 @@ def handle_options_request():
     """Handle CORS preflight OPTIONS requests for all Cloudflare routes."""
     if request.method == 'OPTIONS':
         return create_cors_response()
+    return None
 
 
 from . import cloudflare_routes  # noqa: E402, F401

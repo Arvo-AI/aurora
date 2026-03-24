@@ -7,7 +7,6 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Loader2, ExternalLink, AlertCircle, CheckCircle2, Globe, Shield, LogOut, ChevronDown, ChevronUp } from "lucide-react";
-import { useRouter } from "next/navigation";
 import { useToast } from "@/hooks/use-toast";
 import { providerPreferencesService } from '@/lib/services/providerPreferences';
 import { getEnv } from '@/lib/env';
@@ -150,7 +149,6 @@ export default function CloudflareAuthPage() {
   const [apiToken, setApiToken] = useState("");
   const [status, setStatus] = useState<CloudflareStatus | null>(null);
   const [zones, setZones] = useState<CloudflareZone[]>([]);
-  const router = useRouter();
   const { toast } = useToast();
 
   const getUserId = async (): Promise<string | null> => {
