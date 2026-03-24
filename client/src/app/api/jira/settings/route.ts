@@ -2,6 +2,9 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getAuthenticatedUser } from '@/lib/auth-helper';
 
 const API_BASE_URL = process.env.BACKEND_URL;
+if (!API_BASE_URL) {
+  throw new Error('BACKEND_URL environment variable is not configured');
+}
 
 export async function GET() {
   try {
@@ -11,7 +14,6 @@ export async function GET() {
     const response = await fetch(`${API_BASE_URL}/jira/settings`, {
       method: 'GET',
       headers: { ...authHeaders },
-      credentials: 'include',
     });
     if (!response.ok) {
       const text = await response.text();
@@ -34,7 +36,6 @@ export async function PUT(request: NextRequest) {
       method: 'PUT',
       headers: { ...authHeaders, 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
-      credentials: 'include',
     });
     if (!response.ok) {
       const text = await response.text();

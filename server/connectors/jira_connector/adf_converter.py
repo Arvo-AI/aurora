@@ -2,12 +2,43 @@
 
 Jira Cloud REST API v3 requires ADF for issue descriptions and comments.
 This module converts basic markdown into the ADF JSON structure.
+Also provides ``adf_to_plain_text`` for Data Center REST v2 which only
+accepts plain strings.
 """
 
 from __future__ import annotations
 
 import re
 from typing import Any, Dict, List
+
+
+def adf_to_plain_text(adf: Dict[str, Any]) -> str:
+    """Recursively extract plain text from an ADF document.
+
+    Used when sending descriptions/comments to Jira Data Center (REST v2)
+    which does not support ADF.
+    """
+    parts: List[str] = []
+
+    def _walk(node: Any) -> None:
+        if isinstance(node, str):
+            parts.append(node)
+            return
+        if not isinstance(node, dict):
+            return
+        if node.get("type") == "text":
+            parts.append(node.get("text", ""))
+            return
+        if node.get("type") == "hardBreak":
+            parts.append("\n")
+            return
+        for child in node.get("content") or []:
+            _walk(child)
+        if node.get("type") in ("paragraph", "heading", "bulletList", "orderedList", "listItem", "codeBlock"):
+            parts.append("\n")
+
+    _walk(adf)
+    return "".join(parts).strip()
 
 
 def text_to_adf(plain_text: str) -> Dict[str, Any]:

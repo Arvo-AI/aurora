@@ -103,10 +103,10 @@ class JiraClient:
     # Search
     # ------------------------------------------------------------------
 
-    _DEFAULT_SEARCH_FIELDS = [
+    _DEFAULT_SEARCH_FIELDS: tuple[str, ...] = (
         "summary", "status", "assignee", "priority",
         "created", "updated", "labels", "issuetype", "project",
-    ]
+    )
 
     def search_issues(
         self,
@@ -175,14 +175,23 @@ class JiraClient:
         parent_key: Optional[str] = None,
         extra_fields: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        """Create a new issue. *description_adf* must be in ADF format for Cloud."""
+        """Create a new issue.
+
+        *description_adf* is in ADF format for Cloud (v3).  When ``auth_type``
+        is ``"pat"`` (Data Center, v2), it is automatically converted to plain
+        text since DC does not support ADF.
+        """
         fields: Dict[str, Any] = {
             "project": {"key": project_key},
             "summary": summary,
             "issuetype": {"name": issue_type},
         }
         if description_adf:
-            fields["description"] = description_adf
+            if self.auth_type == "pat":
+                from connectors.jira_connector.adf_converter import adf_to_plain_text
+                fields["description"] = adf_to_plain_text(description_adf)
+            else:
+                fields["description"] = description_adf
         if labels:
             fields["labels"] = labels
         if parent_key:
@@ -231,7 +240,18 @@ class JiraClient:
         issue_key: str,
         body_adf: Dict[str, Any],
     ) -> Dict[str, Any]:
-        """Add a comment to an issue. *body_adf* must be in ADF format for Cloud."""
+        """Add a comment to an issue.
+
+        *body_adf* is in ADF format for Cloud (v3).  When ``auth_type`` is
+        ``"pat"`` (Data Center, v2), it is converted to plain text.
+        """
+        if self.auth_type == "pat":
+            from connectors.jira_connector.adf_converter import adf_to_plain_text
+            return self._request(
+                "POST",
+                f"/issue/{issue_key}/comment",
+                json_body={"body": adf_to_plain_text(body_adf)},
+            )
         return self._request(
             "POST",
             f"/issue/{issue_key}/comment",

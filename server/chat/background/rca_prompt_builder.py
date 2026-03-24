@@ -417,7 +417,7 @@ def _has_jira_connected(user_id: str) -> bool:
             return False
         from utils.auth.token_management import get_token_data
         creds = get_token_data(user_id, "jira")
-        return bool(creds and (creds.get("access_token") or creds.get("api_token")))
+        return bool(creds and (creds.get("access_token") or creds.get("pat_token")))
     except Exception as e:
         logger.warning(f"Error checking Jira context: {e}")
         return False
@@ -650,13 +650,14 @@ def build_rca_prompt(
 
         if has_jira:
             service_name = alert_details.get('labels', {}).get('service', '') or title
+            escaped_service = service_name.replace('\\', '\\\\').replace('"', '\\"')
             prompt_parts.extend([
                 "",
                 "### Jira — Recent Development Context (SEARCH FIRST):",
                 "Jira is connected. Your FIRST tool calls MUST be jira_search_issues.",
                 "",
                 "**Step 1 — Find related recent work (DO THIS IMMEDIATELY):**",
-                f"- `jira_search_issues(jql='text ~ \"{service_name}\" AND updated >= -7d ORDER BY updated DESC')` — Recent tickets for this service",
+                f"- `jira_search_issues(jql='text ~ \"{escaped_service}\" AND updated >= -7d ORDER BY updated DESC')` — Recent tickets for this service",
                 "- `jira_search_issues(jql='type in (Bug, Incident) AND status != Done AND updated >= -14d ORDER BY updated DESC')` — Open bugs/incidents",
                 "- `jira_search_issues(jql='type in (Story, Task) AND status = Done AND updated >= -3d ORDER BY updated DESC')` — Recently completed work (likely deployed)",
                 "",
@@ -825,19 +826,25 @@ def build_rca_prompt(
             "",
         ])
     
+    depth_steps = []
+    if has_jira or has_confluence:
+        depth_steps.append("**Search Jira/Confluence first** for recent changes, open bugs, and runbooks")
+    depth_steps.extend([
+        "Start broad - understand the overall system state",
+        "Identify the affected component(s)",
+        "Drill down into specifics - logs, metrics, configurations",
+        "Check related/dependent resources",
+        "Look for recent changes that correlate with the issue",
+        "Compare with healthy resources of the same type",
+        "Check resource quotas, limits, and constraints",
+        "Examine network connectivity and security rules",
+        "Verify IAM permissions and service accounts",
+        "Review historical patterns if available",
+    ])
+    prompt_parts.append("### INVESTIGATION DEPTH:")
+    for i, step in enumerate(depth_steps, 1):
+        prompt_parts.append(f"{i}. {step}")
     prompt_parts.extend([
-        "### INVESTIGATION DEPTH:",
-        "1. **Search Jira/Confluence first** for recent changes, open bugs, and runbooks",
-        "2. Start broad - understand the overall system state",
-        "3. Identify the affected component(s)",
-        "4. Drill down into specifics - logs, metrics, configurations",
-        "5. Check related/dependent resources",
-        "6. Look for recent changes that correlate with the issue",
-        "7. Compare with healthy resources of the same type",
-        "8. Check resource quotas, limits, and constraints",
-        "9. Examine network connectivity and security rules",
-        "10. Verify IAM permissions and service accounts",
-        "11. Review historical patterns if available",
         "",
         "### ERROR RESILIENCE:",
         "- If cloud monitoring/metrics commands fail -> use kubectl directly",

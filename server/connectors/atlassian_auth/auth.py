@@ -105,9 +105,8 @@ def exchange_code_for_token(code: str, redirect_uri: Optional[str] = None) -> Di
     response = requests.post(ATLASSIAN_TOKEN_URL, json=payload, timeout=30)
     if not response.ok:
         logger.error(
-            "Atlassian OAuth token exchange failed (%s): %s",
+            "Atlassian OAuth token exchange failed (%s)",
             response.status_code,
-            response.text,
         )
     response.raise_for_status()
     token_data = response.json()
@@ -138,9 +137,8 @@ def refresh_access_token(refresh_token: str) -> Dict[str, Any]:
     response = requests.post(ATLASSIAN_TOKEN_URL, json=payload, timeout=30)
     if not response.ok:
         logger.error(
-            "Atlassian OAuth refresh failed (%s): %s",
+            "Atlassian OAuth refresh failed (%s)",
             response.status_code,
-            response.text,
         )
     response.raise_for_status()
     token_data = response.json()
@@ -166,9 +164,14 @@ def refresh_access_token(refresh_token: str) -> Dict[str, Any]:
 def fetch_accessible_resources(access_token: str) -> List[Dict[str, Any]]:
     """Fetch Atlassian cloud sites accessible by the OAuth token."""
     headers = {"Authorization": f"Bearer {access_token}", "Accept": "application/json"}
-    response = requests.get(ATLASSIAN_RESOURCES_URL, headers=headers, timeout=30)
-    response.raise_for_status()
-    return response.json()
+    try:
+        response = requests.get(ATLASSIAN_RESOURCES_URL, headers=headers, timeout=30)
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.RequestException as exc:
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+        logger.error("Atlassian accessible-resources request failed (status=%s): %s", status, type(exc).__name__)
+        raise
 
 
 def select_resource_for_product(

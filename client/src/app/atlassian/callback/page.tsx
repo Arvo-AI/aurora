@@ -1,18 +1,25 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Loader2, CheckCircle, XCircle } from "lucide-react";
 import { atlassianService } from "@/lib/services/atlassian";
 
 type Status = "loading" | "success" | "error";
 
-export default function AtlassianCallbackPage() {
+function AtlassianCallbackInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [status, setStatus] = useState<Status>("loading");
   const [message, setMessage] = useState("Processing Atlassian OAuth callback...");
   const exchangedRef = useRef(false);
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    };
+  }, []);
 
   useEffect(() => {
     if (exchangedRef.current) return;
@@ -73,7 +80,7 @@ export default function AtlassianCallbackPage() {
         setMessage(`${parts.join(" & ")} connected!`);
 
         const returnTo = jiraConnected && !confluenceConnected ? "/jira/connect" : "/confluence/connect";
-        setTimeout(() => router.replace(returnTo), 1000);
+        timeoutRef.current = setTimeout(() => router.replace(returnTo), 1000);
       } catch (err) {
         try {
           const statusResult = await atlassianService.getStatus();
@@ -87,7 +94,7 @@ export default function AtlassianCallbackPage() {
             setStatus("success");
             setMessage("Connected successfully!");
             const returnTo = statusResult?.jira?.connected && !statusResult?.confluence?.connected ? "/jira/connect" : "/confluence/connect";
-            setTimeout(() => router.replace(returnTo), 500);
+            timeoutRef.current = setTimeout(() => router.replace(returnTo), 500);
             return;
           }
         } catch (statusErr) {
@@ -132,5 +139,19 @@ export default function AtlassianCallbackPage() {
         )}
       </div>
     </div>
+  );
+}
+
+export default function AtlassianCallbackPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="flex items-center justify-center min-h-screen bg-background">
+          <Loader2 className="h-12 w-12 animate-spin text-[#2684FF]" />
+        </div>
+      }
+    >
+      <AtlassianCallbackInner />
+    </Suspense>
   );
 }

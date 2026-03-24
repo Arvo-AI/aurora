@@ -25,7 +25,7 @@ def _log_store_ok(provider: str, elapsed_ms: float) -> None:
 
 
 def _log_store_fail(provider: str, elapsed_ms: float, exc: Exception) -> None:
-    logger.error("[STORE-TOKENS] Failed to store credentials for provider %s after %.2fms: %s", provider, elapsed_ms, type(exc).__name__)
+    logger.error("[STORE-TOKENS] Failed to store credentials for provider %s after %.2fms: %s: %s", provider, elapsed_ms, type(exc).__name__, exc)
 
 
 def store_tokens_in_db(user_id: str, token_data: Dict, provider: str,
@@ -49,7 +49,7 @@ def store_tokens_in_db(user_id: str, token_data: Dict, provider: str,
             from utils.auth.stateless_auth import resolve_org_id
             org_id = resolve_org_id(user_id)
         except Exception as e:
-            logging.debug("Could not resolve org_id: %s", e)
+            logger.debug("Could not resolve org_id: %s", type(e).__name__)
 
     if not org_id:
         _log_no_org(provider)
@@ -71,10 +71,10 @@ def store_tokens_in_db(user_id: str, token_data: Dict, provider: str,
         try:
             secret_ref = secret_manager.store_secret(secret_name, token_json)
         except Exception as secret_error:
-            logger.error("[STORE-TOKENS] Failed to store credentials in Vault: %s", type(secret_error).__name__)
+            logger.error("[STORE-TOKENS] Failed to store credentials in Vault: %s: %s", type(secret_error).__name__, secret_error)
             if "not available" in str(secret_error):
                 logger.error("[STORE-TOKENS] Please ensure VAULT_ADDR and VAULT_TOKEN environment variables are configured")
-            raise
+            raise secret_error
         
         with db_pool.get_admin_connection() as conn:
             cursor = conn.cursor()

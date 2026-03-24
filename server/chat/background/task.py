@@ -223,7 +223,7 @@ def _get_connected_integrations(user_id: str) -> Dict[str, bool]:
             from utils.auth.token_management import get_token_data as _get_jira_creds
             jira_creds = _get_jira_creds(user_id, "jira")
             integrations['jira'] = bool(
-                jira_creds and (jira_creds.get("access_token") or jira_creds.get("api_token"))
+                jira_creds and (jira_creds.get("access_token") or jira_creds.get("pat_token"))
             )
             if integrations['jira']:
                 from utils.auth.stateless_auth import get_user_preference
@@ -591,9 +591,15 @@ def _session_has_successful_jira_action(session_id: str) -> bool:
                 msgs = row[0] if isinstance(row[0], list) else json.loads(row[0])
                 for msg in msgs:
                     for tc in (msg.get('toolCalls') or []):
-                        if (tc.get('tool_name') or '').lower() in _JIRA_TOOL_NAMES \
-                                and '"success"' in str(tc.get('output') or ''):
-                            return True
+                        if (tc.get('tool_name') or '').lower() in _JIRA_TOOL_NAMES:
+                            output = tc.get('output') or ''
+                            try:
+                                parsed = json.loads(output) if isinstance(output, str) else output
+                                if isinstance(parsed, dict) and parsed.get('status') == 'success':
+                                    return True
+                            except (json.JSONDecodeError, TypeError, ValueError):
+                                if '"success"' in str(output):
+                                    return True
     except Exception as exc:
         logger.warning(f"[JiraFollowup] Failed to check existing actions: {exc}")
     return False
@@ -717,7 +723,7 @@ async def _run_jira_action(
     from chat.backend.agent.llm import ModelConfig
     from main_chatbot import process_workflow_async
 
-    jira_mode = rca_context.get('integrations', {}).get('jira_mode', 'full')
+    jira_mode = rca_context.get('integrations', {}).get('jira_mode', 'comment_only')
     followup_text = _build_jira_followup_prompt(jira_mode)
 
     investigation_messages = _snapshot_session_messages(session_id)

@@ -404,7 +404,7 @@ For self-hosted Confluence or Jira instances:
 2. Select the products you want and enter per-product:
    - **Base URL**: e.g. `https://confluence.yourcompany.com` or `https://jira.yourcompany.com`
    - **Personal Access Token**: The respective PAT
-4. Click **Connect with PAT**
+3. Click **Connect with PAT**
 
 #### URL Limitations
 

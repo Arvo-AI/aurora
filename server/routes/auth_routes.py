@@ -143,7 +143,7 @@ def register():
         return jsonify({"error": "Registration failed"}), 500
 
 
-@auth_bp.route('/setup-org', methods=['POST', 'OPTIONS'])
+@auth_bp.route('/setup-org', methods=['POST'])
 @require_auth_only
 def setup_org(user_id):
     """Create an organization for an authenticated user who doesn't have one.
@@ -287,7 +287,7 @@ def login():
         return jsonify({"error": "Login failed"}), 500
 
 
-@auth_bp.route('/change-password', methods=['POST', 'OPTIONS'])
+@auth_bp.route('/change-password', methods=['POST'])
 @require_auth_only
 def change_password(user_id):
     """Change user password (requires authentication)."""

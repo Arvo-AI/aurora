@@ -3,7 +3,7 @@ from langgraph.graph import StateGraph
 from langgraph.graph import START, END
 from chat.backend.agent.utils.safe_memory_saver import SafeMemorySaver
 from langchain_core.runnables.config import RunnableConfig
-from langchain_core.messages import AIMessageChunk, AIMessage
+from langchain_core.messages import AIMessageChunk, AIMessage, SystemMessage
 from chat.backend.agent.agent import Agent
 from chat.backend.agent.utils.state import State
 import logging
@@ -880,10 +880,16 @@ class Workflow:
                 )
                 compressed = self._compress_rca_context([], rca_info) if rca_info else None
                 if compressed:
+                    # Convert any AIMessage to SystemMessage so it doesn't
+                    # appear before the user's HumanMessage in the sequence.
+                    sys_compressed = [
+                        SystemMessage(content=m.content) if isinstance(m, AIMessage) else m
+                        for m in compressed
+                    ]
                     combined_messages = []
-                    combined_messages.extend(compressed)
                     combined_messages.extend(input_state.messages)
-                    input_state.messages = combined_messages
+                    # Prepend system context before user messages
+                    input_state.messages = sys_compressed + combined_messages
                     logger.info(
                         f"[RCA-Context] Injected RCA context into empty session {input_state.session_id}: "
                         f"{len(compressed)} context msgs + {len(input_state.messages) - len(compressed)} new"

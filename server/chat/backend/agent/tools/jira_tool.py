@@ -239,7 +239,7 @@ def jira_add_comment(
 
     try:
         client = _get_client(user_id)
-        body_adf = text_to_adf(comment)
+        body_adf = markdown_to_adf(comment)
         result = client.add_comment(issue_key, body_adf)
     except ValueError:
         raise

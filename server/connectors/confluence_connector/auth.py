@@ -18,9 +18,9 @@ from connectors.atlassian_auth.auth import (
 )
 
 __all__ = [
-    "get_auth_url",
     "exchange_code_for_token",
     "fetch_accessible_resources",
+    "get_auth_url",
     "refresh_access_token",
     "select_confluence_resource",
 ]

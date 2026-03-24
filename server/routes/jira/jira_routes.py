@@ -41,6 +41,32 @@ def _get_jira_client(user_id: str) -> tuple[Optional[JiraClient], Optional[Dict[
     return client, creds, None
 
 
+def _with_refresh(user_id, creds, client, operation):
+    """Run *operation(client)* and retry once with refreshed credentials on 401."""
+    import requests as _requests
+    try:
+        return operation(client)
+    except _requests.exceptions.HTTPError as exc:
+        if getattr(getattr(exc, "response", None), "status_code", None) != 401:
+            raise
+    except Exception:
+        raise
+
+    refreshed = _refresh_jira_credentials(user_id, creds)
+    if not refreshed:
+        raise ValueError("Jira token refresh failed — user should reconnect.")
+    new_token = refreshed.get("access_token")
+    if not new_token:
+        raise ValueError("Jira token refresh returned no access_token.")
+    new_client = JiraClient(
+        creds.get("base_url", ""),
+        new_token,
+        auth_type=(creds.get("auth_type") or "oauth").lower(),
+        cloud_id=creds.get("cloud_id"),
+    )
+    return operation(new_client)
+
+
 def _refresh_jira_credentials(user_id: str, creds: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Attempt to refresh OAuth Jira credentials."""
     refresh_token = creds.get("refresh_token")
@@ -83,10 +109,13 @@ def search(user_id):
 
     data = request.get_json(force=True, silent=True) or {}
     jql = data.get("jql", "")
-    max_results = min(int(data.get("maxResults", 20)), 100)
+    try:
+        max_results = min(int(data.get("maxResults", 20)), 100)
+    except (TypeError, ValueError):
+        return jsonify({"error": "maxResults must be a number"}), 400
 
     try:
-        result = client.search_issues(jql, max_results=max_results)
+        result = _with_refresh(user_id, creds, client, lambda c: c.search_issues(jql, max_results=max_results))
         return jsonify(result)
     except Exception as exc:
         logger.error("[JIRA] Search failed for user %s: %s", user_id, exc)
@@ -105,7 +134,7 @@ def get_issue(user_id, issue_key):
         return jsonify({"error": error}), 404 if not creds else 400
 
     try:
-        result = client.get_issue(issue_key)
+        result = _with_refresh(user_id, creds, client, lambda c: c.get_issue(issue_key))
         return jsonify(result)
     except Exception as exc:
         logger.error("[JIRA] Get issue failed for user %s: %s", user_id, exc)
@@ -136,14 +165,14 @@ def create_issue(user_id):
     parent_key = data.get("parentKey")
 
     try:
-        result = client.create_issue(
+        result = _with_refresh(user_id, creds, client, lambda c: c.create_issue(
             project_key=project_key,
             summary=summary,
             issue_type=issue_type,
             description_adf=description_adf,
             labels=labels,
             parent_key=parent_key,
-        )
+        ))
         return jsonify(result), 201
     except Exception as exc:
         logger.error("[JIRA] Create issue failed for user %s: %s", user_id, exc)
@@ -167,7 +196,7 @@ def update_issue(user_id, issue_key):
         return jsonify({"error": "fields object required"}), 400
 
     try:
-        client.update_issue(issue_key, fields=fields)
+        _with_refresh(user_id, creds, client, lambda c: c.update_issue(issue_key, fields=fields))
         return jsonify({"success": True})
     except Exception as exc:
         logger.error("[JIRA] Update issue failed for user %s: %s", user_id, exc)
@@ -193,7 +222,7 @@ def add_comment(user_id, issue_key):
     body_adf = text_to_adf(body_text)
 
     try:
-        result = client.add_comment(issue_key, body_adf)
+        result = _with_refresh(user_id, creds, client, lambda c: c.add_comment(issue_key, body_adf))
         return jsonify(result), 201
     except Exception as exc:
         logger.error("[JIRA] Add comment failed for user %s: %s", user_id, exc)
@@ -220,7 +249,7 @@ def link_issues(user_id):
         return jsonify({"error": "inwardKey and outwardKey are required"}), 400
 
     try:
-        client.link_issues(inward_key, outward_key, link_type)
+        _with_refresh(user_id, creds, client, lambda c: c.link_issues(inward_key, outward_key, link_type))
         return jsonify({"success": True}), 201
     except Exception as exc:
         logger.error("[JIRA] Link issues failed for user %s: %s", user_id, exc)
