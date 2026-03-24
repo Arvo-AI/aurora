@@ -60,6 +60,7 @@ SUPPORTED_SECRET_PROVIDERS: Set[str] = {
     "jenkins",  # Jenkins CI/CD connector tokens
     "cloudbees", # CloudBees CI connector tokens
     "spinnaker", # Spinnaker CD connector tokens
+    "prometheus", # Prometheus + Alertmanager connector tokens
 }
 
 

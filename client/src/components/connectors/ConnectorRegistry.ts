@@ -136,6 +136,17 @@ class ConnectorRegistry {
       });
 
     this.register({
+        id: "prometheus",
+        name: "Prometheus",
+        description: "Connect Prometheus and Alertmanager for metrics queries and alert ingestion. Run PromQL range queries for RCA and feed firing alerts into the incident pipeline.",
+        iconPath: "/prometheus.svg",
+        iconBgColor: "bg-white dark:bg-white",
+        category: "Monitoring",
+        path: "/prometheus/auth",
+        storageKey: "isPrometheusConnected",
+      });
+
+    this.register({
         id: "confluence",
         name: "Confluence",
         description: "Fetch runbooks and documentation from Confluence pages to automate incident response workflows.",

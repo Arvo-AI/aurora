@@ -52,6 +52,7 @@ celery_app.conf.update(
         'routes.splunk.tasks',
         'routes.dynatrace.tasks',
         'routes.bigpanda.tasks',
+        'routes.prometheus.tasks',
         'routes.pagerduty.tasks',
         'routes.jenkins.tasks',
         'routes.spinnaker.tasks',
@@ -124,6 +125,12 @@ try:
     logging.info("BigPanda tasks imported successfully")
 except ImportError as e:
     logging.warning(f"Failed to import BigPanda tasks: {e}")
+
+try:
+    import routes.prometheus.tasks  # noqa: F401
+    logging.info("Prometheus tasks imported successfully")
+except ImportError as e:
+    logging.warning(f"Failed to import Prometheus tasks: {e}")
 
 try:
     import routes.pagerduty.tasks

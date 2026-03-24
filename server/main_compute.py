@@ -327,6 +327,11 @@ from routes.bigpanda import bp as bigpanda_bp  # noqa: F401
 import routes.bigpanda.tasks  # noqa: F401
 app.register_blueprint(bigpanda_bp, url_prefix="/bigpanda")
 
+# --- Prometheus Integration Routes ---
+from routes.prometheus import bp as prometheus_bp  # noqa: F401
+import routes.prometheus.tasks  # noqa: F401
+app.register_blueprint(prometheus_bp, url_prefix="/prometheus")
+
 # --- PagerDuty Integration Routes ---
 from routes.pagerduty.pagerduty_routes import pagerduty_bp  # noqa: F401
 app.register_blueprint(pagerduty_bp, url_prefix="/pagerduty")

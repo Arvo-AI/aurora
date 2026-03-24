@@ -459,6 +459,40 @@ def _check_bigpanda(creds: Dict[str, Any]) -> Dict[str, Any]:
         return {"connected": False}
 
 
+def _check_prometheus(creds: Dict[str, Any]) -> Dict[str, Any]:
+    """Mirrors /prometheus/connect validation — live API call."""
+    prometheus_url = creds.get("prometheus_url")
+    if not prometheus_url:
+        return {"connected": False}
+    try:
+        from connectors.prometheus_connector.api_client import PrometheusClient
+        client = PrometheusClient(
+            base_url=prometheus_url,
+            bearer_token=creds.get("bearer_token"),
+            username=creds.get("username"),
+            password=creds.get("password"),
+        )
+        info = client.validate_connection()
+        result: Dict[str, Any] = {"connected": True, "version": info.get("version")}
+        am_url = creds.get("alertmanager_url")
+        if am_url:
+            try:
+                from connectors.prometheus_connector.api_client import AlertmanagerClient
+                am = AlertmanagerClient(
+                    base_url=am_url,
+                    bearer_token=creds.get("bearer_token"),
+                    username=creds.get("username"),
+                    password=creds.get("password"),
+                )
+                am.validate_connection()
+                result["alertmanagerConnected"] = True
+            except Exception:
+                result["alertmanagerConnected"] = False
+        return result
+    except Exception:
+        return {"connected": False}
+
+
 def _check_tailscale(creds: Dict[str, Any]) -> Dict[str, Any]:
     """Mirrors /tailscale/connect validation — live API call with token refresh."""
     client_id = creds.get("client_id")
@@ -515,6 +549,7 @@ PROVIDER_CHECKERS = {
     "pagerduty": _check_pagerduty,
     "dynatrace": _check_dynatrace,
     "bigpanda": _check_bigpanda,
+    "prometheus": _check_prometheus,
     "tailscale": _check_tailscale,
     # Credential-existence checks (no live API endpoint to validate against)
     "netdata": _check_netdata,
