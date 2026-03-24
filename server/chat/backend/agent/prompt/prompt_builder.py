@@ -1475,17 +1475,29 @@ def build_web_search_note() -> str: #mainly for testing
 
 
 def build_background_mode_segment(state: Optional[Any]) -> str:
-    """Build RCA investigation instructions for background chats.
-
-    This injects provider-aware investigation guidance into the system prompt
-    for background RCA chats triggered by monitoring alerts.
-    """
+    """Build background mode instructions for RCA or prediscovery chats."""
     if not state:
         return ""
 
-    # Only build if this is a background chat with RCA context
     if not getattr(state, 'is_background', False):
         return ""
+
+    # Prediscovery mode: autonomous exploration instructions
+    mode = getattr(state, 'mode', None)
+    if mode == 'prediscovery':
+        return (
+            "=" * 40 + "\n"
+            "BACKGROUND PREDISCOVERY MODE\n"
+            "=" * 40 + "\n\n"
+            "You are running autonomously in the background. No user is watching.\n"
+            "- Call integration tools IMMEDIATELY. Do not output plans or explanations.\n"
+            "- Every response MUST contain a tool call unless you are completely done.\n"
+            "- NOT providing a tool call will end the session.\n"
+            "- NEVER use terminal_exec -- the local filesystem is Aurora's own code, not user infrastructure.\n"
+            "- ONLY use: cloud_exec, github_rca, jenkins_rca, search_datadog, list_datadog_monitors, "
+            "search_splunk, on_prem_kubectl, knowledge_base_search, save_discovery_finding.\n"
+            "- Write detailed paragraph-level findings describing real infrastructure interconnections.\n"
+        )
 
     rca_context = getattr(state, 'rca_context', None)
     if not rca_context:

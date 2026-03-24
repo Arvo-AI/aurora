@@ -156,7 +156,6 @@ def insert_chunks(
 
                     properties = {
                         "user_id": user_id,
-                        "org_id": org_id or "",
                         "document_id": document_id,
                         "chunk_index": chunk_index,
                         "content": chunk.get("content", ""),
@@ -164,6 +163,8 @@ def insert_chunks(
                         "source_filename": source_filename,
                         "created_at": now,
                     }
+                    if org_id:
+                        properties["org_id"] = org_id
 
                     batch.add_object(properties=properties, uuid=uuid)
                     success_count += 1

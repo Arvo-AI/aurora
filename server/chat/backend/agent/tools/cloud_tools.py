@@ -1340,6 +1340,31 @@ Once you identify which account has the issue, pass account_id (e.g. '1510256343
         except Exception as e:
             logging.warning(f"Failed to add knowledge_base_search tool: {e}")
 
+    # Add discovery finding tool for prediscovery mode
+    if user_id and mode_suffix == "prediscovery":
+        try:
+            from chat.backend.agent.tools.discovery_finding_tool import (
+                save_discovery_finding,
+                DiscoveryFindingArgs,
+                DISCOVERY_FINDING_DESCRIPTION,
+            )
+
+            context_wrapped_df = with_user_context(save_discovery_finding)
+            notification_wrapped_df = with_completion_notification(context_wrapped_df)
+            if tool_capture:
+                final_df_func = wrap_func_with_capture(notification_wrapped_df, "save_discovery_finding")
+            else:
+                final_df_func = notification_wrapped_df
+
+            tools.append(StructuredTool.from_function(
+                func=final_df_func,
+                name="save_discovery_finding",
+                description=DISCOVERY_FINDING_DESCRIPTION,
+                args_schema=DiscoveryFindingArgs,
+            ))
+            logging.info(f"Added save_discovery_finding tool for prediscovery mode")
+        except Exception as e:
+            logging.warning(f"Failed to add save_discovery_finding tool: {e}")
 
     # Add Splunk tools if connected
     if user_id and is_splunk_connected(user_id):

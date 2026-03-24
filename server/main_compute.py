@@ -189,6 +189,10 @@ CORS(app, origins=FRONTEND_URL, supports_credentials=True,
                           "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
                                             "Authorization", "X-Provider-Preference"],
                           "methods": ["GET", "POST", "DELETE", "OPTIONS"]},
+        r"/api/prediscovery/*": {"origins": FRONTEND_URL, "supports_credentials": True,
+                                 "allow_headers": ["Content-Type", "X-Requested-With", "X-User-ID",
+                                                   "Authorization"],
+                                 "methods": ["GET", "POST", "OPTIONS"]},
         r"/*": {"origins": FRONTEND_URL, "supports_credentials": True,
                 "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID", 
                                 "Authorization", "X-Provider-Preference"], 
@@ -441,6 +445,10 @@ app.register_blueprint(terraform_workspace_bp)
 # --- Graph / Service Discovery Routes ---
 from routes.graph_routes import graph_bp
 app.register_blueprint(graph_bp)
+
+# --- Prediscovery Routes ---
+from routes.prediscovery import bp as prediscovery_bp
+app.register_blueprint(prediscovery_bp, url_prefix="/api/prediscovery")
 
 # ---- Debug Routes ----
 from routes.debug import bp as debug_bp
