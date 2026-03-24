@@ -64,7 +64,12 @@ export default function ManageTailscalePage() {
     const init = async () => {
       try {
         const res = await fetch("/api/tailscale/status");
-        if (!res.ok) return;
+        if (!res.ok) {
+          console.error("Tailscale status check failed:", res.status);
+          setLoadingDevices(false);
+          setLoadingSSH(false);
+          return;
+        }
         const data = await res.json();
         setTailnetName(data.tailnetName || data.tailnet || "");
         if (!data.connected) {
@@ -73,6 +78,8 @@ export default function ManageTailscalePage() {
         }
       } catch (error) {
         console.error("Error loading Tailscale status:", error);
+        setLoadingDevices(false);
+        setLoadingSSH(false);
         return;
       }
       loadDevices();
