@@ -10,9 +10,18 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { toast } from "@/hooks/use-toast";
+import { useQuery, jsonFetcher, queryClient } from "@/lib/query";
 import OrgOverview from "./components/OrgOverview";
 import OrgMembers from "./components/OrgMembers";
 import OrgActivity from "./components/OrgActivity";
+
+export interface OrgMember {
+  id: string;
+  email: string;
+  name: string | null;
+  role: string;
+  createdAt: string | null;
+}
 
 interface OrgData {
   id: string;
@@ -23,20 +32,10 @@ interface OrgData {
   members: OrgMember[];
 }
 
-export interface OrgMember {
-  id: string;
-  email: string;
-  name: string | null;
-  role: string;
-  createdAt: string | null;
-}
-
 export default function OrgPage() {
   const { user, isLoaded } = useUser();
   const { update: updateSession } = useSession();
   const router = useRouter();
-  const [org, setOrg] = useState<OrgData | null>(null);
-  const [loading, setLoading] = useState(true);
   const [editingName, setEditingName] = useState(false);
   const [nameInput, setNameInput] = useState("");
   const [savingName, setSavingName] = useState(false);
@@ -45,30 +44,21 @@ export default function OrgPage() {
   const editingNameRef = React.useRef(false);
   editingNameRef.current = editingName;
 
+  const { data: org, isLoading, mutate } = useQuery<OrgData>(
+    user?.id ? '/api/orgs/current' : null,
+    jsonFetcher,
+    { staleTime: 30_000, retryCount: 2, revalidateOnFocus: true },
+  );
+
+  useEffect(() => {
+    if (org && !editingNameRef.current) {
+      setNameInput(org.name);
+    }
+  }, [org]);
+
   useEffect(() => {
     if (isLoaded && !user) router.replace("/sign-in");
   }, [isLoaded, user, router]);
-
-  useEffect(() => {
-    if (user) fetchOrg();
-  }, [user?.id]);
-
-  async function fetchOrg() {
-    try {
-      const res = await fetch("/api/orgs/current");
-      if (res.ok) {
-        const data = await res.json();
-        setOrg(data);
-        if (!editingNameRef.current) {
-          setNameInput(data.name);
-        }
-      }
-    } catch (err) {
-      console.error("Failed to fetch org:", err);
-    } finally {
-      setLoading(false);
-    }
-  }
 
   async function saveName() {
     const trimmed = nameInput.trim();
@@ -85,7 +75,7 @@ export default function OrgPage() {
       });
       const data = await res.json();
       if (res.ok) {
-        setOrg((prev) => (prev ? { ...prev, name: data.name } : prev));
+        queryClient.set<OrgData>('/api/orgs/current', { ...org!, name: data.name });
         setNameInput(data.name);
         toast({ title: "Name updated" });
         await updateSession();
@@ -102,7 +92,7 @@ export default function OrgPage() {
     }
   }
 
-  if (!isLoaded || loading) {
+  if (!isLoaded || isLoading) {
     return <div className="flex items-center justify-center h-full text-muted-foreground text-sm">Loading...</div>;
   }
 
@@ -114,7 +104,6 @@ export default function OrgPage() {
 
   return (
     <div className="max-w-5xl mx-auto px-6 py-10">
-      {/* Minimal header — just the name, editable */}
       <div className="mb-10">
         <div className="flex items-center gap-4 mb-1">
           <div className="h-10 w-10 rounded-lg bg-foreground text-background flex items-center justify-center text-lg font-semibold select-none">
@@ -163,7 +152,6 @@ export default function OrgPage() {
         </p>
       </div>
 
-      {/* Underline-style tabs — no pill background */}
       <Tabs defaultValue="overview" className="w-full">
         <div className="border-b border-border mb-8">
           <TabsList className="h-auto p-0 bg-transparent rounded-none gap-6">
@@ -183,7 +171,7 @@ export default function OrgPage() {
           <OrgOverview org={org} isAdmin={isAdmin} />
         </TabsContent>
         <TabsContent value="members">
-          <OrgMembers org={org} currentUserId={user?.id || ""} isAdmin={isAdmin} onMembersChanged={fetchOrg} />
+          <OrgMembers org={org} currentUserId={user?.id || ""} isAdmin={isAdmin} onMembersChanged={mutate} />
         </TabsContent>
         <TabsContent value="activity">
           <OrgActivity />

@@ -5,69 +5,88 @@ import { isOvhEnabled, isScalewayEnabled } from "@/lib/feature-flags";
 import { getEnv } from '@/lib/env';
 import type { ConnectorConfig } from "@/components/connectors/types";
 import { slackService } from "@/lib/services/slack";
+import {
+  getConnectedAccounts,
+  subscribe,
+} from '@/lib/connected-accounts-cache';
+import { fetchR } from '@/lib/query';
 
 const pagerdutyService = require("@/lib/services/pagerduty").pagerdutyService;
 
-export function useConnectorStatus(connector: ConnectorConfig, userId: string | null) {
+const SPECIAL_CONNECTORS = new Set(["github", "bitbucket", "onprem", "slack", "pagerduty"]);
+
+/**
+ * Connection status for a single connector card.
+ *
+ * - connectedOverride present  → parent batch-fetched, skip all fetching
+ * - standard connector          → reads from shared connected-accounts cache
+ * - special connector            → dedicated status API (only on manage pages)
+ */
+export function useConnectorStatus(
+  connector: ConnectorConfig,
+  userId: string | null,
+  connectedOverride?: boolean,
+) {
   const [isConnected, setIsConnected] = useState(false);
   const [isCheckingConnection, setIsCheckingConnection] = useState(true);
   const [isLoadingDetails, setIsLoadingDetails] = useState(false);
   const [slackStatus, setSlackStatus] = useState<any>(null);
 
+  const hasOverride = connectedOverride !== undefined;
+  const isSpecial = SPECIAL_CONNECTORS.has(connector.id);
+
   useEffect(() => {
-    checkConnectionStatus();
-    
-    const handleProviderChange = () => {
-      if (connector.id === "onprem" && typeof window !== "undefined") {
-        checkVmConfigStatus();
-        return;
-      }
-      checkConnectionStatus();
+    if (hasOverride || isSpecial) return;
+    const sync = () => {
+      const { providerIds } = getConnectedAccounts();
+      setIsConnected(providerIds.includes(connector.id.toLowerCase()));
+      setIsCheckingConnection(false);
     };
-
-    window.addEventListener("providerStateChanged", handleProviderChange);
-    return () => window.removeEventListener("providerStateChanged", handleProviderChange);
-  }, [connector.id, userId]);
+    sync();
+    return subscribe(sync);
+  }, [connector.id, hasOverride, isSpecial]);
 
   useEffect(() => {
-    if (connector.id === "github" && userId) {
-      checkGitHubStatus();
-    }
-    if (connector.id === "slack" && userId) {
-      checkSlackStatus();
-    }
-    if (connector.id === "pagerduty" && userId) {
-      checkPagerDutyStatus();
-    }
-    if (connector.id === "bitbucket" && userId) {
-      checkBitbucketStatus();
-    }
-    if (connector.id === "onprem" && userId) {
-      checkVmConfigStatus();
-    }
-  }, [userId, connector.id]);
+    if (!hasOverride) return;
+    setIsConnected(connectedOverride);
+    setIsCheckingConnection(false);
+  }, [hasOverride, connectedOverride]);
+
+  useEffect(() => {
+    if (hasOverride || !isSpecial) return;
+    const check = () => {
+      if (connector.id === "github") checkGitHubStatus();
+      else if (connector.id === "bitbucket") checkBitbucketStatus();
+      else if (connector.id === "slack") checkSlackStatus();
+      else if (connector.id === "pagerduty") checkPagerDutyStatus();
+      else if (connector.id === "onprem") checkVmConfigStatus();
+    };
+    check();
+    window.addEventListener("providerStateChanged", check);
+    return () => window.removeEventListener("providerStateChanged", check);
+  }, [connector.id, userId, hasOverride, isSpecial]);
 
   const checkGitHubStatus = async () => {
     if (!userId) return;
-    
     try {
       const data = await GitHubIntegrationService.checkStatus(userId);
       setIsConnected(data.connected || false);
-    } catch (error) {
-      console.error("Error checking GitHub status:", error);
+    } catch {
       setIsConnected(false);
+    } finally {
+      setIsCheckingConnection(false);
     }
   };
 
   const checkBitbucketStatus = async () => {
     if (!userId) return;
-
     try {
       const data = await BitbucketIntegrationService.checkStatus(userId);
       setIsConnected(data.connected || false);
-    } catch (error) {
-      console.error("Error checking Bitbucket status:", error);
+    } catch {
       setIsConnected(false);
+    } finally {
+      setIsCheckingConnection(false);
     }
   };
 
@@ -75,15 +94,14 @@ export function useConnectorStatus(connector: ConnectorConfig, userId: string | 
     setIsLoadingDetails(true);
     try {
       const data = await slackService.getStatus();
-      const connected = data?.connected || false;
-      setIsConnected(connected);
+      setIsConnected(data?.connected || false);
       setSlackStatus(data);
-    } catch (error) {
-      console.error("Error checking Slack status:", error);
+    } catch {
       setIsConnected(false);
       setSlackStatus(null);
     } finally {
       setIsLoadingDetails(false);
+      setIsCheckingConnection(false);
     }
   };
 
@@ -91,144 +109,73 @@ export function useConnectorStatus(connector: ConnectorConfig, userId: string | 
     setIsLoadingDetails(true);
     try {
       const data = await pagerdutyService.getStatus();
-      const connected = data?.connected || false;
-      setIsConnected(connected);
-    } catch (error) {
-      console.error("Error checking PagerDuty status:", error);
+      setIsConnected(data?.connected || false);
+    } catch {
       setIsConnected(false);
     } finally {
       setIsLoadingDetails(false);
+      setIsCheckingConnection(false);
     }
   };
 
   const checkVmConfigStatus = async () => {
     setIsCheckingConnection(true);
     try {
-      const manualResponse = await fetch('/api/vms/manual', {
-        credentials: 'include',
-      });
-      
-      if (manualResponse.ok) {
-        const manualData = await manualResponse.json();
-        const hasVerifiedManualVm = (manualData.vms || []).some((vm: any) => vm.connectionVerified);
-        if (hasVerifiedManualVm) {
+      const manualRes = await fetchR('/api/vms/manual', { credentials: 'include' });
+      if (manualRes.ok) {
+        const manualData = await manualRes.json();
+        if ((manualData.vms || []).some((vm: any) => vm.connectionVerified)) {
           setIsConnected(true);
           return;
         }
       }
-      
+
       const backendUrl = getEnv('NEXT_PUBLIC_BACKEND_URL');
-      if (!backendUrl || !userId) {
-        setIsConnected(false);
-        return;
-      }
-      
+      if (!backendUrl || !userId) { setIsConnected(false); return; }
+
       if (isOvhEnabled()) {
         try {
-          const ovhResponse = await fetch(`${backendUrl}/ovh_api/ovh/instances`, {
-            headers: { "X-User-ID": userId },
-            credentials: "include",
+          const r = await fetchR(`${backendUrl}/ovh_api/ovh/instances`, {
+            headers: { "X-User-ID": userId }, credentials: "include",
           });
-          if (ovhResponse.ok) {
-            const ovhData = await ovhResponse.json();
-            const hasConfiguredOvhVm = (ovhData.instances || []).some((instance: any) => instance.sshConfig);
-            if (hasConfiguredOvhVm) {
-              setIsConnected(true);
-              return;
-            }
+          if (r.ok) {
+            const d = await r.json();
+            if ((d.instances || []).some((i: any) => i.sshConfig)) { setIsConnected(true); return; }
           }
-        } catch {
-          /* OVH not configured - continue to next provider */
-        }
+        } catch { /* not configured */ }
       }
-      
+
       if (isScalewayEnabled()) {
         try {
-          const scwResponse = await fetch(`${backendUrl}/scaleway_api/scaleway/instances`, {
-            headers: { "X-User-ID": userId },
-            credentials: "include",
+          const r = await fetchR(`${backendUrl}/scaleway_api/scaleway/instances`, {
+            headers: { "X-User-ID": userId }, credentials: "include",
           });
-          if (scwResponse.ok) {
-            const scwData = await scwResponse.json();
-            const hasConfiguredScwVm = (scwData.servers || []).some((server: any) => server.sshConfig);
-            if (hasConfiguredScwVm) {
-              setIsConnected(true);
-              return;
-            }
+          if (r.ok) {
+            const d = await r.json();
+            if ((d.servers || []).some((s: any) => s.sshConfig)) { setIsConnected(true); return; }
           }
-        } catch {
-          /* Scaleway not configured - continue */
-        }
+        } catch { /* not configured */ }
       }
-      
+
       setIsConnected(false);
-    } catch (error) {
-      console.error("Error checking VM config status:", error);
+    } catch {
       setIsConnected(false);
     } finally {
       setIsCheckingConnection(false);
     }
   };
 
-  /**
-   * Unified API-based connection check. Fetches /api/connected-accounts
-   * (the single source of truth backed by the database) and checks if this
-   * connector's provider appears in the response. Works for all providers
-   * regardless of connection method (OAuth, STS, API key, etc.).
-   */
-  const checkApiConnectionStatus = async () => {
-    try {
-      const response = await fetch('/api/connected-accounts', {
-        credentials: 'include',
-      });
-      if (!response.ok) {
-        console.error('Failed to fetch connected accounts:', response.status);
-        return;
-      }
-      const data = await response.json();
-      const accounts = data.accounts || {};
-      const isConnectedInDb = Object.keys(accounts).some(
-        key => key.toLowerCase() === connector.id.toLowerCase()
-      );
-      setIsConnected(isConnectedInDb);
-    } catch (error) {
-      console.error('Error checking API connection status:', error);
-    }
-  };
-
-  /**
-   * Main entry point for checking connection status.
-   * Uses /api/connected-accounts as the single source of truth for all
-   * providers. Special-case connectors (github, bitbucket, onprem) that
-   * have their own dedicated status APIs fall through to those.
-   */
   const checkConnectionStatus = () => {
     if (typeof window === "undefined") return;
-    
-    // Providers with dedicated status endpoints
-    if (connector.id === "github") {
-      checkGitHubStatus();
-      return;
+    if (connector.id === "github") checkGitHubStatus();
+    else if (connector.id === "bitbucket") checkBitbucketStatus();
+    else if (connector.id === "onprem") checkVmConfigStatus();
+    else if (connector.id === "slack") checkSlackStatus();
+    else if (connector.id === "pagerduty") checkPagerDutyStatus();
+    else {
+      const { providerIds } = getConnectedAccounts();
+      setIsConnected(providerIds.includes(connector.id.toLowerCase()));
     }
-    if (connector.id === "bitbucket") {
-      checkBitbucketStatus();
-      return;
-    }
-    if (connector.id === "onprem") {
-      checkVmConfigStatus();
-      return;
-    }
-    if (connector.id === "slack") {
-      checkSlackStatus();
-      return;
-    }
-    if (connector.id === "pagerduty") {
-      checkPagerDutyStatus();
-      return;
-    }
-
-    // All other providers (including CI connectors): use the unified API
-    checkApiConnectionStatus();
   };
 
   return {
@@ -242,7 +189,6 @@ export function useConnectorStatus(connector: ConnectorConfig, userId: string | 
     checkSlackStatus,
     checkPagerDutyStatus,
     checkVmConfigStatus,
-    checkApiConnectionStatus,
     checkConnectionStatus,
   };
 }

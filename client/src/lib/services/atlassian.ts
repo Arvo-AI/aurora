@@ -1,3 +1,5 @@
+import { apiDelete } from '@/lib/services/api-client';
+
 export interface AtlassianProductStatus {
   connected: boolean;
   authType?: 'oauth' | 'pat';
@@ -67,16 +69,13 @@ export const atlassianService = {
   },
 
   async disconnect(product: 'confluence' | 'jira' | 'all'): Promise<void> {
-    const response = await fetch(`${API_BASE}/disconnect`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ product }),
-      credentials: 'include',
-      cache: 'no-store',
-    });
-    if (!response.ok && response.status !== 204) {
-      const text = await response.text();
-      throw new Error(text || 'Failed to disconnect');
+    if (product === 'all') {
+      await Promise.all([
+        apiDelete('/api/connected-accounts/confluence', { cache: 'no-store' }),
+        apiDelete('/api/connected-accounts/jira', { cache: 'no-store' }),
+      ]);
+    } else {
+      await apiDelete(`/api/connected-accounts/${product}`, { cache: 'no-store' });
     }
   },
 };

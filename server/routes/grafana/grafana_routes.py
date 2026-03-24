@@ -13,6 +13,7 @@ from utils.logging.secure_logging import mask_credential_value
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import get_org_id_from_request
+from utils.secrets.secret_ref_utils import delete_user_secret
 GRAFANA_TIMEOUT = 15
 
 logger = logging.getLogger(__name__)
@@ -97,7 +98,7 @@ def connect(user_id):
     except Exception:
         data = {}
 
-    api_token = data.get("apiToken") or data.get("token")
+    api_token = (data.get("apiToken") or data.get("token") or "").strip()
     raw_base_url = data.get("baseUrl")
     stack_slug = data.get("stackSlug")
 
@@ -118,7 +119,7 @@ def connect(user_id):
         user_profile = client.get_user()
     except GrafanaAPIError as exc:
         logger.error(f"[GRAFANA] Connection validation failed for user {user_id}: {exc}")
-        return jsonify({"error": "Failed to validate Grafana credentials"}), 502
+        return jsonify({"error": "Failed to validate Grafana credentials. Ensure the service account has the Admin role."}), 502
 
     org_name = org_data.get("name") or "Grafana"
     org_id = str(org_data.get("id")) if org_data.get("id") is not None else None
@@ -166,19 +167,10 @@ def status(user_id):
         logger.warning(f"[GRAFANA] Incomplete credentials for user {user_id}")
         return jsonify({"connected": False})
 
-    client = GrafanaClient(base_url, api_token)
-
-    try:
-        org_data = client.get_org()
-        user_profile = client.get_user()
-    except GrafanaAPIError as exc:
-        logger.warning(f"[GRAFANA] Status check failed for user {user_id}: {exc}")
-        return jsonify({"connected": False, "error": "Failed to validate stored Grafana credentials"})
-
     return jsonify({
         "connected": True,
-        "org": org_data,
-        "user": user_profile,
+        "org": {"name": creds.get("org_name"), "id": creds.get("org_id")},
+        "user": {"email": creds.get("user_email")} if creds.get("user_email") else None,
         "baseUrl": base_url,
         "stackSlug": creds.get("stack_slug"),
     })
@@ -189,24 +181,21 @@ def status(user_id):
 def disconnect(user_id):
     """Disconnect Grafana by removing stored credentials."""
     try:
-        with db_pool.get_admin_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "DELETE FROM user_tokens WHERE user_id = %s AND provider = %s",
-                (user_id, "grafana")
-            )
-            conn.commit()
-            deleted_count = cursor.rowcount
-        
-        logger.info(f"[GRAFANA] Disconnected user {user_id} (deleted {deleted_count} token entries)")
-        
+        success, deleted_count = delete_user_secret(user_id, "grafana")
+        if not success:
+            logger.warning("[GRAFANA] Failed to clean up secrets during disconnect")
+            return jsonify({"success": False, "error": "Failed to delete stored credentials"}), 500
+
+        logger.info("[GRAFANA] Disconnected provider (deleted %s token entries)", deleted_count)
+
         return jsonify({
             "success": True,
-            "message": "Grafana disconnected successfully"
+            "message": "Grafana disconnected successfully",
+            "deleted": deleted_count
         }), 200
-        
+
     except Exception as exc:
-        logger.exception(f"[GRAFANA] Failed to disconnect user {user_id}: {exc}")
+        logger.exception("[GRAFANA] Failed to disconnect provider")
         return jsonify({"error": "Failed to disconnect Grafana"}), 500
 
 

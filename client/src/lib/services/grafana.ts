@@ -1,5 +1,7 @@
 'use client';
 
+import { apiRequest } from '@/lib/services/api-client';
+
 interface GrafanaOrg {
   id?: string | number;
   name?: string;
@@ -27,36 +29,6 @@ export interface GrafanaConnectPayload {
 }
 
 const API_BASE = '/api/grafana';
-
-async function parseJsonResponse<T>(response: Response): Promise<T | null> {
-  const text = await response.text();
-  if (!text) {
-    return null;
-  }
-
-  return JSON.parse(text) as T;
-}
-
-async function handleJsonFetch<T>(input: RequestInfo, init?: RequestInit): Promise<T> {
-  const response = await fetch(input, {
-    ...init,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(init?.headers ?? {}),
-    },
-    cache: 'no-store',
-  });
-
-  if (!response.ok) {
-    type ErrorBody = { error?: string; details?: string };
-    const parsed = await parseJsonResponse<ErrorBody>(response).catch(() => null);
-    const message = parsed?.error || parsed?.details || response.statusText || `Request failed with status ${response.status}`;
-    throw new Error(message);
-  }
-
-  const parsed = await parseJsonResponse<T>(response);
-  return (parsed ?? ({} as T));
-}
 
 export interface GrafanaAlert {
   id: number;
@@ -87,7 +59,9 @@ export interface WebhookUrlResponse {
 export const grafanaService = {
   async getStatus(): Promise<GrafanaStatus | null> {
     try {
-      const raw = await handleJsonFetch<Record<string, any>>(`${API_BASE}/status`);
+      const raw = await apiRequest<Record<string, any>>(`${API_BASE}/status`, {
+        cache: 'no-store',
+      });
       return {
         connected: Boolean(raw?.connected),
         baseUrl: raw?.baseUrl ?? raw?.base_url,
@@ -103,9 +77,10 @@ export const grafanaService = {
   },
 
   async connect(payload: GrafanaConnectPayload): Promise<GrafanaStatus> {
-    const raw = await handleJsonFetch<Record<string, any>>(`${API_BASE}/connect`, {
+    const raw = await apiRequest<Record<string, any>>(`${API_BASE}/connect`, {
       method: 'POST',
       body: JSON.stringify(payload),
+      cache: 'no-store',
     });
     return {
       connected: Boolean(raw?.success ?? true),
@@ -122,12 +97,14 @@ export const grafanaService = {
       url += `&state=${encodeURIComponent(state)}`;
     }
 
-    const data = await handleJsonFetch<GrafanaAlertsResponse>(url);
+    const data = await apiRequest<GrafanaAlertsResponse>(url, { cache: 'no-store' });
     return data;
   },
 
   async getWebhookUrl(): Promise<WebhookUrlResponse> {
-    const data = await handleJsonFetch<WebhookUrlResponse>(`${API_BASE}/alerts/webhook-url`);
+    const data = await apiRequest<WebhookUrlResponse>(`${API_BASE}/alerts/webhook-url`, {
+      cache: 'no-store',
+    });
     return data;
   },
 };

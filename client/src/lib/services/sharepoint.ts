@@ -1,3 +1,5 @@
+import { apiRequest, apiDelete } from '@/lib/services/api-client';
+
 export interface SharePointStatus {
   connected: boolean;
   userDisplayName?: string | null;
@@ -40,94 +42,59 @@ export interface SharePointSite {
 
 const API_BASE = '/api/sharepoint';
 
-async function parseJsonResponse<T>(response: Response): Promise<T | null> {
-  const text = await response.text();
-  if (!text) {
-    return null;
-  }
-  try {
-    return JSON.parse(text) as T;
-  } catch {
-    throw new Error('Invalid JSON response from server');
-  }
-}
-
-async function handleJsonFetch<T>(input: RequestInfo, init?: RequestInit): Promise<T | null> {
-  const headers = new Headers(init?.headers);
-  if (!headers.has('Content-Type')) {
-    headers.set('Content-Type', 'application/json');
-  }
-
-  const response = await fetch(input, {
-    ...init,
-    headers,
-    cache: 'no-store',
-  });
-
-  if (!response.ok) {
-    type ErrorBody = { error?: string; details?: string };
-    const parsed = await parseJsonResponse<ErrorBody>(response).catch(() => null);
-    const message = parsed?.error || parsed?.details || response.statusText || `Request failed with status ${response.status}`;
-    throw new Error(message);
-  }
-
-  return parseJsonResponse<T>(response);
-}
-
 export const sharepointService = {
   async getStatus(init?: RequestInit): Promise<SharePointStatus | null> {
-    return handleJsonFetch<SharePointStatus>(`${API_BASE}/status`, init);
+    return apiRequest<SharePointStatus | null>(`${API_BASE}/status`, {
+      ...init,
+      cache: 'no-store',
+    });
   },
 
   async connect(payload: SharePointConnectPayload): Promise<SharePointConnectResponse | null> {
-    return handleJsonFetch<SharePointConnectResponse>(`${API_BASE}/connect`, {
+    return apiRequest<SharePointConnectResponse | null>(`${API_BASE}/connect`, {
       method: 'POST',
       body: JSON.stringify(payload),
+      cache: 'no-store',
     });
   },
 
   async disconnect(): Promise<void> {
-    const response = await fetch('/api/connected-accounts/sharepoint', {
-      method: 'DELETE',
-      credentials: 'include',
-      cache: 'no-store',
-    });
-
-    if (!response.ok) {
-      const text = await response.text();
-      throw new Error(text || 'Failed to disconnect SharePoint');
-    }
+    await apiDelete('/api/connected-accounts/sharepoint', { cache: 'no-store' });
   },
 
   async search(query: string, siteId?: string): Promise<SharePointSearchResult[] | null> {
-    return handleJsonFetch<SharePointSearchResult[]>(`${API_BASE}/search`, {
+    return apiRequest<SharePointSearchResult[] | null>(`${API_BASE}/search`, {
       method: 'POST',
       body: JSON.stringify({ query, siteId }),
+      cache: 'no-store',
     });
   },
 
   async fetchPage(siteId: string, pageId: string): Promise<SharePointFetchResponse | null> {
-    return handleJsonFetch<SharePointFetchResponse>(`${API_BASE}/fetch-page`, {
+    return apiRequest<SharePointFetchResponse | null>(`${API_BASE}/fetch-page`, {
       method: 'POST',
       body: JSON.stringify({ siteId, pageId }),
+      cache: 'no-store',
     });
   },
 
   async fetchDocument(siteId: string, driveId: string, itemId: string): Promise<SharePointFetchResponse | null> {
-    return handleJsonFetch<SharePointFetchResponse>(`${API_BASE}/fetch-document`, {
+    return apiRequest<SharePointFetchResponse | null>(`${API_BASE}/fetch-document`, {
       method: 'POST',
       body: JSON.stringify({ siteId, driveId, itemId }),
+      cache: 'no-store',
     });
   },
 
   async createPage(siteId: string, title: string, content: string): Promise<SharePointFetchResponse | null> {
-    return handleJsonFetch<SharePointFetchResponse>(`${API_BASE}/create-page`, {
+    return apiRequest<SharePointFetchResponse | null>(`${API_BASE}/create-page`, {
       method: 'POST',
       body: JSON.stringify({ siteId, title, content }),
+      cache: 'no-store',
     });
   },
 
   async getSites(): Promise<SharePointSite[] | null> {
-    return handleJsonFetch<SharePointSite[]>(`${API_BASE}/sites`);
+    return apiRequest<SharePointSite[] | null>(`${API_BASE}/sites`, { cache: 'no-store' });
   },
 };

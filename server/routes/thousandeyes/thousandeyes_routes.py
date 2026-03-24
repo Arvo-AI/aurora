@@ -136,5 +136,5 @@ def disconnect(user_id):
             "tokensDeleted": rows,
         })
     except Exception as exc:
-        logger.exception("[THOUSANDEYES] Failed to disconnect user %s: %s", user_id, exc)
+        logger.exception("[THOUSANDEYES] Failed to disconnect provider")
         return jsonify({"error": "Failed to disconnect ThousandEyes"}), 500

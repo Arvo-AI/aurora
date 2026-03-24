@@ -14,6 +14,7 @@ from connectors.jira_connector.adf_converter import markdown_to_adf, text_to_adf
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import get_user_preference, store_user_preference
 from utils.auth.token_management import get_token_data, store_tokens_in_db
+from utils.secrets.secret_ref_utils import delete_user_secret
 
 logger = logging.getLogger(__name__)
 
@@ -288,3 +289,69 @@ def update_settings(user_id):
     logger.info("[JIRA] Updated settings for user %s: jiraMode=%s", user_id, mode)
 
     return jsonify({"success": True, "jiraMode": mode})
+
+
+# ------------------------------------------------------------------
+# GET /jira/status
+# ------------------------------------------------------------------
+
+@jira_bp.route("/status", methods=["GET", "OPTIONS"])
+@require_permission("connectors", "read")
+def jira_status(user_id):
+    """Check Jira connection status."""
+    creds = get_token_data(user_id, "jira")
+    if not creds:
+        return jsonify({"connected": False})
+
+    auth_type = (creds.get("auth_type") or "oauth").lower()
+    base_url = creds.get("base_url", "")
+    token = creds.get("pat_token") if auth_type == "pat" else creds.get("access_token")
+
+    if not token:
+        return jsonify({"connected": False})
+
+    cloud_id = creds.get("cloud_id") if auth_type == "oauth" else None
+    client = JiraClient(base_url, token, auth_type=auth_type, cloud_id=cloud_id)
+    try:
+        client.get_myself()
+    except Exception:
+        if auth_type == "oauth":
+            refreshed = _refresh_jira_credentials(user_id, creds)
+            if refreshed:
+                token = refreshed.get("access_token")
+                try:
+                    JiraClient(base_url, token, auth_type=auth_type, cloud_id=cloud_id).get_myself()
+                except Exception:
+                    return jsonify({"connected": False})
+            else:
+                return jsonify({"connected": False})
+        else:
+            return jsonify({"connected": False})
+
+    return jsonify({
+        "connected": True,
+        "authType": auth_type,
+        "baseUrl": base_url,
+        "cloudId": creds.get("cloud_id"),
+    })
+
+
+# ------------------------------------------------------------------
+# POST|DELETE /jira/disconnect
+# ------------------------------------------------------------------
+
+@jira_bp.route("/disconnect", methods=["POST", "DELETE", "OPTIONS"])
+@require_permission("connectors", "write")
+def disconnect(user_id):
+    """Disconnect Jira by removing stored credentials."""
+    try:
+        success, deleted_count = delete_user_secret(user_id, "jira")
+        if not success:
+            logger.warning("[JIRA] Failed to clean up secrets during disconnect")
+            return jsonify({"success": False, "error": "Failed to delete stored credentials"}), 500
+
+        logger.info("[JIRA] Disconnected provider (deleted %s token rows)", deleted_count)
+        return jsonify({"success": True, "message": "Jira disconnected successfully", "deleted": deleted_count})
+    except Exception as exc:
+        logger.exception("[JIRA] Failed to disconnect provider")
+        return jsonify({"error": "Failed to disconnect Jira"}), 500

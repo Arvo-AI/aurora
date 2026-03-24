@@ -1,5 +1,7 @@
 'use client';
 
+import { apiGet, apiPost, apiRequest, type ApiError } from '@/lib/services/api-client';
+
 // ============================================================================
 // Types
 // Based on user research: minimal cognitive load, automatic analysis, 
@@ -215,27 +217,14 @@ export interface Incident {
 export const incidentsService = {
   async getIncidents(): Promise<Incident[]> {
     try {
-      const response = await fetch('/api/incidents', {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        credentials: 'include',
-      });
+      const data = await apiGet<{ incidents: any[] }>('/api/incidents');
 
-      if (!response.ok) {
-        throw new Error(`Failed to fetch incidents: ${response.statusText}`);
-      }
-
-      const data = await response.json();
-      
-      // Map backend response to frontend Incident type
       return (data.incidents || []).map((inc: any) => ({
         id: inc.id,
         alert: {
           source: inc.sourceType as AlertSource,
           sourceUrl: inc.alert?.sourceUrl || '',
-          rawPayload: '', // Not needed for list display
+          rawPayload: '',
           triggeredAt: inc.startedAt,
           title: inc.alert.title,
           severity: inc.severity,
@@ -264,25 +253,9 @@ export const incidentsService = {
 
   async getIncident(id: string): Promise<Incident | null> {
     try {
-      const response = await fetch(`/api/incidents/${id}`, {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        credentials: 'include',
-      });
-
-      if (!response.ok) {
-        if (response.status === 404) {
-          return null;
-        }
-        throw new Error(`Failed to fetch incident: ${response.statusText}`);
-      }
-
-      const data = await response.json();
+      const data = await apiGet<{ incident: any }>(`/api/incidents/${id}`);
       const inc = data.incident;
-      
-      // Map backend response to frontend Incident type
+
       return {
         id: inc.id,
         alert: {
@@ -311,7 +284,6 @@ export const incidentsService = {
           type: s.type || 'diagnostic',
           risk: s.risk || 'safe',
           command: s.command,
-          // Fix-type suggestion fields
           filePath: s.filePath,
           originalContent: s.originalContent,
           suggestedContent: s.suggestedContent,
@@ -361,6 +333,9 @@ export const incidentsService = {
         activeTab: inc.activeTab || 'thoughts',
       };
     } catch (error) {
+      if ((error as ApiError).status === 404) {
+        return null;
+      }
       console.error('Error fetching incident:', error);
       return null;
     }
@@ -378,21 +353,12 @@ export const incidentsService = {
 
   async updateActiveTab(incidentId: string, activeTab: 'thoughts' | 'chat'): Promise<void> {
     try {
-      const response = await fetch(`/api/incidents/${incidentId}`, {
+      await apiRequest(`/api/incidents/${incidentId}`, {
         method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        credentials: 'include',
         body: JSON.stringify({ activeTab }),
       });
-
-      if (!response.ok) {
-        throw new Error(`Failed to update active tab: ${response.statusText}`);
-      }
     } catch (error) {
       console.error('Error updating active tab:', error);
-      // Don't throw - this is a non-critical update
     }
   },
 
@@ -467,19 +433,10 @@ export const incidentsService = {
   },
 
   async updateFixSuggestion(suggestionId: string, userEditedContent: string): Promise<{ success: boolean }> {
-    const response = await fetch(`/api/incidents/suggestions/${suggestionId}`, {
+    return apiRequest<{ success: boolean }>(`/api/incidents/suggestions/${suggestionId}`, {
       method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
       body: JSON.stringify({ userEditedContent }),
     });
-
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      throw new Error(errorData.error || `Failed to update suggestion: ${response.statusText}`);
-    }
-
-    return response.json();
   },
 
   async applyFixSuggestion(
@@ -487,21 +444,13 @@ export const incidentsService = {
     options?: { useEditedContent?: boolean; targetBranch?: string }
   ): Promise<{ success: boolean; prUrl?: string; prNumber?: number; error?: string }> {
     try {
-      const response = await fetch(`/api/incidents/suggestions/${suggestionId}/apply`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({
+      return await apiPost<{ success: boolean; prUrl?: string; prNumber?: number }>(
+        `/api/incidents/suggestions/${suggestionId}/apply`,
+        {
           useEditedContent: options?.useEditedContent ?? true,
           targetBranch: options?.targetBranch,
-        }),
-      });
-
-      const data = await response.json();
-      if (!response.ok) {
-        return { success: false, error: data.error || 'Failed to apply fix' };
-      }
-      return data;
+        },
+      );
     } catch (error) {
       console.error('Error applying fix suggestion:', error);
       const message = error instanceof Error ? error.message : 'Unknown error';
@@ -514,18 +463,8 @@ export const incidentsService = {
       const url = excludeId 
         ? `/api/incidents/recent-unlinked?exclude=${encodeURIComponent(excludeId)}`
         : '/api/incidents/recent-unlinked';
-      
-      const response = await fetch(url, {
-        method: 'GET',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-      });
 
-      if (!response.ok) {
-        throw new Error(`Failed to fetch recent incidents: ${response.statusText}`);
-      }
-
-      const data = await response.json();
+      const data = await apiGet<{ incidents: RecentIncident[] }>(url);
       return data.incidents || [];
     } catch (error) {
       console.error('Error fetching recent unlinked incidents:', error);
@@ -538,17 +477,7 @@ export const incidentsService = {
     sourceIncidentId: string
   ): Promise<{ success: boolean; error?: string }> {
     try {
-      const response = await fetch(`/api/incidents/${targetIncidentId}/merge-alert`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({ sourceIncidentId }),
-      });
-
-      const data = await response.json();
-      if (!response.ok) {
-        return { success: false, error: data.error || 'Failed to merge alert' };
-      }
+      await apiPost(`/api/incidents/${targetIncidentId}/merge-alert`, { sourceIncidentId });
       return { success: true };
     } catch (error) {
       console.error('Error merging alert:', error);
@@ -558,16 +487,10 @@ export const incidentsService = {
   },
 
   async resolveIncident(incidentId: string): Promise<void> {
-    const response = await fetch(`/api/incidents/${incidentId}`, {
+    await apiRequest(`/api/incidents/${incidentId}`, {
       method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
       body: JSON.stringify({ status: 'resolved' }),
     });
-
-    if (!response.ok) {
-      throw new Error(`Failed to resolve incident: ${response.statusText}`);
-    }
   },
 };
 
@@ -578,22 +501,12 @@ export const incidentsService = {
 export const postmortemService = {
   async getPostmortem(incidentId: string): Promise<{ data: PostmortemData | null; error?: string }> {
     try {
-      const response = await fetch(`/api/incidents/${incidentId}/postmortem`, {
-        method: 'GET',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-      });
-
-      if (!response.ok) {
-        if (response.status === 404) {
-          return { data: null };
-        }
-        return { data: null, error: `Failed to fetch postmortem: ${response.statusText}` };
-      }
-
-      const data = await response.json();
+      const data = await apiGet<{ postmortem: PostmortemData | null }>(`/api/incidents/${incidentId}/postmortem`);
       return { data: data.postmortem || null };
     } catch (error) {
+      if ((error as ApiError).status === 404) {
+        return { data: null };
+      }
       console.error('Error fetching postmortem:', error);
       return { data: null, error: error instanceof Error ? error.message : 'Network error' };
     }
@@ -601,17 +514,10 @@ export const postmortemService = {
 
   async updatePostmortem(incidentId: string, content: string): Promise<{ success: boolean }> {
     try {
-      const response = await fetch(`/api/incidents/${incidentId}/postmortem`, {
+      await apiRequest(`/api/incidents/${incidentId}/postmortem`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
         body: JSON.stringify({ content }),
       });
-
-      if (!response.ok) {
-        throw new Error(`Failed to update postmortem: ${response.statusText}`);
-      }
-
       return { success: true };
     } catch (error) {
       console.error('Error updating postmortem:', error);
@@ -625,18 +531,10 @@ export const postmortemService = {
     parentPageId?: string
   ): Promise<{ success: boolean; pageUrl?: string; error?: string }> {
     try {
-      const response = await fetch(`/api/incidents/${incidentId}/postmortem/export/confluence`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({ spaceKey, parentPageId }),
-      });
-
-      const data = await response.json();
-      if (!response.ok) {
-        return { success: false, error: data.error || 'Failed to export to Confluence' };
-      }
-      return data;
+      return await apiPost<{ success: boolean; pageUrl?: string }>(
+        `/api/incidents/${incidentId}/postmortem/export/confluence`,
+        { spaceKey, parentPageId },
+      );
     } catch (error) {
       console.error('Error exporting to Confluence:', error);
       const message = error instanceof Error ? error.message : 'Unknown error';
@@ -656,9 +554,7 @@ export const postmortemService = {
 
   async listPostmortems(): Promise<PostmortemListItem[]> {
     try {
-      const res = await fetch('/api/postmortems', { cache: 'no-store', credentials: 'include' });
-      if (!res.ok) throw new Error('Failed to fetch postmortems');
-      const data = await res.json();
+      const data = await apiGet<{ postmortems: PostmortemListItem[] }>('/api/postmortems');
       return data.postmortems ?? [];
     } catch (error) {
       console.error('Error fetching postmortems:', error);

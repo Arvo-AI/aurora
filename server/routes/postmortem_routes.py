@@ -262,7 +262,7 @@ def export_to_confluence(user_id, incident_id):
             space_key, title, content_html, parent_id=parent_page_id
         )
     except requests.HTTPError as exc:
-        status_code = exc.response.status_code if exc.response else None
+        status_code = exc.response.status_code if exc.response is not None else None
         if status_code == 401 and auth_type == "oauth":
             refreshed = _refresh_confluence_credentials(user_id, creds)
             if refreshed:

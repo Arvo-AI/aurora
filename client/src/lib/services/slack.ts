@@ -1,3 +1,5 @@
+import { apiRequest } from '@/lib/services/api-client';
+
 export interface SlackStatus {
   connected: boolean;
   team_name?: string;
@@ -24,40 +26,12 @@ export interface SlackChannel {
 
 const API_BASE = '/api/slack';
 
-async function parseJsonResponse<T>(response: Response): Promise<T | null> {
-  const text = await response.text();
-  if (!text) {
-    return null;
-  }
-
-  return JSON.parse(text) as T;
-}
-
-async function handleJsonFetch<T>(input: RequestInfo, init?: RequestInit): Promise<T> {
-  const response = await fetch(input, {
-    ...init,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(init?.headers ?? {}),
-    },
-    cache: 'no-store',
-  });
-
-  if (!response.ok) {
-    type ErrorBody = { error?: string; details?: string };
-    const parsed = await parseJsonResponse<ErrorBody>(response).catch(() => null);
-    const message = parsed?.error || parsed?.details || response.statusText || `Request failed with status ${response.status}`;
-    throw new Error(message);
-  }
-
-  const parsed = await parseJsonResponse<T>(response);
-  return parsed ?? ({} as T);
-}
-
 export const slackService = {
   async getStatus(): Promise<SlackStatus | null> {
     try {
-      const data = await handleJsonFetch<Record<string, any>>(`${API_BASE}`);
+      const data = await apiRequest<Record<string, any>>(`${API_BASE}`, {
+        cache: 'no-store',
+      });
       return {
         connected: Boolean(data?.connected),
         team_name: data?.team_name ?? data?.teamName,
@@ -75,21 +49,24 @@ export const slackService = {
   },
 
   async connect(): Promise<SlackConnectResponse> {
-    const data = await handleJsonFetch<SlackConnectResponse>(`${API_BASE}`, {
+    const data = await apiRequest<SlackConnectResponse>(`${API_BASE}`, {
       method: 'POST',
+      cache: 'no-store',
     });
     return data;
   },
 
   async disconnect(): Promise<void> {
-    await handleJsonFetch(`${API_BASE}`, {
+    await apiRequest(`${API_BASE}`, {
       method: 'DELETE',
+      cache: 'no-store',
     });
   },
 
   async listChannels(): Promise<SlackChannel[]> {
-    const data = await handleJsonFetch<{ channels: SlackChannel[] }>(`${API_BASE}/channels`);
+    const data = await apiRequest<{ channels: SlackChannel[] }>(`${API_BASE}/channels`, {
+      cache: 'no-store',
+    });
     return data.channels || [];
   },
 };
-
