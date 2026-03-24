@@ -2,9 +2,6 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getAuthenticatedUser } from '@/lib/auth-helper';
 
 const API_BASE_URL = process.env.BACKEND_URL;
-if (!API_BASE_URL) {
-  throw new Error('BACKEND_URL environment variable is not configured');
-}
 
 export async function GET() {
   try {
