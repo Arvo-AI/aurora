@@ -49,6 +49,7 @@ const PROVIDER_ICONS: Record<string, string> = {
   tailscale: "/tailscale.svg",
   scaleway: "/scaleway.svg",
   ovh: "/ovh.svg",
+  newrelic: "/newrelic.svg",
 };
 
 const PROVIDER_NAMES: Record<string, string> = {
@@ -75,6 +76,7 @@ const PROVIDER_NAMES: Record<string, string> = {
   tailscale: "Tailscale",
   scaleway: "Scaleway",
   ovh: "OVH Cloud",
+  newrelic: "New Relic",
 };
 
 const SEVERITY_STYLES: Record<string, string> = {

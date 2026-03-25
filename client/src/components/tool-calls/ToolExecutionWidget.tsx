@@ -27,6 +27,7 @@ import {
   parseAwsMcpCommand,
   parseAwsSuggestCommand,
   parseCorootCommand,
+  parseNewRelicCommand,
 } from "./tool-command-parser"
 import { RenderOutput } from "./tool-output-renderer"
 
@@ -257,6 +258,10 @@ const ToolExecutionWidget = ({ tool, className, sendMessage, sendRaw, onToolUpda
   // Coroot tools parsing
   else if (tool.tool_name.startsWith("coroot_")) {
     command = parseCorootCommand(tool.tool_name, normalizedInput)
+  }
+  // New Relic tools parsing
+  else if (tool.tool_name === "query_newrelic" && typeof command === "string" && command.trim().startsWith("{")) {
+    command = parseNewRelicCommand(normalizedInput)
   }
 
   // If command is still JSON blob, use default

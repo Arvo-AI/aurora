@@ -433,3 +433,52 @@ export function parseJenkinsRcaCommand(toolInput: string): string {
 export function parseCloudbeesRcaCommand(toolInput: string): string {
   return parseCIRcaCommand(toolInput, "CloudBees")
 }
+
+export function parseNewRelicCommand(toolInput: string): string {
+  try {
+    let parsed: Record<string, unknown> | null = null
+    try {
+      parsed = JSON.parse(toolInput)
+    } catch {
+      parsed = JSON.parse(toolInput.replace(/'/g, '"'))
+    }
+    const args = ((parsed as Record<string, unknown>)?.kwargs || parsed || {}) as Record<string, unknown>
+    const resourceType = (args.resource_type as string) || ""
+    const query = (args.query as string) || ""
+    const timeRange = (args.time_range as string) || ""
+
+    switch (resourceType.toLowerCase()) {
+      case "nrql": {
+        if (!query) return "New Relic: NRQL query"
+        const upper = query.toUpperCase()
+        let label = "NRQL"
+        if (upper.includes("FROM TRANSACTION")) label = "Transactions"
+        else if (upper.includes("FROM LOG")) label = "Logs"
+        else if (upper.includes("FROM SYSTEMSAMPLE") || upper.includes("FROM PROCESSSAMPLE")) label = "Infrastructure"
+        else if (upper.includes("FROM METRIC") || upper.includes("AVERAGE(") || upper.includes("MAX(")) label = "Metrics"
+        else if (upper.includes("FROM SYNTHETICSCHECK")) label = "Synthetics"
+        else if (upper.includes("FROM SPAN") || upper.includes("FROM DISTRIBUTEDTRACING")) label = "Traces"
+        else if (upper.includes("ERROR")) label = "Errors"
+
+        const truncated = query.length > 70 ? query.substring(0, 67) + "..." : query
+        const time = timeRange ? ` (${timeRange})` : ""
+        return `New Relic ${label}: ${truncated}${time}`
+      }
+      case "issues": {
+        const stateFilter = query ? ` (${query})` : ""
+        return `New Relic: Alert issues${stateFilter}`
+      }
+      case "entities": {
+        const parts = query.split("|")
+        const search = parts[0]?.trim() || ""
+        const type = parts[1]?.trim() || ""
+        const typeLabel = type ? ` [${type}]` : ""
+        return `New Relic: Entity search${search ? ` "${search}"` : ""}${typeLabel}`
+      }
+      default:
+        return `New Relic: ${resourceType || "query"}`
+    }
+  } catch {
+    return "New Relic: query"
+  }
+}

@@ -172,6 +172,14 @@ const logos = {
       onError={(e) => console.error('Failed to load Datadog logo:', e)}
     />
   ),
+  newrelic: (
+    <img
+      src="/newrelic.svg"
+      className="w-4 h-4 min-w-4 min-h-4 object-contain"
+      alt="New Relic"
+      onError={(e) => console.error('Failed to load New Relic logo:', e)}
+    />
+  ),
   thousandeyes: (
     <img
       src="/thousandeyes.svg"
@@ -310,6 +318,11 @@ const getLogoForCommand = (command: string | any, toolName: string, provider?: s
   // Datadog tools
   if (tool.includes('datadog') || tool === 'query_datadog') {
     return 'datadog'
+  }
+
+  // New Relic tools
+  if (tool.includes('newrelic') || tool === 'query_newrelic') {
+    return 'newrelic'
   }
 
   // ThousandEyes tools
