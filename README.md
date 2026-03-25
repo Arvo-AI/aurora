@@ -151,11 +151,12 @@ Aurora integrates with 22+ tools across your stack:
 
 | Provider | Models |
 |----------|--------|
-| **OpenAI** | GPT-4o, GPT-4, GPT-3.5 |
-| **Anthropic** | Claude 4, Claude 3.5 Sonnet |
-| **Google** | Gemini Pro, Gemini Flash |
-| **OpenRouter** | Any model via OpenRouter API |
-| **Ollama** | Llama, Mistral, and any local model (air-gapped) |
+| **OpenAI** | GPT-5.4, GPT-5.2, o3, o4-mini, o3-mini, GPT-4.1, GPT-4.1-mini, GPT-4o, GPT-4o-mini |
+| **Anthropic** | Claude Opus 4.6, Claude Sonnet 4.6, Claude Opus 4.5, Claude Sonnet 4.5, Claude Haiku 4.5, Claude 3.5 Sonnet, Claude 3 Haiku |
+| **Google Gemini** | Gemini 3.1 Pro Preview, Gemini 3 Flash Preview, Gemini 2.5 Pro, Gemini 2.5 Flash, Gemini 2.5 Flash Lite |
+| **Vertex AI** | Same Gemini models via Google Cloud with IAM auth |
+| **OpenRouter** | Any model via OpenRouter API (single key for all providers) |
+| **Ollama** | Llama 3.1, Qwen 2.5, and any local model (air-gapped) |
 
 ## Quick Start
 
