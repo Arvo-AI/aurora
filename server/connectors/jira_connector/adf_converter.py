@@ -34,8 +34,10 @@ def adf_to_plain_text(adf: Dict[str, Any]) -> str:
             return
         for child in node.get("content") or []:
             _walk(child)
-        if node.get("type") in ("paragraph", "heading", "bulletList", "orderedList", "listItem", "codeBlock"):
+        if node.get("type") in ("paragraph", "heading", "bulletList", "orderedList", "listItem", "codeBlock", "blockquote"):
             parts.append("\n")
+        if node.get("type") == "rule":
+            parts.append("\n---\n")
 
     _walk(adf)
     return "".join(parts).strip()
@@ -260,6 +262,28 @@ def markdown_to_adf(markdown_text: str) -> Dict[str, Any]:
         # Blank line
         if not line.strip():
             i += 1
+            continue
+
+        # Horizontal rule
+        if re.match(r"^-{3,}$|^\*{3,}$|^_{3,}$", line.strip()):
+            content.append({"type": "rule"})
+            i += 1
+            continue
+
+        # Blockquote
+        bq_match = re.match(r"^>\s?(.*)", line)
+        if bq_match:
+            bq_lines: List[Dict[str, Any]] = []
+            while i < len(lines):
+                bqm = re.match(r"^>\s?(.*)", lines[i])
+                if not bqm:
+                    break
+                bq_lines.append({
+                    "type": "paragraph",
+                    "content": _parse_line_to_inline(bqm.group(1)),
+                })
+                i += 1
+            content.append({"type": "blockquote", "content": bq_lines})
             continue
 
         # Regular paragraph
