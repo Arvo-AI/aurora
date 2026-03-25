@@ -128,9 +128,11 @@ def list_resources(user_id):
         except Exception as e:
             logger.warning("Failed to fetch on-prem resources: %s", e)
 
+    cost_map = _get_cost_by_service(user_id)
+
     all_resources = []
     for svc in resources:
-        all_resources.append(_normalize_resource(svc))
+        all_resources.append(_normalize_resource(svc, cost_map))
 
     for vm in onprem_resources:
         all_resources.append({
@@ -146,6 +148,7 @@ def list_resources(user_id):
             "cloud_resource_id": "",
             "endpoint": f"{vm.get('ip_address', '')}:{vm.get('port', 22)}",
             "updated_at": str(vm.get("updated_at", "")),
+            "monthly_cost": None,
         })
 
     if provider == "onprem":
@@ -176,7 +179,8 @@ def get_resource_detail(user_id, resource_id):
     if not service:
         return jsonify({"error": "Resource not found"}), 404
 
-    resource = _normalize_resource(service)
+    cost_map = _get_cost_by_service(user_id)
+    resource = _normalize_resource(service, cost_map)
     resource["upstream"] = service.get("upstream", [])
     resource["downstream"] = service.get("downstream", [])
 
@@ -277,7 +281,82 @@ def register_onprem_resource(user_id):
 # Helper Functions
 # =========================================================================
 
-def _normalize_resource(svc):
+_cost_cache = {}
+_COST_CACHE_TTL = 300  # 5 minutes
+
+def _get_cost_by_service(user_id):
+    """Fetch last 30 days of cost aggregated by cloud service name. Cached for 5 min."""
+    import time
+    now = time.time()
+    cache_key = user_id
+    cached = _cost_cache.get(cache_key)
+    if cached and now - cached[0] < _COST_CACHE_TTL:
+        return cached[1]
+
+    costs = {}
+    try:
+        with db_pool.get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT LOWER(service), SUM(cost) as total_cost
+                    FROM cloud_billing_usage
+                    WHERE user_id = %s AND usage_date >= CURRENT_DATE - INTERVAL '30 days'
+                    GROUP BY LOWER(service)
+                    """,
+                    (user_id,),
+                )
+                for row in cur.fetchall():
+                    if row[0] and row[1]:
+                        costs[row[0]] = float(row[1])
+    except Exception as e:
+        logger.debug("Failed to fetch billing data: %s", e)
+
+    _cost_cache[cache_key] = (now, costs)
+    return costs
+
+
+# Mapping from sub_type to billing service name patterns
+_SUB_TYPE_TO_BILLING_SERVICE = {
+    "ec2": "amazon elastic compute cloud",
+    "rds": "amazon relational database service",
+    "aurora_rds": "amazon relational database service",
+    "s3": "amazon simple storage service",
+    "lambda": "aws lambda",
+    "elasticache": "amazon elasticache",
+    "dynamodb": "amazon dynamodb",
+    "sqs": "amazon simple queue service",
+    "sns": "amazon simple notification service",
+    "cloudfront": "amazon cloudfront",
+    "alb_nlb": "elastic load balancing",
+    "eks": "amazon elastic kubernetes service",
+    "gce": "compute engine",
+    "gke": "kubernetes engine",
+    "cloud_sql": "cloud sql",
+    "cloud_run": "cloud run",
+    "cloud_function": "cloud functions",
+    "gcs": "cloud storage",
+    "pubsub_topic": "cloud pub/sub",
+    "azure_vm": "virtual machines",
+    "aks": "azure kubernetes service",
+    "cosmos_db": "azure cosmos db",
+    "azure_sql": "sql database",
+    "azure_blob": "storage accounts",
+}
+
+
+def _estimate_resource_cost(svc, cost_map):
+    """Estimate monthly cost for a resource by matching its sub_type to billing data."""
+    if not cost_map:
+        return None
+    sub_type = svc.get("sub_type", "")
+    billing_key = _SUB_TYPE_TO_BILLING_SERVICE.get(sub_type)
+    if billing_key and billing_key in cost_map:
+        return round(cost_map[billing_key], 2)
+    return None
+
+
+def _normalize_resource(svc, cost_map=None):
     """Normalize a Memgraph service dict for API response."""
     name = svc.get("name", "")
     provider = svc.get("provider", "")
@@ -295,6 +374,7 @@ def _normalize_resource(svc):
         "endpoint": svc.get("endpoint", ""),
         "metadata": svc.get("metadata", {}),
         "updated_at": str(svc.get("updated_at", "")),
+        "monthly_cost": _estimate_resource_cost(svc, cost_map) if cost_map else None,
     }
 
 

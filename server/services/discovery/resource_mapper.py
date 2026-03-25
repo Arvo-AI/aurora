@@ -319,6 +319,7 @@ STATUS_DISPLAY_MAP = {
     "ready": "Running",
     "healthy": "Running",
     "READY": "Running",
+    "available": "Running",
     # Stopped
     "STOPPED": "Stopped",
     "TERMINATED": "Stopped",
@@ -330,6 +331,8 @@ STATUS_DISPLAY_MAP = {
     "terminated": "Stopped",
     "DOWN": "Stopped",
     "DEPROVISIONING": "Stopped",
+    "shutting-down": "Stopped",
+    "deleting": "Stopped",
     # Provisioning
     "PENDING": "Provisioning",
     "PROVISIONING": "Provisioning",
@@ -340,11 +343,17 @@ STATUS_DISPLAY_MAP = {
     "RECONCILING": "Provisioning",
     "pending": "Provisioning",
     "STARTING": "Provisioning",
+    "creating": "Provisioning",
+    "backing-up": "Provisioning",
+    "modifying": "Provisioning",
+    "rebooting": "Provisioning",
     # Error
     "ERROR": "Error",
     "FAILED": "Error",
     "Failed": "Error",
     "Unhealthy": "Error",
+    "failed": "Error",
+    "inaccessible-encryption-credentials": "Error",
 }
 
 

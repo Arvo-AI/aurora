@@ -157,6 +157,55 @@ def _fetch_cloudmap_services(env):
     }, None
 
 
+def _fetch_ec2_statuses(env):
+    """Fetch EC2 instance states for all instances."""
+    cmd = ["aws", "ec2", "describe-instance-status",
+           "--include-all-instances", "--output", "json"]
+    data = run_cli_json_command(cmd, env)
+    if data is None:
+        return {}, "Failed to fetch EC2 instance statuses"
+    statuses = {}
+    for ist in data.get("InstanceStatuses", []):
+        instance_id = ist.get("InstanceId", "")
+        state = ist.get("InstanceState", {}).get("Name", "")
+        if instance_id and state:
+            statuses[instance_id] = state
+    return statuses, None
+
+
+def _fetch_rds_statuses(env):
+    """Fetch RDS instance statuses."""
+    cmd = ["aws", "rds", "describe-db-instances", "--output", "json"]
+    data = run_cli_json_command(cmd, env)
+    if data is None:
+        return {}, "Failed to fetch RDS instance statuses"
+    statuses = {}
+    for db in data.get("DBInstances", []):
+        identifier = db.get("DBInstanceIdentifier", "")
+        status = db.get("DBInstanceStatus", "")
+        if identifier and status:
+            statuses[identifier] = status
+    return statuses, None
+
+
+def _fetch_eks_statuses(env):
+    """Fetch EKS cluster statuses."""
+    cmd = ["aws", "eks", "list-clusters", "--output", "json"]
+    data = run_cli_json_command(cmd, env)
+    if data is None:
+        return {}, "Failed to fetch EKS clusters"
+    statuses = {}
+    for cluster_name in data.get("clusters", []):
+        detail_cmd = ["aws", "eks", "describe-cluster",
+                      "--name", cluster_name, "--output", "json"]
+        detail = run_cli_json_command(detail_cmd, env)
+        if detail and detail.get("cluster"):
+            status = detail["cluster"].get("status", "")
+            if status:
+                statuses[cluster_name] = status
+    return statuses, None
+
+
 def enrich(user_id, aws_nodes, credentials):
     """Enrich AWS resources with detail data not available from Resource Explorer 2.
 
@@ -224,6 +273,32 @@ def enrich(user_id, aws_nodes, credentials):
             len(cm_data.get("namespaces", [])),
             len(cm_data.get("services", [])),
         )
+
+    # Enrich AWS node statuses
+    status_map = {}
+    for label, fetcher in [("EC2", _fetch_ec2_statuses), ("RDS", _fetch_rds_statuses), ("EKS", _fetch_eks_statuses)]:
+        statuses, err = fetcher(env)
+        if err:
+            errors.append(err)
+        else:
+            status_map.update(statuses)
+            logger.info("Fetched %d %s statuses", len(statuses), label)
+
+    # Patch status onto AWS nodes
+    if status_map:
+        for node in aws_nodes:
+            node_name = node.get("name", "")
+            arn = node.get("cloud_resource_id", "")
+            # Match by name or by extracting the resource ID from the ARN
+            status = status_map.get(node_name)
+            if not status and arn:
+                # Try matching the last segment of the ARN
+                arn_id = arn.split("/")[-1] if "/" in arn else arn.split(":")[-1]
+                status = status_map.get(arn_id)
+            if status:
+                node["status"] = status
+
+        enrichment_data["resource_statuses"] = status_map
 
     logger.info(
         "AWS enrichment complete for user %s: %d errors",
