@@ -111,7 +111,7 @@ def connect(user_id):
         user_info = client.validate_credentials()
     except NewRelicAPIError as exc:
         logger.warning("[NEWRELIC] Credential validation failed for user %s: %s", user_id, exc)
-        return jsonify({"error": f"Failed to validate New Relic credentials: {exc}"}), 400
+        return jsonify({"error": "Failed to validate New Relic credentials"}), 400
 
     account_info = None
     try:
