@@ -111,8 +111,6 @@ class ConnectorRegistry {
       category: "Monitoring",
       path: "/newrelic/auth",
       storageKey: "isNewRelicConnected",
-      alertsPath: "/newrelic/events",
-      alertsLabel: "View Issues",
       useCustomConnection: true,
     });
 

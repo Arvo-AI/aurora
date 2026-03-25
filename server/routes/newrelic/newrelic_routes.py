@@ -3,11 +3,7 @@
 Provides endpoints for:
 - Connecting/disconnecting New Relic accounts (NerdGraph + optional license key)
 - Credential validation against NerdGraph
-- Running NRQL queries
-- Fetching issues and incidents
-- Entity search
-- Polling-based incident ingestion
-- Webhook receiver for New Relic alert notifications
+- Webhook URL generation for alert notifications
 """
 
 import logging
@@ -18,10 +14,7 @@ from typing import Any, Dict, Optional
 from flask import Blueprint, jsonify, request
 
 from connectors.newrelic_connector.client import NewRelicClient, NewRelicAPIError
-from routes.newrelic.config import MAX_NRQL_LENGTH, MAX_RESULTS_CAP
-from routes.newrelic.tasks import process_newrelic_issue, poll_newrelic_issues
 from utils.db.connection_pool import db_pool
-from utils.web.cors_utils import create_cors_response
 from utils.logging.secure_logging import mask_credential_value
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.auth.rbac_decorators import require_permission
@@ -45,20 +38,16 @@ def _get_stored_newrelic_credentials(user_id: str) -> Optional[Dict[str, Any]]:
         if not org_id:
             return None
 
-        from utils.db.db_utils import connect_to_db_as_admin
-        conn = connect_to_db_as_admin()
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT user_id FROM user_tokens WHERE org_id = %s AND provider = 'newrelic' AND is_active = TRUE AND secret_ref IS NOT NULL LIMIT 1",
-            (org_id,)
-        )
-        row = cursor.fetchone()
-        cursor.close()
-        conn.close()
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT user_id FROM user_tokens WHERE org_id = %s AND provider = 'newrelic' AND is_active = TRUE AND secret_ref IS NOT NULL LIMIT 1",
+                    (org_id,)
+                )
+                row = cursor.fetchone()
 
         if row:
-            data = get_token_data(row[0], "newrelic")
-            return data or None
+            return get_token_data(row[0], "newrelic") or None
 
         return None
     except Exception as exc:
@@ -204,28 +193,22 @@ def status(user_id):
 @newrelic_bp.route("/disconnect", methods=["DELETE", "POST", "OPTIONS"])
 @require_permission("connectors", "write")
 def disconnect(user_id):
-    """Remove stored New Relic credentials and associated events."""
+    """Remove stored New Relic credentials."""
     try:
         with db_pool.get_admin_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "DELETE FROM user_tokens WHERE user_id = %s AND provider = %s",
-                (user_id, "newrelic"),
-            )
-            token_rows = cursor.rowcount
-            cursor.execute(
-                "DELETE FROM newrelic_events WHERE user_id = %s",
-                (user_id,),
-            )
-            event_rows = cursor.rowcount
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "DELETE FROM user_tokens WHERE user_id = %s AND provider = %s",
+                    (user_id, "newrelic"),
+                )
+                token_rows = cursor.rowcount
             conn.commit()
 
-        logger.info("[NEWRELIC] Disconnected user %s (tokens=%s, events=%s)", user_id, token_rows, event_rows)
+        logger.info("[NEWRELIC] Disconnected user %s (tokens=%s)", user_id, token_rows)
         return jsonify({
             "success": True,
             "message": "New Relic disconnected successfully",
             "tokensDeleted": token_rows,
-            "eventsDeleted": event_rows,
         })
     except Exception as exc:
         logger.exception("[NEWRELIC] Failed to disconnect user %s: %s", user_id, exc)
@@ -233,282 +216,8 @@ def disconnect(user_id):
 
 
 # ------------------------------------------------------------------
-# NRQL Query Endpoint
+# Webhook URL (for UI setup instructions)
 # ------------------------------------------------------------------
-
-
-@newrelic_bp.route("/nrql", methods=["POST", "OPTIONS"])
-@require_permission("connectors", "read")
-def nrql_query(user_id):
-    """Execute an NRQL query via NerdGraph."""
-    creds = _get_stored_newrelic_credentials(user_id)
-    if not creds:
-        return jsonify({"error": "New Relic is not connected"}), 400
-
-    client = _build_client_from_creds(creds)
-    if not client:
-        return jsonify({"error": "Stored New Relic credentials are incomplete"}), 400
-
-    body = request.get_json(force=True, silent=True) or {}
-    nrql = body.get("query", "").strip()
-    if not nrql:
-        return jsonify({"error": "NRQL query is required"}), 400
-    if len(nrql) > MAX_NRQL_LENGTH:
-        return jsonify({"error": f"NRQL query exceeds maximum length of {MAX_NRQL_LENGTH} characters"}), 400
-
-    override_account_id = body.get("accountId")
-    timeout_seconds = min(int(body.get("timeout", 30)), 120)
-
-    try:
-        result = client.execute_nrql(
-            nrql,
-            account_id=override_account_id,
-            timeout_seconds=timeout_seconds,
-        )
-        console_url = client.build_nrql_console_url(nrql)
-        return jsonify({
-            "results": result.get("results", []),
-            "metadata": result.get("metadata"),
-            "totalResult": result.get("totalResult"),
-            "consoleUrl": console_url,
-        })
-    except NewRelicAPIError as exc:
-        logger.error("[NEWRELIC] NRQL query failed for user %s: %s", user_id, exc)
-        return jsonify({"error": f"NRQL query failed: {exc}"}), 502
-
-
-# ------------------------------------------------------------------
-# Issues & Incidents
-# ------------------------------------------------------------------
-
-
-@newrelic_bp.route("/issues", methods=["GET", "OPTIONS"])
-@require_permission("connectors", "read")
-def list_issues(user_id):
-    """Fetch alert issues from NerdGraph with filtering support."""
-    creds = _get_stored_newrelic_credentials(user_id)
-    if not creds:
-        return jsonify({"error": "New Relic is not connected"}), 400
-
-    client = _build_client_from_creds(creds)
-    if not client:
-        return jsonify({"error": "Stored New Relic credentials are incomplete"}), 400
-
-    args = request.args
-    states = [s.upper() for s in args.get("states", "").split(",") if s.strip()] or None
-    priorities = [p.upper() for p in args.get("priorities", "").split(",") if p.strip()] or None
-    since_ms = args.get("sinceMs", type=int)
-    until_ms = args.get("untilMs", type=int)
-    cursor = args.get("cursor")
-    page_size = min(int(args.get("pageSize", 25)), 100)
-
-    try:
-        result = client.get_issues(
-            states=states,
-            priorities=priorities,
-            since_epoch_ms=since_ms,
-            until_epoch_ms=until_ms,
-            cursor=cursor,
-            page_size=page_size,
-        )
-        return jsonify({
-            "issues": result.get("issues", []),
-            "nextCursor": result.get("nextCursor"),
-        })
-    except NewRelicAPIError as exc:
-        logger.error("[NEWRELIC] Issues fetch failed for user %s: %s", user_id, exc)
-        return jsonify({"error": f"Failed to fetch issues: {exc}"}), 502
-
-
-@newrelic_bp.route("/issues/<issue_id>", methods=["GET", "OPTIONS"])
-@require_permission("connectors", "read")
-def get_issue(user_id, issue_id: str):
-    """Get detailed info about a single issue."""
-    creds = _get_stored_newrelic_credentials(user_id)
-    if not creds:
-        return jsonify({"error": "New Relic is not connected"}), 400
-
-    client = _build_client_from_creds(creds)
-    if not client:
-        return jsonify({"error": "Stored New Relic credentials are incomplete"}), 400
-
-    try:
-        issue = client.get_issue_details(issue_id)
-        if not issue:
-            return jsonify({"error": f"Issue {issue_id} not found"}), 404
-        return jsonify(issue)
-    except NewRelicAPIError as exc:
-        logger.error("[NEWRELIC] Issue detail fetch failed for user %s: %s", user_id, exc)
-        return jsonify({"error": f"Failed to fetch issue details: {exc}"}), 502
-
-
-# ------------------------------------------------------------------
-# Entity search
-# ------------------------------------------------------------------
-
-
-@newrelic_bp.route("/entities", methods=["GET", "OPTIONS"])
-@require_permission("connectors", "read")
-def search_entities(user_id):
-    """Search for New Relic entities (services, hosts, etc.)."""
-    creds = _get_stored_newrelic_credentials(user_id)
-    if not creds:
-        return jsonify({"error": "New Relic is not connected"}), 400
-
-    client = _build_client_from_creds(creds)
-    if not client:
-        return jsonify({"error": "Stored New Relic credentials are incomplete"}), 400
-
-    query_str = request.args.get("query", "")
-    entity_type = request.args.get("type")
-    limit = min(int(request.args.get("limit", 25)), 200)
-
-    try:
-        entities = client.search_entities(
-            query_str=query_str,
-            entity_type=entity_type,
-            limit=limit,
-        )
-        return jsonify({"entities": entities})
-    except NewRelicAPIError as exc:
-        logger.error("[NEWRELIC] Entity search failed for user %s: %s", user_id, exc)
-        return jsonify({"error": f"Entity search failed: {exc}"}), 502
-
-
-# ------------------------------------------------------------------
-# Accounts listing
-# ------------------------------------------------------------------
-
-
-@newrelic_bp.route("/accounts", methods=["GET", "OPTIONS"])
-@require_permission("connectors", "read")
-def list_accounts(user_id):
-    """List all New Relic accounts accessible by the stored API key."""
-    creds = _get_stored_newrelic_credentials(user_id)
-    if not creds:
-        return jsonify({"error": "New Relic is not connected"}), 400
-
-    client = _build_client_from_creds(creds)
-    if not client:
-        return jsonify({"error": "Stored New Relic credentials are incomplete"}), 400
-
-    try:
-        accounts = client.list_accessible_accounts()
-        return jsonify({"accounts": accounts})
-    except NewRelicAPIError as exc:
-        logger.error("[NEWRELIC] Accounts list failed for user %s: %s", user_id, exc)
-        return jsonify({"error": f"Failed to list accounts: {exc}"}), 502
-
-
-# ------------------------------------------------------------------
-# Ingested events (stored from webhooks / polling)
-# ------------------------------------------------------------------
-
-
-@newrelic_bp.route("/events/ingested", methods=["GET", "OPTIONS"])
-@require_permission("connectors", "read")
-def list_ingested_events(user_id):
-    """List New Relic events stored from webhooks or polling."""
-    org_id = get_org_id_from_request()
-    limit = request.args.get("limit", default=50, type=int)
-    offset = request.args.get("offset", default=0, type=int)
-    status_filter = request.args.get("status")
-    priority_filter = request.args.get("priority")
-
-    try:
-        with db_pool.get_admin_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("SET myapp.current_org_id = %s", (org_id,))
-
-            base_query = """
-                SELECT id, issue_id, issue_title, priority, state, entity_names, payload, received_at, created_at
-                FROM newrelic_events
-                WHERE org_id = %s
-            """
-            params = [org_id]
-            if status_filter:
-                base_query += " AND state = %s"
-                params.append(status_filter)
-            if priority_filter:
-                base_query += " AND priority = %s"
-                params.append(priority_filter)
-
-            base_query += " ORDER BY received_at DESC LIMIT %s OFFSET %s"
-            params.extend([limit, offset])
-
-            cursor.execute(base_query, params)
-            rows = cursor.fetchall()
-
-            count_query = "SELECT COUNT(*) FROM newrelic_events WHERE org_id = %s"
-            count_params = [org_id]
-            if status_filter:
-                count_query += " AND state = %s"
-                count_params.append(status_filter)
-            if priority_filter:
-                count_query += " AND priority = %s"
-                count_params.append(priority_filter)
-
-            cursor.execute(count_query, count_params)
-            total = cursor.fetchone()[0]
-
-        events = []
-        for row in rows:
-            events.append({
-                "id": row[0],
-                "issueId": row[1],
-                "title": row[2],
-                "priority": row[3],
-                "state": row[4],
-                "entityNames": row[5],
-                "payload": row[6],
-                "receivedAt": row[7].isoformat() if row[7] else None,
-                "createdAt": row[8].isoformat() if row[8] else None,
-            })
-
-        return jsonify({
-            "events": events,
-            "total": total,
-            "limit": limit,
-            "offset": offset,
-        })
-    except Exception as exc:
-        logger.exception("[NEWRELIC] Failed to list ingested events for user %s: %s", user_id, exc)
-        return jsonify({"error": "Failed to load New Relic events"}), 500
-
-
-# ------------------------------------------------------------------
-# Webhook receiver for New Relic alert notifications
-# ------------------------------------------------------------------
-
-
-@newrelic_bp.route("/webhook/<user_id>", methods=["POST", "OPTIONS"])
-def webhook(user_id: str):
-    """Receive New Relic alert notification webhooks."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
-    if not user_id:
-        logger.warning("[NEWRELIC] Webhook received without user_id")
-        return jsonify({"error": "user_id is required"}), 400
-
-    creds = get_token_data(user_id, "newrelic")
-    if not creds:
-        logger.warning("[NEWRELIC] Webhook received for user %s with no New Relic connection", user_id)
-        return jsonify({"error": "New Relic not connected for this user"}), 404
-
-    payload = request.get_json(silent=True) or {}
-    metadata = {
-        "headers": dict(request.headers),
-        "remote_addr": request.remote_addr,
-    }
-
-    logger.info(
-        "[NEWRELIC] Received webhook for user %s issue_id=%s",
-        user_id, payload.get("issueId") or payload.get("issue_id"),
-    )
-
-    process_newrelic_issue.delay(payload, metadata, user_id)
-    return jsonify({"received": True})
 
 
 @newrelic_bp.route("/webhook-url", methods=["GET", "OPTIONS"])
@@ -538,20 +247,3 @@ def webhook_url(user_id):
         "webhookUrl": url,
         "instructions": instructions,
     })
-
-
-# ------------------------------------------------------------------
-# Polling trigger (manual or cron-driven)
-# ------------------------------------------------------------------
-
-
-@newrelic_bp.route("/poll-issues", methods=["POST", "OPTIONS"])
-@require_permission("connectors", "write")
-def trigger_poll(user_id):
-    """Manually trigger issue polling from New Relic."""
-    creds = _get_stored_newrelic_credentials(user_id)
-    if not creds:
-        return jsonify({"error": "New Relic is not connected"}), 400
-
-    task = poll_newrelic_issues.delay(user_id)
-    return jsonify({"success": True, "taskId": task.id, "message": "Polling triggered"})

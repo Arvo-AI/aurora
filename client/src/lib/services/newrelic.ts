@@ -27,39 +27,6 @@ export interface NewRelicWebhookInfo {
   instructions: string[];
 }
 
-export interface NewRelicIssue {
-  issueId: string;
-  title: string;
-  priority: string;
-  state: string;
-  activatedAt?: string;
-  closedAt?: string;
-  createdAt?: string;
-  entityNames?: string[];
-  conditionName?: string;
-  policyName?: string;
-  totalIncidents?: number;
-}
-
-export interface NewRelicIngestedEvent {
-  id: number;
-  issueId?: string;
-  title?: string;
-  priority?: string;
-  state?: string;
-  entityNames?: string;
-  payload: UnknownRecord;
-  receivedAt?: string;
-  createdAt?: string;
-}
-
-export interface NewRelicIngestedEventsResponse {
-  events: NewRelicIngestedEvent[];
-  total: number;
-  limit: number;
-  offset: number;
-}
-
 const API_BASE = '/api/newrelic';
 
 async function parseJsonResponse<T>(response: Response): Promise<T | null> {
@@ -130,38 +97,5 @@ export const newrelicService = {
 
   async getWebhookUrl(): Promise<NewRelicWebhookInfo> {
     return handleJsonFetch<NewRelicWebhookInfo>(`${API_BASE}/webhook-url`);
-  },
-
-  async getIssues(params: URLSearchParams): Promise<{ issues: NewRelicIssue[]; nextCursor?: string }> {
-    const qs = params.toString();
-    const url = qs ? `${API_BASE}/issues?${qs}` : `${API_BASE}/issues`;
-    return handleJsonFetch(url);
-  },
-
-  async getIngestedEvents(params: URLSearchParams): Promise<NewRelicIngestedEventsResponse> {
-    const qs = params.toString();
-    const url = qs ? `${API_BASE}/events/ingested?${qs}` : `${API_BASE}/events/ingested`;
-    return handleJsonFetch<NewRelicIngestedEventsResponse>(url);
-  },
-
-  async executeNrql(query: string, accountId?: string): Promise<UnknownRecord> {
-    return handleJsonFetch<UnknownRecord>(`${API_BASE}/nrql`, {
-      method: 'POST',
-      body: JSON.stringify({ query, accountId }),
-    });
-  },
-
-  async getEntities(params: URLSearchParams): Promise<UnknownRecord> {
-    const qs = params.toString();
-    const url = qs ? `${API_BASE}/entities?${qs}` : `${API_BASE}/entities`;
-    return handleJsonFetch<UnknownRecord>(url);
-  },
-
-  async getAccounts(): Promise<{ accounts: Array<{ id: number; name: string }> }> {
-    return handleJsonFetch(`${API_BASE}/accounts`);
-  },
-
-  async pollIssues(): Promise<UnknownRecord> {
-    return handleJsonFetch<UnknownRecord>(`${API_BASE}/poll-issues`, { method: 'POST' });
   },
 };
