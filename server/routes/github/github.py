@@ -122,22 +122,11 @@ def github_status(user_id):
         github_creds = get_credentials_from_db(user_id, "github")
         if not github_creds or not github_creds.get("access_token"):
             return jsonify({"connected": False})
-        
-        # Validate the stored token by making a test API call
-        headers = {"Authorization": f"token {github_creds['access_token']}"}
-        user_response = requests.get("https://api.github.com/user", headers=headers)
-        
-        if user_response.status_code == 200:
-            user_data = user_response.json()
-            return jsonify({
-                "connected": True,
-                "username": user_data.get("login"),
-                "name": user_data.get("name"),
-                "avatar_url": user_data.get("avatar_url")
-            })
-        else:
-            # Token is invalid, remove it
-            return jsonify({"connected": False, "error": "Invalid or expired token"})
+
+        return jsonify({
+            "connected": True,
+            "username": github_creds.get("username"),
+        })
     
     except Exception as e:
         logging.error(f"Error checking GitHub status: {e}", exc_info=True)
