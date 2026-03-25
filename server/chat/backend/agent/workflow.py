@@ -791,8 +791,18 @@ class Workflow:
         )
         summary_msg = AIMessage(content=compressed_summary)
 
-        # 3. Take the recent tail (last N messages for conversational flow)
-        recent_tail = existing_context[-recent_tail_size:] if len(existing_context) > recent_tail_size else existing_context
+        # 3. Take the recent tail (last N messages for conversational flow),
+        #    excluding any previously injected synthetic RCA summaries to avoid duplication.
+        synthetic_prefix = "[RCA Investigation Summary"
+        tail_source = [
+            msg for msg in existing_context
+            if not (
+                isinstance(msg, AIMessage)
+                and isinstance(getattr(msg, "content", None), str)
+                and msg.content.startswith(synthetic_prefix)
+            )
+        ]
+        recent_tail = tail_source[-recent_tail_size:] if len(tail_source) > recent_tail_size else tail_source
 
         # 4. Assemble: original prompt + summary + recent tail (deduplicated)
         compressed = []

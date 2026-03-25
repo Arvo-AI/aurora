@@ -820,6 +820,8 @@ async def _run_jira_action(
             await wf._wait_for_ongoing_tool_calls()
     except Exception as exc:
         logger.error(f"[JiraAction] Failed: {exc}")
+        _merge_investigation_messages(session_id, investigation_messages,
+                                       followup_prompt_prefix=followup_text[:80])
         return
 
     _merge_investigation_messages(session_id, investigation_messages,

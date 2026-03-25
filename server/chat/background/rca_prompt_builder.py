@@ -820,7 +820,7 @@ def build_rca_prompt(
             "- **DO NOT** output a plan or text explanation first.",
             "- **DO NOT** say 'I will start by...'",
             "- **If Jira is connected, your FIRST tool call MUST be jira_search_issues.**",
-            "- After Jira context, proceed to infrastructure/CI tools.",
+            f"- After {'Jira' if has_jira else 'Confluence' if has_confluence else 'change'} context, proceed to infrastructure/CI tools.",
             "- UNLESS YOU ARE DONE, your response MUST contain a tool call.",
             "- NOT PROVIDING A TOOL CALL WILL END THE INVESTIGATION AUTOMATICALLY",
             "",

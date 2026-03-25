@@ -102,7 +102,11 @@ def exchange_code_for_token(code: str, redirect_uri: Optional[str] = None) -> Di
         "redirect_uri": redirect_uri or config["redirect_uri"],
     }
 
-    response = requests.post(ATLASSIAN_TOKEN_URL, json=payload, timeout=30)
+    try:
+        response = requests.post(ATLASSIAN_TOKEN_URL, json=payload, timeout=30)
+    except requests.exceptions.RequestException as exc:
+        logger.error("Atlassian OAuth token exchange request failed: %s", exc)
+        raise ValueError(f"Atlassian OAuth token exchange failed: {exc}") from exc
     if not response.ok:
         logger.error(
             "Atlassian OAuth token exchange failed (%s)",
@@ -134,7 +138,11 @@ def refresh_access_token(refresh_token: str) -> Dict[str, Any]:
         "refresh_token": refresh_token,
     }
 
-    response = requests.post(ATLASSIAN_TOKEN_URL, json=payload, timeout=30)
+    try:
+        response = requests.post(ATLASSIAN_TOKEN_URL, json=payload, timeout=30)
+    except requests.exceptions.RequestException as exc:
+        logger.error("Atlassian OAuth refresh request failed: %s", exc)
+        raise ValueError(f"Atlassian OAuth refresh failed: {exc}") from exc
     if not response.ok:
         logger.error(
             "Atlassian OAuth refresh failed (%s)",
