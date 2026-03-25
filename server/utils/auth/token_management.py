@@ -386,6 +386,9 @@ def store_tokens_in_db(user_id: str, token_data: Dict, provider: str,
         except Exception as cache_error:
             logger.warning(f"[STORE-TOKENS] Failed to clear secret cache: {cache_error}")
 
+        # Schedule prediscovery with debounce (10min delay, deduped via Redis)
+        _schedule_prediscovery(user_id)
+
         elapsed_time = (time.perf_counter() - start_time) * 1000
         logger.info("[STORE-TOKENS] Successfully stored credentials for provider: %s", provider)
         logger.info(f"[STORE-TOKENS] Secret reference stored in database")
@@ -463,3 +466,23 @@ def get_token_data(user_id: str, provider: str, org_id: str | None = None) -> Op
         elapsed_time = (time.perf_counter() - start_time) * 1000
         logger.error("[GET-TOKENS] Failed to fetch credentials for provider(s) %s after %.2fms: %s", provider, elapsed_time, e)
         return {}
+
+
+def _schedule_prediscovery(user_id: str) -> None:
+    """Schedule prediscovery with 10-minute debounce after new connector setup."""
+    try:
+        from utils.cache.redis_client import get_redis_client
+        redis = get_redis_client()
+        if not redis:
+            return
+        key = f"prediscovery_pending:{user_id}"
+        if not redis.set(key, "1", nx=True, ex=60):
+            return
+        from chat.background.prediscovery_task import run_prediscovery
+        run_prediscovery.apply_async(
+            kwargs={"user_id": user_id, "trigger": "new_connector"},
+            countdown=60,
+        )
+        logger.info("[STORE-TOKENS] Scheduled prediscovery for user %s (1min delay)", user_id)
+    except Exception as e:
+        logger.debug("[STORE-TOKENS] Could not schedule prediscovery: %s", e)

@@ -9,7 +9,7 @@ import logging
 from flask import Blueprint, jsonify
 
 from utils.auth.rbac_decorators import require_permission
-from utils.auth.stateless_auth import get_user_id_from_request, get_org_id_from_request
+from utils.auth.stateless_auth import get_org_id_from_request
 from utils.db.connection_pool import db_pool
 
 logger = logging.getLogger(__name__)
@@ -18,12 +18,9 @@ prediscovery_bp = Blueprint("prediscovery", __name__)
 
 
 @prediscovery_bp.route("/run", methods=["POST"])
-@require_permission("prediscovery", "write")
-def trigger_prediscovery():
+@require_permission("connectors", "write")
+def trigger_prediscovery(user_id):
     """Trigger an on-demand prediscovery run for the current user."""
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "Authentication required"}), 401
 
     try:
         from chat.background.prediscovery_task import run_prediscovery
@@ -40,12 +37,9 @@ def trigger_prediscovery():
 
 
 @prediscovery_bp.route("/status", methods=["GET"])
-@require_permission("prediscovery", "read")
-def get_prediscovery_status():
+@require_permission("connectors", "read")
+def get_prediscovery_status(user_id):
     """Get the status of the latest prediscovery run for this org."""
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "Authentication required"}), 401
 
     try:
         org_id = get_org_id_from_request()
