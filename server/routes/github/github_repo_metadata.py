@@ -91,6 +91,11 @@ def generate_repo_metadata(self, user_id: str, repo_full_name: str):
         readme = _fetch_readme(token, owner, repo)
         file_list = _fetch_top_level_listing(token, owner, repo)
 
+        if not readme and file_list == "(could not list files)":
+            logger.warning(f"Could not fetch any content for {repo_full_name}, skipping LLM summary")
+            _update_metadata(user_id, repo_full_name, None, "error")
+            return
+
         context_parts = []
         if readme:
             context_parts.append(f"README:\n{readme}")

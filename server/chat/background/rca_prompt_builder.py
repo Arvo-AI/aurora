@@ -365,7 +365,8 @@ def _get_github_connected(user_id: str) -> bool:
         from utils.auth.stateless_auth import get_credentials_from_db
         creds = get_credentials_from_db(user_id, "github")
         return bool(creds and creds.get("access_token"))
-    except Exception:
+    except Exception as e:
+        logger.warning(f"Error checking GitHub connection for user {user_id}: {e}")
         return False
 
 

@@ -157,6 +157,7 @@ export default function GitHubProviderIntegration() {
   // Repo picker state
   const [allRepos, setAllRepos] = useState<Repository[]>([]);
   const [isLoadingRepos, setIsLoadingRepos] = useState(false);
+  const [hasLoadedRepos, setHasLoadedRepos] = useState(false);
   const [checkedRepos, setCheckedRepos] = useState<Set<string>>(new Set());
   const [searchFilter, setSearchFilter] = useState('');
   const [expanded, setExpanded] = useState(false);
@@ -181,7 +182,7 @@ export default function GitHubProviderIntegration() {
       const repos: Repository[] = Array.isArray(data) ? data : data?.repos || [];
       setAllRepos(repos);
     } catch { setAllRepos([]); }
-    finally { setIsLoadingRepos(false); }
+    finally { setIsLoadingRepos(false); setHasLoadedRepos(true); }
   }, [userId]);
 
   const startMetadataPolling = useCallback((repos: ConnectedRepo[]) => {
@@ -219,10 +220,10 @@ export default function GitHubProviderIntegration() {
 
   // Lazy-load full repo list only when user expands the picker
   useEffect(() => {
-    if (expanded && githubStatus.isAuthenticated && userId && allRepos.length === 0 && !isLoadingRepos) {
+    if (expanded && githubStatus.isAuthenticated && userId && !hasLoadedRepos && !isLoadingRepos) {
       fetchAllRepos();
     }
-  }, [expanded, githubStatus.isAuthenticated, userId, allRepos.length, isLoadingRepos, fetchAllRepos]);
+  }, [expanded, githubStatus.isAuthenticated, userId, hasLoadedRepos, isLoadingRepos, fetchAllRepos]);
 
   useEffect(() => () => { if (pollingRef.current) clearInterval(pollingRef.current); }, []);
 
@@ -313,6 +314,7 @@ export default function GitHubProviderIntegration() {
       setSavedRepos([]);
       setCheckedRepos(new Set());
       setAllRepos([]);
+      setHasLoadedRepos(false);
       setExpanded(false);
       githubStatus.refresh();
       window.dispatchEvent(new CustomEvent('providerStateChanged'));

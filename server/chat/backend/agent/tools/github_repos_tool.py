@@ -5,8 +5,7 @@ The agent uses this to decide which repo(s) to investigate during RCA.
 """
 import json
 import logging
-from typing import Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
@@ -27,9 +26,9 @@ def get_connected_repos(**kwargs) -> str:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    """SELECT repo_full_name, default_branch, is_private, metadata_summary
+                    """SELECT repo_full_name, default_branch, is_private, metadata_summary, metadata_status
                        FROM github_connected_repos
-                       WHERE user_id = %s AND metadata_status = 'ready'
+                       WHERE user_id = %s
                        ORDER BY repo_full_name""",
                     (user_id,),
                 )
@@ -43,7 +42,7 @@ def get_connected_repos(**kwargs) -> str:
                 "repo": r[0],
                 "branch": r[1] or "main",
                 "private": r[2],
-                "description": r[3] or "(no description yet)",
+                "description": r[3] or ("(description generating...)" if r[4] != 'ready' else "(no description)"),
             }
             for r in rows
         ]

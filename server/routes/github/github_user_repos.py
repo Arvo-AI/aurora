@@ -2,6 +2,7 @@
 GitHub user repositories endpoint that works with user ID authentication
 """
 import logging
+import time
 import requests
 from flask import Blueprint, jsonify, request
 from utils.auth.stateless_auth import get_credentials_from_db
@@ -34,7 +35,6 @@ def get_user_repos(user_id):
     if request.method == 'OPTIONS':
         return create_cors_response()
     
-    import time
     t0 = time.time()
     try:
         # Get stored GitHub credentials for this user
