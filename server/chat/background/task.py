@@ -676,8 +676,14 @@ def _snapshot_session_messages(session_id: str) -> list:
     return []
 
 
-def _merge_investigation_messages(session_id: str, investigation_messages: list) -> None:
-    """Prepend investigation messages before the follow-up messages in the DB."""
+def _merge_investigation_messages(session_id: str, investigation_messages: list, followup_prompt_prefix: str = "") -> None:
+    """Replace session messages with investigation + Jira-only follow-up messages.
+    
+    The Jira follow-up workflow saves compressed investigation context + Jira
+    messages to the session. We need the full investigation messages followed by
+    only the new Jira-specific messages (to avoid duplicating the compressed
+    context that the workflow injected).
+    """
     if not investigation_messages:
         return
     from utils.db.connection_pool import db_pool
@@ -690,7 +696,20 @@ def _merge_investigation_messages(session_id: str, investigation_messages: list)
                 row = cursor.fetchone()
                 followup = (row[0] if isinstance(row[0], list) else json.loads(row[0])) \
                     if row and row[0] else []
-                merged = investigation_messages + followup
+
+                # Find where the Jira-specific messages start by looking for the
+                # follow-up prompt. Everything before it is re-injected context
+                # that duplicates the investigation.
+                jira_start_idx = 0
+                if followup_prompt_prefix:
+                    for i, msg in enumerate(followup):
+                        text = msg.get('text') or msg.get('content') or ''
+                        if msg.get('sender') == 'user' and text.startswith(followup_prompt_prefix[:80]):
+                            jira_start_idx = i
+                            break
+
+                jira_only = followup[jira_start_idx:] if jira_start_idx > 0 else followup
+                merged = investigation_messages + jira_only
                 cursor.execute(
                     "UPDATE chat_sessions SET messages = %s::jsonb WHERE id = %s",
                     (json.dumps(merged), session_id),
@@ -698,7 +717,8 @@ def _merge_investigation_messages(session_id: str, investigation_messages: list)
                 conn.commit()
         logger.info(
             f"[JiraFollowup] Merged messages: {len(investigation_messages)} investigation "
-            f"+ {len(followup)} follow-up = {len(merged)} total"
+            f"+ {len(jira_only)} jira-only (skipped {len(followup) - len(jira_only)} context duplicates) "
+            f"= {len(merged)} total"
         )
     except Exception as exc:
         logger.error(f"[JiraFollowup] Failed to merge messages: {exc}")
@@ -729,6 +749,14 @@ async def _run_jira_action(
     investigation_messages = _snapshot_session_messages(session_id)
     logger.info(f"[JiraAction] Saved {len(investigation_messages)} investigation messages")
 
+    # Flush any pending async context save so the Jira follow-up can load
+    # the full investigation history from the DB.
+    try:
+        from chat.backend.agent.utils.persistence.context_manager import ContextManager
+        await ContextManager.flush_session(session_id)
+    except Exception as exc:
+        logger.warning(f"[JiraAction] Failed to flush context for {session_id}: {exc}")
+
     followup_state = State(
         user_id=user_id,
         session_id=session_id,
@@ -752,7 +780,8 @@ async def _run_jira_action(
         logger.error(f"[JiraAction] Failed: {exc}")
         return
 
-    _merge_investigation_messages(session_id, investigation_messages)
+    _merge_investigation_messages(session_id, investigation_messages,
+                                   followup_prompt_prefix=followup_text[:80])
     logger.info(f"[JiraAction] Completed for {session_id}")
 
 

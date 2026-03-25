@@ -118,6 +118,28 @@ class AsyncSaveQueue:
         
         logger.info("Save worker stopped")
     
+    async def flush_session(self, session_id: str, timeout: float = 10.0) -> bool:
+        """Flush any pending save for a specific session synchronously.
+
+        Drains the queue until the session's save has been processed or timeout
+        is reached.  Called before the Jira follow-up so the investigation
+        context is guaranteed to be in the DB.
+        """
+        task = self._pending_saves.pop(session_id, None)
+        if task is None:
+            return True
+
+        logger.info(f"[AsyncSaveQueue] Flushing pending save for session {session_id}")
+        try:
+            await asyncio.get_event_loop().run_in_executor(
+                None, self._execute_save, task
+            )
+            logger.info(f"[AsyncSaveQueue] Flush complete for session {session_id}")
+            return True
+        except Exception as e:
+            logger.error(f"[AsyncSaveQueue] Flush failed for session {session_id}: {e}")
+            return False
+
     def _execute_save(self, task: SaveTask):
         """Execute the actual save operation."""
         try:
