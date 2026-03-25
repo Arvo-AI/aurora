@@ -38,7 +38,11 @@ const API_BASE = '/api/atlassian';
 async function parseJsonResponse<T>(response: Response): Promise<T | null> {
   const text = await response.text();
   if (!text) return null;
-  return JSON.parse(text) as T;
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    return null;
+  }
 }
 
 async function handleJsonFetch<T>(input: RequestInfo, init?: RequestInit): Promise<T | null> {
@@ -70,10 +74,14 @@ export const atlassianService = {
 
   async disconnect(product: 'confluence' | 'jira' | 'all'): Promise<void> {
     if (product === 'all') {
-      await Promise.all([
+      const results = await Promise.allSettled([
         apiDelete('/api/connected-accounts/confluence', { cache: 'no-store' }),
         apiDelete('/api/connected-accounts/jira', { cache: 'no-store' }),
       ]);
+      const failed = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
+      if (failed.length === results.length) {
+        throw new Error('Failed to disconnect all Atlassian products');
+      }
     } else {
       await apiDelete(`/api/connected-accounts/${product}`, { cache: 'no-store' });
     }

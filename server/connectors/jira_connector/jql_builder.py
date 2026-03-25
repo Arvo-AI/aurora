@@ -19,7 +19,7 @@ def build_incident_search_jql(
     labels: Optional[List[str]] = None,
     text: Optional[str] = None,
     project: Optional[str] = None,
-    max_days_back: int = 90,
+    max_days_back: Optional[int] = 90,
 ) -> str:
     """Build a JQL query to find incident-related issues.
 

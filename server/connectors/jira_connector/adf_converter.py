@@ -232,6 +232,8 @@ def markdown_to_adf(markdown_text: str) -> Dict[str, Any]:
         if ul_match:
             items = []
             while i < len(lines):
+                if re.match(r"^[-*]\s+\[[ xX]\]\s+", lines[i]):
+                    break
                 um = re.match(r"^[-*]\s+(.*)", lines[i])
                 if not um:
                     break
@@ -240,7 +242,8 @@ def markdown_to_adf(markdown_text: str) -> Dict[str, Any]:
                     "content": [{"type": "paragraph", "content": _parse_line_to_inline(um.group(1))}],
                 })
                 i += 1
-            content.append({"type": "bulletList", "content": items})
+            if items:
+                content.append({"type": "bulletList", "content": items})
             continue
 
         # Ordered list
@@ -248,6 +251,8 @@ def markdown_to_adf(markdown_text: str) -> Dict[str, Any]:
         if ol_match:
             items = []
             while i < len(lines):
+                if re.match(r"^[-*]\s+\[[ xX]\]\s+", lines[i]):
+                    break
                 om = re.match(r"^\d+[.)]\s+(.*)", lines[i])
                 if not om:
                     break
@@ -256,7 +261,8 @@ def markdown_to_adf(markdown_text: str) -> Dict[str, Any]:
                     "content": [{"type": "paragraph", "content": _parse_line_to_inline(om.group(1))}],
                 })
                 i += 1
-            content.append({"type": "orderedList", "content": items})
+            if items:
+                content.append({"type": "orderedList", "content": items})
             continue
 
         # Blank line

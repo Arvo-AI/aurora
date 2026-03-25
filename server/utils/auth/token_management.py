@@ -25,7 +25,7 @@ def _log_store_ok(provider: str, elapsed_ms: float) -> None:
 
 
 def _log_store_fail(provider: str, elapsed_ms: float, exc: Exception) -> None:
-    logger.error("[STORE-TOKENS] Failed to store credentials for provider %s after %.2fms: %s: %s", provider, elapsed_ms, type(exc).__name__, exc)
+    logger.error("[STORE-TOKENS] Failed to store credentials for provider %s after %.2fms: %s: %s", provider, elapsed_ms, type(exc).__name__, exc, exc_info=True)
 
 
 def store_tokens_in_db(user_id: str, token_data: Dict, provider: str,

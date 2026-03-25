@@ -177,7 +177,8 @@ def connect(user_id):
     if endpoint_key.startswith("atlassian:"):
         stored_products = endpoint_key.split(":", 1)[1].split(",")
     else:
-        stored_products = products
+        logger.warning("[ATLASSIAN] OAuth state has invalid endpoint key: %s", endpoint_key)
+        return jsonify({"error": "Invalid or expired OAuth state"}), 400
 
     try:
         token_data = exchange_code_for_token(code)

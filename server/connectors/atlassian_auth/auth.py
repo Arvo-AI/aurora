@@ -93,6 +93,8 @@ def get_auth_url(state: str, products: Optional[List[str]] = None,
 
 def exchange_code_for_token(code: str, redirect_uri: Optional[str] = None) -> Dict[str, Any]:
     """Exchange OAuth authorization code for access and refresh tokens."""
+    if not code:
+        raise ValueError("OAuth authorization code is required")
     config = _validate_config(get_atlassian_oauth_config(redirect_uri))
     payload = {
         "grant_type": "authorization_code",
@@ -171,6 +173,8 @@ def refresh_access_token(refresh_token: str) -> Dict[str, Any]:
 
 def fetch_accessible_resources(access_token: str) -> List[Dict[str, Any]]:
     """Fetch Atlassian cloud sites accessible by the OAuth token."""
+    if not access_token:
+        raise ValueError("access_token is required to fetch accessible resources")
     headers = {"Authorization": f"Bearer {access_token}", "Accept": "application/json"}
     try:
         response = requests.get(ATLASSIAN_RESOURCES_URL, headers=headers, timeout=30)
@@ -178,8 +182,8 @@ def fetch_accessible_resources(access_token: str) -> List[Dict[str, Any]]:
         return response.json()
     except requests.exceptions.RequestException as exc:
         status = getattr(getattr(exc, "response", None), "status_code", None)
-        logger.error("Atlassian accessible-resources request failed (status=%s): %s", status, type(exc).__name__)
-        raise
+        logger.error("Atlassian accessible-resources request failed (status=%s): %s", status, exc)
+        raise ValueError(f"Failed to fetch Atlassian resources (status={status}): {exc}") from exc
 
 
 def select_resource_for_product(

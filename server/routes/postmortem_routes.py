@@ -458,6 +458,9 @@ def export_to_jira(user_id, incident_id):
     if not token:
         return jsonify({"error": "Jira credentials incomplete"}), 400
 
+    if auth_type == "pat" and not base_url:
+        return jsonify({"error": "Jira credentials incomplete: base_url required for PAT auth"}), 400
+
     from connectors.jira_connector.adf_converter import markdown_to_adf, extract_action_items, text_to_adf
     from connectors.jira_connector.client import JiraClient
 
@@ -498,9 +501,12 @@ def export_to_jira(user_id, incident_id):
         logger.exception("[POSTMORTEM] Jira export failed for user %s: %s", user_id, exc)
         return jsonify({"error": "Failed to export to Jira"}), 502
 
-    parent_key = parent_result.get("key")
-    parent_id = parent_result.get("id")
-    parent_url = f"{base_url}/browse/{parent_key}" if parent_key and base_url else None
+    parent_key = parent_result.get("key") if isinstance(parent_result, dict) else None
+    parent_id = parent_result.get("id") if isinstance(parent_result, dict) else None
+    if not parent_key or not parent_id:
+        logger.error("[POSTMORTEM] Jira create_issue returned incomplete result: %s", parent_result)
+        return jsonify({"error": "Jira issue created but response was incomplete"}), 502
+    parent_url = f"{base_url}/browse/{parent_key}" if base_url else None
 
     action_items = extract_action_items(content)
     subtask_keys = []

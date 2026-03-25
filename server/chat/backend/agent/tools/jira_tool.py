@@ -216,10 +216,16 @@ def jira_get_issue(
     comments = []
     comment_field = fields.get("comment", {})
     for c in (comment_field.get("comments") or [])[-5:]:
+        body = c.get("body", "")
+        if isinstance(body, dict):
+            from connectors.jira_connector.adf_converter import adf_to_plain_text
+            body = adf_to_plain_text(body)
+        else:
+            body = str(body)
         comments.append({
             "author": (c.get("author") or {}).get("displayName"),
             "created": c.get("created"),
-            "body": str(c.get("body", ""))[:500],
+            "body": body[:500],
         })
     result["recentComments"] = comments
 

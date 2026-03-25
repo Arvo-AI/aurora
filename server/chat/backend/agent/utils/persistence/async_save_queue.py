@@ -39,6 +39,7 @@ class AsyncSaveQueue:
         
         # Deduplication tracking
         self._pending_saves: Dict[str, SaveTask] = {}
+        self._flushed_sessions: set = set()
         
     async def start(self):
         """Start the async save worker."""
@@ -103,6 +104,11 @@ class AsyncSaveQueue:
                 # Remove from pending
                 self._pending_saves.pop(task.session_id, None)
                 
+                # Skip if already flushed synchronously
+                if task.session_id in self._flushed_sessions:
+                    self._flushed_sessions.discard(task.session_id)
+                    continue
+                
                 # Execute save in thread pool to avoid blocking
                 await asyncio.get_event_loop().run_in_executor(
                     None, 
@@ -129,13 +135,20 @@ class AsyncSaveQueue:
         if task is None:
             return True
 
+        self._flushed_sessions.add(session_id)
         logger.info(f"[AsyncSaveQueue] Flushing pending save for session {session_id}")
         try:
-            await asyncio.get_event_loop().run_in_executor(
-                None, self._execute_save, task
+            await asyncio.wait_for(
+                asyncio.get_event_loop().run_in_executor(
+                    None, self._execute_save, task
+                ),
+                timeout=timeout,
             )
             logger.info(f"[AsyncSaveQueue] Flush complete for session {session_id}")
             return True
+        except asyncio.TimeoutError:
+            logger.error(f"[AsyncSaveQueue] Flush timed out after {timeout}s for session {session_id}")
+            return False
         except Exception as e:
             logger.error(f"[AsyncSaveQueue] Flush failed for session {session_id}: {e}")
             return False

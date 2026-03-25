@@ -896,13 +896,11 @@ class Workflow:
                         SystemMessage(content=m.content) if isinstance(m, AIMessage) else m
                         for m in compressed
                     ]
-                    combined_messages = []
-                    combined_messages.extend(input_state.messages)
-                    # Prepend system context before user messages
-                    input_state.messages = sys_compressed + combined_messages
+                    new_count = len(input_state.messages)
+                    input_state.messages = sys_compressed + input_state.messages
                     logger.info(
                         f"[RCA-Context] Injected RCA context into empty session {input_state.session_id}: "
-                        f"{len(compressed)} context msgs + {len(input_state.messages) - len(compressed)} new"
+                        f"{len(sys_compressed)} context msgs + {new_count} new"
                     )
                 else:
                     # Not an RCA session or no summary available yet — try legacy migration
