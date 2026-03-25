@@ -2,6 +2,7 @@
 Observability API Routes - /api/observability/* endpoints for infrastructure overview.
 """
 
+import json
 import logging
 from flask import Blueprint, request, jsonify
 from utils.auth.rbac_decorators import require_permission
@@ -25,40 +26,36 @@ def get_summary(user_id):
     client = get_memgraph_client()
     stats = client.get_graph_stats(user_id)
 
-    # Get status counts
     status_counts_raw = client.get_services_status_counts(user_id)
 
-    # Normalize status counts
     by_status = {}
     for raw_status, count in status_counts_raw.items():
         display = normalize_status(raw_status)
         by_status[display] = by_status.get(display, 0) + count
 
-    # Build by_category from services_by_type
     by_category = {}
     for rtype, count in stats.get("services_by_type", {}).items():
         cat = get_category(rtype)
         by_category[cat] = by_category.get(cat, 0) + count
 
-    # Count on-prem resources from PostgreSQL
     onprem_count = 0
     try:
         with db_pool.get_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT count(*) FROM user_manual_vms WHERE user_id = %s",
-                    (user_id,),
+                    "SELECT (SELECT count(*) FROM user_manual_vms WHERE user_id = %s) + (SELECT count(*) FROM user_onprem_resources WHERE user_id = %s)",
+                    (user_id, user_id),
                 )
                 row = cur.fetchone()
                 onprem_count = row[0] if row else 0
     except Exception as e:
         logger.warning("Failed to count on-prem resources: %s", e)
 
-    # Add onprem to provider counts
     by_provider = stats.get("services_by_provider", {})
     if onprem_count > 0:
         by_provider["onprem"] = by_provider.get("onprem", 0) + onprem_count
-        by_category["Compute"] = by_category.get("Compute", 0) + onprem_count
+        onprem_category = get_category("vm")
+        by_category[onprem_category] = by_category.get(onprem_category, 0) + onprem_count
 
     total = stats.get("total_services", 0) + onprem_count
 
@@ -85,42 +82,34 @@ def list_resources(user_id):
 
     client = get_memgraph_client()
 
-    # If filtering by category, resolve to resource_types
     resource_types_for_category = None
     if category and not resource_type:
         resource_types_for_category = [
             rt for rt, cat in RESOURCE_TYPE_TO_CATEGORY.items() if cat == category
         ]
 
-    # For category filter, we query without resource_type filter then post-filter
-    # For simplicity, use existing paginated query for single resource_type
     if resource_types_for_category:
-        # Get all matching resources (no skip/limit) and filter by category
-        all_services = client.list_services(user_id, provider=provider)
-        filtered = [
-            s for s in all_services
-            if get_category(s.get("resource_type", "")) == category
-        ]
-        if search:
-            search_lower = search.lower()
-            filtered = [
-                s for s in filtered
-                if search_lower in (s.get("name", "").lower())
-                or search_lower in (s.get("display_name", "").lower())
-            ]
+        all_filtered = []
+        for rt in resource_types_for_category:
+            svcs = client.list_services_paginated(
+                user_id, resource_type=rt, provider=provider,
+                search=search, skip=0, limit=10000,
+            )
+            all_filtered.extend(svcs)
         if status_filter:
-            filtered = [
-                s for s in filtered
+            all_filtered = [
+                s for s in all_filtered
                 if normalize_status(s.get("status", "")) == status_filter
             ]
-        total = len(filtered)
-        resources = filtered[skip:skip + limit]
+        total = len(all_filtered)
+        all_filtered.sort(key=lambda s: s.get("name", ""))
+        resources = all_filtered[skip:skip + limit]
     else:
         resources = client.list_services_paginated(
             user_id,
             resource_type=resource_type,
             provider=provider if provider != "onprem" else None,
-            status=None,  # We normalize status in post-processing
+            status=None,
             search=search,
             skip=skip,
             limit=limit,
@@ -132,7 +121,6 @@ def list_resources(user_id):
             search=search,
         )
 
-    # Add on-prem resources (from user_manual_vms) if provider filter allows
     onprem_resources = []
     if not provider or provider == "onprem":
         try:
@@ -140,7 +128,6 @@ def list_resources(user_id):
         except Exception as e:
             logger.warning("Failed to fetch on-prem resources: %s", e)
 
-    # Merge and normalize
     all_resources = []
     for svc in resources:
         all_resources.append(_normalize_resource(svc))
@@ -164,12 +151,14 @@ def list_resources(user_id):
     if provider == "onprem":
         total = len(onprem_resources)
         all_resources = all_resources[skip:skip + limit]
+    elif onprem_resources:
+        total = total + len(onprem_resources)
 
     total_pages = max(1, (total + limit - 1) // limit)
 
     return jsonify({
         "resources": all_resources,
-        "total": total + (len(onprem_resources) if provider != "onprem" else 0),
+        "total": total,
         "page": page,
         "limit": limit,
         "total_pages": total_pages,
@@ -256,13 +245,13 @@ def register_onprem_resource(user_id):
                     RETURNING id;
                     """,
                     (user_id, org_id, name, resource_type, sub_type,
-                     ip_address, port, __import__("json").dumps(metadata), status),
+                     ip_address, port, json.dumps(metadata), status),
                 )
                 row = cur.fetchone()
                 conn.commit()
     except Exception as e:
         logger.error("Failed to register on-prem resource: %s", e)
-        return jsonify({"error": f"Database error: {e}"}), 500
+        return jsonify({"error": "Failed to register resource"}), 500
 
     # Also write to Memgraph as a Service node
     try:
@@ -310,22 +299,34 @@ def _normalize_resource(svc):
 
 
 def _get_onprem_resources(user_id, search=None):
-    """Fetch on-prem VMs from PostgreSQL."""
+    """Fetch on-prem resources from both user_manual_vms and user_onprem_resources."""
     resources = []
     try:
         with db_pool.get_connection() as conn:
             with conn.cursor() as cur:
                 if search:
                     cur.execute(
-                        "SELECT name, ip_address, port, updated_at FROM user_manual_vms "
-                        "WHERE user_id = %s AND name ILIKE %s ORDER BY name",
-                        (user_id, f"%{search}%"),
+                        """
+                        SELECT name, ip_address, port, updated_at FROM user_manual_vms
+                        WHERE user_id = %s AND name ILIKE %s
+                        UNION ALL
+                        SELECT name, ip_address, port, updated_at FROM user_onprem_resources
+                        WHERE user_id = %s AND name ILIKE %s
+                        ORDER BY name
+                        """,
+                        (user_id, f"%{search}%", user_id, f"%{search}%"),
                     )
                 else:
                     cur.execute(
-                        "SELECT name, ip_address, port, updated_at FROM user_manual_vms "
-                        "WHERE user_id = %s ORDER BY name",
-                        (user_id,),
+                        """
+                        SELECT name, ip_address, port, updated_at FROM user_manual_vms
+                        WHERE user_id = %s
+                        UNION ALL
+                        SELECT name, ip_address, port, updated_at FROM user_onprem_resources
+                        WHERE user_id = %s
+                        ORDER BY name
+                        """,
+                        (user_id, user_id),
                     )
                 for row in cur.fetchall():
                     resources.append({
@@ -373,55 +374,38 @@ def _get_related_alerts(user_id, service_name):
     alerts = []
     name_lower = service_name.lower()
 
-    # Check Grafana alerts
-    try:
-        with db_pool.get_connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    SELECT alert_title, alert_state, received_at, 'grafana' as source
-                    FROM grafana_alerts
-                    WHERE user_id = %s
-                      AND (LOWER(alert_title) LIKE %s OR payload::text ILIKE %s)
-                    ORDER BY received_at DESC
-                    LIMIT 5
-                    """,
-                    (user_id, f"%{name_lower}%", f"%{name_lower}%"),
-                )
-                for row in cur.fetchall():
-                    alerts.append({
-                        "title": row[0],
-                        "state": row[1],
-                        "triggered_at": str(row[2]),
-                        "source": row[3],
-                    })
-    except Exception as e:
-        logger.debug("Failed to fetch Grafana alerts: %s", e)
+    alert_sources = [
+        {"table": "grafana_alerts", "title_col": "alert_title", "state_col": "alert_state", "source": "grafana"},
+        {"table": "datadog_events", "title_col": "event_title", "state_col": "status", "source": "datadog"},
+    ]
 
-    # Check Datadog events
     try:
         with db_pool.get_connection() as conn:
             with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    SELECT event_title, status, received_at, 'datadog' as source
-                    FROM datadog_events
-                    WHERE user_id = %s
-                      AND (LOWER(event_title) LIKE %s OR payload::text ILIKE %s)
-                    ORDER BY received_at DESC
-                    LIMIT 5
-                    """,
-                    (user_id, f"%{name_lower}%", f"%{name_lower}%"),
-                )
-                for row in cur.fetchall():
-                    alerts.append({
-                        "title": row[0],
-                        "state": row[1],
-                        "triggered_at": str(row[2]),
-                        "source": row[3],
-                    })
+                for src in alert_sources:
+                    try:
+                        cur.execute(
+                            f"""
+                            SELECT {src['title_col']}, {src['state_col']}, received_at, %s as source
+                            FROM {src['table']}
+                            WHERE user_id = %s
+                              AND (LOWER({src['title_col']}) LIKE %s OR payload::text ILIKE %s)
+                            ORDER BY received_at DESC
+                            LIMIT 5
+                            """,
+                            (src["source"], user_id, f"%{name_lower}%", f"%{name_lower}%"),
+                        )
+                        for row in cur.fetchall():
+                            alerts.append({
+                                "title": row[0],
+                                "state": row[1],
+                                "triggered_at": str(row[2]),
+                                "source": row[3],
+                            })
+                    except Exception as e:
+                        logger.debug("Failed to fetch %s alerts: %s", src["source"], e)
     except Exception as e:
-        logger.debug("Failed to fetch Datadog events: %s", e)
+        logger.debug("Failed to get DB connection for alerts: %s", e)
 
     return alerts
 

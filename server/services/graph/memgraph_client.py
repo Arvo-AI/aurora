@@ -783,29 +783,9 @@ class MemgraphClient:
         results = self._execute(query, {"user_id": user_id, "days": stale_days})
         return results[0]["marked"] if results else 0
 
-    def list_services_paginated(self, user_id, resource_type=None, provider=None, status=None, search=None, skip=0, limit=50):
-        """List services with pagination and optional filters."""
-        conditions = ["s.user_id = $user_id"]
-        params = {"user_id": user_id, "skip": skip, "limit": limit}
-        if resource_type:
-            conditions.append("s.resource_type = $resource_type")
-            params["resource_type"] = resource_type
-        if provider:
-            conditions.append("s.provider = $provider")
-            params["provider"] = provider
-        if status:
-            conditions.append("s.status = $status")
-            params["status"] = status
-        if search:
-            conditions.append("(s.name CONTAINS $search OR s.display_name CONTAINS $search)")
-            params["search"] = search
-        where = " AND ".join(conditions)
-        query = f"MATCH (s:Service) WHERE {where} RETURN s ORDER BY s.name SKIP $skip LIMIT $limit;"
-        results = self._execute(query, params)
-        return [self._node_to_dict(r["s"]) for r in results]
-
-    def count_services(self, user_id, resource_type=None, provider=None, status=None, search=None):
-        """Count services matching filters for pagination metadata."""
+    @staticmethod
+    def _build_service_filters(user_id, resource_type=None, provider=None, status=None, search=None):
+        """Build WHERE conditions and params for service queries."""
         conditions = ["s.user_id = $user_id"]
         params = {"user_id": user_id}
         if resource_type:
@@ -820,7 +800,19 @@ class MemgraphClient:
         if search:
             conditions.append("(s.name CONTAINS $search OR s.display_name CONTAINS $search)")
             params["search"] = search
-        where = " AND ".join(conditions)
+        return " AND ".join(conditions), params
+
+    def list_services_paginated(self, user_id, resource_type=None, provider=None, status=None, search=None, skip=0, limit=50):
+        """List services with pagination and optional filters."""
+        where, params = self._build_service_filters(user_id, resource_type, provider, status, search)
+        params.update({"skip": skip, "limit": limit})
+        query = f"MATCH (s:Service) WHERE {where} RETURN s ORDER BY s.name SKIP $skip LIMIT $limit;"
+        results = self._execute(query, params)
+        return [self._node_to_dict(r["s"]) for r in results]
+
+    def count_services(self, user_id, resource_type=None, provider=None, status=None, search=None):
+        """Count services matching filters for pagination metadata."""
+        where, params = self._build_service_filters(user_id, resource_type, provider, status, search)
         query = f"MATCH (s:Service) WHERE {where} RETURN count(s) AS total;"
         results = self._execute(query, params)
         return results[0]["total"] if results else 0
