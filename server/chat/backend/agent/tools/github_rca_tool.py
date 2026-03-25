@@ -108,7 +108,7 @@ def _resolve_repository(
         return None, None, f"multiple repos connected ({repo_list}). Call get_connected_repos and pass repo='owner/repo' explicitly"
     except Exception as e:
         logger.warning(f"Error resolving repository: {e}")
-        return None, None, "no repository found"
+        return None, None, f"database error while resolving repository: {e}"
 
 
 def _calculate_time_windows(
