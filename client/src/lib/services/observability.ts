@@ -23,6 +23,7 @@ export interface Resource {
   endpoint: string;
   metadata: Record<string, unknown>;
   updated_at: string;
+  monthly_cost: number | null;
 }
 
 export interface ResourcesResponse {

@@ -35,6 +35,7 @@ function LoadingSkeleton() {
           <div className="h-4 w-16 bg-muted rounded" />
           <div className="h-4 w-20 bg-muted rounded" />
           <div className="h-4 w-16 bg-muted rounded" />
+          <div className="h-4 w-16 bg-muted rounded" />
         </div>
       ))}
     </div>
@@ -64,6 +65,7 @@ export default function ResourceTable({ resources, isLoading, page, totalPages, 
               <th className="text-left px-4 py-3 font-medium text-muted-foreground">Type</th>
               <th className="text-left px-4 py-3 font-medium text-muted-foreground">Provider</th>
               <th className="text-left px-4 py-3 font-medium text-muted-foreground">Region</th>
+              <th className="text-right px-4 py-3 font-medium text-muted-foreground">Cost/mo</th>
               <th className="text-left px-4 py-3 font-medium text-muted-foreground">Updated</th>
             </tr>
           </thead>
@@ -88,6 +90,13 @@ export default function ResourceTable({ resources, isLoading, page, totalPages, 
                   </span>
                 </td>
                 <td className="px-4 py-3 text-muted-foreground">{resource.region || "-"}</td>
+                <td className="px-4 py-3 text-right text-muted-foreground">
+                  {resource.monthly_cost != null ? (
+                    <span className="tabular-nums">${resource.monthly_cost.toLocaleString()}</span>
+                  ) : (
+                    <span className="text-muted-foreground/50">-</span>
+                  )}
+                </td>
                 <td className="px-4 py-3 text-muted-foreground">{formatTimeAgo(resource.updated_at)}</td>
               </tr>
             ))}
