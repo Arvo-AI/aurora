@@ -261,10 +261,11 @@ export default function GitHubProviderIntegration() {
     if (!userId) return;
     try {
       await GitHubIntegrationService.generateRepoMetadata(userId, repoFullName);
-      setSavedRepos(prev => prev.map(r =>
+      const updated = savedRepos.map(r =>
         r.repo_full_name === repoFullName ? { ...r, metadata_status: 'generating' } : r
-      ));
-      startMetadataPolling(savedRepos);
+      );
+      setSavedRepos(updated);
+      startMetadataPolling(updated);
     } catch {
       toast({ title: "Error", description: "Failed to regenerate description", variant: "destructive" });
     }

@@ -497,7 +497,9 @@ def build_github_context_segment(user_id: Optional[str]) -> str:
             "- Use github_rca for RCA (deployment_check, commits, diff, pull_requests).\n"
             "- Use MCP tools (mcp_*) for direct GitHub API operations.\n"
         )
-    except Exception:
+    except Exception as e:
+        import logging
+        logging.warning(f"Error building GitHub context segment: {e}")
         return ""
 
 

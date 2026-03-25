@@ -88,7 +88,7 @@ def prepare_github_commit_suggestion(
                     cur.execute(
                         """SELECT repo_full_name, default_branch
                            FROM github_connected_repos
-                           WHERE user_id = %s ORDER BY created_at LIMIT 1""",
+                           WHERE user_id = %s ORDER BY created_at DESC LIMIT 1""",
                         (user_id,),
                     )
                     row = cur.fetchone()

@@ -19,8 +19,22 @@ def _get_user_org_id(user_id: str) -> str | None:
                 cur.execute("SELECT org_id FROM users WHERE id = %s", (user_id,))
                 row = cur.fetchone()
                 return row[0] if row else None
-    except Exception:
+    except Exception as e:
+        logger.warning(f"Error fetching org_id for user {user_id}: {e}")
         return None
+
+
+def _update_metadata_status(user_id: str, repo_full_name: str, status: str):
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE github_connected_repos SET metadata_status = %s, updated_at = NOW() WHERE user_id = %s AND repo_full_name = %s",
+                    (status, user_id, repo_full_name),
+                )
+                conn.commit()
+    except Exception as e:
+        logger.warning(f"Failed to revert metadata_status for {repo_full_name}: {e}")
 
 
 @github_repo_selection_bp.route("/repo-selections", methods=["GET"])
@@ -109,6 +123,9 @@ def save_repo_selections(user_id):
                     )
                     if full_name not in existing:
                         newly_added.append(full_name)
+
+                if not incoming:
+                    return jsonify({"error": "No valid repositories in request (all missing full_name)"}), 400
 
                 removed = existing - incoming
                 if removed:
@@ -201,7 +218,12 @@ def trigger_metadata_generation(user_id):
                 conn.commit()
 
         from routes.github.github_repo_metadata import generate_repo_metadata
-        generate_repo_metadata.delay(user_id, repo_full_name)
+        try:
+            generate_repo_metadata.delay(user_id, repo_full_name)
+        except Exception as e:
+            logger.error(f"Failed to enqueue metadata gen for {repo_full_name}: {e}")
+            _update_metadata_status(user_id, repo_full_name, "pending")
+            return jsonify({"error": "Failed to start metadata generation"}), 500
         return jsonify({"message": "Metadata generation started"})
     except Exception as e:
         logger.error(f"Error triggering metadata generation: {e}", exc_info=True)

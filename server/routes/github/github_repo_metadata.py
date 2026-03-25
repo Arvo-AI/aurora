@@ -36,7 +36,8 @@ def _fetch_readme(token: str, owner: str, repo: str) -> str:
     try:
         decoded = base64.b64decode(content).decode("utf-8", errors="replace")
         return decoded[:4000]
-    except Exception:
+    except Exception as e:
+        logger.warning(f"Failed to decode README for {owner}/{repo}: {e}")
         return ""
 
 
@@ -76,11 +77,13 @@ def generate_repo_metadata(self, user_id: str, repo_full_name: str):
     try:
         token = _get_github_token(user_id)
         if not token:
+            logger.error(f"No GitHub token for user {user_id}, cannot generate metadata for {repo_full_name}")
             _update_metadata(user_id, repo_full_name, None, "error")
             return
 
         parts = repo_full_name.split("/")
         if len(parts) != 2:
+            logger.error(f"Invalid repo format '{repo_full_name}' for user {user_id}, expected owner/repo")
             _update_metadata(user_id, repo_full_name, None, "error")
             return
         owner, repo = parts

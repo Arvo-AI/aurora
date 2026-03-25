@@ -1057,6 +1057,7 @@ def initialize_tables():
             rls_tables.append("incident_alerts")
             rls_tables.append("incident_feedback")
             rls_tables.append("postmortems")
+            rls_tables.append("github_connected_repos")
 
 
             # Migration: Add rca_celery_task_id column to incidents table if it doesn't exist
@@ -1749,6 +1750,7 @@ def initialize_tables():
                 "cloud_billing_usage", "provider_metrics",
                 "knowledge_base_memory", "knowledge_base_documents",
                 "incident_feedback", "postmortems",
+                "github_connected_repos",
             ]
             for tbl in org_id_tables:
                 try:

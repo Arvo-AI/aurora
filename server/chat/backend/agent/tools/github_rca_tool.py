@@ -100,6 +100,8 @@ def _resolve_repository(
             parsed = _parse_owner_repo(rows[0][0])
             if parsed:
                 return parsed[0], parsed[1], "connected repository"
+            logger.warning(f"Invalid repo format in DB: {rows[0][0]}")
+            return None, None, f"invalid repo format: {rows[0][0]}"
 
         repo_list = ", ".join(r[0] for r in rows)
         logger.info(f"Multiple repos connected ({repo_list}), agent must specify repo= explicitly")
