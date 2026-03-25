@@ -143,6 +143,7 @@ def save_repo_selections(user_id):
                 generate_repo_metadata.delay(user_id, repo_name)
             except Exception as e:
                 logger.warning(f"Failed to enqueue metadata gen for {repo_name}: {e}")
+                _update_metadata_status(user_id, repo_name, "error")
 
         return jsonify({
             "message": f"Saved {len(incoming)} repos, removed {len(removed)}, generating metadata for {len(newly_added)}",
