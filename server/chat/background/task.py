@@ -126,7 +126,7 @@ _RATE_LIMIT_WINDOW_SECONDS = 300  # 5 minute window
 _RATE_LIMIT_MAX_REQUESTS = 5  # Max 5 background chats per window
 
 # RCA sources that use rca_context in system prompt
-_RCA_SOURCES = {'grafana', 'datadog', 'netdata', 'splunk', 'slack', 'pagerduty', 'dynatrace', 'jenkins', 'cloudbees', 'spinnaker'}
+_RCA_SOURCES = {'grafana', 'datadog', 'netdata', 'splunk', 'slack', 'pagerduty', 'dynatrace', 'jenkins', 'cloudbees', 'spinnaker', 'newrelic'}
 
 # Initialize Redis client at module load time - fails if Redis is unavailable
 _redis_client = get_redis_client()
@@ -671,7 +671,7 @@ def _build_jira_followup_prompt(jira_mode: str) -> str:
         "in this conversation. Do NOT guess project keys like 'OPS' or 'PROJECT' "
         "— use the real key you saw in search results.\n\n"
         "1. Search for an existing Jira issue related to this incident:\n"
-        "   jira_search_issues(jql='text ~ \"<service_name>\" AND type in "
+        "   jira_search_issues(jql='text ~ \"SERVICE_NAME\" AND type in "
         "(Bug, Incident) ORDER BY updated DESC')\n"
     )
     if jira_mode == "comment_only":
@@ -692,7 +692,7 @@ def _build_jira_followup_prompt(jira_mode: str) -> str:
         "3. If NO matching issue is found:\n"
         "   - Create one using jira_create_issue with:\n"
         "     project_key from the search results, "
-        "summary like 'Incident: <service> — <short description>', issue_type='Bug'.\n"
+        "summary like 'Incident: SERVICE_NAME — brief description', issue_type='Bug'.\n"
         "   - Put the full RCA findings in the description field.\n"
         "   - Do NOT add a separate comment — the description is enough.\n\n"
         "File EXACTLY ONE Jira action (one comment OR one issue). Never both.\n\n"

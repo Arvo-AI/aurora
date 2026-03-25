@@ -15,7 +15,6 @@ from flask import Blueprint, jsonify, request
 
 from connectors.newrelic_connector.client import NewRelicClient, NewRelicAPIError
 from utils.db.connection_pool import db_pool
-from utils.logging.secure_logging import mask_credential_value
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import get_org_id_from_request
@@ -100,10 +99,9 @@ def connect(user_id):
     if region not in ("us", "eu"):
         return jsonify({"error": "Region must be 'us' or 'eu'"}), 400
 
-    masked_key = mask_credential_value(api_key)
     logger.info(
-        "[NEWRELIC] Connecting user %s account=%s region=%s key=%s",
-        user_id, account_id, region, masked_key,
+        "[NEWRELIC] Connecting user %s account=%s region=%s",
+        user_id, account_id, region,
     )
 
     client = NewRelicClient(api_key=api_key, account_id=account_id, region=region)

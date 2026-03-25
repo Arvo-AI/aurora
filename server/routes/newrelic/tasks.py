@@ -162,8 +162,50 @@ def process_newrelic_event(
 
                 received_at = datetime.now(timezone.utc)
 
+                # Persist raw event
+                issue_id_str = alert_metadata.get("issueId") or "unknown"
+                priority_str = (payload.get("priority") or payload.get("severity") or "")[:20]
+                state_str = (payload.get("state") or payload.get("currentState") or "")[:50]
+                entity_names_str = ", ".join(
+                    e.get("name", "") for e in payload.get("entitiesData", {}).get("entities", [])[:10]
+                ) or None
+
+                cursor.execute(
+                    """
+                    INSERT INTO newrelic_events
+                    (user_id, org_id, issue_id, issue_title, priority, state, entity_names, payload, received_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (org_id, issue_id) DO UPDATE
+                    SET issue_title = EXCLUDED.issue_title,
+                        priority = EXCLUDED.priority,
+                        state = EXCLUDED.state,
+                        payload = EXCLUDED.payload,
+                        received_at = EXCLUDED.received_at
+                    RETURNING id
+                    """,
+                    (
+                        user_id,
+                        org_id,
+                        issue_id_str,
+                        event_title,
+                        priority_str,
+                        state_str,
+                        entity_names_str,
+                        json.dumps(payload),
+                        received_at,
+                    ),
+                )
+                event_result = cursor.fetchone()
+                event_id = event_result[0] if event_result else None
+                conn.commit()
+
+                if not event_id:
+                    logger.error("[NEWRELIC][WEBHOOK] Failed to get event_id for user %s", user_id)
+                    return
+
+                source_alert_id = event_id
+
                 # --- Alert correlation ---
-                source_alert_id = alert_metadata.get("issueId") or f"nr-{received_at.timestamp()}"
 
                 try:
                     correlator = AlertCorrelator()

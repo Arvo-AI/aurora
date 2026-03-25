@@ -974,6 +974,44 @@ def build_dynatrace_rca_prompt(
     return build_rca_prompt('dynatrace', alert_details, providers, user_id)
 
 
+def build_newrelic_rca_prompt(
+    payload: Dict[str, Any],
+    providers: Optional[List[str]] = None,
+    user_id: Optional[str] = None,
+) -> str:
+    """Build RCA prompt from New Relic issue payload."""
+    title = (
+        payload.get("title")
+        or payload.get("issueTitle")
+        or payload.get("conditionName")
+        or "Unknown Issue"
+    )
+    priority = payload.get("priority") or "UNKNOWN"
+    state = payload.get("state") or "ACTIVATED"
+    condition = payload.get("conditionName") or payload.get("condition_name") or ""
+    policy = payload.get("policyName") or payload.get("policy_name") or ""
+    entity_names = payload.get("entityNames") or payload.get("entity_names") or []
+    sources = payload.get("sources") or []
+    description = payload.get("description") or ""
+
+    alert_details = {
+        'title': title,
+        'status': f"{state} (priority={priority})",
+        'message': description,
+        'labels': {
+            'condition': condition,
+            'policy': policy,
+            'sources': ", ".join(sources) if isinstance(sources, list) else str(sources),
+        },
+    }
+
+    if entity_names:
+        entities_str = ", ".join(entity_names) if isinstance(entity_names, list) else str(entity_names)
+        alert_details['entities'] = entities_str
+
+    return build_rca_prompt('newrelic', alert_details, providers, user_id)
+
+
 def build_netdata_rca_prompt(
     payload: Dict[str, Any],
     providers: Optional[List[str]] = None,

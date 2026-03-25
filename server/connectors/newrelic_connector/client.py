@@ -6,10 +6,10 @@ against New Relic's NerdGraph API. Query/RCA methods live on the RCA branch.
 """
 
 import logging
-import re
 import time
 from typing import Any, Dict, List, Optional
 
+import re
 import requests
 
 logger = logging.getLogger(__name__)
@@ -221,3 +221,132 @@ class NewRelicClient:
         """
         data = self._execute_graphql(query)
         return data.get("actor", {}).get("accounts", [])
+
+    # ------------------------------------------------------------------
+    # NRQL queries
+    # ------------------------------------------------------------------
+
+    def execute_nrql(self, nrql: str, timeout: int = 30) -> Dict[str, Any]:
+        """Execute a NRQL query against the configured account."""
+        query = """
+        {
+            actor {
+                account(id: %s) {
+                    nrql(query: "%s", timeout: %d) {
+                        results
+                        metadata {
+                            facets
+                            eventTypes
+                            timeWindow { begin end }
+                        }
+                    }
+                }
+            }
+        }
+        """ % (self.account_id, self._sanitize_graphql_string(nrql), timeout)
+        data = self._execute_graphql(query)
+        nrql_data = data.get("actor", {}).get("account", {}).get("nrql", {})
+        return {
+            "results": nrql_data.get("results", []),
+            "metadata": nrql_data.get("metadata", {}),
+        }
+
+    # ------------------------------------------------------------------
+    # Issues (AiIssues)
+    # ------------------------------------------------------------------
+
+    def get_issues(
+        self,
+        states: Optional[List[str]] = None,
+        since_epoch_ms: Optional[int] = None,
+        page_size: int = 25,
+    ) -> Dict[str, Any]:
+        """Fetch alert issues from NerdGraph AiIssuesSearch."""
+        filter_parts = []
+        if states:
+            states_str = ", ".join(states)
+            filter_parts.append(f"states: [{states_str}]")
+        if since_epoch_ms:
+            filter_parts.append(f"startTime: {since_epoch_ms}")
+        filter_clause = ", ".join(filter_parts)
+        filter_block = f"filter: {{ {filter_clause} }}" if filter_clause else ""
+
+        query = """
+        {
+            actor {
+                account(id: %s) {
+                    aiIssues {
+                        issues(%s, first: %d) {
+                            issues {
+                                issueId
+                                title
+                                priority
+                                state
+                                sources
+                                entityNames
+                                entityGuids
+                                conditionName
+                                policyName
+                                activatedAt
+                                closedAt
+                                totalIncidents
+                                isCorrelated
+                                mutingState
+                                issueUrl
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        """ % (self.account_id, filter_block, page_size)
+        data = self._execute_graphql(query)
+        issues_data = (
+            data.get("actor", {})
+            .get("account", {})
+            .get("aiIssues", {})
+            .get("issues", {})
+            .get("issues", [])
+        )
+        return {"issues": issues_data, "count": len(issues_data)}
+
+    # ------------------------------------------------------------------
+    # Entity search
+    # ------------------------------------------------------------------
+
+    def search_entities(
+        self,
+        query_str: str = "",
+        entity_type: Optional[str] = None,
+        limit: int = 25,
+    ) -> List[Dict[str, Any]]:
+        """Search for entities (APM apps, hosts, etc.) via NerdGraph."""
+        search_query = query_str or ""
+        type_filter = f', types: "{self._sanitize_graphql_string(entity_type)}"' if entity_type else ""
+
+        gql = """
+        {
+            actor {
+                entitySearch(query: "%s"%s) {
+                    results(limit: %d) {
+                        entities {
+                            guid
+                            name
+                            entityType
+                            domain
+                            reporting
+                            alertSeverity
+                            tags { key values }
+                        }
+                    }
+                }
+            }
+        }
+        """ % (self._sanitize_graphql_string(search_query), type_filter, limit)
+        data = self._execute_graphql(gql)
+        return (
+            data.get("actor", {})
+            .get("entitySearch", {})
+            .get("results", {})
+            .get("entities", [])
+        )
