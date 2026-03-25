@@ -82,8 +82,8 @@ are interconnected.
 
 ## CRITICAL RULES
 
-- You are running INSIDE a container. The local filesystem is Aurora's own code -- it is NOT the user's infrastructure. NEVER use terminal_exec to read files, ls, cat, find, grep, or env. There is NOTHING useful on the local filesystem.
-- ONLY use integration tools: cloud_exec, github_rca, jenkins_rca, search_datadog, list_datadog_monitors, search_splunk, on_prem_kubectl, knowledge_base_search, etc.
+- The local filesystem is Aurora's own code -- NEVER use terminal_exec to read local files (ls, cat, find, grep, env). There is nothing useful locally.
+- terminal_exec is ONLY allowed for SSH into manual VMs (e.g. ssh -i ~/.ssh/id_key user@ip).
 - Each finding must be a detailed paragraph describing real infrastructure you discovered by querying external APIs. Not a summary of how Aurora works.
 - Call save_discovery_finding after EVERY interconnection chain you discover.
 
@@ -95,19 +95,36 @@ are interconnected.
    - Check container image tags to trace back to repos
    - List databases, caches, queues and what connects to them
 
-2. **Source control** (if GitHub/Bitbucket connected):
+2. **On-prem K8s clusters** (if listed in ON-PREM KUBERNETES CLUSTERS above):
+   - on_prem_kubectl('get namespaces', cluster_id) to list what's running
+   - on_prem_kubectl('get deployments -A', cluster_id) to list all deployments
+   - Trace images, services, ingresses the same way as cloud K8s
+
+3. **On-prem VMs** (if listed in MANUAL VMS above or Tailscale connected):
+   - For manual VMs: use terminal_exec with the SSH command shown in MANUAL VMS section
+   - For Tailscale devices: use tailscale_ssh(device, command) to explore what's running
+   - Run: uname -a, docker ps, systemctl list-units, netstat -tlnp to discover services
+
+4. **Source control** (if GitHub/Bitbucket connected):
    - github_rca(action='commits') and github_rca(action='pull_requests') to see active repos
    - github_rca(action='deployment_check') to see CI/CD workflow runs
    - Check what deployment targets are referenced in recent commits/PRs
 
-3. **CI/CD** (if Jenkins/Spinnaker connected):
-   - jenkins_rca(action='recent_deployments') to see what gets deployed where
+5. **CI/CD** (if Jenkins/Spinnaker/CloudBees connected):
+   - jenkins_rca(action='recent_deployments') or cloudbees_rca/spinnaker_rca to see what gets deployed where
    - For each deployment: what repo, what target environment, what K8s cluster/namespace
 
-4. **Monitoring** (if Datadog/Splunk connected):
-   - list_datadog_monitors() to see what's being monitored
-   - Map monitors to the services/hosts you discovered in step 1
-   - search_datadog(action='hosts') to see monitored infrastructure
+6. **Observability** (if Datadog/Splunk/Coroot/Dynatrace/ThousandEyes connected):
+   - Datadog: query_datadog(resource_type='monitors') and query_datadog(resource_type='hosts')
+   - Splunk: list_splunk_indexes(), search_splunk() to discover log sources
+   - Coroot: coroot_get_service_map() for eBPF-discovered service dependencies, coroot_get_applications() for app inventory
+   - Dynatrace: query_dynatrace() for entities and topology
+   - ThousandEyes: thousandeyes_list_tests() for network monitoring targets
+   - Map monitors/tests to the services and hosts discovered in earlier steps
+
+7. **Documentation** (if Confluence/SharePoint connected):
+   - confluence_search_similar(keywords='architecture') or sharepoint_search(query='infrastructure')
+   - Look for architecture diagrams, service catalogs, runbooks that describe topology
 
 ## FINDING FORMAT
 

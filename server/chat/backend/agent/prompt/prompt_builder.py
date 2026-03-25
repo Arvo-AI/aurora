@@ -1493,9 +1493,10 @@ def build_background_mode_segment(state: Optional[Any]) -> str:
             "- Call integration tools IMMEDIATELY. Do not output plans or explanations.\n"
             "- Every response MUST contain a tool call unless you are completely done.\n"
             "- NOT providing a tool call will end the session.\n"
-            "- NEVER use terminal_exec -- the local filesystem is Aurora's own code, not user infrastructure.\n"
-            "- ONLY use: cloud_exec, github_rca, jenkins_rca, search_datadog, list_datadog_monitors, "
-            "search_splunk, on_prem_kubectl, knowledge_base_search, save_discovery_finding.\n"
+            "- NEVER use terminal_exec to read local files -- the local filesystem is Aurora's code, not user infrastructure.\n"
+            "- terminal_exec is ONLY allowed for SSH into manual VMs listed in the system prompt.\n"
+            "- Use: cloud_exec, github_rca, jenkins_rca, on_prem_kubectl, tailscale_ssh, "
+            "search_datadog, list_datadog_monitors, search_splunk, knowledge_base_search, save_discovery_finding.\n"
             "- Write detailed paragraph-level findings describing real infrastructure interconnections.\n"
         )
 
