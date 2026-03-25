@@ -92,7 +92,8 @@ def get_postmortem(user_id, incident_id):
                 conn.commit()
                 cursor.execute(
                     """SELECT id, incident_id, user_id, content, generated_at, updated_at,
-                              confluence_page_id, confluence_page_url, confluence_exported_at
+                              confluence_page_id, confluence_page_url, confluence_exported_at,
+                              jira_issue_id, jira_issue_key, jira_issue_url, jira_exported_at
                        FROM postmortems
                        WHERE incident_id = %s AND org_id = %s""",
                     (incident_id, org_id),
@@ -112,6 +113,10 @@ def get_postmortem(user_id, incident_id):
             "confluencePageId": row[6],
             "confluencePageUrl": row[7],
             "confluenceExportedAt": _format_timestamp(row[8]),
+            "jiraIssueId": row[9],
+            "jiraIssueKey": row[10],
+            "jiraIssueUrl": row[11],
+            "jiraExportedAt": _format_timestamp(row[12]),
         }
         return jsonify({"postmortem": postmortem})
 
@@ -257,7 +262,7 @@ def export_to_confluence(user_id, incident_id):
             space_key, title, content_html, parent_id=parent_page_id
         )
     except requests.HTTPError as exc:
-        status_code = exc.response.status_code if exc.response else None
+        status_code = exc.response.status_code if exc.response is not None else None
         if status_code == 401 and auth_type == "oauth":
             refreshed = _refresh_confluence_credentials(user_id, creds)
             if refreshed:
@@ -349,7 +354,8 @@ def list_postmortems(user_id):
                 cursor.execute(
                     """SELECT p.id, p.incident_id, p.user_id, p.content, p.generated_at, p.updated_at,
                               p.confluence_page_id, p.confluence_page_url, p.confluence_exported_at,
-                              i.alert_title
+                              i.alert_title,
+                              p.jira_issue_id, p.jira_issue_key, p.jira_issue_url, p.jira_exported_at
                        FROM postmortems p
                        LEFT JOIN incidents i ON p.incident_id = i.id
                        WHERE p.org_id = %s
@@ -371,6 +377,10 @@ def list_postmortems(user_id):
                 "confluencePageId": row[6],
                 "confluencePageUrl": row[7],
                 "confluenceExportedAt": _format_timestamp(row[8]),
+                "jiraIssueId": row[10],
+                "jiraIssueKey": row[11],
+                "jiraIssueUrl": row[12],
+                "jiraExportedAt": _format_timestamp(row[13]),
             }
             postmortems.append(postmortem)
 
@@ -383,3 +393,191 @@ def list_postmortems(user_id):
             e,
         )
         return jsonify({"error": "Failed to fetch postmortems"}), 500
+
+
+@postmortem_bp.route(
+    "/api/incidents/<incident_id>/postmortem/export/jira", methods=["POST"]
+)
+@require_permission("postmortems", "write")
+def export_to_jira(user_id, incident_id):
+    """Export postmortem to Jira as a parent issue with subtasks for action items."""
+    if not _validate_uuid(incident_id):
+        return jsonify({"error": "Invalid incident ID"}), 400
+
+    try:
+        data = request.get_json(force=True, silent=True) or {}
+    except Exception:
+        data = {}
+
+    project_key = data.get("projectKey")
+    if not project_key:
+        return jsonify({"error": "projectKey is required"}), 400
+
+    issue_type = data.get("issueType", "Task")
+
+    org_id = get_org_id_from_request()
+
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("SET myapp.current_user_id = %s", (user_id,))
+                cursor.execute("SET myapp.current_org_id = %s", (org_id,))
+                conn.commit()
+                cursor.execute(
+                    """SELECT id, content FROM postmortems
+                       WHERE incident_id = %s AND org_id = %s""",
+                    (incident_id, org_id),
+                )
+                row = cursor.fetchone()
+    except Exception as e:
+        logger.error(
+            "[POSTMORTEM] Failed to fetch postmortem for Jira export, incident %s: %s",
+            incident_id,
+            e,
+        )
+        return jsonify({"error": "Failed to fetch postmortem"}), 500
+
+    if not row:
+        return jsonify({"error": "Postmortem not found"}), 404
+
+    postmortem_id = row[0]
+    content = row[1]
+
+    if not content:
+        return jsonify({"error": "Postmortem has no content to export"}), 400
+
+    creds = get_token_data(user_id, "jira")
+    if not creds:
+        return jsonify({"error": "Jira not connected"}), 404
+
+    auth_type = (creds.get("auth_type") or "oauth").lower()
+    base_url = creds.get("base_url", "")
+    cloud_id = creds.get("cloud_id") if auth_type == "oauth" else None
+    token = creds.get("pat_token") if auth_type == "pat" else creds.get("access_token")
+
+    if not token:
+        return jsonify({"error": "Jira credentials incomplete"}), 400
+
+    if auth_type == "pat" and not base_url:
+        return jsonify({"error": "Jira credentials incomplete: base_url required for PAT auth"}), 400
+
+    from connectors.jira_connector.adf_converter import markdown_to_adf, extract_action_items, text_to_adf
+    from connectors.jira_connector.client import JiraClient
+
+    description_adf = markdown_to_adf(content)
+    title = f"Postmortem - Incident {incident_id[:8]}"
+
+    try:
+        client = JiraClient(base_url, token, auth_type=auth_type, cloud_id=cloud_id)
+        parent_result = client.create_issue(
+            project_key=project_key,
+            summary=title,
+            issue_type=issue_type,
+            description_adf=description_adf,
+        )
+    except requests.HTTPError as exc:
+        status_code = exc.response.status_code if exc.response else None
+        if status_code == 401 and auth_type == "oauth":
+            refreshed = _refresh_jira_credentials(user_id, creds)
+            if refreshed:
+                token = refreshed.get("access_token")
+                try:
+                    client = JiraClient(base_url, token, auth_type=auth_type, cloud_id=cloud_id)
+                    parent_result = client.create_issue(
+                        project_key=project_key,
+                        summary=title,
+                        issue_type=issue_type,
+                        description_adf=description_adf,
+                    )
+                except Exception as retry_exc:
+                    logger.exception("[POSTMORTEM] Retry Jira export failed for user %s: %s", user_id, retry_exc)
+                    return jsonify({"error": "Failed to export to Jira"}), 502
+            else:
+                return jsonify({"error": "Jira credentials expired"}), 401
+        else:
+            logger.exception("[POSTMORTEM] Jira export failed for user %s: %s", user_id, exc)
+            return jsonify({"error": "Failed to export to Jira"}), 502
+    except Exception as exc:
+        logger.exception("[POSTMORTEM] Jira export failed for user %s: %s", user_id, exc)
+        return jsonify({"error": "Failed to export to Jira"}), 502
+
+    parent_key = parent_result.get("key") if isinstance(parent_result, dict) else None
+    parent_id = parent_result.get("id") if isinstance(parent_result, dict) else None
+    if not parent_key or not parent_id:
+        logger.error("[POSTMORTEM] Jira create_issue returned incomplete result: %s", parent_result)
+        return jsonify({"error": "Jira issue created but response was incomplete"}), 502
+    parent_url = f"{base_url}/browse/{parent_key}" if base_url else None
+
+    action_items = extract_action_items(content)
+    subtask_keys = []
+    for item in action_items:
+        if not item.get("text") or item.get("checked"):
+            continue
+        try:
+            sub_result = client.create_subtask(
+                parent_key=parent_key,
+                project_key=project_key,
+                summary=item["text"][:255],
+                description_adf=text_to_adf(item["text"]),
+            )
+            subtask_keys.append(sub_result.get("key"))
+        except Exception as sub_exc:
+            logger.warning("[POSTMORTEM] Failed to create subtask: %s", sub_exc)
+
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("SET myapp.current_user_id = %s", (user_id,))
+                cursor.execute("SET myapp.current_org_id = %s", (org_id,))
+                conn.commit()
+                cursor.execute(
+                    """UPDATE postmortems
+                       SET jira_issue_id = %s,
+                           jira_issue_key = %s,
+                           jira_issue_url = %s,
+                           jira_exported_at = CURRENT_TIMESTAMP
+                       WHERE id = %s AND org_id = %s""",
+                    (str(parent_id), parent_key, parent_url, str(postmortem_id), org_id),
+                )
+                conn.commit()
+    except Exception as e:
+        logger.warning("[POSTMORTEM] Failed to update Jira metadata for postmortem %s: %s", postmortem_id, e)
+
+    return jsonify({
+        "success": True,
+        "issueKey": parent_key,
+        "issueId": str(parent_id),
+        "issueUrl": parent_url,
+        "subtasks": subtask_keys,
+    })
+
+
+def _refresh_jira_credentials(user_id: str, creds: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Attempt to refresh OAuth Jira credentials."""
+    from connectors.atlassian_auth.auth import refresh_access_token as _refresh_token
+
+    refresh_token = creds.get("refresh_token")
+    if not refresh_token:
+        return None
+    try:
+        token_data = _refresh_token(refresh_token)
+    except Exception as exc:
+        logger.warning("[POSTMORTEM] Jira OAuth refresh failed for user %s: %s", user_id, exc)
+        return None
+
+    access_token = token_data.get("access_token")
+    if not access_token:
+        return None
+
+    updated = dict(creds)
+    updated["access_token"] = access_token
+    new_refresh = token_data.get("refresh_token")
+    if new_refresh:
+        updated["refresh_token"] = new_refresh
+    expires_in = token_data.get("expires_in")
+    if expires_in:
+        updated["expires_in"] = expires_in
+        updated["expires_at"] = int(time.time()) + int(expires_in)
+
+    store_tokens_in_db(user_id, updated, "jira")
+    return updated

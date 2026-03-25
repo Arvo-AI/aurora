@@ -1,5 +1,7 @@
 'use client';
 
+import { apiRequest } from '@/lib/services/api-client';
+
 type UnknownRecord = Record<string, unknown>;
 
 export interface CorootProject {
@@ -30,39 +32,12 @@ export interface CorootConnectResponse {
 
 const API_BASE = '/api/coroot';
 
-async function parseJsonResponse<T>(response: Response): Promise<T | null> {
-  const text = await response.text();
-  if (!text) {
-    return null;
-  }
-  return JSON.parse(text) as T;
-}
-
-async function handleJsonFetch<T>(input: RequestInfo, init?: RequestInit): Promise<T> {
-  const response = await fetch(input, {
-    ...init,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(init?.headers ?? {}),
-    },
-    cache: 'no-store',
-  });
-
-  if (!response.ok) {
-    type ErrorBody = { error?: string; details?: string };
-    const parsed = await parseJsonResponse<ErrorBody>(response).catch(() => null);
-    const message = parsed?.error || parsed?.details || response.statusText || `Request failed with status ${response.status}`;
-    throw new Error(message);
-  }
-
-  const parsed = await parseJsonResponse<T>(response);
-  return parsed ?? ({} as T);
-}
-
 export const corootService = {
   async getStatus(): Promise<CorootStatus | null> {
     try {
-      const data = await handleJsonFetch<UnknownRecord>(`${API_BASE}/status`);
+      const data = await apiRequest<UnknownRecord>(`${API_BASE}/status`, {
+        cache: 'no-store',
+      });
       return {
         connected: Boolean(data?.connected),
         url: data?.url as string | undefined,
@@ -79,9 +54,10 @@ export const corootService = {
 
   async connect(payload: CorootConnectPayload): Promise<CorootConnectResponse> {
     try {
-      const result = await handleJsonFetch<CorootConnectResponse>(`${API_BASE}/connect`, {
+      const result = await apiRequest<CorootConnectResponse>(`${API_BASE}/connect`, {
         method: 'POST',
         body: JSON.stringify(payload),
+        cache: 'no-store',
       });
       return result ?? ({} as CorootConnectResponse);
     } catch (error) {

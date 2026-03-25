@@ -333,6 +333,7 @@ export default function AWSOnboardingPage() {
       await fetchOnboardingData();
       setIsConfigured(true);
       localStorage.setItem("aurora_graph_discovery_trigger", "1");
+      window.dispatchEvent(new CustomEvent('providerStateChanged'));
 
     } catch (err) {
       console.error("Failed to set role:", err);
@@ -500,6 +501,7 @@ export default function AWSOnboardingPage() {
       localStorage.setItem('cloudProvider', 'aws');
       await fetchConnectedAccounts();
       await fetchInactiveAccounts();
+      window.dispatchEvent(new CustomEvent('providerStateChanged'));
     } catch (err) {
       console.error('Reconnect error:', err);
       setError('Failed to reconnect. Check your network connection and try again.');
@@ -577,6 +579,7 @@ export default function AWSOnboardingPage() {
         setIsConfigured(true);
         localStorage.setItem('isAWSConnected', 'true');
         localStorage.setItem('cloudProvider', 'aws');
+        window.dispatchEvent(new CustomEvent('providerStateChanged'));
       }
     } catch (err) {
       console.error('Bulk register error:', err);

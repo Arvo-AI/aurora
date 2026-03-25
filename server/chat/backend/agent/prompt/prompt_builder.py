@@ -8,6 +8,13 @@ from typing import Any, List, Optional, Tuple
 # Prefix Cache Configuration
 PREFIX_CACHE_EPHEMERAL_TTL = 300  # 5 minutes - TTL for ephemeral cache segments
 
+# Providers that support CLI execution via cloud_exec.
+# Providers not in this set (e.g. grafana) are observation-only and should
+# never be passed as the provider argument to cloud_exec.
+CLOUD_EXEC_PROVIDERS = frozenset({
+    "gcp", "aws", "azure", "ovh", "scaleway", "tailscale",
+})
+
 from chat.backend.agent.utils.prefix_cache import PrefixCacheManager
 from utils.db.connection_pool import db_pool
 
@@ -95,9 +102,11 @@ def build_provider_context_segment(provider_preference: Optional[Any], selected_
             f"- Provider already selected: {providers_text}. Do NOT ask the user to choose a provider again; continue with these settings.\n"
         )
         # Add explicit instruction about which provider to use for cloud_exec
-        if len(normalized) == 1:
+        # Only include providers that actually support CLI execution
+        cloud_exec_providers = [p for p in normalized if p in CLOUD_EXEC_PROVIDERS]
+        if len(cloud_exec_providers) == 1:
             parts.append(
-                f"- IMPORTANT: Use provider='{normalized[0]}' for all cloud_exec calls.\n"
+                f"- IMPORTANT: Use provider='{cloud_exec_providers[0]}' for all cloud_exec calls.\n"
             )
 
     if selected_project_id:
@@ -348,6 +357,24 @@ def build_provider_context_segment(provider_preference: Optional[Any], selected_
                     "- Tags must start with 'tag:' prefix (e.g., tag:server)\n"
                     "- Auth key values are only shown once at creation\n"
                     "- Tailscale does NOT provision infrastructure\n\n"
+                )
+            elif provider == "grafana":
+                parts.append(
+                    "## Grafana Reference:\n\n"
+                    "Grafana is connected as an **observation-only** provider for alert ingestion and dashboard monitoring.\n\n"
+                    "### IMPORTANT — NO CLI SUPPORT:\n"
+                    "- Do NOT use `cloud_exec('grafana', ...)` — there is no Grafana CLI connector.\n"
+                    "- Do NOT use `terminal_exec` with `grafana-cli` — it is not installed.\n"
+                    "- Grafana data (alerts) is available through Aurora's internal API, not through CLI tools.\n\n"
+                    "### WHAT YOU CAN DO:\n"
+                    "- **View alerts**: Grafana alerts are automatically ingested via webhook and stored in Aurora's database.\n"
+                    "  Reference the alert context provided in the conversation to answer questions about Grafana alerts.\n"
+                    "- **Investigate infrastructure**: If an alert references a specific cloud resource (VM, pod, service),\n"
+                    "  use the appropriate cloud provider tool (cloud_exec with 'gcp', 'aws', 'azure', etc.) to investigate.\n\n"
+                    "### CRITICAL RULES:\n"
+                    "- NEVER call cloud_exec with provider='grafana' — it will fail.\n"
+                    "- Use the alert context already available in the conversation.\n"
+                    "- For deeper investigation, identify the underlying cloud provider from the alert and use that provider's tools.\n\n"
                 )
             else:
                 parts.append(
@@ -1494,6 +1521,37 @@ def build_background_mode_segment(state: Optional[Any]) -> str:
             "Workflow: search first, then fetch promising pages for detailed procedures.",
             "Cross-reference Confluence findings with live infrastructure state.",
         ])
+
+    # Jira integration (if connected)
+    if integrations.get('jira'):
+        jira_mode = integrations.get('jira_mode', 'comment_only')
+        parts.extend([
+            "",
+            "JIRA INTEGRATION:",
+            "Jira is connected. Use Jira tools to gain context during investigation AND to track the incident afterward:",
+            "",
+            "Investigation (use EARLY to narrow scope):",
+            "- jira_search_issues(jql='text ~ \"service\" AND updated >= -7d ORDER BY updated DESC') - Find recent work on the affected service",
+            "- jira_search_issues(jql='type in (Bug, Incident) AND status != Done ORDER BY updated DESC') - Find open bugs/incidents",
+            "- jira_get_issue(issue_key='PROJ-123') - Read issue details, linked PRs, comments for change context",
+            "",
+        ])
+        if jira_mode == "comment_only":
+            parts.extend([
+                "Post-analysis (comment on existing issues only):",
+                "- jira_add_comment(issue_key='PROJ-123', comment='update') - Add findings to existing issue",
+                "NOTE: You are configured to COMMENT ONLY. Do NOT create new issues or link issues.",
+                "After adding a comment or creating an issue, the tool returns a `url` field. Always share this link with the user as a markdown link so they can click through to Jira.",
+                "Write comments as short, clean plain text. No markdown syntax. Structure: Title, Root Cause, Impact, Evidence, Remediation. Under 15 lines.",
+            ])
+        else:
+            parts.extend([
+                "Post-analysis (create tracking issue):",
+                "- jira_create_issue(project_key='PROJ', summary='title', description='details', issue_type='Bug') - Create incident tracking issue",
+                "- jira_add_comment(issue_key='PROJ-123', comment='update') - Add findings to existing issue",
+                "After adding a comment or creating an issue, the tool returns a `url` field. Always share this link with the user as a markdown link so they can click through to Jira.",
+                "Write comments as short, clean plain text. No markdown syntax. Structure: Title, Root Cause, Impact, Evidence, Remediation. Under 15 lines.",
+            ])
 
     # SharePoint search tools (if connected)
     if integrations.get('sharepoint'):

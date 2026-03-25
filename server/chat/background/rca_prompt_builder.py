@@ -392,6 +392,34 @@ def _has_cloudbees_connected(user_id: str) -> bool:
         return False
 
 
+def _has_jira_connected(user_id: str) -> bool:
+    """Check if user has Jira connected and the feature flag is enabled."""
+    try:
+        from utils.flags.feature_flags import is_jira_enabled
+        if not is_jira_enabled():
+            return False
+        from utils.auth.token_management import get_token_data
+        creds = get_token_data(user_id, "jira")
+        return bool(creds and (creds.get("access_token") or creds.get("pat_token")))
+    except Exception as e:
+        logger.warning(f"Error checking Jira context: {e}")
+        return False
+
+
+def _has_confluence_connected(user_id: str) -> bool:
+    """Check if user has Confluence connected and the feature flag is enabled."""
+    try:
+        from utils.flags.feature_flags import is_confluence_enabled
+        if not is_confluence_enabled():
+            return False
+        from utils.auth.token_management import get_token_data
+        creds = get_token_data(user_id, "confluence")
+        return bool(creds and (creds.get("access_token") or creds.get("pat_token")))
+    except Exception as e:
+        logger.warning(f"Error checking Confluence context: {e}")
+        return False
+
+
 def _get_recent_jenkins_deployments(user_id: str, service: str = "", lookback_minutes: int = 60, provider: str = "") -> List[Dict[str, Any]]:
     """Query jenkins_deployment_events for recent deployments matching a service.
 
@@ -530,6 +558,62 @@ def build_rca_prompt(
             "When you identify a code issue, use `github_fix` to suggest a fix.",
         ])
 
+    # Jira/Confluence investigation context — placed FIRST so agent searches before infra
+    has_jira = False
+    has_confluence = False
+    if user_id:
+        has_jira = _has_jira_connected(user_id)
+        has_confluence = _has_confluence_connected(user_id)
+
+        if has_jira or has_confluence:
+            prompt_parts.extend([
+                "",
+                "## ⚠️  MANDATORY FIRST STEP — CHANGE CONTEXT & KNOWLEDGE BASE:",
+                "**You MUST call the Jira/Confluence tools below BEFORE any infrastructure or CI/CD investigation.**",
+                "Skipping this step is a failure of the investigation.",
+            ])
+
+        if has_jira:
+            service_name = alert_details.get('labels', {}).get('service', '') or title
+            escaped_service = service_name.replace('\\', '\\\\').replace('"', '\\"')
+            prompt_parts.extend([
+                "",
+                "### Jira — Recent Development Context (SEARCH FIRST):",
+                "Jira is connected. Your FIRST tool calls MUST be jira_search_issues.",
+                "",
+                "**Step 1 — Find related recent work (DO THIS IMMEDIATELY):**",
+                f"- `jira_search_issues(jql='text ~ \"{escaped_service}\" AND updated >= -7d ORDER BY updated DESC')` — Recent tickets for this service",
+                "- `jira_search_issues(jql='type in (Bug, Incident) AND status != Done AND updated >= -14d ORDER BY updated DESC')` — Open bugs/incidents",
+                "- `jira_search_issues(jql='type in (Story, Task) AND status = Done AND updated >= -3d ORDER BY updated DESC')` — Recently completed work (likely deployed)",
+                "",
+                "**Step 2 — For each relevant ticket, check details:**",
+                "- `jira_get_issue(issue_key='PROJ-123')` — Read the description, linked PRs, comments for context on what changed",
+                "",
+                "**What to look for:**",
+                "- Recently completed stories/tasks → code that was just deployed",
+                "- Open bugs with similar symptoms → known issues",
+                "- Config change tickets → infrastructure or config drift",
+                "- Linked PRs/commits → exact code changes to correlate with the failure",
+                "",
+                "**Use Jira findings to NARROW your infrastructure investigation.** If a ticket mentions a DB migration, focus on DB connectivity. If a ticket mentions a config change, check configs first.",
+                "",
+                "**CRITICAL: During this investigation phase, ONLY use jira_search_issues and jira_get_issue.**",
+                "Do NOT use jira_create_issue, jira_add_comment, jira_update_issue, or jira_link_issues.",
+                "Jira filing happens automatically in a separate step after your investigation completes.",
+            ])
+
+        if has_confluence:
+            prompt_parts.extend([
+                "",
+                "### Confluence — Runbooks & Past Incidents:",
+                "Search Confluence for runbooks and prior postmortems BEFORE deep-diving into infrastructure:",
+                "- `confluence_search_similar(keywords=['error keywords'], service_name='SERVICE')` — Find past incidents with similar symptoms",
+                "- `confluence_search_runbooks(service_name='SERVICE')` — Find operational runbooks/SOPs",
+                "- `confluence_fetch_page(page_id='ID')` — Read full page content",
+                "",
+                "**Why this matters:** A runbook may give you the exact diagnostic steps. A past postmortem may reveal this is a recurring issue with a known fix.",
+            ])
+
     # Provider-specific investigation section
     provider_section = _build_provider_investigation_section(providers, user_id)
     if provider_section:
@@ -660,24 +744,32 @@ def build_rca_prompt(
             "### IMMEDIATE ACTION REQUIRED:",
             "- **DO NOT** output a plan or text explanation first.",
             "- **DO NOT** say 'I will start by...'",
-            "- **IMMEDIATELY** call the first tool (e.g., `list_gcp_resources` or `kubectl`).",
+            "- **If Jira is connected, your FIRST tool call MUST be jira_search_issues.**",
+            f"- After {'Jira' if has_jira else 'Confluence' if has_confluence else 'change'} context, proceed to infrastructure/CI tools.",
             "- UNLESS YOU ARE DONE, your response MUST contain a tool call.",
             "- NOT PROVIDING A TOOL CALL WILL END THE INVESTIGATION AUTOMATICALLY",
             "",
         ])
     
+    depth_steps = []
+    if has_jira or has_confluence:
+        depth_steps.append("**Search Jira/Confluence first** for recent changes, open bugs, and runbooks")
+    depth_steps.extend([
+        "Start broad - understand the overall system state",
+        "Identify the affected component(s)",
+        "Drill down into specifics - logs, metrics, configurations",
+        "Check related/dependent resources",
+        "Look for recent changes that correlate with the issue",
+        "Compare with healthy resources of the same type",
+        "Check resource quotas, limits, and constraints",
+        "Examine network connectivity and security rules",
+        "Verify IAM permissions and service accounts",
+        "Review historical patterns if available",
+    ])
+    prompt_parts.append("### INVESTIGATION DEPTH:")
+    for i, step in enumerate(depth_steps, 1):
+        prompt_parts.append(f"{i}. {step}")
     prompt_parts.extend([
-        "### INVESTIGATION DEPTH:",
-        "1. Start broad - understand the overall system state",
-        "2. Identify the affected component(s)",
-        "3. Drill down into specifics - logs, metrics, configurations",
-        "4. Check related/dependent resources",
-        "5. Look for recent changes that correlate with the issue",
-        "6. Compare with healthy resources of the same type",
-        "7. Check resource quotas, limits, and constraints",
-        "8. Examine network connectivity and security rules",
-        "9. Verify IAM permissions and service accounts",
-        "10. Review historical patterns if available",
         "",
         "### ERROR RESILIENCE:",
         "- If cloud monitoring/metrics commands fail -> use kubectl directly",

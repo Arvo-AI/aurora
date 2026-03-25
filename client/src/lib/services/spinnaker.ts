@@ -1,19 +1,6 @@
+import { apiRequest } from '@/lib/services/api-client';
+
 const API_BASE = '/api/spinnaker';
-
-async function fetchJson<T>(input: RequestInfo, init?: RequestInit): Promise<T> {
-  const response = await fetch(input, {
-    ...init,
-    headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
-    cache: 'no-store',
-  });
-
-  if (!response.ok) {
-    const body = (await response.json().catch(() => null)) as { error?: string } | null;
-    throw new Error(body?.error || response.statusText || `Request failed (${response.status})`);
-  }
-
-  return response.json();
-}
 
 export interface SpinnakerStatus {
   connected: boolean;
@@ -48,22 +35,23 @@ export interface SpinnakerRcaSettings {
 export const spinnakerService = {
   async getStatus(): Promise<SpinnakerStatus | null> {
     try {
-      return await fetchJson<SpinnakerStatus>(`${API_BASE}/status`);
+      return await apiRequest<SpinnakerStatus>(`${API_BASE}/status`, { cache: 'no-store' });
     } catch {
       return null;
     }
   },
 
   async connect(payload: Record<string, string>): Promise<SpinnakerStatus> {
-    return fetchJson<SpinnakerStatus>(`${API_BASE}/connect`, {
+    return apiRequest<SpinnakerStatus>(`${API_BASE}/connect`, {
       method: 'POST',
       body: JSON.stringify(payload),
+      cache: 'no-store',
     });
   },
 
   async getWebhookUrl(): Promise<SpinnakerWebhookInfo | null> {
     try {
-      return await fetchJson<SpinnakerWebhookInfo>(`${API_BASE}/webhook-url`);
+      return await apiRequest<SpinnakerWebhookInfo>(`${API_BASE}/webhook-url`, { cache: 'no-store' });
     } catch {
       return null;
     }
@@ -71,8 +59,9 @@ export const spinnakerService = {
 
   async getDeployments(limit = 10): Promise<{ deployments: SpinnakerDeploymentEvent[]; total: number } | null> {
     try {
-      return await fetchJson<{ deployments: SpinnakerDeploymentEvent[]; total: number }>(
-        `${API_BASE}/deployments?limit=${limit}`
+      return await apiRequest<{ deployments: SpinnakerDeploymentEvent[]; total: number }>(
+        `${API_BASE}/deployments?limit=${limit}`,
+        { cache: 'no-store' },
       );
     } catch {
       return null;
@@ -81,7 +70,7 @@ export const spinnakerService = {
 
   async getRcaSettings(): Promise<SpinnakerRcaSettings | null> {
     try {
-      return await fetchJson<SpinnakerRcaSettings>(`${API_BASE}/rca-settings`);
+      return await apiRequest<SpinnakerRcaSettings>(`${API_BASE}/rca-settings`, { cache: 'no-store' });
     } catch {
       return null;
     }
@@ -89,9 +78,10 @@ export const spinnakerService = {
 
   async updateRcaSettings(settings: SpinnakerRcaSettings): Promise<SpinnakerRcaSettings | null> {
     try {
-      return await fetchJson<SpinnakerRcaSettings>(`${API_BASE}/rca-settings`, {
+      return await apiRequest<SpinnakerRcaSettings>(`${API_BASE}/rca-settings`, {
         method: 'PUT',
         body: JSON.stringify(settings),
+        cache: 'no-store',
       });
     } catch {
       return null;

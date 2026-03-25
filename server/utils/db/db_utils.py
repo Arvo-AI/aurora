@@ -1578,6 +1578,20 @@ def initialize_tables():
                     logging.warning(f"Error creating index: {e}")
                     conn.rollback()
 
+            # Migration: Add Jira columns to postmortems table
+            try:
+                cursor.execute("""
+                    ALTER TABLE postmortems ADD COLUMN IF NOT EXISTS jira_issue_id TEXT;
+                    ALTER TABLE postmortems ADD COLUMN IF NOT EXISTS jira_issue_key TEXT;
+                    ALTER TABLE postmortems ADD COLUMN IF NOT EXISTS jira_issue_url TEXT;
+                    ALTER TABLE postmortems ADD COLUMN IF NOT EXISTS jira_exported_at TIMESTAMP;
+                """)
+                logging.info("Added Jira columns to postmortems table (if not exist).")
+                conn.commit()
+            except Exception as e:
+                logging.warning(f"Error adding Jira columns to postmortems: {e}")
+                conn.rollback()
+
             # View creation moved to after org_id migration (see below)
 
             # Early migration: ensure org_id column exists on all tables

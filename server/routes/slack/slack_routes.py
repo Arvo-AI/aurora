@@ -34,7 +34,8 @@ def slack_status(user_id):
         headers = {"Authorization": f"Bearer {slack_creds['access_token']}"}
         test_response = requests.post(
             "https://slack.com/api/auth.test",
-            headers=headers
+            headers=headers,
+            timeout=20
         )
         
         if test_response.status_code == 200:
