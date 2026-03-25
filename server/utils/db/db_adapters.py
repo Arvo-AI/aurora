@@ -145,7 +145,7 @@ def get_admin_connection_legacy():
         if connection:
             try:
                 connection.rollback()
-            except:
+            except BaseException:
                 pass
         raise
     finally:
@@ -166,7 +166,7 @@ def get_user_connection_legacy():
         if connection:
             try:
                 connection.rollback()
-            except:
+            except BaseException:
                 pass
         raise
     finally:
