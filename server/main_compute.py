@@ -450,6 +450,9 @@ app.register_blueprint(terraform_workspace_bp)
 from routes.graph_routes import graph_bp
 app.register_blueprint(graph_bp)
 
+from routes.observability_routes import observability_bp
+app.register_blueprint(observability_bp)
+
 # ---- Debug Routes ----
 from routes.debug import bp as debug_bp
 app.register_blueprint(debug_bp)

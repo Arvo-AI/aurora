@@ -185,6 +185,7 @@ def _resource_to_node(resource):
         "region": region,
         "cloud_resource_id": arn,
         "endpoint": endpoint,
+        "status": "",
         "metadata": {
             "aws_resource_type": aws_resource_type,
             "properties": properties,

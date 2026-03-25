@@ -141,6 +141,7 @@ class MemgraphClient:
             s.team_owner = $team_owner,
             s.aws_account_id = $aws_account_id,
             s.metadata = $metadata,
+            s.status = $status,
             s.created_at = localDateTime(),
             s.updated_at = localDateTime()
         ON MATCH SET
@@ -158,6 +159,7 @@ class MemgraphClient:
             s.team_owner = $team_owner,
             s.aws_account_id = $aws_account_id,
             s.metadata = $metadata,
+            s.status = $status,
             s.updated_at = localDateTime()
         RETURN s;
         """
@@ -203,6 +205,7 @@ class MemgraphClient:
             s.team_owner = svc.team_owner,
             s.aws_account_id = svc.aws_account_id,
             s.metadata = svc.metadata,
+            s.status = svc.status,
             s.created_at = localDateTime(),
             s.updated_at = localDateTime()
         ON MATCH SET
@@ -220,6 +223,7 @@ class MemgraphClient:
             s.team_owner = svc.team_owner,
             s.aws_account_id = svc.aws_account_id,
             s.metadata = svc.metadata,
+            s.status = svc.status,
             s.updated_at = localDateTime()
         RETURN count(s) AS total;
         """
@@ -779,6 +783,57 @@ class MemgraphClient:
         results = self._execute(query, {"user_id": user_id, "days": stale_days})
         return results[0]["marked"] if results else 0
 
+    def list_services_paginated(self, user_id, resource_type=None, provider=None, status=None, search=None, skip=0, limit=50):
+        """List services with pagination and optional filters."""
+        conditions = ["s.user_id = $user_id"]
+        params = {"user_id": user_id, "skip": skip, "limit": limit}
+        if resource_type:
+            conditions.append("s.resource_type = $resource_type")
+            params["resource_type"] = resource_type
+        if provider:
+            conditions.append("s.provider = $provider")
+            params["provider"] = provider
+        if status:
+            conditions.append("s.status = $status")
+            params["status"] = status
+        if search:
+            conditions.append("(s.name CONTAINS $search OR s.display_name CONTAINS $search)")
+            params["search"] = search
+        where = " AND ".join(conditions)
+        query = f"MATCH (s:Service) WHERE {where} RETURN s ORDER BY s.name SKIP $skip LIMIT $limit;"
+        results = self._execute(query, params)
+        return [self._node_to_dict(r["s"]) for r in results]
+
+    def count_services(self, user_id, resource_type=None, provider=None, status=None, search=None):
+        """Count services matching filters for pagination metadata."""
+        conditions = ["s.user_id = $user_id"]
+        params = {"user_id": user_id}
+        if resource_type:
+            conditions.append("s.resource_type = $resource_type")
+            params["resource_type"] = resource_type
+        if provider:
+            conditions.append("s.provider = $provider")
+            params["provider"] = provider
+        if status:
+            conditions.append("s.status = $status")
+            params["status"] = status
+        if search:
+            conditions.append("(s.name CONTAINS $search OR s.display_name CONTAINS $search)")
+            params["search"] = search
+        where = " AND ".join(conditions)
+        query = f"MATCH (s:Service) WHERE {where} RETURN count(s) AS total;"
+        results = self._execute(query, params)
+        return results[0]["total"] if results else 0
+
+    def get_services_status_counts(self, user_id):
+        """Get counts of services grouped by status."""
+        query = """
+        MATCH (s:Service {user_id: $user_id})
+        RETURN s.status AS status, count(s) AS count;
+        """
+        results = self._execute(query, {"user_id": user_id})
+        return {r["status"] or "": r["count"] for r in results}
+
     # =========================================================================
     # Helpers
     # =========================================================================
@@ -836,4 +891,5 @@ class MemgraphClient:
             "team_owner": svc.get("team_owner", ""),
             "aws_account_id": svc.get("aws_account_id", ""),
             "metadata": json.dumps(metadata) if isinstance(metadata, dict) else (metadata or "{}"),
+            "status": svc.get("status", ""),
         }

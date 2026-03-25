@@ -272,6 +272,7 @@ def _parse_asset_to_node(asset, project_id):
         "cloud_resource_id": name_path,
         "endpoint": endpoint,
         "vpc_id": vpc_id,
+        "status": state or "ACTIVE",
         "metadata": metadata,
     }
 

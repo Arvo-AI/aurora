@@ -242,6 +242,7 @@ def _resource_to_node(resource):
         "cloud_resource_id": cloud_resource_id,
         "endpoint": endpoint,
         "vpc_id": vpc_id,
+        "status": (properties.get("provisioningState") or ""),
         "metadata": {
             "subscription_id": subscription_id,
             "resource_group": resource_group,

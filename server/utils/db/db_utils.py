@@ -308,6 +308,23 @@ def initialize_tables():
                         UNIQUE(user_id, ip_address, port)
                     );
                 """,
+                "user_onprem_resources": """
+                    CREATE TABLE IF NOT EXISTS user_onprem_resources (
+                        id SERIAL PRIMARY KEY,
+                        user_id VARCHAR(255) NOT NULL,
+                        org_id VARCHAR(255) NOT NULL,
+                        name VARCHAR(255) NOT NULL,
+                        resource_type VARCHAR(100) NOT NULL,
+                        sub_type VARCHAR(100),
+                        ip_address VARCHAR(255),
+                        port INTEGER,
+                        metadata JSONB DEFAULT '{}',
+                        status VARCHAR(50) DEFAULT 'unknown',
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE(user_id, org_id, name)
+                    );
+                """,
                 "user_connections": """
                     CREATE TABLE IF NOT EXISTS user_connections (
                         id SERIAL PRIMARY KEY,

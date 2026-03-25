@@ -264,3 +264,92 @@ GCP_RELATIONSHIP_TYPE_MAP = {
     "COMPUTE_BACKEND_SERVICE_TO_INSTANCE_GROUP": "network",
     "COMPUTE_URL_MAP_TO_BACKEND_SERVICE": "network",
 }
+
+
+# =========================================================================
+# Resource Type -> Category Mapping (for Observability UI)
+# =========================================================================
+
+RESOURCE_TYPE_TO_CATEGORY = {
+    "vm": "Compute",
+    "kubernetes_cluster": "Containers",
+    "database": "Database",
+    "cache": "Database",
+    "serverless_function": "Serverless",
+    "api_gateway": "Serverless",
+    "load_balancer": "Networking",
+    "cdn": "Networking",
+    "dns_zone": "Networking",
+    "vpc": "Networking",
+    "subnet": "Networking",
+    "firewall": "Networking",
+    "service_discovery": "Networking",
+    "message_queue": "Messaging",
+    "storage_bucket": "Storage",
+    "filesystem": "Storage",
+    "container_registry": "Storage",
+    "secret_store": "Security",
+    "data_pipeline": "Data",
+    "search_engine": "Data",
+    "on_prem_device": "Compute",
+}
+
+
+def get_category(resource_type):
+    """Map a resource_type to a UI category."""
+    return RESOURCE_TYPE_TO_CATEGORY.get(resource_type, "Other")
+
+
+# =========================================================================
+# Status Display Mapping (normalize provider-specific statuses)
+# =========================================================================
+
+STATUS_DISPLAY_MAP = {
+    # Running
+    "ACTIVE": "Running",
+    "RUNNING": "Running",
+    "online": "Running",
+    "Succeeded": "Running",
+    "active": "Running",
+    "running": "Running",
+    "Ready": "Running",
+    "Available": "Running",
+    "RUNNABLE": "Running",
+    "UP": "Running",
+    "ready": "Running",
+    "healthy": "Running",
+    "READY": "Running",
+    # Stopped
+    "STOPPED": "Stopped",
+    "TERMINATED": "Stopped",
+    "SUSPENDED": "Stopped",
+    "offline": "Stopped",
+    "Deallocated": "Stopped",
+    "Stopped": "Stopped",
+    "stopped": "Stopped",
+    "terminated": "Stopped",
+    "DOWN": "Stopped",
+    "DEPROVISIONING": "Stopped",
+    # Provisioning
+    "PENDING": "Provisioning",
+    "PROVISIONING": "Provisioning",
+    "STAGING": "Provisioning",
+    "Creating": "Provisioning",
+    "Updating": "Provisioning",
+    "REPAIRING": "Provisioning",
+    "RECONCILING": "Provisioning",
+    "pending": "Provisioning",
+    "STARTING": "Provisioning",
+    # Error
+    "ERROR": "Error",
+    "FAILED": "Error",
+    "Failed": "Error",
+    "Unhealthy": "Error",
+}
+
+
+def normalize_status(raw_status):
+    """Normalize a raw provider status to a display status."""
+    if not raw_status:
+        return "Unknown"
+    return STATUS_DISPLAY_MAP.get(raw_status, "Unknown")
