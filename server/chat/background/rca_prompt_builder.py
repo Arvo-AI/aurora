@@ -174,6 +174,71 @@ def _get_similar_good_rcas_context(
         return ""
 
 
+def _get_prediscovery_context(user_id: str, alert_title: str, alert_service: str) -> str:
+    """Search prediscovery findings relevant to the alert and return formatted context."""
+    if not user_id:
+        return ""
+
+    query = " ".join(filter(None, [alert_title, alert_service]))
+    if not query.strip():
+        return ""
+
+    try:
+        from routes.knowledge_base.weaviate_client import _get_weaviate_client
+        from weaviate.classes.query import Filter, HybridFusion
+        from utils.auth.stateless_auth import get_org_id_for_user
+
+        org_id = get_org_id_for_user(user_id)
+        if not org_id:
+            return ""
+
+        _, collection = _get_weaviate_client()
+
+        discovery_filter = (
+            Filter.by_property("org_id").equal(org_id)
+            & Filter.by_property("document_id").like("discovery:*")
+        )
+
+        response = collection.query.hybrid(
+            query=query,
+            limit=3,
+            alpha=0.5,
+            fusion_type=HybridFusion.RANKED,
+            filters=discovery_filter,
+            return_metadata=["score"],
+        )
+
+        if not response.objects:
+            return ""
+
+        parts = [
+            "",
+            "## INFRASTRUCTURE TOPOLOGY CONTEXT (from pre-discovery):",
+            "The following infrastructure mappings were discovered automatically and may be relevant:",
+            "",
+        ]
+
+        for obj in response.objects:
+            source = obj.properties.get("source_filename", "")
+            content = obj.properties.get("content", "")
+            if content:
+                label = source.replace("[Auto-Discovery] ", "") if source else "Discovery"
+                parts.append(f"### {label}")
+                parts.append(content[:2000])
+                parts.append("")
+
+        parts.append("Use this topology context to understand dependencies and blast radius.")
+        parts.append("")
+
+        context = "\n".join(parts)
+        logger.info(f"[PREDISCOVERY] Injected {len(response.objects)} findings for alert: {query[:50]}")
+        return context
+
+    except Exception as e:
+        logger.warning(f"Error getting prediscovery context: {e}")
+        return ""
+
+
 def get_user_providers(user_id: str) -> List[str]:
     """Fetch connected cloud providers for a user from the database."""
     if not user_id:
@@ -713,6 +778,16 @@ def build_rca_prompt(
         )
         if similar_context:
             prompt_parts.append(similar_context)
+
+    # Prediscovery: Inject infrastructure topology context
+    if user_id:
+        prediscovery_context = _get_prediscovery_context(
+            user_id=user_id,
+            alert_title=title,
+            alert_service=alert_service or alert_details.get('labels', {}).get('service', ''),
+        )
+        if prediscovery_context:
+            prompt_parts.append(prediscovery_context)
 
     # Critical persistence instructions
     prompt_parts.extend([
