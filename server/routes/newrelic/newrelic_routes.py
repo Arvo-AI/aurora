@@ -247,3 +247,57 @@ def webhook_url(user_id):
         "webhookUrl": url,
         "instructions": instructions,
     })
+
+
+# ------------------------------------------------------------------
+# Webhook receiver (called by New Relic — no RBAC, authenticates via user_id in URL)
+# ------------------------------------------------------------------
+
+
+@newrelic_bp.route("/webhook/<user_id>", methods=["POST", "OPTIONS"])
+def webhook(user_id: str):
+    """Receive alert notifications from New Relic and enqueue RCA processing."""
+    if request.method == "OPTIONS":
+        return jsonify({}), 200
+
+    if not user_id:
+        return jsonify({"error": "user_id is required"}), 400
+
+    creds = _get_stored_newrelic_credentials(user_id)
+    if not creds:
+        logger.warning("[NEWRELIC] Webhook received for user %s with no connection", user_id)
+        return jsonify({"error": "New Relic not connected for this user"}), 404
+
+    payload = request.get_json(force=True, silent=True) or {}
+    if not payload:
+        return jsonify({"error": "Empty payload"}), 400
+
+    metadata = {
+        "headers": {k: v for k, v in request.headers if k.lower() not in ("authorization", "api-key")},
+        "remote_addr": request.remote_addr,
+    }
+
+    issue_id = (
+        payload.get("issueId")
+        or payload.get("issue_id")
+        or payload.get("incidentId")
+        or payload.get("incident_id")
+        or "unknown"
+    )
+    title = (
+        payload.get("title")
+        or payload.get("issueTitle")
+        or payload.get("issue_title")
+        or payload.get("conditionName")
+        or "New Relic Alert"
+    )
+
+    logger.info(
+        "[NEWRELIC][WEBHOOK] Received alert for user %s: %s (issue=%s)",
+        user_id, title, issue_id,
+    )
+
+    from routes.newrelic.tasks import process_newrelic_event
+    process_newrelic_event.delay(payload, metadata, user_id)
+
+    return jsonify({"accepted": True, "issueId": str(issue_id)}), 202

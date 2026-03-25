@@ -449,36 +449,29 @@ export function parseNewRelicCommand(toolInput: string): string {
 
     switch (resourceType.toLowerCase()) {
       case "nrql": {
-        if (!query) return "New Relic: NRQL query"
-        const upper = query.toUpperCase()
-        let label = "NRQL"
-        if (upper.includes("FROM TRANSACTION")) label = "Transactions"
-        else if (upper.includes("FROM LOG")) label = "Logs"
-        else if (upper.includes("FROM SYSTEMSAMPLE") || upper.includes("FROM PROCESSSAMPLE")) label = "Infrastructure"
-        else if (upper.includes("FROM METRIC") || upper.includes("AVERAGE(") || upper.includes("MAX(")) label = "Metrics"
-        else if (upper.includes("FROM SYNTHETICSCHECK")) label = "Synthetics"
-        else if (upper.includes("FROM SPAN") || upper.includes("FROM DISTRIBUTEDTRACING")) label = "Traces"
-        else if (upper.includes("ERROR")) label = "Errors"
-
-        const truncated = query.length > 70 ? query.substring(0, 67) + "..." : query
-        const time = timeRange ? ` (${timeRange})` : ""
-        return `New Relic ${label}: ${truncated}${time}`
+        const upper = (query || "").toUpperCase()
+        let label = "Query data"
+        if (upper.includes("FROM TRANSACTION")) label = "Query transactions"
+        else if (upper.includes("FROM LOG")) label = "Query logs"
+        else if (upper.includes("FROM SYSTEMSAMPLE") || upper.includes("FROM PROCESSSAMPLE")) label = "Query infrastructure"
+        else if (upper.includes("FROM METRIC") || upper.includes("AVERAGE(") || upper.includes("MAX(")) label = "Query metrics"
+        else if (upper.includes("FROM SYNTHETICSCHECK")) label = "Query synthetics"
+        else if (upper.includes("FROM SPAN") || upper.includes("FROM DISTRIBUTEDTRACING")) label = "Query traces"
+        else if (upper.includes("ERROR")) label = "Query errors"
+        const time = timeRange ? ` — ${timeRange}` : ""
+        return `New Relic: ${label}${time}`
       }
       case "issues": {
-        const stateFilter = query ? ` (${query})` : ""
-        return `New Relic: Alert issues${stateFilter}`
+        return "New Relic: Fetch alert issues"
       }
       case "entities": {
-        const parts = query.split("|")
-        const search = parts[0]?.trim() || ""
-        const type = parts[1]?.trim() || ""
-        const typeLabel = type ? ` [${type}]` : ""
-        return `New Relic: Entity search${search ? ` "${search}"` : ""}${typeLabel}`
+        const search = query.split("|")[0]?.trim() || ""
+        return search ? `New Relic: Search entities — ${search}` : "New Relic: Search entities"
       }
       default:
         return `New Relic: ${resourceType || "query"}`
     }
   } catch {
-    return "New Relic: query"
+    return "New Relic: Query"
   }
 }

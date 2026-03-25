@@ -53,6 +53,7 @@ celery_app.conf.update(
         'routes.dynatrace.tasks',
         'routes.bigpanda.tasks',
         'routes.pagerduty.tasks',
+        'routes.newrelic.tasks',
         'routes.jenkins.tasks',
         'routes.spinnaker.tasks',
         'utils.terminal.terminal_pod_cleanup',

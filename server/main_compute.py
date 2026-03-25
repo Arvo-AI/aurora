@@ -330,6 +330,7 @@ app.register_blueprint(bigpanda_bp, url_prefix="/bigpanda")
 # --- New Relic Integration Routes ---
 from routes.newrelic import bp as newrelic_bp  # noqa: F401
 app.register_blueprint(newrelic_bp, url_prefix="/newrelic")
+import routes.newrelic.tasks  # noqa: F401
 
 # --- PagerDuty Integration Routes ---
 from routes.pagerduty.pagerduty_routes import pagerduty_bp  # noqa: F401
