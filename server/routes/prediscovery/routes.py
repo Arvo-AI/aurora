@@ -33,7 +33,7 @@ def trigger_prediscovery(user_id):
         }), 202
     except Exception as e:
         logger.exception(f"[Prediscovery API] Failed to trigger: {e}")
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": "Failed to start discovery"}), 500
 
 
 @prediscovery_bp.route("/status", methods=["GET"])
@@ -70,4 +70,4 @@ def get_prediscovery_status(user_id):
         })
     except Exception as e:
         logger.exception(f"[Prediscovery API] Failed to get status: {e}")
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": "Failed to get discovery status"}), 500

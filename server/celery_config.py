@@ -155,7 +155,7 @@ except ImportError as e:
     logging.warning(f"Failed to import discovery tasks: {e}")
 
 try:
-    import chat.background.prediscovery_task
+    import chat.background.prediscovery_task  # noqa: F401
     logging.info("Prediscovery task imported successfully")
 except ImportError as e:
     logging.warning(f"Failed to import prediscovery task: {e}")

@@ -352,3 +352,24 @@ def get_document_chunk_count(user_id: str, document_id: str) -> int:
     except Exception as e:
         logger.error(f"[KB Weaviate] Error getting chunk count: {e}")
         return 0
+
+
+def delete_discovery_chunks(org_id: str) -> int:
+    """Delete all auto-discovery chunks for an org."""
+    try:
+        _, collection = _get_weaviate_client()
+
+        from weaviate.classes.query import Filter
+        discovery_filter = (
+            Filter.by_property("org_id").equal(org_id)
+            & Filter.by_property("document_id").like("discovery:*")
+        )
+
+        result = collection.data.delete_many(where=discovery_filter)
+        deleted = result.successful if hasattr(result, "successful") else 0
+        logger.info(f"[KB Weaviate] Deleted {deleted} discovery chunks for org {org_id}")
+        return deleted
+
+    except Exception as e:
+        logger.error(f"[KB Weaviate] Error deleting discovery chunks: {e}")
+        return 0

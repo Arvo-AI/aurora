@@ -13,8 +13,6 @@ from celery_config import celery_app
 
 logger = logging.getLogger(__name__)
 
-PREDISCOVERY_DOCUMENT_PREFIX = "discovery:"
-
 
 def _get_users_with_integrations() -> List[Dict[str, Any]]:
     """Get all users who have at least one connected integration."""
@@ -45,20 +43,8 @@ def _get_users_with_integrations() -> List[Dict[str, Any]]:
 def _cleanup_old_discovery_chunks(org_id: str) -> int:
     """Delete previous discovery findings from Weaviate for this org."""
     try:
-        from routes.knowledge_base.weaviate_client import _get_weaviate_client
-        from weaviate.classes.query import Filter
-
-        _, collection = _get_weaviate_client()
-
-        discovery_filter = (
-            Filter.by_property("org_id").equal(org_id)
-            & Filter.by_property("document_id").like("discovery:*")
-        )
-
-        result = collection.data.delete_many(where=discovery_filter)
-        deleted = result.successful if hasattr(result, "successful") else 0
-        logger.info(f"[Prediscovery] Cleaned up {deleted} old discovery chunks for org {org_id}")
-        return deleted
+        from routes.knowledge_base.weaviate_client import delete_discovery_chunks
+        return delete_discovery_chunks(org_id)
     except Exception as e:
         logger.warning(f"[Prediscovery] Failed to cleanup old chunks: {e}")
         return 0
@@ -201,7 +187,7 @@ def run_prediscovery(
             trigger_metadata={"source": "prediscovery", "trigger": trigger},
         )
 
-        result = asyncio.run(_execute_background_chat(
+        asyncio.run(_execute_background_chat(
             user_id=user_id,
             session_id=session_id,
             initial_message=prompt,

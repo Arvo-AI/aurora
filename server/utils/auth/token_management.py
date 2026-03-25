@@ -476,13 +476,13 @@ def _schedule_prediscovery(user_id: str) -> None:
         if not redis:
             return
         key = f"prediscovery_pending:{user_id}"
-        if not redis.set(key, "1", nx=True, ex=60):
+        if not redis.set(key, "1", nx=True, ex=600):
             return
         from chat.background.prediscovery_task import run_prediscovery
         run_prediscovery.apply_async(
             kwargs={"user_id": user_id, "trigger": "new_connector"},
-            countdown=60,
+            countdown=600,
         )
-        logger.info("[STORE-TOKENS] Scheduled prediscovery for user %s (1min delay)", user_id)
+        logger.info("[STORE-TOKENS] Scheduled prediscovery for user %s (10min delay)", user_id)
     except Exception as e:
         logger.debug("[STORE-TOKENS] Could not schedule prediscovery: %s", e)
