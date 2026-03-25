@@ -380,6 +380,25 @@ def store_tokens_in_db(user_id: str, token_data: Dict, provider: str,
                     "is_active = TRUE",
                     (user_id, secret_ref, provider, base_url, auth_type)
                 )
+            elif provider == "newrelic":
+                account_id_val = token_data.get("account_id") if isinstance(token_data, dict) else None
+                account_name = token_data.get("account_name") if isinstance(token_data, dict) else None
+                region = token_data.get("region") if isinstance(token_data, dict) else None
+                user_email = token_data.get("user_email") if isinstance(token_data, dict) else None
+
+                cursor.execute(
+                    "INSERT INTO user_tokens (user_id, org_id, secret_ref, provider, subscription_id, subscription_name, client_id, email) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) ON CONFLICT (user_id, provider) DO UPDATE "
+                    "SET secret_ref = EXCLUDED.secret_ref, "
+                    "org_id = COALESCE(EXCLUDED.org_id, user_tokens.org_id), "
+                    "subscription_id = EXCLUDED.subscription_id, "
+                    "subscription_name = EXCLUDED.subscription_name, "
+                    "client_id = EXCLUDED.client_id, "
+                    "email = EXCLUDED.email, "
+                    "timestamp = CURRENT_TIMESTAMP, "
+                    "is_active = TRUE",
+                    (user_id, request_org_id, secret_ref, provider, account_id_val, account_name, region, user_email)
+                )
             elif subscription_name is not None and subscription_id is not None:
                 cursor.execute(
                     "INSERT INTO user_tokens (user_id, org_id, secret_ref, provider, subscription_name, subscription_id) "
