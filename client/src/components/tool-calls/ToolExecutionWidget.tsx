@@ -27,6 +27,7 @@ import {
   parseAwsMcpCommand,
   parseAwsSuggestCommand,
   parseCorootCommand,
+  parseCloudflareCommand,
 } from "./tool-command-parser"
 import { RenderOutput } from "./tool-output-renderer"
 
@@ -257,6 +258,9 @@ const ToolExecutionWidget = ({ tool, className, sendMessage, sendRaw, onToolUpda
   // Coroot tools parsing
   else if (tool.tool_name.startsWith("coroot_")) {
     command = parseCorootCommand(tool.tool_name, normalizedInput)
+  }
+  else if (tool.tool_name === "query_cloudflare" || tool.tool_name === "cloudflare_list_zones" || tool.tool_name === "cloudflare_action") {
+    command = parseCloudflareCommand(tool.tool_name, normalizedInput)
   }
 
   // If command is still JSON blob, use default

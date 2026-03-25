@@ -433,3 +433,43 @@ export function parseJenkinsRcaCommand(toolInput: string): string {
 export function parseCloudbeesRcaCommand(toolInput: string): string {
   return parseCIRcaCommand(toolInput, "CloudBees")
 }
+
+export function parseCloudflareCommand(toolName: string, toolInput: string): string {
+  const args = (() => {
+    try {
+      const parsed = JSON.parse(toolInput)
+      return parsed?.kwargs || parsed || {}
+    } catch {
+      try {
+        return JSON.parse(toolInput.replace(/'/g, '"'))
+      } catch {
+        return {}
+      }
+    }
+  })()
+
+  if (toolName === "cloudflare_list_zones") {
+    return "Cloudflare: List zones"
+  }
+
+  if (toolName === "query_cloudflare") {
+    const resource = args.resource_type || "query"
+    const label = resource.replace(/_/g, " ")
+    const since = args.since ? ` (since ${args.since})` : ""
+    return `Cloudflare: ${label}${since}`
+  }
+
+  if (toolName === "cloudflare_action") {
+    const action = args.action_type || "action"
+    const actionLabels: Record<string, string> = {
+      purge_cache: "Purge cache",
+      security_level: `Security level → ${args.value || "?"}`,
+      development_mode: `Dev mode → ${args.value || "?"}`,
+      dns_update: `Update DNS record${args.record_id ? ` ${args.record_id.substring(0, 8)}` : ""}`,
+      toggle_firewall_rule: `${args.paused ? "Disable" : "Enable"} firewall rule`,
+    }
+    return `Cloudflare: ${actionLabels[action] || action.replace(/_/g, " ")}`
+  }
+
+  return `Cloudflare: ${toolName.replace(/cloudflare_?/g, "").replace(/_/g, " ") || "query"}`
+}

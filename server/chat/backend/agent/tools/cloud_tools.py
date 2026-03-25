@@ -139,6 +139,15 @@ from .thousandeyes_tool import (
     ThousandEyesGetDashboardWidgetArgs,
     ThousandEyesGetBGPMonitorsArgs,
 )
+from .cloudflare_tool import (
+    query_cloudflare,
+    cloudflare_list_zones,
+    cloudflare_action,
+    is_cloudflare_connected,
+    CloudflareQueryArgs,
+    CloudflareListZonesArgs,
+    CloudflareActionArgs,
+)
 
 # Import all context management functions from utils
 from utils.cloud.cloud_utils import (
@@ -1662,6 +1671,51 @@ Once you identify which account has the issue, pass account_id (e.g. '1510256343
             logging.debug(f"ThousandEyes tools not added - user {user_id} not connected to ThousandEyes")
     except Exception as e:
         logging.warning(f"Failed to add ThousandEyes tools (treating as not connected): {e}")
+
+    # Add Cloudflare tools if connected
+    try:
+        if user_id and is_cloudflare_connected(user_id):
+            _cf_tools = [
+                (query_cloudflare, "query_cloudflare", CloudflareQueryArgs,
+                 "Query Cloudflare for diagnostic data. Set resource_type to one of: "
+                 "'dns_records' (DNS records for a zone), "
+                 "'analytics' (traffic, threats, status codes, bandwidth, content types, HTTP versions, "
+                 "SSL protocols, IP classification for a zone — supports time-series via limit and custom windows via since/until), "
+                 "'firewall_events' (recent WAF/security events), 'firewall_rules' (active rules), "
+                 "'rate_limits' (rate limiting rules — check if traffic is being throttled), "
+                 "'workers' (list Workers scripts), 'load_balancers' (LBs for a zone), "
+                 "'ssl' (TLS mode and cert status), 'healthchecks' (configured health monitors), "
+                 "'zone_settings' (all zone settings: security level, caching, dev mode, WAF, TLS version), "
+                 "'page_rules' (URL-based redirects, forwarding, cache overrides). "
+                 "Use cloudflare_list_zones() first to discover zone IDs, "
+                 "then pass zone_id for zone-specific queries."),
+                (cloudflare_list_zones, "cloudflare_list_zones", CloudflareListZonesArgs,
+                 "Quick helper to list all Cloudflare zones with their IDs, names, and status. "
+                 "Use this first to discover zone IDs before querying zone-specific data."),
+                (cloudflare_action, "cloudflare_action", CloudflareActionArgs,
+                 "REMEDIATION: Execute a Cloudflare write action. action_type values: "
+                 "'purge_cache' (clear cached content; pass 'files' for targeted purge or omit for full), "
+                 "'security_level' (set 'value' to 'under_attack','high','medium','low','essentially_off'), "
+                 "'development_mode' (set 'value' to 'on' or 'off' — bypasses cache), "
+                 "'dns_update' (update a DNS record; requires 'record_id' + at least one of 'content','proxied','ttl'), "
+                 "'toggle_firewall_rule' (requires 'rule_id' and 'paused' boolean). "
+                 "All actions require zone_id. Use query_cloudflare to find record/rule IDs first."),
+            ]
+            for _func, _name, _schema, _desc in _cf_tools:
+                _ctx = with_user_context(_func)
+                _notif = with_completion_notification(_ctx)
+                _final = wrap_func_with_capture(_notif, _name) if tool_capture else _notif
+                tools.append(StructuredTool.from_function(
+                    func=_final,
+                    name=_name,
+                    description=_desc,
+                    args_schema=_schema,
+                ))
+            logging.info(f"Added {len(_cf_tools)} Cloudflare tools for user {user_id}")
+        else:
+            logging.debug(f"Cloudflare tools not added - user {user_id} not connected to Cloudflare")
+    except Exception as e:
+        logging.warning(f"Failed to add Cloudflare tools (treating as not connected): {e}")
 
     logging.info(f"Created {len(tools)} Aurora native tools")
     
