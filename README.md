@@ -105,27 +105,6 @@ Aurora doesn't just find the root cause — it suggests code fixes and can gener
 - **Self-Hosted** — Docker Compose or Helm chart. HashiCorp Vault for secrets management
 - **Free Forever** — No per-seat or per-incident pricing. Apache 2.0.
 
-## Why Aurora?
-
-| | Aurora | Rootly | FireHydrant | incident.io | HolmesGPT |
-|---|:---:|:---:|:---:|:---:|:---:|
-| **Approach** | Agentic investigation | Workflow + AI agents | Workflow automation | Workflow + AI agents | Agentic investigation |
-| **AI Root Cause Analysis** | Autonomous multi-step | Autonomous multi-step | Post-incident summaries | Autonomous multi-agent | Autonomous agentic loop |
-| **Cloud Providers** | AWS, Azure, GCP, OVH, Scaleway | Not specified | Not specified | Not specified | AWS, Azure, GCP |
-| **CLI Execution** | Sandboxed K8s pods | No | No | No | Bash + kubectl |
-| **Knowledge Base (RAG)** | Weaviate vector search | Past incidents | No | Past incidents | Confluence, Slab, Notion |
-| **Infrastructure Graph** | Memgraph dependency map | No | Service Catalog | No | No |
-| **Open Source** | Apache 2.0 | No | No | No | Apache 2.0 (CNCF) |
-| **Self-Hosted** | Docker / Helm | No | No | No | Kubernetes / CLI |
-| **LLM Provider** | Any (incl. Ollama) | Multi-provider (BYOK) | Undisclosed | Undisclosed | Any (12+ providers) |
-| **Auto Postmortem** | Yes + Confluence export | Yes | Yes | Yes | Not verified |
-| **Code Fix PRs** | Yes | Not verified | No | Yes | Yes |
-| **Pricing** | **Free** (self-hosted) | From $20/user/mo | From $9,600/yr | From $15/user/mo | Free (open source) |
-
-> Data verified from official websites and repositories. Last reviewed: March 2026. Reviewed quarterly.
->
-> Sources: [Rootly AI SRE](https://rootly.com/ai-sre) | [Rootly Pricing](https://rootly.com/pricing) | [FireHydrant AI](https://firehydrant.com/ai/) | [FireHydrant Pricing](https://firehydrant.com/pricing) | [incident.io AI SRE](https://incident.io/ai-sre) | [incident.io Pricing](https://incident.io/pricing) | [HolmesGPT Docs](https://holmesgpt.dev) | [HolmesGPT Toolsets](https://holmesgpt.dev/data-sources/builtin-toolsets/)
-
 ## How It Works
 
 ```text
