@@ -507,117 +507,23 @@ def build_failure_recovery_segment(state: Optional[Any]) -> str:
 
 
 def build_github_context_segment(user_id: Optional[str]) -> str:
-    """Build GitHub context segment with connected account and selected repo info."""
-    import logging
-    
+    """Build GitHub context segment -- lightweight, repos are fetched via tool call."""
     if not user_id:
         return ""
-    
     try:
         from utils.auth.stateless_auth import get_credentials_from_db
-        
-        parts: List[str] = []
-        
-        # Get GitHub credentials (username, connection status)
         github_creds = get_credentials_from_db(user_id, 'github')
-        if not github_creds:
-            logging.debug(f"No GitHub credentials found for user {user_id}")
+        if not github_creds or not github_creds.get('username'):
             return ""
-        
-        username = github_creds.get('username', '')
-        if not username:
-            logging.debug(f"GitHub credentials found but no username for user {user_id}")
-            return ""
-        
-        logging.info(f"Building GitHub context for user {user_id}, username: {username}")
-        
-        parts.append("GITHUB INTEGRATION CONTEXT:\n")
-        parts.append(f"- Connected GitHub account: {username}\n")
-        
-        # Get selected repository and branch
-        repo_selection = get_credentials_from_db(user_id, 'github_repo_selection')
-        if repo_selection:
-            repository = repo_selection.get('repository', {})
-            branch = repo_selection.get('branch', {})
-            
-            repo_full_name = repository.get('full_name', '')
-            branch_name = branch.get('name', 'main')
-            
-            if repo_full_name:
-                # Parse owner and repo
-                repo_parts = repo_full_name.split('/')
-                if len(repo_parts) == 2:
-                    owner, repo_name = repo_parts
-                    logging.info(f"GitHub repo selection found: {repo_full_name} (branch: {branch_name})")
-                    parts.append(f"- Selected repository: {repo_full_name}\n")
-                    parts.append(f"- Repository owner: {owner}\n")
-                    parts.append(f"- Repository name: {repo_name}\n")
-                    parts.append(f"- Default branch: {branch_name}\n")
-        else:
-            logging.info(f"No GitHub repo selection found for user {user_id}")
-        
-        parts.append("\n")
-        parts.append("GITHUB MCP TOOLS AVAILABLE (Official GitHub MCP Server - 94 tools):\n")
-        parts.append("You have full access to the Official GitHub MCP Server tools. Use these for all GitHub operations:\n\n")
-        
-        parts.append("**Repository & Files:**\n")
-        parts.append("- create_repository, fork_repository, search_repositories, get_repository_tree\n")
-        parts.append("- get_file_contents, create_or_update_file, delete_file, push_files\n")
-        parts.append("- create_branch, list_branches, list_commits, get_commit\n")
-        parts.append("- list_tags, get_tag, list_releases, get_latest_release, get_release_by_tag\n\n")
-        
-        parts.append("**Issues:**\n")
-        parts.append("- create_issue, get_issue, list_issues, update_issue, search_issues\n")
-        parts.append("- add_issue_comment, get_label, list_label, label_write\n")
-        parts.append("- issue_read, issue_write, sub_issue_write, list_issue_types\n")
-        parts.append("- assign_copilot_to_issue\n\n")
-        
-        parts.append("**Pull Requests:**\n")
-        parts.append("- create_pull_request, get_pull_request, list_pull_requests, update_pull_request\n")
-        parts.append("- merge_pull_request, update_pull_request_branch, search_pull_requests\n")
-        parts.append("- get_pull_request_files, get_pull_request_status, get_pull_request_comments, get_pull_request_reviews\n")
-        parts.append("- create_pull_request_review, create_pending_pull_request_review, create_and_submit_pull_request_review\n")
-        parts.append("- add_comment_to_pending_review, pull_request_read, pull_request_review_write\n")
-        parts.append("- request_copilot_review\n\n")
-        
-        parts.append("**GitHub Actions/Workflows:**\n")
-        parts.append("- list_workflows, list_workflow_runs, get_workflow_run, run_workflow\n")
-        parts.append("- cancel_workflow_run, rerun_workflow_run, rerun_failed_jobs\n")
-        parts.append("- list_workflow_jobs, get_job_logs, get_workflow_run_logs\n")
-        parts.append("- list_workflow_run_artifacts, download_workflow_run_artifact\n")
-        parts.append("- get_workflow_run_usage, delete_workflow_run_logs\n\n")
-        
-        parts.append("**Security & Scanning:**\n")
-        parts.append("- list_code_scanning_alerts, get_code_scanning_alert\n")
-        parts.append("- list_dependabot_alerts, get_dependabot_alert\n")
-        parts.append("- list_secret_scanning_alerts, get_secret_scanning_alert\n")
-        parts.append("- list_global_security_advisories, get_global_security_advisory\n")
-        parts.append("- list_repository_security_advisories, list_org_repository_security_advisories\n\n")
-        
-        parts.append("**Discussions & Projects:**\n")
-        parts.append("- list_discussions, get_discussion, get_discussion_comments, list_discussion_categories\n")
-        parts.append("- list_projects, get_project, list_project_items, get_project_item\n")
-        parts.append("- add_project_item, update_project_item, delete_project_item\n")
-        parts.append("- list_project_fields, get_project_field\n\n")
-        
-        parts.append("**Gists & Notifications:**\n")
-        parts.append("- create_gist, get_gist, list_gists, update_gist\n")
-        parts.append("- list_notifications, get_notification_details, dismiss_notification\n")
-        parts.append("- mark_all_notifications_read, manage_notification_subscription\n\n")
-        
-        parts.append("**Users, Teams & Search:**\n")
-        parts.append("- get_me, search_users, search_orgs, get_teams, get_team_members\n")
-        parts.append("- search_code, list_starred_repositories, star_repository, unstar_repository\n\n")
-        
-        parts.append("GITHUB TOOL USAGE RULES:\n")
-        parts.append("- When user asks about PRs, issues, commits, or repo operations WITHOUT specifying a repository, use the selected repository above.\n")
-        parts.append("- For list_pull_requests, list_issues, list_commits: use 'owner' and 'repo' parameters from the selected repository.\n")
-        parts.append("- For creating PRs/issues: default to the selected repository unless user specifies another.\n")
-        parts.append("- Always use the MCP tools (prefixed with 'mcp_') for GitHub operations - they provide full GitHub API access.\n")
-        parts.append("- If no repository is selected and user doesn't specify one, ask which repository they want to work with.\n")
-        
-        return "".join(parts)
-        
+
+        return (
+            "GITHUB INTEGRATION:\n"
+            f"- Connected account: {github_creds['username']}\n"
+            "- Call get_connected_repos to list available repositories with descriptions.\n"
+            "- Always pass repo='owner/repo' to github_rca and MCP tools.\n"
+            "- Use github_rca for RCA (deployment_check, commits, diff, pull_requests).\n"
+            "- Use MCP tools (mcp_*) for direct GitHub API operations.\n"
+        )
     except Exception as e:
         import logging
         logging.warning(f"Error building GitHub context segment: {e}")
@@ -1589,17 +1495,14 @@ def build_background_mode_segment(state: Optional[Any]) -> str:
             "",
             "GITHUB INVESTIGATION:",
             "Use github_rca tool for structured code change investigation.",
+            "Always pass repo='owner/repo' to specify which repository.",
+            "If unsure which repo is relevant to the alert, call get_connected_repos first.",
             "",
-            "IMPORTANT - Repository Auto-Resolution:",
-            "- The tool auto-resolves repo from Knowledge Base (runbooks) if available",
-            "- Do NOT pass repo= parameter unless you need a specific repo",
-            "- Resolution order: KB Memory → KB Documents → Connected repo (fallback)",
-            "",
-            "Commands (omit repo= to use KB auto-resolution):",
-            "- github_rca(action='deployment_check') - Recent GitHub Actions runs",
-            "- github_rca(action='commits', incident_time='ALERT_TIME') - Recent commits",
-            "- github_rca(action='diff', commit_sha='SHA') - Diff for specific commits",
-            "- github_rca(action='pull_requests') - Recently merged PRs",
+            "Commands:",
+            "- github_rca(repo='owner/repo', action='deployment_check') - Recent GitHub Actions runs",
+            "- github_rca(repo='owner/repo', action='commits', incident_time='ALERT_TIME') - Recent commits",
+            "- github_rca(repo='owner/repo', action='diff', commit_sha='SHA') - Diff for specific commits",
+            "- github_rca(repo='owner/repo', action='pull_requests') - Recently merged PRs",
             "",
             "Check for recent code changes that may correlate with the alert.",
             "Look for: config changes, k8s manifests, Terraform, dependency updates.",

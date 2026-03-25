@@ -28,6 +28,7 @@ iac_tool = run_iac_tool
 from .github_commit_tool import github_commit, GitHubCommitArgs
 from .github_rca_tool import github_rca, GitHubRCAArgs
 from .github_fix_tool import github_fix, GitHubFixArgs
+from .github_repos_tool import get_connected_repos, GetConnectedReposArgs
 from .jenkins_rca_tool import jenkins_rca, JenkinsRCAArgs
 from .cloudbees_rca_tool import cloudbees_rca, CloudBeesRCAArgs
 from .spinnaker_rca_tool import spinnaker_rca, SpinnakerRCAArgs
@@ -1135,6 +1136,7 @@ Once you identify which account has the issue, pass account_id (e.g. '1510256343
     tool_functions = [
         (run_iac_tool, "iac_tool"),
         (github_commit, "github_commit"),
+        (get_connected_repos, "get_connected_repos"),
         (github_rca, "github_rca"),
         (github_fix, "github_fix"),
         (jenkins_rca, "jenkins_rca"),
@@ -1181,6 +1183,17 @@ Once you identify which account has the issue, pass account_id (e.g. '1510256343
                 description="Commit and push Terraform files to a GitHub repository. Parameters: repo (string, required) - repository in 'owner/repo' format, commit_message (string, required) - commit message, branch (string, optional, default='main') - target branch, push (boolean, optional, default=true) - whether to push.",
                 args_schema=GitHubCommitArgs
             )
+        elif name == 'get_connected_repos':
+            tool = StructuredTool.from_function(
+                func=final_func,
+                name=name,
+                description=(
+                    "List all GitHub repositories the user has connected, with descriptions. "
+                    "Call this first to discover available repos before using github_rca. "
+                    "Returns repo names, default branches, and metadata summaries."
+                ),
+                args_schema=GetConnectedReposArgs
+            )
         elif name == 'github_rca':
             tool = StructuredTool.from_function(
                 func=final_func,
@@ -1191,7 +1204,8 @@ Once you identify which account has the issue, pass account_id (e.g. '1510256343
                     "'commits' (recent commits with timeline correlation), "
                     "'diff' (file changes for a specific commit), "
                     "'pull_requests' (merged PRs in time window). "
-                    "Auto-resolves repository from Knowledge Base or connected repo if not specified. "
+                    "IMPORTANT: Always pass repo='owner/repo' to specify which repository to investigate. "
+                    "If unsure which repo, call get_connected_repos first. "
                     "Pass incident_time (ISO 8601) for automatic time window correlation."
                 ),
                 args_schema=GitHubRCAArgs

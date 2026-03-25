@@ -359,32 +359,15 @@ Use the actual tool names (cloud_exec, terminal_exec) when making calls.""")
     return "\n".join(sections)
 
 
-def _get_github_context(user_id: str) -> Optional[Dict[str, str]]:
-    """Check if user has GitHub connected and a repo selected."""
+def _get_github_connected(user_id: str) -> bool:
+    """Check if user has GitHub connected."""
     try:
         from utils.auth.stateless_auth import get_credentials_from_db
-        
-        # Check if GitHub is connected
-        github_creds = get_credentials_from_db(user_id, "github")
-        if not github_creds or not github_creds.get("access_token"):
-            return None
-            
-        # Check if a repo is selected
-        selection = get_credentials_from_db(user_id, "github_repo_selection")
-        if not selection or not selection.get("branch"):
-            return None
-            
-        repo = selection.get("repository")
-        branch = selection.get("branch")
-        
-        return {
-            "repo_full_name": repo.get("full_name"),
-            "branch_name": branch.get("name"),
-            "repo_url": repo.get("html_url")
-        }
+        creds = get_credentials_from_db(user_id, "github")
+        return bool(creds and creds.get("access_token"))
     except Exception as e:
-        logger.warning(f"Error checking GitHub context: {e}")
-        return None
+        logger.warning(f"Error checking GitHub connection for user {user_id}: {e}")
+        return False
 
 
 def _has_jenkins_connected(user_id: str) -> bool:
@@ -562,76 +545,18 @@ def build_rca_prompt(
     ])
 
     # GitHub Integration
-    if user_id:
-        github_context = _get_github_context(user_id)
-        if github_context:
-            repo_full_name = github_context['repo_full_name']
-            branch_name = github_context['branch_name']
-            
-            # Extract owner and repo name safely
-            try:
-                owner, repo_name = repo_full_name.split('/')
-            except ValueError:
-                owner, repo_name = repo_full_name, ""
-            
-            prompt_parts.extend([
-                "",
-                "## GITHUB REPOSITORY CONTEXT:",
-                f"- **Connected Repository**: {repo_full_name}",
-                f"- **Branch**: {branch_name}",
-                "",
-                "### GITHUB RCA TOOL (RECOMMENDED):",
-                "Use the unified `github_rca` tool for efficient GitHub investigation.",
-                "This tool provides timeline correlation and structured output.",
-                "",
-                "**IMPORTANT: Repository Resolution**",
-                "- Omit `repo=` to auto-resolve from Knowledge Base documents (runbooks)",
-                "- Pass `repo='owner/repo'` explicitly to investigate a DIFFERENT repository than KB suggests",
-                "- Resolution order: explicit param → KB Memory → KB Documents → connected repo",
-                "",
-                "**Quick Investigation Commands:**",
-                "1. **Check deployments**: `github_rca(action='deployment_check')`",
-                "2. **List recent commits**: `github_rca(action='commits')`",
-                "3. **Check merged PRs**: `github_rca(action='pull_requests')`",
-                "4. **Get commit diff**: `github_rca(action='diff', commit_sha='COMMIT_SHA')`",
-                "",
-                "**Timeline Correlation:**",
-                "- By default, the tool uses current time and searches 24 hours back",
-                "- Pass `incident_time` only if you have a specific timestamp from the alert",
-                "- Use `time_window_hours` to adjust search scope if needed",
-                "",
-                "**Recommended Investigation Flow:**",
-                "1. First call `github_rca(action='deployment_check')` to see recent workflow runs",
-                "2. Then call `github_rca(action='commits')` to list commits in time window",
-                "3. For suspicious commits, use `github_rca(action='diff', commit_sha='...')` to see changes",
-                "4. Check `github_rca(action='pull_requests')` for recently merged PRs",
-                "",
-                "### IMPORTANT NOTES:",
-                "- The repository is REMOTE. Do NOT use `ls`, `cat`, `cd`, or terminal commands for GitHub.",
-                "- Do NOT attempt to `git clone` the repository.",
-                "- ALWAYS check GitHub BEFORE diving into infrastructure commands.",
-                "- Look for changes in: config files, k8s manifests, Terraform, dependencies.",
-                "",
-                "FAILURE TO CHECK CODE IS A FAILURE OF THE INVESTIGATION.",
-                "",
-                "### FIX SUGGESTIONS (When applicable):",
-                "When you identify a code issue that caused the incident, use `github_fix` to suggest a fix:",
-                "```",
-                "github_fix(",
-                "    file_path='config/deployment.yaml',",
-                "    suggested_content='[complete fixed file content]',",
-                "    fix_description='What this fix does',",
-                "    root_cause_summary='Why this caused the issue'",
-                ")",
-                "```",
-                "",
-                "**Guidelines for suggesting fixes:**",
-                "- Only suggest fixes when you have HIGH CONFIDENCE in the root cause",
-                "- Provide the COMPLETE file content, not just the diff",
-                "- The fix is stored for user review - never applied automatically",
-                "- Best for: config changes, YAML values, environment variables, resource limits",
-                "- The user can edit your suggestion before creating a PR",
-            ])
+    if user_id and _get_github_connected(user_id):
+        prompt_parts.extend([
+            "",
+            "## GITHUB:",
+            "GitHub is connected. Call `get_connected_repos` to list available repositories with descriptions,",
+            "then use `github_rca(repo='owner/repo', action=...)` to investigate code changes.",
+            "",
+            "**Actions:** deployment_check, commits, pull_requests, diff (with commit_sha).",
+            "ALWAYS check GitHub BEFORE diving into infrastructure commands.",
+            "",
+            "When you identify a code issue, use `github_fix` to suggest a fix.",
+        ])
 
     # Jira/Confluence investigation context — placed FIRST so agent searches before infra
     has_jira = False
