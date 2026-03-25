@@ -74,6 +74,16 @@ export const newrelicService = {
       };
     } catch (error) {
       console.error('[newrelicService] Failed to fetch status:', error);
+      const msg = error instanceof Error ? error.message : String(error);
+      const isTransportError =
+        msg.includes('Failed to fetch') ||
+        msg.includes('NetworkError') ||
+        msg.includes('network') ||
+        msg.includes('ECONNREFUSED') ||
+        msg.includes('timeout');
+      if (isTransportError) {
+        throw new Error('Unable to reach the server. Please try again.');
+      }
       return null;
     }
   },

@@ -19,6 +19,7 @@ from utils.logging.secure_logging import mask_credential_value
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import get_org_id_from_request
+from utils.secrets.secret_ref_utils import delete_user_secret
 
 logger = logging.getLogger(__name__)
 
@@ -175,7 +176,7 @@ def status(user_id):
         user_info = client.validate_credentials()
     except NewRelicAPIError as exc:
         logger.warning("[NEWRELIC] Status validation failed for user %s: %s", user_id, exc)
-        return jsonify({"connected": False, "error": "Stored New Relic credentials are no longer valid"})
+        return jsonify({"connected": False, "error": "Stored credentials are no longer valid. Please reconnect."})
 
     return jsonify({
         "connected": True,
@@ -193,22 +194,18 @@ def status(user_id):
 @newrelic_bp.route("/disconnect", methods=["DELETE", "POST", "OPTIONS"])
 @require_permission("connectors", "write")
 def disconnect(user_id):
-    """Remove stored New Relic credentials."""
+    """Remove stored New Relic credentials and backing Vault secrets."""
     try:
-        with db_pool.get_admin_connection() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute(
-                    "DELETE FROM user_tokens WHERE user_id = %s AND provider = %s",
-                    (user_id, "newrelic"),
-                )
-                token_rows = cursor.rowcount
-            conn.commit()
+        success, deleted = delete_user_secret(user_id, "newrelic")
+        if not success:
+            logger.warning("[NEWRELIC] Failed to clean up secrets during disconnect")
+            return jsonify({"success": False, "error": "Failed to delete stored credentials"}), 500
 
-        logger.info("[NEWRELIC] Disconnected user %s (tokens=%s)", user_id, token_rows)
+        logger.info("[NEWRELIC] Disconnected user %s (deleted %d token rows)", user_id, deleted)
         return jsonify({
             "success": True,
             "message": "New Relic disconnected successfully",
-            "tokensDeleted": token_rows,
+            "tokensDeleted": deleted,
         })
     except Exception as exc:
         logger.exception("[NEWRELIC] Failed to disconnect user %s: %s", user_id, exc)

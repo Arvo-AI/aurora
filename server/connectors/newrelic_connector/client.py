@@ -6,6 +6,7 @@ against New Relic's NerdGraph API. Query/RCA methods live on the RCA branch.
 """
 
 import logging
+import re
 import time
 from typing import Any, Dict, List, Optional
 
@@ -51,6 +52,8 @@ class NewRelicClient:
 
         self.api_key = api_key
         self.account_id = str(account_id).strip()
+        if not re.match(r"^\d+$", self.account_id):
+            raise ValueError("Account ID must be numeric")
         self.region = region.lower().strip()
         self.timeout = timeout
         self.endpoint = NERDGRAPH_EU if self.region == "eu" else NERDGRAPH_US
@@ -61,6 +64,11 @@ class NewRelicClient:
             "Content-Type": "application/json",
             "API-Key": self.api_key,
         }
+
+    @staticmethod
+    def _sanitize_graphql_string(value: str) -> str:
+        """Escape characters that could break GraphQL string literals."""
+        return value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
 
     def _execute_graphql(
         self,

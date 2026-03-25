@@ -259,6 +259,11 @@ export default function NewRelicAuthPage() {
             onDisconnect={handleDisconnect}
             loading={loading}
           />
+        ) : isConnected ? (
+          <div className="flex items-center justify-center py-12">
+            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#00AC69]" />
+            <span className="ml-3 text-muted-foreground">Loading webhook configuration…</span>
+          </div>
         ) : null}
       </div>
     </ConnectorAuthGuard>
