@@ -179,6 +179,7 @@ def _get_connected_integrations(user_id: str) -> Dict[str, bool]:
         'jenkins': False,
         'cloudbees': False,
         'spinnaker': False,
+        'newrelic': False,
     }
 
     try:
@@ -269,6 +270,12 @@ def _get_connected_integrations(user_id: str) -> Dict[str, bool]:
             integrations['spinnaker'] = is_spinnaker_connected(user_id)
     except Exception as e:
         logger.debug(f"[BackgroundChat] Error checking Spinnaker: {e}")
+
+    try:
+        from chat.backend.agent.tools.newrelic_tool import is_newrelic_connected
+        integrations['newrelic'] = is_newrelic_connected(user_id)
+    except Exception as e:
+        logger.debug(f"[BackgroundChat] Error checking New Relic: {e}")
 
     return integrations
 

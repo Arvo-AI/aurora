@@ -224,13 +224,13 @@ def _handle_nrql(client: NewRelicClient, query: str, time_range: str, limit: int
 
 def _handle_issues(client: NewRelicClient, query: str, time_range: str, limit: int) -> dict:
     """Fetch alert issues from NerdGraph."""
+    from routes.newrelic.config import VALID_ISSUE_STATES
     states = None
     if query and query.strip():
         states = [s.strip().upper() for s in query.split(",") if s.strip()]
-        valid_states = {"ACTIVATED", "CREATED", "CLOSED"}
-        invalid = [s for s in states if s not in valid_states]
+        invalid = [s for s in states if s not in VALID_ISSUE_STATES]
         if invalid:
-            return {"error": f"Invalid issue state(s): {', '.join(invalid)}. Valid: ACTIVATED, CREATED, CLOSED."}
+            return {"error": f"Invalid issue state(s): {', '.join(invalid)}. Valid: {', '.join(sorted(VALID_ISSUE_STATES))}."}
     else:
         states = ["ACTIVATED", "CREATED"]
 

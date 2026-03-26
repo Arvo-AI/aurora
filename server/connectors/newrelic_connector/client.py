@@ -276,10 +276,10 @@ class NewRelicClient:
         createdAt, updatedAt, totalIncidents, isCorrelated, origins,
         accountIds, incidentIds, description.
         """
-        VALID_STATES = {"ACTIVATED", "DEACTIVATED", "CLOSED", "CREATED"}
+        from routes.newrelic.config import VALID_ISSUE_STATES
         filter_parts = []
         if states:
-            sanitized = [s for s in states if s in VALID_STATES]
+            sanitized = [s for s in states if s in VALID_ISSUE_STATES]
             if sanitized:
                 states_str = ", ".join(sanitized)
                 filter_parts.append(f"states: [{states_str}]")
