@@ -456,8 +456,13 @@ export function parseCloudflareCommand(toolName: string, toolInput: string): str
   if (toolName === "query_cloudflare") {
     const resource = args.resource_type || "query"
     const label = resource.replace(/_/g, " ")
-    const since = args.since ? ` (since ${args.since})` : ""
-    return `Cloudflare: ${label}${since}`
+    const parts: string[] = []
+    if (args.since) parts.push(`since ${args.since}`)
+    if (args.until) parts.push(`until ${args.until}`)
+    if (args.limit && args.limit !== 50) parts.push(`limit ${args.limit}`)
+    if (args.zone_id) parts.push(args.zone_id.substring(0, 8))
+    const detail = parts.length ? ` (${parts.join(", ")})` : ""
+    return `Cloudflare: ${label}${detail}`
   }
 
   if (toolName === "cloudflare_action") {

@@ -227,7 +227,7 @@ class CloudflareClient:
             dim_field = "date"
             auto_limit = math.ceil(window_minutes / 1440)
 
-        query_limit = max(1, min(limit if limit > 1 else auto_limit, 100))
+        query_limit = max(1, min(limit, 100))
 
         start_str = start.strftime("%Y-%m-%dT%H:%M:%SZ")
         end_str = end.strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -312,7 +312,8 @@ class CloudflareClient:
 
         errors = data.get("errors")
         if errors:
-            logger.warning("[CF-GRAPHQL] Analytics query errors: %s", errors)
+            msg = "; ".join(e.get("message", str(e)) for e in errors if isinstance(e, dict)) or str(errors)
+            raise CloudflareAPIError(f"Analytics query failed: {msg}")
 
         try:
             viewer = (data.get("data") or {}).get("viewer") or {}
@@ -400,7 +401,8 @@ class CloudflareClient:
 
         errors = data.get("errors")
         if errors:
-            logger.warning("[CF-GRAPHQL] Firewall events query errors: %s", errors)
+            msg = "; ".join(e.get("message", str(e)) for e in errors if isinstance(e, dict)) or str(errors)
+            raise CloudflareAPIError(f"Firewall events query failed: {msg}")
 
         try:
             viewer = (data.get("data") or {}).get("viewer") or {}

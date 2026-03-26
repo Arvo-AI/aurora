@@ -680,6 +680,9 @@ def query_cloudflare(
 
     except Exception as exc:
         import requests as _requests
+        from connectors.cloudflare_connector.api_client import CloudflareAPIError
+        if isinstance(exc, CloudflareAPIError):
+            return json.dumps({"error": f"Cloudflare API error: {exc}"})
         if isinstance(exc, _requests.exceptions.HTTPError):
             status = exc.response.status_code if exc.response is not None else "unknown"
             if status == 401:
@@ -720,6 +723,9 @@ def cloudflare_list_zones(
         result["success"] = True
         return json.dumps(result)
     except Exception as exc:
+        from connectors.cloudflare_connector.api_client import CloudflareAPIError
+        if isinstance(exc, CloudflareAPIError):
+            return json.dumps({"error": f"Cloudflare API error: {exc}"})
         logger.error(f"[CLOUDFLARE-TOOL] Failed to list zones: {exc}")
         return json.dumps({"error": f"Failed to list zones: {str(exc)}"})
 
@@ -914,7 +920,10 @@ def cloudflare_action(
 
     except Exception as exc:
         import requests as _requests
+        from connectors.cloudflare_connector.api_client import CloudflareAPIError
         perm = _ACTION_PERMISSIONS.get(action_type, "unknown")
+        if isinstance(exc, CloudflareAPIError):
+            return json.dumps({"error": f"Cloudflare API error: {exc}"})
         if isinstance(exc, _requests.exceptions.HTTPError):
             status = exc.response.status_code if exc.response is not None else "unknown"
             if status == 403:
