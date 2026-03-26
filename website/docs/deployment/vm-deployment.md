@@ -304,35 +304,41 @@ Use this path when the target VM has restricted or no outbound internet access (
 
 **Prerequisites:**
 
-- You have received the airtight bundle (`aurora-airtight-<version>-<arch>.tar.gz`) and its checksum file (`aurora-airtight-<version>-<arch>.tar.gz.sha256`)
+- You have received the airtight bundle (a `.tar.gz` file, e.g. `aurora-airtight-4c92267-amd64.tar.gz`)
+- Optionally, its `.sha256` checksum file for integrity verification
 - The target VM meets the [hardware requirements](#1-provision-a-vm) (4+ CPU, 8+ GB RAM, 60 GB SSD)
 - Docker and Docker Compose are installed on the VM (see [Installing Docker](./install-docker) for all OS/architecture combinations, including environments where `curl` and `wget` are blocked)
 - You can SSH into the VM
 
 ### 1. Transfer the Bundle to the VM
 
-Move the `.tar.gz` and `.sha256` files to the VM using whatever transfer method your organization permits:
+You need the `.tar.gz` tarball on the VM. The `.sha256` checksum file is optional (for verifying the transfer). Use whatever transfer method your organization permits:
 
 ```bash
 # SCP
-scp aurora-airtight-*.tar.gz aurora-airtight-*.sha256 user@VM_IP:~/
+scp aurora-airtight-4c92267-amd64.tar.gz user@10.0.0.5:~/
 
-# GCS bucket (GCP)
-gcloud storage cp aurora-airtight-*.tar.gz aurora-airtight-*.sha256 gs://YOUR_BUCKET/
+# GCS bucket
+gcloud storage cp aurora-airtight-4c92267-amd64.tar.gz gs://my-bucket/
 # Then on the VM:
-gcloud storage cp gs://YOUR_BUCKET/aurora-airtight-* ~/
+gcloud storage cp gs://my-bucket/aurora-airtight-4c92267-amd64.tar.gz ~/
 
 # Azure Blob / AWS S3 / internal file server — use your org's standard method
 ```
 
-### 2. Verify the Bundle Integrity
+Replace the filename, user, and IP/bucket with your actual values.
+
+### 2. (Optional) Verify the Bundle Integrity
+
+If you also transferred the `.sha256` checksum file, verify the tarball wasn't corrupted:
 
 ```bash
 cd ~
-sha256sum -c aurora-airtight-*.sha256
+sha256sum -c aurora-airtight-4c92267-amd64.tar.gz.sha256
+# Expected output: aurora-airtight-4c92267-amd64.tar.gz: OK
 ```
 
-You should see `OK`. If the check fails, the file was corrupted during transfer — re-transfer it.
+If the check fails, the file was corrupted — re-transfer it.
 
 ### 3. Clone the Repository
 
@@ -385,8 +391,10 @@ Save and exit (`Ctrl+X`, `Y`, `Enter` in nano).
 
 ### 5. Load Images and Start
 
+Pass the path to the tarball you transferred in step 1:
+
 ```bash
-make prod-airtight AIRTIGHT_BUNDLE=~/aurora-airtight-<version>-<arch>.tar.gz
+make prod-airtight AIRTIGHT_BUNDLE=~/aurora-airtight-4c92267-amd64.tar.gz
 ```
 
 This loads every Docker image from the tarball into the local Docker daemon and starts the full Aurora stack. No outbound network calls are made. First run takes a few minutes while images are loaded.
@@ -435,7 +443,7 @@ Transfer the new tarball and checksum to the VM, then:
 
 ```bash
 make down
-make prod-airtight AIRTIGHT_BUNDLE=~/aurora-airtight-<version>-<arch>.tar.gz
+make prod-airtight AIRTIGHT_BUNDLE=~/aurora-airtight-<new-version>.tar.gz
 ```
 
 The `.env` file stays on the VM and is never part of the bundle.
