@@ -133,9 +133,15 @@ def build_provider_context_segment(provider_preference: Optional[Any], selected_
                 parts.append(
                     "- Fetch the Azure subscription before writing Terraform: cloud_exec('azure', \"account show --query 'id' -o tsv\"). Use the concrete subscription ID in code.\n"
                 )
-            elif provider == "ovh":
+            elif provider not in ("ovh", "scaleway", "tailscale", "cloudflare", "grafana"):
                 parts.append(
-                    "## OVHcloud Reference:\n\n"
+                    "- Identify the correct project or subscription with the matching CLI command before writing infrastructure code.\n"
+                )
+
+    for provider in normalized or []:
+        if provider == "ovh":
+            parts.append(
+                "## OVHcloud Reference:\n\n"
                     "### CLI COMMANDS (use cloud_exec with 'ovh'):\n\n"
                     "**Discovery Commands:**\n"
                     "- List projects: `cloud_exec('ovh', 'cloud project list --json')`\n"
@@ -220,8 +226,8 @@ def build_provider_context_segment(provider_preference: Optional[Any], selected_
                     "Topic should be the **CLI command** (e.g., 'cloud instance create', 'cloud kube list')\n\n"
                     "️ Do NOT mix them up! Terraform errors need Terraform docs, CLI errors need CLI docs.\n"
                 )
-            elif provider == "scaleway":
-                parts.append(
+        elif provider == "scaleway":
+            parts.append(
                     "## Scaleway Reference:\n\n"
                     "### CLI COMMANDS (use cloud_exec with 'scaleway'):\n\n"
                     "**CRITICAL: Always use cloud_exec('scaleway', 'command') for Scaleway commands, NOT terminal_exec!**\n"
@@ -315,8 +321,8 @@ def build_provider_context_segment(provider_preference: Optional[Any], selected_
                     "- Default region: fr-par, zones: fr-par-1, fr-par-2, fr-par-3\n"
                     "- Default SSH username for instances: `root`\n\n"
                 )
-            elif provider == "tailscale":
-                parts.append(
+        elif provider == "tailscale":
+            parts.append(
                     "## Tailscale Reference:\n\n"
                     "Tailscale is a mesh VPN/network provider. It connects your devices into a secure private network called a 'tailnet'.\n"
                     "Unlike cloud providers (GCP, AWS, Azure), Tailscale doesn't provision infrastructure - it networks existing devices.\n\n"
@@ -358,8 +364,8 @@ def build_provider_context_segment(provider_preference: Optional[Any], selected_
                     "- Auth key values are only shown once at creation\n"
                     "- Tailscale does NOT provision infrastructure\n\n"
                 )
-            elif provider == "cloudflare":
-                parts.append(
+        elif provider == "cloudflare":
+            parts.append(
                     "## Cloudflare Reference:\n\n"
                     "Cloudflare is connected for DNS, CDN, WAF, and edge diagnostics with full remediation capabilities.\n\n"
                     "### IMPORTANT — NO CLI SUPPORT:\n"
@@ -370,7 +376,8 @@ def build_provider_context_segment(provider_preference: Optional[Any], selected_
                     "- **DNS records**: `query_cloudflare(resource_type='dns_records', zone_id='...')` — list A, AAAA, CNAME, MX, TXT records.\n"
                     "- **Analytics**: `query_cloudflare(resource_type='analytics', zone_id='...')` — traffic, bandwidth, threats, HTTP status codes, content types, HTTP versions, SSL protocols, IP classification.\n"
                     "  - Pass `since` (e.g. '-60' for last hour, or ISO-8601) and `until` (ISO-8601) to control the time window.\n"
-                    "  - Pass `limit > 1` to get time-series buckets instead of a single aggregate (e.g. `limit=24` with `since='-1440'` for hourly breakdown over 24h).\n"
+                    "  - Bucket granularity is auto-selected: minute buckets for ≤100 min, hourly for ≤100 h, daily beyond that.\n"
+                    "  - Pass `limit > 1` to get time-series buckets (e.g. `limit=24` with `since='-1440'` for 24 hourly buckets). Default returns a single bucket covering the whole window.\n"
                     "- **Security events**: `query_cloudflare(resource_type='firewall_events', zone_id='...')` — recent WAF blocks, challenges, JS challenges.\n"
                     "- **Firewall rules**: `query_cloudflare(resource_type='firewall_rules', zone_id='...')` — active firewall rules and expressions.\n"
                     "- **Rate limits**: `query_cloudflare(resource_type='rate_limits', zone_id='...')` — rate limiting rules (thresholds, actions, URL patterns).\n"
@@ -414,8 +421,8 @@ def build_provider_context_segment(provider_preference: Optional[Any], selected_
                     "- Analytics covers the last 24h by default; use the `since` parameter for custom ranges.\n"
                     "- Remediation actions require write permissions on the token; if a 403 is returned, tell the user which permission to add.\n\n"
                 )
-            elif provider == "grafana":
-                parts.append(
+        elif provider == "grafana":
+            parts.append(
                     "## Grafana Reference:\n\n"
                     "Grafana is connected as an **observation-only** provider for alert ingestion and dashboard monitoring.\n\n"
                     "### IMPORTANT — NO CLI SUPPORT:\n"
@@ -431,10 +438,6 @@ def build_provider_context_segment(provider_preference: Optional[Any], selected_
                     "- NEVER call cloud_exec with provider='grafana' — it will fail.\n"
                     "- Use the alert context already available in the conversation.\n"
                     "- For deeper investigation, identify the underlying cloud provider from the alert and use that provider's tools.\n\n"
-                )
-            else:
-                parts.append(
-                    "- Identify the correct project or subscription with the matching CLI command before writing infrastructure code.\n"
                 )
 
     return "".join(parts)

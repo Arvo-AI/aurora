@@ -173,6 +173,8 @@ def _get_enabled_zone_ids(user_id: str) -> Optional[List[str]]:
         prefs = get_user_preference(user_id, "cloudflare_zones")
         if not prefs or not isinstance(prefs, list):
             return None
+        # Zones are stored as dicts ({"id": ..., "enabled": ...}) by the
+        # POST /cloudflare/zones endpoint — see cloudflare_routes.py.
         enabled = [z["id"] for z in prefs if isinstance(z, dict) and z.get("enabled", True)]
         return enabled if enabled else None
     except Exception:

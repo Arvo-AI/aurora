@@ -7,6 +7,7 @@ and write/remediation actions (cache purge, security level, DNS, firewall).
 """
 
 import logging
+import math
 import requests
 from typing import Any, Dict, List, Optional
 from datetime import datetime, timezone, timedelta
@@ -16,27 +17,49 @@ logger = logging.getLogger(__name__)
 CLOUDFLARE_API_BASE = "https://api.cloudflare.com/client/v4"
 
 
+class CloudflareAPIError(Exception):
+    """Raised when Cloudflare returns success=false in a 200 response."""
+
+
 class CloudflareClient:
-    """Authenticated Cloudflare API client."""
+    """Authenticated Cloudflare API client.
+
+    Uses ``requests.Session`` for HTTP connection pooling across calls.
+    """
 
     def __init__(self, api_token: str):
-        self.headers = {
+        self._session = requests.Session()
+        self._session.headers.update({
             "Authorization": f"Bearer {api_token}",
             "Content-Type": "application/json",
-        }
+        })
 
     def _request(self, method: str, path: str, json_data: Optional[Dict] = None,
                   params: Optional[Dict] = None, timeout: int = 15) -> Dict[str, Any]:
-        response = requests.request(
+        response = self._session.request(
             method,
             f"{CLOUDFLARE_API_BASE}{path}",
-            headers=self.headers,
             json=json_data,
             params=params,
             timeout=timeout,
         )
         response.raise_for_status()
-        return response.json()
+        data = response.json()
+
+        # Cloudflare REST API returns {"success": false, "errors": [...]}
+        # with HTTP 200 for API-level failures.  GraphQL uses a different
+        # envelope so we skip the check for /graphql.
+        if not path.startswith("/graphql") and data.get("success") is False:
+            errors = data.get("errors") or []
+            msg = "; ".join(
+                e.get("message", f"error code {e.get('code', 'unknown')}")
+                for e in errors
+                if isinstance(e, dict)
+            ) or "Unknown Cloudflare API error"
+            logger.warning("[CF-API] %s %s returned success=false: %s", method, path, msg)
+            raise CloudflareAPIError(msg)
+
+        return data
 
     # -----------------------------------------------------------------
     # Account & token management
@@ -93,7 +116,12 @@ class CloudflareClient:
     # -----------------------------------------------------------------
 
     def list_zones(self, account_id: Optional[str] = None) -> List[Dict]:
-        """List all DNS zones, optionally filtered by account. Paginates automatically."""
+        """List all DNS zones, optionally filtered by account. Paginates automatically.
+
+        Pagination is bounded by total_pages from Cloudflare's response, not
+        an artificial cap.  Even large accounts rarely exceed a handful of pages
+        (50 zones/page), and Cloudflare's rate limit is 1 200 req / 5 min. Hence, no upper cap on page count.
+        """
         all_zones: List[Dict] = []
         page = 1
 
@@ -147,41 +175,76 @@ class CloudflareClient:
                            limit: int = 1) -> List[Dict[str, Any]]:
         """Fetch zone analytics (requests, bandwidth, threats, status codes).
 
-        Uses the GraphQL Analytics API (``httpRequests1mGroups``) which works
-        with both user-owned and account-level tokens.
+        Uses the Cloudflare GraphQL Analytics API.  The dataset node is chosen
+        automatically based on the requested time window so that the ``limit``
+        cap (max 100 rows) never silently truncates data:
+
+        * Window <= 100 min  → ``httpRequests1mGroups`` (1-minute buckets)
+        * Window <= 100 h    → ``httpRequests1hGroups`` (1-hour buckets)
+        * Larger             → ``httpRequests1dGroups`` (1-day buckets)
 
         Args:
             since: Relative minutes as negative int string (e.g. ``"-1440"``
-                   for last 24h) or ISO-8601 datetime. Default is last 24h.
-            until: Same format as ``since``. Defaults to now.
-            limit: Number of time-bucket groups to return. ``1`` gives a single
-                   aggregate for the whole range; higher values give a time series.
+                   for last 24h) or ISO-8601 datetime.  Default is last 24h.
+            until: Same format as ``since``.  Defaults to now.
+            limit: Max number of time-bucket groups to return (1–100).  ``1``
+                   returns a single bucket; higher values give a time-series.
+                   When omitted the method auto-sizes to cover the full window.
 
         Returns:
             List of group dicts, each containing ``sum``, ``uniq``, and
-            ``dimensions`` (with ``datetime`` key for time-series).
+            ``dimensions`` (with ``datetime`` or ``date`` key).
         """
         now = datetime.now(timezone.utc)
         start = self._parse_time(since, now, fallback_hours=24)
         end = self._parse_time(until, now) if until else now
-        limit = max(1, min(limit, 100))
+
+        window_minutes = max(1, math.ceil((end - start).total_seconds() / 60))
+
+        # Pick the coarsest bucket that covers the window within the 100-row cap.
+        if window_minutes <= 100:
+            dataset = "httpRequests1mGroups"
+            filter_key_start = "datetime_geq"
+            filter_key_end = "datetime_lt"
+            dim_field = "datetime"
+            auto_limit = window_minutes
+        elif window_minutes <= 6000:  # <= 100 hours
+            dataset = "httpRequests1hGroups"
+            filter_key_start = "datetime_geq"
+            filter_key_end = "datetime_lt"
+            dim_field = "datetime"
+            auto_limit = math.ceil(window_minutes / 60)
+        else:
+            dataset = "httpRequests1dGroups"
+            filter_key_start = "date_geq"
+            filter_key_end = "date_lt"
+            dim_field = "date"
+            auto_limit = math.ceil(window_minutes / 1440)
+
+        query_limit = max(1, min(limit if limit > 1 else auto_limit, 100))
 
         start_str = start.strftime("%Y-%m-%dT%H:%M:%SZ")
         end_str = end.strftime("%Y-%m-%dT%H:%M:%SZ")
+        # date-only filters for daily dataset
+        start_date = start.strftime("%Y-%m-%d")
+        end_date = end.strftime("%Y-%m-%d")
 
-        query = """
-        query ($zoneTag: string!, $start: Time!, $end: Time!, $limit: Int!) {
-          viewer {
-            zones(filter: {zoneTag: $zoneTag}) {
-              httpRequests1mGroups(
+        filter_start = start_date if dim_field == "date" else start_str
+        filter_end = end_date if dim_field == "date" else end_str
+
+        query = f"""
+        query ($zoneTag: String!, $start: {("Date" if dim_field == "date" else "Time")}!, $end: {("Date" if dim_field == "date" else "Time")}!, $limit: Int!) {{
+          viewer {{
+            zones(filter: {{zoneTag: $zoneTag}}) {{
+              {dataset}(
                 limit: $limit
-                filter: {datetime_geq: $start, datetime_lt: $end}
-                orderBy: [datetime_ASC]
-              ) {
-                dimensions {
-                  datetime
-                }
-                sum {
+                filter: {{{filter_key_start}: $start, {filter_key_end}: $end}}
+                orderBy: [{dim_field}_ASC]
+              ) {{
+                dimensions {{
+                  {dim_field}
+                }}
+                sum {{
                   bytes
                   cachedBytes
                   cachedRequests
@@ -190,53 +253,53 @@ class CloudflareClient:
                   requests
                   threats
                   pageViews
-                  countryMap {
+                  countryMap {{
                     bytes
                     requests
                     threats
                     clientCountryName
-                  }
-                  responseStatusMap {
+                  }}
+                  responseStatusMap {{
                     requests
                     edgeResponseStatus
-                  }
-                  threatPathingMap {
+                  }}
+                  threatPathingMap {{
                     requests
                     threatPathingName
-                  }
-                  contentTypeMap {
+                  }}
+                  contentTypeMap {{
                     requests
                     bytes
                     edgeResponseContentTypeName
-                  }
-                  clientHTTPVersionMap {
+                  }}
+                  clientHTTPVersionMap {{
                     requests
                     clientHTTPProtocol
-                  }
-                  clientSSLMap {
+                  }}
+                  clientSSLMap {{
                     requests
                     clientSSLProtocol
-                  }
-                  ipClassMap {
+                  }}
+                  ipClassMap {{
                     requests
                     ipType
-                  }
-                }
-                uniq {
+                  }}
+                }}
+                uniq {{
                   uniques
-                }
-              }
-            }
-          }
-        }
+                }}
+              }}
+            }}
+          }}
+        }}
         """
         payload = {
             "query": query,
             "variables": {
                 "zoneTag": zone_id,
-                "start": start_str,
-                "end": end_str,
-                "limit": limit,
+                "start": filter_start,
+                "end": filter_end,
+                "limit": query_limit,
             },
         }
         data = self._request("POST", "/graphql", json_data=payload)
@@ -250,8 +313,17 @@ class CloudflareClient:
             zones = viewer.get("zones") or []
             if not zones:
                 return []
-            return zones[0].get("httpRequests1mGroups") or [] #always returns a list so must select [0] since filtered to one zone before
-        except (KeyError, IndexError, TypeError, AttributeError):
+            groups = zones[0].get(dataset) or []
+            # Normalise the dimension key to "datetime" so callers don't have
+            # to care which dataset was used.
+            if dim_field != "datetime":
+                for g in groups:
+                    dims = g.get("dimensions") or {}
+                    if dim_field in dims and "datetime" not in dims:
+                        dims["datetime"] = dims.pop(dim_field)
+            return groups
+        except (KeyError, IndexError, TypeError, AttributeError) as exc:
+            logger.warning("[CF-GRAPHQL] Failed to parse analytics response: %s", exc)
             return []
 
     @staticmethod
@@ -287,7 +359,7 @@ class CloudflareClient:
         capped = min(limit, 100)
 
         query = """
-        query ($zoneTag: string!, $since: Time!, $until: Time!, $limit: Int!) {
+        query ($zoneTag: String!, $since: Time!, $until: Time!, $limit: Int!) {
           viewer {
             zones(filter: {zoneTag: $zoneTag}) {
               firewallEventsAdaptive(
@@ -330,7 +402,10 @@ class CloudflareClient:
             if zones:
                 return zones[0].get("firewallEventsAdaptive") or []
         except (KeyError, IndexError, TypeError, AttributeError):
-            pass
+            logger.warning(
+                "[CF-GRAPHQL] Failed to parse firewall events response; returning empty list",
+                exc_info=True,
+            )
         return []
 
     # -----------------------------------------------------------------

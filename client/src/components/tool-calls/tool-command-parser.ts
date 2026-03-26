@@ -441,7 +441,8 @@ export function parseCloudflareCommand(toolName: string, toolInput: string): str
       return parsed?.kwargs || parsed || {}
     } catch {
       try {
-        return JSON.parse(toolInput.replace(/'/g, '"'))
+        const parsed = JSON.parse(toolInput.replace(/'/g, '"'))
+        return parsed?.kwargs || parsed || {}
       } catch {
         return {}
       }
