@@ -477,6 +477,19 @@ def get_incident(user_id, incident_id: str):
                             logger.debug("[INCIDENTS] Found Dynatrace payload for alert")
                     except (ValueError, TypeError):
                         logger.debug("[INCIDENTS] Skipping payload fetch for dynatrace alert (non-integer id)")
+                elif source_type == "newrelic":
+                    try:
+                        alert_id_int = int(source_alert_id)
+                        cursor.execute(
+                            "SELECT payload FROM newrelic_events WHERE id = %s AND user_id = %s",
+                            (alert_id_int, user_id),
+                        )
+                        alert_row = cursor.fetchone()
+                        if alert_row and alert_row[0] is not None:
+                            raw_payload = alert_row[0]
+                            logger.debug("[INCIDENTS] Found New Relic payload for alert")
+                    except (ValueError, TypeError):
+                        logger.debug("[INCIDENTS] Skipping payload fetch for newrelic alert (non-integer id)")
 
                 # Log warning if no payload found for any source type
                 if not raw_payload:

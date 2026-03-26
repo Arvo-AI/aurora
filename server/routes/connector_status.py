@@ -532,13 +532,6 @@ def _check_credentials_only(creds: Dict[str, Any]) -> Dict[str, Any]:
     return {"connected": True}
 
 
-def _check_netdata(creds: Dict[str, Any]) -> Dict[str, Any]:
-    api_token = creds.get("api_token")
-    if not api_token:
-        return {"connected": False}
-    return {"connected": True, "spaceName": creds.get("space_name")}
-
-
 def _check_newrelic(creds: Dict[str, Any]) -> Dict[str, Any]:
     """Validate New Relic credentials via NerdGraph user query."""
     api_key = creds.get("api_key")
@@ -561,6 +554,13 @@ def _check_newrelic(creds: Dict[str, Any]) -> Dict[str, Any]:
         return {"connected": False}
     except Exception:
         return {"connected": False}
+
+
+def _check_netdata(creds: Dict[str, Any]) -> Dict[str, Any]:
+    api_token = creds.get("api_token")
+    if not api_token:
+        return {"connected": False}
+    return {"connected": True, "spaceName": creds.get("space_name")}
 
 
 # ── Provider checker registry ──────────────────────────────────────
@@ -590,10 +590,10 @@ PROVIDER_CHECKERS = {
     "tailscale": _check_tailscale,
     # Credential-existence checks (no live API endpoint to validate against)
     "netdata": _check_netdata,
+    "newrelic": _check_newrelic,
     "gcp": _check_credentials_only,
     "aws": _check_credentials_only,
     "azure": _check_credentials_only,
-    "newrelic": _check_newrelic,
 }
 
 

@@ -15,7 +15,6 @@ from flask import Blueprint, jsonify, request
 
 from connectors.newrelic_connector.client import NewRelicClient, NewRelicAPIError
 from utils.db.connection_pool import db_pool
-from utils.logging.secure_logging import mask_credential_value
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import get_org_id_from_request
@@ -100,10 +99,9 @@ def connect(user_id):
     if region not in ("us", "eu"):
         return jsonify({"error": "Region must be 'us' or 'eu'"}), 400
 
-    masked_key = mask_credential_value(api_key)
     logger.info(
-        "[NEWRELIC] Connecting user %s account=%s region=%s key=%s",
-        user_id, account_id, region, masked_key,
+        "[NEWRELIC] Connecting user %s account=%s region=%s",
+        user_id, account_id, region,
     )
 
     client = NewRelicClient(api_key=api_key, account_id=account_id, region=region)
@@ -244,6 +242,108 @@ def webhook_url(user_id):
         "webhookUrl": url,
         "instructions": instructions,
     })
+
+
+# ------------------------------------------------------------------
+# Issues (proxy to NerdGraph)
+# ------------------------------------------------------------------
+
+
+@newrelic_bp.route("/issues", methods=["GET", "OPTIONS"])
+@require_permission("connectors", "read")
+def list_issues(user_id):
+    """Fetch active alert issues from New Relic via NerdGraph."""
+    creds = _get_stored_newrelic_credentials(user_id)
+    if not creds:
+        return jsonify({"error": "New Relic not connected"}), 404
+
+    client = _build_client_from_creds(creds)
+    if not client:
+        return jsonify({"error": "Incomplete New Relic credentials"}), 400
+
+    states_param = request.args.get("states")
+    states = [s.strip().upper() for s in states_param.split(",") if s.strip()] if states_param else None
+    page_size = request.args.get("limit", default=25, type=int)
+
+    try:
+        data = client.get_issues(states=states, page_size=min(page_size, 100))
+        return jsonify(data)
+    except NewRelicAPIError as exc:
+        logger.warning("[NEWRELIC] get_issues failed for user %s: %s", user_id, exc)
+        return jsonify({"error": "Failed to fetch issues from New Relic"}), 502
+    except Exception as exc:
+        logger.exception("[NEWRELIC] Unexpected error in list_issues for user %s: %s", user_id, exc)
+        return jsonify({"error": "Failed to load New Relic issues"}), 500
+
+
+# ------------------------------------------------------------------
+# Ingested events (from webhook DB table)
+# ------------------------------------------------------------------
+
+
+@newrelic_bp.route("/events/ingested", methods=["GET", "OPTIONS"])
+@require_permission("connectors", "read")
+def list_ingested_events(user_id):
+    """List New Relic webhook events stored in the database."""
+    org_id = get_org_id_from_request()
+    limit = request.args.get("limit", default=50, type=int)
+    offset = request.args.get("offset", default=0, type=int)
+    state_filter = request.args.get("state")
+
+    try:
+        with db_pool.get_admin_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SET myapp.current_org_id = %s", (org_id,))
+
+            base_query = """
+                SELECT id, issue_id, issue_title, priority, state,
+                       entity_names, payload, received_at, created_at
+                FROM newrelic_events
+                WHERE org_id = %s
+            """
+            params = [org_id]
+            if state_filter:
+                base_query += " AND state = %s"
+                params.append(state_filter)
+
+            base_query += " ORDER BY received_at DESC LIMIT %s OFFSET %s"
+            params.extend([limit, offset])
+
+            cursor.execute(base_query, params)
+            rows = cursor.fetchall()
+
+            count_query = "SELECT COUNT(*) FROM newrelic_events WHERE org_id = %s"
+            count_params = [org_id]
+            if state_filter:
+                count_query += " AND state = %s"
+                count_params.append(state_filter)
+
+            cursor.execute(count_query, count_params)
+            total = cursor.fetchone()[0]
+
+        events = []
+        for row in rows:
+            events.append({
+                "id": row[0],
+                "issueId": row[1],
+                "title": row[2],
+                "priority": row[3],
+                "state": row[4],
+                "entityNames": row[5],
+                "payload": row[6],
+                "receivedAt": row[7].isoformat() if row[7] else None,
+                "createdAt": row[8].isoformat() if row[8] else None,
+            })
+
+        return jsonify({
+            "events": events,
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+        })
+    except Exception as exc:
+        logger.exception("[NEWRELIC] Failed to list ingested events for user %s: %s", user_id, exc)
+        return jsonify({"error": "Failed to load New Relic webhook events"}), 500
 
 
 # ------------------------------------------------------------------

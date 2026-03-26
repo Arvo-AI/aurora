@@ -974,6 +974,78 @@ def build_dynatrace_rca_prompt(
     return build_rca_prompt('dynatrace', alert_details, providers, user_id)
 
 
+def build_newrelic_rca_prompt(
+    payload: Dict[str, Any],
+    providers: Optional[List[str]] = None,
+    user_id: Optional[str] = None,
+) -> str:
+    """Build RCA prompt from New Relic alert/issue webhook payload."""
+    title = (
+        payload.get("title")
+        or payload.get("issueTitle")
+        or payload.get("issue_title")
+        or payload.get("conditionName")
+        or "New Relic Alert"
+    )
+    state = payload.get("state") or payload.get("currentState") or "unknown"
+    priority = payload.get("priority") or payload.get("severity") or "unknown"
+    condition_name = payload.get("conditionName") or payload.get("condition_name") or ""
+    policy_name = payload.get("policyName") or payload.get("policy_name") or ""
+    description = payload.get("description") or ""
+    issue_url = payload.get("issueUrl") or payload.get("violationChartUrl") or ""
+    account_id = payload.get("accountId") or payload.get("account_id") or ""
+    sources = payload.get("sources") or []
+
+    entity_names = payload.get("entityNames") or payload.get("entity_names") or []
+    if not entity_names:
+        entities_data = payload.get("entitiesData", {}).get("entities", [])
+        entity_names = [e.get("name", "unknown") for e in entities_data[:5]] if entities_data else []
+    targets = payload.get("targets", [])
+    target_names = [t.get("name", "unknown") for t in targets[:5]] if targets else []
+
+    message_parts = []
+    if description:
+        message_parts.append(description)
+    if condition_name:
+        message_parts.append(f"Condition: {condition_name}")
+    if policy_name:
+        message_parts.append(f"Policy: {policy_name}")
+    if entity_names:
+        names = ", ".join(entity_names) if isinstance(entity_names, list) else str(entity_names)
+        message_parts.append(f"Entities: {names}")
+    elif target_names:
+        message_parts.append(f"Targets: {', '.join(target_names)}")
+    if sources:
+        src_str = ", ".join(sources) if isinstance(sources, list) else str(sources)
+        message_parts.append(f"Sources: {src_str}")
+    if payload.get("totalIncidents"):
+        message_parts.append(f"Total incidents: {payload['totalIncidents']}")
+
+    labels: Dict[str, str] = {}
+    if priority and priority != "unknown":
+        labels["priority"] = priority
+    if account_id:
+        labels["accountId"] = str(account_id)
+    if condition_name:
+        labels["condition"] = condition_name
+    if policy_name:
+        labels["policy"] = policy_name
+
+    alert_details = {
+        'title': title,
+        'status': f"{state} (priority: {priority})",
+        'message': ". ".join(message_parts) if message_parts else title,
+        'labels': labels,
+    }
+    if issue_url:
+        alert_details['issueUrl'] = issue_url
+    if entity_names:
+        names = ", ".join(entity_names) if isinstance(entity_names, list) else str(entity_names)
+        alert_details['entities'] = names
+
+    return build_rca_prompt('newrelic', alert_details, providers, user_id)
+
+
 def build_netdata_rca_prompt(
     payload: Dict[str, Any],
     providers: Optional[List[str]] = None,

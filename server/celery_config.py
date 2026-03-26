@@ -156,6 +156,12 @@ try:
 except ImportError as e:
     logging.warning(f"Failed to import AWS credential refresh task: {e}")
 
+try:
+    import routes.newrelic.tasks  # noqa: F401
+    logging.info("New Relic tasks imported successfully")
+except ImportError as e:
+    logging.warning(f"Failed to import New Relic tasks: {e}")
+
 # Log the number of registered tasks for debugging
 if hasattr(celery_app, 'tasks'):
     non_celery_tasks = [t for t in celery_app.tasks.keys() if not t.startswith('celery.')]
