@@ -95,13 +95,14 @@ export function NewRelicConnectionStep({
                   <p className="text-xs text-muted-foreground">Found in the account dropdown or on the API keys page</p>
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="nr-region">Data Center Region</Label>
-                  <div className="flex gap-2">
+                  <Label id="nr-region-label">Data Center Region</Label>
+                  <div className="flex gap-2" role="group" aria-labelledby="nr-region-label">
                     {REGION_HINTS.map(hint => (
                       <button
                         type="button"
                         key={hint.value}
                         onClick={() => setRegion(hint.value)}
+                        aria-pressed={region === hint.value}
                         className={`px-4 py-2 rounded border transition-colors font-medium ${
                           region === hint.value
                             ? 'border-[#00AC69] bg-[#00AC69] text-white hover:bg-[#00AC69]/90'
