@@ -515,6 +515,27 @@ def initialize_tables():
                     CREATE INDEX IF NOT EXISTS idx_datadog_events_status ON datadog_events(status);
                     CREATE INDEX IF NOT EXISTS idx_datadog_events_received_at ON datadog_events(received_at DESC);
                 """,
+                "newrelic_events": """
+                    CREATE TABLE IF NOT EXISTS newrelic_events (
+                        id SERIAL PRIMARY KEY,
+                        user_id VARCHAR(255) NOT NULL,
+                        org_id VARCHAR(255),
+                        issue_id VARCHAR(255),
+                        issue_title TEXT,
+                        priority VARCHAR(20),
+                        state VARCHAR(50),
+                        entity_names TEXT,
+                        payload JSONB NOT NULL,
+                        received_at TIMESTAMP NOT NULL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_newrelic_events_org_issue
+                        ON newrelic_events(org_id, issue_id) WHERE issue_id IS NOT NULL;
+                    CREATE INDEX IF NOT EXISTS idx_newrelic_events_user_id ON newrelic_events(user_id, received_at DESC);
+                    CREATE INDEX IF NOT EXISTS idx_newrelic_events_state ON newrelic_events(state);
+                    CREATE INDEX IF NOT EXISTS idx_newrelic_events_received_at ON newrelic_events(received_at DESC);
+                """,
                 "netdata_alerts": """
                     CREATE TABLE IF NOT EXISTS netdata_verification_tokens (
                         user_id TEXT PRIMARY KEY,
