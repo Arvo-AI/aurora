@@ -120,6 +120,7 @@ def _inject_limit_clause(nrql: str, limit: int) -> str:
 # ---------------------------------------------------------------------------
 
 _NRQL_DISALLOWED = re.compile(r"\b(DROP|DELETE|INSERT|UPDATE|CREATE|ALTER)\b", re.IGNORECASE)
+_QUOTED_STRINGS = re.compile(r"'[^']*'")
 
 
 def _validate_nrql(nrql: str) -> Optional[str]:
@@ -128,7 +129,8 @@ def _validate_nrql(nrql: str) -> Optional[str]:
         return "NRQL query is required for resource_type='nrql'."
     if len(nrql) > MAX_NRQL_LENGTH:
         return f"NRQL query exceeds maximum length ({MAX_NRQL_LENGTH} chars)."
-    if _NRQL_DISALLOWED.search(nrql):
+    stripped = _QUOTED_STRINGS.sub("''", nrql)
+    if _NRQL_DISALLOWED.search(stripped):
         return "NRQL query contains disallowed keywords (only SELECT/FROM/WHERE/FACET queries are supported)."
     return None
 

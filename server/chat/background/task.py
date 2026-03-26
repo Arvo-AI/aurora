@@ -801,8 +801,10 @@ async def _run_jira_action(
     if incident_id:
         try:
             from utils.db.connection_pool import db_pool
+            from utils.auth.stateless_auth import set_rls_context
             with db_pool.get_admin_connection() as conn:
                 with conn.cursor() as cur:
+                    set_rls_context(cur, conn, user_id, log_prefix="[JiraAction]")
                     cur.execute("SELECT alert_service FROM incidents WHERE id = %s", (incident_id,))
                     row = cur.fetchone()
                     if row and row[0]:

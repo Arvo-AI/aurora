@@ -262,22 +262,25 @@ class NewRelicClient:
         page_size: int = 25,
     ) -> Dict[str, Any]:
         """Fetch alert issues from NerdGraph AiIssuesSearch."""
+        VALID_STATES = {"ACTIVATED", "DEACTIVATED", "CLOSED", "CREATED", "ACKNOWLEDGED"}
         filter_parts = []
         if states:
-            states_str = ", ".join(states)
-            filter_parts.append(f"states: [{states_str}]")
+            sanitized = [s for s in states if s in VALID_STATES]
+            if sanitized:
+                states_str = ", ".join(sanitized)
+                filter_parts.append(f"states: [{states_str}]")
         if since_epoch_ms:
-            filter_parts.append(f"startTime: {since_epoch_ms}")
+            filter_parts.append(f"startTime: {int(since_epoch_ms)}")
 
-        issue_args = [f"first: {page_size}"]
+        issue_args = [f"first: {int(page_size)}"]
         if filter_parts:
             filter_clause = ", ".join(filter_parts)
             issue_args.insert(0, f"filter: {{ {filter_clause} }}")
 
         query = """
-        {
+        query($accountId: Int!) {
             actor {
-                account(id: %s) {
+                account(id: $accountId) {
                     aiIssues {
                         issues(%s) {
                             issues {
@@ -302,9 +305,10 @@ class NewRelicClient:
                 }
             }
         }
-        """ % (self.account_id, ", ".join(issue_args))
+        """ % ", ".join(issue_args)
+        variables = {"accountId": int(self.account_id)}
         try:
-            data = self._execute_graphql(query)
+            data = self._execute_graphql(query, variables=variables)
         except Exception:
             logger.exception("[NEWRELIC] get_issues GraphQL query failed")
             raise
