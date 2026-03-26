@@ -100,8 +100,14 @@ class CloudflareClient:
                 data = self._request("GET", f"/accounts/{account_id}/tokens/{token_id}")
                 return self._extract_permission_names(
                     data.get("result", {}).get("policies", []))
-            except requests.exceptions.HTTPError:
-                logger.info("Account token lookup failed, falling back to user token endpoint")
+            except requests.exceptions.HTTPError as exc:
+                status = exc.response.status_code if exc.response is not None else None
+                if status in (403, 404):
+                    logger.info("Account token lookup failed (%s), falling back to user token endpoint", status)
+                else:
+                    raise
+            except CloudflareAPIError:
+                logger.info("Account token lookup returned API error, falling back to user token endpoint")
 
         try:
             data = self._request("GET", f"/user/tokens/{token_id}")
@@ -509,7 +515,7 @@ class CloudflareClient:
                     files: Optional[List[str]] = None) -> Dict[str, Any]:
         """Purge cache for a zone.  Either purge everything or specific file URLs."""
         payload: Dict[str, Any] = {}
-        if files:
+        if files is not None:
             payload["files"] = files
         else:
             payload["purge_everything"] = True

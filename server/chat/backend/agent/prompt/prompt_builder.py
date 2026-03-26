@@ -377,7 +377,7 @@ def build_provider_context_segment(provider_preference: Optional[Any], selected_
                     "- **Analytics**: `query_cloudflare(resource_type='analytics', zone_id='...')` — traffic, bandwidth, threats, HTTP status codes, content types, HTTP versions, SSL protocols, IP classification.\n"
                     "  - Pass `since` (e.g. '-60' for last hour, or ISO-8601) and `until` (ISO-8601) to control the time window.\n"
                     "  - Bucket granularity is auto-selected: minute buckets for ≤100 min, hourly for ≤100 h, daily beyond that.\n"
-                    "  - Pass `limit > 1` to get time-series buckets (e.g. `limit=24` with `since='-1440'` for 24 hourly buckets). Default returns a single bucket covering the whole window.\n"
+                    "  - Default limit=50 returns a bucketed time-series (e.g., last 24h yields multiple hourly buckets). Set `limit=1` to force a single aggregate covering the entire window.\n"
                     "- **Security events**: `query_cloudflare(resource_type='firewall_events', zone_id='...')` — recent WAF blocks, challenges, JS challenges.\n"
                     "- **Firewall rules**: `query_cloudflare(resource_type='firewall_rules', zone_id='...')` — active firewall rules and expressions.\n"
                     "- **Rate limits**: `query_cloudflare(resource_type='rate_limits', zone_id='...')` — rate limiting rules (thresholds, actions, URL patterns).\n"

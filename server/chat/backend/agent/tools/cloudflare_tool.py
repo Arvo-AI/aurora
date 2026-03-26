@@ -167,18 +167,19 @@ def is_cloudflare_connected(user_id: str) -> bool:
 
 
 def _get_enabled_zone_ids(user_id: str) -> Optional[List[str]]:
-    """Return the list of zone IDs the user explicitly enabled, or None if no preference is stored."""
-    try:
-        from utils.auth.stateless_auth import get_user_preference
-        prefs = get_user_preference(user_id, "cloudflare_zones")
-        if not prefs or not isinstance(prefs, list):
-            return None
-        # Zones are stored as dicts ({"id": ..., "enabled": ...}) by the
-        # POST /cloudflare/zones endpoint — see cloudflare_routes.py.
-        enabled = [z["id"] for z in prefs if isinstance(z, dict) and z.get("enabled", True)]
-        return enabled if enabled else None
-    except Exception:
+    """Return the list of zone IDs the user explicitly enabled, or None if no preference is stored.
+
+    Returns [] (empty list) when a preference exists but every entry is disabled,
+    signalling an explicit empty allow-list.
+    """
+    from utils.auth.stateless_auth import get_user_preference
+    prefs = get_user_preference(user_id, "cloudflare_zones")
+    if not prefs or not isinstance(prefs, list):
         return None
+    # Zones are stored as dicts ({"id": ..., "enabled": ...}) by the
+    # POST /cloudflare/zones endpoint — see cloudflare_routes.py.
+    enabled = [z["id"] for z in prefs if isinstance(z, dict) and z.get("enabled", True)]
+    return enabled if enabled else []
 
 
 # ---------------------------------------------------------------------------
@@ -254,7 +255,7 @@ def _query_analytics(creds: Dict, zone_id: str, since: Optional[str] = None,
 
         total_requests = sums.get("requests", 0)
         cached_requests = sums.get("cachedRequests", 0)
-        uncached = (total_requests - cached_requests) if total_requests and cached_requests else 0
+        uncached = max(0, total_requests - cached_requests)
 
         country_map = sums.get("countryMap", [])
         country_requests = {c["clientCountryName"]: c["requests"] for c in country_map if c.get("clientCountryName")}
@@ -659,16 +660,21 @@ def query_cloudflare(
             until=until,
             limit=limit,
         )
+
+        if "error" in result or result.get("success") is False:
+            return json.dumps(result)
+
         result["success"] = True
 
-        results_list = result.get("results", [])
-        if results_list:
-            truncated_results, was_truncated = _truncate_results(results_list)
-            if was_truncated:
-                result["results"] = truncated_results
-                result["truncated"] = True
-                result["note"] = f"Results truncated from {len(results_list)} to {len(truncated_results)} due to size limit."
-                result["count"] = len(truncated_results)
+        for key in ("results", "time_series"):
+            items = result.get(key, [])
+            if items:
+                truncated_items, was_truncated = _truncate_results(items)
+                if was_truncated:
+                    result[key] = truncated_items
+                    result["truncated"] = True
+                    result["note"] = f"{key} truncated from {len(items)} to {len(truncated_items)} due to size limit."
+                    result["count"] = len(truncated_items)
 
         return json.dumps(result)
 
