@@ -105,7 +105,7 @@ export default function RecentAlertsSection({
   onAlertMerged,
 }: RecentAlertsSectionProps) {
   // Don't show if RCA has completed
-  if (auroraStatus === 'complete' || auroraStatus === 'error') {
+  if (auroraStatus === 'complete' || auroraStatus === 'summarizing' || auroraStatus === 'error') {
     return null;
   }
 

@@ -68,10 +68,10 @@ export default function IncidentDetailPage() {
     };
   }, [params.id]);
 
-  // Poll for incident updates (only while investigating)
+  // Poll for incident updates (while investigating or generating final summary)
   useEffect(() => {
-    // Only poll while the incident is still being investigated
-    if (incident && incident.status !== 'investigating') return;
+    const shouldPoll = !incident || incident.status === 'investigating' || incident.auroraStatus === 'summarizing';
+    if (!shouldPoll) return;
 
     let isMounted = true;
 
@@ -120,7 +120,7 @@ export default function IncidentDetailPage() {
       isMounted = false;
       clearInterval(interval);
     };
-  }, [params.id, incident?.status]);
+  }, [params.id, incident?.status, incident?.auroraStatus]);
 
   if (loading) {
     return (
