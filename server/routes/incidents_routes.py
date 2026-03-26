@@ -775,7 +775,7 @@ def get_incident_alerts(user_id, incident_id: str):
 
 # Allowed values for validation
 ALLOWED_INCIDENT_STATUS = {"investigating", "analyzed", "merged", "resolved"}
-ALLOWED_AURORA_STATUS = {"idle", "running", "complete", "error"}
+ALLOWED_AURORA_STATUS = {"idle", "running", "summarizing", "complete", "error"}
 ALLOWED_ACTIVE_TAB = {"thoughts", "chat"}
 
 @incidents_bp.route("/api/incidents/<incident_id>", methods=["PATCH"])

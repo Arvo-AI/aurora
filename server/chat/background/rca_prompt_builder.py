@@ -174,6 +174,71 @@ def _get_similar_good_rcas_context(
         return ""
 
 
+def _get_prediscovery_context(user_id: str, alert_title: str, alert_service: str) -> str:
+    """Search prediscovery findings relevant to the alert and return formatted context."""
+    if not user_id:
+        return ""
+
+    query = " ".join(filter(None, [alert_title, alert_service]))
+    if not query.strip():
+        return ""
+
+    try:
+        from routes.knowledge_base.weaviate_client import _get_weaviate_client
+        from weaviate.classes.query import Filter, HybridFusion
+        from utils.auth.stateless_auth import get_org_id_for_user
+
+        org_id = get_org_id_for_user(user_id)
+        if not org_id:
+            return ""
+
+        _, collection = _get_weaviate_client()
+
+        discovery_filter = (
+            Filter.by_property("org_id").equal(org_id)
+            & Filter.by_property("document_id").like("discovery:*")
+        )
+
+        response = collection.query.hybrid(
+            query=query,
+            limit=3,
+            alpha=0.5,
+            fusion_type=HybridFusion.RANKED,
+            filters=discovery_filter,
+            return_metadata=["score"],
+        )
+
+        if not response.objects:
+            return ""
+
+        parts = [
+            "",
+            "## INFRASTRUCTURE TOPOLOGY CONTEXT (from pre-discovery):",
+            "The following infrastructure mappings were discovered automatically and may be relevant:",
+            "",
+        ]
+
+        for obj in response.objects:
+            source = obj.properties.get("source_filename", "")
+            content = obj.properties.get("content", "")
+            if content:
+                label = source.replace("[Auto-Discovery] ", "") if source else "Discovery"
+                parts.append(f"### {label}")
+                parts.append(content[:2000])
+                parts.append("")
+
+        parts.append("Use this topology context to understand dependencies and blast radius.")
+        parts.append("")
+
+        context = "\n".join(parts)
+        logger.info(f"[PREDISCOVERY] Injected {len(response.objects)} findings for alert: {query[:50]}")
+        return context
+
+    except Exception as e:
+        logger.warning(f"Error getting prediscovery context: {e}")
+        return ""
+
+
 def get_user_providers(user_id: str) -> List[str]:
     """Fetch connected cloud providers for a user from the database."""
     if not user_id:
@@ -359,32 +424,15 @@ Use the actual tool names (cloud_exec, terminal_exec) when making calls.""")
     return "\n".join(sections)
 
 
-def _get_github_context(user_id: str) -> Optional[Dict[str, str]]:
-    """Check if user has GitHub connected and a repo selected."""
+def _get_github_connected(user_id: str) -> bool:
+    """Check if user has GitHub connected."""
     try:
         from utils.auth.stateless_auth import get_credentials_from_db
-        
-        # Check if GitHub is connected
-        github_creds = get_credentials_from_db(user_id, "github")
-        if not github_creds or not github_creds.get("access_token"):
-            return None
-            
-        # Check if a repo is selected
-        selection = get_credentials_from_db(user_id, "github_repo_selection")
-        if not selection or not selection.get("branch"):
-            return None
-            
-        repo = selection.get("repository")
-        branch = selection.get("branch")
-        
-        return {
-            "repo_full_name": repo.get("full_name"),
-            "branch_name": branch.get("name"),
-            "repo_url": repo.get("html_url")
-        }
+        creds = get_credentials_from_db(user_id, "github")
+        return bool(creds and creds.get("access_token"))
     except Exception as e:
-        logger.warning(f"Error checking GitHub context: {e}")
-        return None
+        logger.warning(f"Error checking GitHub connection for user {user_id}: {e}")
+        return False
 
 
 def _has_jenkins_connected(user_id: str) -> bool:
@@ -567,76 +615,18 @@ def build_rca_prompt(
     ])
 
     # GitHub Integration
-    if user_id:
-        github_context = _get_github_context(user_id)
-        if github_context:
-            repo_full_name = github_context['repo_full_name']
-            branch_name = github_context['branch_name']
-            
-            # Extract owner and repo name safely
-            try:
-                owner, repo_name = repo_full_name.split('/')
-            except ValueError:
-                owner, repo_name = repo_full_name, ""
-            
-            prompt_parts.extend([
-                "",
-                "## GITHUB REPOSITORY CONTEXT:",
-                f"- **Connected Repository**: {repo_full_name}",
-                f"- **Branch**: {branch_name}",
-                "",
-                "### GITHUB RCA TOOL (RECOMMENDED):",
-                "Use the unified `github_rca` tool for efficient GitHub investigation.",
-                "This tool provides timeline correlation and structured output.",
-                "",
-                "**IMPORTANT: Repository Resolution**",
-                "- Omit `repo=` to auto-resolve from Knowledge Base documents (runbooks)",
-                "- Pass `repo='owner/repo'` explicitly to investigate a DIFFERENT repository than KB suggests",
-                "- Resolution order: explicit param → KB Memory → KB Documents → connected repo",
-                "",
-                "**Quick Investigation Commands:**",
-                "1. **Check deployments**: `github_rca(action='deployment_check')`",
-                "2. **List recent commits**: `github_rca(action='commits')`",
-                "3. **Check merged PRs**: `github_rca(action='pull_requests')`",
-                "4. **Get commit diff**: `github_rca(action='diff', commit_sha='COMMIT_SHA')`",
-                "",
-                "**Timeline Correlation:**",
-                "- By default, the tool uses current time and searches 24 hours back",
-                "- Pass `incident_time` only if you have a specific timestamp from the alert",
-                "- Use `time_window_hours` to adjust search scope if needed",
-                "",
-                "**Recommended Investigation Flow:**",
-                "1. First call `github_rca(action='deployment_check')` to see recent workflow runs",
-                "2. Then call `github_rca(action='commits')` to list commits in time window",
-                "3. For suspicious commits, use `github_rca(action='diff', commit_sha='...')` to see changes",
-                "4. Check `github_rca(action='pull_requests')` for recently merged PRs",
-                "",
-                "### IMPORTANT NOTES:",
-                "- The repository is REMOTE. Do NOT use `ls`, `cat`, `cd`, or terminal commands for GitHub.",
-                "- Do NOT attempt to `git clone` the repository.",
-                "- ALWAYS check GitHub BEFORE diving into infrastructure commands.",
-                "- Look for changes in: config files, k8s manifests, Terraform, dependencies.",
-                "",
-                "FAILURE TO CHECK CODE IS A FAILURE OF THE INVESTIGATION.",
-                "",
-                "### FIX SUGGESTIONS (When applicable):",
-                "When you identify a code issue that caused the incident, use `github_fix` to suggest a fix:",
-                "```",
-                "github_fix(",
-                "    file_path='config/deployment.yaml',",
-                "    suggested_content='[complete fixed file content]',",
-                "    fix_description='What this fix does',",
-                "    root_cause_summary='Why this caused the issue'",
-                ")",
-                "```",
-                "",
-                "**Guidelines for suggesting fixes:**",
-                "- Only suggest fixes when you have HIGH CONFIDENCE in the root cause",
-                "- Provide the COMPLETE file content, not just the diff",
-                "- The fix is stored for user review - never applied automatically",
-                "- Best for: config changes, YAML values, environment variables, resource limits",
-                "- The user can edit your suggestion before creating a PR",
-            ])
+    if user_id and _get_github_connected(user_id):
+        prompt_parts.extend([
+            "",
+            "## GITHUB:",
+            "GitHub is connected. Call `get_connected_repos` to list available repositories with descriptions,",
+            "then use `github_rca(repo='owner/repo', action=...)` to investigate code changes.",
+            "",
+            "**Actions:** deployment_check, commits, pull_requests, diff (with commit_sha).",
+            "ALWAYS check GitHub BEFORE diving into infrastructure commands.",
+            "",
+            "When you identify a code issue, use `github_fix` to suggest a fix.",
+        ])
 
     # Jira/Confluence investigation context — placed FIRST so agent searches before infra
     has_jira = False
@@ -802,6 +792,16 @@ def build_rca_prompt(
         )
         if similar_context:
             prompt_parts.append(similar_context)
+
+    # Prediscovery: Inject infrastructure topology context
+    if user_id:
+        prediscovery_context = _get_prediscovery_context(
+            user_id=user_id,
+            alert_title=title,
+            alert_service=alert_service or alert_details.get('labels', {}).get('service', ''),
+        )
+        if prediscovery_context:
+            prompt_parts.append(prediscovery_context)
 
     # Critical persistence instructions
     prompt_parts.extend([

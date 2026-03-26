@@ -356,7 +356,7 @@ export default function ThoughtsPanel({ thoughts, incident, isVisible, canIntera
           }`}
         >
           Thoughts
-          {incident.auroraStatus === 'running' && <span className="ml-1.5 w-2 h-2 bg-orange-400 rounded-full animate-pulse inline-block" />}
+          {(incident.auroraStatus === 'running' || incident.auroraStatus === 'summarizing') && <span className="ml-1.5 w-2 h-2 bg-orange-400 rounded-full animate-pulse inline-block" />}
         </button>
 
         {/* Chat session tabs */}
@@ -388,7 +388,7 @@ export default function ThoughtsPanel({ thoughts, incident, isVisible, canIntera
                   <p className="text-sm text-zinc-300">{thought.content}</p>
                 </div>
               ))}
-              {incident.auroraStatus === 'running' && (
+              {(incident.auroraStatus === 'running' || incident.auroraStatus === 'summarizing') && (
                 <div className="pl-4 border-l-2 border-orange-500/50">
                   <div className="flex items-center gap-2 text-sm text-zinc-400">
                     <div className="flex gap-1">
@@ -396,11 +396,11 @@ export default function ThoughtsPanel({ thoughts, incident, isVisible, canIntera
                       <span className="w-1.5 h-1.5 bg-orange-400 rounded-full animate-bounce" style={{ animationDelay: '100ms' }} />
                       <span className="w-1.5 h-1.5 bg-orange-400 rounded-full animate-bounce" style={{ animationDelay: '200ms' }} />
                     </div>
-                    <span>Thinking...</span>
+                    <span>{incident.auroraStatus === 'summarizing' ? 'Generating summary...' : 'Thinking...'}</span>
                   </div>
                 </div>
               )}
-              {thoughts.length === 0 && incident.auroraStatus !== 'running' && (
+              {thoughts.length === 0 && incident.auroraStatus !== 'running' && incident.auroraStatus !== 'summarizing' && (
                 <p className="text-center text-zinc-500 text-sm py-8">No investigation thoughts yet</p>
               )}
             </div>

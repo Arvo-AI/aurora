@@ -28,6 +28,7 @@ import {
   parseAwsSuggestCommand,
   parseCorootCommand,
   parseNewRelicCommand,
+  parseCloudflareCommand,
 } from "./tool-command-parser"
 import { RenderOutput } from "./tool-output-renderer"
 
@@ -262,6 +263,9 @@ const ToolExecutionWidget = ({ tool, className, sendMessage, sendRaw, onToolUpda
   // New Relic tools parsing
   else if (tool.tool_name === "query_newrelic" && typeof command === "string" && command.trim().startsWith("{")) {
     command = parseNewRelicCommand(normalizedInput)
+  }
+  else if (tool.tool_name === "query_cloudflare" || tool.tool_name === "cloudflare_list_zones" || tool.tool_name === "cloudflare_action") {
+    command = parseCloudflareCommand(tool.tool_name, normalizedInput)
   }
 
   // If command is still JSON blob, use default

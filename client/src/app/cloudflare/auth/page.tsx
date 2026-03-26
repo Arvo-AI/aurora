@@ -43,6 +43,7 @@ const RECOMMENDED_WRITE_PERMISSIONS: Record<string, string> = {
   "DNS Write": "Zone — DNS — Edit",
   "Cache Purge": "Zone — Cache Purge — Purge",
   "Firewall Services Write": "Zone — Firewall Services — Edit",
+  "Zone Settings Write": "Zone — Zone Settings — Edit",
   "Load Balancers Account Write": "Account — Load Balancing: Account Load Balancers — Edit",
 };
 

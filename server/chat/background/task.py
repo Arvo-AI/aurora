@@ -479,7 +479,7 @@ def run_background_chat(
                 logger.warning(f"[BackgroundChat] Failed to clear task ID for incident {incident_id}: {e}")
             
             _update_incident_status(incident_id, "analyzed")
-            _update_incident_aurora_status(incident_id, "complete")
+            _update_incident_aurora_status(incident_id, "summarizing")
             
             # Determine severity from RCA if currently unknown
             try:
@@ -506,6 +506,7 @@ def run_background_chat(
                 )
             except Exception as e:
                 logger.error(f"[BackgroundChat] Failed to enqueue post-RCA summarization for incident {incident_id}: {e}")
+                _update_incident_aurora_status(incident_id, "complete")
             
             # Generate final complete visualization
             try:

@@ -188,6 +188,14 @@ const logos = {
       onError={(e) => console.error('Failed to load ThousandEyes logo:', e)}
     />
   ),
+  cloudflare: (
+    <img
+      src="/cloudflare.svg"
+      className="w-4 h-4 min-w-4 min-h-4 object-contain"
+      alt="Cloudflare"
+      onError={(e) => console.error('Failed to load Cloudflare logo:', e)}
+    />
+  ),
   bitbucket: (
     <img
       src="/bitbucket.svg"
@@ -328,6 +336,11 @@ const getLogoForCommand = (command: string | any, toolName: string, provider?: s
   // ThousandEyes tools
   if (tool.includes('thousandeyes')) {
     return 'thousandeyes'
+  }
+
+  // Cloudflare tools
+  if (tool.includes('cloudflare')) {
+    return 'cloudflare'
   }
 
   // Bitbucket tools
