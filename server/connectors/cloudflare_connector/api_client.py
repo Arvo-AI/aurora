@@ -178,7 +178,7 @@ class CloudflareClient:
 
     def get_zone_analytics(self, zone_id: str, since: str = "-1440",
                            until: Optional[str] = None,
-                           limit: int = 1) -> List[Dict[str, Any]]:
+                           limit: Optional[int] = None) -> List[Dict[str, Any]]:
         """Fetch zone analytics (requests, bandwidth, threats, status codes).
 
         Uses the Cloudflare GraphQL Analytics API.  The dataset node is chosen
@@ -227,7 +227,7 @@ class CloudflareClient:
             dim_field = "date"
             auto_limit = math.ceil(window_minutes / 1440)
 
-        query_limit = max(1, min(limit, 100))
+        query_limit = max(1, min(limit if limit is not None else auto_limit, 100))
 
         start_str = start.strftime("%Y-%m-%dT%H:%M:%SZ")
         end_str = end.strftime("%Y-%m-%dT%H:%M:%SZ")
