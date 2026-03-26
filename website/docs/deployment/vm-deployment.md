@@ -315,18 +315,21 @@ Use this path when the target VM has restricted or no outbound internet access (
 You need the `.tar.gz` tarball on the VM. The `.sha256` checksum file is optional (for verifying the transfer). Use whatever transfer method your organization permits:
 
 ```bash
+BUNDLE=aurora-airtight-4c92267-amd64.tar.gz  # replace with your bundle filename
+
 # SCP
-scp aurora-airtight-4c92267-amd64.tar.gz user@10.0.0.5:~/
+VM_USER=user        # replace with your SSH username
+VM_IP=10.0.0.5      # replace with your VM's IP
+scp $BUNDLE $VM_USER@$VM_IP:~/
 
 # GCS bucket
-gcloud storage cp aurora-airtight-4c92267-amd64.tar.gz gs://my-bucket/
+BUCKET=my-bucket    # replace with your bucket name
+gcloud storage cp $BUNDLE gs://$BUCKET/
 # Then on the VM:
-gcloud storage cp gs://my-bucket/aurora-airtight-4c92267-amd64.tar.gz ~/
+gcloud storage cp gs://$BUCKET/$BUNDLE ~/
 
 # Azure Blob / AWS S3 / internal file server — use your org's standard method
 ```
-
-Replace the filename, user, and IP/bucket with your actual values.
 
 ### 2. (Optional) Verify the Bundle Integrity
 
@@ -334,7 +337,8 @@ If you also transferred the `.sha256` checksum file, verify the tarball wasn't c
 
 ```bash
 cd ~
-sha256sum -c aurora-airtight-4c92267-amd64.tar.gz.sha256
+BUNDLE=aurora-airtight-4c92267-amd64.tar.gz  # replace with your bundle filename
+sha256sum -c $BUNDLE.sha256
 # Expected output: aurora-airtight-4c92267-amd64.tar.gz: OK
 ```
 
@@ -415,7 +419,8 @@ Save and exit (`Ctrl+X`, `Y`, `Enter` in nano).
 Pass the path to the tarball you transferred in step 1:
 
 ```bash
-make prod-airtight AIRTIGHT_BUNDLE=~/aurora-airtight-4c92267-amd64.tar.gz
+BUNDLE=aurora-airtight-4c92267-amd64.tar.gz  # replace with your bundle filename
+make prod-airtight AIRTIGHT_BUNDLE=~/$BUNDLE
 ```
 
 This loads every Docker image from the tarball into the local Docker daemon and starts the full Aurora stack. No outbound network calls are made. First run takes a few minutes while images are loaded.
