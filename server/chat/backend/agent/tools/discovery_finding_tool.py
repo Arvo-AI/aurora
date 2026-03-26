@@ -69,6 +69,9 @@ def save_discovery_finding(
         from utils.auth.stateless_auth import get_org_id_for_user
 
         org_id = get_org_id_for_user(user_id)
+        if not org_id:
+            logger.warning(f"[Discovery] No org_id for user {user_id}, skipping (findings would be unsearchable)")
+            return "Error: No organization context. Discovery findings require org scope."
         document_id = f"{DISCOVERY_DOC_PREFIX}{datetime.utcnow().strftime('%Y%m%d')}:{uuid.uuid4().hex[:8]}"
 
         chunks = [{

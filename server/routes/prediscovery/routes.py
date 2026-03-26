@@ -52,11 +52,11 @@ def get_prediscovery_status(user_id):
                 cur.execute("""
                     SELECT id, status, created_at, updated_at
                     FROM chat_sessions
-                    WHERE user_id = %s
-                      AND ui_state->>'triggerMetadata' LIKE '%%prediscovery%%'
+                    WHERE org_id = %s
+                      AND ui_state->'triggerMetadata'->>'source' = 'prediscovery'
                     ORDER BY created_at DESC
                     LIMIT 1
-                """, (user_id,))
+                """, (org_id,))
                 row = cur.fetchone()
 
         if not row:

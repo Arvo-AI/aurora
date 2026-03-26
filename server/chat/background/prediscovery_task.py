@@ -173,7 +173,6 @@ def run_prediscovery(
             logger.info(f"[Prediscovery] No integrations for user {user_id}, skipping")
             return {"status": "skipped", "reason": "no_integrations"}
 
-        # Get org_id for cleanup
         from utils.auth.stateless_auth import get_org_id_for_user
         org_id = get_org_id_for_user(user_id)
         if org_id:
