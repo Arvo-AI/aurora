@@ -10,8 +10,9 @@ import ConnectorAuthGuard from "@/components/connectors/ConnectorAuthGuard";
 
 const CACHE_KEYS = {
   STATUS: 'newrelic_connection_status',
-  WEBHOOK: 'newrelic_webhook_url',
 };
+
+type CachedStatus = Pick<NewRelicStatus, 'connected' | 'region' | 'accountId' | 'hasLicenseKey'>;
 
 export default function NewRelicAuthPage() {
   const { toast } = useToast();
@@ -39,9 +40,6 @@ export default function NewRelicAuthPage() {
     try {
       const response = await newrelicService.getWebhookUrl();
       setWebhookUrl(response.webhookUrl);
-      if (typeof window !== 'undefined') {
-        localStorage.setItem(CACHE_KEYS.WEBHOOK, response.webhookUrl);
-      }
     } catch (error: unknown) {
       console.error('[newrelic] Failed to load webhook URL', error);
     }
@@ -52,7 +50,13 @@ export default function NewRelicAuthPage() {
     setStatus(result);
 
     if (typeof window !== 'undefined' && result) {
-      localStorage.setItem(CACHE_KEYS.STATUS, JSON.stringify(result));
+      const cached: CachedStatus = {
+        connected: result.connected,
+        region: result.region,
+        accountId: result.accountId,
+        hasLicenseKey: result.hasLicenseKey,
+      };
+      localStorage.setItem(CACHE_KEYS.STATUS, JSON.stringify(cached));
     }
 
     updateLocalStorageConnection(result?.connected ?? false);
@@ -61,7 +65,7 @@ export default function NewRelicAuthPage() {
       setRegion(result.region || "us");
       await loadWebhookUrl();
     } else if (typeof window !== 'undefined') {
-      localStorage.removeItem(CACHE_KEYS.WEBHOOK);
+      localStorage.removeItem(CACHE_KEYS.STATUS);
     }
   };
 
@@ -69,15 +73,13 @@ export default function NewRelicAuthPage() {
     try {
       if (!skipCache && typeof window !== 'undefined') {
         const cachedStatus = localStorage.getItem(CACHE_KEYS.STATUS);
-        const cachedWebhook = localStorage.getItem(CACHE_KEYS.WEBHOOK);
 
         if (cachedStatus) {
-          const parsedStatus = JSON.parse(cachedStatus) as NewRelicStatus;
+          const parsedStatus = JSON.parse(cachedStatus) as CachedStatus;
           setStatus(parsedStatus);
           updateLocalStorageConnection(parsedStatus?.connected ?? false);
           if (parsedStatus?.connected) {
             setRegion(parsedStatus.region || "us");
-            if (cachedWebhook) setWebhookUrl(cachedWebhook);
           }
 
           if (isInitialLoad) {
@@ -116,7 +118,13 @@ export default function NewRelicAuthPage() {
       setStatus(result);
 
       if (typeof window !== 'undefined') {
-        localStorage.setItem(CACHE_KEYS.STATUS, JSON.stringify(result));
+        const cached: CachedStatus = {
+          connected: true,
+          region: result.region,
+          accountId: result.accountId,
+          hasLicenseKey: result.hasLicenseKey,
+        };
+        localStorage.setItem(CACHE_KEYS.STATUS, JSON.stringify(cached));
         localStorage.setItem('isNewRelicConnected', 'true');
       }
 
@@ -169,7 +177,6 @@ export default function NewRelicAuthPage() {
 
       if (typeof window !== 'undefined') {
         localStorage.removeItem(CACHE_KEYS.STATUS);
-        localStorage.removeItem(CACHE_KEYS.WEBHOOK);
         localStorage.removeItem('isNewRelicConnected');
       }
 

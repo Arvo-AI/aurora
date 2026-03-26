@@ -67,7 +67,13 @@ export function NewRelicWebhookStep({
           <span className="font-semibold text-sm">Webhook URL</span>
           <div className="flex items-center gap-2">
             <code className="flex-1 bg-muted px-3 py-2 rounded text-xs break-all">{webhookUrl}</code>
-            <Button variant="outline" size="sm" onClick={onCopy} className="shrink-0">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={onCopy}
+              className="shrink-0"
+              aria-label={copied ? "Webhook URL copied" : "Copy webhook URL"}
+            >
               {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
             </Button>
           </div>
