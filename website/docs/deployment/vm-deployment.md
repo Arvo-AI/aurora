@@ -340,13 +340,34 @@ sha256sum -c aurora-airtight-4c92267-amd64.tar.gz.sha256
 
 If the check fails, the file was corrupted — re-transfer it.
 
-### 3. Clone the Repository
+### 3. Get the Repository
 
 The repo contains configuration files (`docker-compose.airtight.yml`, `Makefile`, `.env.example`) needed to run the stack. No images are pulled during this step.
+
+**Option A — Clone (requires internet or GitHub access on the VM):**
 
 ```bash
 git clone https://github.com/arvo-ai/aurora.git
 cd aurora
+```
+
+**Option B — Release archive (no internet needed on the VM):**
+
+Download the source archive (`.tar.gz` or `.zip`) from the [releases page](https://github.com/arvo-ai/aurora/releases) on a connected machine, transfer it to the VM alongside the image bundle, then extract:
+
+```bash
+VERSION=1.2.2  # replace with your release version (GitHub strips the 'v' prefix)
+tar xzf aurora-$VERSION.tar.gz
+cd aurora-$VERSION
+```
+
+:::warning Version must match the image bundle
+The release archive version must match the version used to build the airtight image bundle. Mismatched versions can cause errors — the compose files, configs, and entrypoints in the source must match the images.
+:::
+
+Then initialize:
+
+```bash
 make init
 ```
 
