@@ -40,11 +40,16 @@ def _get_users_with_integrations() -> List[Dict[str, Any]]:
         return []
 
 
-def _cleanup_old_discovery_chunks(org_id: str) -> int:
-    """Delete previous discovery findings from Weaviate for this org."""
+def _cleanup_old_discovery_chunks(org_id: str, before: str = None) -> int:
+    """Delete previous discovery findings from Weaviate for this org.
+    
+    Args:
+        org_id: Organization to clean up for
+        before: ISO timestamp -- only delete findings created before this time
+    """
     try:
         from routes.knowledge_base.weaviate_client import delete_discovery_chunks
-        return delete_discovery_chunks(org_id)
+        return delete_discovery_chunks(org_id, before=before)
     except Exception as e:
         logger.warning(f"[Prediscovery] Failed to cleanup old chunks: {e}")
         return 0
@@ -174,9 +179,9 @@ def run_prediscovery(
             return {"status": "skipped", "reason": "no_integrations"}
 
         from utils.auth.stateless_auth import get_org_id_for_user
+        from datetime import datetime, timezone
         org_id = get_org_id_for_user(user_id)
-        if org_id:
-            _cleanup_old_discovery_chunks(org_id)
+        run_started_at = datetime.now(timezone.utc).isoformat()
 
         prompt = build_prediscovery_prompt(user_id, providers, integrations)
 
@@ -197,6 +202,9 @@ def run_prediscovery(
 
         from chat.background.task import _update_session_status
         _update_session_status(session_id, "completed")
+
+        if org_id:
+            _cleanup_old_discovery_chunks(org_id, before=run_started_at)
 
         logger.info(f"[Prediscovery] Completed for user {user_id}, session {session_id}")
         return {"status": "completed", "session_id": session_id, "user_id": user_id}

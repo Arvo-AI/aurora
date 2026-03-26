@@ -8,7 +8,6 @@ import { useToast } from "@/hooks/use-toast";
 import { Trash2, FileText } from "lucide-react";
 import { clearTerraformState } from "@/lib/services/userSettings";
 import { RCASettings } from "@/components/RCASettings";
-import { DiscoverySettings } from "@/components/DiscoverySettings";
 import { useUser } from "@/hooks/useAuthHooks";
 import { canWrite } from "@/lib/roles";
 import Link from "next/link";
@@ -179,9 +178,6 @@ export function GeneralSettings() {
 
       {/* RCA Notification Settings */}
       <RCASettings />
-
-      {/* Infrastructure Discovery Settings */}
-      <DiscoverySettings />
 
       {/* Legal & Privacy Section */}
       <div>

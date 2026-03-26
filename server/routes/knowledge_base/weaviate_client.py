@@ -354,8 +354,8 @@ def get_document_chunk_count(user_id: str, document_id: str) -> int:
         return 0
 
 
-def delete_discovery_chunks(org_id: str) -> int:
-    """Delete all auto-discovery chunks for an org."""
+def delete_discovery_chunks(org_id: str, before: str = None) -> int:
+    """Delete auto-discovery chunks for an org, optionally only those created before a timestamp."""
     try:
         _, collection = _get_weaviate_client()
 
@@ -364,6 +364,8 @@ def delete_discovery_chunks(org_id: str) -> int:
             Filter.by_property("org_id").equal(org_id)
             & Filter.by_property("document_id").like("discovery:*")
         )
+        if before:
+            discovery_filter = discovery_filter & Filter.by_property("created_at").less_than(before)
 
         result = collection.data.delete_many(where=discovery_filter)
         deleted = result.successful if hasattr(result, "successful") else 0

@@ -68,12 +68,16 @@ export function DiscoverySettings() {
     setIntervalHours(clamped);
     setSavingInterval(true);
     try {
-      await fetch(`${backendUrl}/api/user-preferences`, {
+      const res = await fetch(`${backendUrl}/api/user-preferences`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-User-ID": userId },
         body: JSON.stringify({ key: "prediscovery_interval_hours", value: clamped }),
       });
-      toast({ title: "Saved", description: `Discovery will run every ${clamped} hour${clamped === 1 ? "" : "s"}.` });
+      if (res.ok) {
+        toast({ title: "Saved", description: `Discovery will run every ${clamped} hour${clamped === 1 ? "" : "s"}.` });
+      } else {
+        toast({ title: "Failed to save", variant: "destructive" });
+      }
     } catch {
       toast({ title: "Failed to save", variant: "destructive" });
     } finally {
