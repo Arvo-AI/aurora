@@ -1,5 +1,7 @@
 'use client';
 
+import { apiRequest } from '@/lib/services/api-client';
+
 type UnknownRecord = Record<string, unknown>;
 
 export interface NewRelicStatus {
@@ -29,37 +31,12 @@ export interface NewRelicWebhookInfo {
 
 const API_BASE = '/api/newrelic';
 
-async function parseJsonResponse<T>(response: Response): Promise<T | null> {
-  const text = await response.text();
-  if (!text) return null;
-  return JSON.parse(text) as T;
-}
-
-async function handleJsonFetch<T>(input: RequestInfo, init?: RequestInit): Promise<T> {
-  const response = await fetch(input, {
-    ...init,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(init?.headers ?? {}),
-    },
-    cache: 'no-store',
-  });
-
-  if (!response.ok) {
-    type ErrorBody = { error?: string; details?: string };
-    const parsed = await parseJsonResponse<ErrorBody>(response).catch(() => null);
-    const message = parsed?.error || parsed?.details || response.statusText || `Request failed with status ${response.status}`;
-    throw new Error(message);
-  }
-
-  const parsed = await parseJsonResponse<T>(response);
-  return parsed ?? ({} as T);
-}
-
 export const newrelicService = {
   async getStatus(): Promise<NewRelicStatus | null> {
     try {
-      const data = await handleJsonFetch<UnknownRecord>(`${API_BASE}/status`);
+      const data = await apiRequest<UnknownRecord>(`${API_BASE}/status`, {
+        cache: 'no-store',
+      });
       return {
         connected: Boolean(data?.connected),
         region: data?.region as string | undefined,
@@ -74,24 +51,15 @@ export const newrelicService = {
       };
     } catch (error) {
       console.error('[newrelicService] Failed to fetch status:', error);
-      const msg = error instanceof Error ? error.message : String(error);
-      const isTransportError =
-        msg.includes('Failed to fetch') ||
-        msg.includes('NetworkError') ||
-        msg.includes('network') ||
-        msg.includes('ECONNREFUSED') ||
-        msg.includes('timeout');
-      if (isTransportError) {
-        throw new Error('Unable to reach the server. Please try again.');
-      }
       return null;
     }
   },
 
   async connect(payload: NewRelicConnectPayload): Promise<NewRelicStatus> {
-    const data = await handleJsonFetch<UnknownRecord>(`${API_BASE}/connect`, {
+    const data = await apiRequest<UnknownRecord>(`${API_BASE}/connect`, {
       method: 'POST',
       body: JSON.stringify(payload),
+      cache: 'no-store',
     });
     return {
       connected: Boolean(data?.success ?? true),
@@ -106,6 +74,8 @@ export const newrelicService = {
   },
 
   async getWebhookUrl(): Promise<NewRelicWebhookInfo> {
-    return handleJsonFetch<NewRelicWebhookInfo>(`${API_BASE}/webhook-url`);
+    return apiRequest<NewRelicWebhookInfo>(`${API_BASE}/webhook-url`, {
+      cache: 'no-store',
+    });
   },
 };
