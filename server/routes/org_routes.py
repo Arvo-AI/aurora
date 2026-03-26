@@ -164,7 +164,7 @@ def update_org(user_id):
                         (name, org_id)
                     )
                     if cursor.fetchone():
-                        return jsonify({"error": "An organization with this name already exists"}), 409
+                        return jsonify({"error": "An organization with this name already exists. Please contact your organization's admin to get an account."}), 409
 
                 updates = []
                 params = []

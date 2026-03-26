@@ -86,7 +86,7 @@ def register():
                     (org_name,)
                 )
                 if cursor.fetchone():
-                    return jsonify({"error": "An organization with this name already exists"}), 409
+                    return jsonify({"error": "An organization with this name already exists. Please contact your organization's admin to get an account."}), 409
 
                 cursor.execute(
                     "SELECT id FROM organizations WHERE slug = %s",
@@ -192,7 +192,7 @@ def setup_org(user_id):
                     (org_name,)
                 )
                 if cursor.fetchone():
-                    return jsonify({"error": "An organization with this name already exists"}), 409
+                    return jsonify({"error": "An organization with this name already exists. Please contact your organization's admin to get an account."}), 409
 
                 cursor.execute(
                     "SELECT id FROM organizations WHERE slug = %s",
