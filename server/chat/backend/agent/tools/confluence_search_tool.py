@@ -81,9 +81,12 @@ def confluence_search_similar(
         logger.exception(
             "Confluence similar-incidents search failed for user %s: %s", user_id, exc
         )
-        raise ValueError(
-            "Failed to search Confluence; check connection and permissions"
-        ) from exc
+        return json.dumps(
+            {"status": "error", "error": f"Confluence search failed: {exc}. "
+             "The token may be expired — ask the user to reconnect Confluence. "
+             "Continue the investigation using other tools."},
+            ensure_ascii=False,
+        )
 
     return json.dumps(
         {"status": "success", "count": len(results), "results": results},
@@ -114,9 +117,12 @@ def confluence_search_runbooks(
         logger.exception(
             "Confluence runbook search failed for user %s: %s", user_id, exc
         )
-        raise ValueError(
-            "Failed to search Confluence; check connection and permissions"
-        ) from exc
+        return json.dumps(
+            {"status": "error", "error": f"Confluence runbook search failed: {exc}. "
+             "The token may be expired — ask the user to reconnect Confluence. "
+             "Continue the investigation using other tools."},
+            ensure_ascii=False,
+        )
 
     return json.dumps(
         {"status": "success", "count": len(results), "results": results},
@@ -140,8 +146,11 @@ def confluence_fetch_page(
         result = svc.fetch_page_markdown(page_id, max_length=max_length)
     except Exception as exc:
         logger.exception("Confluence page fetch failed for user %s: %s", user_id, exc)
-        raise ValueError(
-            "Failed to fetch Confluence page; check connection and permissions"
-        ) from exc
+        return json.dumps(
+            {"status": "error", "error": f"Confluence page fetch failed: {exc}. "
+             "The token may be expired — ask the user to reconnect Confluence. "
+             "Continue the investigation using other tools."},
+            ensure_ascii=False,
+        )
 
     return json.dumps({"status": "success", **result}, ensure_ascii=False)

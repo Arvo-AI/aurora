@@ -333,13 +333,15 @@ SLACK_SIGNING_SECRET=your-signing-secret
 
 ---
 
-## Documentation Tools
+## Documentation & Project Management
 
-### Confluence
+### Atlassian (Confluence + Jira)
 
-OAuth 2.0 authentication for Confluence Cloud, or Personal Access Token for Data Center.
+OAuth 2.0 authentication for Atlassian Cloud (Confluence and/or Jira), or Personal Access Tokens for Data Center.
 
-#### Option A: Confluence Cloud (OAuth)
+One OAuth app covers both products. You choose which to connect in the Aurora UI.
+
+#### Option A: Atlassian Cloud (OAuth)
 
 For Atlassian Cloud (`*.atlassian.net`):
 
@@ -349,50 +351,68 @@ For Atlassian Cloud (`*.atlassian.net`):
 2. Click **Create** > **OAuth 2.0 integration**
 3. Name: `Aurora`
 4. Click **Create**
-5. Go to **Permissions** > **Confluence API** > **Add** > **Configure**
-6. Add scopes:
-   - `read:page:confluence`
-   - `read:space:confluence`
-   - `read:user:confluence`
+5. Go to **Distribution**, set Distribution Status to **Sharing**, fill in the required vendor fields (name, privacy policy URL), set Personal Data Declaration to **Yes**, and save. Without this, non-owner users will see "You don't have access to this app."
+6. Go to **Permissions** and add scopes for the products you want:
+   - **Confluence API** > **Add** > **Configure** > click **Edit Scopes** then **Add granular scopes**:
+     - `read:page:confluence`
+     - `read:space:confluence`
+     - `read:user:confluence`
+     - `search:confluence`
+
+     :::warning Use Granular Scopes
+     You must add these as **granular scopes**, not classic scopes. Click "Add granular scopes" under Confluence API in the Permissions tab. If only classic scopes are added, the OAuth flow will fail with "scopes not added to the app."
+     :::
+
+   - **Jira platform REST API** > **Add** > **Configure**:
+     - `read:jira-work`
+     - `write:jira-work`
+     - `read:jira-user`
 7. Go to **Authorization** > **Add** callback URL:
-   - `http://localhost:3000/confluence/callback` (development)
-   - `https://your-domain.com/confluence/callback` (production)
+   - `http://localhost:3000/atlassian/callback` (development)
+   - `https://your-domain.com/atlassian/callback` (production)
 8. Go to **Settings** and copy **Client ID** and **Secret**
 
 ##### 2. Configure Environment
 
 ```bash
-CONFLUENCE_CLIENT_ID=your-client-id
-CONFLUENCE_CLIENT_SECRET=your-client-secret
+NEXT_PUBLIC_ENABLE_CONFLUENCE=true
+NEXT_PUBLIC_ENABLE_JIRA=true
+ATLASSIAN_CLIENT_ID=your-client-id
+ATLASSIAN_CLIENT_SECRET=your-client-secret
 ```
 
 ##### 3. Connect via Aurora UI
 
-1. Navigate to **Connectors** > **Confluence**
-2. Click **Connect with Atlassian**
-3. Authorize Aurora in the Atlassian popup
-4. Connection complete - the site URL is detected automatically
+1. Navigate to **Connectors** > **Atlassian**
+2. Select which products to connect (Confluence, Jira, or both)
+3. Click **Connect with Atlassian**
+4. Authorize Aurora in the Atlassian popup
+5. Connection complete - the site URL is detected automatically
+6. For Jira, choose the agent permission tier (Read Only or Full Access)
 
-#### Option B: Confluence Data Center (PAT)
+#### Option B: Data Center (PAT)
 
-For self-hosted Confluence instances:
+For self-hosted Confluence or Jira instances:
 
 ##### 1. Create Personal Access Token
 
+**Confluence:**
 1. In Confluence, go to your profile > **Settings** > **Personal Access Tokens**
-2. Click **Create token**
-3. Name: `Aurora`
-4. Set expiry as needed
-5. Copy the token
+2. Click **Create token**, name: `Aurora`, set expiry as needed
+3. Copy the token
+
+**Jira:**
+1. In Jira, go to your profile > **Personal Access Tokens**
+2. Click **Create token**, name: `Aurora`, set expiry as needed
+3. Copy the token
 
 ##### 2. Connect via Aurora UI
 
-1. Navigate to **Connectors** > **Confluence**
-2. Select **Confluence Data Center (PAT)**
-3. Enter:
-   - **Base URL**: `https://confluence.yourcompany.com`
-   - **Personal Access Token**: Your PAT
-4. Click **Connect with PAT**
+1. Navigate to **Connectors** > **Atlassian**
+2. Select the products you want and enter per-product:
+   - **Base URL**: e.g. `https://confluence.yourcompany.com` or `https://jira.yourcompany.com`
+   - **Personal Access Token**: The respective PAT
+3. Click **Connect with PAT**
 
 #### URL Limitations
 
@@ -412,6 +432,12 @@ Data Center short links work correctly.
 | "Confluence page URL does not match configured base URL" | Verify the page is from your connected Confluence instance |
 | "Confluence credentials expired" | Reconnect via the Connectors page |
 | "Failed to validate Confluence PAT" | Verify PAT is valid and not expired |
+| "Jira credentials expired" | Reconnect via the Connectors page |
+| "Failed to validate Jira PAT" | Verify PAT is valid and not expired |
+| "Insufficient Jira scopes" | Ensure OAuth app has `read:jira-work`, `write:jira-work`, and `read:jira-user` scopes |
+| "Atlassian OAuth configuration missing" | Set `ATLASSIAN_CLIENT_ID` and `ATLASSIAN_CLIENT_SECRET` in `.env` |
+| "You don't have access to this app" | Enable **Sharing** in the Distribution tab of your Atlassian OAuth app |
+| "Scopes not added to the app" | Add **granular** Confluence scopes (not classic) in the Permissions tab |
 
 ---
 

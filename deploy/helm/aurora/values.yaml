@@ -216,9 +216,9 @@ secrets:
     OVH_US_CLIENT_ID: ""         # US region
     OVH_US_CLIENT_SECRET: ""
 
-    # --- Optional: Confluence Integration ---
-    CONFLUENCE_CLIENT_ID: ""
-    CONFLUENCE_CLIENT_SECRET: ""
+    # --- Optional: Atlassian Integration (Confluence + Jira) ---
+    ATLASSIAN_CLIENT_ID: ""
+    ATLASSIAN_CLIENT_SECRET: ""
 
     # --- Optional: SharePoint Integration ---
     SHAREPOINT_CLIENT_ID: ""

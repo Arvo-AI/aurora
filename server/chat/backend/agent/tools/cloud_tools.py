@@ -28,6 +28,7 @@ iac_tool = run_iac_tool
 from .github_commit_tool import github_commit, GitHubCommitArgs
 from .github_rca_tool import github_rca, GitHubRCAArgs
 from .github_fix_tool import github_fix, GitHubFixArgs
+from .github_repos_tool import get_connected_repos, GetConnectedReposArgs
 from .jenkins_rca_tool import jenkins_rca, JenkinsRCAArgs
 from .cloudbees_rca_tool import cloudbees_rca, CloudBeesRCAArgs
 from .spinnaker_rca_tool import spinnaker_rca, SpinnakerRCAArgs
@@ -1144,6 +1145,7 @@ Once you identify which account has the issue, pass account_id (e.g. '1510256343
     tool_functions = [
         (run_iac_tool, "iac_tool"),
         (github_commit, "github_commit"),
+        (get_connected_repos, "get_connected_repos"),
         (github_rca, "github_rca"),
         (github_fix, "github_fix"),
         (jenkins_rca, "jenkins_rca"),
@@ -1190,6 +1192,17 @@ Once you identify which account has the issue, pass account_id (e.g. '1510256343
                 description="Commit and push Terraform files to a GitHub repository. Parameters: repo (string, required) - repository in 'owner/repo' format, commit_message (string, required) - commit message, branch (string, optional, default='main') - target branch, push (boolean, optional, default=true) - whether to push.",
                 args_schema=GitHubCommitArgs
             )
+        elif name == 'get_connected_repos':
+            tool = StructuredTool.from_function(
+                func=final_func,
+                name=name,
+                description=(
+                    "List all GitHub repositories the user has connected, with descriptions. "
+                    "Call this first to discover available repos before using github_rca. "
+                    "Returns repo names, default branches, and metadata summaries."
+                ),
+                args_schema=GetConnectedReposArgs
+            )
         elif name == 'github_rca':
             tool = StructuredTool.from_function(
                 func=final_func,
@@ -1200,7 +1213,8 @@ Once you identify which account has the issue, pass account_id (e.g. '1510256343
                     "'commits' (recent commits with timeline correlation), "
                     "'diff' (file changes for a specific commit), "
                     "'pull_requests' (merged PRs in time window). "
-                    "Auto-resolves repository from Knowledge Base or connected repo if not specified. "
+                    "IMPORTANT: Always pass repo='owner/repo' to specify which repository to investigate. "
+                    "If unsure which repo, call get_connected_repos first. "
                     "Pass incident_time (ISO 8601) for automatic time window correlation."
                 ),
                 args_schema=GitHubRCAArgs
@@ -1349,6 +1363,31 @@ Once you identify which account has the issue, pass account_id (e.g. '1510256343
         except Exception as e:
             logging.warning(f"Failed to add knowledge_base_search tool: {e}")
 
+    # Add discovery finding tool for prediscovery mode
+    if user_id and mode_suffix == "prediscovery":
+        try:
+            from chat.backend.agent.tools.discovery_finding_tool import (
+                save_discovery_finding,
+                DiscoveryFindingArgs,
+                DISCOVERY_FINDING_DESCRIPTION,
+            )
+
+            context_wrapped_df = with_user_context(save_discovery_finding)
+            notification_wrapped_df = with_completion_notification(context_wrapped_df)
+            if tool_capture:
+                final_df_func = wrap_func_with_capture(notification_wrapped_df, "save_discovery_finding")
+            else:
+                final_df_func = notification_wrapped_df
+
+            tools.append(StructuredTool.from_function(
+                func=final_df_func,
+                name="save_discovery_finding",
+                description=DISCOVERY_FINDING_DESCRIPTION,
+                args_schema=DiscoveryFindingArgs,
+            ))
+            logging.info(f"Added save_discovery_finding tool for prediscovery mode")
+        except Exception as e:
+            logging.warning(f"Failed to add save_discovery_finding tool: {e}")
 
     # Add Splunk tools if connected
     if user_id and is_splunk_connected(user_id):
@@ -1515,6 +1554,53 @@ Once you identify which account has the issue, pass account_id (e.g. '1510256343
             logging.info(f"Added 3 Confluence search tools for user {user_id}")
     except Exception as e:
         logging.warning(f"Failed to add Confluence search tools: {e}")
+
+    # Add Jira tools if enabled
+    try:
+        from utils.flags.feature_flags import is_jira_enabled
+        from .jira_tool import (
+            jira_search_issues, jira_get_issue, jira_add_comment,
+            jira_create_issue, jira_update_issue, jira_link_issues,
+            JiraSearchIssuesArgs, JiraGetIssueArgs, JiraAddCommentArgs,
+            JiraCreateIssueArgs, JiraUpdateIssueArgs, JiraLinkIssuesArgs,
+        )
+
+        if is_jira_enabled() and user_id:
+            from utils.auth.token_management import get_token_data as _get_jira_creds
+            _jira_creds = _get_jira_creds(user_id, "jira")
+            if _jira_creds:
+                from utils.auth.stateless_auth import get_user_preference
+                _jira_mode = get_user_preference(user_id, "jira_mode", default="comment_only") or "comment_only"
+
+                _jira_tools = [
+                    (jira_search_issues, "jira_search_issues", JiraSearchIssuesArgs,
+                     "Search Jira issues using JQL. Returns matching issues with key, summary, status, assignee, labels."),
+                    (jira_get_issue, "jira_get_issue", JiraGetIssueArgs,
+                     "Get full details of a Jira issue by key (e.g. OPS-123). Returns description, status, comments."),
+                    (jira_add_comment, "jira_add_comment", JiraAddCommentArgs,
+                     "Add a comment to a Jira issue. Non-destructive operation."),
+                ]
+
+                if _jira_mode != "comment_only":
+                    _jira_tools.extend([
+                        (jira_create_issue, "jira_create_issue", JiraCreateIssueArgs,
+                         "Create a new Jira issue in a project. Requires project key, summary, and optional description."),
+                        (jira_update_issue, "jira_update_issue", JiraUpdateIssueArgs,
+                         "Update fields on an existing Jira issue."),
+                        (jira_link_issues, "jira_link_issues", JiraLinkIssuesArgs,
+                         "Create a link between two Jira issues (Relates, Blocks, Clones, etc.)."),
+                    ])
+
+                for _func, _name, _schema, _desc in _jira_tools:
+                    _ctx = with_user_context(_func)
+                    _notif = with_completion_notification(_ctx)
+                    _final = wrap_func_with_capture(_notif, _name) if tool_capture else _notif
+                    tools.append(StructuredTool.from_function(
+                        func=_final, name=_name, description=_desc, args_schema=_schema,
+                    ))
+                logging.info(f"Added {len(_jira_tools)} Jira tools for user {user_id} (mode={_jira_mode})")
+    except Exception as e:
+        logging.warning(f"Failed to add Jira tools: {e}")
 
     # Add SharePoint search tools if enabled
     try:

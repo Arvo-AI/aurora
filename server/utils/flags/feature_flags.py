@@ -13,6 +13,16 @@ def is_pagerduty_oauth_enabled() -> bool:
     return os.getenv("NEXT_PUBLIC_ENABLE_PAGERDUTY_OAUTH", "false").lower() == "true"
 
 
+def is_confluence_enabled() -> bool:
+    """Check if Confluence integration is enabled via environment variable."""
+    return os.getenv("NEXT_PUBLIC_ENABLE_CONFLUENCE", "false").lower() == "true"
+
+
+def is_jira_enabled() -> bool:
+    """Check if Jira integration is enabled via environment variable."""
+    return os.getenv("NEXT_PUBLIC_ENABLE_JIRA", "false").lower() == "true"
+
+
 def is_sharepoint_enabled() -> bool:
     """Check if SharePoint integration is enabled via environment variable."""
     return os.getenv("NEXT_PUBLIC_ENABLE_SHAREPOINT", "false").lower() == "true"

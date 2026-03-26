@@ -193,6 +193,10 @@ CORS(app, origins=FRONTEND_URL, supports_credentials=True,
                           "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
                                             "Authorization", "X-Provider-Preference"],
                           "methods": ["GET", "POST", "DELETE", "OPTIONS"]},
+        r"/api/prediscovery/*": {"origins": FRONTEND_URL, "supports_credentials": True,
+                                 "allow_headers": ["Content-Type", "X-Requested-With", "X-User-ID",
+                                                   "Authorization"],
+                                 "methods": ["GET", "POST", "OPTIONS"]},
         r"/*": {"origins": FRONTEND_URL, "supports_credentials": True,
                 "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID", 
                                 "Authorization", "X-Provider-Preference"], 
@@ -340,6 +344,17 @@ app.register_blueprint(knowledge_base_bp, url_prefix="/api/knowledge-base")
 from routes.confluence import bp as confluence_bp  # noqa: F401
 app.register_blueprint(confluence_bp, url_prefix="/confluence")
 
+# --- Unified Atlassian Routes (Confluence + Jira OAuth) ---
+from utils.flags.feature_flags import is_jira_enabled, is_confluence_enabled
+if is_confluence_enabled() or is_jira_enabled():
+    from routes.atlassian import bp as atlassian_bp  # noqa: F401
+    app.register_blueprint(atlassian_bp, url_prefix="/atlassian")
+
+# --- Jira Integration Routes ---
+if is_jira_enabled():
+    from routes.jira import bp as jira_bp  # noqa: F401
+    app.register_blueprint(jira_bp, url_prefix="/jira")
+
 # --- SharePoint Integration Routes ---
 from utils.flags.feature_flags import is_sharepoint_enabled
 if is_sharepoint_enabled():
@@ -449,6 +464,10 @@ app.register_blueprint(terraform_workspace_bp)
 # --- Graph / Service Discovery Routes ---
 from routes.graph_routes import graph_bp
 app.register_blueprint(graph_bp)
+
+# --- Prediscovery Routes ---
+from routes.prediscovery import bp as prediscovery_bp
+app.register_blueprint(prediscovery_bp, url_prefix="/api/prediscovery")
 
 # ---- Debug Routes ----
 from routes.debug import bp as debug_bp

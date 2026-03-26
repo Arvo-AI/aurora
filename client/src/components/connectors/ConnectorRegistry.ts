@@ -1,5 +1,5 @@
 import { Github, Server } from "lucide-react";
-import { isOvhEnabled, isSharePointEnabled, isSpinnakerEnabled } from "@/lib/feature-flags";
+import { isOvhEnabled, isSharePointEnabled, isJiraEnabled, isSpinnakerEnabled } from "@/lib/feature-flags";
 import type { ConnectorConfig } from "./types";
 
 class ConnectorRegistry {
@@ -145,6 +145,19 @@ class ConnectorRegistry {
         path: "/confluence/connect",
         storageKey: "isConfluenceConnected",
       });
+
+    if (isJiraEnabled()) {
+      this.register({
+        id: "jira",
+        name: "Jira",
+        description: "Search issues, track incidents, and export postmortem action items as tracked Jira work.",
+        iconPath: "/jira.svg",
+        iconBgColor: "bg-white dark:bg-white",
+        category: "Documentation",
+        path: "/jira/connect",
+        storageKey: "isJiraConnected",
+      });
+    }
 
     if (isSharePointEnabled()) {
       this.register({
