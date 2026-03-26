@@ -1354,3 +1354,53 @@ def build_splunk_rca_prompt(
         alert_details['labels']['severity'] = str(severity)
 
     return build_rca_prompt('splunk', alert_details, providers, user_id)
+
+
+def build_newrelic_rca_prompt(
+    payload: Dict[str, Any],
+    providers: Optional[List[str]] = None,
+    user_id: Optional[str] = None,
+) -> str:
+    """Build RCA prompt from New Relic alert/issue webhook payload."""
+    from routes.newrelic.tasks import extract_newrelic_title
+    title = extract_newrelic_title(payload)
+    state = payload.get("state") or payload.get("currentState") or "unknown"
+    priority = payload.get("priority") or payload.get("severity") or "unknown"
+    condition_name = payload.get("conditionName") or payload.get("condition_name") or ""
+    policy_name = payload.get("policyName") or payload.get("policy_name") or ""
+    issue_url = payload.get("issueUrl") or payload.get("violationChartUrl") or ""
+    account_id = payload.get("accountId") or payload.get("account_id") or ""
+
+    entities = payload.get("entitiesData", {}).get("entities", [])
+    entity_names = [e.get("name", "unknown") for e in entities[:5]] if entities else []
+    targets = payload.get("targets", [])
+    target_names = [t.get("name", "unknown") for t in targets[:5]] if targets else []
+
+    message_parts = []
+    if condition_name:
+        message_parts.append(f"Condition: {condition_name}")
+    if policy_name:
+        message_parts.append(f"Policy: {policy_name}")
+    if entity_names:
+        message_parts.append(f"Entities: {', '.join(entity_names)}")
+    elif target_names:
+        message_parts.append(f"Targets: {', '.join(target_names)}")
+    if payload.get("totalIncidents"):
+        message_parts.append(f"Total incidents: {payload['totalIncidents']}")
+
+    labels: Dict[str, str] = {}
+    if priority and priority != "unknown":
+        labels["priority"] = priority
+    if account_id:
+        labels["accountId"] = str(account_id)
+
+    alert_details = {
+        'title': title,
+        'status': f"{state} (priority: {priority})",
+        'message': ". ".join(message_parts) if message_parts else title,
+        'labels': labels,
+    }
+    if issue_url:
+        alert_details['issueUrl'] = issue_url
+
+    return build_rca_prompt('newrelic', alert_details, providers, user_id)

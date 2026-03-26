@@ -15,14 +15,26 @@ from services.correlation import handle_correlated_alert
 logger = logging.getLogger(__name__)
 
 
-def _summarize_event(payload: Dict[str, Any]) -> str:
-    title = (
+def extract_newrelic_title(payload: Dict[str, Any], default: str = "New Relic Alert") -> str:
+    """Extract alert title from a New Relic webhook payload.
+
+    New Relic uses different payload shapes depending on webhook type:
+    - Workflow notifications use ``title``
+    - Issue payloads use ``issueTitle``
+    - Older/internal formats use ``issue_title``
+    - Classic alert conditions fall back to ``conditionName``
+    """
+    return (
         payload.get("title")
         or payload.get("issueTitle")
         or payload.get("issue_title")
         or payload.get("conditionName")
-        or "New Relic Alert"
+        or default
     )
+
+
+def _summarize_event(payload: Dict[str, Any]) -> str:
+    title = extract_newrelic_title(payload)
     state = payload.get("state") or payload.get("currentState") or payload.get("status")
     priority = payload.get("priority") or payload.get("severity")
     issue_id = payload.get("issueId") or payload.get("issue_id") or payload.get("incidentId")
@@ -142,13 +154,7 @@ def process_newrelic_event(
 
         from utils.db.connection_pool import db_pool
 
-        event_title = (
-            payload.get("title")
-            or payload.get("issueTitle")
-            or payload.get("issue_title")
-            or payload.get("conditionName")
-            or "New Relic Alert"
-        )
+        event_title = extract_newrelic_title(payload)
         severity = _extract_severity(payload)
         service = _extract_service(payload)
         alert_metadata = _build_alert_metadata(payload)

@@ -454,9 +454,9 @@ export function parseNewRelicCommand(toolInput: string): string {
         if (upper.includes("FROM TRANSACTION")) label = "Query transactions"
         else if (upper.includes("FROM LOG")) label = "Query logs"
         else if (upper.includes("FROM SYSTEMSAMPLE") || upper.includes("FROM PROCESSSAMPLE")) label = "Query infrastructure"
-        else if (upper.includes("FROM METRIC") || upper.includes("AVERAGE(") || upper.includes("MAX(")) label = "Query metrics"
         else if (upper.includes("FROM SYNTHETICSCHECK")) label = "Query synthetics"
         else if (upper.includes("FROM SPAN") || upper.includes("FROM DISTRIBUTEDTRACING")) label = "Query traces"
+        else if (upper.includes("FROM METRIC")) label = "Query metrics"
         else if (upper.includes("ERROR")) label = "Query errors"
         const time = timeRange ? ` — ${timeRange}` : ""
         return `New Relic: ${label}${time}`

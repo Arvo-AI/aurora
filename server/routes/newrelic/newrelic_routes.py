@@ -381,20 +381,14 @@ def webhook(user_id: str):
         or payload.get("incident_id")
         or "unknown"
     )
-    title = (
-        payload.get("title")
-        or payload.get("issueTitle")
-        or payload.get("issue_title")
-        or payload.get("conditionName")
-        or "New Relic Alert"
-    )
+    from routes.newrelic.tasks import extract_newrelic_title, process_newrelic_event
+    title = extract_newrelic_title(payload)
 
     logger.info(
         "[NEWRELIC][WEBHOOK] Received alert for user %s: %s (issue=%s)",
         user_id, title, issue_id,
     )
 
-    from routes.newrelic.tasks import process_newrelic_event
     process_newrelic_event.delay(payload, metadata, user_id)
 
     return jsonify({"accepted": True, "issueId": str(issue_id)}), 202
