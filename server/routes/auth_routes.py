@@ -151,19 +151,14 @@ def register():
 
 
 @auth_bp.route('/setup-org', methods=['POST', 'OPTIONS'])
-def setup_org():
+@require_auth_only
+def setup_org(user_id):
     """Create an organization for an authenticated user who doesn't have one.
 
     Body: { org_name }
-    Header: X-User-ID (set by the frontend proxy)
     """
     if request.method == 'OPTIONS':
         return create_cors_response()
-
-    user_id = request.headers.get('X-User-ID')
-    if not user_id:
-        return jsonify({"error": "Authentication required"}), 401
-
     try:
         data = request.get_json()
         if not data:
@@ -312,16 +307,12 @@ def login():
 
 
 @auth_bp.route('/change-password', methods=['POST', 'OPTIONS'])
-def change_password():
+@require_auth_only
+def change_password(user_id):
     """Change user password (requires authentication)."""
     if request.method == 'OPTIONS':
         return create_cors_response()
-    
     try:
-        user_id = request.headers.get('X-User-ID')
-        if not user_id:
-            return jsonify({"error": "Authentication required"}), 401
-        
         data = request.get_json()
         if not data:
             return jsonify({"error": "Invalid request body"}), 400

@@ -304,45 +304,63 @@ Use this path when the target VM has restricted or no outbound internet access (
 
 **Prerequisites:**
 
-- You have received the airtight bundle (`aurora-airtight-<version>-<arch>.tar.gz`) and its checksum file (`aurora-airtight-<version>-<arch>.tar.gz.sha256`)
+- You have received the airtight bundle (a `.tar.gz` file, e.g. `aurora-airtight-4c92267-amd64.tar.gz`)
+- Optionally, its `.sha256` checksum file for integrity verification
 - The target VM meets the [hardware requirements](#1-provision-a-vm) (4+ CPU, 8+ GB RAM, 60 GB SSD)
 - Docker and Docker Compose are installed on the VM (see [Installing Docker](./install-docker) for all OS/architecture combinations, including environments where `curl` and `wget` are blocked)
+- **Optional:** `make` and `jq` installed on the VM — the `Makefile` targets (`make init`, `make prod-airtight`) are convenience wrappers. If you can't install these, see the tip in step 3
 - You can SSH into the VM
 
 ### 1. Transfer the Bundle to the VM
 
-Move the `.tar.gz` and `.sha256` files to the VM using whatever transfer method your organization permits:
+You need the `.tar.gz` tarball on the VM. The `.sha256` checksum file is optional (for verifying the transfer). Use whatever transfer method your organization permits:
 
 ```bash
+BUNDLE=aurora-airtight-4c92267-amd64.tar.gz  # replace with your bundle filename
+
 # SCP
-scp aurora-airtight-*.tar.gz aurora-airtight-*.sha256 user@VM_IP:~/
-
-# GCS bucket (GCP)
-gcloud storage cp aurora-airtight-*.tar.gz aurora-airtight-*.sha256 gs://YOUR_BUCKET/
-# Then on the VM:
-gcloud storage cp gs://YOUR_BUCKET/aurora-airtight-* ~/
-
-# Azure Blob / AWS S3 / internal file server — use your org's standard method
+VM_USER=user        # replace with your SSH username
+VM_IP=10.0.0.5      # replace with your VM's IP
+scp $BUNDLE $VM_USER@$VM_IP:~/
 ```
 
-### 2. Verify the Bundle Integrity
+### 2. (Optional) Verify the Bundle Integrity
+
+If you also transferred the `.sha256` checksum file, verify the tarball wasn't corrupted:
 
 ```bash
 cd ~
-sha256sum -c aurora-airtight-*.sha256
+sha256sum -c $BUNDLE.sha256
+# Expected output: aurora-airtight-4c92267-amd64.tar.gz: OK
 ```
 
-You should see `OK`. If the check fails, the file was corrupted during transfer — re-transfer it.
+If the check fails, the file was corrupted — re-transfer it.
 
-### 3. Clone the Repository
+### 3. Get the Repository
 
 The repo contains configuration files (`docker-compose.airtight.yml`, `Makefile`, `.env.example`) needed to run the stack. No images are pulled during this step.
 
+Download the source archive (`.tar.gz` or `.zip`) from the [releases page](https://github.com/arvo-ai/aurora/releases) on a connected machine, transfer it to the VM alongside the image bundle, then extract:
+
 ```bash
-git clone https://github.com/arvo-ai/aurora.git
-cd aurora
+VERSION=1.2.2  # replace with your release version (GitHub strips the 'v' prefix)
+tar xzf aurora-$VERSION.tar.gz
+cd aurora-$VERSION
+```
+
+:::warning Version must match the image bundle
+The release archive version must match the version used to build the airtight image bundle. Mismatched versions can cause errors — the compose files, configs, and entrypoints in the source must match the images.
+:::
+
+Then initialize:
+
+```bash
 make init
 ```
+
+:::tip Without make
+If `make` is not available, check the `Makefile` for the underlying commands and run them manually.
+:::
 
 ### 4. Configure .env
 
@@ -366,6 +384,17 @@ LLM_PROVIDER_MODE=openrouter   # for OPENROUTER_API_KEY (default)
 LLM_PROVIDER_MODE=direct       # for direct provider keys (Anthropic, OpenAI, Google, etc.)
 ```
 
+:::tip No outbound internet? Use Ollama
+If the VM cannot reach external LLM APIs, run models locally with [Ollama](https://ollama.com/). Install Ollama on the host, pull models while you still have connectivity (or transfer them offline), then configure:
+```bash
+LLM_PROVIDER_MODE=direct
+OLLAMA_BASE_URL=http://host.docker.internal:11434
+MAIN_MODEL=ollama/llama3.1
+RCA_MODEL=ollama/llama3.1
+```
+See [LLM Providers — Ollama](/docs/integrations/llm-providers#ollama-local-models) for full setup details.
+:::
+
 **VM URLs** — replace `YOUR_VM_IP` with the VM's public IP (or internal/VPN IP):
 
 ```bash
@@ -385,8 +414,11 @@ Save and exit (`Ctrl+X`, `Y`, `Enter` in nano).
 
 ### 5. Load Images and Start
 
+Pass the path to the tarball you transferred in step 1:
+
 ```bash
-make prod-airtight AIRTIGHT_BUNDLE=~/aurora-airtight-<version>-<arch>.tar.gz
+BUNDLE=aurora-airtight-4c92267-amd64.tar.gz  # replace with your bundle filename
+make prod-airtight AIRTIGHT_BUNDLE=~/$BUNDLE
 ```
 
 This loads every Docker image from the tarball into the local Docker daemon and starts the full Aurora stack. No outbound network calls are made. First run takes a few minutes while images are loaded.
@@ -435,7 +467,7 @@ Transfer the new tarball and checksum to the VM, then:
 
 ```bash
 make down
-make prod-airtight AIRTIGHT_BUNDLE=~/aurora-airtight-<version>-<arch>.tar.gz
+make prod-airtight AIRTIGHT_BUNDLE=~/aurora-airtight-<new-version>.tar.gz
 ```
 
 The `.env` file stays on the VM and is never part of the bundle.

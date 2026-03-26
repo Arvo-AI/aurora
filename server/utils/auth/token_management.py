@@ -12,6 +12,22 @@ from utils.db.connection_pool import db_pool
 logger = logging.getLogger(__name__)
 
 
+def _log_no_org(provider: str) -> None:
+    logger.warning("[STORE-TOKENS] No org_id resolved, provider %s - token will lack org scope", provider)
+
+
+def _log_store_start(provider: str) -> None:
+    logger.info("[STORE-TOKENS] Starting credential storage for provider: %s", provider)
+
+
+def _log_store_ok(provider: str, elapsed_ms: float) -> None:
+    logger.info("[STORE-TOKENS] Successfully stored credentials for provider %s in %.2fms", provider, elapsed_ms)
+
+
+def _log_store_fail(provider: str, elapsed_ms: float, exc: Exception) -> None:
+    logger.error("[STORE-TOKENS] Failed to store credentials for provider %s after %.2fms: %s: %s", provider, elapsed_ms, type(exc).__name__, exc, exc_info=True)
+
+
 def store_tokens_in_db(user_id: str, token_data: Dict, provider: str,
                       subscription_name: str = None, subscription_id: str = None,
                       org_id: str = None) -> None:
@@ -33,42 +49,32 @@ def store_tokens_in_db(user_id: str, token_data: Dict, provider: str,
             from utils.auth.stateless_auth import resolve_org_id
             org_id = resolve_org_id(user_id)
         except Exception as e:
-            logging.debug("Could not resolve org_id: %s", e)
+            logger.debug("Could not resolve org_id: %s", type(e).__name__)
 
     if not org_id:
-        logging.warning(
-            "[STORE-TOKENS] No org_id resolved, provider %s - token will lack org scope",
-            provider,
-        )
+        _log_no_org(provider)
 
     request_org_id = org_id
 
     try:
-        logger.info("[STORE-TOKENS] Starting credential storage for provider: %s", provider)
-        logger.info(f"[STORE-TOKENS] Has subscription info: {bool(subscription_name or subscription_id)}")
+        _log_store_start(provider)
 
         from utils.secrets.secret_ref_utils import SecretRefManager
 
         secret_manager = SecretRefManager()
 
-        # Create secret name
         safe_user_id = ''.join(c for c in user_id if c.isalnum() or c in '-_')
         secret_name = f"aurora-dev-{safe_user_id}-{provider}-token"
 
-        logger.info(f"[STORE-TOKENS] Generated secret name: {secret_name}")
-        logger.debug(f"[STORE-TOKENS] Token data keys: {list(token_data.keys()) if isinstance(token_data, dict) else 'string'}")
-
-        # Store credentials in Vault
         token_json = json.dumps(token_data) if isinstance(token_data, dict) else str(token_data)
-        logger.info(f"[STORE-TOKENS] Storing credentials in Vault (size: {len(token_json)} bytes)")
 
         try:
             secret_ref = secret_manager.store_secret(secret_name, token_json)
         except Exception as secret_error:
-            logger.error(f"[STORE-TOKENS] Failed to store credentials in Vault: {secret_error}")
+            logger.error("[STORE-TOKENS] Failed to store credentials in Vault: %s: %s", type(secret_error).__name__, secret_error)
             if "not available" in str(secret_error):
                 logger.error("[STORE-TOKENS] Please ensure VAULT_ADDR and VAULT_TOKEN environment variables are configured")
-            raise Exception(f"Vault storage failed: {secret_error}")
+            raise
         
         with db_pool.get_admin_connection() as conn:
             cursor = conn.cursor()
@@ -229,6 +235,26 @@ def store_tokens_in_db(user_id: str, token_data: Dict, provider: str,
                     "is_active = TRUE",
                     (user_id, request_org_id, secret_ref, provider, client_id, tailnet, tailnet_name)
                 )
+            elif provider == "cloudflare":
+                # Cloudflare: Store email, primary account_id as subscription_id, account_name as subscription_name
+                # API token stored in Vault (via secret_ref)
+                cf_email = token_data.get("email") if isinstance(token_data, dict) else None
+                cf_accounts = token_data.get("accounts", []) if isinstance(token_data, dict) else []
+                cf_account_id = cf_accounts[0].get("id") if cf_accounts else None
+                cf_account_name = cf_accounts[0].get("name") if cf_accounts else None
+
+                cursor.execute(
+                    "INSERT INTO user_tokens (user_id, org_id, secret_ref, provider, email, subscription_id, subscription_name) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s) ON CONFLICT (user_id, provider) DO UPDATE "
+                    "SET secret_ref = EXCLUDED.secret_ref, "
+                    "org_id = COALESCE(EXCLUDED.org_id, user_tokens.org_id), "
+                    "email = EXCLUDED.email, "
+                    "subscription_id = EXCLUDED.subscription_id, "
+                    "subscription_name = EXCLUDED.subscription_name, "
+                    "timestamp = CURRENT_TIMESTAMP, "
+                    "is_active = TRUE",
+                    (user_id, request_org_id, secret_ref, provider, cf_email, cf_account_id, cf_account_name)
+                )
             elif provider == "splunk":
                 # Splunk: Store base_url as client_id, server_name as subscription_name, username as email
                 base_url = token_data.get("base_url") if isinstance(token_data, dict) else None
@@ -386,14 +412,15 @@ def store_tokens_in_db(user_id: str, token_data: Dict, provider: str,
         except Exception as cache_error:
             logger.warning(f"[STORE-TOKENS] Failed to clear secret cache: {cache_error}")
 
+        # Schedule prediscovery with debounce (10min delay, deduped via Redis)
+        _schedule_prediscovery(user_id)
+
         elapsed_time = (time.perf_counter() - start_time) * 1000
-        logger.info("[STORE-TOKENS] Successfully stored credentials for provider: %s", provider)
-        logger.info(f"[STORE-TOKENS] Secret reference stored in database")
-        logger.info(f"[STORE-TOKENS] Total operation completed in {elapsed_time:.2f}ms")
+        _log_store_ok(provider, elapsed_time)
 
     except Exception as e:
         elapsed_time = (time.perf_counter() - start_time) * 1000
-        logger.error("[STORE-TOKENS] Failed to store credentials for provider %s after %.2fms: %s", provider, elapsed_time, e)
+        _log_store_fail(provider, elapsed_time, e)
         raise
 
 
@@ -463,3 +490,23 @@ def get_token_data(user_id: str, provider: str, org_id: str | None = None) -> Op
         elapsed_time = (time.perf_counter() - start_time) * 1000
         logger.error("[GET-TOKENS] Failed to fetch credentials for provider(s) %s after %.2fms: %s", provider, elapsed_time, e)
         return {}
+
+
+def _schedule_prediscovery(user_id: str) -> None:
+    """Schedule prediscovery with 10-minute debounce after new connector setup."""
+    try:
+        from utils.cache.redis_client import get_redis_client
+        redis = get_redis_client()
+        if not redis:
+            return
+        key = f"prediscovery_pending:{user_id}"
+        if not redis.set(key, "1", nx=True, ex=600):
+            return
+        from chat.background.prediscovery_task import run_prediscovery
+        run_prediscovery.apply_async(
+            kwargs={"user_id": user_id, "trigger": "new_connector"},
+            countdown=600,
+        )
+        logger.info("[STORE-TOKENS] Scheduled prediscovery for user %s (10min delay)", user_id)
+    except Exception as e:
+        logger.debug("[STORE-TOKENS] Could not schedule prediscovery: %s", e)

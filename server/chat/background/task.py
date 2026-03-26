@@ -173,6 +173,7 @@ def _get_connected_integrations(user_id: str) -> Dict[str, bool]:
         'datadog': False,
         'github': False,
         'confluence': False,
+        'jira': False,
         'sharepoint': False,
         'coroot': False,
         'jenkins': False,
@@ -215,6 +216,20 @@ def _get_connected_integrations(user_id: str) -> Dict[str, bool]:
         )
     except Exception as e:
         logger.debug(f"[BackgroundChat] Error checking Confluence: {e}")
+
+    try:
+        from utils.flags.feature_flags import is_jira_enabled
+        if is_jira_enabled():
+            from utils.auth.token_management import get_token_data as _get_jira_creds
+            jira_creds = _get_jira_creds(user_id, "jira")
+            integrations['jira'] = bool(
+                jira_creds and (jira_creds.get("access_token") or jira_creds.get("pat_token"))
+            )
+            if integrations['jira']:
+                from utils.auth.stateless_auth import get_user_preference
+                integrations['jira_mode'] = get_user_preference(user_id, "jira_mode", default="comment_only") or "comment_only"
+    except Exception as e:
+        logger.debug(f"[BackgroundChat] Error checking Jira: {e}")
 
     try:
         from utils.flags.feature_flags import is_sharepoint_enabled
@@ -457,7 +472,7 @@ def run_background_chat(
                 logger.warning(f"[BackgroundChat] Failed to clear task ID for incident {incident_id}: {e}")
             
             _update_incident_status(incident_id, "analyzed")
-            _update_incident_aurora_status(incident_id, "complete")
+            _update_incident_aurora_status(incident_id, "summarizing")
             
             # Determine severity from RCA if currently unknown
             try:
@@ -484,6 +499,7 @@ def run_background_chat(
                 )
             except Exception as e:
                 logger.error(f"[BackgroundChat] Failed to enqueue post-RCA summarization for incident {incident_id}: {e}")
+                _update_incident_aurora_status(incident_id, "complete")
             
             # Generate final complete visualization
             try:
@@ -549,6 +565,269 @@ def run_background_chat(
                             logger.warning(f"[BackgroundChat] Finally block marked session {session_id} as failed")
             except Exception as cleanup_err:
                 logger.error(f"[BackgroundChat] Failed to cleanup session {session_id}: {cleanup_err}")
+
+
+# ---------------------------------------------------------------------------
+# Jira follow-up helpers
+# ---------------------------------------------------------------------------
+
+_JIRA_TOOL_NAMES = frozenset(('jira_add_comment', 'jira_create_issue'))
+
+
+def _session_has_successful_jira_action(session_id: str) -> bool:
+    """Return True if the session already contains a successful Jira tool call.
+
+    Used after _run_jira_action to confirm the agent actually filed.
+    """
+    from utils.db.connection_pool import db_pool
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT messages FROM chat_sessions WHERE id = %s", (session_id,)
+                )
+                row = cursor.fetchone()
+                if not row or not row[0]:
+                    return False
+                msgs = row[0] if isinstance(row[0], list) else json.loads(row[0])
+                for msg in msgs:
+                    for tc in (msg.get('toolCalls') or []):
+                        if (tc.get('tool_name') or '').lower() in _JIRA_TOOL_NAMES:
+                            output = tc.get('output') or ''
+                            try:
+                                parsed = json.loads(output) if isinstance(output, str) else output
+                                if isinstance(parsed, dict) and parsed.get('status') == 'success':
+                                    return True
+                            except (json.JSONDecodeError, TypeError, ValueError):
+                                if '"success"' in str(output):
+                                    return True
+    except Exception as exc:
+        logger.warning(f"[JiraFollowup] Failed to check existing actions: {exc}")
+    return False
+
+
+def _build_jira_followup_prompt(jira_mode: str) -> str:
+    """Return the prompt for the Jira filing step after investigation completes."""
+    comment_format = (
+        "\n\nFormat the comment using markdown — it will be rendered as rich text in Jira.\n"
+        "Use this structure:\n\n"
+        "## Aurora RCA — {Short Title}\n\n"
+        "### Root Cause\n"
+        "{1-2 sentences. Be specific about the failure mechanism.}\n\n"
+        "### Impact\n"
+        "{1 sentence. Service, duration, user-facing effect.}\n\n"
+        "### Evidence\n"
+        "- {Key data point 1 with specific numbers/timestamps}\n"
+        "- {Key data point 2}\n\n"
+        "### Remediation\n"
+        "1. **Immediate**: {What to do right now}\n"
+        "2. **Follow-up**: {Prevent recurrence}\n\n"
+        "RULES:\n"
+        "- Keep it concise (15-25 lines max)\n"
+        "- Use **bold** for emphasis on key terms\n"
+        "- Use `code` for service names, commands, config values\n"
+        "- Use bullet lists for evidence, numbered lists for remediation steps\n"
+        "- No investigation logs, no 'I analyzed...', third person factual tone\n"
+        "- Include specific numbers, timestamps, and metric values\n\n"
+        "After the tool call succeeds, it returns a `url` field. "
+        "Include this link in your response as a markdown link: [View in Jira](URL)"
+    )
+
+    issue_format = (
+        "\n\nFormat the issue description using markdown — it will be rendered as rich text in Jira.\n"
+        "Use this structure:\n\n"
+        "## Summary\n"
+        "{2-3 sentence overview of the incident.}\n\n"
+        "## Root Cause\n"
+        "{Detailed explanation of what went wrong and why.}\n\n"
+        "## Impact\n"
+        "- **Service**: {affected service(s)}\n"
+        "- **Duration**: {how long}\n"
+        "- **Severity**: {critical/high/medium/low}\n"
+        "- **User-facing**: {yes/no and what users saw}\n\n"
+        "## Evidence\n"
+        "- {Key finding 1 with specific data}\n"
+        "- {Key finding 2}\n"
+        "- {Key finding 3}\n\n"
+        "## Remediation\n"
+        "### Immediate\n"
+        "1. {Step 1}\n"
+        "2. {Step 2}\n\n"
+        "### Long-term\n"
+        "1. {Preventive measure 1}\n"
+        "2. {Preventive measure 2}\n\n"
+        "RULES:\n"
+        "- Use **bold** for key terms, `code` for service names/commands\n"
+        "- Use bullet lists for evidence, numbered lists for action items\n"
+        "- No investigation logs, third person factual tone\n"
+        "- Include specific numbers, timestamps, metric values\n\n"
+        "For the summary field, use: 'Incident: {service} — {short description}'\n\n"
+        "After the tool call succeeds, it returns a `url` field. "
+        "Include this link in your response as a markdown link: [View in Jira](URL)"
+    )
+
+    base = (
+        "Your investigation is complete. Now file your findings in Jira.\n\n"
+        "IMPORTANT: Use the project key from issues you already found earlier "
+        "in this conversation. Do NOT guess project keys like 'OPS' or 'PROJECT' "
+        "— use the real key you saw in search results.\n\n"
+        "1. Search for an existing Jira issue related to this incident:\n"
+        "   jira_search_issues(jql='text ~ \"<service_name>\" AND type in "
+        "(Bug, Incident) ORDER BY updated DESC')\n"
+    )
+    if jira_mode == "comment_only":
+        return (
+            base
+            + "2. Add your RCA findings as a single comment on the most relevant issue "
+            "using jira_add_comment.\n\n"
+            "You are in COMMENT ONLY mode. Do NOT create new issues.\n"
+            "File EXACTLY ONE comment. Never more.\n\n"
+            "Execute the tool calls now — do not just describe what you would do."
+            + comment_format
+        )
+    return (
+        base
+        + "2. If a matching issue is found:\n"
+        "   - Add your RCA findings as a single comment using jira_add_comment.\n"
+        "   - Do NOT create a new issue.\n"
+        "3. If NO matching issue is found:\n"
+        "   - Create one using jira_create_issue with:\n"
+        "     project_key from the search results, "
+        "summary like 'Incident: <service> — <short description>', issue_type='Bug'.\n"
+        "   - Put the full RCA findings in the description field.\n"
+        "   - Do NOT add a separate comment — the description is enough.\n\n"
+        "File EXACTLY ONE Jira action (one comment OR one issue). Never both.\n\n"
+        "Execute the tool calls now — do not just describe what you would do."
+        + issue_format
+    )
+
+
+def _snapshot_session_messages(session_id: str) -> list:
+    """Return the current UI messages list for the session."""
+    from utils.db.connection_pool import db_pool
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT messages FROM chat_sessions WHERE id = %s", (session_id,)
+                )
+                row = cursor.fetchone()
+                if row and row[0]:
+                    return row[0] if isinstance(row[0], list) else json.loads(row[0])
+    except Exception as exc:
+        logger.error(f"[JiraFollowup] Failed to snapshot messages: {exc}")
+    return []
+
+
+def _merge_investigation_messages(session_id: str, investigation_messages: list, followup_prompt_prefix: str = "") -> None:
+    """Replace session messages with investigation + Jira-only follow-up messages.
+    
+    The Jira follow-up workflow saves compressed investigation context + Jira
+    messages to the session. We need the full investigation messages followed by
+    only the new Jira-specific messages (to avoid duplicating the compressed
+    context that the workflow injected).
+    """
+    if not investigation_messages:
+        return
+    from utils.db.connection_pool import db_pool
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT messages FROM chat_sessions WHERE id = %s", (session_id,)
+                )
+                row = cursor.fetchone()
+                followup = (row[0] if isinstance(row[0], list) else json.loads(row[0])) \
+                    if row and row[0] else []
+
+                # Find where the Jira-specific messages start by looking for the
+                # follow-up prompt. Everything before it is re-injected context
+                # that duplicates the investigation.
+                jira_start_idx = 0
+                if followup_prompt_prefix:
+                    for i, msg in enumerate(followup):
+                        text = msg.get('text') or msg.get('content') or ''
+                        if msg.get('sender') == 'user' and text.startswith(followup_prompt_prefix[:80]):
+                            jira_start_idx = i
+                            break
+
+                jira_only = followup[jira_start_idx:] if jira_start_idx > 0 else followup
+                merged = investigation_messages + jira_only
+                cursor.execute(
+                    "UPDATE chat_sessions SET messages = %s::jsonb WHERE id = %s",
+                    (json.dumps(merged), session_id),
+                )
+                conn.commit()
+        logger.info(
+            f"[JiraFollowup] Merged messages: {len(investigation_messages)} investigation "
+            f"+ {len(jira_only)} jira-only (skipped {len(followup) - len(jira_only)} context duplicates) "
+            f"= {len(merged)} total"
+        )
+    except Exception as exc:
+        logger.error(f"[JiraFollowup] Failed to merge messages: {exc}")
+
+
+async def _run_jira_action(
+    *,
+    session_id: str,
+    user_id: str,
+    incident_id: Optional[str],
+    provider_preference: Optional[List[str]],
+    rca_context: dict,
+    mode: str,
+    wf,
+    background_ws,
+) -> None:
+    """Run the Jira filing step after the RCA investigation completes.
+
+    This is a deterministic second phase: investigate first, then file.
+    """
+    from chat.backend.agent.utils.state import State
+    from chat.backend.agent.llm import ModelConfig
+    from main_chatbot import process_workflow_async
+
+    jira_mode = rca_context.get('integrations', {}).get('jira_mode', 'comment_only')
+    followup_text = _build_jira_followup_prompt(jira_mode)
+
+    investigation_messages = _snapshot_session_messages(session_id)
+    logger.info(f"[JiraAction] Saved {len(investigation_messages)} investigation messages")
+
+    # Flush any pending async context save so the Jira follow-up can load
+    # the full investigation history from the DB.
+    try:
+        from chat.backend.agent.utils.persistence.context_manager import ContextManager
+        await ContextManager.flush_session(session_id)
+    except Exception as exc:
+        logger.warning(f"[JiraAction] Failed to flush context for {session_id}: {exc}")
+
+    followup_state = State(
+        user_id=user_id,
+        session_id=session_id,
+        incident_id=incident_id,
+        provider_preference=provider_preference,
+        selected_project_id=None,
+        messages=[HumanMessage(content=followup_text)],
+        question=followup_text,
+        model=ModelConfig.RCA_MODEL,
+        mode=mode,
+        is_background=True,
+        rca_context=rca_context,
+    )
+    logger.info(f"[JiraAction] Starting Jira step for {session_id} (jira_mode={jira_mode})")
+
+    try:
+        await process_workflow_async(wf, followup_state, background_ws, user_id, incident_id=incident_id)
+        if hasattr(wf, '_wait_for_ongoing_tool_calls'):
+            await wf._wait_for_ongoing_tool_calls()
+    except Exception as exc:
+        logger.error(f"[JiraAction] Failed: {exc}")
+        _merge_investigation_messages(session_id, investigation_messages,
+                                       followup_prompt_prefix=followup_text[:80])
+        return
+
+    _merge_investigation_messages(session_id, investigation_messages,
+                                   followup_prompt_prefix=followup_text[:80])
+    logger.info(f"[JiraAction] Completed for {session_id}")
 
 
 async def _execute_background_chat(
@@ -665,6 +944,21 @@ async def _execute_background_chat(
         # The workflow stream might complete, but tool calls could still be running
         if hasattr(wf, '_wait_for_ongoing_tool_calls'):
             await wf._wait_for_ongoing_tool_calls()
+
+        # --- Phase 2: Jira action ---
+        # Investigation is done. Now deterministically file in Jira.
+        if rca_context and rca_context.get('integrations', {}).get('jira') \
+                and not _session_has_successful_jira_action(session_id):
+            await _run_jira_action(
+                session_id=session_id,
+                user_id=user_id,
+                incident_id=incident_id,
+                provider_preference=provider_preference,
+                rca_context=rca_context,
+                mode=mode,
+                wf=wf,
+                background_ws=background_ws,
+            )
         
         if incident_id:
             # Check if status was already set to complete (shouldn't happen, but log if it does)

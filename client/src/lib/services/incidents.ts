@@ -10,7 +10,7 @@ import { apiGet, apiPost, apiRequest, type ApiError } from '@/lib/services/api-c
 
 export type AlertSource = 'netdata' | 'datadog' | 'grafana' | 'prometheus' | 'pagerduty' | 'splunk' | 'dynatrace' | 'coroot' | 'bigpanda';
 export type IncidentStatus = 'investigating' | 'analyzed' | 'merged' | 'resolved';
-export type AuroraStatus = 'running' | 'complete' | 'error';
+export type AuroraStatus = 'running' | 'summarizing' | 'complete' | 'error';
 export type SuggestionRisk = 'safe' | 'low' | 'medium' | 'high';
 export type SuggestionType = 'diagnostic' | 'mitigation' | 'communication' | 'fix';
 
@@ -344,7 +344,7 @@ export const incidentsService = {
   async getActiveCount(): Promise<number> {
     try {
       const incidents = await this.getIncidents();
-      return incidents.filter(i => i.auroraStatus === 'running').length;
+      return incidents.filter(i => i.auroraStatus === 'running' || i.auroraStatus === 'summarizing').length;
     } catch (error) {
       console.error('Error getting active count:', error);
       return 0;
@@ -418,6 +418,7 @@ export const incidentsService = {
   getAuroraStatusLabel(status: AuroraStatus): string {
     switch (status) {
       case 'running': return 'Aurora Investigating...';
+      case 'summarizing': return 'Generating Summary...';
       case 'complete': return 'Analysis Complete';
       case 'error': return 'Analysis Error';
     }

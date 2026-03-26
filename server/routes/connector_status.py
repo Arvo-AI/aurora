@@ -185,6 +185,53 @@ def _check_confluence(creds: Dict[str, Any]) -> Dict[str, Any]:
         return {"connected": False}
 
 
+def _check_jira(creds: Dict[str, Any]) -> Dict[str, Any]:
+    """Mirrors /atlassian/status for Jira — validates via Jira API + OAuth refresh."""
+    from connectors.jira_connector.client import JiraClient
+    from connectors.atlassian_auth.auth import refresh_access_token
+
+    auth_type = (creds.get("auth_type") or "oauth").lower()
+    base_url = creds.get("base_url")
+    token = creds.get("pat_token") if auth_type == "pat" else creds.get("access_token")
+    if not base_url or not token:
+        return {"connected": False}
+
+    cloud_id = creds.get("cloud_id") if auth_type == "oauth" else None
+    try:
+        client = JiraClient(base_url, token, auth_type=auth_type, cloud_id=cloud_id)
+        client.get_myself()
+        return {"connected": True, "baseUrl": base_url}
+    except requests.HTTPError as exc:
+        status_code = exc.response.status_code if exc.response is not None else None
+        if status_code == 401 and auth_type == "oauth":
+            refresh_tok = creds.get("refresh_token")
+            if not refresh_tok:
+                return {"connected": False}
+            try:
+                token_data = refresh_access_token(refresh_tok)
+                new_access = token_data.get("access_token")
+                if not new_access:
+                    return {"connected": False}
+                updated = dict(creds)
+                updated["access_token"] = new_access
+                if token_data.get("refresh_token"):
+                    updated["refresh_token"] = token_data["refresh_token"]
+                expires_in = token_data.get("expires_in")
+                if expires_in:
+                    updated["expires_at"] = int(_time.time()) + int(expires_in)
+                uid = creds.get("_user_id")
+                if uid:
+                    store_tokens_in_db(uid, updated, "jira")
+                client = JiraClient(base_url, new_access, auth_type=auth_type, cloud_id=cloud_id)
+                client.get_myself()
+                return {"connected": True, "baseUrl": base_url}
+            except Exception:
+                return {"connected": False}
+        return {"connected": False}
+    except Exception:
+        return {"connected": False}
+
+
 def _check_slack(creds: Dict[str, Any]) -> Dict[str, Any]:
     """Mirrors GET /slack/ — validates via Slack auth.test API."""
     access_token = creds.get("access_token")
@@ -504,6 +551,7 @@ PROVIDER_CHECKERS = {
     "splunk": _check_splunk,
     "coroot": _check_coroot,
     "confluence": _check_confluence,
+    "jira": _check_jira,
     "slack": _check_slack,
     "github": _check_github,
     "bitbucket": _check_bitbucket,

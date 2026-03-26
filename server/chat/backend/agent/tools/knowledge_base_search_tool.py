@@ -109,7 +109,7 @@ def knowledge_base_search(
 
 
 # Tool description for the agent
-KNOWLEDGE_BASE_SEARCH_DESCRIPTION = """Search your knowledge base for relevant documentation, runbooks, or context.
+KNOWLEDGE_BASE_SEARCH_DESCRIPTION = """Search your knowledge base for relevant documentation, runbooks, or infrastructure topology.
 
 IMPORTANT: Use this tool at the START of any investigation to check for existing documentation.
 
@@ -117,13 +117,14 @@ When to use:
 - Before investigating any service or system
 - When you encounter an error or issue
 - To find runbooks with troubleshooting steps
+- To understand service dependencies and deployment chains (auto-discovery findings)
 - To check for past incident reports or postmortems
-- To understand service architecture and dependencies
 
 Search tips:
-- Include the service name: "spanner latency troubleshooting"
+- Include the service name: "payment-service deployment chain"
 - Include the error type: "connection timeout redis"
-- Search for patterns: "batch job conflict"
+- Search for topology: "what connects to database X"
 - Search for procedures: "escalation process database"
 
-Returns relevant excerpts with source file attribution."""
+Returns relevant excerpts with source file attribution. Results prefixed with [Auto-Discovery] contain
+infrastructure topology mapped automatically (deployment chains, dependencies, monitoring)."""

@@ -28,6 +28,7 @@ import {
 } from "lucide-react";
 import { userPreferencesService } from "@/lib/services/incident-feedback";
 import { useUser } from "@/hooks/useAuthHooks";
+import { DiscoverySettings } from "@/components/DiscoverySettings";
 import { canWrite as checkCanWrite } from "@/lib/roles";
 import { getEnv } from '@/lib/env';
 
@@ -629,6 +630,8 @@ export function KnowledgeBaseSettings() {
           )}
         </CardContent>
       </Card>
+
+      <DiscoverySettings />
     </div>
   );
 }

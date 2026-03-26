@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle, CardContent, CardFooter } from "@/components/ui/card";
@@ -19,6 +19,8 @@ import { useGraphDiscoveryStatus } from "@/hooks/use-graph-discovery-status";
 import { useUser } from "@/hooks/useAuthHooks";
 import { canWrite as checkCanWrite } from "@/lib/roles";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+
+let pendingGitHubDialog = false;
 
 interface ConnectorCardProps {
   connector: ConnectorConfig;
@@ -59,6 +61,13 @@ export default function ConnectorCard({ connector, connectedOverride }: Connecto
     slackStatus,
     checkGitHubStatus,
   } = useConnectorStatus(connector, userId, connectedOverride);
+
+  useEffect(() => {
+    if (pendingGitHubDialog && (githubStatus.isAuthenticated || isConnected)) {
+      pendingGitHubDialog = false;
+      setShowGitHubDialog(true);
+    }
+  }, [githubStatus.isAuthenticated, isConnected]);
 
   // Graph discovery status (only active for supported cloud providers)
   const { syncStatus } = useGraphDiscoveryStatus(connector.id, isConnected, userId);
@@ -101,7 +110,9 @@ export default function ConnectorCard({ connector, connectedOverride }: Connecto
 
   const handleConnect = async () => {
     if (connector.id === "github") {
-      if (!isConnected) {
+      const isGitHubAuthed = hasOverride ? isConnected : githubStatus.isAuthenticated;
+      if (!isGitHubAuthed) {
+        pendingGitHubDialog = true;
         await handleGitHubOAuth(checkGitHubStatus);
       } else {
         setShowGitHubDialog(true);
@@ -190,13 +201,17 @@ export default function ConnectorCard({ connector, connectedOverride }: Connecto
   const IconComponent = connector.icon;
 
   function renderStatusBadge() {
-    // GitHub and Bitbucket use two-tier status (authenticated vs fully connected)
+    // GitHub and Bitbucket use dedicated two-tier status hooks as the sole
+    // source of truth. Never fall through to the generic isConnected path
+    // for these connectors — that would flash "Connected" while the
+    // dedicated hook is still loading.
     const devToolStatus =
       connector.id === "github" ? githubStatus :
       connector.id === "bitbucket" ? bitbucketStatus :
       null;
 
-    if (devToolStatus?.isAuthenticated) {
+    if (devToolStatus) {
+      if (!devToolStatus.isAuthenticated) return null;
       return devToolStatus.isConnected ? (
         <div className="flex items-center gap-1 text-green-600 dark:text-green-500">
           <Check className="h-4 w-4" />
@@ -444,6 +459,10 @@ export default function ConnectorCard({ connector, connectedOverride }: Connecto
         showOvhDialog={showOvhDialog}
         showScalewayDialog={showScalewayDialog}
         onGitHubDialogChange={(open) => {
+          if (!open && githubStatus.isAuthenticated && !githubStatus.isConnected) {
+            toast({ title: "Select at least one repository", description: "GitHub requires at least one connected repo to be useful during investigations.", variant: "destructive" });
+            return;
+          }
           setShowGitHubDialog(open);
           if (!open) {
             setTimeout(() => {

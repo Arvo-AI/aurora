@@ -842,7 +842,7 @@ def get_user_cloud_credentials(user_id: str) -> Dict[str, Dict]:
                 from utils.auth.stateless_auth import get_credentials_from_db
                 
                 # Use the fallback approach
-                for provider in ["aws", "azure", "gcp", "github", "github_repo_selection", "ovh"]:
+                for provider in ["aws", "azure", "gcp", "github", "ovh"]:
                     try:
                         provider_creds = get_credentials_from_db(user_id, provider)
                         if provider_creds:

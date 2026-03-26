@@ -57,6 +57,16 @@ function StatusPill({ status }: { status: AuroraStatus }) {
           <span className="text-xs font-semibold text-orange-400">Aurora Investigating...</span>
         </div>
       );
+    case 'summarizing':
+      return (
+        <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-blue-500/10 border border-blue-500/30">
+          <span className="relative flex h-2.5 w-2.5">
+            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
+            <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-blue-500"></span>
+          </span>
+          <span className="text-xs font-semibold text-blue-400">Generating Summary...</span>
+        </div>
+      );
     case 'complete':
       return (
         <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-green-500/10 border border-green-500/30">
@@ -471,7 +481,7 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
       {incident.status !== 'merged' ? (
         <div>
           <div className="flex items-center gap-3 mb-4">
-            {incident.auroraStatus === 'running' && (
+            {(incident.auroraStatus === 'running' || incident.auroraStatus === 'summarizing') && (
               <h2 className="text-lg font-medium text-white">Current Summary</h2>
             )}
             
@@ -489,7 +499,7 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
               aria-label={showThoughts ? "Hide thoughts panel" : "Show thoughts panel"}
               aria-expanded={showThoughts}
             >
-              <span>{incident.auroraStatus === 'running' ? 'Thinking' : 'View Thoughts'}</span>
+              <span>{incident.auroraStatus === 'running' || incident.auroraStatus === 'summarizing' ? 'Thinking' : 'View Thoughts'}</span>
               <ChevronRight className={`w-3 h-3 transition-transform ${showThoughts ? 'rotate-90' : ''}`} />
             </button>
           </div>
@@ -543,7 +553,7 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
             </button>
           )}
           
-          {(incident.auroraStatus === 'complete' || incident.auroraStatus === 'running') && (
+          {(incident.auroraStatus === 'complete' || incident.auroraStatus === 'running' || incident.auroraStatus === 'summarizing') && (
             <button
               onClick={() => setShowVisualization(!showVisualization)}
               className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-md text-xs transition-colors ${
@@ -602,7 +612,7 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
       />
 
       {/* Infrastructure Visualization */}
-      {showVisualization && (incident.auroraStatus === 'complete' || incident.auroraStatus === 'running') && (
+      {showVisualization && (incident.auroraStatus === 'complete' || incident.auroraStatus === 'running' || incident.auroraStatus === 'summarizing') && (
         <>
           <div className="border-t border-zinc-800" />
           <div>

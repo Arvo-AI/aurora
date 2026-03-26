@@ -76,6 +76,7 @@ def get_chat_sessions(user_id):
                 FROM chat_sessions cs
                 LEFT JOIN users u ON cs.user_id = u.id
                 WHERE cs.org_id = %s AND cs.is_active = true
+                  AND (cs.ui_state->'triggerMetadata'->>'source') IS DISTINCT FROM 'prediscovery'
                 ORDER BY cs.updated_at DESC
             """, (org_id,))
         else:
@@ -88,6 +89,7 @@ def get_chat_sessions(user_id):
                        NULL as user_name
                 FROM chat_sessions cs
                 WHERE cs.org_id = %s AND cs.user_id = %s AND cs.is_active = true
+                  AND (cs.ui_state->'triggerMetadata'->>'source') IS DISTINCT FROM 'prediscovery'
                 ORDER BY cs.updated_at DESC
             """, (org_id, user_id))
         

@@ -221,6 +221,14 @@ class ContextManager:
             return False
     
     @classmethod
+    async def flush_session(cls, session_id: str) -> bool:
+        """Flush any pending async save for a session so its context is in the DB."""
+        instance = cls._get_instance()
+        if hasattr(instance, 'async_queue'):
+            return await instance.async_queue.flush_session(session_id)
+        return True
+
+    @classmethod
     def cleanup(cls):
         """Cleanup resources on shutdown."""
         if hasattr(cls, '_instance'):

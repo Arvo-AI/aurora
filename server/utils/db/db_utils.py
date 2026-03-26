@@ -291,6 +291,23 @@ def initialize_tables():
                         UNIQUE(user_id, provider)
                     );
                 """,
+                "github_connected_repos": """
+                    CREATE TABLE IF NOT EXISTS github_connected_repos (
+                        id SERIAL PRIMARY KEY,
+                        user_id VARCHAR(255) NOT NULL,
+                        org_id VARCHAR(255),
+                        repo_full_name VARCHAR(512) NOT NULL,
+                        repo_id INTEGER,
+                        default_branch VARCHAR(255),
+                        is_private BOOLEAN DEFAULT false,
+                        metadata_summary TEXT,
+                        metadata_status VARCHAR(20) DEFAULT 'pending',
+                        repo_data JSONB,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE(user_id, repo_full_name)
+                    );
+                """,
                 "user_manual_vms": """
                     CREATE TABLE IF NOT EXISTS user_manual_vms (
                         id SERIAL PRIMARY KEY,
@@ -1040,6 +1057,7 @@ def initialize_tables():
             rls_tables.append("incident_alerts")
             rls_tables.append("incident_feedback")
             rls_tables.append("postmortems")
+            rls_tables.append("github_connected_repos")
 
 
             # Migration: Add rca_celery_task_id column to incidents table if it doesn't exist
@@ -1560,6 +1578,20 @@ def initialize_tables():
                     logging.warning(f"Error creating index: {e}")
                     conn.rollback()
 
+            # Migration: Add Jira columns to postmortems table
+            try:
+                cursor.execute("""
+                    ALTER TABLE postmortems ADD COLUMN IF NOT EXISTS jira_issue_id TEXT;
+                    ALTER TABLE postmortems ADD COLUMN IF NOT EXISTS jira_issue_key TEXT;
+                    ALTER TABLE postmortems ADD COLUMN IF NOT EXISTS jira_issue_url TEXT;
+                    ALTER TABLE postmortems ADD COLUMN IF NOT EXISTS jira_exported_at TIMESTAMP;
+                """)
+                logging.info("Added Jira columns to postmortems table (if not exist).")
+                conn.commit()
+            except Exception as e:
+                logging.warning(f"Error adding Jira columns to postmortems: {e}")
+                conn.rollback()
+
             # View creation moved to after org_id migration (see below)
 
             # Early migration: ensure org_id column exists on all tables
@@ -1752,6 +1784,7 @@ def initialize_tables():
                 "cloud_billing_usage", "provider_metrics",
                 "knowledge_base_memory", "knowledge_base_documents",
                 "incident_feedback", "postmortems",
+                "github_connected_repos",
             ]
             for tbl in org_id_tables:
                 try:
