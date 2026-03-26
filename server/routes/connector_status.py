@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 connector_status_bp = Blueprint("connector_status", __name__)
 
 LIVE_CHECK_TIMEOUT = 10
-HTTP_TIMEOUT = 8
+HTTP_TIMEOUT = (3.5, 5)
 
 
 # ── Providers with live API validation ──────────────────────────────
