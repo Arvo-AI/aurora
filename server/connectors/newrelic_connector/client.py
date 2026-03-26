@@ -229,10 +229,10 @@ class NewRelicClient:
     def execute_nrql(self, nrql: str, timeout: int = 30) -> Dict[str, Any]:
         """Execute a NRQL query against the configured account."""
         query = """
-        {
+        query($accountId: Int!, $nrql: Nrql!, $timeout: Seconds) {
             actor {
-                account(id: %s) {
-                    nrql(query: "%s", timeout: %d) {
+                account(id: $accountId) {
+                    nrql(query: $nrql, timeout: $timeout) {
                         results
                         metadata {
                             facets
@@ -243,8 +243,13 @@ class NewRelicClient:
                 }
             }
         }
-        """ % (self.account_id, self._sanitize_graphql_string(nrql), timeout)
-        data = self._execute_graphql(query)
+        """
+        variables = {
+            "accountId": int(self.account_id),
+            "nrql": nrql,
+            "timeout": timeout,
+        }
+        data = self._execute_graphql(query, variables=variables)
         nrql_data = data.get("actor", {}).get("account", {}).get("nrql", {})
         return {
             "results": nrql_data.get("results", []),
@@ -268,15 +273,18 @@ class NewRelicClient:
             filter_parts.append(f"states: [{states_str}]")
         if since_epoch_ms:
             filter_parts.append(f"startTime: {since_epoch_ms}")
-        filter_clause = ", ".join(filter_parts)
-        filter_block = f"filter: {{ {filter_clause} }}" if filter_clause else ""
+
+        issue_args = [f"first: {page_size}"]
+        if filter_parts:
+            filter_clause = ", ".join(filter_parts)
+            issue_args.insert(0, f"filter: {{ {filter_clause} }}")
 
         query = """
         {
             actor {
                 account(id: %s) {
                     aiIssues {
-                        issues(%s, first: %d) {
+                        issues(%s) {
                             issues {
                                 issueId
                                 title
@@ -299,8 +307,12 @@ class NewRelicClient:
                 }
             }
         }
-        """ % (self.account_id, filter_block, page_size)
-        data = self._execute_graphql(query)
+        """ % (self.account_id, ", ".join(issue_args))
+        try:
+            data = self._execute_graphql(query)
+        except Exception:
+            logger.exception("[NEWRELIC] get_issues GraphQL query failed")
+            raise
         issues_data = (
             data.get("actor", {})
             .get("account", {})
@@ -320,15 +332,24 @@ class NewRelicClient:
         entity_type: Optional[str] = None,
         limit: int = 25,
     ) -> List[Dict[str, Any]]:
-        """Search for entities (APM apps, hosts, etc.) via NerdGraph."""
-        search_query = query_str or ""
-        type_filter = f', types: "{self._sanitize_graphql_string(entity_type)}"' if entity_type else ""
+        """Search for entities (APM apps, hosts, etc.) via NerdGraph.
+
+        Scopes results to the configured account_id by appending an
+        accountId filter to the entity search query.
+        """
+        parts = []
+        if query_str:
+            parts.append(query_str)
+        parts.append(f"accountId = '{self.account_id}'")
+        if entity_type:
+            parts.append(f"type = '{self._sanitize_graphql_string(entity_type)}'")
+        combined_query = " AND ".join(parts)
 
         gql = """
-        {
+        query($query: String!, $limit: Int) {
             actor {
-                entitySearch(query: "%s"%s) {
-                    results(limit: %d) {
+                entitySearch(query: $query) {
+                    results(limit: $limit) {
                         entities {
                             guid
                             name
@@ -342,8 +363,9 @@ class NewRelicClient:
                 }
             }
         }
-        """ % (self._sanitize_graphql_string(search_query), type_filter, limit)
-        data = self._execute_graphql(gql)
+        """
+        variables = {"query": combined_query, "limit": limit}
+        data = self._execute_graphql(gql, variables=variables)
         return (
             data.get("actor", {})
             .get("entitySearch", {})

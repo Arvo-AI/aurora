@@ -77,15 +77,17 @@ _UNIT_MAP = {
 
 
 def _parse_time_range(time_range: str) -> str:
-    """Convert a human time range like '1 hour' into NRQL SINCE clause value."""
+    """Convert a human time range like '1 hour' into NRQL SINCE clause value.
+
+    Only accepts structured relative patterns (e.g. '1 hour', '30 minutes').
+    Rejects freeform strings to prevent injection of extra NRQL tokens.
+    """
     stripped = time_range.strip().lower()
     m = _RELATIVE_RE.match(stripped)
     if m:
         amount = int(m.group(1))
         unit = _UNIT_MAP.get(m.group(2).rstrip("s"), m.group(2))
         return f"{amount} {unit} ago"
-    if "ago" in stripped:
-        return stripped
     return "1 hour ago"
 
 
@@ -98,11 +100,19 @@ def _inject_since_clause(nrql: str, time_range: str) -> str:
     return f"{nrql} SINCE {since_val}"
 
 
+_LIMIT_RE = re.compile(r"\bLIMIT\s+(\d+|MAX)\b", re.IGNORECASE)
+
+
 def _inject_limit_clause(nrql: str, limit: int) -> str:
-    """Append a LIMIT clause if the query doesn't already have one."""
-    if "LIMIT" in nrql.upper():
+    """Ensure the query has a LIMIT clause capped at the given value."""
+    cap = min(limit, MAX_RESULTS_CAP)
+    m = _LIMIT_RE.search(nrql)
+    if m:
+        existing = m.group(1)
+        if existing.upper() == "MAX" or int(existing) > cap:
+            return _LIMIT_RE.sub(f"LIMIT {cap}", nrql, count=1)
         return nrql
-    return f"{nrql} LIMIT {limit}"
+    return f"{nrql} LIMIT {cap}"
 
 
 # ---------------------------------------------------------------------------
@@ -154,7 +164,13 @@ def _truncate_results(results: list, max_size: int = MAX_OUTPUT_SIZE) -> tuple:
 def is_newrelic_connected(user_id: str) -> bool:
     """Check if a user has valid New Relic credentials stored."""
     creds = _get_stored_newrelic_credentials(user_id)
-    return _build_client_from_creds(creds) is not None if creds else False
+    if not creds:
+        return False
+    try:
+        return _build_client_from_creds(creds) is not None
+    except ValueError as exc:
+        logger.warning("[NEWRELIC-TOOL] Invalid stored credentials for user=%s: %s", user_id, exc)
+        return False
 
 
 def _get_client(user_id: str) -> tuple:
@@ -162,7 +178,11 @@ def _get_client(user_id: str) -> tuple:
     creds = _get_stored_newrelic_credentials(user_id)
     if not creds:
         return None, json.dumps({"error": "New Relic not connected. Please connect New Relic first."})
-    client = _build_client_from_creds(creds)
+    try:
+        client = _build_client_from_creds(creds)
+    except ValueError as exc:
+        logger.warning("[NEWRELIC-TOOL] Invalid stored credentials for user=%s: %s", user_id, exc)
+        return None, json.dumps({"error": "Stored New Relic credentials are invalid. Please reconnect."})
     if not client:
         return None, json.dumps({"error": "New Relic credentials are incomplete. Please reconnect."})
     return client, None
@@ -212,8 +232,7 @@ def _handle_issues(client: NewRelicClient, query: str, time_range: str, limit: i
     else:
         states = ["ACTIVATED", "CREATED"]
 
-    since_ms = int((datetime.now(timezone.utc) - timedelta(hours=24)).timestamp() * 1000)
-    data = client.get_issues(states=states, since_epoch_ms=since_ms, page_size=min(limit, MAX_RESULTS_CAP))
+    data = client.get_issues(states=states, page_size=min(limit, MAX_RESULTS_CAP))
     issues = data.get("issues", [])
 
     return {

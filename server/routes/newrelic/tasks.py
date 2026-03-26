@@ -163,7 +163,7 @@ def process_newrelic_event(
                 received_at = datetime.now(timezone.utc)
 
                 # Persist raw event
-                issue_id_str = alert_metadata.get("issueId") or "unknown"
+                issue_id_str = alert_metadata.get("issueId") or None
                 priority_str = (payload.get("priority") or payload.get("severity") or "")[:20]
                 state_str = (payload.get("state") or payload.get("currentState") or "")[:50]
                 entity_names_str = ", ".join(
@@ -175,7 +175,9 @@ def process_newrelic_event(
                     INSERT INTO newrelic_events
                     (user_id, org_id, issue_id, issue_title, priority, state, entity_names, payload, received_at)
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (org_id, issue_id) DO UPDATE
+                    ON CONFLICT (org_id, issue_id)
+                    WHERE issue_id IS NOT NULL
+                    DO UPDATE
                     SET issue_title = EXCLUDED.issue_title,
                         priority = EXCLUDED.priority,
                         state = EXCLUDED.state,

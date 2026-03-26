@@ -64,7 +64,6 @@ celery_app.conf.update(
         'routes.knowledge_base.tasks',
         'services.discovery.tasks',
         'utils.aws.credential_refresh',
-        'routes.newrelic.tasks',
     ],
     # Periodic task schedule
     beat_schedule={
