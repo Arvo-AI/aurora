@@ -196,6 +196,9 @@ def run_prediscovery(
             mode="prediscovery",
         ))
 
+        from chat.background.task import _update_session_status
+        _update_session_status(session_id, "completed")
+
         logger.info(f"[Prediscovery] Completed for user {user_id}, session {session_id}")
         return {"status": "completed", "session_id": session_id, "user_id": user_id}
 
@@ -207,21 +210,50 @@ def run_prediscovery(
         return {"status": "error", "user_id": user_id, "error": str(e)}
 
 
+DEFAULT_INTERVAL_HOURS = 24
+MIN_INTERVAL_HOURS = 1
+
+
+def _should_run_for_user(user_id: str) -> bool:
+    """Check if enough time has passed since last prediscovery for this user."""
+    from utils.auth.stateless_auth import get_user_preference
+    from utils.db.connection_pool import db_pool
+    from datetime import datetime, timedelta
+
+    interval = get_user_preference(user_id, "prediscovery_interval_hours", DEFAULT_INTERVAL_HOURS)
+    interval = max(MIN_INTERVAL_HOURS, int(interval or DEFAULT_INTERVAL_HOURS))
+
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT created_at FROM chat_sessions
+                    WHERE user_id = %s
+                      AND ui_state->'triggerMetadata'->>'source' = 'prediscovery'
+                    ORDER BY created_at DESC LIMIT 1
+                """, (user_id,))
+                row = cur.fetchone()
+                if not row:
+                    return True
+                return datetime.now() - row[0] > timedelta(hours=interval)
+    except Exception:
+        return True
+
+
 @celery_app.task(
     name="chat.background.prediscovery_task.run_prediscovery_all_orgs",
     bind=True,
     max_retries=0,
 )
 def run_prediscovery_all_orgs(self) -> Dict[str, Any]:
-    """Run prediscovery for all orgs. Picks one user per org with the most integrations."""
-    logger.info("[Prediscovery] Starting scheduled run for all orgs")
+    """Run prediscovery for orgs that are due based on their configured interval."""
+    logger.info("[Prediscovery] Starting scheduled check for all orgs")
 
     users = _get_users_with_integrations()
     if not users:
         logger.info("[Prediscovery] No users with integrations found")
         return {"status": "no_users", "processed": 0}
 
-    # Deduplicate: one user per org (first user found)
     seen_orgs = set()
     unique_users = []
     for u in users:
@@ -229,9 +261,11 @@ def run_prediscovery_all_orgs(self) -> Dict[str, Any]:
             seen_orgs.add(u["org_id"])
             unique_users.append(u)
 
-    logger.info(f"[Prediscovery] Scheduling for {len(unique_users)} orgs")
-
+    dispatched = 0
     for u in unique_users:
-        run_prediscovery.delay(user_id=u["user_id"], trigger="scheduled")
+        if _should_run_for_user(u["user_id"]):
+            run_prediscovery.delay(user_id=u["user_id"], trigger="scheduled")
+            dispatched += 1
 
-    return {"status": "dispatched", "orgs": len(unique_users)}
+    logger.info(f"[Prediscovery] Dispatched {dispatched}/{len(unique_users)} orgs (others not due yet)")
+    return {"status": "dispatched", "orgs_due": dispatched, "orgs_total": len(unique_users)}

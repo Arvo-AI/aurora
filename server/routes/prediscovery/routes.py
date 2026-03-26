@@ -65,8 +65,8 @@ def get_prediscovery_status(user_id):
         return jsonify({
             "status": row[1],
             "session_id": str(row[0]),
-            "started_at": row[2].isoformat() if row[2] else None,
-            "updated_at": row[3].isoformat() if row[3] else None,
+            "started_at": (row[2].isoformat() + "Z") if row[2] else None,
+            "updated_at": (row[3].isoformat() + "Z") if row[3] else None,
         })
     except Exception as e:
         logger.exception(f"[Prediscovery API] Failed to get status: {e}")

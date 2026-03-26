@@ -1,11 +1,9 @@
 "use client";
 
 import React from "react";
-import { Search, Radar } from "lucide-react";
+import { Search } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 
 interface ConnectorHeaderProps {
   searchQuery: string;
@@ -22,58 +20,10 @@ export default function ConnectorHeader({
   onCategoryToggle,
   availableCategories,
 }: ConnectorHeaderProps) {
-  const [discovering, setDiscovering] = React.useState(false);
-  const [discoveryMsg, setDiscoveryMsg] = React.useState("");
-
-  const runDiscovery = async () => {
-    setDiscovering(true);
-    setDiscoveryMsg("");
-    try {
-      const res = await fetch("/api/prediscovery/run", {
-        method: "POST",
-        credentials: "include",
-      });
-      if (res.ok) {
-        setDiscoveryMsg("Discovery started");
-      } else {
-        const data = await res.json().catch(() => ({}));
-        setDiscoveryMsg(data.error || "Failed to start");
-      }
-    } catch {
-      setDiscoveryMsg("Failed to start");
-    } finally {
-      setDiscovering(false);
-      setTimeout(() => setDiscoveryMsg(""), 4000);
-    }
-  };
-
   return (
     <div className="mb-8 space-y-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-3xl font-bold">Connectors</h1>
-        <div className="flex items-center gap-3">
-          {discoveryMsg && (
-            <span className="text-sm text-muted-foreground">{discoveryMsg}</span>
-          )}
-          <TooltipProvider>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={runDiscovery}
-                  disabled={discovering}
-                >
-                  <Radar className={`h-4 w-4 mr-2 ${discovering ? "animate-spin" : ""}`} />
-                  {discovering ? "Discovering..." : "Run Discovery"}
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom" className="max-w-xs text-center">
-                <p>Scan all connected integrations to map how your services, pipelines, and monitoring are interconnected. Runs automatically once a day and when new connectors are added.</p>
-              </TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
-        </div>
+      <div>
+        <h1 className="text-3xl font-bold mb-3">Connectors</h1>
       </div>
 
       {/* Search Bar */}

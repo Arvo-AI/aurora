@@ -89,7 +89,7 @@ celery_app.conf.update(
         },
         'run-prediscovery': {
             'task': 'chat.background.prediscovery_task.run_prediscovery_all_orgs',
-            'schedule': float(os.getenv('PREDISCOVERY_INTERVAL_HOURS', '24')) * 3600,  # Default: daily
+            'schedule': 3600.0,  # Check hourly; per-org interval controlled by prediscovery_interval_hours preference
         },
         'refresh-aws-credentials': {
             'task': 'utils.aws.credential_refresh.refresh_aws_credentials',
