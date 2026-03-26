@@ -65,16 +65,23 @@ class NewRelicClient:
             "API-Key": self.api_key,
         }
 
+    @staticmethod
+    def _sanitize_graphql_string(value: str) -> str:
+        """Escape characters that could break GraphQL string literals."""
+        return value.replace("\\", "\\\\").replace('"', '\\"').replace("'", "\\'").replace("\n", "\\n")
+
     def _execute_graphql(
         self,
         query: str,
         variables: Optional[Dict[str, Any]] = None,
+        extra_headers: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Any]:
         """Execute a GraphQL query against NerdGraph with retry logic."""
         payload: Dict[str, Any] = {"query": query}
         if variables:
             payload["variables"] = variables
 
+        headers = {**self.headers, **(extra_headers or {})}
         last_error: Optional[Exception] = None
 
         for attempt in range(MAX_RETRIES + 1):
@@ -82,7 +89,7 @@ class NewRelicClient:
                 response = requests.post(
                     self.endpoint,
                     json=payload,
-                    headers=self.headers,
+                    headers=headers,
                     timeout=self.timeout,
                 )
 
@@ -261,8 +268,15 @@ class NewRelicClient:
         since_epoch_ms: Optional[int] = None,
         page_size: int = 25,
     ) -> Dict[str, Any]:
-        """Fetch alert issues from NerdGraph AiIssuesSearch."""
-        VALID_STATES = {"ACTIVATED", "DEACTIVATED", "CLOSED", "CREATED", "ACKNOWLEDGED"}
+        """Fetch alert issues from NerdGraph AiIssuesSearch.
+
+        Note: The AiIssues API is experimental and requires an opt-in header.
+        Available fields per the NerdGraph schema: issueId, title, priority,
+        state, sources, entityNames, entityGuids, activatedAt, closedAt,
+        createdAt, updatedAt, totalIncidents, isCorrelated, origins,
+        accountIds, incidentIds, description.
+        """
+        VALID_STATES = {"ACTIVATED", "DEACTIVATED", "CLOSED", "CREATED"}
         filter_parts = []
         if states:
             sanitized = [s for s in states if s in VALID_STATES]
@@ -272,10 +286,10 @@ class NewRelicClient:
         if since_epoch_ms:
             filter_parts.append(f"startTime: {int(since_epoch_ms)}")
 
-        issue_args = [f"first: {int(page_size)}"]
+        filter_arg = ""
         if filter_parts:
             filter_clause = ", ".join(filter_parts)
-            issue_args.insert(0, f"filter: {{ {filter_clause} }}")
+            filter_arg = f"filter: {{ {filter_clause} }}"
 
         query = """
         query($accountId: Int!) {
@@ -289,26 +303,31 @@ class NewRelicClient:
                                 priority
                                 state
                                 sources
+                                origins
                                 entityNames
                                 entityGuids
-                                conditionName
-                                policyName
                                 activatedAt
                                 closedAt
+                                createdAt
+                                updatedAt
                                 totalIncidents
                                 isCorrelated
-                                mutingState
-                                issueUrl
+                                accountIds
+                                description
                             }
                         }
                     }
                 }
             }
         }
-        """ % ", ".join(issue_args)
+        """ % filter_arg
         variables = {"accountId": int(self.account_id)}
         try:
-            data = self._execute_graphql(query, variables=variables)
+            data = self._execute_graphql(
+                query,
+                variables=variables,
+                extra_headers={"nerd-graph-unsafe-experimental-opt-in": "AiIssues"},
+            )
         except Exception:
             logger.exception("[NEWRELIC] get_issues GraphQL query failed")
             raise
@@ -335,20 +354,22 @@ class NewRelicClient:
 
         Scopes results to the configured account_id by appending an
         accountId filter to the entity search query.
+        NerdGraph returns up to 200 entities per page by default.
         """
         parts = []
         if query_str:
-            parts.append(query_str)
+            parts.append(self._sanitize_graphql_string(query_str))
         parts.append(f"accountId = '{self.account_id}'")
         if entity_type:
             parts.append(f"type = '{self._sanitize_graphql_string(entity_type)}'")
         combined_query = " AND ".join(parts)
 
         gql = """
-        query($query: String!, $limit: Int) {
+        query($query: String!) {
             actor {
                 entitySearch(query: $query) {
-                    results(limit: $limit) {
+                    count
+                    results {
                         entities {
                             guid
                             name
@@ -363,7 +384,7 @@ class NewRelicClient:
             }
         }
         """
-        variables = {"query": combined_query, "limit": limit}
+        variables = {"query": combined_query}
         data = self._execute_graphql(gql, variables=variables)
         return (
             data.get("actor", {})
