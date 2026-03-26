@@ -62,8 +62,15 @@ def get_prediscovery_status(user_id):
         if not row:
             return jsonify({"status": "never_run", "last_run": None})
 
+        session_status = row[1]
+        # Treat stale in_progress as failed (task was killed mid-run)
+        if session_status == "in_progress" and row[3]:
+            from datetime import datetime, timedelta
+            if datetime.now() - row[3] > timedelta(minutes=35):
+                session_status = "failed"
+
         return jsonify({
-            "status": row[1],
+            "status": session_status,
             "session_id": str(row[0]),
             "started_at": (row[2].isoformat() + "Z") if row[2] else None,
             "updated_at": (row[3].isoformat() + "Z") if row[3] else None,

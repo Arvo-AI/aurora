@@ -21,8 +21,6 @@ export function DiscoverySettings() {
   const backendUrl = getEnv("NEXT_PUBLIC_BACKEND_URL");
 
   useEffect(() => {
-    if (!userId || !backendUrl) return;
-
     fetch("/api/prediscovery/status", { credentials: "include" })
       .then((r) => r.json())
       .then((data) => {
@@ -30,7 +28,10 @@ export function DiscoverySettings() {
         setLastRun(data.updated_at || data.started_at || null);
       })
       .catch(() => setStatus("unknown"));
+  }, []);
 
+  useEffect(() => {
+    if (!userId || !backendUrl) return;
     fetch(`${backendUrl}/api/user-preferences?key=prediscovery_interval_hours`, {
       headers: { "X-User-ID": userId },
     })
