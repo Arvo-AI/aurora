@@ -1290,13 +1290,8 @@ def build_newrelic_rca_prompt(
     user_id: Optional[str] = None,
 ) -> str:
     """Build RCA prompt from New Relic alert/issue webhook payload."""
-    title = (
-        payload.get("title")
-        or payload.get("issueTitle")
-        or payload.get("issue_title")
-        or payload.get("conditionName")
-        or "New Relic Alert"
-    )
+    from routes.newrelic.tasks import extract_newrelic_title
+    title = extract_newrelic_title(payload)
     state = payload.get("state") or payload.get("currentState") or "unknown"
     priority = payload.get("priority") or payload.get("severity") or "unknown"
     condition_name = payload.get("conditionName") or payload.get("condition_name") or ""

@@ -65,11 +65,6 @@ class NewRelicClient:
             "API-Key": self.api_key,
         }
 
-    @staticmethod
-    def _sanitize_graphql_string(value: str) -> str:
-        """Escape characters that could break GraphQL string literals."""
-        return value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
-
     def _execute_graphql(
         self,
         query: str,
