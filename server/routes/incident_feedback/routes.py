@@ -127,11 +127,11 @@ def submit_feedback(user_id, incident_id: str):
                 # Save feedback to database (don't commit yet for helpful feedback)
                 cursor.execute(
                     """
-                    INSERT INTO incident_feedback (user_id, incident_id, feedback_type, comment)
-                    VALUES (%s, %s, %s, %s)
+                    INSERT INTO incident_feedback (user_id, org_id, incident_id, feedback_type, comment)
+                    VALUES (%s, %s, %s, %s, %s)
                     RETURNING id, created_at
                     """,
-                    (user_id, incident_id, feedback_type, comment or None),
+                    (user_id, org_id, incident_id, feedback_type, comment or None),
                 )
                 feedback_row = cursor.fetchone()
                 feedback_id = str(feedback_row[0])
