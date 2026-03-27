@@ -137,6 +137,18 @@ if [ -f "$SCRIPT_DIR/demo-incident-newrelic.sql" ]; then
     echo "       New Relic demo incident exists: $NR_EXISTS"
 fi
 
+if [ -f "$SCRIPT_DIR/demo-incident-newrelic-oom.sql" ]; then
+    echo "       Importing demo incident (New Relic OOM Risk)..."
+    if psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" < "$SCRIPT_DIR/demo-incident-newrelic-oom.sql" 2>&1; then
+        echo "       Done"
+    else
+        echo "       WARNING: Demo incident (New Relic OOM Risk) import had errors"
+    fi
+    NR_OOM_EXISTS=$(psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" -tAc \
+        "SELECT EXISTS(SELECT 1 FROM incidents WHERE id = '859b8ade-7269-4c18-9389-de25468b5905')" 2>/dev/null || echo "false")
+    echo "       New Relic OOM Risk demo incident exists: $NR_OOM_EXISTS"
+fi
+
 # Extract Weaviate data
 echo "[2/3] Restoring Weaviate vector data..."
 if [ -d "/var/lib/weaviate" ]; then
@@ -184,5 +196,7 @@ echo "  - Demo incident (Coroot): 'Database connectivity issues - catalog servic
 echo "    Source: Coroot | Shows exact code lines + PR fix | NVIDIA Demo Ready"
 echo "  - Demo incident (New Relic): 'checkout-service High Memory / Connection Pool Exhaustion'"
 echo "    Source: New Relic | Cloud: AWS/ECS | Tools: Cloud CLI, GitHub, Terminal, MCP"
+echo "  - Demo incident (New Relic OOM): 'checkout-service OOM Risk'"
+echo "    Source: New Relic | Cloud: AWS/ECS | Tools: Cloud CLI, GitHub, Jira, Terminal"
 echo "  - Access: Sign up at http://localhost:3000 to view the incidents"
 echo ""
