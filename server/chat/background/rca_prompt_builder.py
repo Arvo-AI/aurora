@@ -286,9 +286,10 @@ def _build_provider_investigation_section(providers: List[str], user_id: Optiona
     """Build provider-specific investigation instructions."""
     sections = []
     providers_lower = [p.lower() for p in providers] if providers else []
+    has_onprem = _has_onprem_clusters(user_id)
 
     # On-Prem Kubernetes-specific instructions
-    if _has_onprem_clusters(user_id):
+    if has_onprem:
         sections.append("""
 ## On-Premise Kubernetes Investigation:
 - Available clusters are listed in the "ON-PREM KUBERNETES CLUSTERS" section above
@@ -386,9 +387,76 @@ IMPORTANT: If multiple AWS accounts are connected, your FIRST cloud_exec('aws', 
 - List load balancers: cloud_tool('scaleway', 'lb list')
 - **ALWAYS use cloud_tool('scaleway', ...) NOT terminal_tool for Scaleway commands**""")
 
+    # Cloudflare investigation
+    if 'cloudflare' in providers_lower:
+        sections.append("""
+## Cloudflare Investigation:
+- **FIRST**: List zones: `cloudflare_list_zones()` to discover zone IDs
+- Check DNS records: `query_cloudflare(resource_type='dns_records', zone_id='ZONE_ID')`
+- Check traffic analytics: `query_cloudflare(resource_type='analytics', zone_id='ZONE_ID', since='-60')`
+- Check security/WAF events: `query_cloudflare(resource_type='firewall_events', zone_id='ZONE_ID')`
+- Check firewall rules: `query_cloudflare(resource_type='firewall_rules', zone_id='ZONE_ID')`
+- Check rate limits: `query_cloudflare(resource_type='rate_limits', zone_id='ZONE_ID')`
+- Check SSL/TLS settings: `query_cloudflare(resource_type='ssl', zone_id='ZONE_ID')`
+- Check healthchecks: `query_cloudflare(resource_type='healthchecks', zone_id='ZONE_ID')`
+- Check zone settings (security level, cache, dev mode): `query_cloudflare(resource_type='zone_settings', zone_id='ZONE_ID')`
+- Check load balancers: `query_cloudflare(resource_type='load_balancers', zone_id='ZONE_ID')`
+- Check Workers: `query_cloudflare(resource_type='workers')`
+- **Remediation**: `cloudflare_action(action_type='purge_cache', zone_id='ZONE_ID')` / `security_level` / `development_mode` / `dns_update` / `toggle_firewall_rule`
+- **Look for**: 5xx spikes in analytics, WAF blocks causing false positives, SSL misconfigs, DNS misrouting, healthcheck failures""")
+
+    # New Relic investigation
+    if 'newrelic' in providers_lower:
+        sections.append("""
+## New Relic Investigation:
+- Query transactions: `query_newrelic(resource_type='nrql', query="SELECT count(*) FROM Transaction WHERE appName = 'SERVICE' SINCE 1 hour ago")`
+- Check error rates: `query_newrelic(resource_type='nrql', query="SELECT count(*) FROM TransactionError WHERE appName = 'SERVICE' SINCE 1 hour ago FACET error.message")`
+- Check response times: `query_newrelic(resource_type='nrql', query="SELECT average(duration) FROM Transaction WHERE appName = 'SERVICE' SINCE 1 hour ago TIMESERIES")`
+- Query logs: `query_newrelic(resource_type='nrql', query="SELECT * FROM Log WHERE service = 'SERVICE' AND level = 'ERROR' SINCE 30 minutes ago LIMIT 50")`
+- Check infrastructure: `query_newrelic(resource_type='nrql', query="SELECT average(cpuPercent), average(memoryUsedPercent) FROM SystemSample SINCE 1 hour ago FACET hostname")`
+- List active alert issues: `query_newrelic(resource_type='issues')`
+- **NRQL is very powerful** — use it to query Transaction, TransactionError, Log, SystemSample, NetworkSample, ProcessSample, K8sContainerSample, etc.""")
+
+    # Grafana investigation
+    if 'grafana' in providers_lower:
+        sections.append("""
+## Grafana Investigation:
+- Query metrics via Grafana's data sources using the alert labels/annotations for context
+- Check dashboards related to the affected service for visual correlation""")
+
+    # Datadog investigation
+    if 'datadog' in providers_lower:
+        sections.append("""
+## Datadog Investigation:
+- Search logs: `query_datadog(resource_type='logs', query='service:SERVICE status:error', time_from='-1h')`
+- Query metrics: `query_datadog(resource_type='metrics', query='avg:system.cpu.user{service:SERVICE}', time_from='-1h')`
+- Check monitors: `query_datadog(resource_type='monitors')`
+- Search traces: `query_datadog(resource_type='traces', query='service:SERVICE @http.status_code:500', time_from='-1h')`
+- List hosts: `query_datadog(resource_type='hosts')`
+- Check incidents: `query_datadog(resource_type='incidents')`""")
+
+    # Splunk investigation
+    if 'splunk' in providers_lower:
+        sections.append("""
+## Splunk Investigation:
+- Search logs: `splunk_search(query='index=main sourcetype=SERVICE error | head 50', earliest_time='-1h')`
+- List indexes: `list_splunk_indexes()` to discover available data
+- List sourcetypes: `list_splunk_sourcetypes()` to find relevant log sources
+- **SPL queries** — use field extraction, stats, timechart for analysis""")
+
+    # Dynatrace investigation
+    if 'dynatrace' in providers_lower:
+        sections.append("""
+## Dynatrace Investigation:
+- Query problems: `query_dynatrace(resource_type='problems')`
+- Check entities: `query_dynatrace(resource_type='entities', query='type("SERVICE")')`
+- Query metrics: `query_dynatrace(resource_type='metrics', query='builtin:service.response.time')`
+- Check logs: `query_dynatrace(resource_type='logs', query='status="ERROR"')`""")
+
     # General kubectl/SSH instructions
     k8s_providers = {'gcp', 'aws', 'azure', 'ovh', 'scaleway'}
-    if k8s_providers.intersection(set(providers_lower)):
+    has_k8s = k8s_providers.intersection(set(providers_lower)) or has_onprem
+    if has_k8s:
         sections.append("""
 ## General Kubernetes Investigation (for any provider):
 - Check all pods across namespaces: kubectl get pods -A
@@ -399,8 +467,10 @@ IMPORTANT: If multiple AWS accounts are connected, your FIRST cloud_exec('aws', 
 - Check ingress: kubectl get ingress -A
 - Check network policies: kubectl get networkpolicies -A""")
 
-    # SSH investigation for VMs
-    sections.append("""
+    # SSH investigation for VMs — only when a cloud infra provider is connected
+    vm_providers = {'gcp', 'aws', 'azure', 'ovh', 'scaleway'}
+    if vm_providers.intersection(set(providers_lower)):
+        sections.append("""
 ## SSH Investigation (for VMs):
 If you need to SSH into a VM for deeper investigation:
 1. Generate SSH key if needed: terminal_tool('test -f ~/.ssh/aurora_key || ssh-keygen -t rsa -b 4096 -f ~/.ssh/aurora_key -N ""')
@@ -413,8 +483,9 @@ If you need to SSH into a VM for deeper investigation:
    - OVH: USER=debian or ubuntu
    - Scaleway: USER=root""")
 
-    # Add note about tool names
-    sections.append("""
+    # Add note about tool names only when cloud/infra tools are relevant
+    if vm_providers.intersection(set(providers_lower)) or has_k8s:
+        sections.append("""
 ## IMPORTANT - Tool Name Mapping:
 In the examples above:
 - cloud_tool() refers to the cloud_exec tool
@@ -546,6 +617,12 @@ def build_rca_prompt(
     providers = providers or []
     providers_lower = [p.lower() for p in providers]
 
+    # Extract alert service name early — used by multiple sections below
+    _label_service = alert_details.get('labels', {}).get('service', '')
+    alert_service = _label_service if _label_service and _label_service != 'unknown' else ''
+    if not alert_service and source == 'netdata':
+        alert_service = alert_details.get('host', '') or ''
+
     # Format alert details
     title = alert_details.get('title', 'Unknown Alert')
     status = alert_details.get('status', 'unknown')
@@ -607,26 +684,15 @@ def build_rca_prompt(
         if 'issueUrl' in alert_details:
             prompt_parts.append(f"- **Issue URL**: {alert_details['issueUrl']}")
 
-    # Connected providers section
+    # Connected providers section — only list infra/monitoring providers here;
+    # GitHub, Jira, Confluence, Jenkins, CloudBees get their own dedicated sections.
+    _dedicated_sections = {'github', 'jira', 'confluence', 'jenkins', 'cloudbees'}
+    _display_providers = [p for p in providers if p.lower() not in _dedicated_sections]
     prompt_parts.extend([
         "",
-        "## CONNECTED PROVIDERS:",
-        f"You have access to: {', '.join(providers) if providers else 'No providers detected - check user configuration'}",
+        "## CONNECTED INFRASTRUCTURE & MONITORING:",
+        f"You have access to: {', '.join(_display_providers) if _display_providers else 'No cloud/monitoring providers connected'}",
     ])
-
-    # GitHub Integration
-    if user_id and _get_github_connected(user_id):
-        prompt_parts.extend([
-            "",
-            "## GITHUB:",
-            "GitHub is connected. Call `get_connected_repos` to list available repositories with descriptions,",
-            "then use `github_rca(repo='owner/repo', action=...)` to investigate code changes.",
-            "",
-            "**Actions:** deployment_check, commits, pull_requests, diff (with commit_sha).",
-            "ALWAYS check GitHub BEFORE diving into infrastructure commands.",
-            "",
-            "When you identify a code issue, use `github_fix` to suggest a fix.",
-        ])
 
     # Jira/Confluence investigation context — placed FIRST so agent searches before infra
     has_jira = False
@@ -644,8 +710,27 @@ def build_rca_prompt(
             ])
 
         if has_jira:
-            service_name = alert_details.get('labels', {}).get('service', '') or title
-            escaped_service = service_name.replace('\\', '\\\\').replace('"', '\\"')
+            # Build a meaningful Jira search term from alert details.
+            # Prefer the service label, then fall back to message keywords or title.
+            # Avoid using generic fallback titles like "New Relic Alert".
+            _jira_search_term = alert_details.get('labels', {}).get('service', '')
+            if not _jira_search_term or _jira_search_term == 'unknown':
+                _jira_search_term = title
+            _generic_titles = {
+                'new relic alert', 'unknown alert', 'alert', 'unknown',
+                'grafana alert', 'datadog alert', 'splunk alert',
+            }
+            if _jira_search_term.lower().strip() in _generic_titles:
+                _msg = message or ''
+                _candidates = []
+                for _part in _msg.replace('.', ',').split(','):
+                    _part = _part.strip()
+                    for _prefix in ('Condition:', 'Policy:', 'Entities:', 'Targets:', 'Search:'):
+                        if _part.startswith(_prefix):
+                            _candidates.append(_part[len(_prefix):].strip())
+                            break
+                _jira_search_term = _candidates[0] if _candidates else title
+            escaped_service = _jira_search_term.replace('\\', '\\\\').replace('"', '\\"')
             prompt_parts.extend([
                 "",
                 "### Jira — Recent Development Context (SEARCH FIRST):",
@@ -684,6 +769,20 @@ def build_rca_prompt(
                 "**Why this matters:** A runbook may give you the exact diagnostic steps. A past postmortem may reveal this is a recurring issue with a known fix.",
             ])
 
+    # GitHub Integration
+    if user_id and _get_github_connected(user_id):
+        prompt_parts.extend([
+            "",
+            "## GITHUB:",
+            "GitHub is connected. Call `get_connected_repos` to list available repositories with descriptions,",
+            "then use `github_rca(repo='owner/repo', action=...)` to investigate code changes.",
+            "",
+            "**Actions:** deployment_check, commits, pull_requests, diff (with commit_sha).",
+            "Check GitHub for recent deployments and code changes that may correlate with the alert.",
+            "",
+            "When you identify a code issue, use `github_fix` to suggest a fix.",
+        ])
+
     # Provider-specific investigation section
     provider_section = _build_provider_investigation_section(providers, user_id)
     if provider_section:
@@ -695,10 +794,6 @@ def build_rca_prompt(
 
     # Jenkins CI/CD context: inject recent deployments + investigation instructions
     if user_id and _has_jenkins_connected(user_id):
-        alert_service = alert_details.get('labels', {}).get('service', '') or ''
-        if source == 'netdata':
-            alert_service = alert_details.get('host', '') or ''
-
         recent_deploys = _get_recent_jenkins_deployments(user_id, alert_service, provider="jenkins")
         prompt_parts.extend([
             "",
@@ -738,10 +833,6 @@ def build_rca_prompt(
 
     # CloudBees CI/CD context (same API as Jenkins, separate credentials)
     if user_id and _has_cloudbees_connected(user_id):
-        alert_service = alert_details.get('labels', {}).get('service', '') or ''
-        if source == 'netdata':
-            alert_service = alert_details.get('host', '') or ''
-
         recent_deploys = _get_recent_jenkins_deployments(user_id, alert_service, provider="cloudbees")
         prompt_parts.extend([
             "",
@@ -781,9 +872,6 @@ def build_rca_prompt(
 
     # Aurora Learn: Inject context from similar past incidents
     if user_id:
-        alert_service = alert_details.get('labels', {}).get('service', '') or ''
-        if source == 'netdata':
-            alert_service = alert_details.get('host', '') or ''
         similar_context = _get_similar_good_rcas_context(
             user_id=user_id,
             alert_title=title,
@@ -798,7 +886,7 @@ def build_rca_prompt(
         prediscovery_context = _get_prediscovery_context(
             user_id=user_id,
             alert_title=title,
-            alert_service=alert_service or alert_details.get('labels', {}).get('service', ''),
+            alert_service=alert_service,
         )
         if prediscovery_context:
             prompt_parts.append(prediscovery_context)
@@ -809,6 +897,8 @@ def build_rca_prompt(
         "## CRITICAL INVESTIGATION REQUIREMENTS:",
         "",
     ])
+
+    has_infra_providers = bool({'gcp', 'aws', 'azure', 'ovh', 'scaleway'}.intersection(set(providers_lower)))
     
     # Add aggressive persistence prompts only if cost optimization is disabled
     # The immediate action required due to the AgentExecutor which assumes agent is done when it sends a text chunk without a tool call.
@@ -840,22 +930,32 @@ def build_rca_prompt(
         "Drill down into specifics - logs, metrics, configurations",
         "Check related/dependent resources",
         "Look for recent changes that correlate with the issue",
-        "Compare with healthy resources of the same type",
-        "Check resource quotas, limits, and constraints",
-        "Examine network connectivity and security rules",
-        "Verify IAM permissions and service accounts",
-        "Review historical patterns if available",
     ])
+    if has_infra_providers:
+        depth_steps.extend([
+            "Compare with healthy resources of the same type",
+            "Check resource quotas, limits, and constraints",
+            "Examine network connectivity and security rules",
+            "Verify IAM permissions and service accounts",
+        ])
+    depth_steps.append("Review historical patterns if available")
     prompt_parts.append("### INVESTIGATION DEPTH:")
     for i, step in enumerate(depth_steps, 1):
         prompt_parts.append(f"{i}. {step}")
+
     prompt_parts.extend([
         "",
         "### ERROR RESILIENCE:",
-        "- If cloud monitoring/metrics commands fail -> use kubectl directly",
-        "- If kubectl fails -> check cloud provider CLI alternatives",
-        "- If one log source fails -> try another (kubectl logs, cloud logging, container logs)",
-        "- If a resource isn't found -> check other namespaces, regions, or projects",
+        "- If one tool or data source fails, try an alternative immediately",
+    ])
+    if has_infra_providers:
+        prompt_parts.extend([
+            "- If cloud monitoring/metrics commands fail -> use kubectl directly",
+            "- If kubectl fails -> check cloud provider CLI alternatives",
+            "- If one log source fails -> try another (kubectl logs, cloud logging, container logs)",
+            "- If a resource isn't found -> check other namespaces, regions, or projects",
+        ])
+    prompt_parts.extend([
         "- **ALWAYS have 3-4 backup approaches ready**",
         "",
         "### WHAT TO INVESTIGATE:",
@@ -1292,17 +1392,19 @@ def build_newrelic_rca_prompt(
     """Build RCA prompt from New Relic alert/issue webhook payload."""
     from routes.newrelic.tasks import extract_newrelic_title
     title = extract_newrelic_title(payload)
-    state = payload.get("state") or payload.get("currentState") or "unknown"
+    state = payload.get("state") or payload.get("currentState") or payload.get("current_state") or "unknown"
     priority = payload.get("priority") or payload.get("severity") or "unknown"
     condition_name = payload.get("conditionName") or payload.get("condition_name") or ""
     policy_name = payload.get("policyName") or payload.get("policy_name") or ""
-    issue_url = payload.get("issueUrl") or payload.get("violationChartUrl") or ""
+    issue_url = payload.get("issueUrl") or payload.get("violationChartUrl") or payload.get("incident_url") or ""
     account_id = payload.get("accountId") or payload.get("account_id") or ""
 
     entities = payload.get("entitiesData", {}).get("entities", [])
     entity_names = [e.get("name", "unknown") for e in entities[:5]] if entities else []
     targets = payload.get("targets", [])
     target_names = [t.get("name", "unknown") for t in targets[:5]] if targets else []
+
+    details = payload.get("details") or ""
 
     message_parts = []
     if condition_name:
@@ -1315,6 +1417,8 @@ def build_newrelic_rca_prompt(
         message_parts.append(f"Targets: {', '.join(target_names)}")
     if payload.get("totalIncidents"):
         message_parts.append(f"Total incidents: {payload['totalIncidents']}")
+    if details:
+        message_parts.append(f"Details: {details[:500]}")
 
     labels: Dict[str, str] = {}
     if priority and priority != "unknown":
