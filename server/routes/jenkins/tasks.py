@@ -116,10 +116,10 @@ def process_jenkins_deployment(
                     # Upsert the deployment event with dedup on (user_id, job_name, build_number)
                     cursor.execute(
                         """INSERT INTO jenkins_deployment_events
-                           (user_id, event_type, service, environment, result, build_number,
+                           (user_id, org_id, event_type, service, environment, result, build_number,
                             build_url, commit_sha, branch, repository, deployer, duration_ms,
                             job_name, trace_id, span_id, payload, received_at, provider)
-                           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                            ON CONFLICT (user_id, COALESCE(job_name, ''), COALESCE(build_number, -1)) DO UPDATE
                            SET result = EXCLUDED.result,
                                payload = EXCLUDED.payload,
@@ -127,6 +127,7 @@ def process_jenkins_deployment(
                            RETURNING id""",
                         (
                             user_id,
+                            org_id,
                             payload.get("event_type", "deployment"),
                             service, environment, result, build_number, build_url,
                             git.get("commit_sha", ""), git.get("branch", ""),
