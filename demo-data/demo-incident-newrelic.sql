@@ -2,6 +2,11 @@
 -- Source: New Relic | Cloud: AWS/ECS | Tools: Cloud CLI, GitHub, Terminal, MCP
 -- Generated from live incident 133de658-05b3-488f-b0b3-dd3452de3c8f
 
+-- Fix: ensure org_id is NULL for demo incidents (matches other demo data)
+UPDATE incidents SET org_id = NULL WHERE id = 'b1c2d3e4-f5a6-4b7c-8d9e-0f1a2b3c4d5e' AND org_id IS NOT NULL;
+UPDATE incident_alerts SET org_id = NULL WHERE incident_id = 'b1c2d3e4-f5a6-4b7c-8d9e-0f1a2b3c4d5e' AND org_id IS NOT NULL;
+UPDATE newrelic_events SET org_id = NULL WHERE issue_id = 'INC-20260326-003' AND user_id = 'ab209180-626b-4601-8042-9f6328d03ae9' AND org_id IS NOT NULL;
+
 DO $$
 DECLARE
   v_incident_id UUID := 'b1c2d3e4-f5a6-4b7c-8d9e-0f1a2b3c4d5e';
