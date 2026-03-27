@@ -1501,14 +1501,7 @@ def build_background_mode_segment(state: Optional[Any]) -> str:
             "Look for: 5xx spikes, WAF false positives, SSL misconfigs, DNS misrouting, healthcheck failures",
         ])
 
-    # Grafana (comes through providers, not integrations)
-    if 'grafana' in providers_lower:
-        parts.extend([
-            "",
-            "GRAFANA INVESTIGATION:",
-            "Query metrics via Grafana data sources using alert labels/annotations for context.",
-            "Check dashboards related to the affected service for visual correlation.",
-        ])
+    # Grafana only raises alerts — no data pull connection yet, so no investigation section
 
     # Tool mapping (critical)
     parts.extend([
