@@ -151,6 +151,11 @@ else
         alpine tar xzf /backup/weaviate_data.tar.gz -C /dest 2>/dev/null && echo "       Done" || echo "       WARNING: Weaviate extraction failed"
 fi
 
+# Promote all users to admin (demo site: everyone needs full access)
+echo "       Promoting all users to admin role..."
+psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" -c \
+    "UPDATE users SET role = 'admin' WHERE role != 'admin';" 2>/dev/null || true
+
 # Create marker table
 echo "[3/3] Setting demo_initialized marker..."
 psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" <<EOF >/dev/null 2>&1
