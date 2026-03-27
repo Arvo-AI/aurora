@@ -2033,6 +2033,25 @@ def initialize_tables():
                 logging.warning(f"Error creating k8s_clusters view: {e}")
                 conn.rollback()
 
+            # Migration: De-duplicate organization names from before uniqueness was enforced.
+            # Appends a short ID suffix to the newer duplicate(s) so names are unique going forward.
+            try:
+                cursor.execute("""
+                    UPDATE organizations SET name = name || ' (' || LEFT(id, 8) || ')'
+                    WHERE id IN (
+                        SELECT id FROM (
+                            SELECT id,
+                                   ROW_NUMBER() OVER (PARTITION BY LOWER(name) ORDER BY created_at ASC) AS rn
+                            FROM organizations
+                        ) dupes WHERE rn > 1
+                    );
+                """)
+                if cursor.rowcount > 0:
+                    logging.info(f"De-duplicated {cursor.rowcount} organization name(s).")
+            except Exception as e:
+                logging.warning(f"Error de-duplicating organization names: {e}")
+                conn.rollback()
+
             conn.commit()
             logging.info("Database tables initialized successfully.")
             cursor.close()

@@ -267,7 +267,7 @@ export default function SetupOrgPage() {
 
               {!loadingInvitations && pendingInvitations.length === 0 && !joinSuccess && (
                 <p className="text-sm text-gray-500 dark:text-gray-400 text-center py-6">
-                  No pending invitations. Ask your organization admin to send you one.
+                  No pending invitations. Ask your organization admin to send an invite to <span className="font-medium text-gray-700 dark:text-gray-200">{session?.user?.email || "your email"}</span>.
                 </p>
               )}
             </>
