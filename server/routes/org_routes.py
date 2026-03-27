@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from flask import Blueprint, request, jsonify
 from utils.db.connection_pool import db_pool
-from utils.db.org_backfill import backfill_user_org_data, migrate_user_to_org
+from utils.db.org_backfill import backfill_user_org_data, migrate_user_to_org, _USER_SCOPED_TABLES_SQL
 from utils.auth import VALID_ROLES
 from utils.auth.rbac_decorators import require_permission, require_auth_only
 from utils.auth.stateless_auth import get_org_id_from_request
@@ -37,14 +37,34 @@ def _validate_org_id_for_user(user_id: str, org_id: str) -> bool:
 
 
 def _cleanup_empty_org(cursor, org_id: str) -> bool:
-    """Delete an org if it has no remaining members. Returns True if deleted."""
+    """Delete an org and all its scoped data if it has no remaining members."""
     cursor.execute("SELECT COUNT(*) FROM users WHERE org_id = %s", (org_id,))
     if cursor.fetchone()[0] == 0:
         cursor.execute("DELETE FROM org_invitations WHERE org_id = %s", (org_id,))
+        # Clean up all org-scoped data so nothing is orphaned
+        cursor.execute(_USER_SCOPED_TABLES_SQL)
+        for (tbl,) in cursor.fetchall():
+            try:
+                cursor.execute(f'DELETE FROM "{tbl}" WHERE org_id = %s', (org_id,))
+            except Exception as e:
+                logger.warning("Failed to clean up %s for empty org %s: %s", tbl, org_id, e)
         cursor.execute("DELETE FROM organizations WHERE id = %s", (org_id,))
-        logger.info("Cleaned up empty org %s", org_id)
+        logger.info("Cleaned up empty org %s and its data", org_id)
         return True
     return False
+
+
+def _delete_user_org_data(cursor, user_id: str, org_id: str):
+    """Delete a user's connections, tokens, and other org-scoped data from the old org.
+
+    Called when a user joins an existing org so their old data doesn't linger.
+    """
+    cursor.execute(_USER_SCOPED_TABLES_SQL)
+    for (tbl,) in cursor.fetchall():
+        try:
+            cursor.execute(f'DELETE FROM "{tbl}" WHERE user_id = %s AND org_id = %s', (user_id, org_id))
+        except Exception as e:
+            logger.warning("Failed to delete %s data for user %s in org %s: %s", tbl, user_id, org_id, e)
 
 
 def _transfer_user_to_org(cursor, user_id: str, old_org_id, new_org_id: str, new_role: str, is_new_org: bool = False):
@@ -52,11 +72,14 @@ def _transfer_user_to_org(cursor, user_id: str, old_org_id, new_org_id: str, new
 
     When is_new_org=True (user is creating the org), all their data is migrated.
     When is_new_org=False (user is joining an existing org), only their user row
-    is updated — connections, tokens, etc. stay in the old org to avoid duplicates.
+    is updated — old connections/tokens are deleted to avoid duplicates with
+    whatever the new org already has set up.
     """
     if old_org_id and old_org_id != new_org_id:
         if is_new_org:
             migrate_user_to_org(cursor, user_id, new_org_id)
+        else:
+            _delete_user_org_data(cursor, user_id, old_org_id)
         cursor.execute(
             "UPDATE users SET org_id = %s, role = %s WHERE id = %s RETURNING id, email, name",
             (new_org_id, new_role, user_id),

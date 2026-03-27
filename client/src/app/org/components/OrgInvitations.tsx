@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import { useSession } from "next-auth/react";
-import { useRouter } from "next/navigation";
 import { Loader2, Mail, CheckCircle, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { toast } from "@/hooks/use-toast";
@@ -19,7 +18,6 @@ interface Invitation {
 
 export default function OrgInvitations() {
   const { data: session, update } = useSession();
-  const router = useRouter();
   const [acting, setActing] = useState<string | null>(null);
 
   const { data, isLoading, mutate } = useQuery<{ invitations: Invitation[] }>(
@@ -46,7 +44,7 @@ export default function OrgInvitations() {
       }
       toast({ title: `Joined ${inv.orgName}`, description: "Redirecting to your new organization..." });
       await update();
-      router.push("/");
+      window.location.href = "/";
     } catch {
       toast({ title: "Failed to join", variant: "destructive" });
       setActing(null);

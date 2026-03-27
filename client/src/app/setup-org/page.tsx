@@ -68,7 +68,7 @@ export default function SetupOrgPage() {
 
       setJoinSuccess(`Successfully joined ${data.name || "the organization"}! Redirecting...`)
       await update()
-      router.push("/")
+      window.location.href = "/"
     } catch {
       setJoinError("An error occurred. Please try again.")
       setAcceptingId(null)
@@ -117,7 +117,7 @@ export default function SetupOrgPage() {
       }
 
       await update()
-      router.push("/")
+      window.location.href = "/"
     } catch {
       setCreateError("An error occurred. Please try again.")
       setIsCreating(false)
