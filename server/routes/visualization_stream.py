@@ -22,8 +22,8 @@ def stream_visualization_updates(user_id, incident_id: str):
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
                 cursor.execute(
-                    "SELECT 1 FROM incidents WHERE id = %s AND org_id = %s",
-                    (incident_id, org_id),
+                    "SELECT 1 FROM incidents WHERE id = %s",
+                    (incident_id,),
                 )
                 if not cursor.fetchone():
                     return Response("Forbidden", status=403)
@@ -85,8 +85,8 @@ def get_current_visualization(user_id, incident_id: str):
                 cursor.execute("""
                     SELECT visualization_code, visualization_updated_at
                     FROM incidents
-                    WHERE id = %s AND org_id = %s
-                """, (incident_id, org_id))
+                    WHERE id = %s
+                """, (incident_id,))
                 
                 row = cursor.fetchone()
                 
