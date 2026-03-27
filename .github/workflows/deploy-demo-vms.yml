@@ -164,7 +164,7 @@ jobs:
             grep -q '^NEXT_PUBLIC_ENABLE_THOUSANDEYES=' .env && sudo sed -i 's|^NEXT_PUBLIC_ENABLE_THOUSANDEYES=.*|NEXT_PUBLIC_ENABLE_THOUSANDEYES=${{ env.ENABLE_THOUSANDEYES }}|' .env || echo 'NEXT_PUBLIC_ENABLE_THOUSANDEYES=${{ env.ENABLE_THOUSANDEYES }}' | sudo tee -a .env
             grep -q '^NEXT_PUBLIC_ENABLE_BIGPANDA=' .env && sudo sed -i 's|^NEXT_PUBLIC_ENABLE_BIGPANDA=.*|NEXT_PUBLIC_ENABLE_BIGPANDA=${{ env.ENABLE_BIGPANDA }}|' .env || echo 'NEXT_PUBLIC_ENABLE_BIGPANDA=${{ env.ENABLE_BIGPANDA }}' | sudo tee -a .env
 
-            sudo docker compose -f docker-compose.prod-local.yml build frontend aurora-server
+            sudo docker compose -f docker-compose.prod-local.yml build frontend aurora-server demo-init
             sudo docker compose -f docker-compose.prod-local.yml up -d --remove-orphans
             sudo docker compose -f docker-compose.prod-local.yml up -d --force-recreate demo-init
           " 2>&1
@@ -303,7 +303,7 @@ jobs:
             grep -q '^NEXT_PUBLIC_ENABLE_THOUSANDEYES=' .env && sudo sed -i 's|^NEXT_PUBLIC_ENABLE_THOUSANDEYES=.*|NEXT_PUBLIC_ENABLE_THOUSANDEYES=${{ env.ENABLE_THOUSANDEYES }}|' .env || echo 'NEXT_PUBLIC_ENABLE_THOUSANDEYES=${{ env.ENABLE_THOUSANDEYES }}' | sudo tee -a .env
             grep -q '^NEXT_PUBLIC_ENABLE_BIGPANDA=' .env && sudo sed -i 's|^NEXT_PUBLIC_ENABLE_BIGPANDA=.*|NEXT_PUBLIC_ENABLE_BIGPANDA=${{ env.ENABLE_BIGPANDA }}|' .env || echo 'NEXT_PUBLIC_ENABLE_BIGPANDA=${{ env.ENABLE_BIGPANDA }}' | sudo tee -a .env
 
-            sudo docker compose -f docker-compose.prod-local.yml build frontend aurora-server
+            sudo docker compose -f docker-compose.prod-local.yml build frontend aurora-server demo-init
             sudo docker compose -f docker-compose.prod-local.yml up -d --remove-orphans
             sudo docker compose -f docker-compose.prod-local.yml up -d --force-recreate demo-init
           " 2>&1
