@@ -27,15 +27,13 @@ INCIDENT_MIGRATION_COLS = [
 
 INCIDENT_ALERT_BASE_COLS = [
     'id', 'incident_id', 'user_id', 'org_id', 'source_type',
-    'source_alert_id', 'alert_title', 'alert_service', 'severity',
-    'alert_priority', 'correlated_alert_count', 'correlation_metadata',
-    'alert_metadata', 'triggered_at'
+    'source_alert_id', 'alert_title', 'alert_service', 'alert_metadata'
 ]
 
 THOUGHT_BASE_COLS = ['incident_id', 'timestamp', 'content', 'thought_type', 'created_at']
-CITATION_BASE_COLS = None  # use all columns from source
-SUGGESTION_BASE_COLS = None  # use all columns from source
-CHAT_BASE_COLS = None  # use all columns from source
+CITATION_BASE_COLS = ['incident_id', 'citation_key', 'tool_name', 'command', 'output', 'executed_at', 'created_at']
+SUGGESTION_BASE_COLS = ['incident_id', 'title', 'description', 'type', 'risk', 'command', 'file_path', 'original_content', 'suggested_content', 'user_edited_content', 'repository', 'pr_url', 'pr_number', 'created_branch', 'applied_at', 'created_at']
+CHAT_BASE_COLS = ['id', 'user_id', 'org_id', 'title', 'messages', 'ui_state', 'created_at', 'updated_at', 'is_active', 'status', 'incident_id']
 
 def psql(sql):
     r = subprocess.run(
@@ -70,8 +68,9 @@ def escape_val(v):
     if isinstance(v, dict):
         j = json.dumps(v, ensure_ascii=False).replace("'", "''")
         return f"'{j}'::jsonb"
-    s = str(v).replace("'", "''")
-    return f"'{s}'"
+    s = str(v).replace("\\", "\\\\").replace("'", "''")
+    s = s.replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t")
+    return f"E'{s}'"
 
 def gen_insert(table, row, cols=None):
     if cols:
@@ -145,6 +144,7 @@ for row in rows:
     row['org_id'] = DEMO_ORG_ID
     row['source_alert_id'] = NR_EVENT_ID
     row['aurora_chat_session_id'] = CHAT_SESSION_ID
+    row['alert_title'] = 'checkout-service High Memory / Connection Pool Exhaustion'
     output.append(gen_insert('incidents', row, INCIDENT_BASE_COLS))
 output.append("")
 
