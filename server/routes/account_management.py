@@ -155,9 +155,39 @@ def get_connected_accounts(user_id, target_user_id):
 
             accounts[provider] = account_info
 
+        # ------------------------------
+        # 3) Kubectl agent connections
+        # ------------------------------
+        if "kubectl" not in accounts:
+            cursor2 = conn.cursor()
+            cursor2.execute(
+                """SELECT COUNT(*) FROM active_kubectl_connections ac
+                   JOIN kubectl_agent_tokens kat ON ac.token = kat.token
+                   WHERE kat.org_id = %s AND ac.status = 'active'""",
+                (org_id,),
+            )
+            if cursor2.fetchone()[0] > 0:
+                accounts["kubectl"] = {"isConnected": True, "name": "Kubernetes", "displayText": "Kubernetes Cluster"}
+            cursor2.close()
+
+        # ------------------------------
+        # 4) On-prem VM connections
+        # ------------------------------
+        if "onprem" not in accounts:
+            cursor3 = conn.cursor()
+            cursor3.execute(
+                """SELECT COUNT(*) FROM user_manual_vms
+                   WHERE (user_id = %s OR org_id = %s)
+                     AND connection_verified = TRUE""",
+                (user_id, org_id),
+            )
+            if cursor3.fetchone()[0] > 0:
+                accounts["onprem"] = {"isConnected": True, "name": "Instances SSH Access", "displayText": "VM SSH Access"}
+            cursor3.close()
+
         cursor.close()
         conn.close()
-        
+
         return jsonify({"accounts": accounts})
 
     except Exception as e:
