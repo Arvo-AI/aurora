@@ -433,3 +433,91 @@ export function parseJenkinsRcaCommand(toolInput: string): string {
 export function parseCloudbeesRcaCommand(toolInput: string): string {
   return parseCIRcaCommand(toolInput, "CloudBees")
 }
+
+export function parseNewRelicCommand(toolInput: string): string {
+  try {
+    let parsed: Record<string, unknown> | null = null
+    try {
+      parsed = JSON.parse(toolInput)
+    } catch {
+      parsed = JSON.parse(toolInput.replace(/'/g, '"'))
+    }
+    const args = ((parsed as Record<string, unknown>)?.kwargs || parsed || {}) as Record<string, unknown>
+    const resourceType = (args.resource_type as string) || ""
+    const query = (args.query as string) || ""
+    const timeRange = (args.time_range as string) || ""
+
+    switch (resourceType.toLowerCase()) {
+      case "nrql": {
+        const upper = (query || "").toUpperCase()
+        let label = "Query data"
+        if (upper.includes("FROM TRANSACTION")) label = "Query transactions"
+        else if (upper.includes("FROM LOG")) label = "Query logs"
+        else if (upper.includes("FROM SYSTEMSAMPLE") || upper.includes("FROM PROCESSSAMPLE")) label = "Query infrastructure"
+        else if (upper.includes("FROM SYNTHETICSCHECK")) label = "Query synthetics"
+        else if (upper.includes("FROM SPAN") || upper.includes("FROM DISTRIBUTEDTRACING")) label = "Query traces"
+        else if (upper.includes("FROM METRIC")) label = "Query metrics"
+        else if (upper.includes("ERROR")) label = "Query errors"
+        const time = timeRange ? ` — ${timeRange}` : ""
+        return `New Relic: ${label}${time}`
+      }
+      case "issues": {
+        return "New Relic: Fetch alert issues"
+      }
+      case "entities": {
+        const search = query.split("|")[0]?.trim() || ""
+        return search ? `New Relic: Search entities — ${search}` : "New Relic: Search entities"
+      }
+      default:
+        return `New Relic: ${resourceType || "query"}`
+    }
+  } catch {
+    return "New Relic: Query"
+  }
+}
+
+export function parseCloudflareCommand(toolName: string, toolInput: string): string {
+  const args = (() => {
+    try {
+      const parsed = JSON.parse(toolInput)
+      return parsed?.kwargs || parsed || {}
+    } catch {
+      try {
+        const parsed = JSON.parse(toolInput.replace(/'/g, '"'))
+        return parsed?.kwargs || parsed || {}
+      } catch {
+        return {}
+      }
+    }
+  })()
+
+  if (toolName === "cloudflare_list_zones") {
+    return "Cloudflare: List zones"
+  }
+
+  if (toolName === "query_cloudflare") {
+    const resource = args.resource_type || "query"
+    const label = resource.replace(/_/g, " ")
+    const parts: string[] = []
+    if (args.since) parts.push(`since ${args.since}`)
+    if (args.until) parts.push(`until ${args.until}`)
+    if (args.limit && args.limit !== 50) parts.push(`limit ${args.limit}`)
+    if (args.zone_id) parts.push(args.zone_id.substring(0, 8))
+    const detail = parts.length ? ` (${parts.join(", ")})` : ""
+    return `Cloudflare: ${label}${detail}`
+  }
+
+  if (toolName === "cloudflare_action") {
+    const action = args.action_type || "action"
+    const actionLabels: Record<string, string> = {
+      purge_cache: "Purge cache",
+      security_level: `Security level → ${args.value || "?"}`,
+      development_mode: `Dev mode → ${args.value || "?"}`,
+      dns_update: `Update DNS record${args.record_id ? ` ${args.record_id.substring(0, 8)}` : ""}`,
+      toggle_firewall_rule: `${args.paused ? "Disable" : "Enable"} firewall rule`,
+    }
+    return `Cloudflare: ${actionLabels[action] || action.replace(/_/g, " ")}`
+  }
+
+  return `Cloudflare: ${toolName.replace(/cloudflare_?/g, "").replace(/_/g, " ") || "query"}`
+}

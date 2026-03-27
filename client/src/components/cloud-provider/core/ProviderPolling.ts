@@ -1,5 +1,9 @@
 import { Provider } from '../types';
 import { getEnv } from '@/lib/env';
+import {
+  fetchConnectedAccounts,
+  getConnectedAccounts,
+} from '@/lib/connected-accounts-cache';
 
 const BACKEND_URL = getEnv('NEXT_PUBLIC_BACKEND_URL');
 
@@ -30,7 +34,6 @@ export class ProviderPolling {
 
   // Fetch actual connection status from backend API (source of truth)
   private async fetchConnectionStatusFromAPI(): Promise<Record<string, boolean>> {
-    // Avoid fetching too frequently (debounce to 2 seconds)
     const now = Date.now();
     if (this.isFetching || (now - this.lastFetchTime < 2000)) {
       return this.connectionStatus;
@@ -40,36 +43,35 @@ export class ProviderPolling {
     this.lastFetchTime = now;
 
     try {
-      const response = await fetch('/api/user-tokens');
-      
-      // If redirected to sign-in, user not authenticated yet
-      if (response.redirected || !response.ok) {
-        return this.connectionStatus;
-      }
+      const [tokensResponse] = await Promise.all([
+        fetch('/api/user-tokens'),
+        fetchConnectedAccounts(),
+      ]);
 
-      const tokens = await response.json();
-      
-      // Handle error responses
-      if (tokens.error) {
-        return this.connectionStatus;
-      }
-      
-      // Update connection status based on API response
       const newStatus: Record<string, boolean> = {};
-      
-      if (Array.isArray(tokens)) {
-        tokens.forEach((token: any) => {
-          const provider = token.provider?.toLowerCase();
-          if (provider) {
-            newStatus[provider] = true;
-            // Sync to localStorage for backwards compatibility
-            const key = `is${provider.charAt(0).toUpperCase() + provider.slice(1)}Connected`;
-            localStorage.setItem(key, 'true');
-          }
-        });
+
+      // 1) OAuth / secret-based providers (user_tokens)
+      if (!tokensResponse.redirected && tokensResponse.ok) {
+        const tokens = await tokensResponse.json();
+        if (!tokens.error && Array.isArray(tokens)) {
+          tokens.forEach((token: any) => {
+            const provider = token.provider?.toLowerCase();
+            if (provider) {
+              newStatus[provider] = true;
+            }
+          });
+        }
       }
 
-      // Update internal state
+      // 2) Role-based connections from shared cache
+      const { accounts } = getConnectedAccounts();
+      for (const provider of Object.keys(accounts)) {
+        const normalized = provider.toLowerCase();
+        if (accounts[provider]?.isConnected) {
+          newStatus[normalized] = true;
+        }
+      }
+
       this.connectionStatus = newStatus;
       return newStatus;
     } catch (error) {
@@ -80,16 +82,9 @@ export class ProviderPolling {
     }
   }
 
-  // Get connection status (from internal cache, fallback to localStorage)
+  // Get connection status from internal API cache only
   private getConnectionStatus(provider: string): boolean {
-    // First check internal state from last API fetch
-    if (this.connectionStatus[provider] !== undefined) {
-      return this.connectionStatus[provider];
-    }
-    
-    // Fallback to localStorage for backwards compatibility
-    const key = `is${provider.charAt(0).toUpperCase() + provider.slice(1)}Connected`;
-    return localStorage.getItem(key) === "true";
+    return this.connectionStatus[provider] ?? false;
   }
 
   // Clear connection status cache for a specific provider (called during disconnect)
@@ -117,6 +112,7 @@ export class ProviderPolling {
     const isScalewayConnected = this.getConnectionStatus('scaleway');
     const isScalewayFetching = localStorage.getItem("isScalewayFetching") === "true";
     const isTailscaleConnected = this.getConnectionStatus('tailscale');
+    const isCloudflareConnected = this.getConnectionStatus('cloudflare');
     const isGrafanaConnected = this.getConnectionStatus('grafana');
     const isDatadogConnected = this.getConnectionStatus('datadog');
     const isNetdataConnected = this.getConnectionStatus('netdata');
@@ -240,6 +236,15 @@ export class ProviderPolling {
             if (JSON.stringify(newDynatraceState) !== JSON.stringify(provider)) hasChanges = true;
             return newDynatraceState;
 
+          case 'cloudflare':
+            const newCloudflareState = {
+              ...provider,
+              isConnected: isCloudflareConnected,
+              status: isCloudflareConnected ? ('connected' as const) : ('disconnected' as const)
+            };
+            if (JSON.stringify(newCloudflareState) !== JSON.stringify(provider)) hasChanges = true;
+            return newCloudflareState;
+
           default:
             return provider;
         }
@@ -255,44 +260,33 @@ export class ProviderPolling {
     // Synchronize GCP setup progress
     this.config.onSetupProgressUpdate(isSetupInProgressLS);
 
-    // Check if any provider data needs to be fetched (exact same logic as old implementation)
+    // Check if any provider data needs to be fetched
     if (typeof window !== "undefined") {
-      // Check if GCP data needs to be fetched
       if (
-        localStorage.getItem("isLoggedAurora") === "true" &&
-        localStorage.getItem("isGCPConnected") === "true" &&
+        isGCPConnected &&
         localStorage.getItem("isGCPFetched") === "false" &&
         localStorage.getItem("isGCPFetching") !== "true"
       ) {
         this.config.fetchProviderData('gcp');
       }
 
-      // Check if AWS data needs to be fetched
       if (
-        localStorage.getItem("isLoggedAurora") === "true" &&
-        localStorage.getItem("isAWSConnected") === "true" &&
+        isAWSConnected &&
         localStorage.getItem("isAWSFetched") === "false" &&
-        localStorage.getItem("isAWSFetching") !== "true" &&
-        localStorage.getItem("cloudProvider") === "aws" // Only fetch if AWS is the current provider
+        localStorage.getItem("isAWSFetching") !== "true"
       ) {
         this.config.fetchProviderData('aws');
       }
 
-      // Check if Azure data needs to be fetched
       if (
-        localStorage.getItem("isLoggedAurora") === "true" &&
-        localStorage.getItem("isAzureConnected") === "true" &&
+        isAzureConnected &&
         localStorage.getItem("isAzureFetched") === "false" &&
-        localStorage.getItem("isAzureFetching") !== "true" &&
-        localStorage.getItem("cloudProvider") === "azure" // Only fetch if Azure is the current provider
+        localStorage.getItem("isAzureFetching") !== "true"
       ) {
         this.config.fetchProviderData('azure');
       }
 
-      if (
-        localStorage.getItem('isLoggedAurora') === 'true' &&
-        localStorage.getItem('isGrafanaConnected') === 'true'
-      ) {
+      if (isGrafanaConnected) {
         this.config.fetchProviderData('grafana');
       }
     }
@@ -305,7 +299,7 @@ export class ProviderPolling {
       console.error('[ProviderPolling] Initial state check failed:', err)
     );
 
-    // Listen for localStorage changes (when other tabs/pages update provider states)
+    // Listen for localStorage changes (transient UI state like fetching progress)
     const handleStorageChange = (e: StorageEvent) => {
       if (e.key && (
         e.key === 'isAWSFetching' ||
@@ -313,24 +307,10 @@ export class ProviderPolling {
         e.key === 'isOVHFetching' ||
         e.key === 'isScalewayFetching' ||
         e.key === 'isAzureConnecting' ||
-        e.key === 'isAWSConnected' ||
-        e.key === 'isAzureConnected' ||
-        e.key === 'isOVHConnected' ||
-        e.key === 'isScalewayConnected' ||
-        e.key === 'isTailscaleConnected' ||
-        e.key === 'isGrafanaConnected' ||
-        e.key === 'isDatadogConnected' ||
-        e.key === 'isNetdataConnected' ||
-        e.key === 'isKubectlConnected' ||
-        e.key === 'isSlackConnected' ||
-        e.key === 'isSplunkConnected' ||
-        e.key === 'isDynatraceConnected' ||
-        e.key === 'isGCPConnected' ||
         e.key === 'isAzureFetched' ||
         e.key === 'isOVHFetched' ||
         e.key === 'isScalewayFetched'
       )) {
-        // Immediately check provider states when relevant localStorage keys change
         this.checkProviderStates().catch(err =>
           console.error('[ProviderPolling] State check failed:', err)
         );
@@ -575,10 +555,7 @@ export class ProviderPolling {
     localStorage.removeItem("gcpPollingActive");
 
     if (success) {
-      localStorage.setItem("isGCPConnected", "true");
-      localStorage.setItem("cloudProvider", "gcp");
       localStorage.setItem("isGCPFetched", "false");
-      localStorage.setItem("isLoggedAurora", "true");
 
       // Trigger graph discovery now that post-auth (API enablement, SA propagation) is done
       localStorage.setItem("aurora_graph_discovery_trigger", "1");
@@ -668,10 +645,7 @@ export class ProviderPolling {
             }
 
             console.log(`GCP setup completed while away - cleaning up`);
-            localStorage.setItem("isGCPConnected", "true");
-            localStorage.setItem("cloudProvider", "gcp");
             localStorage.setItem("isGCPFetched", "false");
-            localStorage.setItem("isLoggedAurora", "true");
             this.config.autoSelectProvider("gcp", true);
             this.config.onProvidersUpdate(prev => prev.map(p => p.id === 'gcp' ? { ...p, isRefreshing: false, isConnected: true } : p));
 

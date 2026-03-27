@@ -98,6 +98,7 @@ def _ensure_collection(client: weaviate.WeaviateClient):
             vectorizer_config=Configure.Vectorizer.text2vec_transformers(),
             properties=[
                 Property(name="user_id", data_type=DataType.TEXT),
+                Property(name="org_id", data_type=DataType.TEXT),
                 Property(name="document_id", data_type=DataType.TEXT),
                 Property(name="chunk_index", data_type=DataType.INT),
                 Property(name="content", data_type=DataType.TEXT),
@@ -120,6 +121,7 @@ def insert_chunks(
     document_id: str,
     source_filename: str,
     chunks: list[dict[str, Any]],
+    org_id: str = None,
 ) -> int:
     """
     Insert document chunks into Weaviate.
@@ -132,6 +134,7 @@ def insert_chunks(
             - content: str (the chunk text)
             - heading_context: str (optional, parent heading hierarchy)
             - chunk_index: int (position in document)
+        org_id: Organization identifier for tenant isolation
 
     Returns:
         Number of successfully inserted chunks
@@ -160,6 +163,8 @@ def insert_chunks(
                         "source_filename": source_filename,
                         "created_at": now,
                     }
+                    if org_id:
+                        properties["org_id"] = org_id
 
                     batch.add_object(properties=properties, uuid=uuid)
                     success_count += 1
@@ -196,6 +201,7 @@ def search_knowledge_base(
     limit: int = 5,
     alpha: float = 0.5,
     min_score: float = 0.0,
+    org_id: str = None,
 ) -> list[dict[str, Any]]:
     """
     Search the knowledge base using hybrid search.
@@ -206,6 +212,7 @@ def search_knowledge_base(
         limit: Maximum number of results
         alpha: Balance between vector (1.0) and keyword (0.0) search
         min_score: Minimum score threshold (0.0 to skip filtering)
+        org_id: Organization identifier for tenant isolation
 
     Returns:
         List of result dictionaries with content, source, and score
@@ -216,16 +223,21 @@ def search_knowledge_base(
     try:
         _, collection = _get_weaviate_client()
 
-        # Build user filter
+        # Build filter: user_id OR org_id (if available) for org-shared access
         user_filter = Filter.by_property("user_id").equal(user_id)
+        if org_id:
+            org_filter = Filter.by_property("org_id").equal(org_id)
+            combined_filter = user_filter | org_filter
+        else:
+            combined_filter = user_filter
 
-        # Perform hybrid search
+        # Perform hybrid search (scoped to user + org)
         response = collection.query.hybrid(
             query=query,
             limit=limit,
             alpha=alpha,
             fusion_type=HybridFusion.RANKED,
-            filters=user_filter,
+            filters=combined_filter,
             return_metadata=["score"],
         )
 
@@ -339,4 +351,27 @@ def get_document_chunk_count(user_id: str, document_id: str) -> int:
 
     except Exception as e:
         logger.error(f"[KB Weaviate] Error getting chunk count: {e}")
+        return 0
+
+
+def delete_discovery_chunks(org_id: str, before: str = None) -> int:
+    """Delete auto-discovery chunks for an org, optionally only those created before a timestamp."""
+    try:
+        _, collection = _get_weaviate_client()
+
+        from weaviate.classes.query import Filter
+        discovery_filter = (
+            Filter.by_property("org_id").equal(org_id)
+            & Filter.by_property("document_id").like("discovery:*")
+        )
+        if before:
+            discovery_filter = discovery_filter & Filter.by_property("created_at").less_than(before)
+
+        result = collection.data.delete_many(where=discovery_filter)
+        deleted = result.successful if hasattr(result, "successful") else 0
+        logger.info(f"[KB Weaviate] Deleted {deleted} discovery chunks for org {org_id}")
+        return deleted
+
+    except Exception as e:
+        logger.error(f"[KB Weaviate] Error deleting discovery chunks: {e}")
         return 0

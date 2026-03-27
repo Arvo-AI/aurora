@@ -15,8 +15,10 @@ from connectors.jenkins_connector.api_client import JenkinsClient
 from utils.db.connection_pool import db_pool
 from utils.web.cors_utils import create_cors_response
 from utils.web.webhook_signature import SIGNATURE_HEADER, verify_webhook_signature
-from utils.auth.stateless_auth import get_user_id_from_request
 from utils.auth.token_management import get_token_data, store_tokens_in_db
+from utils.auth.rbac_decorators import require_permission
+from utils.auth.stateless_auth import get_org_id_from_request
+from utils.secrets.secret_ref_utils import delete_user_secret
 
 logger = logging.getLogger(__name__)
 
@@ -43,15 +45,9 @@ def _build_client(creds: Dict[str, Any]) -> Optional[JenkinsClient]:
 
 
 @cloudbees_bp.route("/connect", methods=["POST", "OPTIONS"])
-def connect():
+@require_permission("connectors", "write")
+def connect(user_id):
     """Validate and store CloudBees CI credentials."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
-
     try:
         data = request.get_json(force=True, silent=True) or {}
     except Exception:
@@ -117,15 +113,9 @@ def connect():
 
 
 @cloudbees_bp.route("/status", methods=["GET", "OPTIONS"])
-def status():
+@require_permission("connectors", "read")
+def status(user_id):
     """Check whether CloudBees CI is connected and return summary dashboard data."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
-
     creds = _get_stored_cloudbees_credentials(user_id)
     if not creds:
         return jsonify({"connected": False})
@@ -218,29 +208,19 @@ def status():
 
 
 @cloudbees_bp.route("/disconnect", methods=["POST", "DELETE", "OPTIONS"])
-def disconnect():
+@require_permission("connectors", "write")
+def disconnect(user_id):
     """Disconnect CloudBees CI by removing stored credentials."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
-
     try:
-        with db_pool.get_admin_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "DELETE FROM user_tokens WHERE user_id = %s AND provider = %s",
-                (user_id, CLOUDBEES_PROVIDER),
-            )
-            conn.commit()
-            deleted = cursor.rowcount
+        success, deleted = delete_user_secret(user_id, CLOUDBEES_PROVIDER)
+        if not success:
+            logger.warning("[CLOUDBEES] Failed to clean up secrets during disconnect")
+            return jsonify({"success": False, "error": "Failed to delete stored credentials"}), 500
 
-        logger.info("[CLOUDBEES] Disconnected user %s (deleted %d token rows)", user_id, deleted)
-        return jsonify({"success": True, "message": "CloudBees CI disconnected successfully"})
+        logger.info("[CLOUDBEES] Disconnected provider (deleted %d token rows)", deleted)
+        return jsonify({"success": True, "message": "CloudBees CI disconnected successfully", "deleted": deleted})
     except Exception as exc:
-        logger.exception("[CLOUDBEES] Failed to disconnect user %s", user_id)
+        logger.exception("[CLOUDBEES] Failed to disconnect provider")
         return jsonify({"error": "Failed to disconnect CloudBees CI"}), 500
 
 
@@ -323,15 +303,9 @@ def deployment_webhook(user_id: str):
 
 
 @cloudbees_bp.route("/webhook-url", methods=["GET", "OPTIONS"])
-def get_webhook_url():
+@require_permission("connectors", "read")
+def get_webhook_url(user_id):
     """Return the webhook URL and Jenkinsfile snippets for the authenticated user."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
-
     backend_url = os.getenv("BACKEND_URL", "").rstrip("/")
     if not backend_url:
         backend_url = request.host_url.rstrip("/")
@@ -408,15 +382,10 @@ def get_webhook_url():
 
 
 @cloudbees_bp.route("/deployments", methods=["GET", "OPTIONS"])
-def list_deployments():
+@require_permission("connectors", "read")
+def list_deployments(user_id):
     """List recent CloudBees CI deployment events for the authenticated user."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
-
+    org_id = get_org_id_from_request()
     limit = min(max(request.args.get("limit", 20, type=int), 1), 100)
     offset = max(request.args.get("offset", 0, type=int), 0)
     service_filter = request.args.get("service")
@@ -426,16 +395,18 @@ def list_deployments():
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                cursor.execute("SET myapp.current_org_id = %s", (org_id,))
+
                 if service_filter:
                     cursor.execute(
                         """SELECT id, service, environment, result, build_number, build_url,
                                   commit_sha, branch, repository, deployer, duration_ms,
                                   job_name, trace_id, received_at
                            FROM jenkins_deployment_events
-                           WHERE user_id = %s AND provider = 'cloudbees' AND service = %s
+                           WHERE org_id = %s AND provider = 'cloudbees' AND service = %s
                            ORDER BY received_at DESC
                            LIMIT %s OFFSET %s""",
-                        (user_id, service_filter, limit, offset),
+                        (org_id, service_filter, limit, offset),
                     )
                 else:
                     cursor.execute(
@@ -443,17 +414,17 @@ def list_deployments():
                                   commit_sha, branch, repository, deployer, duration_ms,
                                   job_name, trace_id, received_at
                            FROM jenkins_deployment_events
-                           WHERE user_id = %s AND provider = 'cloudbees'
+                           WHERE org_id = %s AND provider = 'cloudbees'
                            ORDER BY received_at DESC
                            LIMIT %s OFFSET %s""",
-                        (user_id, limit, offset),
+                        (org_id, limit, offset),
                     )
                 rows = cursor.fetchall()
 
                 cursor.execute(
-                    "SELECT COUNT(*) FROM jenkins_deployment_events WHERE user_id = %s AND provider = 'cloudbees'"
+                    "SELECT COUNT(*) FROM jenkins_deployment_events WHERE org_id = %s AND provider = 'cloudbees'"
                     + (" AND service = %s" if service_filter else ""),
-                    (user_id, service_filter) if service_filter else (user_id,),
+                    (org_id, service_filter) if service_filter else (org_id,),
                 )
                 total = cursor.fetchone()[0]
 

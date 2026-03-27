@@ -361,7 +361,7 @@ RULES:
     return prompt
 
 
-def _save_postmortem(incident_id: str, user_id: str, content: str) -> None:
+def _save_postmortem(incident_id: str, user_id: str, content: str, org_id: str) -> None:
     """Save or update the postmortem in the database."""
     from utils.db.connection_pool import db_pool
 
@@ -369,17 +369,19 @@ def _save_postmortem(incident_id: str, user_id: str, content: str) -> None:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
                 cursor.execute("SET myapp.current_user_id = %s", (user_id,))
+                cursor.execute("SET myapp.current_org_id = %s", (org_id,))
                 conn.commit()
                 cursor.execute(
                     """
-                    INSERT INTO postmortems (incident_id, user_id, content, generated_at, updated_at)
-                    VALUES (%s, %s, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                    INSERT INTO postmortems (incident_id, user_id, org_id, content, generated_at, updated_at)
+                    VALUES (%s, %s, %s, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                     ON CONFLICT (incident_id)
                     DO UPDATE SET content = EXCLUDED.content,
                                   user_id = EXCLUDED.user_id,
+                                  org_id = EXCLUDED.org_id,
                                   updated_at = CURRENT_TIMESTAMP
                     """,
-                    (incident_id, user_id, content),
+                    (incident_id, user_id, org_id, content),
                 )
                 logger.info("[Postmortem] Upserted postmortem for incident %s", incident_id)
             conn.commit()
@@ -398,7 +400,7 @@ def _save_postmortem(incident_id: str, user_id: str, content: str) -> None:
     max_retries=2,
     default_retry_delay=10,
 )
-def generate_postmortem(self, incident_id: str, user_id: str) -> Dict[str, Any]:
+def generate_postmortem(self, incident_id: str, user_id: str, org_id: str) -> Dict[str, Any]:
     """Generate an AI-powered postmortem for a resolved incident.
 
     Fetches incident data, investigation thoughts, and suggestions, then
@@ -414,7 +416,7 @@ def generate_postmortem(self, incident_id: str, user_id: str) -> Dict[str, Any]:
     from celery.exceptions import SoftTimeLimitExceeded
 
     logger.info(
-        f"[Postmortem] Generating postmortem for incident {incident_id} (user={user_id})"
+        f"[Postmortem] Generating postmortem for incident {incident_id} (user={user_id}, org={org_id})"
     )
 
     try:
@@ -461,7 +463,7 @@ def generate_postmortem(self, incident_id: str, user_id: str) -> Dict[str, Any]:
         )
 
         # Save to database
-        _save_postmortem(incident_id, user_id, postmortem_content)
+        _save_postmortem(incident_id, user_id, postmortem_content, org_id)
 
         return {
             "incident_id": incident_id,

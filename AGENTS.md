@@ -18,7 +18,7 @@
 
 ## Architecture
 - **Docker Compose stack**: aurora-server (Flask API on :5080), celery_worker (background tasks), chatbot (WebSocket on :5006), frontend (Next.js on :3000), postgres (:5432), weaviate (vector DB :8080), redis (:6379), vault (secrets :8200), seaweedfs (object storage :8333)
-- **Backend** (server/): Flask REST API (main_compute.py), WebSocket chatbot (main_chatbot.py), Celery tasks, connectors for GCP/AWS/Azure, LangGraph agent workflow
+- **Backend** (server/): Flask REST API (main_compute.py), WebSocket chatbot (main_chatbot.py), Celery tasks, connectors for GCP/AWS/Azure/Datadog/New Relic/Grafana, LangGraph agent workflow
 - **Frontend** (client/): Next.js 15, TypeScript, Tailwind CSS, shadcn/ui components, Auth.js authentication, path alias `@/*` → `./src/*`
 - **Database**: PostgreSQL (aurora_db), Weaviate for semantic search, Redis for Celery queue
 - **Secrets**: HashiCorp Vault (KV v2 engine at `aurora` mount)

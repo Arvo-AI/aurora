@@ -1,3 +1,5 @@
+import { apiRequest, apiDelete } from '@/lib/services/api-client';
+
 export interface BigPandaStatus {
   connected: boolean;
   environmentCount?: number;
@@ -11,25 +13,10 @@ export interface BigPandaWebhookUrlResponse {
 
 const API_BASE = '/api/bigpanda';
 
-async function jsonFetch<T>(input: RequestInfo, init?: RequestInit): Promise<T> {
-  const response = await fetch(input, {
-    ...init,
-    headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
-    cache: 'no-store',
-  });
-
-  if (!response.ok) {
-    const parsed = await response.json().catch(() => null) as { error?: string } | null;
-    throw new Error(parsed?.error || response.statusText || `Request failed (${response.status})`);
-  }
-
-  return await response.json();
-}
-
 export const bigpandaService = {
   async getStatus(): Promise<BigPandaStatus | null> {
     try {
-      return await jsonFetch<BigPandaStatus>(`${API_BASE}/status`);
+      return await apiRequest<BigPandaStatus>(`${API_BASE}/status`, { cache: 'no-store' });
     } catch (err) {
       console.error('[bigpandaService] Failed to fetch status:', err);
       return null;
@@ -37,9 +24,9 @@ export const bigpandaService = {
   },
 
   async connect(apiToken: string): Promise<BigPandaStatus> {
-    const raw = await jsonFetch<{ success: boolean; connected: boolean; error?: string; environmentCount?: number }>(
+    const raw = await apiRequest<{ success: boolean; connected: boolean; error?: string; environmentCount?: number }>(
       `${API_BASE}/connect`,
-      { method: 'POST', body: JSON.stringify({ apiToken }) },
+      { method: 'POST', body: JSON.stringify({ apiToken }), cache: 'no-store' },
     );
     if (!raw.success && !raw.connected) {
       throw new Error(raw.error || 'Connection failed');
@@ -49,7 +36,7 @@ export const bigpandaService = {
 
   async getWebhookUrl(): Promise<BigPandaWebhookUrlResponse | null> {
     try {
-      return await jsonFetch<BigPandaWebhookUrlResponse>(`${API_BASE}/webhook-url`);
+      return await apiRequest<BigPandaWebhookUrlResponse>(`${API_BASE}/webhook-url`, { cache: 'no-store' });
     } catch (err) {
       console.error('[bigpandaService] Failed to fetch webhook URL:', err);
       return null;
@@ -57,9 +44,6 @@ export const bigpandaService = {
   },
 
   async disconnect(): Promise<void> {
-    const response = await fetch('/api/connected-accounts/bigpanda', { method: 'DELETE', credentials: 'include' });
-    if (!response.ok) {
-      throw new Error(await response.text() || 'Failed to disconnect');
-    }
+    await apiDelete('/api/connected-accounts/bigpanda');
   },
 };

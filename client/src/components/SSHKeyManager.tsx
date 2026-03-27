@@ -16,6 +16,7 @@ import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { useUserId } from "@/hooks/use-user-id";
 import { Loader2, Plus, Copy, Check, Trash2, ShieldCheck } from "lucide-react";
+import { copyToClipboard } from "@/lib/utils";
 
 type ManagedSshKey = {
   id: number;
@@ -165,7 +166,7 @@ export function SSHKeyManager() {
       return;
     }
     try {
-      await navigator.clipboard.writeText(key.publicKey);
+      await copyToClipboard(key.publicKey);
       setCopiedKeyId(key.id);
       toast({
         title: "Copied",

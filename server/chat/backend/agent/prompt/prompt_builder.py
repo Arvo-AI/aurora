@@ -8,6 +8,13 @@ from typing import Any, List, Optional, Tuple
 # Prefix Cache Configuration
 PREFIX_CACHE_EPHEMERAL_TTL = 300  # 5 minutes - TTL for ephemeral cache segments
 
+# Providers that support CLI execution via cloud_exec.
+# Providers not in this set (e.g. grafana) are observation-only and should
+# never be passed as the provider argument to cloud_exec.
+CLOUD_EXEC_PROVIDERS = frozenset({
+    "gcp", "aws", "azure", "ovh", "scaleway", "tailscale",
+})
+
 from chat.backend.agent.utils.prefix_cache import PrefixCacheManager
 from utils.db.connection_pool import db_pool
 
@@ -95,9 +102,11 @@ def build_provider_context_segment(provider_preference: Optional[Any], selected_
             f"- Provider already selected: {providers_text}. Do NOT ask the user to choose a provider again; continue with these settings.\n"
         )
         # Add explicit instruction about which provider to use for cloud_exec
-        if len(normalized) == 1:
+        # Only include providers that actually support CLI execution
+        cloud_exec_providers = [p for p in normalized if p in CLOUD_EXEC_PROVIDERS]
+        if len(cloud_exec_providers) == 1:
             parts.append(
-                f"- IMPORTANT: Use provider='{normalized[0]}' for all cloud_exec calls.\n"
+                f"- IMPORTANT: Use provider='{cloud_exec_providers[0]}' for all cloud_exec calls.\n"
             )
 
     if selected_project_id:
@@ -124,9 +133,15 @@ def build_provider_context_segment(provider_preference: Optional[Any], selected_
                 parts.append(
                     "- Fetch the Azure subscription before writing Terraform: cloud_exec('azure', \"account show --query 'id' -o tsv\"). Use the concrete subscription ID in code.\n"
                 )
-            elif provider == "ovh":
+            elif provider not in ("ovh", "scaleway", "tailscale", "cloudflare", "grafana"):
                 parts.append(
-                    "## OVHcloud Reference:\n\n"
+                    "- Identify the correct project or subscription with the matching CLI command before writing infrastructure code.\n"
+                )
+
+    for provider in normalized or []:
+        if provider == "ovh":
+            parts.append(
+                "## OVHcloud Reference:\n\n"
                     "### CLI COMMANDS (use cloud_exec with 'ovh'):\n\n"
                     "**Discovery Commands:**\n"
                     "- List projects: `cloud_exec('ovh', 'cloud project list --json')`\n"
@@ -211,8 +226,8 @@ def build_provider_context_segment(provider_preference: Optional[Any], selected_
                     "Topic should be the **CLI command** (e.g., 'cloud instance create', 'cloud kube list')\n\n"
                     "️ Do NOT mix them up! Terraform errors need Terraform docs, CLI errors need CLI docs.\n"
                 )
-            elif provider == "scaleway":
-                parts.append(
+        elif provider == "scaleway":
+            parts.append(
                     "## Scaleway Reference:\n\n"
                     "### CLI COMMANDS (use cloud_exec with 'scaleway'):\n\n"
                     "**CRITICAL: Always use cloud_exec('scaleway', 'command') for Scaleway commands, NOT terminal_exec!**\n"
@@ -306,8 +321,8 @@ def build_provider_context_segment(provider_preference: Optional[Any], selected_
                     "- Default region: fr-par, zones: fr-par-1, fr-par-2, fr-par-3\n"
                     "- Default SSH username for instances: `root`\n\n"
                 )
-            elif provider == "tailscale":
-                parts.append(
+        elif provider == "tailscale":
+            parts.append(
                     "## Tailscale Reference:\n\n"
                     "Tailscale is a mesh VPN/network provider. It connects your devices into a secure private network called a 'tailnet'.\n"
                     "Unlike cloud providers (GCP, AWS, Azure), Tailscale doesn't provision infrastructure - it networks existing devices.\n\n"
@@ -349,9 +364,80 @@ def build_provider_context_segment(provider_preference: Optional[Any], selected_
                     "- Auth key values are only shown once at creation\n"
                     "- Tailscale does NOT provision infrastructure\n\n"
                 )
-            else:
-                parts.append(
-                    "- Identify the correct project or subscription with the matching CLI command before writing infrastructure code.\n"
+        elif provider == "cloudflare":
+            parts.append(
+                    "## Cloudflare Reference:\n\n"
+                    "Cloudflare is connected for DNS, CDN, WAF, and edge diagnostics with full remediation capabilities.\n\n"
+                    "### IMPORTANT — NO CLI SUPPORT:\n"
+                    "- Do NOT use `cloud_exec('cloudflare', ...)` — there is no Cloudflare CLI connector.\n"
+                    "- Use the dedicated `query_cloudflare`, `cloudflare_list_zones`, and `cloudflare_action` tools instead.\n\n"
+                    "### OBSERVATION TOOLS (read-only):\n"
+                    "- **List zones**: `cloudflare_list_zones()` — discover all zones with IDs, names, and status.\n"
+                    "- **DNS records**: `query_cloudflare(resource_type='dns_records', zone_id='...')` — list A, AAAA, CNAME, MX, TXT records.\n"
+                    "- **Analytics**: `query_cloudflare(resource_type='analytics', zone_id='...')` — traffic, bandwidth, threats, HTTP status codes, content types, HTTP versions, SSL protocols, IP classification.\n"
+                    "  - Pass `since` (e.g. '-60' for last hour, or ISO-8601) and `until` (ISO-8601) to control the time window.\n"
+                    "  - Bucket granularity is auto-selected: minute buckets for ≤100 min, hourly for ≤100 h, daily beyond that.\n"
+                    "  - Default limit=50 returns a bucketed time-series (e.g., last 24h yields multiple hourly buckets). Set `limit=1` to force a single aggregate covering the entire window.\n"
+                    "- **Security events**: `query_cloudflare(resource_type='firewall_events', zone_id='...')` — recent WAF blocks, challenges, JS challenges.\n"
+                    "- **Firewall rules**: `query_cloudflare(resource_type='firewall_rules', zone_id='...')` — active firewall rules and expressions.\n"
+                    "- **Rate limits**: `query_cloudflare(resource_type='rate_limits', zone_id='...')` — rate limiting rules (thresholds, actions, URL patterns).\n"
+                    "- **Zone settings**: `query_cloudflare(resource_type='zone_settings', zone_id='...')` — ALL zone settings (security level, caching, dev mode, WAF, TLS version, minification, etc.).\n"
+                    "- **Page rules**: `query_cloudflare(resource_type='page_rules', zone_id='...')` — URL-based redirects, forwarding, cache overrides.\n"
+                    "- **Workers**: `query_cloudflare(resource_type='workers')` — list Cloudflare Workers scripts.\n"
+                    "- **Load balancers**: `query_cloudflare(resource_type='load_balancers', zone_id='...')` — LB config, pools, failover.\n"
+                    "- **SSL/TLS**: `query_cloudflare(resource_type='ssl', zone_id='...')` — TLS mode (off/flexible/full/strict) and cert status.\n"
+                    "- **Healthchecks**: `query_cloudflare(resource_type='healthchecks', zone_id='...')` — origin health monitors.\n\n"
+                    "### REMEDIATION TOOLS (write actions via `cloudflare_action`):\n"
+                    "All remediation uses one tool: `cloudflare_action(action_type='...', zone_id='...', ...)`\n\n"
+                    "- **Purge cache**: `cloudflare_action(action_type='purge_cache', zone_id='...', files=['https://...'])` — clear cached content.\n"
+                    "  - Omit `files` to purge everything (use with caution — spikes origin load).\n"
+                    "- **Under Attack Mode**: `cloudflare_action(action_type='security_level', zone_id='...', value='under_attack')` — enable JS challenge for all visitors.\n"
+                    "  - Other values: 'high', 'medium', 'low', 'essentially_off'.\n"
+                    "  - Use during active DDoS or abuse. Remember to lower it after the incident.\n"
+                    "- **Development mode**: `cloudflare_action(action_type='development_mode', zone_id='...', value='on')` — bypass cache entirely.\n"
+                    "  - Useful for debugging stale content issues. Auto-expires after 3 hours.\n"
+                    "- **DNS update**: `cloudflare_action(action_type='dns_update', zone_id='...', record_id='...', content='1.2.3.4')` — change a DNS record.\n"
+                    "  - Use for failover to backup origin, maintenance page, or IP migration.\n"
+                    "  - Get record_id from `query_cloudflare(resource_type='dns_records')`.\n"
+                    "  - Also supports `proxied` (bool) and `ttl` (int, 1=auto).\n"
+                    "- **Toggle firewall rule**: `cloudflare_action(action_type='toggle_firewall_rule', zone_id='...', rule_id='...', paused=True)` — disable a rule.\n"
+                    "  - Use to unblock false-positive blocks or emergency-enable a blocking rule.\n"
+                    "  - Get rule_id from `query_cloudflare(resource_type='firewall_rules')`.\n\n"
+                    "### RCA WORKFLOW:\n"
+                    "1. Start with `cloudflare_list_zones()` to discover zone IDs.\n"
+                    "2. Check `zone_settings` for current security level, dev mode, caching config.\n"
+                    "3. Check `analytics` for traffic spikes, elevated error rates (5xx), or threat surges.\n"
+                    "4. Check `firewall_events` if traffic is being blocked unexpectedly.\n"
+                    "5. Check `firewall_rules` and `rate_limits` if legitimate traffic appears throttled.\n"
+                    "6. Check `dns_records` if a domain resolution issue is suspected.\n"
+                    "7. Check `ssl` if TLS handshake errors are reported.\n"
+                    "8. Check `healthchecks` and `load_balancers` if origin availability is degraded.\n"
+                    "9. Check `page_rules` if redirects or caching overrides are misbehaving.\n\n"
+                    "### CRITICAL RULES:\n"
+                    "- NEVER call cloud_exec with provider='cloudflare' — it will fail.\n"
+                    "- NEVER use query_cloudflare to list zones — use `cloudflare_list_zones()` instead.\n"
+                    "- Always get zone IDs first before querying zone-specific data.\n"
+                    "- Only zones enabled by the user are accessible; others will be rejected.\n"
+                    "- Analytics covers the last 24h by default; use the `since` parameter for custom ranges.\n"
+                    "- Remediation actions require write permissions on the token; if a 403 is returned, tell the user which permission to add.\n\n"
+                )
+        elif provider == "grafana":
+            parts.append(
+                    "## Grafana Reference:\n\n"
+                    "Grafana is connected as an **observation-only** provider for alert ingestion and dashboard monitoring.\n\n"
+                    "### IMPORTANT — NO CLI SUPPORT:\n"
+                    "- Do NOT use `cloud_exec('grafana', ...)` — there is no Grafana CLI connector.\n"
+                    "- Do NOT use `terminal_exec` with `grafana-cli` — it is not installed.\n"
+                    "- Grafana data (alerts) is available through Aurora's internal API, not through CLI tools.\n\n"
+                    "### WHAT YOU CAN DO:\n"
+                    "- **View alerts**: Grafana alerts are automatically ingested via webhook and stored in Aurora's database.\n"
+                    "  Reference the alert context provided in the conversation to answer questions about Grafana alerts.\n"
+                    "- **Investigate infrastructure**: If an alert references a specific cloud resource (VM, pod, service),\n"
+                    "  use the appropriate cloud provider tool (cloud_exec with 'gcp', 'aws', 'azure', etc.) to investigate.\n\n"
+                    "### CRITICAL RULES:\n"
+                    "- NEVER call cloud_exec with provider='grafana' — it will fail.\n"
+                    "- Use the alert context already available in the conversation.\n"
+                    "- For deeper investigation, identify the underlying cloud provider from the alert and use that provider's tools.\n\n"
                 )
 
     return "".join(parts)
@@ -480,117 +566,23 @@ def build_failure_recovery_segment(state: Optional[Any]) -> str:
 
 
 def build_github_context_segment(user_id: Optional[str]) -> str:
-    """Build GitHub context segment with connected account and selected repo info."""
-    import logging
-    
+    """Build GitHub context segment -- lightweight, repos are fetched via tool call."""
     if not user_id:
         return ""
-    
     try:
         from utils.auth.stateless_auth import get_credentials_from_db
-        
-        parts: List[str] = []
-        
-        # Get GitHub credentials (username, connection status)
         github_creds = get_credentials_from_db(user_id, 'github')
-        if not github_creds:
-            logging.debug(f"No GitHub credentials found for user {user_id}")
+        if not github_creds or not github_creds.get('username'):
             return ""
-        
-        username = github_creds.get('username', '')
-        if not username:
-            logging.debug(f"GitHub credentials found but no username for user {user_id}")
-            return ""
-        
-        logging.info(f"Building GitHub context for user {user_id}, username: {username}")
-        
-        parts.append("GITHUB INTEGRATION CONTEXT:\n")
-        parts.append(f"- Connected GitHub account: {username}\n")
-        
-        # Get selected repository and branch
-        repo_selection = get_credentials_from_db(user_id, 'github_repo_selection')
-        if repo_selection:
-            repository = repo_selection.get('repository', {})
-            branch = repo_selection.get('branch', {})
-            
-            repo_full_name = repository.get('full_name', '')
-            branch_name = branch.get('name', 'main')
-            
-            if repo_full_name:
-                # Parse owner and repo
-                repo_parts = repo_full_name.split('/')
-                if len(repo_parts) == 2:
-                    owner, repo_name = repo_parts
-                    logging.info(f"GitHub repo selection found: {repo_full_name} (branch: {branch_name})")
-                    parts.append(f"- Selected repository: {repo_full_name}\n")
-                    parts.append(f"- Repository owner: {owner}\n")
-                    parts.append(f"- Repository name: {repo_name}\n")
-                    parts.append(f"- Default branch: {branch_name}\n")
-        else:
-            logging.info(f"No GitHub repo selection found for user {user_id}")
-        
-        parts.append("\n")
-        parts.append("GITHUB MCP TOOLS AVAILABLE (Official GitHub MCP Server - 94 tools):\n")
-        parts.append("You have full access to the Official GitHub MCP Server tools. Use these for all GitHub operations:\n\n")
-        
-        parts.append("**Repository & Files:**\n")
-        parts.append("- create_repository, fork_repository, search_repositories, get_repository_tree\n")
-        parts.append("- get_file_contents, create_or_update_file, delete_file, push_files\n")
-        parts.append("- create_branch, list_branches, list_commits, get_commit\n")
-        parts.append("- list_tags, get_tag, list_releases, get_latest_release, get_release_by_tag\n\n")
-        
-        parts.append("**Issues:**\n")
-        parts.append("- create_issue, get_issue, list_issues, update_issue, search_issues\n")
-        parts.append("- add_issue_comment, get_label, list_label, label_write\n")
-        parts.append("- issue_read, issue_write, sub_issue_write, list_issue_types\n")
-        parts.append("- assign_copilot_to_issue\n\n")
-        
-        parts.append("**Pull Requests:**\n")
-        parts.append("- create_pull_request, get_pull_request, list_pull_requests, update_pull_request\n")
-        parts.append("- merge_pull_request, update_pull_request_branch, search_pull_requests\n")
-        parts.append("- get_pull_request_files, get_pull_request_status, get_pull_request_comments, get_pull_request_reviews\n")
-        parts.append("- create_pull_request_review, create_pending_pull_request_review, create_and_submit_pull_request_review\n")
-        parts.append("- add_comment_to_pending_review, pull_request_read, pull_request_review_write\n")
-        parts.append("- request_copilot_review\n\n")
-        
-        parts.append("**GitHub Actions/Workflows:**\n")
-        parts.append("- list_workflows, list_workflow_runs, get_workflow_run, run_workflow\n")
-        parts.append("- cancel_workflow_run, rerun_workflow_run, rerun_failed_jobs\n")
-        parts.append("- list_workflow_jobs, get_job_logs, get_workflow_run_logs\n")
-        parts.append("- list_workflow_run_artifacts, download_workflow_run_artifact\n")
-        parts.append("- get_workflow_run_usage, delete_workflow_run_logs\n\n")
-        
-        parts.append("**Security & Scanning:**\n")
-        parts.append("- list_code_scanning_alerts, get_code_scanning_alert\n")
-        parts.append("- list_dependabot_alerts, get_dependabot_alert\n")
-        parts.append("- list_secret_scanning_alerts, get_secret_scanning_alert\n")
-        parts.append("- list_global_security_advisories, get_global_security_advisory\n")
-        parts.append("- list_repository_security_advisories, list_org_repository_security_advisories\n\n")
-        
-        parts.append("**Discussions & Projects:**\n")
-        parts.append("- list_discussions, get_discussion, get_discussion_comments, list_discussion_categories\n")
-        parts.append("- list_projects, get_project, list_project_items, get_project_item\n")
-        parts.append("- add_project_item, update_project_item, delete_project_item\n")
-        parts.append("- list_project_fields, get_project_field\n\n")
-        
-        parts.append("**Gists & Notifications:**\n")
-        parts.append("- create_gist, get_gist, list_gists, update_gist\n")
-        parts.append("- list_notifications, get_notification_details, dismiss_notification\n")
-        parts.append("- mark_all_notifications_read, manage_notification_subscription\n\n")
-        
-        parts.append("**Users, Teams & Search:**\n")
-        parts.append("- get_me, search_users, search_orgs, get_teams, get_team_members\n")
-        parts.append("- search_code, list_starred_repositories, star_repository, unstar_repository\n\n")
-        
-        parts.append("GITHUB TOOL USAGE RULES:\n")
-        parts.append("- When user asks about PRs, issues, commits, or repo operations WITHOUT specifying a repository, use the selected repository above.\n")
-        parts.append("- For list_pull_requests, list_issues, list_commits: use 'owner' and 'repo' parameters from the selected repository.\n")
-        parts.append("- For creating PRs/issues: default to the selected repository unless user specifies another.\n")
-        parts.append("- Always use the MCP tools (prefixed with 'mcp_') for GitHub operations - they provide full GitHub API access.\n")
-        parts.append("- If no repository is selected and user doesn't specify one, ask which repository they want to work with.\n")
-        
-        return "".join(parts)
-        
+
+        return (
+            "GITHUB INTEGRATION:\n"
+            f"- Connected account: {github_creds['username']}\n"
+            "- Call get_connected_repos to list available repositories with descriptions.\n"
+            "- Always pass repo='owner/repo' to github_rca and MCP tools.\n"
+            "- Use github_rca for RCA (deployment_check, commits, diff, pull_requests).\n"
+            "- Use MCP tools (mcp_*) for direct GitHub API operations.\n"
+        )
     except Exception as e:
         import logging
         logging.warning(f"Error building GitHub context segment: {e}")
@@ -729,28 +721,30 @@ def build_system_invariant() -> str:
         "knowledge_base_search(query, limit) - Search user's uploaded documentation:\n"
         "- ALWAYS search the knowledge base at the START of any investigation\n"
         "- Contains runbooks, architecture docs, postmortems, and team-specific procedures\n"
+        "- Contains auto-discovered infrastructure topology (deployment chains, dependencies, monitoring mappings)\n"
         "- Returns relevant excerpts with source file attribution\n"
         "- WHEN TO SEARCH:\n"
-        "  1. At the START of every investigation - check for existing runbooks\n"
+        "  1. At the START of every investigation - check for existing runbooks AND infrastructure topology\n"
         "  2. When encountering unfamiliar services or systems\n"
         "  3. When seeing error patterns that might match past incidents\n"
         "  4. Before providing recommendations - check for documented procedures\n"
         "- QUERY EXAMPLES:\n"
-        "  • 'spanner latency troubleshooting runbook'\n"
+        "  • 'payment-service deployment chain dependencies'\n"
         "  • 'redis connection timeout'\n"
-        "  • 'batch job conflict'\n"
+        "  • 'what connects to database X'\n"
         "  • 'escalation process database'\n"
         "- IMPORTANT: Reference knowledge base findings with source citations in your analysis\n"
         "- If a runbook exists for the issue, FOLLOW the documented steps\n\n"
     )
     
-    return ('''
+    return (
         "You are Aurora, an RCA (Root Cause Analysis) agent specialized in troubleshooting and resolving cloud infrastructure problems across multiple providers (GCP, AWS, Azure, OVH, Scaleway). Your role is to diagnose issues, identify root causes, and implement fixes to restore infrastructure health.\n\n"
         "You are part of Arvo, a Canadian AI company based out of McGill University that has raised a pre-seed funding round. Arvo builds AI-powered cloud infrastructure management and troubleshooting solutions.\n\n"
         "When troubleshooting, gather context first, then investigate infrastructure state and logs to identify the underlying cause before proposing and implementing solutions.\n\n"
         "IMPORTANT: You are Aurora by Arvo - never identify as \"a language model trained by X\". You're a cloud infrastructure troubleshooting agent.\n\n"
         "You have access to a suite of powerful tools to accomplish this.\n\n"
-        ''' + knowledge_base_section + '''"TOOL SELECTION - CRITICAL DECISION TREE:\n"
+        + knowledge_base_section +
+        "TOOL SELECTION - CRITICAL DECISION TREE:\n"
         "FIRST CHECK: Did user explicitly mention 'Terraform', 'IaC', 'infrastructure as code', or 'tf'?\n"
         "  → YES: Use iac_tool for the ENTIRE workflow (write → plan → apply). Do NOT use cloud_exec for resource creation.\n"
         "  → NO: Continue with the decision tree below.\n\n"
@@ -861,7 +855,7 @@ def build_system_invariant() -> str:
         "- Focus on insights and context rather than duplicating data the user can already see\n"
         "- Example: Instead of showing the full JSON array again, say 'You have 36 resource groups across 3 regions'\n\n"
         "CANCELLATION RESPECT:\n"
-        "- If the user cancels an `iac_tool(action="apply")` execution, you MUST NOT attempt to recreate, delete, or modify the same resources via other tools such as `cloud_exec` or direct API calls.\n"
+        "- If the user cancels an `iac_tool(action='apply')` execution, you MUST NOT attempt to recreate, delete, or modify the same resources via other tools such as `cloud_exec` or direct API calls.\n"
         "- Treat a cancelled apply action as the final decision unless the user explicitly asks again.\n\n"
         "ERROR HANDLING & PERSISTENCE - CRITICAL:\n"
         "- NEVER finish a workflow silently when a tool returns an error\n"
@@ -908,7 +902,7 @@ def build_system_invariant() -> str:
         "  7. Check dependent resources (network, storage, etc.)\n"
         "  8. Examine node/host health\n"
         "  9. Look for patterns in historical data\n"
-        "  10. Identify root cause and recommend remediation\n\n"'''
+        "  10. Identify root cause and recommend remediation\n\n"
         "SMART DELETION WORKFLOW:\n"
         "When asked to delete, remove, stop, or destroy resources:\n"
         "1. TERRAFORM-MANAGED RESOURCES: If terraform state exists, use terraform deletion\n"
@@ -1447,15 +1441,10 @@ def build_web_search_note() -> str: #mainly for testing
 
 
 def build_background_mode_segment(state: Optional[Any]) -> str:
-    """Build RCA investigation instructions for background chats.
-
-    This injects provider-aware investigation guidance into the system prompt
-    for background RCA chats triggered by monitoring alerts.
-    """
+    """Build background mode instructions for RCA or prediscovery chats."""
     if not state:
         return ""
 
-    # Only build if this is a background chat with RCA context
     if not getattr(state, 'is_background', False):
         return ""
 
@@ -1530,23 +1519,64 @@ def build_background_mode_segment(state: Optional[Any]) -> str:
             "Start with problems to understand the issue, then drill into entities and logs.",
         ])
 
+    # Datadog tools (if connected)
+    if integrations.get('datadog'):
+        parts.extend([
+            "",
+            "DATADOG INVESTIGATION:",
+            "IMPORTANT: Datadog is a REMOTE service. Use ONLY the query_datadog API tool.",
+            "Usage: query_datadog(resource_type=TYPE, query=QUERY, time_from=START)",
+            "Resource types:",
+            "1. 'logs' - Search log entries. query=Datadog log query syntax e.g. \"service:web status:error\"",
+            "2. 'metrics' - Query metric timeseries. query=metric query e.g. \"avg:system.cpu.user{*}\"",
+            "3. 'monitors' - List monitors with status. query=name filter (optional)",
+            "4. 'events' - Platform events. query=source filter (optional)",
+            "5. 'traces' - APM spans/traces. query=span query e.g. \"service:web @http.status_code:500\"",
+            "6. 'hosts' - Infrastructure hosts. query=host filter (optional)",
+            "7. 'incidents' - Datadog incidents. Lists active/recent incidents (requires Incident Management; may 403 if not enabled).",
+            "Investigation flow:",
+            "1. Search logs for errors around the alert time",
+            "2. Check traces for failing requests and latency",
+            "3. Query metrics for resource correlation (CPU, memory, error rates)",
+            "4. List monitors to understand alerting context",
+            "5. Check hosts for infrastructure health",
+            "6. Review incidents for related/correlated issues",
+            "Datadog query syntax: service:X, status:error, @http.status_code:5*, host:X, env:production",
+        ])
+
+    # New Relic tools (if connected)
+    if integrations.get('newrelic'):
+        parts.extend([
+            "",
+            "NEW RELIC INVESTIGATION:",
+            "IMPORTANT: New Relic is a REMOTE service. Use ONLY the query_newrelic API tool.",
+            "Usage: query_newrelic(resource_type=TYPE, query=QUERY, time_range=RANGE, limit=N)",
+            "Resource types:",
+            "1. 'nrql' - Run NRQL queries. query=NRQL string e.g. \"SELECT count(*) FROM Transaction WHERE error IS true FACET appName\"",
+            "2. 'issues' - Active alert issues. query=state filter (ACTIVATED, CREATED, CLOSED)",
+            "3. 'entities' - Search monitored entities (APM apps, hosts). query=entity name or filter",
+            "Investigation flow:",
+            "1. Check issues for active/related alert context",
+            "2. Search entities to identify affected services and hosts",
+            "3. Use NRQL to query transactions, errors, and metrics around the alert time",
+            "NRQL tips: SELECT ... FROM Transaction/TransactionError/SystemSample, FACET for grouping, TIMESERIES for trends",
+            "Common NRQL: SELECT count(*) FROM TransactionError WHERE appName='X' SINCE 1 hour ago TIMESERIES",
+        ])
+
     # GitHub tools (if connected)
     if integrations.get('github'):
         parts.extend([
             "",
             "GITHUB INVESTIGATION:",
             "Use github_rca tool for structured code change investigation.",
+            "Always pass repo='owner/repo' to specify which repository.",
+            "If unsure which repo is relevant to the alert, call get_connected_repos first.",
             "",
-            "IMPORTANT - Repository Auto-Resolution:",
-            "- The tool auto-resolves repo from Knowledge Base (runbooks) if available",
-            "- Do NOT pass repo= parameter unless you need a specific repo",
-            "- Resolution order: KB Memory → KB Documents → Connected repo (fallback)",
-            "",
-            "Commands (omit repo= to use KB auto-resolution):",
-            "- github_rca(action='deployment_check') - Recent GitHub Actions runs",
-            "- github_rca(action='commits', incident_time='ALERT_TIME') - Recent commits",
-            "- github_rca(action='diff', commit_sha='SHA') - Diff for specific commits",
-            "- github_rca(action='pull_requests') - Recently merged PRs",
+            "Commands:",
+            "- github_rca(repo='owner/repo', action='deployment_check') - Recent GitHub Actions runs",
+            "- github_rca(repo='owner/repo', action='commits', incident_time='ALERT_TIME') - Recent commits",
+            "- github_rca(repo='owner/repo', action='diff', commit_sha='SHA') - Diff for specific commits",
+            "- github_rca(repo='owner/repo', action='pull_requests') - Recently merged PRs",
             "",
             "Check for recent code changes that may correlate with the alert.",
             "Look for: config changes, k8s manifests, Terraform, dependency updates.",
@@ -1565,6 +1595,37 @@ def build_background_mode_segment(state: Optional[Any]) -> str:
             "Workflow: search first, then fetch promising pages for detailed procedures.",
             "Cross-reference Confluence findings with live infrastructure state.",
         ])
+
+    # Jira integration (if connected)
+    if integrations.get('jira'):
+        jira_mode = integrations.get('jira_mode', 'comment_only')
+        parts.extend([
+            "",
+            "JIRA INTEGRATION:",
+            "Jira is connected. Use Jira tools to gain context during investigation AND to track the incident afterward:",
+            "",
+            "Investigation (use EARLY to narrow scope):",
+            "- jira_search_issues(jql='text ~ \"service\" AND updated >= -7d ORDER BY updated DESC') - Find recent work on the affected service",
+            "- jira_search_issues(jql='type in (Bug, Incident) AND status != Done ORDER BY updated DESC') - Find open bugs/incidents",
+            "- jira_get_issue(issue_key='PROJ-123') - Read issue details, linked PRs, comments for change context",
+            "",
+        ])
+        if jira_mode == "comment_only":
+            parts.extend([
+                "Post-analysis (comment on existing issues only):",
+                "- jira_add_comment(issue_key='PROJ-123', comment='update') - Add findings to existing issue",
+                "NOTE: You are configured to COMMENT ONLY. Do NOT create new issues or link issues.",
+                "After adding a comment or creating an issue, the tool returns a `url` field. Always share this link with the user as a markdown link so they can click through to Jira.",
+                "Write comments as short, clean plain text. No markdown syntax. Structure: Title, Root Cause, Impact, Evidence, Remediation. Under 15 lines.",
+            ])
+        else:
+            parts.extend([
+                "Post-analysis (create tracking issue):",
+                "- jira_create_issue(project_key='PROJ', summary='title', description='details', issue_type='Bug') - Create incident tracking issue",
+                "- jira_add_comment(issue_key='PROJ-123', comment='update') - Add findings to existing issue",
+                "After adding a comment or creating an issue, the tool returns a `url` field. Always share this link with the user as a markdown link so they can click through to Jira.",
+                "Write comments as short, clean plain text. No markdown syntax. Structure: Title, Root Cause, Impact, Evidence, Remediation. Under 15 lines.",
+            ])
 
     # SharePoint search tools (if connected)
     if integrations.get('sharepoint'):
@@ -1769,6 +1830,17 @@ def build_background_mode_segment(state: Optional[Any]) -> str:
             "6. Provide remediation steps",
             "",
             "YOU MUST make 15-20+ tool calls. After EACH tool call, continue investigating.",
+        ])
+
+        # Non-Anthropic models often don't produce text between tool calls unless instructed to
+        model_name = (getattr(state, 'model', '') or '').lower()
+        if model_name and not model_name.startswith("anthropic/"):
+            parts.extend([
+                "THINK OUT LOUD: Before each tool call, briefly state what you're investigating and why (1-2 sentences).",
+                "After each tool result, briefly state your findings before the next tool call.",
+            ])
+
+        parts.extend([
             "NEVER stop after listing resources - that's just step 1.",
             "On failure: try 3-4 alternatives immediately.",
             "",
@@ -1782,7 +1854,7 @@ def build_background_mode_segment(state: Optional[Any]) -> str:
 def build_knowledge_base_memory_segment(user_id: Optional[str]) -> str:
     """Build knowledge base memory segment for system prompt.
 
-    Fetches user's knowledge base memory content and formats it for injection
+    Fetches the org's knowledge base memory content and formats it for injection
     into the system prompt. This content is always included for authenticated users.
     """
     if not user_id:
@@ -1792,15 +1864,24 @@ def build_knowledge_base_memory_segment(user_id: Optional[str]) -> str:
     kb_logger = logging.getLogger(__name__)
 
     try:
-        with db_pool.get_user_connection() as conn:
+        with db_pool.get_admin_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
-            conn.commit()
-
             cursor.execute(
-                "SELECT content FROM knowledge_base_memory WHERE user_id = %s",
-                (user_id,)
+                "SELECT org_id FROM users WHERE id = %s", (user_id,)
             )
+            user_row = cursor.fetchone()
+            org_id = user_row[0] if user_row else None
+
+            if org_id:
+                cursor.execute(
+                    "SELECT content FROM knowledge_base_memory WHERE org_id = %s ORDER BY updated_at DESC LIMIT 1",
+                    (org_id,)
+                )
+            else:
+                cursor.execute(
+                    "SELECT content FROM knowledge_base_memory WHERE user_id = %s ORDER BY updated_at DESC LIMIT 1",
+                    (user_id,)
+                )
             row = cursor.fetchone()
 
         if row and row[0] and row[0].strip():

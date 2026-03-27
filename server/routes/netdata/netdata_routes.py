@@ -9,8 +9,10 @@ from flask import Blueprint, jsonify, request
 from routes.netdata.tasks import process_netdata_alert
 from utils.db.connection_pool import db_pool
 from utils.web.cors_utils import create_cors_response
-from utils.auth.stateless_auth import get_user_id_from_request
 from utils.auth.token_management import get_token_data, store_tokens_in_db
+from utils.auth.rbac_decorators import require_permission
+from utils.auth.stateless_auth import get_org_id_from_request
+from utils.secrets.secret_ref_utils import delete_user_secret
 
 logger = logging.getLogger(__name__)
 
@@ -27,24 +29,17 @@ def _get_stored_netdata_credentials(user_id: str) -> Optional[Dict[str, Any]]:
 
 
 @netdata_bp.route("/connect", methods=["POST", "OPTIONS"])
-def connect():
+@require_permission("connectors", "write")
+def connect(user_id):
     """Store Netdata API token and space info."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
     try:
         data = request.get_json(force=True, silent=True) or {}
     except Exception:
         data = {}
 
-    # Always use authenticated user ID - never trust userId from request body
-    user_id = get_user_id_from_request()
     api_token = data.get("apiToken") or data.get("token")
     space_url = data.get("spaceUrl") or data.get("baseUrl")
     space_name = data.get("spaceName")
-
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
 
     if not api_token or not isinstance(api_token, str):
         return jsonify({"error": "Netdata API token is required"}), 400
@@ -73,17 +68,10 @@ def connect():
 
 
 @netdata_bp.route("/status", methods=["GET", "OPTIONS"])
-def status():
+@require_permission("connectors", "read")
+def status(user_id):
     """Check Netdata connection status."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
-    user_id = get_user_id_from_request()
     logger.info(f"[NETDATA] Status check for user: {user_id}")
-    
-    if not user_id:
-        logger.warning("[NETDATA] Status check: No user ID found")
-        return jsonify({"error": "User authentication required"}), 401
 
     creds = _get_stored_netdata_credentials(user_id)
     logger.info(f"[NETDATA] Retrieved credentials: {bool(creds)}")
@@ -106,41 +94,35 @@ def status():
 
 
 @netdata_bp.route("/disconnect", methods=["POST", "DELETE", "OPTIONS"])
-def disconnect():
+@require_permission("connectors", "write")
+def disconnect(user_id):
     """Disconnect Netdata by removing stored credentials."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
-
     try:
-        with db_pool.get_admin_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "DELETE FROM user_tokens WHERE user_id = %s AND provider = %s",
-                (user_id, "netdata")
-            )
-            token_rows = cursor.rowcount
-            cursor.execute(
-                "DELETE FROM netdata_alerts WHERE user_id = %s",
-                (user_id,)
-            )
-            alert_rows = cursor.rowcount
-            cursor.execute(
-                "DELETE FROM netdata_verification_tokens WHERE user_id = %s",
-                (user_id,)
-            )
-            conn.commit()
+        success, deleted = delete_user_secret(user_id, "netdata")
+        if not success:
+            logger.warning("[NETDATA] Failed to clean up secrets during disconnect")
 
-        logger.info(f"[NETDATA] Disconnected user {user_id} (tokens={token_rows}, alerts={alert_rows})")
+        alert_rows = 0
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "DELETE FROM netdata_alerts WHERE user_id = %s",
+                    (user_id,)
+                )
+                alert_rows = cursor.rowcount
+                cursor.execute(
+                    "DELETE FROM netdata_verification_tokens WHERE user_id = %s",
+                    (user_id,)
+                )
+                conn.commit()
+
+        logger.info("[NETDATA] Disconnected user (tokens=%d, alerts=%d)", deleted, alert_rows)
         return jsonify({
             "success": True,
             "message": "Netdata disconnected successfully",
         })
     except Exception as exc:
-        logger.exception(f"[NETDATA] Failed to disconnect user {user_id}: {exc}")
+        logger.exception("[NETDATA] Failed to disconnect user: %s", exc)
         return jsonify({"error": "Failed to disconnect Netdata"}), 500
 
 
@@ -199,15 +181,10 @@ def alert_webhook(user_id: str):
 
 
 @netdata_bp.route("/alerts", methods=["GET", "OPTIONS"])
-def get_alerts():
+@require_permission("connectors", "read")
+def get_alerts(user_id):
     """Fetch stored Netdata alerts for user."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
-
+    org_id = get_org_id_from_request()
     limit = request.args.get("limit", 50, type=int)
     offset = request.args.get("offset", 0, type=int)
     status_filter = request.args.get("status")
@@ -215,6 +192,7 @@ def get_alerts():
     try:
         with db_pool.get_admin_connection() as conn:
             cursor = conn.cursor()
+            cursor.execute("SET myapp.current_org_id = %s", (org_id,))
 
             if status_filter:
                 cursor.execute(
@@ -222,11 +200,11 @@ def get_alerts():
                     SELECT id, alert_name, alert_status, chart, host, space, room, 
                            value, message, payload, received_at, created_at
                     FROM netdata_alerts
-                    WHERE user_id = %s AND alert_status = %s
+                    WHERE org_id = %s AND alert_status = %s
                     ORDER BY received_at DESC
                     LIMIT %s OFFSET %s
                     """,
-                    (user_id, status_filter, limit, offset)
+                    (org_id, status_filter, limit, offset)
                 )
             else:
                 cursor.execute(
@@ -234,11 +212,11 @@ def get_alerts():
                     SELECT id, alert_name, alert_status, chart, host, space, room,
                            value, message, payload, received_at, created_at
                     FROM netdata_alerts
-                    WHERE user_id = %s
+                    WHERE org_id = %s
                     ORDER BY received_at DESC
                     LIMIT %s OFFSET %s
                     """,
-                    (user_id, limit, offset)
+                    (org_id, limit, offset)
                 )
 
             alerts = cursor.fetchall()
@@ -246,13 +224,13 @@ def get_alerts():
             # Get total count
             if status_filter:
                 cursor.execute(
-                    "SELECT COUNT(*) FROM netdata_alerts WHERE user_id = %s AND alert_status = %s",
-                    (user_id, status_filter)
+                    "SELECT COUNT(*) FROM netdata_alerts WHERE org_id = %s AND alert_status = %s",
+                    (org_id, status_filter)
                 )
             else:
                 cursor.execute(
-                    "SELECT COUNT(*) FROM netdata_alerts WHERE user_id = %s",
-                    (user_id,)
+                    "SELECT COUNT(*) FROM netdata_alerts WHERE org_id = %s",
+                    (org_id,)
                 )
             total_count = cursor.fetchone()[0]
 
@@ -284,15 +262,9 @@ def get_alerts():
 
 
 @netdata_bp.route("/alerts/webhook-url", methods=["GET", "OPTIONS"])
-def get_webhook_url():
+@require_permission("connectors", "read")
+def get_webhook_url(user_id):
     """Get the webhook URL and verification token for Netdata configuration."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
-
     # Use ngrok URL for development if available, otherwise use backend URL
     ngrok_url = os.getenv("NGROK_URL", "").rstrip("/")
     backend_url = os.getenv("NEXT_PUBLIC_BACKEND_URL", "").rstrip("/")

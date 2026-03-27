@@ -319,7 +319,6 @@ In **Basic Information**, copy:
 #### 4. Configure Environment
 
 ```bash
-NEXT_PUBLIC_ENABLE_SLACK=true
 SLACK_CLIENT_ID=your-slack-client-id
 SLACK_CLIENT_SECRET=your-slack-client-secret
 SLACK_SIGNING_SECRET=your-signing-secret
@@ -330,17 +329,19 @@ SLACK_SIGNING_SECRET=your-signing-secret
 | Error | Solution |
 |-------|----------|
 | "bad_redirect_uri" | Redirect URL must match exactly in Slack App settings |
-| "Slack connector not enabled" | Set `NEXT_PUBLIC_ENABLE_SLACK=true` and restart |
+| "Slack OAuth credentials not configured" | Set `SLACK_CLIENT_ID` and `SLACK_CLIENT_SECRET` in `.env` |
 
 ---
 
-## Documentation Tools
+## Documentation & Project Management
 
-### Confluence
+### Atlassian (Confluence + Jira)
 
-OAuth 2.0 authentication for Confluence Cloud, or Personal Access Token for Data Center.
+OAuth 2.0 authentication for Atlassian Cloud (Confluence and/or Jira), or Personal Access Tokens for Data Center.
 
-#### Option A: Confluence Cloud (OAuth)
+One OAuth app covers both products. You choose which to connect in the Aurora UI.
+
+#### Option A: Atlassian Cloud (OAuth)
 
 For Atlassian Cloud (`*.atlassian.net`):
 
@@ -350,51 +351,68 @@ For Atlassian Cloud (`*.atlassian.net`):
 2. Click **Create** > **OAuth 2.0 integration**
 3. Name: `Aurora`
 4. Click **Create**
-5. Go to **Permissions** > **Confluence API** > **Add** > **Configure**
-6. Add scopes:
-   - `read:page:confluence`
-   - `read:space:confluence`
-   - `read:user:confluence`
+5. Go to **Distribution**, set Distribution Status to **Sharing**, fill in the required vendor fields (name, privacy policy URL), set Personal Data Declaration to **Yes**, and save. Without this, non-owner users will see "You don't have access to this app."
+6. Go to **Permissions** and add scopes for the products you want:
+   - **Confluence API** > **Add** > **Configure** > click **Edit Scopes** then **Add granular scopes**:
+     - `read:page:confluence`
+     - `read:space:confluence`
+     - `read:user:confluence`
+     - `search:confluence`
+
+     :::warning Use Granular Scopes
+     You must add these as **granular scopes**, not classic scopes. Click "Add granular scopes" under Confluence API in the Permissions tab. If only classic scopes are added, the OAuth flow will fail with "scopes not added to the app."
+     :::
+
+   - **Jira platform REST API** > **Add** > **Configure**:
+     - `read:jira-work`
+     - `write:jira-work`
+     - `read:jira-user`
 7. Go to **Authorization** > **Add** callback URL:
-   - `http://localhost:3000/confluence/callback` (development)
-   - `https://your-domain.com/confluence/callback` (production)
+   - `http://localhost:3000/atlassian/callback` (development)
+   - `https://your-domain.com/atlassian/callback` (production)
 8. Go to **Settings** and copy **Client ID** and **Secret**
 
 ##### 2. Configure Environment
 
 ```bash
 NEXT_PUBLIC_ENABLE_CONFLUENCE=true
-CONFLUENCE_CLIENT_ID=your-client-id
-CONFLUENCE_CLIENT_SECRET=your-client-secret
+NEXT_PUBLIC_ENABLE_JIRA=true
+ATLASSIAN_CLIENT_ID=your-client-id
+ATLASSIAN_CLIENT_SECRET=your-client-secret
 ```
 
 ##### 3. Connect via Aurora UI
 
-1. Navigate to **Connectors** > **Confluence**
-2. Click **Connect with Atlassian**
-3. Authorize Aurora in the Atlassian popup
-4. Connection complete - the site URL is detected automatically
+1. Navigate to **Connectors** > **Atlassian**
+2. Select which products to connect (Confluence, Jira, or both)
+3. Click **Connect with Atlassian**
+4. Authorize Aurora in the Atlassian popup
+5. Connection complete - the site URL is detected automatically
+6. For Jira, choose the agent permission tier (Read Only or Full Access)
 
-#### Option B: Confluence Data Center (PAT)
+#### Option B: Data Center (PAT)
 
-For self-hosted Confluence instances:
+For self-hosted Confluence or Jira instances:
 
 ##### 1. Create Personal Access Token
 
+**Confluence:**
 1. In Confluence, go to your profile > **Settings** > **Personal Access Tokens**
-2. Click **Create token**
-3. Name: `Aurora`
-4. Set expiry as needed
-5. Copy the token
+2. Click **Create token**, name: `Aurora`, set expiry as needed
+3. Copy the token
+
+**Jira:**
+1. In Jira, go to your profile > **Personal Access Tokens**
+2. Click **Create token**, name: `Aurora`, set expiry as needed
+3. Copy the token
 
 ##### 2. Connect via Aurora UI
 
-1. Navigate to **Connectors** > **Confluence**
-2. Select **Confluence Data Center (PAT)**
-3. Enter:
-   - **Base URL**: `https://confluence.yourcompany.com`
-   - **Personal Access Token**: Your PAT
-4. Click **Connect with PAT**
+1. Navigate to **Connectors** > **Atlassian**
+2. Select the products you want and enter per-product:
+   - **Base URL**: e.g. `https://confluence.yourcompany.com` or `https://jira.yourcompany.com`
+   - **Personal Access Token**: The respective PAT
+3. Click **Connect with PAT**
 
 #### URL Limitations
 
@@ -414,6 +432,12 @@ Data Center short links work correctly.
 | "Confluence page URL does not match configured base URL" | Verify the page is from your connected Confluence instance |
 | "Confluence credentials expired" | Reconnect via the Connectors page |
 | "Failed to validate Confluence PAT" | Verify PAT is valid and not expired |
+| "Jira credentials expired" | Reconnect via the Connectors page |
+| "Failed to validate Jira PAT" | Verify PAT is valid and not expired |
+| "Insufficient Jira scopes" | Ensure OAuth app has `read:jira-work`, `write:jira-work`, and `read:jira-user` scopes |
+| "Atlassian OAuth configuration missing" | Set `ATLASSIAN_CLIENT_ID` and `ATLASSIAN_CLIENT_SECRET` in `.env` |
+| "You don't have access to this app" | Enable **Sharing** in the Distribution tab of your Atlassian OAuth app |
+| "Scopes not added to the app" | Add **granular** Confluence scopes (not classic) in the Permissions tab |
 
 ---
 
@@ -526,6 +550,99 @@ Users enter the token and Grafana URL via the Aurora UI.
 3. URL: `https://your-aurora-domain/grafana/alerts/webhook/{user_id}`
 4. In **Notification policies**, route alerts to the Aurora contact point
 
+#### How Aurora Processes Grafana Webhooks
+
+Grafana sends grouped webhook payloads containing an `alerts[]` array. Each alert has a
+**fingerprint** (hash of rule + labels) that uniquely identifies an alert instance.
+
+Aurora processes each alert in the array individually:
+
+- **Firing** (`status: "firing"`): Processed independently per fingerprint. AlertCorrelator
+  checks whether the alert matches an existing open incident (by fingerprint, service
+  similarity, and time proximity, selecting the newest by `started_at DESC`). If a match
+  is found the alert is attached to that incident; otherwise a new incident is created
+  and RCA is triggered.
+- **Resolved** (`status: "resolved"`): Matches the original incident by fingerprint and
+  attaches the resolution as a correlated alert. No new incident or RCA is created.
+
+**Key behaviors:**
+
+| Scenario | Behavior |
+|----------|----------|
+| Single alert fires then resolves | Matched by fingerprint, resolution grouped with original incident |
+| Multiple alerts in one webhook | Each fingerprint is processed independently; correlated alerts attach to an existing incident, uncorrelated ones create a new incident and RCA |
+| Partial resolution (some firing, some resolved) | Each alert handled independently by its status |
+| Same alert re-fires weeks later | New incident created; resolution matches newest by `started_at DESC` |
+| No matching incident for resolution | Logged and skipped; alert still persisted in `grafana_alerts` |
+| Labels change mid-incident | Fingerprint changes, so resolution won't match (labels shouldn't change mid-incident) |
+
+---
+
+### New Relic
+
+User API Key authentication for querying New Relic via NerdGraph (GraphQL).
+
+#### 1. Create a User API Key
+
+1. Log in to [one.newrelic.com](https://one.newrelic.com) and go to **Administration > API keys** (or visit [one.newrelic.com/admin-portal/api-keys](https://one.newrelic.com/admin-portal/api-keys/))
+2. Click **Create a key** and select **User** as the key type
+3. Name the key (e.g., `Aurora Integration`) and save it
+4. Copy the key — it starts with `NRAK-`
+
+#### 2. Find Your Account ID
+
+Your Account ID is shown in the account dropdown or on the API keys page. It is a numeric value (e.g., `1234567`).
+
+#### 3. Identify Your Region
+
+| Region | NerdGraph Endpoint |
+|--------|-------------------|
+| US | `https://api.newrelic.com/graphql` |
+| EU | `https://api.eu.newrelic.com/graphql` |
+
+#### 4. (Optional) License Key
+
+If you want Aurora to write annotations back to New Relic in the future, you can also provide a 40-character License (ingest) key. This is optional and not required for read-only RCA.
+
+#### 5. Connect via Aurora UI
+
+1. Navigate to **Connectors** > **New Relic**
+2. Enter your **User API Key**, **Account ID**, and **Region** (US/EU)
+3. Optionally provide a **License Key** for write-back capabilities
+4. Click **Connect**
+
+#### What Aurora Queries
+
+Aurora uses NerdGraph to:
+- Execute arbitrary **NRQL queries** against any telemetry type (metrics, logs, traces, events)
+- Fetch **alert issues and incidents** with filtering by state, priority, and time window
+- Search **entities** (services, hosts, applications)
+- List **accessible accounts** for multi-account setups
+
+All queries go through a single endpoint: `POST https://api.newrelic.com/graphql` with the `API-Key` header.
+
+#### Webhook Configuration
+
+To receive New Relic alerts in Aurora:
+
+1. In New Relic: **Alerts > Destinations** > create a new **Webhook** destination
+2. Webhook URL: `https://your-aurora-domain/newrelic/webhook/{user_id}`
+3. Under **Workflows**, create or edit a workflow
+4. Add a notification channel using the webhook destination
+5. Configure the workflow filter for the issues you want Aurora to investigate
+
+#### Polling (Alternative to Webhooks)
+
+Aurora can also poll NerdGraph for active issues. Trigger manually via `POST /newrelic/poll-issues` or schedule via Celery Beat.
+
+#### Troubleshooting
+
+| Error | Solution |
+|-------|----------|
+| "Invalid API key" | Ensure the key starts with `NRAK-` and belongs to a user with read access to APM, Infrastructure, Logs, and Alerts |
+| "Account not found" | Verify the Account ID is correct and the API key has access to that account |
+| "EU region issues" | Make sure you selected "EU" in the region selector if your account is on the EU data center |
+
 ---
 
 ### Netdata
@@ -607,6 +724,29 @@ kubectl logs -n aurora -l app=aurora-kubectl-agent --tail=50
 The cluster should appear in Aurora UI with "Connected" status.
 
 See [kubectl-agent README](https://github.com/arvo-ai/aurora/blob/main/kubectl-agent/README.md) for advanced configuration.
+
+---
+
+## Development Tools
+
+### Bitbucket
+
+OAuth App authentication for Bitbucket Cloud.
+
+#### 1. Create OAuth Consumer
+
+1. Go to **Bitbucket workspace settings** > **OAuth consumers** > **Add consumer**
+   - Name: `Aurora`
+   - Callback URL: `{NEXT_PUBLIC_BACKEND_URL}/bitbucket/callback` (e.g. `https://your-aurora-domain/bitbucket/callback`)
+   - Permissions: **Repositories** (Read), **Pull requests** (Read)
+2. Copy the **Key** and **Secret**
+
+#### 2. Configure Environment
+
+```bash
+BB_OAUTH_CLIENT_ID=your-bitbucket-key
+BB_OAUTH_CLIENT_SECRET=your-bitbucket-secret
+```
 
 ---
 

@@ -1,0 +1,20 @@
+<svg version="1.2" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1344 1554" width="1344" height="1554">
+	<title>newrelic-svg</title>
+	<defs>
+		<clipPath clipPathUnits="userSpaceOnUse" id="cp1">
+			<path d="m0 0h7990.83v1554h-7990.83z"/>
+		</clipPath>
+	</defs>
+	<style>
+		.s0 { fill: #00ac69 } 
+		.s1 { fill: #1ce783 } 
+		.s2 { fill: #1d252c } 
+	</style>
+	<g id="Clip-Path" clip-path="url(#cp1)">
+		<g id="Layer">
+			<path id="Layer" class="s0" d="m1084.9 537.9v478.2l-413.2 239.1v298.8l671.6-388.5v-777z"/>
+			<path id="Layer" class="s1" d="m671.7 298.9l413.2 239 258.4-149.4-671.6-388.5-671.7 388.5 258.4 149.4z"/>
+			<path id="Layer" class="s2" d="m413.3 926.5v478.1l258.4 149.4v-777l-671.7-388.5v298.9z"/>
+		</g>
+	</g>
+</svg>

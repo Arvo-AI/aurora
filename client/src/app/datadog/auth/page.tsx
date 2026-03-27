@@ -5,7 +5,8 @@ import { useToast } from "@/hooks/use-toast";
 import { datadogService, DatadogStatus } from "@/lib/services/datadog";
 import { DatadogConnectionStep } from "@/components/datadog/DatadogConnectionStep";
 import { DatadogWebhookStep } from "@/components/datadog/DatadogWebhookStep";
-import { getUserFriendlyError } from "@/lib/utils";
+import { getUserFriendlyError, copyToClipboard } from "@/lib/utils";
+import ConnectorAuthGuard from "@/components/connectors/ConnectorAuthGuard";
 
 const CACHE_KEYS = {
   STATUS: 'datadog_connection_status',
@@ -215,7 +216,7 @@ export default function DatadogAuthPage() {
 
   const handleCopyWebhook = () => {
     if (!webhookUrl) return;
-    navigator.clipboard.writeText(webhookUrl);
+    copyToClipboard(webhookUrl);
     setCopied(true);
     toast({ title: 'Copied', description: 'Webhook URL copied to clipboard' });
     setTimeout(() => setCopied(false), 2000);
@@ -224,59 +225,61 @@ export default function DatadogAuthPage() {
   const isConnected = Boolean(status?.connected);
 
   return (
-    <div className="container mx-auto py-8 px-4 max-w-5xl">
-      <div className="mb-6">
-        <h1 className="text-3xl font-bold">Datadog Integration</h1>
-        <p className="text-muted-foreground mt-1">
-          Securely connect Datadog to ingest logs, metrics, monitors, and alerts inside Aurora.
-        </p>
-      </div>
+    <ConnectorAuthGuard connectorName="Datadog">
+      <div className="container mx-auto py-8 px-4 max-w-5xl">
+        <div className="mb-6">
+          <h1 className="text-3xl font-bold">Datadog Integration</h1>
+          <p className="text-muted-foreground mt-1">
+            Securely connect Datadog to ingest logs, metrics, monitors, and alerts inside Aurora.
+          </p>
+        </div>
 
-      <div className="flex items-center justify-center mb-8">
-        <div className="flex items-center">
-          <div className={`flex items-center justify-center w-10 h-10 rounded-full ${!isConnected ? 'bg-purple-600 text-white' : 'bg-gray-200 text-gray-600'} font-bold`}>
-            1
-          </div>
-          <div className={`w-24 h-1 ${isConnected ? 'bg-purple-600' : 'bg-gray-200'}`}></div>
-          <div className={`flex items-center justify-center w-10 h-10 rounded-full ${isConnected ? 'bg-purple-600 text-white' : 'bg-gray-200 text-gray-600'} font-bold`}>
-            2
+        <div className="flex items-center justify-center mb-8">
+          <div className="flex items-center">
+            <div className={`flex items-center justify-center w-10 h-10 rounded-full ${!isConnected ? 'bg-purple-600 text-white' : 'bg-gray-200 text-gray-600'} font-bold`}>
+              1
+            </div>
+            <div className={`w-24 h-1 ${isConnected ? 'bg-purple-600' : 'bg-gray-200'}`}></div>
+            <div className={`flex items-center justify-center w-10 h-10 rounded-full ${isConnected ? 'bg-purple-600 text-white' : 'bg-gray-200 text-gray-600'} font-bold`}>
+              2
+            </div>
           </div>
         </div>
-      </div>
 
-      <div className="flex items-center justify-center mb-6 text-sm font-medium">
-        <span className={!isConnected ? 'text-purple-600' : 'text-muted-foreground'}>
-          Connect Datadog
-        </span>
-        <span className="mx-4 text-muted-foreground">→</span>
-        <span className={isConnected ? 'text-purple-600' : 'text-muted-foreground'}>
-          Configure Webhook
-        </span>
-      </div>
+        <div className="flex items-center justify-center mb-6 text-sm font-medium">
+          <span className={!isConnected ? 'text-purple-600' : 'text-muted-foreground'}>
+            Connect Datadog
+          </span>
+          <span className="mx-4 text-muted-foreground">→</span>
+          <span className={isConnected ? 'text-purple-600' : 'text-muted-foreground'}>
+            Configure Webhook
+          </span>
+        </div>
 
-      {!isConnected ? (
-        <DatadogConnectionStep
-          apiKey={apiKey}
-          setApiKey={setApiKey}
-          appKey={appKey}
-          setAppKey={setAppKey}
-          site={site}
-          setSite={setSite}
-          serviceAccountName={serviceAccountName}
-          setServiceAccountName={setServiceAccountName}
-          loading={loading}
-          onConnect={handleConnect}
-        />
-      ) : status && webhookUrl ? (
-        <DatadogWebhookStep
-          status={status}
-          webhookUrl={webhookUrl}
-          copied={copied}
-          onCopy={handleCopyWebhook}
-          onDisconnect={handleDisconnect}
-          loading={loading}
-        />
-      ) : null}
-    </div>
+        {!isConnected ? (
+          <DatadogConnectionStep
+            apiKey={apiKey}
+            setApiKey={setApiKey}
+            appKey={appKey}
+            setAppKey={setAppKey}
+            site={site}
+            setSite={setSite}
+            serviceAccountName={serviceAccountName}
+            setServiceAccountName={setServiceAccountName}
+            loading={loading}
+            onConnect={handleConnect}
+          />
+        ) : status && webhookUrl ? (
+          <DatadogWebhookStep
+            status={status}
+            webhookUrl={webhookUrl}
+            copied={copied}
+            onCopy={handleCopyWebhook}
+            onDisconnect={handleDisconnect}
+            loading={loading}
+          />
+        ) : null}
+      </div>
+    </ConnectorAuthGuard>
   );
 }

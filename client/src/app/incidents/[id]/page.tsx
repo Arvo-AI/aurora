@@ -7,6 +7,8 @@ import { incidentsService, Incident, StreamingThought } from '@/lib/services/inc
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { ArrowLeft, AlertTriangle, GitMerge } from 'lucide-react';
+import { useAuth } from '@/hooks/useAuthHooks';
+import { canWrite } from '@/lib/roles';
 
 import IncidentCard from '../components/IncidentCard';
 import ThoughtsPanel from '../components/ThoughtsPanel';
@@ -14,6 +16,7 @@ import ThoughtsPanel from '../components/ThoughtsPanel';
 export default function IncidentDetailPage() {
   const params = useParams();
   const router = useRouter();
+  const { role } = useAuth();
   const [incident, setIncident] = useState<Incident | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -65,10 +68,10 @@ export default function IncidentDetailPage() {
     };
   }, [params.id]);
 
-  // Poll for incident updates (only while investigating)
+  // Poll for incident updates (while investigating or generating final summary)
   useEffect(() => {
-    // Only poll while the incident is still being investigated
-    if (incident && incident.status !== 'investigating') return;
+    const shouldPoll = !incident || incident.status === 'investigating' || incident.auroraStatus === 'summarizing';
+    if (!shouldPoll) return;
 
     let isMounted = true;
 
@@ -117,7 +120,7 @@ export default function IncidentDetailPage() {
       isMounted = false;
       clearInterval(interval);
     };
-  }, [params.id, incident?.status]);
+  }, [params.id, incident?.status, incident?.auroraStatus]);
 
   if (loading) {
     return (
@@ -243,6 +246,7 @@ export default function IncidentDetailPage() {
           thoughts={thoughts}
           incident={incident}
           isVisible={showThoughts}
+          canInteract={canWrite(role)}
         />
       </div>
     </div>

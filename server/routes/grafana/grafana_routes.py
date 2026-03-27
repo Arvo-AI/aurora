@@ -10,8 +10,10 @@ from routes.grafana.tasks import process_grafana_alert
 from utils.db.connection_pool import db_pool
 from utils.web.cors_utils import create_cors_response
 from utils.logging.secure_logging import mask_credential_value
-from utils.auth.stateless_auth import get_user_id_from_request
 from utils.auth.token_management import get_token_data, store_tokens_in_db
+from utils.auth.rbac_decorators import require_permission
+from utils.auth.stateless_auth import get_org_id_from_request
+from utils.secrets.secret_ref_utils import delete_user_secret
 GRAFANA_TIMEOUT = 15
 
 logger = logging.getLogger(__name__)
@@ -88,23 +90,17 @@ def _get_stored_grafana_credentials(user_id: str) -> Optional[Dict[str, Any]]:
 
 
 @grafana_bp.route("/connect", methods=["POST", "OPTIONS"])
-def connect():
+@require_permission("connectors", "write")
+def connect(user_id):
     """Store Grafana API token and validate connectivity."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
     try:
         data = request.get_json(force=True, silent=True) or {}
     except Exception:
         data = {}
 
-    user_id = data.get("userId") or get_user_id_from_request()
-    api_token = data.get("apiToken") or data.get("token")
+    api_token = (data.get("apiToken") or data.get("token") or "").strip()
     raw_base_url = data.get("baseUrl")
     stack_slug = data.get("stackSlug")
-
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
 
     if not api_token or not isinstance(api_token, str):
         return jsonify({"error": "Grafana API token is required"}), 400
@@ -123,7 +119,7 @@ def connect():
         user_profile = client.get_user()
     except GrafanaAPIError as exc:
         logger.error(f"[GRAFANA] Connection validation failed for user {user_id}: {exc}")
-        return jsonify({"error": "Failed to validate Grafana credentials"}), 502
+        return jsonify({"error": "Failed to validate Grafana credentials. Ensure the service account has the Admin role."}), 502
 
     org_name = org_data.get("name") or "Grafana"
     org_id = str(org_data.get("id")) if org_data.get("id") is not None else None
@@ -158,14 +154,8 @@ def connect():
 
 
 @grafana_bp.route("/status", methods=["GET", "OPTIONS"])
-def status():
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
-
+@require_permission("connectors", "read")
+def status(user_id):
     creds = _get_stored_grafana_credentials(user_id)
     if not creds:
         return jsonify({"connected": False})
@@ -177,53 +167,35 @@ def status():
         logger.warning(f"[GRAFANA] Incomplete credentials for user {user_id}")
         return jsonify({"connected": False})
 
-    client = GrafanaClient(base_url, api_token)
-
-    try:
-        org_data = client.get_org()
-        user_profile = client.get_user()
-    except GrafanaAPIError as exc:
-        logger.warning(f"[GRAFANA] Status check failed for user {user_id}: {exc}")
-        return jsonify({"connected": False, "error": "Failed to validate stored Grafana credentials"})
-
     return jsonify({
         "connected": True,
-        "org": org_data,
-        "user": user_profile,
+        "org": {"name": creds.get("org_name"), "id": creds.get("org_id")},
+        "user": {"email": creds.get("user_email")} if creds.get("user_email") else None,
         "baseUrl": base_url,
         "stackSlug": creds.get("stack_slug"),
     })
 
 
 @grafana_bp.route("/disconnect", methods=["POST", "DELETE", "OPTIONS"])
-def disconnect():
+@require_permission("connectors", "write")
+def disconnect(user_id):
     """Disconnect Grafana by removing stored credentials."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
-
     try:
-        with db_pool.get_admin_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "DELETE FROM user_tokens WHERE user_id = %s AND provider = %s",
-                (user_id, "grafana")
-            )
-            conn.commit()
-            deleted_count = cursor.rowcount
-        
-        logger.info(f"[GRAFANA] Disconnected user {user_id} (deleted {deleted_count} token entries)")
-        
+        success, deleted_count = delete_user_secret(user_id, "grafana")
+        if not success:
+            logger.warning("[GRAFANA] Failed to clean up secrets during disconnect")
+            return jsonify({"success": False, "error": "Failed to delete stored credentials"}), 500
+
+        logger.info("[GRAFANA] Disconnected provider (deleted %s token entries)", deleted_count)
+
         return jsonify({
             "success": True,
-            "message": "Grafana disconnected successfully"
+            "message": "Grafana disconnected successfully",
+            "deleted": deleted_count
         }), 200
-        
+
     except Exception as exc:
-        logger.exception(f"[GRAFANA] Failed to disconnect user {user_id}: {exc}")
+        logger.exception("[GRAFANA] Failed to disconnect provider")
         return jsonify({"error": "Failed to disconnect Grafana"}), 500
 
 
@@ -260,15 +232,10 @@ def alert_webhook(user_id: str):
 
 
 @grafana_bp.route("/alerts", methods=["GET", "OPTIONS"])
-def get_alerts():
+@require_permission("connectors", "read")
+def get_alerts(user_id):
     """Fetch Grafana alerts for the authenticated user."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
-
+    org_id = get_org_id_from_request()
     limit = request.args.get("limit", 50, type=int)
     offset = request.args.get("offset", 0, type=int)
     state_filter = request.args.get("state")  # Optional: filter by alert state
@@ -276,6 +243,7 @@ def get_alerts():
     try:
         with db_pool.get_admin_connection() as conn:
             cursor = conn.cursor()
+            cursor.execute("SET myapp.current_org_id = %s", (org_id,))
             
             if state_filter:
                 cursor.execute(
@@ -283,11 +251,11 @@ def get_alerts():
                     SELECT id, alert_uid, alert_title, alert_state, rule_name, 
                            rule_url, dashboard_url, panel_url, payload, received_at, created_at
                     FROM grafana_alerts
-                    WHERE user_id = %s AND alert_state = %s
+                    WHERE org_id = %s AND alert_state = %s
                     ORDER BY received_at DESC
                     LIMIT %s OFFSET %s
                     """,
-                    (user_id, state_filter, limit, offset)
+                    (org_id, state_filter, limit, offset)
                 )
             else:
                 cursor.execute(
@@ -295,11 +263,11 @@ def get_alerts():
                     SELECT id, alert_uid, alert_title, alert_state, rule_name, 
                            rule_url, dashboard_url, panel_url, payload, received_at, created_at
                     FROM grafana_alerts
-                    WHERE user_id = %s
+                    WHERE org_id = %s
                     ORDER BY received_at DESC
                     LIMIT %s OFFSET %s
                     """,
-                    (user_id, limit, offset)
+                    (org_id, limit, offset)
                 )
             
             alerts = cursor.fetchall()
@@ -307,13 +275,13 @@ def get_alerts():
             # Get total count
             if state_filter:
                 cursor.execute(
-                    "SELECT COUNT(*) FROM grafana_alerts WHERE user_id = %s AND alert_state = %s",
-                    (user_id, state_filter)
+                    "SELECT COUNT(*) FROM grafana_alerts WHERE org_id = %s AND alert_state = %s",
+                    (org_id, state_filter)
                 )
             else:
                 cursor.execute(
-                    "SELECT COUNT(*) FROM grafana_alerts WHERE user_id = %s",
-                    (user_id,)
+                    "SELECT COUNT(*) FROM grafana_alerts WHERE org_id = %s",
+                    (org_id,)
                 )
             total_count = cursor.fetchone()[0]
 
@@ -344,15 +312,9 @@ def get_alerts():
 
 
 @grafana_bp.route("/alerts/webhook-url", methods=["GET", "OPTIONS"])
-def get_webhook_url():
+@require_permission("connectors", "read")
+def get_webhook_url(user_id):
     """Get the webhook URL that should be configured in Grafana."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
-
     # Use ngrok URL for development if available, otherwise use backend URL
     ngrok_url = os.getenv("NGROK_URL", "").rstrip("/")
     backend_url = os.getenv("NEXT_PUBLIC_BACKEND_URL", "").rstrip("/")

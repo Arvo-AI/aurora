@@ -10,6 +10,7 @@ Backend configuration guides for Aurora connectors.
 | **AWS** | IAM Role + External ID | [Setup](./aws_connector/README.md) |
 | **Azure** | Service Principal | [Setup](./azure_connector/README.md) |
 | **OVH** | OAuth 2.0 (multi-region) | [Setup](./ovh_connector/README.md) |
+| **Cloudflare** | API Token | [Setup](./cloudflare_connector/README.md) |
 
 ## Source Control & Collaboration
 
@@ -25,6 +26,7 @@ Backend configuration guides for Aurora connectors.
 | **PagerDuty** | OAuth / API Token | [Setup](./pagerduty_connector/README.md) |
 | **Grafana** | API Token | [Setup](./grafana_connector/README.md) |
 | **Datadog** | API Key + App Key | [Setup](./datadog_connector/README.md) |
+| **New Relic** | User API Key (NerdGraph) | [Setup](./newrelic_connector/README.md) |
 | **Netdata** | API Token | [Setup](./netdata_connector/README.md) |
 
 ## CI/CD

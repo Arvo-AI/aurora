@@ -9,13 +9,17 @@ OAuth 2.0 authentication for Slack workspaces.
 1. Go to [Slack API Apps](https://api.slack.com/apps) > **Create New App** > **From scratch**
    - App Name: `Aurora`
    - Select your workspace
-2. Go to **OAuth & Permissions**
-   - Add Redirect URL: `http://localhost:5080/slack/callback` (for local dev)
-   - OR use ngrok URL: `https://your-ngrok-url.ngrok-free.dev/slack/callback` (when using ngrok)
-3. Add **Bot Token Scopes**:
+2. **Set up port forwarding** — Slack does not allow `localhost` redirect URIs. Use a tunnel like [ngrok](https://ngrok.com):
+   ```bash
+   ngrok http 5080
+   ```
+   Copy the `https://xxxx.ngrok-free.app` URL.
+3. Go to **OAuth & Permissions**
+   - Add Redirect URL: `https://xxxx.ngrok-free.app/slack/callback`
+4. Add **Bot Token Scopes**:
    - `chat:write`, `channels:read`, `channels:history`, `channels:join`
    - `app_mentions:read`, `users:read`
-4. Go to **Basic Information** and copy:
+5. Go to **Basic Information** and copy:
    - **Client ID**
    - **Client Secret**
    - **Signing Secret**
@@ -23,14 +27,14 @@ OAuth 2.0 authentication for Slack workspaces.
 ### 2. Configure `.env`
 
 ```bash
-NEXT_PUBLIC_ENABLE_SLACK=true
+NGROK_URL=https://xxxx.ngrok-free.app
 SLACK_CLIENT_ID=your-slack-client-id
 SLACK_CLIENT_SECRET=your-slack-client-secret
 SLACK_SIGNING_SECRET=your-signing-secret
 ```
 
+The `NGROK_URL` env var tells the backend to use the tunnel URL for the OAuth redirect instead of `localhost`.
+
 ## Troubleshooting
 
-**"bad_redirect_uri"** — Redirect URL must match exactly in Slack App. Use ngrok URL when tunneling externally.
-
-**Slack connector not enabled** — Ensure `NEXT_PUBLIC_ENABLE_SLACK=true` and restart Aurora
+**"redirect_uri did not match"** — The redirect URL sent to Slack must exactly match what's configured in your Slack App. Make sure `NGROK_URL` in `.env` matches the Redirect URL in OAuth & Permissions, and restart the server after changing it.

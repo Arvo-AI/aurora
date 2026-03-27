@@ -1,16 +1,21 @@
 """
-Context trimming middleware for LangChain create_agent.
+Context safety-net middleware for LangChain create_agent.
 
-Prevents context overflow during long-running ReAct loops (e.g., RCA investigations
-with 240 recursion limit) by trimming messages before each LLM call. Only affects
-what the LLM sees — the full message history is preserved in graph state.
+Primary context management happens upstream — tool outputs are capped/summarized
+before entering the ReAct message list (see utils/tool_output_cap.py).
+
+This middleware provides two functions:
+1. Injects correlated RCA context updates into background sessions.
+2. Safety net: if accumulated messages still exceed the model's context window
+   (e.g., 200+ iterations on a 200K model), trims to the most recent messages.
 """
 
 import logging
-from typing import Awaitable, Callable
+from typing import Awaitable, Callable, List
 
 from langchain.agents.middleware import AgentMiddleware
 from langchain.agents.middleware.types import ModelRequest, ModelResponse
+from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.messages.utils import trim_messages, count_tokens_approximately
 
 from ..utils.chat_context_manager import ChatContextManager
@@ -19,34 +24,29 @@ from chat.background.context_updates import apply_rca_context_updates
 
 logger = logging.getLogger(__name__)
 
-# Use 75% of the model's context limit, leaving headroom for the response
-_CONTEXT_USAGE_RATIO = 0.75
+# Safety net triggers at 80% of context limit — should rarely fire now that
+# tool outputs are capped upstream.
+_SAFETY_NET_RATIO = 0.80
 
 
-class ContextTrimMiddleware(AgentMiddleware):
-    """Trims messages before each LLM call to prevent context overflow.
+class ContextSafetyMiddleware(AgentMiddleware):
+    """Lightweight safety net for context overflow.
 
-    During a ReAct agent loop, tool outputs accumulate in the message list
-    without any trimming between iterations. With a high recursion limit
-    (e.g., 240 for RCA), the context can grow far beyond the model's limit.
-
-    This middleware intercepts each LLM call via awrap_model_call and trims
-    the ModelRequest.messages to fit within the model's context window.
-    Because it modifies the request (not the graph state), the full message
-    history is preserved for persistence.
+    With tool output capping in place, this should rarely trigger. It exists
+    to protect small-context models (200K) during long runs (240 iterations)
+    where even capped messages can accumulate past the limit.
 
     Args:
-        model_name: Model name in OpenRouter format (e.g., "anthropic/claude-opus-4.5").
-            Used to look up the context limit from ChatContextManager.MODEL_CONTEXT_LIMITS.
+        model_name: Model name for context limit lookup.
     """
 
     def __init__(self, model_name: str):
         self.model_name = model_name
         self.max_tokens = int(
-            ChatContextManager.get_context_limit(model_name) * _CONTEXT_USAGE_RATIO
+            ChatContextManager.get_context_limit(model_name) * _SAFETY_NET_RATIO
         )
         logger.info(
-            f"ContextTrimMiddleware initialized: model={model_name}, "
+            f"ContextSafetyMiddleware initialized: model={model_name}, "
             f"max_tokens={self.max_tokens}"
         )
 
@@ -55,31 +55,27 @@ class ContextTrimMiddleware(AgentMiddleware):
         request: ModelRequest,
         handler: Callable[[ModelRequest], Awaitable[ModelResponse]],
     ) -> ModelResponse:
-        # Inject correlated incident updates into background RCA sessions.
-        # Strategy: Append at the END as the most recent message (highest priority).
-        # Only inject ONCE when the update first arrives.
+        # 1. Inject correlated incident updates into background RCA sessions.
         state = get_state_context()
         update_message = apply_rca_context_updates(state)
         if update_message:
             try:
-                # Append at end - most recent message has highest priority
                 request = request.override(messages=[*request.messages, update_message])
                 logger.info(
-                    "[ContextTrimMiddleware] Appended context update to request "
+                    f"[ContextSafety] Appended RCA context update "
                     f"(messages={len(request.messages)})"
                 )
             except Exception as e:
-                logger.warning("[ContextTrimMiddleware] Failed to append context update: %s", e)
+                logger.warning(f"[ContextSafety] Failed to append context update: {e}")
 
-        original_count = len(request.messages)
+        # 2. Safety net — trim if still over budget despite upstream capping.
         estimated_tokens = count_tokens_approximately(request.messages)
-
         if estimated_tokens <= self.max_tokens:
             return await handler(request)
 
         logger.warning(
-            f"Context trimming triggered: {estimated_tokens} tokens "
-            f"(limit: {self.max_tokens}) across {original_count} messages"
+            f"[ContextSafety] Safety net triggered: {estimated_tokens} tokens "
+            f"(limit: {self.max_tokens}) across {len(request.messages)} messages"
         )
 
         trimmed = trim_messages(
@@ -87,16 +83,43 @@ class ContextTrimMiddleware(AgentMiddleware):
             strategy="last",
             token_counter=count_tokens_approximately,
             max_tokens=self.max_tokens,
-            start_on="human",
-            end_on=("human", "tool"),
         )
 
-        trimmed_count = len(trimmed)
-        trimmed_tokens = count_tokens_approximately(trimmed)
+        # Drop orphaned ToolMessages whose AIMessage (tool_use) was trimmed.
+        trimmed = _drop_orphaned_tool_messages(trimmed)
+
+        if not trimmed:
+            logger.warning("[ContextSafety] Trim produced empty list, keeping last 6 messages")
+            trimmed = _drop_orphaned_tool_messages(request.messages[-6:])
 
         logger.info(
-            f"Context trimmed: {original_count} -> {trimmed_count} messages, "
-            f"~{estimated_tokens} -> ~{trimmed_tokens} tokens"
+            f"[ContextSafety] Trimmed: {len(request.messages)} -> {len(trimmed)} messages, "
+            f"~{estimated_tokens} -> ~{count_tokens_approximately(trimmed)} tokens"
         )
 
         return await handler(request.override(messages=trimmed))
+
+
+def _drop_orphaned_tool_messages(messages: List) -> List:
+    """Drop ToolMessages from the front that have no matching AIMessage with tool_calls."""
+    available_tool_call_ids: set = set()
+    for msg in messages:
+        if isinstance(msg, AIMessage) and getattr(msg, "tool_calls", None):
+            for tc in msg.tool_calls:
+                tc_id = tc.get("id") if isinstance(tc, dict) else getattr(tc, "id", None)
+                if tc_id:
+                    available_tool_call_ids.add(tc_id)
+
+    start = 0
+    for i, msg in enumerate(messages):
+        if isinstance(msg, ToolMessage):
+            tc_id = getattr(msg, "tool_call_id", None)
+            if tc_id not in available_tool_call_ids:
+                start = i + 1
+                continue
+        break
+
+    if start > 0:
+        logger.info(f"[ContextSafety] Dropped {start} orphaned ToolMessage(s)")
+
+    return messages[start:]

@@ -1,5 +1,5 @@
 import { Github, Server } from "lucide-react";
-import { isSlackEnabled, isOvhEnabled, isConfluenceEnabled, isSharePointEnabled, isBitbucketEnabled, isDynatraceEnabled, isThousandEyesEnabled, isBigPandaEnabled } from "@/lib/feature-flags";
+import { isOvhEnabled, isSharePointEnabled, isJiraEnabled, isSpinnakerEnabled } from "@/lib/feature-flags";
 import type { ConnectorConfig } from "./types";
 
 class ConnectorRegistry {
@@ -49,6 +49,7 @@ class ConnectorRegistry {
       alertsLabel: "View Events",
       overviewPath: "/datadog/overview",
       overviewLabel: "Overview",
+      useCustomConnection: true,
     });
 
     this.register({
@@ -77,8 +78,7 @@ class ConnectorRegistry {
       alertsLabel: "View Alerts",
     });
 
-    if (isDynatraceEnabled()) {
-      this.register({
+    this.register({
         id: "dynatrace",
         name: "Dynatrace",
         description: "Connect to Dynatrace for full-stack observability. Receive problem notifications and query metrics, logs, and entities for root cause analysis.",
@@ -90,7 +90,6 @@ class ConnectorRegistry {
         alertsPath: "/dynatrace/alerts",
         alertsLabel: "View Problems",
       });
-    }
 
     this.register({
       id: "coroot",
@@ -103,8 +102,19 @@ class ConnectorRegistry {
       storageKey: "isCorootConnected",
     });
 
-    if (isThousandEyesEnabled()) {
-      this.register({
+    this.register({
+      id: "newrelic",
+      name: "New Relic",
+      description: "Full-stack observability with New Relic. Query metrics, logs, traces, and alert issues via NerdGraph for automated root cause analysis.",
+      iconPath: "/newrelic.svg",
+      iconBgColor: "bg-white dark:bg-white",
+      category: "Monitoring",
+      path: "/newrelic/auth",
+      storageKey: "isNewRelicConnected",
+      useCustomConnection: true,
+    });
+
+    this.register({
         id: "thousandeyes",
         name: "ThousandEyes",
         description: "Connect Cisco ThousandEyes for network intelligence: tests, alerts, path visualization, BGP monitoring, and Internet Insights outage detection.",
@@ -114,7 +124,6 @@ class ConnectorRegistry {
         path: "/thousandeyes/auth",
         storageKey: "isThousandEyesConnected",
       });
-    }
 
     this.register({
       id: "pagerduty",
@@ -127,8 +136,7 @@ class ConnectorRegistry {
       storageKey: "isPagerDutyConnected",
     });
 
-    if (isBigPandaEnabled()) {
-      this.register({
+    this.register({
         id: "bigpanda",
         name: "BigPanda",
         description: "Connect BigPanda for AIOps incident correlation. Receive pre-correlated incident clusters with enriched metadata for improved root cause analysis.",
@@ -138,10 +146,8 @@ class ConnectorRegistry {
         path: "/bigpanda/auth",
         storageKey: "isBigPandaConnected",
       });
-    }
 
-    if (isConfluenceEnabled()) {
-      this.register({
+    this.register({
         id: "confluence",
         name: "Confluence",
         description: "Fetch runbooks and documentation from Confluence pages to automate incident response workflows.",
@@ -150,6 +156,18 @@ class ConnectorRegistry {
         category: "Documentation",
         path: "/confluence/connect",
         storageKey: "isConfluenceConnected",
+      });
+
+    if (isJiraEnabled()) {
+      this.register({
+        id: "jira",
+        name: "Jira",
+        description: "Search issues, track incidents, and export postmortem action items as tracked Jira work.",
+        iconPath: "/jira.svg",
+        iconBgColor: "bg-white dark:bg-white",
+        category: "Documentation",
+        path: "/jira/connect",
+        storageKey: "isJiraConnected",
       });
     }
 
@@ -188,8 +206,7 @@ class ConnectorRegistry {
       useCustomConnection: true,
     });
 
-    if (isBitbucketEnabled()) {
-      this.register({
+    this.register({
         id: "bitbucket",
         name: "Bitbucket",
         description: "Connect to Bitbucket Cloud to browse workspaces, manage repositories, track pull requests, and collaborate on code.",
@@ -199,10 +216,8 @@ class ConnectorRegistry {
         useCustomConnection: true,
         storageKey: "isBitbucketConnected",
       });
-    }
 
-    if (isSlackEnabled()) {
-      this.register({
+    this.register({
         id: "slack",
         name: "Slack",
         description: "Receive alerts and notifications directly in your Slack workspace. Connect your Slack workspace to get real-time updates and interact with Aurora.",
@@ -212,7 +227,6 @@ class ConnectorRegistry {
         storageKey: "isSlackConnected",
         useCustomConnection: true,
       });
-    }
 
     // Cloud Providers (now under Infrastructure category)
     this.register({
@@ -288,6 +302,17 @@ class ConnectorRegistry {
     });
 
     this.register({
+      id: "cloudflare",
+      name: "Cloudflare",
+      description: "Connect to Cloudflare for DNS management, cache purging, WAF & firewall rules, traffic analytics, Workers monitoring, and load balancer control.",
+      iconPath: "/cloudflare.svg",
+      iconBgColor: "bg-white dark:bg-white",
+      category: "Infrastructure",
+      path: "/cloudflare/auth",
+      storageKey: "isCloudflareConnected",
+    });
+
+    this.register({
       id: "jenkins",
       name: "Jenkins",
       description: "Connect to Jenkins to view jobs, builds, pipeline status, and build agents. Read-only access to your CI/CD server.",
@@ -308,6 +333,19 @@ class ConnectorRegistry {
       path: "/cloudbees/auth",
       storageKey: "isCloudBeesConnected",
     });
+
+    if (isSpinnakerEnabled()) {
+      this.register({
+        id: "spinnaker",
+        name: "Spinnaker",
+        description: "Connect to Spinnaker for deployment pipeline visibility, application health monitoring, and automated incident correlation with CD events.",
+        iconPath: "/spinnaker.svg",
+        iconBgColor: "bg-white dark:bg-white",
+        category: "CI/CD",
+        path: "/spinnaker/auth",
+        storageKey: "isSpinnakerConnected",
+      });
+    }
   }
 
   register(connector: ConnectorConfig): void {

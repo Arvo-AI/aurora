@@ -1,10 +1,7 @@
 import "./globals.css";
-import { Inter } from "next/font/google";
 import { SessionProvider } from "next-auth/react";
 import ClientShell from "./components/ClientShell";
 import ConditionalShell from "./components/ConditionalShell";
-
-const inter = Inter({ subsets: ["latin"] });
 
 export default function RootLayout({
   children,
@@ -17,8 +14,8 @@ export default function RootLayout({
       <head>
         <script src="/env-config.js" />
       </head>
-      <body className={`${inter.className} antialiased h-full`}>
-        <SessionProvider>
+      <body className="antialiased h-full">
+        <SessionProvider refetchInterval={60} refetchOnWindowFocus={true}>
           <ConditionalShell>{children}</ConditionalShell>
         </SessionProvider>
       </body>

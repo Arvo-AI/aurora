@@ -842,7 +842,7 @@ def get_user_cloud_credentials(user_id: str) -> Dict[str, Dict]:
                 from utils.auth.stateless_auth import get_credentials_from_db
                 
                 # Use the fallback approach
-                for provider in ["aws", "azure", "gcp", "github", "github_repo_selection", "ovh"]:
+                for provider in ["aws", "azure", "gcp", "github", "ovh"]:
                     try:
                         provider_creds = get_credentials_from_db(user_id, provider)
                         if provider_creds:
@@ -1378,8 +1378,13 @@ def create_mcp_langchain_tools(real_mcp_tools: List, tool_capture=None, send_too
                     except Exception as notification_error:
                         logging.warning(f"Failed to send completion notification for {tool_name}: {notification_error}")
                     
+                    # Cap tool output before returning to LangChain so the ReAct
+                    # loop never accumulates oversized ToolMessages.
+                    from chat.backend.agent.utils.tool_output_cap import cap_tool_output
+                    final_result = cap_tool_output(final_result, tool_name)
+
                     return final_result
-                        
+
                 except Exception as e:
                     error_msg = f"Error calling MCP tool {original_tool_name}: {str(e)}"
                     logging.error(error_msg)

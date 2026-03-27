@@ -53,15 +53,19 @@ celery_app.conf.update(
         'routes.dynatrace.tasks',
         'routes.bigpanda.tasks',
         'routes.pagerduty.tasks',
+        'routes.newrelic.tasks',
         'routes.jenkins.tasks',
+        'routes.spinnaker.tasks',
         'utils.terminal.terminal_pod_cleanup',
         'chat.background.task',
         'chat.background.summarization',
         'chat.background.visualization_generator',
         'chat.background.postmortem_generator',
+        'chat.background.prediscovery_task',
         'routes.knowledge_base.tasks',
         'services.discovery.tasks',
         'utils.aws.credential_refresh',
+        'routes.github.github_repo_metadata',
     ],
     # Periodic task schedule
     beat_schedule={
@@ -84,6 +88,10 @@ celery_app.conf.update(
         'mark-stale-services': {
             'task': 'services.discovery.tasks.mark_stale_services',
             'schedule': 86400.0,  # Daily (24 hours)
+        },
+        'run-prediscovery': {
+            'task': 'chat.background.prediscovery_task.run_prediscovery_all_orgs',
+            'schedule': 3600.0,  # Check hourly; per-org interval controlled by prediscovery_interval_hours preference
         },
         'refresh-aws-credentials': {
             'task': 'utils.aws.credential_refresh.refresh_aws_credentials',
@@ -137,16 +145,40 @@ except ImportError as e:
     logging.warning(f"Failed to import Jenkins tasks: {e}")
 
 try:
+    import routes.spinnaker.tasks  # noqa: F401
+    logging.info("Spinnaker tasks imported successfully")
+except ImportError as e:
+    logging.warning(f"Failed to import Spinnaker tasks: {e}")
+
+try:
     import services.discovery.tasks
     logging.info("Discovery tasks imported successfully")
 except ImportError as e:
     logging.warning(f"Failed to import discovery tasks: {e}")
 
 try:
+    import chat.background.prediscovery_task  # noqa: F401
+    logging.info("Prediscovery task imported successfully")
+except ImportError as e:
+    logging.warning(f"Failed to import prediscovery task: {e}")
+
+try:
     import utils.aws.credential_refresh
     logging.info("AWS credential refresh task imported successfully")
 except ImportError as e:
     logging.warning(f"Failed to import AWS credential refresh task: {e}")
+
+try:
+    import routes.newrelic.tasks  # noqa: F401
+    logging.info("New Relic tasks imported successfully")
+except ImportError as e:
+    logging.warning(f"Failed to import New Relic tasks: {e}")
+
+try:
+    import routes.github.github_repo_metadata  # noqa: F401
+    logging.info("GitHub repo metadata task imported successfully")
+except ImportError as e:
+    logging.warning(f"Failed to import GitHub repo metadata task: {e}")
 
 # Log the number of registered tasks for debugging
 if hasattr(celery_app, 'tasks'):

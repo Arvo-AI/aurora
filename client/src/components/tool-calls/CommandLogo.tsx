@@ -140,6 +140,14 @@ const logos = {
       onError={(e) => console.error('Failed to load CloudBees logo:', e)}
     />
   ),
+  spinnaker: (
+    <img
+      src="/spinnaker.svg"
+      className="w-4 h-4 min-w-4 min-h-4 object-contain"
+      alt="Spinnaker"
+      onError={(e) => console.error('Failed to load Spinnaker logo:', e)}
+    />
+  ),
   coroot: (
     <img
       src="/coroot.svg"
@@ -156,12 +164,36 @@ const logos = {
       onError={(e) => console.error('Failed to load Dynatrace logo:', e)}
     />
   ),
+  datadog: (
+    <img
+      src="/datadog.svg"
+      className="w-4 h-4 min-w-4 min-h-4 object-contain"
+      alt="Datadog"
+      onError={(e) => console.error('Failed to load Datadog logo:', e)}
+    />
+  ),
+  newrelic: (
+    <img
+      src="/newrelic.svg"
+      className="w-4 h-4 min-w-4 min-h-4 object-contain"
+      alt="New Relic"
+      onError={(e) => console.error('Failed to load New Relic logo:', e)}
+    />
+  ),
   thousandeyes: (
     <img
       src="/thousandeyes.svg"
       className="w-4 h-4 min-w-4 min-h-4 object-contain"
       alt="ThousandEyes"
       onError={(e) => console.error('Failed to load ThousandEyes logo:', e)}
+    />
+  ),
+  cloudflare: (
+    <img
+      src="/cloudflare.svg"
+      className="w-4 h-4 min-w-4 min-h-4 object-contain"
+      alt="Cloudflare"
+      onError={(e) => console.error('Failed to load Cloudflare logo:', e)}
     />
   ),
   bitbucket: (
@@ -178,6 +210,22 @@ const logos = {
       className="w-4 h-4 min-w-4 min-h-4 object-contain"
       alt="SharePoint"
       onError={(e) => console.error('Failed to load SharePoint logo:', e)}
+    />
+  ),
+  jira: (
+    <img
+      src="/jira.svg"
+      className="w-4 h-4 min-w-4 min-h-4 object-contain"
+      alt="Jira"
+      onError={(e) => console.error('Failed to load Jira logo:', e)}
+    />
+  ),
+  confluence: (
+    <img
+      src="/confluence.svg"
+      className="w-4 h-4 min-w-4 min-h-4 object-contain"
+      alt="Confluence"
+      onError={(e) => console.error('Failed to load Confluence logo:', e)}
     />
   ),
   web: (
@@ -256,6 +304,11 @@ const getLogoForCommand = (command: string | any, toolName: string, provider?: s
     return 'cloudbees'
   }
 
+  // Spinnaker tools
+  if (tool.includes('spinnaker')) {
+    return 'spinnaker'
+  }
+
   // Jenkins tools
   if (tool.includes('jenkins')) {
     return 'jenkins'
@@ -270,9 +323,24 @@ const getLogoForCommand = (command: string | any, toolName: string, provider?: s
     return 'dynatrace'
   }
 
+  // Datadog tools
+  if (tool.includes('datadog') || tool === 'query_datadog') {
+    return 'datadog'
+  }
+
+  // New Relic tools
+  if (tool.includes('newrelic') || tool === 'query_newrelic') {
+    return 'newrelic'
+  }
+
   // ThousandEyes tools
   if (tool.includes('thousandeyes')) {
     return 'thousandeyes'
+  }
+
+  // Cloudflare tools
+  if (tool.includes('cloudflare')) {
+    return 'cloudflare'
   }
 
   // Bitbucket tools
@@ -283,6 +351,16 @@ const getLogoForCommand = (command: string | any, toolName: string, provider?: s
   // SharePoint tools
   if (tool.startsWith('sharepoint_')) {
     return 'sharepoint'
+  }
+
+  // Jira tools
+  if (tool.startsWith('jira_') || tool === 'jira') {
+    return 'jira'
+  }
+
+  // Confluence tools
+  if (tool.startsWith('confluence_') || tool === 'confluence') {
+    return 'confluence'
   }
 
   // IAC tools

@@ -13,16 +13,20 @@ export const isOvhEnabled = () => {
   return getEnv('NEXT_PUBLIC_ENABLE_OVH') === 'true';
 };
 
-export const isSlackEnabled = () => {
-  return getEnv('NEXT_PUBLIC_ENABLE_SLACK') === 'true';
+export const isScalewayEnabled = () => {
+  return getEnv('NEXT_PUBLIC_ENABLE_SCALEWAY') === 'true';
+};
+
+export const isSharePointEnabled = () => {
+  return getEnv('NEXT_PUBLIC_ENABLE_SHAREPOINT') === 'true';
 };
 
 export const isConfluenceEnabled = () => {
   return getEnv('NEXT_PUBLIC_ENABLE_CONFLUENCE') === 'true';
 };
 
-export const isScalewayEnabled = () => {
-  return getEnv('NEXT_PUBLIC_ENABLE_SCALEWAY') === 'true';
+export const isJiraEnabled = () => {
+  return getEnv('NEXT_PUBLIC_ENABLE_JIRA') === 'true';
 };
 
 export const isBitbucketEnabled = () => {
@@ -43,4 +47,8 @@ export const isThousandEyesEnabled = () => {
 
 export const isSharePointEnabled = () => {
   return getEnv('NEXT_PUBLIC_ENABLE_SHAREPOINT') === 'true';
+};
+
+export const isSpinnakerEnabled = () => {
+  return getEnv('NEXT_PUBLIC_ENABLE_SPINNAKER') === 'true';
 };

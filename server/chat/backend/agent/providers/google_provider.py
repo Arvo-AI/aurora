@@ -7,13 +7,13 @@ Requires GOOGLE_AI_API_KEY environment variable.
 Note: This uses Google AI Studio API for direct access to Gemini models.
 """
 
-import os
-from typing import Optional
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_core.language_models.chat_models import BaseChatModel
 import logging
+import os
 
-from .base_provider import BaseLLMProvider
+from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_google_genai import ChatGoogleGenerativeAI
+
+from .base_provider import BaseLLMProvider, apply_gemini_thinking_config
 from ..model_mapper import ModelMapper
 
 try:
@@ -102,43 +102,17 @@ class GoogleProvider(BaseLLMProvider):
 
         logger.info(f"Creating Google AI chat model: {resolved_model}")
 
-        # Build configuration for Google AI Studio access
+        # Strip 'streaming' — not a valid ChatGoogleGenerativeAI param in v4.x
+        kwargs.pop("streaming", None)
+
         config = {
             "model": resolved_model,
             "temperature": temperature if temperature is not None else 0.7,
             "google_api_key": self.api_key,
         }
 
-        # Enable thinking for thinking-capable models (Gemini 2.5+, Gemini 3+)
-        # Can be disabled via GEMINI_DISABLE_THINKING=true for debugging
-        disable_thinking = os.getenv("GEMINI_DISABLE_THINKING", "").lower() in (
-            "true",
-            "1",
-            "yes",
-        )
-        is_thinking_model = not disable_thinking and any(
-            x in resolved_model.lower()
-            for x in [
-                "gemini-3",
-                "gemini-2.5",
-                "2.5-pro",
-                "2.5-flash",
-                "3-pro",
-                "3-flash",
-            ]
-        )
-        if is_thinking_model:
-            config["include_thoughts"] = True
-            config["thinking_level"] = "high"
-            logger.info(
-                f"Enabled thinking mode for {resolved_model} (include_thoughts=True, thinking_level=high)"
-            )
-        elif disable_thinking:
-            logger.info(
-                f"Thinking mode disabled via GEMINI_DISABLE_THINKING for {resolved_model}"
-            )
+        apply_gemini_thinking_config(config, resolved_model)
 
-        # Add any additional kwargs
         config.update(kwargs)
 
         return ChatGoogleGenerativeAI(**config)
@@ -157,6 +131,8 @@ class GoogleProvider(BaseLLMProvider):
         Returns:
             True if this is a Google model
         """
+        if "/" in model:
+            return model.split("/")[0] == "google"
         return ModelMapper.is_model_supported_by_provider(model, "google")
 
     def get_native_model_name(self, model: str) -> str:

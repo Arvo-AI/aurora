@@ -82,8 +82,8 @@ RUN ARCH=$(uname -m) && \
         echo "Unsupported architecture: $ARCH" && exit 1; \
     fi && \
     curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-${AWS_CLI_ARCH}.zip" -o "awscliv2.zip" && \
-    unzip awscliv2.zip && \
-    ./aws/install && \
+    unzip -q awscliv2.zip && \
+    ./aws/install > /dev/null 2>&1 && \
     rm -rf awscliv2.zip aws/
 
 # Install Azure CLI (manual download method)
@@ -185,6 +185,7 @@ COPY ./utils /app/utils/
 COPY ./celery_config.py /app/celery_config.py
 COPY ./main_chatbot.py /app/main_chatbot.py
 COPY ./main_compute.py /app/main_compute.py
+COPY ./rbac_model.conf /app/rbac_model.conf
 
 EXPOSE 5006
 # Entrypoint for chat container:

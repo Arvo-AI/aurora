@@ -3,7 +3,7 @@ from langgraph.graph import StateGraph
 from langgraph.graph import START, END
 from chat.backend.agent.utils.safe_memory_saver import SafeMemorySaver
 from langchain_core.runnables.config import RunnableConfig
-from langchain_core.messages import AIMessageChunk, AIMessage
+from langchain_core.messages import AIMessageChunk, AIMessage, SystemMessage
 from chat.backend.agent.agent import Agent
 from chat.backend.agent.utils.state import State
 import logging
@@ -673,6 +673,154 @@ class Workflow:
         
         return final_messages
 
+    @staticmethod
+    def _get_rca_context_for_session(session_id: str, user_id: str) -> Optional[dict]:
+        """Check if this session is linked to an incident and return its RCA context.
+
+        Returns a dict with summary/alert metadata or None if not an RCA session.
+        We do a single JOIN query rather than importing _get_incident_data from
+        chat.background.task (which is a private helper for notifications and would
+        create a dependency from the agent layer into the background task layer).
+        """
+        from utils.db.connection_pool import db_pool
+        try:
+            with db_pool.get_admin_connection() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """SELECT i.aurora_summary, i.alert_title, i.severity, i.alert_service,
+                                  i.aurora_status, i.source_type, cs.messages
+                           FROM chat_sessions cs
+                           JOIN incidents i ON i.id = cs.incident_id
+                           WHERE cs.id = %s AND cs.user_id = %s AND cs.incident_id IS NOT NULL""",
+                        (session_id, user_id),
+                    )
+                    row = cursor.fetchone()
+                    if row:
+                        return {
+                            "summary": row[0],
+                            "alert_title": row[1],
+                            "severity": row[2],
+                            "service": row[3],
+                            "aurora_status": row[4],
+                            "source_type": row[5],
+                            "ui_messages": row[6],
+                        }
+        except Exception as e:
+            logger.error(f"[RCA-Context] Failed to fetch RCA context for session {session_id}: {e}")
+        return None
+
+    @staticmethod
+    def _compress_rca_context(
+        existing_context: list,
+        rca_info: dict,
+        recent_tail_size: int = 8,
+    ) -> list:
+        """Replace full RCA llm_context_history with a compressed representation.
+
+        All RCA follow-ups (background Jira pass AND interactive user messages)
+        flow through here. Context sources, in priority order:
+          1. incidents.aurora_summary  (best — generated after RCA completes)
+          2. Last substantial bot message from chat_sessions.messages (UI field)
+          3. Last AIMessage from llm_context_history (least reliable — often sparse)
+
+        Returns a list of LangChain messages:
+          1. The original user prompt (first HumanMessage)
+          2. A synthetic AIMessage containing the RCA summary
+          3. The last `recent_tail_size` messages for conversational continuity
+        """
+        from langchain_core.messages import HumanMessage, AIMessage
+
+        alert_title = rca_info.get("alert_title") or "Unknown Alert"
+        severity = rca_info.get("severity") or "unknown"
+        service = rca_info.get("service") or "unknown"
+        source_type = rca_info.get("source_type") or "unknown"
+
+        # --- Resolve the best available summary text ---
+        summary_text = rca_info.get("summary") or ""
+        summary_source = "aurora_summary" if summary_text else None
+
+        if not summary_text:
+            # Fallback: extract last substantial bot response from UI messages
+            ui_messages = rca_info.get("ui_messages") or []
+            if isinstance(ui_messages, str):
+                import json as _json
+                try:
+                    ui_messages = _json.loads(ui_messages)
+                except Exception:
+                    ui_messages = []
+
+            for msg in reversed(ui_messages):
+                if isinstance(msg, dict) and msg.get("sender") in ("bot", "assistant"):
+                    text = msg.get("text") or msg.get("content") or ""
+                    if len(text) > 200:
+                        summary_text = text
+                        summary_source = "ui_messages"
+                        break
+
+        if not summary_text:
+            # Last resort: pull from llm_context_history
+            for msg in reversed(existing_context):
+                if isinstance(msg, AIMessage):
+                    content = msg.content if isinstance(msg.content, str) else str(msg.content)
+                    if len(content) > 100:
+                        summary_text = content
+                        summary_source = "llm_context_history"
+                        break
+
+        # If no summary could be found from any source, skip compression entirely.
+        # This happens during the initial RCA pass (no investigation has run yet).
+        if not summary_text:
+            logger.info(f"[RCA-Context] No summary content available — skipping compression")
+            return None
+
+        # 1. Find the original prompt (first HumanMessage)
+        original_prompt = None
+        for msg in existing_context:
+            if isinstance(msg, HumanMessage):
+                original_prompt = msg
+                break
+
+        # 2. Build the compressed summary message
+        compressed_summary = (
+            f"[RCA Investigation Summary — {source_type.title()} Alert]\n"
+            f"Alert: {alert_title}\n"
+            f"Service: {service} | Severity: {severity}\n\n"
+            f"{summary_text}\n\n"
+            f"[End of RCA summary. The full investigation above was conducted automatically. "
+            f"You may now continue the conversation with full knowledge of these findings.]"
+        )
+        summary_msg = AIMessage(content=compressed_summary)
+
+        # 3. Take the recent tail (last N messages for conversational flow),
+        #    excluding any previously injected synthetic RCA summaries to avoid duplication.
+        synthetic_prefix = "[RCA Investigation Summary"
+        tail_source = [
+            msg for msg in existing_context
+            if not (
+                isinstance(msg, AIMessage)
+                and isinstance(getattr(msg, "content", None), str)
+                and msg.content.startswith(synthetic_prefix)
+            )
+        ]
+        recent_tail = tail_source[-recent_tail_size:] if len(tail_source) > recent_tail_size else tail_source
+
+        # 4. Assemble: original prompt + summary + recent tail (deduplicated)
+        compressed = []
+        if original_prompt:
+            compressed.append(original_prompt)
+        compressed.append(summary_msg)
+
+        for msg in recent_tail:
+            if msg is original_prompt:
+                continue
+            compressed.append(msg)
+
+        logger.info(
+            f"[RCA-Context] Compressed {len(existing_context)} messages to {len(compressed)} "
+            f"(source={summary_source}, summary_len={len(summary_text)}, tail={len(recent_tail)})"
+        )
+        return compressed
+
     async def stream(self, input_state: State):
         """Stream the workflow with enhanced tool interaction capture"""
         # Import here to avoid circular dependency
@@ -702,12 +850,26 @@ class Workflow:
             logger.info(f"Context load took {_ctx_ms:.1f} ms for session {input_state.session_id}")
             
             if existing_context:
-                # Combine existing context with new messages
-                combined_messages = []
-                combined_messages.extend(existing_context)
-                combined_messages.extend(input_state.messages)
-                input_state.messages = combined_messages
-                logger.info(f"Loaded {len(existing_context)} existing messages for session {input_state.session_id}, total messages: {len(input_state.messages)}")
+                rca_info = self._get_rca_context_for_session(
+                    input_state.session_id, input_state.user_id
+                )
+                compressed = self._compress_rca_context(existing_context, rca_info) if rca_info else None
+
+                if compressed:
+                    combined_messages = []
+                    combined_messages.extend(compressed)
+                    combined_messages.extend(input_state.messages)
+                    input_state.messages = combined_messages
+                    logger.info(
+                        f"[RCA-Context] Using compressed context for session {input_state.session_id}: "
+                        f"{len(existing_context)} raw → {len(compressed)} compressed + {len(input_state.messages) - len(compressed)} new"
+                    )
+                else:
+                    combined_messages = []
+                    combined_messages.extend(existing_context)
+                    combined_messages.extend(input_state.messages)
+                    input_state.messages = combined_messages
+                    logger.info(f"Loaded {len(existing_context)} existing messages for session {input_state.session_id}, total messages: {len(input_state.messages)}")
                 
                 # Handle attachments
                 original_attachments = getattr(input_state, 'attachments', None)
@@ -721,19 +883,38 @@ class Workflow:
                     input_state.attachments = previous_attachments
                     logger.info(f"Carried forward {len(previous_attachments)} attachments from previous context")
             else:
-                # Check for legacy session migration
-                if self._handle_legacy_session_migration(input_state, LLMContextManager):
-                    # Try loading context again after migration
-                    existing_context = LLMContextManager.load_context_history(
-                        input_state.session_id, 
-                        input_state.user_id
+                # llm_context_history is empty — check if this is an RCA session
+                # where we can still inject context from the incident summary / UI messages.
+                rca_info = self._get_rca_context_for_session(
+                    input_state.session_id, input_state.user_id
+                )
+                compressed = self._compress_rca_context([], rca_info) if rca_info else None
+                if compressed:
+                    # Convert any AIMessage to SystemMessage so it doesn't
+                    # appear before the user's HumanMessage in the sequence.
+                    sys_compressed = [
+                        SystemMessage(content=m.content) if isinstance(m, AIMessage) else m
+                        for m in compressed
+                    ]
+                    new_count = len(input_state.messages)
+                    input_state.messages = sys_compressed + input_state.messages
+                    logger.info(
+                        f"[RCA-Context] Injected RCA context into empty session {input_state.session_id}: "
+                        f"{len(sys_compressed)} context msgs + {new_count} new"
                     )
-                    if existing_context:
-                        combined_messages = []
-                        combined_messages.extend(existing_context)
-                        combined_messages.extend(input_state.messages)
-                        input_state.messages = combined_messages
-                        logger.info(f"Migrated and loaded {len(existing_context)} messages for legacy session {input_state.session_id}")
+                else:
+                    # Not an RCA session or no summary available yet — try legacy migration
+                    if self._handle_legacy_session_migration(input_state, LLMContextManager):
+                        existing_context = LLMContextManager.load_context_history(
+                            input_state.session_id, 
+                            input_state.user_id
+                        )
+                        if existing_context:
+                            combined_messages = []
+                            combined_messages.extend(existing_context)
+                            combined_messages.extend(input_state.messages)
+                            input_state.messages = combined_messages
+                            logger.info(f"Migrated and loaded {len(existing_context)} messages for legacy session {input_state.session_id}")
         
         # Log initial state
         logger.info(f"Starting workflow with session_id={input_state.session_id}, user_id={input_state.user_id}")
@@ -744,6 +925,7 @@ class Workflow:
         _first_event = True
         _token_count = 0
         _event_count = 0
+        _model_turn_tokens = 0  # Tokens yielded in current model turn
         
         try:
             async for event in self.app.astream_events(input_state, self.config, version="v2"):
@@ -760,21 +942,34 @@ class Workflow:
                 if _event_count <= 5:
                     logger.info(f"[WORKFLOW STREAM] Event #{_event_count}: type={event_type}, name={event_name}")
                 
+                # Reset per-turn token counter when a new model call starts
+                if event_type == "on_chat_model_start":
+                    _model_turn_tokens = 0
+
                 # Handle token streaming from LLM
-                if event_type == "on_chat_model_stream":
+                elif event_type == "on_chat_model_stream":
                     _token_count += 1
                     chunk_data = event.get("data", {})
                     chunk_obj = chunk_data.get("chunk")
-                    if chunk_obj and hasattr(chunk_obj, 'content') and chunk_obj.content:
-                        # Extract text content (handles Gemini thinking model list format)
-                        content = _extract_text_from_content(chunk_obj.content)
-                        
+                    if chunk_obj:
+                        content = ""
+                        if hasattr(chunk_obj, 'content') and chunk_obj.content:
+                            # Extract text content (handles Gemini thinking model list format)
+                            # include_thinking=True so reasoning flows to save_incident_thought() for RCA
+                            content = _extract_text_from_content(chunk_obj.content, include_thinking=True)
+
+                        # Check for reasoning content (OpenRouter reasoning, DeepSeek-R1 etc.)
+                        # regardless of whether content was found above
+                        if not content and hasattr(chunk_obj, 'additional_kwargs'):
+                            content = chunk_obj.additional_kwargs.get("reasoning_content", "")
+
                         # Only yield if we have actual text content
                         if content:
+                            _model_turn_tokens += 1
                             yield ("token", content)
                             if _token_count <= 5:
                                 logger.debug(f"[WORKFLOW STREAM] Token #{_token_count}: '{content[:30]}'")
-                
+
                 # Capture state from chain end events
                 elif event_type == "on_chain_end" and event_name == "LangGraph":
                     output_data = event.get("data", {}).get("output")
@@ -783,15 +978,31 @@ class Workflow:
                         logger.debug(f"[WORKFLOW STREAM] Captured final state from chain end")
                         # Yield values event for compatibility
                         yield ("values", output_data)
-                
-                # Handle tool calls
+
+                # Handle model turn completion — extract thinking/text as fallback
+                # when on_chat_model_stream didn't fire (LangGraph + Gemini bug)
                 elif event_type == "on_chat_model_end":
                     chunk_data = event.get("data", {})
                     output = chunk_data.get("output")
-                    if output and hasattr(output, 'tool_calls') and output.tool_calls:
+                    if output:
                         # Process tool calls
-                        self._process_tool_calls_from_chunk(output, tool_capture)
-                        logger.debug(f"[WORKFLOW STREAM] Detected {len(output.tool_calls)} tool calls")
+                        if hasattr(output, 'tool_calls') and output.tool_calls:
+                            self._process_tool_calls_from_chunk(output, tool_capture)
+                            logger.debug(f"[WORKFLOW STREAM] Detected {len(output.tool_calls)} tool calls")
+
+                        # Fallback: if streaming didn't yield tokens for this turn,
+                        # extract thinking + text from the complete response.
+                        # This handles ChatGoogleGenerativeAI which doesn't stream
+                        # when tools are bound in LangGraph (langgraph#4877).
+                        if _model_turn_tokens == 0:
+                            content = ""
+                            if hasattr(output, 'content') and output.content:
+                                content = _extract_text_from_content(output.content, include_thinking=True)
+                            if not content and hasattr(output, 'additional_kwargs'):
+                                content = output.additional_kwargs.get("reasoning_content", "")
+                            if content:
+                                logger.info(f"[STREAM FALLBACK] Extracted {len(content)} chars from on_chat_model_end (streaming didn't fire)")
+                                yield ("token", content)
                 
                 # Periodic state snapshots (for incremental saves)
                 elif event_type == "on_chain_stream":
@@ -943,7 +1154,8 @@ class Workflow:
                     chunk_builders[msg.id] = builder
 
                 # Accumulate content (handles Gemini thinking model list format)
-                msg_content = _extract_text_from_content(msg.content or "")
+                # include_thinking=True so reasoning is preserved in the saved message
+                msg_content = _extract_text_from_content(msg.content or "", include_thinking=True)
                 builder["content"] += msg_content
 
                 # Process tool calls
@@ -1087,8 +1299,19 @@ class Workflow:
                 message_id += 1
                 
             elif 'AI' in msg_type:
-                # Extract text content (handles Gemini thinking model list format)
-                content = _extract_text_from_content(getattr(msg, 'content', ''))
+                raw_content = getattr(msg, 'content', '')
+                # Extract text content (handles Gemini thinking model list format).
+                # Include thinking when text is empty and message has tool calls,
+                # so Gemini's reasoning appears in chat alongside tool cards.
+                # (Claude generates inline text with tool calls; Gemini puts reasoning
+                # in thinking blocks only, leaving text empty.)
+                content = _extract_text_from_content(raw_content)
+                has_tool_calls = (
+                    getattr(msg, 'tool_calls', [])
+                    or getattr(msg, 'additional_kwargs', {}).get('tool_calls', [])
+                )
+                if not content and has_tool_calls:
+                    content = _extract_text_from_content(raw_content, include_thinking=True)
                 
                 # Get the AIMessage's run_id for consistency (needed regardless of tool calls)
                 run_id = getattr(msg, 'id', None)

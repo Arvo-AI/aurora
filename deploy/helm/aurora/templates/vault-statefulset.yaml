@@ -66,13 +66,13 @@ spec:
               readOnly: true
             {{- end }}
           readinessProbe:
-            exec:
-              command:
-                - /bin/sh
-                - -c
-                - 'vault status -format=json | grep ''"sealed": false'''
+            httpGet:
+              path: /v1/sys/health?standbyok=true
+              port: 8200
             initialDelaySeconds: 10
             periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 10
           livenessProbe:
             httpGet:
               path: /v1/sys/health?standbyok=true&sealedcode=200&uninitcode=200

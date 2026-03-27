@@ -6,7 +6,8 @@ from connectors.gcp_connector.auth.oauth import (
 )
 from utils.auth.token_management import store_tokens_in_db
 from connectors.gcp_connector.gcp_post_auth_tasks import gcp_post_auth_setup_task
-from utils.auth.stateless_auth import get_user_id_from_request
+from utils.auth.rbac_decorators import require_permission
+from utils.auth.stateless_auth import get_org_id_from_request
 from utils.db.db_utils import connect_to_db_as_admin
 from utils.secrets.secret_cache import clear_secret_cache
 from time import time
@@ -27,17 +28,14 @@ def home():
 
 
 @gcp_auth_bp.route("/login", methods=["POST"])
-def login():
-    """Send Google OAuth login URL with user_id encoded in state parameter."""
+@require_permission("connectors", "write")
+def login(user_id):
+    """Send Google OAuth login URL with user_id and org_id encoded in state parameter."""
     logging.info("Logging user in.")
 
-    data = request.get_json()
-    user_id = data.get("userId")
-
-    if not user_id:
-        return jsonify({"error": "Missing userId"}), 400
-
-    state = urllib.parse.quote(user_id)
+    org_id = get_org_id_from_request()
+    state_data = f"{user_id}|{org_id or ''}"
+    state = urllib.parse.quote(state_data)
     login_url = get_auth_url(state=state)
     return jsonify({"login_url": login_url})
 
@@ -56,7 +54,13 @@ def callback():
         return jsonify({"error": "Missing state parameter"}), 400
 
     try:
-        user_id = urllib.parse.unquote(state)
+        state_data = urllib.parse.unquote(state)
+        if '|' in state_data:
+            user_id, org_id = state_data.split('|', 1)
+            org_id = org_id or None
+        else:
+            user_id = state_data
+            org_id = None
         from time import time  # local import to avoid global dependency loop
 
         token_data = exchange_code_for_token(code)
@@ -66,7 +70,6 @@ def callback():
 
         token_data["expires_at"] = int(time()) + token_data.get("expires_in", 3600)
 
-        # Store tokens against the user
         store_tokens_in_db(user_id, token_data, "gcp")
 
         # Clear Redis cache to ensure new credentials are used immediately
@@ -74,10 +77,12 @@ def callback():
             from utils.secrets.secret_cache import clear_secret_cache
             from utils.db.db_utils import connect_to_db_as_admin
             
-            # Get the secret_ref from database
             conn = connect_to_db_as_admin()
             cursor = conn.cursor()
-            cursor.execute("SELECT secret_ref FROM user_tokens WHERE user_id = %s AND provider = 'gcp'", (user_id,))
+            cursor.execute(
+                "SELECT secret_ref FROM user_tokens WHERE user_id = %s AND (org_id = %s OR org_id IS NULL) AND provider = 'gcp'",
+                (user_id, org_id)
+            )
             result = cursor.fetchone()
             cursor.close()
             conn.close()
@@ -100,7 +105,8 @@ def callback():
 
 
 @gcp_auth_bp.route("/gcp/setup/status/<task_id>", methods=["GET"])
-def get_gcp_setup_status(task_id):
+@require_permission("connectors", "read")
+def get_gcp_setup_status(user_id, task_id):
     """Return status of the async GCP post-auth setup task."""
     try:
         from connectors.gcp_connector.gcp_post_auth_tasks import gcp_post_auth_setup_task
@@ -146,41 +152,35 @@ def get_gcp_setup_status(task_id):
 
 
 @gcp_auth_bp.route("/api/gcp/force-disconnect", methods=["POST"])
-def force_disconnect_gcp():
+@require_permission("connectors", "write")
+def force_disconnect_gcp(user_id):
     """Force disconnect GCP by deleting user tokens and clearing cache."""
-    user_id = get_user_id_from_request(request)
-    if not user_id:
-        return jsonify({"error": "User ID not found"}), 401
-    
     logging.info(f"Force disconnecting GCP for user {user_id}")
     
+    org_id = get_org_id_from_request()
     conn = None
     cursor = None
     secret_ref = None
     
     try:
-        # Establish DB connection
         conn = connect_to_db_as_admin()
         cursor = conn.cursor()
         
-        # Get secret_ref before deletion to clear cache
         cursor.execute(
-            "SELECT secret_ref FROM user_tokens WHERE user_id = %s AND provider = 'gcp'",
-            (user_id,)
+            "SELECT secret_ref FROM user_tokens WHERE user_id = %s AND (org_id = %s OR org_id IS NULL) AND provider = 'gcp'",
+            (user_id, org_id)
         )
         result = cursor.fetchone()
         secret_ref = result[0] if result else None
         
-        # Delete GCP tokens from database
         cursor.execute(
-            "DELETE FROM user_tokens WHERE user_id = %s AND provider = 'gcp'",
-            (user_id,)
+            "DELETE FROM user_tokens WHERE user_id = %s AND (org_id = %s OR org_id IS NULL) AND provider = 'gcp'",
+            (user_id, org_id)
         )
         
-        # Delete the GCP root project preference from the user_preferences table
         cursor.execute(
-            "DELETE FROM user_preferences WHERE user_id = %s AND preference_key = 'gcp_root_project'",
-            (user_id,)
+            "DELETE FROM user_preferences WHERE user_id = %s AND (org_id = %s OR org_id IS NULL) AND preference_key = 'gcp_root_project'",
+            (user_id, org_id)
         )
         
         # Commit transaction only if all operations succeeded
@@ -225,19 +225,12 @@ def force_disconnect_gcp():
 
 
 @gcp_auth_bp.route("/gcp/post-auth-retry", methods=["POST"])
-def post_auth_retry():
+@require_permission("connectors", "write")
+def post_auth_retry(user_id):
     """Retry post-auth setup with selected projects."""
     try:
-        # Authenticate user from session/token - DO NOT trust request body user_id
-        authenticated_user_id = get_user_id_from_request()
-        if not authenticated_user_id:
-            return jsonify({"error": "Unauthorized - authentication required"}), 401
-        
         data = request.get_json()
         selected_project_ids = data.get("selected_project_ids", [])
-        
-        # Use authenticated user ID instead of trusting request body
-        user_id = authenticated_user_id
         
         # Validate selected_project_ids is a list
         if not isinstance(selected_project_ids, list):

@@ -18,6 +18,7 @@ interface ThoughtsPanelProps {
   thoughts: StreamingThought[];
   incident: Incident;
   isVisible: boolean;
+  canInteract?: boolean;
 }
 
 /**
@@ -59,7 +60,7 @@ function stripIncidentPrefix(title: string): string {
   return title.replace(/^Incident:\s*/i, '');
 }
 
-export default function ThoughtsPanel({ thoughts, incident, isVisible }: ThoughtsPanelProps) {
+export default function ThoughtsPanel({ thoughts, incident, isVisible, canInteract = true }: ThoughtsPanelProps) {
   // Don't render RCA panel for merged incidents
   if (incident.status === 'merged') {
     return null;
@@ -355,7 +356,7 @@ export default function ThoughtsPanel({ thoughts, incident, isVisible }: Thought
           }`}
         >
           Thoughts
-          {incident.auroraStatus === 'running' && <span className="ml-1.5 w-2 h-2 bg-orange-400 rounded-full animate-pulse inline-block" />}
+          {(incident.auroraStatus === 'running' || incident.auroraStatus === 'summarizing') && <span className="ml-1.5 w-2 h-2 bg-orange-400 rounded-full animate-pulse inline-block" />}
         </button>
 
         {/* Chat session tabs */}
@@ -387,7 +388,7 @@ export default function ThoughtsPanel({ thoughts, incident, isVisible }: Thought
                   <p className="text-sm text-zinc-300">{thought.content}</p>
                 </div>
               ))}
-              {incident.auroraStatus === 'running' && (
+              {(incident.auroraStatus === 'running' || incident.auroraStatus === 'summarizing') && (
                 <div className="pl-4 border-l-2 border-orange-500/50">
                   <div className="flex items-center gap-2 text-sm text-zinc-400">
                     <div className="flex gap-1">
@@ -395,11 +396,11 @@ export default function ThoughtsPanel({ thoughts, incident, isVisible }: Thought
                       <span className="w-1.5 h-1.5 bg-orange-400 rounded-full animate-bounce" style={{ animationDelay: '100ms' }} />
                       <span className="w-1.5 h-1.5 bg-orange-400 rounded-full animate-bounce" style={{ animationDelay: '200ms' }} />
                     </div>
-                    <span>Thinking...</span>
+                    <span>{incident.auroraStatus === 'summarizing' ? 'Generating summary...' : 'Thinking...'}</span>
                   </div>
                 </div>
               )}
-              {thoughts.length === 0 && incident.auroraStatus !== 'running' && (
+              {thoughts.length === 0 && incident.auroraStatus !== 'running' && incident.auroraStatus !== 'summarizing' && (
                 <p className="text-center text-zinc-500 text-sm py-8">No investigation thoughts yet</p>
               )}
             </div>
@@ -409,24 +410,28 @@ export default function ThoughtsPanel({ thoughts, incident, isVisible }: Thought
           <div className="absolute bottom-0 left-0 right-0">
             <div className="h-4 bg-gradient-to-t from-background to-transparent" />
             <div className="px-4 pb-4 bg-background">
-              <div className="relative">
-                <input
-                  type="text"
-                  value={inputValue}
-                  onChange={(e: ChangeEvent<HTMLInputElement>) => setInputValue(e.target.value)}
-                  onKeyDown={handleKeyDown}
-                  placeholder="Ask about this investigation..."
-                  className="w-full bg-zinc-800 border-0 rounded-md pl-3 pr-10 py-2 text-sm text-zinc-300 placeholder-zinc-600 focus:outline-none focus:ring-1 focus:ring-zinc-700 transition-colors"
-                  disabled={isLoading}
-                />
-                <button
-                  onClick={handleSend}
-                  disabled={!inputValue.trim() || isLoading}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-zinc-500 hover:text-zinc-300 disabled:text-zinc-700 transition-colors"
-                >
-                  <Send className="w-3.5 h-3.5" />
-                </button>
-              </div>
+              {canInteract ? (
+                <div className="relative">
+                  <input
+                    type="text"
+                    value={inputValue}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) => setInputValue(e.target.value)}
+                    onKeyDown={handleKeyDown}
+                    placeholder="Ask about this investigation..."
+                    className="w-full bg-zinc-800 border-0 rounded-md pl-3 pr-10 py-2 text-sm text-zinc-300 placeholder-zinc-600 focus:outline-none focus:ring-1 focus:ring-zinc-700 transition-colors"
+                    disabled={isLoading}
+                  />
+                  <button
+                    onClick={handleSend}
+                    disabled={!inputValue.trim() || isLoading}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-zinc-500 hover:text-zinc-300 disabled:text-zinc-700 transition-colors"
+                  >
+                    <Send className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              ) : (
+                <p className="text-xs text-zinc-500 text-center py-2">Read-only access. Editors and admins can interact with investigations.</p>
+              )}
             </div>
           </div>
         </div>
@@ -469,24 +474,28 @@ export default function ThoughtsPanel({ thoughts, incident, isVisible }: Thought
           <div className="absolute bottom-0 left-0 right-0">
             <div className="h-4 bg-gradient-to-t from-background to-transparent" />
             <div className="px-4 pb-4 bg-background">
-              <div className="relative">
-                <input
-                  type="text"
-                  value={inputValue}
-                  onChange={(e: ChangeEvent<HTMLInputElement>) => setInputValue(e.target.value)}
-                  onKeyDown={handleKeyDown}
-                  placeholder="Ask a follow-up..."
-                  className="w-full bg-zinc-800 border-0 rounded-md pl-3 pr-10 py-2 text-sm text-zinc-300 placeholder-zinc-600 focus:outline-none focus:ring-1 focus:ring-zinc-700 transition-colors"
-                  disabled={isLoading}
-                />
-                <button
-                  onClick={handleSend}
-                  disabled={!inputValue.trim() || isLoading}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-zinc-500 hover:text-zinc-300 disabled:text-zinc-700 transition-colors"
-                >
-                  <Send className="w-3.5 h-3.5" />
-                </button>
-              </div>
+              {canInteract ? (
+                <div className="relative">
+                  <input
+                    type="text"
+                    value={inputValue}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) => setInputValue(e.target.value)}
+                    onKeyDown={handleKeyDown}
+                    placeholder="Ask a follow-up..."
+                    className="w-full bg-zinc-800 border-0 rounded-md pl-3 pr-10 py-2 text-sm text-zinc-300 placeholder-zinc-600 focus:outline-none focus:ring-1 focus:ring-zinc-700 transition-colors"
+                    disabled={isLoading}
+                  />
+                  <button
+                    onClick={handleSend}
+                    disabled={!inputValue.trim() || isLoading}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-zinc-500 hover:text-zinc-300 disabled:text-zinc-700 transition-colors"
+                  >
+                    <Send className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              ) : (
+                <p className="text-xs text-zinc-500 text-center py-2">Read-only access. Editors and admins can interact with investigations.</p>
+              )}
             </div>
           </div>
         </div>

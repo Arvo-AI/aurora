@@ -1,3 +1,5 @@
+import { apiRequest } from '@/lib/services/api-client';
+
 export type CIProviderSlug = "jenkins" | "cloudbees";
 
 interface CIServer {
@@ -64,29 +66,6 @@ export interface CIWebhookInfo {
   instructions: string[];
 }
 
-async function fetchJson<T>(input: RequestInfo, init?: RequestInit): Promise<T> {
-  const response = await fetch(input, {
-    ...init,
-    headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
-    cache: "no-store",
-  });
-
-  if (!response.ok) {
-    const body = (await response.json().catch(() => null)) as {
-      error?: string;
-      details?: string;
-    } | null;
-    throw new Error(
-      body?.error ||
-        body?.details ||
-        response.statusText ||
-        `Request failed (${response.status})`
-    );
-  }
-
-  return response.json();
-}
-
 export interface CIRcaSettings {
   rcaEnabled: boolean;
 }
@@ -106,7 +85,7 @@ export function createCIProviderService(slug: CIProviderSlug): CIProviderService
   return {
     async getStatus(): Promise<CIProviderStatus | null> {
       try {
-        const raw = await fetchJson<Record<string, unknown>>(`${apiBase}/status?full=true`);
+        const raw = await apiRequest<Record<string, unknown>>(`${apiBase}/status?full=true`, { cache: 'no-store' });
         return {
           connected: Boolean(raw?.connected),
           baseUrl: (raw?.baseUrl ?? raw?.base_url) as string | undefined,
@@ -122,9 +101,10 @@ export function createCIProviderService(slug: CIProviderSlug): CIProviderService
     },
 
     async connect(payload: CIConnectPayload): Promise<CIProviderStatus> {
-      const raw = await fetchJson<Record<string, unknown>>(`${apiBase}/connect`, {
+      const raw = await apiRequest<Record<string, unknown>>(`${apiBase}/connect`, {
         method: "POST",
         body: JSON.stringify(payload),
+        cache: 'no-store',
       });
       return {
         connected: Boolean(raw?.success ?? true),
@@ -136,7 +116,7 @@ export function createCIProviderService(slug: CIProviderSlug): CIProviderService
 
     async getWebhookUrl(): Promise<CIWebhookInfo | null> {
       try {
-        return await fetchJson<CIWebhookInfo>(`${apiBase}/webhook-url`);
+        return await apiRequest<CIWebhookInfo>(`${apiBase}/webhook-url`, { cache: 'no-store' });
       } catch (error) {
         console.error(`[${slug}Service] Failed to fetch webhook URL:`, error);
         return null;
@@ -147,8 +127,9 @@ export function createCIProviderService(slug: CIProviderSlug): CIProviderService
       limit = 10
     ): Promise<{ deployments: CIDeploymentEvent[]; total: number } | null> {
       try {
-        return await fetchJson<{ deployments: CIDeploymentEvent[]; total: number }>(
-          `${apiBase}/deployments?limit=${limit}`
+        return await apiRequest<{ deployments: CIDeploymentEvent[]; total: number }>(
+          `${apiBase}/deployments?limit=${limit}`,
+          { cache: 'no-store' },
         );
       } catch (error) {
         console.error(`[${slug}Service] Failed to fetch deployments:`, error);
@@ -158,7 +139,7 @@ export function createCIProviderService(slug: CIProviderSlug): CIProviderService
 
     async getRcaSettings(): Promise<CIRcaSettings | null> {
       try {
-        return await fetchJson<CIRcaSettings>(`${apiBase}/rca-settings`);
+        return await apiRequest<CIRcaSettings>(`${apiBase}/rca-settings`, { cache: 'no-store' });
       } catch (error) {
         console.error(`[${slug}Service] Failed to fetch RCA settings:`, error);
         return null;
@@ -167,9 +148,10 @@ export function createCIProviderService(slug: CIProviderSlug): CIProviderService
 
     async updateRcaSettings(settings: CIRcaSettings): Promise<CIRcaSettings | null> {
       try {
-        return await fetchJson<CIRcaSettings>(`${apiBase}/rca-settings`, {
+        return await apiRequest<CIRcaSettings>(`${apiBase}/rca-settings`, {
           method: "PUT",
           body: JSON.stringify(settings),
+          cache: 'no-store',
         });
       } catch (error) {
         console.error(`[${slug}Service] Failed to update RCA settings:`, error);

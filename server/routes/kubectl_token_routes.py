@@ -2,23 +2,13 @@ import logging
 import secrets
 from datetime import datetime, timedelta, timezone
 from flask import Blueprint, jsonify, request
-from functools import wraps
 from psycopg2.extras import RealDictCursor
-from utils.auth.stateless_auth import get_user_id_from_request
+from utils.auth.rbac_decorators import require_permission
 from utils.db.db_adapters import connect_to_db_as_user
 from utils.web.limiter_ext import limiter
 
 logger = logging.getLogger(__name__)
 kubectl_token_bp = Blueprint('kubectl_token', __name__)
-
-def require_auth(f):
-    @wraps(f)
-    def decorated_function(*args, **kwargs):
-        user_id = get_user_id_from_request()
-        if not user_id:
-            return jsonify({'error': 'Authentication required'}), 401
-        return f(user_id, *args, **kwargs)
-    return decorated_function
 
 def generate_token():
     return f"aurora_kubectl_{secrets.token_urlsafe(48)}"
@@ -32,7 +22,7 @@ def _to_iso(dt):
     return dt.isoformat()
 
 @kubectl_token_bp.route('/api/kubectl/tokens', methods=['POST'])
-@require_auth
+@require_permission("connectors", "write")
 @limiter.limit("5 per minute;20 per hour")
 def create_token(user_id):
     try:
@@ -69,7 +59,7 @@ def create_token(user_id):
         return jsonify({'error': 'Failed to create token'}), 500
 
 @kubectl_token_bp.route('/api/kubectl/tokens', methods=['GET'])
-@require_auth
+@require_permission("connectors", "read")
 @limiter.limit("30 per minute")
 def list_tokens(user_id):
     try:
@@ -95,7 +85,7 @@ def list_tokens(user_id):
         return jsonify({'error': 'Failed to list tokens'}), 500
 
 @kubectl_token_bp.route('/api/kubectl/connections', methods=['GET'])
-@require_auth
+@require_permission("connectors", "read")
 @limiter.limit("30 per minute")
 def list_connections(user_id):
     try:
@@ -123,7 +113,7 @@ def list_connections(user_id):
         return jsonify({'error': 'Failed to list connections'}), 500
 
 @kubectl_token_bp.route('/api/kubectl/connections/<cluster_id>', methods=['DELETE'])
-@require_auth
+@require_permission("connectors", "write")
 @limiter.limit("10 per minute;30 per hour")
 def disconnect_cluster(user_id, cluster_id):
     try:

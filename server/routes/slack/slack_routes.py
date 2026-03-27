@@ -8,12 +8,12 @@ import os
 import time
 from flask import Blueprint, request, jsonify, redirect
 import requests
-from utils.auth.stateless_auth import get_user_id_from_request
 from connectors.slack_connector.oauth import get_auth_url, exchange_code_for_token
 from connectors.slack_connector.client import create_incidents_channel, get_slack_client_for_user
 from utils.auth.stateless_auth import get_credentials_from_db
 from utils.secrets.secret_ref_utils import delete_user_secret
 from utils.auth.token_management import store_tokens_in_db
+from utils.auth.rbac_decorators import require_permission
 
 slack_bp = Blueprint("slack", __name__)
 
@@ -21,87 +21,77 @@ slack_bp = Blueprint("slack", __name__)
 FRONTEND_URL = os.getenv("FRONTEND_URL")
 
 
-@slack_bp.route("/", methods=["GET", "POST", "DELETE"], strict_slashes=False)
-def slack_connection():
-    """
-    Unified RESTful endpoint for Slack connection management.
-    
-    GET /slack - Get connection status
-    POST /slack - Initiate OAuth connection (returns oauth_url)
-    DELETE /slack - Disconnect Slack workspace
-    """
-    # Get user_id from authenticated session
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User ID required"}), 400
-    
-    method = request.method
-    
-    if method == "GET":
-        # GET /slack - Check connection status
-        try:
-            slack_creds = get_credentials_from_db(user_id, "slack")
-            if not slack_creds or not slack_creds.get("access_token"):
-                return jsonify({"connected": False})
-            
-            # Validate the stored token by calling auth.test
-            headers = {"Authorization": f"Bearer {slack_creds['access_token']}"}
-            test_response = requests.post(
-                "https://slack.com/api/auth.test",
-                headers=headers
-            )
-            
-            if test_response.status_code == 200:
-                test_data = test_response.json()
-                if test_data.get('ok', False):
-                    return jsonify({
-                        "connected": True,
-                        "team_name": test_data.get('team', slack_creds.get('team_name')),
-                        "user_name": test_data.get('user'),
-                        "team_id": test_data.get('team_id', slack_creds.get('team_id')),
-                        "team_url": test_data.get('url', slack_creds.get('team_url')),
-                        "connected_at": slack_creds.get('connected_at'),
-                        "incidents_channel_name": slack_creds.get('incidents_channel_name'),
-                    })
-            
-            # Token is invalid
-            return jsonify({"connected": False, "error": "Invalid or expired token"})
+@slack_bp.route("/", methods=["GET"], strict_slashes=False)
+@require_permission("connectors", "read")
+def slack_status(user_id):
+    """GET /slack - Get connection status"""
+    try:
+        slack_creds = get_credentials_from_db(user_id, "slack")
+        if not slack_creds or not slack_creds.get("access_token"):
+            return jsonify({"connected": False})
         
-        except Exception as e:
-            logging.error(f"Error checking Slack status: {e}", exc_info=True)
-            return jsonify({"connected": False, "error": "Failed to check Slack status"}), 500
-    
-    elif method == "POST":
-        # POST /slack - Initiate OAuth connection
-        try:
-            # Generate OAuth authorization URL
-            oauth_url = get_auth_url(state=user_id)
-            return jsonify({
-                "oauth_url": oauth_url,
-                "message": "Redirect to Slack for authentication"
-            })
-        except Exception as e:
-            logging.error(f"Error initiating Slack OAuth: {e}", exc_info=True)
-            return jsonify({"error": "Failed to initiate Slack OAuth"}), 500
-    
-    elif method == "DELETE":
-        # DELETE /slack - Disconnect
-        try:        
-            delete_success = delete_user_secret(user_id, "slack")
-            
-            if delete_success:
-                logging.info(f"Disconnected Slack for user {user_id}")
-                return jsonify({"success": True, "message": "Slack workspace disconnected"})
-            else:
-                logging.error(f"Failed to disconnect Slack for user {user_id}")
-                return jsonify({"error": "Failed to disconnect Slack workspace"}), 500
+        # Validate the stored token by calling auth.test
+        headers = {"Authorization": f"Bearer {slack_creds['access_token']}"}
+        test_response = requests.post(
+            "https://slack.com/api/auth.test",
+            headers=headers,
+            timeout=20
+        )
         
-        except Exception as e:
-            logging.error(f"Error disconnecting Slack: {e}", exc_info=True)
-            return jsonify({"error": "Failed to disconnect Slack"}), 500
+        if test_response.status_code == 200:
+            test_data = test_response.json()
+            if test_data.get('ok', False):
+                return jsonify({
+                    "connected": True,
+                    "team_name": test_data.get('team', slack_creds.get('team_name')),
+                    "user_name": test_data.get('user'),
+                    "team_id": test_data.get('team_id', slack_creds.get('team_id')),
+                    "team_url": test_data.get('url', slack_creds.get('team_url')),
+                    "connected_at": slack_creds.get('connected_at'),
+                    "incidents_channel_name": slack_creds.get('incidents_channel_name'),
+                })
+        
+        # Token is invalid
+        return jsonify({"connected": False, "error": "Invalid or expired token"})
     
-    else:
-        return jsonify({"error": "Method not allowed"}), 405
+    except Exception as e:
+        logging.error(f"Error checking Slack status: {e}", exc_info=True)
+        return jsonify({"connected": False, "error": "Failed to check Slack status"}), 500
+
+
+@slack_bp.route("/", methods=["POST"], strict_slashes=False)
+@require_permission("connectors", "write")
+def slack_connect(user_id):
+    """POST /slack - Initiate OAuth connection (returns oauth_url)"""
+    try:
+        # Generate OAuth authorization URL
+        oauth_url = get_auth_url(state=user_id)
+        return jsonify({
+            "oauth_url": oauth_url,
+            "message": "Redirect to Slack for authentication"
+        })
+    except Exception as e:
+        logging.error(f"Error initiating Slack OAuth: {e}", exc_info=True)
+        return jsonify({"error": "Failed to initiate Slack OAuth"}), 500
+
+
+@slack_bp.route("/", methods=["DELETE"], strict_slashes=False)
+@require_permission("connectors", "write")
+def slack_disconnect(user_id):
+    """DELETE /slack - Disconnect Slack workspace"""
+    try:        
+        delete_success = delete_user_secret(user_id, "slack")
+        
+        if delete_success:
+            logging.info(f"Disconnected Slack for user {user_id}")
+            return jsonify({"success": True, "message": "Slack workspace disconnected"})
+        else:
+            logging.error(f"Failed to disconnect Slack for user {user_id}")
+            return jsonify({"error": "Failed to disconnect Slack workspace"}), 500
+    
+    except Exception as e:
+        logging.error(f"Error disconnecting Slack: {e}", exc_info=True)
+        return jsonify({"error": "Failed to disconnect Slack"}), 500
 
 
 @slack_bp.route("/callback", methods=["GET", "POST"])
@@ -174,12 +164,9 @@ def slack_callback():
 
 
 @slack_bp.route("/channels", methods=["GET"])
-def list_channels():
+@require_permission("connectors", "read")
+def list_channels(user_id):
     """List Slack channels the bot can see (may include channels the bot is not a member of)."""
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User ID required"}), 400
-    
     try:
         client = get_slack_client_for_user(user_id)
         if not client:

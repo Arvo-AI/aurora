@@ -33,8 +33,8 @@ Next.js 15 application serving the web UI.
 
 ### Environment Variables
 ```bash
-NEXTAUTH_URL=http://localhost:3000
 AUTH_SECRET=<secret>
+# AUTH_URL is set automatically from FRONTEND_URL in docker-compose
 ```
 
 ### Development

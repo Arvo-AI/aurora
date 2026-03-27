@@ -28,6 +28,8 @@ services:
     enabled: true    # Set false to use Weaviate Cloud or external instance
   vault:
     enabled: true    # Set false to use external Vault or other secrets manager
+  minio:
+    enabled: false   # Set true for local dev (provides S3-compatible storage in-cluster)
 
 # ------------------------------------------------------------------------------
 # ServiceAccount configuration
@@ -106,9 +108,8 @@ config:
   WEAVIATE_GRPC_PORT: "50051"
   
   # --- Public URLs (REQUIRED) ---
-  # IMPORTANT: NEXT_PUBLIC_* vars are baked into the frontend at BUILD time.
-  # Changing them requires rebuilding the image (make deploy-build), not just redeploying.
-  # Uses subdomain-based routing (industry standard for APIs)
+  # NEXT_PUBLIC_* vars are written to window.__ENV by docker-entrypoint.sh at startup.
+  # Changing them only requires a pod restart, not an image rebuild.
   NEXT_PUBLIC_BACKEND_URL: ""    # Example: https://api.aurora.example.com
   NEXT_PUBLIC_WEBSOCKET_URL: ""  # Example: wss://ws.aurora.example.com
   FRONTEND_URL: ""               # Example: https://aurora.example.com
@@ -143,11 +144,11 @@ config:
   
   # --- Optional Features (enable as needed) ---
   ENABLE_POD_ISOLATION: "false"              # Isolate terminal commands in separate pods
-  # NEXT_PUBLIC_* feature flags (build-time only - requires image rebuild to change)
+  # NEXT_PUBLIC_* feature flags — written to window.__ENV by docker-entrypoint.sh at startup, no image rebuild needed
   NEXT_PUBLIC_ENABLE_OVH: "false"            # OVH Cloud integration
-  NEXT_PUBLIC_ENABLE_SLACK: "false"          # Slack notifications
   NEXT_PUBLIC_ENABLE_PAGERDUTY_OAUTH: "false" # PagerDuty integration
-  NEXT_PUBLIC_ENABLE_CONFLUENCE: "false"     # Confluence integration
+  NEXT_PUBLIC_ENABLE_SCALEWAY: "false"       # Scaleway integration
+  NEXT_PUBLIC_ENABLE_SHAREPOINT: "false"     # SharePoint integration
   
   # --- Pod Isolation Settings ---
   # When enabled, the chart automatically creates:
@@ -189,30 +190,24 @@ secrets:
     VAULT_TOKEN: ""              # REQUIRED - Root token from Vault init - Set after running: kubectl exec -it statefulset/<release>-vault -- vault operator init
     STORAGE_ACCESS_KEY: ""       # REQUIRED - Your S3 access key
     STORAGE_SECRET_KEY: ""       # REQUIRED - Your S3 secret key
-  
-  # --- Application Secrets (secret-app.yaml) ---
-  app:   # Mounted by: server, celery-worker, celery-beat, chatbot, frontend, searxng
-    FLASK_SECRET_KEY: ""         # REQUIRED - Generate with: openssl rand -base64 32
-    AUTH_SECRET: ""              # REQUIRED - Generate with: openssl rand -base64 32
-    SEARXNG_SECRET: ""           # REQUIRED - Generate with: openssl rand -base64 32
-    
+
     # --- Optional: Slack Integration ---
     SLACK_CLIENT_ID: ""          # Get from: https://api.slack.com/apps
     SLACK_CLIENT_SECRET: ""
     SLACK_SIGNING_SECRET: ""
-    
+
     # --- Optional: GitHub OAuth ---
     GH_OAUTH_CLIENT_ID: ""       # Get from: https://github.com/settings/developers
     GH_OAUTH_CLIENT_SECRET: ""
-    
+
     # --- Optional: PagerDuty Integration ---
     PAGERDUTY_CLIENT_ID: ""
     PAGERDUTY_CLIENT_SECRET: ""
-    
+
     # --- Optional: GCP OAuth (for GCP integrations) ---
     CLIENT_ID: ""                # GCP OAuth client ID
     CLIENT_SECRET: ""            # GCP OAuth client secret
-    
+
     # --- Optional: OVH Cloud Integration ---
     OVH_EU_CLIENT_ID: ""         # Europe region
     OVH_EU_CLIENT_SECRET: ""
@@ -220,7 +215,26 @@ secrets:
     OVH_CA_CLIENT_SECRET: ""
     OVH_US_CLIENT_ID: ""         # US region
     OVH_US_CLIENT_SECRET: ""
-    
+
+    # --- Optional: Atlassian Integration (Confluence + Jira) ---
+    ATLASSIAN_CLIENT_ID: ""
+    ATLASSIAN_CLIENT_SECRET: ""
+
+    # --- Optional: SharePoint Integration ---
+    SHAREPOINT_CLIENT_ID: ""
+    SHAREPOINT_CLIENT_SECRET: ""
+    SHAREPOINT_TENANT_ID: "common"
+
+    # --- Optional: Bitbucket Integration ---
+    BB_OAUTH_CLIENT_ID: ""
+    BB_OAUTH_CLIENT_SECRET: ""
+
+  # --- Application Secrets (secret-app.yaml) ---
+  app:   # Mounted by: server, celery-worker, celery-beat, chatbot, frontend, searxng
+    FLASK_SECRET_KEY: ""         # REQUIRED - Generate with: openssl rand -base64 32
+    AUTH_SECRET: ""              # REQUIRED - Generate with: openssl rand -base64 32
+    SEARXNG_SECRET: ""           # REQUIRED - Generate with: openssl rand -base64 32
+
     # --- Optional: AWS Integration ---
     AWS_ACCESS_KEY_ID: ""
     AWS_SECRET_ACCESS_KEY: ""
@@ -328,6 +342,13 @@ resources:
     limits:
       cpu: "500m"
       memory: "1Gi"
+  minio:
+    requests:
+      cpu: "50m"
+      memory: "128Mi"
+    limits:
+      cpu: "200m"
+      memory: "512Mi"
 
 # ------------------------------------------------------------------------------
 # Persistent storage
@@ -341,6 +362,8 @@ persistence:
     size: 10Gi           # Secrets storage
   redis:
     size: 5Gi            # Celery task state and cache
+  minio:
+    size: 10Gi           # Object storage (local dev only)
 
 # ------------------------------------------------------------------------------
 # Ingress configuration
@@ -352,6 +375,15 @@ persistence:
 ingress:
   enabled: true
   className: "nginx"   # Use your ingress controller class (nginx, traefik, alb, gce, etc.)
+
+  # Set to true for private/VPN deployments to provision a VPC-internal load balancer.
+  # The ingress will have no public IP — only reachable from within your VPC or over VPN.
+  # You must also add your cloud provider's internal LB annotation via ingress.annotations:
+  #   GKE:   cloud.google.com/load-balancer-type: "Internal"
+  #   EKS:   service.beta.kubernetes.io/aws-load-balancer-internal: "true"
+  #   AKS:   service.beta.kubernetes.io/azure-load-balancer-internal: "true"
+  # This is set automatically when deploying with: ./deploy/k8s-deploy.sh --private
+  internal: false
   
   # Custom annotations - merged with controller-specific defaults below
   # Use this to add your own annotations or override defaults

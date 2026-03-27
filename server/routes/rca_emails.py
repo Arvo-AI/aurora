@@ -5,10 +5,10 @@ import re
 from datetime import datetime, timedelta
 from flask import Blueprint, request, jsonify
 from utils.auth.stateless_auth import (
-    get_user_id_from_request,
     get_user_email,
     create_cors_response
 )
+from utils.auth.rbac_decorators import require_permission
 from utils.db.connection_pool import db_pool
 from utils.notifications.email_service import get_email_service
 
@@ -70,16 +70,10 @@ def _check_rate_limit(user_id: str, email: str, action: str) -> tuple[bool, str]
         return True, ""  # Allow on error to avoid blocking legitimate users
 
 
-@rca_emails_bp.route('/api/rca-emails', methods=['GET', 'OPTIONS'])
-def list_rca_emails():
+@rca_emails_bp.route('/api/rca-emails', methods=['GET'])
+@require_permission("rca_emails", "read")
+def list_rca_emails(user_id):
     """List all emails for user (primary + additional)."""
-    if request.method == 'OPTIONS':
-        return create_cors_response()
-    
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "Missing user_id"}), 400
-    
     try:
         # Get primary email from Auth.js or database
         primary_email = get_user_email(user_id)
@@ -121,16 +115,10 @@ def list_rca_emails():
         return jsonify({"error": "Failed to retrieve emails"}), 500
 
 
-@rca_emails_bp.route('/api/rca-emails/add', methods=['POST', 'OPTIONS'])
-def add_rca_email():
+@rca_emails_bp.route('/api/rca-emails/add', methods=['POST'])
+@require_permission("rca_emails", "write")
+def add_rca_email(user_id):
     """Add a new email and send verification code."""
-    if request.method == 'OPTIONS':
-        return create_cors_response()
-    
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "Missing user_id"}), 400
-    
     data = request.get_json()
     email = data.get('email', '').strip().lower()
     
@@ -214,16 +202,11 @@ def add_rca_email():
         return jsonify({"error": "Failed to add email"}), 500
 
 
-@rca_emails_bp.route('/api/rca-emails/verify', methods=['POST', 'OPTIONS'])
-def verify_rca_email():
+
+@rca_emails_bp.route('/api/rca-emails/verify', methods=['POST'])
+@require_permission("rca_emails", "write")
+def verify_rca_email(user_id):
     """Verify an email with the provided code."""
-    if request.method == 'OPTIONS':
-        return create_cors_response()
-    
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "Missing user_id"}), 400
-    
     data = request.get_json()
     email = data.get('email', '').strip().lower()
     code = data.get('code', '').strip()
@@ -289,16 +272,11 @@ def verify_rca_email():
         return jsonify({"error": "Failed to verify email"}), 500
 
 
-@rca_emails_bp.route('/api/rca-emails/resend', methods=['POST', 'OPTIONS'])
-def resend_verification_code():
+
+@rca_emails_bp.route('/api/rca-emails/resend', methods=['POST'])
+@require_permission("rca_emails", "write")
+def resend_verification_code(user_id):
     """Resend verification code to an email."""
-    if request.method == 'OPTIONS':
-        return create_cors_response()
-    
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "Missing user_id"}), 400
-    
     data = request.get_json()
     email = data.get('email', '').strip().lower()
     
@@ -367,16 +345,11 @@ def resend_verification_code():
         return jsonify({"error": "Failed to resend verification code"}), 500
 
 
-@rca_emails_bp.route('/api/rca-emails/<int:email_id>/toggle', methods=['POST', 'OPTIONS'])
-def toggle_rca_email(email_id: int):
+
+@rca_emails_bp.route('/api/rca-emails/<int:email_id>/toggle', methods=['POST'])
+@require_permission("rca_emails", "write")
+def toggle_rca_email(user_id, email_id: int):
     """Toggle an email address enabled/disabled status."""
-    if request.method == 'OPTIONS':
-        return create_cors_response()
-    
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "Missing user_id"}), 400
-    
     data = request.get_json()
     is_enabled = data.get('is_enabled')
     
@@ -414,16 +387,11 @@ def toggle_rca_email(email_id: int):
         return jsonify({"error": "Failed to toggle email"}), 500
 
 
-@rca_emails_bp.route('/api/rca-emails/<int:email_id>', methods=['DELETE', 'OPTIONS'])
-def remove_rca_email(email_id: int):
+
+@rca_emails_bp.route('/api/rca-emails/<int:email_id>', methods=['DELETE'])
+@require_permission("rca_emails", "write")
+def remove_rca_email(user_id, email_id: int):
     """Remove an additional email."""
-    if request.method == 'OPTIONS':
-        return create_cors_response()
-    
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "Missing user_id"}), 400
-    
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:

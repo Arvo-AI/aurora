@@ -161,6 +161,10 @@ CORS(app, origins=FRONTEND_URL, supports_credentials=True,
                         "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
                                           "Authorization", "X-Provider-Preference"],
                         "methods": ["GET", "POST", "DELETE", "OPTIONS"]},
+        r"/spinnaker/*": {"origins": FRONTEND_URL, "supports_credentials": True,
+                        "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
+                                          "Authorization", "X-Provider-Preference"],
+                        "methods": ["GET", "POST", "DELETE", "OPTIONS", "PATCH"]},
         r"/ovh_api/*": {"origins": FRONTEND_URL, "supports_credentials": True,
                        "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
                                          "Authorization", "X-Provider-Preference"],
@@ -169,10 +173,14 @@ CORS(app, origins=FRONTEND_URL, supports_credentials=True,
                             "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
                                               "Authorization", "X-Provider-Preference"],
                             "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"]},
-        r"/tailscale_api/*": {"origins": FRONTEND_URL, "supports_credentials": True,
+       r"/tailscale_api/*": {"origins": FRONTEND_URL, "supports_credentials": True,
                              "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
                                                "Authorization", "X-Provider-Preference"],
                              "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"]},
+       r"/cloudflare_api/*": {"origins": FRONTEND_URL, "supports_credentials": True,
+                              "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
+                                                "Authorization", "X-Provider-Preference"],
+                              "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"]},
         r"/api/ssh-keys*": {"origins": FRONTEND_URL, "supports_credentials": True,
                             "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
                                               "Authorization", "X-Provider-Preference"],
@@ -185,6 +193,10 @@ CORS(app, origins=FRONTEND_URL, supports_credentials=True,
                           "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
                                             "Authorization", "X-Provider-Preference"],
                           "methods": ["GET", "POST", "DELETE", "OPTIONS"]},
+        r"/api/prediscovery/*": {"origins": FRONTEND_URL, "supports_credentials": True,
+                                 "allow_headers": ["Content-Type", "X-Requested-With", "X-User-ID",
+                                                   "Authorization"],
+                                 "methods": ["GET", "POST", "OPTIONS"]},
         r"/*": {"origins": FRONTEND_URL, "supports_credentials": True,
                 "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID", 
                                 "Authorization", "X-Provider-Preference"], 
@@ -193,15 +205,57 @@ CORS(app, origins=FRONTEND_URL, supports_credentials=True,
 )
 
 # ============================================================================
+# Tenant Isolation Middleware - Validates X-User-ID / X-Org-ID Pairing
+# ============================================================================
+
+_OPEN_PREFIXES = ("/api/auth/login", "/api/auth/register", "/health")
+
+@app.before_request
+def enforce_user_org_binding():
+    """Reject requests where X-Org-ID doesn't match the user's actual org."""
+    if request.method == "OPTIONS":
+        return None
+
+    if any(request.path.startswith(p) for p in _OPEN_PREFIXES):
+        return None
+
+    user_id = request.headers.get("X-User-ID")
+    claimed_org = request.headers.get("X-Org-ID")
+
+    if not user_id or not claimed_org:
+        return None
+
+    from utils.auth.stateless_auth import resolve_org_id
+    actual_org = resolve_org_id(user_id)
+
+    if not actual_org:
+        return jsonify({"error": "Unauthorized - unknown user"}), 401
+
+    if actual_org != claimed_org:
+        logging.getLogger(__name__).warning(
+            "Tenant mismatch: user=%s claimed_org=%s actual_org=%s",
+            user_id, claimed_org, actual_org,
+        )
+        return jsonify({"error": "Forbidden - organization mismatch"}), 403
+
+    return None
+
+# ============================================================================
 # Register Blueprints - Organized by Domain
 # ============================================================================
 
 # --- Core Service Routes ---
 from routes.llm_config import llm_config_bp
 from routes.auth_routes import auth_bp
+from routes.admin_routes import admin_bp
 
 app.register_blueprint(llm_config_bp)  # LLM provider configuration routes
 app.register_blueprint(auth_bp)  # Auth.js authentication routes
+app.register_blueprint(admin_bp)  # RBAC admin routes
+
+# --- Organization Management Routes ---
+from routes.org_routes import org_bp
+app.register_blueprint(org_bp)
 
 # --- GitHub Integration Routes ---
 from routes.github.github import github_bp
@@ -216,12 +270,10 @@ from routes.kubectl_token_routes import kubectl_token_bp
 app.register_blueprint(kubectl_token_bp)
 
 # --- Slack Integration Routes ---
-from utils.flags.feature_flags import is_slack_enabled
-if is_slack_enabled():
-    from routes.slack.slack_routes import slack_bp
-    from routes.slack.slack_events import slack_events_bp
-    app.register_blueprint(slack_bp, url_prefix="/slack")
-    app.register_blueprint(slack_events_bp, url_prefix="/slack")
+from routes.slack.slack_routes import slack_bp
+from routes.slack.slack_events import slack_events_bp
+app.register_blueprint(slack_bp, url_prefix="/slack")
+app.register_blueprint(slack_events_bp, url_prefix="/slack")
 
 # --- Jenkins Integration Routes ---
 from routes.jenkins import bp as jenkins_bp  # noqa: F401
@@ -231,6 +283,13 @@ app.register_blueprint(jenkins_bp, url_prefix="/jenkins")
 # --- CloudBees CI Integration Routes (reuses Jenkins connector) ---
 from routes.cloudbees import bp as cloudbees_bp  # noqa: F401
 app.register_blueprint(cloudbees_bp, url_prefix="/cloudbees")
+
+# --- Spinnaker Integration Routes ---
+from utils.flags.feature_flags import is_spinnaker_enabled
+if is_spinnaker_enabled():
+    from routes.spinnaker import bp as spinnaker_bp
+    import routes.spinnaker.tasks  # noqa: F401
+    app.register_blueprint(spinnaker_bp, url_prefix="/spinnaker")
 
 # --- Grafana Integration Routes ---
 from routes.grafana import bp as grafana_bp  # noqa: F401
@@ -259,24 +318,23 @@ from routes.coroot import bp as coroot_bp  # noqa: F401
 app.register_blueprint(coroot_bp, url_prefix="/coroot")
 
 # --- ThousandEyes Integration Routes ---
-from utils.flags.feature_flags import is_thousandeyes_enabled
-if is_thousandeyes_enabled():
-    from routes.thousandeyes import bp as thousandeyes_bp  # noqa: F401
-    app.register_blueprint(thousandeyes_bp, url_prefix="/thousandeyes")
+from routes.thousandeyes import bp as thousandeyes_bp  # noqa: F401
+app.register_blueprint(thousandeyes_bp, url_prefix="/thousandeyes")
 
 # --- Dynatrace Integration Routes ---
-from utils.flags.feature_flags import is_dynatrace_enabled
-if is_dynatrace_enabled():
-    from routes.dynatrace import bp as dynatrace_bp  # noqa: F401
-    import routes.dynatrace.tasks  # noqa: F401
-    app.register_blueprint(dynatrace_bp, url_prefix="/dynatrace")
+from routes.dynatrace import bp as dynatrace_bp  # noqa: F401
+import routes.dynatrace.tasks  # noqa: F401
+app.register_blueprint(dynatrace_bp, url_prefix="/dynatrace")
 
 # --- BigPanda Integration Routes ---
-from utils.flags.feature_flags import is_bigpanda_enabled
-if is_bigpanda_enabled():
-    from routes.bigpanda import bp as bigpanda_bp  # noqa: F401
-    import routes.bigpanda.tasks  # noqa: F401
-    app.register_blueprint(bigpanda_bp, url_prefix="/bigpanda")
+from routes.bigpanda import bp as bigpanda_bp  # noqa: F401
+import routes.bigpanda.tasks  # noqa: F401
+app.register_blueprint(bigpanda_bp, url_prefix="/bigpanda")
+
+# --- New Relic Integration Routes ---
+from routes.newrelic import bp as newrelic_bp  # noqa: F401
+app.register_blueprint(newrelic_bp, url_prefix="/newrelic")
+import routes.newrelic.tasks  # noqa: F401
 
 # --- PagerDuty Integration Routes ---
 from routes.pagerduty.pagerduty_routes import pagerduty_bp  # noqa: F401
@@ -288,10 +346,19 @@ app.register_blueprint(knowledge_base_bp, url_prefix="/api/knowledge-base")
 
 
 # --- Confluence Integration Routes ---
-from utils.flags.feature_flags import is_confluence_enabled
-if is_confluence_enabled():
-    from routes.confluence import bp as confluence_bp  # noqa: F401
-    app.register_blueprint(confluence_bp, url_prefix="/confluence")
+from routes.confluence import bp as confluence_bp  # noqa: F401
+app.register_blueprint(confluence_bp, url_prefix="/confluence")
+
+# --- Unified Atlassian Routes (Confluence + Jira OAuth) ---
+from utils.flags.feature_flags import is_jira_enabled, is_confluence_enabled
+if is_confluence_enabled() or is_jira_enabled():
+    from routes.atlassian import bp as atlassian_bp  # noqa: F401
+    app.register_blueprint(atlassian_bp, url_prefix="/atlassian")
+
+# --- Jira Integration Routes ---
+if is_jira_enabled():
+    from routes.jira import bp as jira_bp  # noqa: F401
+    app.register_blueprint(jira_bp, url_prefix="/jira")
 
 # --- SharePoint Integration Routes ---
 from utils.flags.feature_flags import is_sharepoint_enabled
@@ -300,14 +367,12 @@ if is_sharepoint_enabled():
     app.register_blueprint(sharepoint_bp, url_prefix="/sharepoint")
 
 # --- Bitbucket Integration Routes ---
-from utils.flags.feature_flags import is_bitbucket_enabled
-if is_bitbucket_enabled():
-    from routes.bitbucket.bitbucket import bitbucket_bp
-    from routes.bitbucket.bitbucket_browsing import bitbucket_browsing_bp
-    from routes.bitbucket.bitbucket_selection import bitbucket_selection_bp
-    app.register_blueprint(bitbucket_bp, url_prefix="/bitbucket")
-    app.register_blueprint(bitbucket_browsing_bp, url_prefix="/bitbucket")
-    app.register_blueprint(bitbucket_selection_bp, url_prefix="/bitbucket")
+from routes.bitbucket.bitbucket import bitbucket_bp
+from routes.bitbucket.bitbucket_browsing import bitbucket_browsing_bp
+from routes.bitbucket.bitbucket_selection import bitbucket_selection_bp
+app.register_blueprint(bitbucket_bp, url_prefix="/bitbucket")
+app.register_blueprint(bitbucket_browsing_bp, url_prefix="/bitbucket")
+app.register_blueprint(bitbucket_selection_bp, url_prefix="/bitbucket")
 
 # --- Incidents Routes ---
 from routes.incidents_routes import incidents_bp
@@ -345,6 +410,10 @@ app.register_blueprint(vms_bp)  # VM management routes
 
 app.register_blueprint(user_connections_bp)
 app.register_blueprint(account_management_bp)
+
+# --- Unified Connector Status ---
+from routes.connector_status import connector_status_bp
+app.register_blueprint(connector_status_bp)
 
 # --- Monitoring & Logging Routes ---
 from routes.chat_routes import chat_bp
@@ -387,6 +456,10 @@ app.register_blueprint(scaleway_bp, url_prefix="/scaleway_api")
 from routes.tailscale import tailscale_bp
 app.register_blueprint(tailscale_bp, url_prefix="/tailscale_api")
 
+# --- Cloudflare Routes ---
+from routes.cloudflare import cloudflare_bp
+app.register_blueprint(cloudflare_bp, url_prefix="/cloudflare_api")
+
 from routes.terraform import terraform_workspace_bp
 app.register_blueprint(terraform_workspace_bp)
 
@@ -396,6 +469,10 @@ app.register_blueprint(terraform_workspace_bp)
 # --- Graph / Service Discovery Routes ---
 from routes.graph_routes import graph_bp
 app.register_blueprint(graph_bp)
+
+# --- Prediscovery Routes ---
+from routes.prediscovery import bp as prediscovery_bp
+app.register_blueprint(prediscovery_bp, url_prefix="/api/prediscovery")
 
 # ---- Debug Routes ----
 from routes.debug import bp as debug_bp
@@ -424,6 +501,14 @@ def initialize_app():
     # Initialize database
     ensure_database_exists()
     initialize_tables()
+
+    # Initialize Casbin RBAC enforcer (seeds default policies on first run)
+    try:
+        from utils.auth.enforcer import get_enforcer
+        get_enforcer()
+        logging.getLogger(__name__).info("Casbin RBAC enforcer initialized.")
+    except Exception as e:
+        logging.getLogger(__name__).warning("Casbin enforcer init deferred: %s", e)
 
 # Always run initialization when module is imported (for Gunicorn and direct execution)
 initialize_app()

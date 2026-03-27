@@ -5,10 +5,10 @@ import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle, CardContent, CardFooter } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Check, ExternalLink, AlertCircle, Loader2, BarChart2, LogOut, KeyRound, Settings } from "lucide-react";
+import { Check, ExternalLink, AlertCircle, Loader2, BarChart2, LogOut, KeyRound, Settings, Lock } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
-import { isSlackEnabled } from "@/lib/feature-flags";
 import { useConnectorStatus } from "@/hooks/use-connector-status";
+import { slackService } from "@/lib/services/slack";
 import { useConnectorOAuth } from "@/hooks/use-connector-oauth";
 import { ConnectorDialogs } from "./ConnectorDialogs";
 import { ConnectorCardContent } from "./ConnectorCardContent";
@@ -16,28 +16,42 @@ import type { ConnectorConfig } from "./types";
 import { useGitHubStatus } from "@/hooks/use-github-status";
 import { useBitbucketStatus } from "@/hooks/use-bitbucket-status";
 import { useGraphDiscoveryStatus } from "@/hooks/use-graph-discovery-status";
+import { useUser } from "@/hooks/useAuthHooks";
+import { canWrite as checkCanWrite } from "@/lib/roles";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 
-const slackService = isSlackEnabled() ? require("@/lib/services/slack").slackService : null;
+let pendingGitHubDialog = false;
 
 interface ConnectorCardProps {
   connector: ConnectorConfig;
+  connectedOverride?: boolean;
 }
 
-export default function ConnectorCard({ connector }: ConnectorCardProps) {
+export default function ConnectorCard({ connector, connectedOverride }: ConnectorCardProps) {
   const router = useRouter();
   const { toast } = useToast();
+  const { user } = useUser();
+  const canWrite = checkCanWrite(user?.role);
+  const userId = user?.id ?? null;
   const [showGitHubDialog, setShowGitHubDialog] = useState(false);
   const [showBitbucketDialog, setShowBitbucketDialog] = useState(false);
   const [showGcpDialog, setShowGcpDialog] = useState(false);
   const [showOvhDialog, setShowOvhDialog] = useState(false);
   const [showScalewayDialog, setShowScalewayDialog] = useState(false);
   const [showAzureDialog, setShowAzureDialog] = useState(false);
-  const [userId, setUserId] = useState<string | null>(null);
   const [isConnectingOAuth, setIsConnectingOAuth] = useState(false);
   
-  // Single source of truth for GitHub status
-  const githubStatus = useGitHubStatus(connector.id === "github" ? userId : null);
-  const bitbucketStatus = useBitbucketStatus(connector.id === "bitbucket" ? userId : null);
+  const hasOverride = connectedOverride !== undefined;
+
+  // GitHub/Bitbucket two-tier status (authenticated vs fully connected)
+  // Only instantiate when this card IS the github/bitbucket card AND
+  // no batch override was provided (i.e., on individual manage pages).
+  const githubStatus = useGitHubStatus(
+    !hasOverride && connector.id === "github" ? userId : null
+  );
+  const bitbucketStatus = useBitbucketStatus(
+    !hasOverride && connector.id === "bitbucket" ? userId : null
+  );
 
   const {
     isConnected,
@@ -46,7 +60,14 @@ export default function ConnectorCard({ connector }: ConnectorCardProps) {
     isLoadingDetails,
     slackStatus,
     checkGitHubStatus,
-  } = useConnectorStatus(connector, userId);
+  } = useConnectorStatus(connector, userId, connectedOverride);
+
+  useEffect(() => {
+    if (pendingGitHubDialog && (githubStatus.isAuthenticated || isConnected)) {
+      pendingGitHubDialog = false;
+      setShowGitHubDialog(true);
+    }
+  }, [githubStatus.isAuthenticated, isConnected]);
 
   // Graph discovery status (only active for supported cloud providers)
   const { syncStatus } = useGraphDiscoveryStatus(connector.id, isConnected, userId);
@@ -59,22 +80,6 @@ export default function ConnectorCard({ connector }: ConnectorCardProps) {
   } = useConnectorOAuth(connector, userId);
 
   const isConnecting = isConnectingOAuth || isConnectingOAuthHandler;
-
-  useEffect(() => {
-    const fetchUserId = async () => {
-      try {
-        const response = await fetch('/api/getUserId');
-        if (response.ok) {
-          const data = await response.json();
-          setUserId(data.userId);
-        }
-      } catch (error) {
-        console.error('Error fetching user ID:', error);
-      }
-    };
-    
-    fetchUserId();
-  }, []);
 
   const handleDisconnect = async () => {
     if (connector.id === "slack") {
@@ -105,7 +110,9 @@ export default function ConnectorCard({ connector }: ConnectorCardProps) {
 
   const handleConnect = async () => {
     if (connector.id === "github") {
-      if (!isConnected) {
+      const isGitHubAuthed = hasOverride ? isConnected : githubStatus.isAuthenticated;
+      if (!isGitHubAuthed) {
+        pendingGitHubDialog = true;
         await handleGitHubOAuth(checkGitHubStatus);
       } else {
         setShowGitHubDialog(true);
@@ -194,13 +201,17 @@ export default function ConnectorCard({ connector }: ConnectorCardProps) {
   const IconComponent = connector.icon;
 
   function renderStatusBadge() {
-    // GitHub and Bitbucket use two-tier status (authenticated vs fully connected)
+    // GitHub and Bitbucket use dedicated two-tier status hooks as the sole
+    // source of truth. Never fall through to the generic isConnected path
+    // for these connectors — that would flash "Connected" while the
+    // dedicated hook is still loading.
     const devToolStatus =
       connector.id === "github" ? githubStatus :
       connector.id === "bitbucket" ? bitbucketStatus :
       null;
 
-    if (devToolStatus?.isAuthenticated) {
+    if (devToolStatus) {
+      if (!devToolStatus.isAuthenticated) return null;
       return devToolStatus.isConnected ? (
         <div className="flex items-center gap-1 text-green-600 dark:text-green-500">
           <Check className="h-4 w-4" />
@@ -303,50 +314,102 @@ export default function ConnectorCard({ connector }: ConnectorCardProps) {
         
         <CardFooter className="flex flex-col gap-2">
           {connector.id === 'onprem' ? (
-            // On Prem always shows both buttons
             <div className="flex gap-2 w-full flex-wrap">
-              <Button
-                onClick={() => router.push("/settings/ssh-keys")}
-                className="flex-1 min-w-[120px] bg-white text-black hover:bg-gray-100"
-              >
-                <KeyRound className="h-4 w-4 mr-2 shrink-0" />
-                <span className="truncate">SSH Keys</span>
-              </Button>
-              <Button
-                onClick={() => router.push("/vm-config")}
-                className="flex-1 min-w-[120px] bg-white text-black hover:bg-gray-100"
-              >
-                <Settings className="h-4 w-4 mr-2 shrink-0" />
-                <span className="truncate">VM Config</span>
-              </Button>
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span className="flex-1 min-w-[120px]">
+                      <Button
+                        onClick={() => router.push("/settings/ssh-keys")}
+                        className="w-full bg-white text-black hover:bg-gray-100"
+                        disabled={!canWrite}
+                      >
+                        {!canWrite ? <Lock className="h-4 w-4 mr-2 shrink-0" /> : <KeyRound className="h-4 w-4 mr-2 shrink-0" />}
+                        <span className="truncate">SSH Keys</span>
+                      </Button>
+                    </span>
+                  </TooltipTrigger>
+                  {!canWrite && (
+                    <TooltipContent>
+                      <p>Editor or Admin role required</p>
+                    </TooltipContent>
+                  )}
+                </Tooltip>
+              </TooltipProvider>
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span className="flex-1 min-w-[120px]">
+                      <Button
+                        onClick={() => router.push("/vm-config")}
+                        className="w-full bg-white text-black hover:bg-gray-100"
+                        disabled={!canWrite}
+                      >
+                        {!canWrite ? <Lock className="h-4 w-4 mr-2 shrink-0" /> : <Settings className="h-4 w-4 mr-2 shrink-0" />}
+                        <span className="truncate">VM Config</span>
+                      </Button>
+                    </span>
+                  </TooltipTrigger>
+                  {!canWrite && (
+                    <TooltipContent>
+                      <p>Editor or Admin role required</p>
+                    </TooltipContent>
+                  )}
+                </Tooltip>
+              </TooltipProvider>
             </div>
           ) : (
             <>
-              <Button 
-                onClick={handleConnect} 
-                className="w-full"
-                variant={isConnected ? "outline" : "default"}
-                disabled={isConnecting}
-              >
-                {isConnecting ? (
-                  <>
-                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                    {connector.id === "slack" && isConnected ? "Disconnecting..." : "Connecting..."}
-                  </>
-                ) : connector.id === "slack" && isConnected ? (
-                  <>
-                    <LogOut className="h-4 w-4 mr-2" />
-                    Disconnect
-                  </>
-                ) : isConnected ? (
-                  <>
-                    <ExternalLink className="h-4 w-4 mr-2" />
-                    {connector.id === 'kubectl' ? 'Manage Clusters' : 'Manage'}
-                  </>
-                ) : (
-                  "Connect"
-                )}
-              </Button>
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span className="w-full">
+                      <Button 
+                        onClick={handleConnect} 
+                        className="w-full"
+                        variant={isConnected ? "outline" : "default"}
+                        disabled={isConnecting || (!isConnected && !canWrite) || (isConnected && !canWrite)}
+                      >
+                        {isConnecting ? (
+                          <>
+                            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                            {connector.id === "slack" && isConnected ? "Disconnecting..." : "Connecting..."}
+                          </>
+                        ) : connector.id === "slack" && isConnected ? (
+                          <>
+                            <LogOut className="h-4 w-4 mr-2" />
+                            Disconnect
+                          </>
+                        ) : isConnected ? (
+                          !canWrite ? (
+                            <>
+                              <Lock className="h-4 w-4 mr-2" />
+                              {connector.id === 'kubectl' ? 'Manage Clusters' : 'Manage'}
+                            </>
+                          ) : (
+                            <>
+                              <ExternalLink className="h-4 w-4 mr-2" />
+                              {connector.id === 'kubectl' ? 'Manage Clusters' : 'Manage'}
+                            </>
+                          )
+                        ) : !canWrite ? (
+                          <>
+                            <Lock className="h-4 w-4 mr-2" />
+                            Connect
+                          </>
+                        ) : (
+                          "Connect"
+                        )}
+                      </Button>
+                    </span>
+                  </TooltipTrigger>
+                  {!canWrite && (
+                    <TooltipContent>
+                      <p>Editor or Admin role required</p>
+                    </TooltipContent>
+                  )}
+                </Tooltip>
+              </TooltipProvider>
               
               {isConnected && connector.id === 'kubectl' && (
                 <Button
@@ -396,6 +459,10 @@ export default function ConnectorCard({ connector }: ConnectorCardProps) {
         showOvhDialog={showOvhDialog}
         showScalewayDialog={showScalewayDialog}
         onGitHubDialogChange={(open) => {
+          if (!open && githubStatus.isAuthenticated && !githubStatus.isConnected) {
+            toast({ title: "Select at least one repository", description: "GitHub requires at least one connected repo to be useful during investigations.", variant: "destructive" });
+            return;
+          }
           setShowGitHubDialog(open);
           if (!open) {
             setTimeout(() => {

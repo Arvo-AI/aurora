@@ -30,6 +30,8 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { getEnv } from '@/lib/env';
+import ConnectorAuthGuard from "@/components/connectors/ConnectorAuthGuard";
+import { copyToClipboard } from '@/lib/utils';
 import { useToast } from '@/hooks/use-toast';
 
 const BACKEND_URL = getEnv('NEXT_PUBLIC_BACKEND_URL');
@@ -331,6 +333,7 @@ export default function AWSOnboardingPage() {
       await fetchOnboardingData();
       setIsConfigured(true);
       localStorage.setItem("aurora_graph_discovery_trigger", "1");
+      window.dispatchEvent(new CustomEvent('providerStateChanged'));
 
     } catch (err) {
       console.error("Failed to set role:", err);
@@ -498,6 +501,7 @@ export default function AWSOnboardingPage() {
       localStorage.setItem('cloudProvider', 'aws');
       await fetchConnectedAccounts();
       await fetchInactiveAccounts();
+      window.dispatchEvent(new CustomEvent('providerStateChanged'));
     } catch (err) {
       console.error('Reconnect error:', err);
       setError('Failed to reconnect. Check your network connection and try again.');
@@ -575,6 +579,7 @@ export default function AWSOnboardingPage() {
         setIsConfigured(true);
         localStorage.setItem('isAWSConnected', 'true');
         localStorage.setItem('cloudProvider', 'aws');
+        window.dispatchEvent(new CustomEvent('providerStateChanged'));
       }
     } catch (err) {
       console.error('Bulk register error:', err);
@@ -649,26 +654,29 @@ export default function AWSOnboardingPage() {
     }
   };
 
-  const copyToClipboard = (text: string, key: string = 'default') => {
-    navigator.clipboard.writeText(text);
+  const handleCopy = (text: string, key: string = 'default') => {
+    copyToClipboard(text);
     setCopySuccess(prev => ({ ...prev, [key]: true }));
     setTimeout(() => setCopySuccess(prev => ({ ...prev, [key]: false })), 2000);
   };
 
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-black flex items-center justify-center">
-        <div className="text-center">
-          <Loader2 className="w-12 h-12 animate-spin mx-auto mb-6 text-blue-400" />
-          <p className="text-slate-300 text-lg">Loading AWS onboarding...</p>
+      <ConnectorAuthGuard connectorName="AWS">
+        <div className="min-h-screen bg-black flex items-center justify-center">
+          <div className="text-center">
+            <Loader2 className="w-12 h-12 animate-spin mx-auto mb-6 text-blue-400" />
+            <p className="text-slate-300 text-lg">Loading AWS onboarding...</p>
+          </div>
         </div>
-      </div>
+      </ConnectorAuthGuard>
     );
   }
 
   if (credentialsConfigured === false) {
     return (
-      <div className="min-h-screen bg-black flex items-center justify-center p-4 sm:p-6">
+      <ConnectorAuthGuard connectorName="AWS">
+        <div className="min-h-screen bg-black flex items-center justify-center p-4 sm:p-6">
         <Card className="w-full max-w-2xl bg-black border-white/10 overflow-hidden">
           <CardHeader className="pb-4">
             <CardTitle className="text-white flex items-center space-x-2 text-lg sm:text-xl">
@@ -699,7 +707,7 @@ export default function AWSOnboardingPage() {
                   <Button
                     variant="outline"
                     size="icon"
-                    onClick={() => copyToClipboard(JSON.stringify({
+                    onClick={() => handleCopy(JSON.stringify({
                       "Version": "2012-10-17",
                       "Statement": [
                         {
@@ -780,13 +788,14 @@ make dev`}</pre>
           </CardContent>
         </Card>
       </div>
+      </ConnectorAuthGuard>
     );
   }
 
-  // Show error page if credentials are configured but account ID cannot be retrieved (invalid credentials)
   if (onboardingData && !onboardingData.auroraAccountId && !isConfigured) {
     return (
-      <div className="min-h-screen bg-black flex items-center justify-center p-4 sm:p-6">
+      <ConnectorAuthGuard connectorName="AWS">
+        <div className="min-h-screen bg-black flex items-center justify-center p-4 sm:p-6">
         <Card className="w-full max-w-2xl bg-black border-white/10 overflow-hidden">
           <CardHeader className="pb-4">
             <CardTitle className="text-white flex items-center space-x-2 text-lg sm:text-xl">
@@ -840,13 +849,15 @@ make dev`}</pre>
           </CardContent>
         </Card>
       </div>
+      </ConnectorAuthGuard>
     );
   }
 
   if (error && !isConfigured) {
     const formattedError = formatAWSErrorMessage(error);
     return (
-      <div className="min-h-screen bg-black flex items-center justify-center p-6">
+      <ConnectorAuthGuard connectorName="AWS">
+        <div className="min-h-screen bg-black flex items-center justify-center p-6">
         <Card className="w-full max-w-2xl bg-slate-900 border-slate-700">
           <CardHeader>
             <CardTitle className="text-red-400 flex items-center space-x-2">
@@ -887,14 +898,17 @@ make dev`}</pre>
           </CardContent>
         </Card>
       </div>
+      </ConnectorAuthGuard>
     );
   }
 
   if (!onboardingData) {
     return (
-      <div className="min-h-screen bg-black flex items-center justify-center">
-        <p className="text-slate-400">No onboarding data available.</p>
-      </div>
+      <ConnectorAuthGuard connectorName="AWS">
+        <div className="min-h-screen bg-black flex items-center justify-center">
+          <p className="text-slate-400">No onboarding data available.</p>
+        </div>
+      </ConnectorAuthGuard>
     );
   }
 
@@ -937,7 +951,8 @@ make dev`}</pre>
   );
 
   return (
-    <div className="min-h-screen bg-black flex flex-col items-center justify-center p-6">
+    <ConnectorAuthGuard connectorName="AWS">
+      <div className="min-h-screen bg-black flex flex-col items-center justify-center p-6">
       <div className="w-full max-w-4xl space-y-8">
         {/* Header */}
         <div className="text-center space-y-3">
@@ -1085,13 +1100,13 @@ make dev`}</pre>
                     </p>
                     <div className="flex gap-2 items-center">
                       <Input value={onboardingData.externalId} readOnly className="font-mono text-xs bg-black/50 text-white border-white/10 focus-visible:ring-white/20" />
-                      <Button variant="outline" size="icon" onClick={() => copyToClipboard(onboardingData.externalId, 'externalId2')} className="border-white/10 hover:bg-white/5 text-white/70 h-8 w-8 shrink-0">
+                      <Button variant="outline" size="icon" onClick={() => handleCopy(onboardingData.externalId, 'externalId2')} className="border-white/10 hover:bg-white/5 text-white/70 h-8 w-8 shrink-0">
                         {copySuccess['externalId2'] ? <CheckCircle className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
                       </Button>
                     </div>
                     <div className="relative">
                       <pre className="text-white text-[10px] whitespace-pre-wrap font-mono bg-black/30 p-2 pr-8 rounded border border-white/10">{trustPolicyJson}</pre>
-                      <Button variant="outline" size="icon" onClick={() => copyToClipboard(trustPolicyJson, 'trustPolicy2')} className="absolute top-1.5 right-1.5 h-5 w-5 border-white/10 hover:bg-white/5 text-white/70">
+                      <Button variant="outline" size="icon" onClick={() => handleCopy(trustPolicyJson, 'trustPolicy2')} className="absolute top-1.5 right-1.5 h-5 w-5 border-white/10 hover:bg-white/5 text-white/70">
                         {copySuccess['trustPolicy2'] ? <CheckCircle className="w-2.5 h-2.5" /> : <Copy className="w-2.5 h-2.5" />}
                       </Button>
                     </div>
@@ -1153,7 +1168,7 @@ make dev`}</pre>
                           <Button
                             variant="outline"
                             size="icon"
-                            onClick={() => copyToClipboard(stackSetsCommand, 'stackSets')}
+                            onClick={() => handleCopy(stackSetsCommand, 'stackSets')}
                             className="absolute top-2 right-2 h-6 w-6 border-white/10 hover:bg-white/5 text-white/70"
                           >
                             {copySuccess['stackSets'] ? <CheckCircle className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
@@ -1256,7 +1271,7 @@ make dev`}</pre>
                       <label className="text-xs text-white/50">External ID</label>
                       <div className="flex gap-2">
                         <Input value={onboardingData.externalId} readOnly className="font-mono text-xs bg-white/5 text-white border-white/10 focus-visible:ring-white/20" />
-                        <Button variant="outline" size="icon" onClick={() => copyToClipboard(onboardingData.externalId, 'externalId')} className="border-white/10 hover:bg-white/5 text-white/70 h-8 w-8">
+                        <Button variant="outline" size="icon" onClick={() => handleCopy(onboardingData.externalId, 'externalId')} className="border-white/10 hover:bg-white/5 text-white/70 h-8 w-8">
                           {copySuccess['externalId'] ? <CheckCircle className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
                         </Button>
                       </div>
@@ -1266,7 +1281,7 @@ make dev`}</pre>
                       <label className="text-xs text-white/50">Trust Policy JSON</label>
                       <div className="relative">
                         <pre className="text-white text-xs whitespace-pre-wrap font-mono bg-black/30 p-3 pr-10 rounded border border-white/10">{trustPolicyJson}</pre>
-                        <Button variant="outline" size="icon" onClick={() => copyToClipboard(trustPolicyJson, 'trustPolicy')} className="absolute top-2 right-2 h-6 w-6 border-white/10 hover:bg-white/5 text-white/70">
+                        <Button variant="outline" size="icon" onClick={() => handleCopy(trustPolicyJson, 'trustPolicy')} className="absolute top-2 right-2 h-6 w-6 border-white/10 hover:bg-white/5 text-white/70">
                           {copySuccess['trustPolicy'] ? <CheckCircle className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
                         </Button>
                       </div>
@@ -1390,5 +1405,6 @@ make dev`}</pre>
           </AlertDialogContent>
         </AlertDialog>
     </div>
+    </ConnectorAuthGuard>
   );
 }

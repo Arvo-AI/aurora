@@ -22,11 +22,11 @@ from connectors.confluence_connector.client import (
     parse_confluence_page_id,
 )
 from connectors.confluence_connector.runbook_parser import parse_confluence_runbook
-from utils.db.connection_pool import db_pool
 from utils.web.cors_utils import create_cors_response
 from utils.auth.oauth2_state_cache import retrieve_oauth2_state, store_oauth2_state
-from utils.auth.stateless_auth import get_user_id_from_request
 from utils.auth.token_management import get_token_data, store_tokens_in_db
+from utils.auth.rbac_decorators import require_permission
+from utils.secrets.secret_ref_utils import delete_user_secret
 
 logger = logging.getLogger(__name__)
 
@@ -117,7 +117,7 @@ def _fetch_page_payload(
         client = ConfluenceClient(base_url, token, auth_type=auth_type, cloud_id=cloud_id)
         page_payload = client.get_page(page_id)
     except requests.HTTPError as exc:
-        status_code = exc.response.status_code if exc.response else None
+        status_code = exc.response.status_code if exc.response is not None else None
         if status_code == 401 and auth_type == "oauth":
             refreshed = _refresh_confluence_credentials(user_id, creds)
             if refreshed:
@@ -142,14 +142,11 @@ def _fetch_page_payload(
 
 
 @confluence_bp.route("/connect", methods=["POST", "OPTIONS"])
-def connect():
+@require_permission("connectors", "write")
+def connect(user_id):
     """Connect Confluence Cloud (OAuth) or Data Center (PAT)."""
     if request.method == "OPTIONS":
         return create_cors_response()
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
 
     try:
         data = request.get_json(force=True, silent=True) or {}
@@ -276,14 +273,11 @@ def connect():
 
 
 @confluence_bp.route("/status", methods=["GET", "OPTIONS"])
-def status():
+@require_permission("connectors", "read")
+def status(user_id):
     """Check Confluence connection status."""
     if request.method == "OPTIONS":
         return create_cors_response()
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
 
     creds = _get_stored_confluence_credentials(user_id)
     if not creds:
@@ -301,7 +295,7 @@ def status():
         client = ConfluenceClient(base_url, token, auth_type=auth_type, cloud_id=cloud_id)
         user_payload = client.get_current_user()
     except requests.HTTPError as exc:
-        status_code = exc.response.status_code if exc.response else None
+        status_code = exc.response.status_code if exc.response is not None else None
         if status_code == 401 and auth_type == "oauth":
             refreshed = _refresh_confluence_credentials(user_id, creds)
             if refreshed:
@@ -334,41 +328,31 @@ def status():
 
 
 @confluence_bp.route("/disconnect", methods=["POST", "DELETE", "OPTIONS"])
-def disconnect():
+@require_permission("connectors", "write")
+def disconnect(user_id):
     """Disconnect Confluence by removing stored credentials."""
     if request.method == "OPTIONS":
         return create_cors_response()
 
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
-
     try:
-        with db_pool.get_admin_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "DELETE FROM user_tokens WHERE user_id = %s AND provider = %s",
-                (user_id, "confluence"),
-            )
-            deleted_count = cursor.rowcount
-            conn.commit()
+        success, deleted_count = delete_user_secret(user_id, "confluence")
+        if not success:
+            logger.warning("[CONFLUENCE] Failed to clean up secrets during disconnect")
+            return jsonify({"success": False, "error": "Failed to delete stored credentials"}), 500
 
-        logger.info("[CONFLUENCE] Disconnected user %s (deleted %s token rows)", user_id, deleted_count)
-        return jsonify({"success": True, "message": "Confluence disconnected successfully"})
+        logger.info("[CONFLUENCE] Disconnected provider (deleted %s token rows)", deleted_count)
+        return jsonify({"success": True, "message": "Confluence disconnected successfully", "deleted": deleted_count})
     except Exception as exc:
-        logger.exception("[CONFLUENCE] Failed to disconnect user %s: %s", user_id, exc)
+        logger.exception("[CONFLUENCE] Failed to disconnect provider")
         return jsonify({"error": "Failed to disconnect Confluence"}), 500
 
 
 @confluence_bp.route("/fetch", methods=["POST", "OPTIONS"])
-def fetch_page():
+@require_permission("connectors", "read")
+def fetch_page(user_id):
     """Fetch a Confluence page by URL and return the raw page payload."""
     if request.method == "OPTIONS":
         return create_cors_response()
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
 
     try:
         data = request.get_json(force=True, silent=True) or {}
@@ -386,14 +370,11 @@ def fetch_page():
 
 
 @confluence_bp.route("/parse", methods=["POST", "OPTIONS"])
-def parse_page():
+@require_permission("connectors", "read")
+def parse_page(user_id):
     """Fetch a Confluence page and return cleaned runbook content."""
     if request.method == "OPTIONS":
         return create_cors_response()
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
 
     try:
         data = request.get_json(force=True, silent=True) or {}

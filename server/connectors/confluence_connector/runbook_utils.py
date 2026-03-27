@@ -81,7 +81,7 @@ def fetch_confluence_runbook(url: str, user_id: str) -> Optional[Dict[str, Any]]
             "page": page_payload,
         }
     except requests.HTTPError as exc:
-        status_code = exc.response.status_code if exc.response else None
+        status_code = exc.response.status_code if exc.response is not None else None
         if status_code == 401 and auth_type == "oauth":
             refreshed = refresh_confluence_credentials()
             if refreshed:

@@ -13,36 +13,21 @@ def is_pagerduty_oauth_enabled() -> bool:
     return os.getenv("NEXT_PUBLIC_ENABLE_PAGERDUTY_OAUTH", "false").lower() == "true"
 
 
-def is_slack_enabled() -> bool:
-    """Check if Slack integration is enabled via environment variable."""
-    return os.getenv("NEXT_PUBLIC_ENABLE_SLACK", "false").lower() == "true"
-
-
 def is_confluence_enabled() -> bool:
     """Check if Confluence integration is enabled via environment variable."""
     return os.getenv("NEXT_PUBLIC_ENABLE_CONFLUENCE", "false").lower() == "true"
 
 
-def is_bitbucket_enabled() -> bool:
-    """Check if Bitbucket integration is enabled via environment variable."""
-    return os.getenv("NEXT_PUBLIC_ENABLE_BITBUCKET", "false").lower() == "true"
-
-  
-def is_dynatrace_enabled() -> bool:
-    """Check if Dynatrace integration is enabled via environment variable."""
-    return os.getenv("NEXT_PUBLIC_ENABLE_DYNATRACE", "false").lower() == "true"
-
-
-def is_bigpanda_enabled() -> bool:
-    """Check if BigPanda integration is enabled via environment variable."""
-    return os.getenv("NEXT_PUBLIC_ENABLE_BIGPANDA", "false").lower() == "true"
-
-
-def is_thousandeyes_enabled() -> bool:
-    """Check if ThousandEyes integration is enabled via environment variable."""
-    return os.getenv("NEXT_PUBLIC_ENABLE_THOUSANDEYES", "false").lower() == "true"
+def is_jira_enabled() -> bool:
+    """Check if Jira integration is enabled via environment variable."""
+    return os.getenv("NEXT_PUBLIC_ENABLE_JIRA", "false").lower() == "true"
 
 
 def is_sharepoint_enabled() -> bool:
     """Check if SharePoint integration is enabled via environment variable."""
     return os.getenv("NEXT_PUBLIC_ENABLE_SHAREPOINT", "false").lower() == "true"
+
+
+def is_spinnaker_enabled() -> bool:
+    """Check if Spinnaker integration is enabled via environment variable."""
+    return os.getenv("NEXT_PUBLIC_ENABLE_SPINNAKER", "false").lower() == "true"

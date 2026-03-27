@@ -10,7 +10,7 @@ def create_cors_response(success=True):
     origin = request.headers.get('Origin', FRONTEND_URL)
     resp.headers.add('Access-Control-Allow-Origin', origin)
     # If you need to restrict in production, consider checking against a whitelist here.
-    resp.headers.add('Access-Control-Allow-Headers', 'Content-Type, X-Provider, X-Requested-With, X-User-ID, Authorization')
+    resp.headers.add('Access-Control-Allow-Headers', 'Content-Type, X-Provider, X-Requested-With, X-User-ID, X-Org-ID, Authorization')
     resp.headers.add('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS')
     resp.headers.add('Access-Control-Allow-Credentials', 'true')
     resp.headers.add('Content-Type', 'application/json')
