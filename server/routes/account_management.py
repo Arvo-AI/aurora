@@ -163,8 +163,8 @@ def get_connected_accounts(user_id, target_user_id):
             cursor2.execute(
                 """SELECT COUNT(*) FROM active_kubectl_connections ac
                    JOIN kubectl_agent_tokens kat ON ac.token = kat.token
-                   WHERE kat.org_id = %s AND ac.status = 'active'""",
-                (org_id,),
+                   WHERE (kat.user_id = %s OR kat.org_id = %s) AND ac.status = 'active'""",
+                (user_id, org_id),
             )
             if cursor2.fetchone()[0] > 0:
                 accounts["kubectl"] = {"isConnected": True, "name": "Kubernetes", "displayText": "Kubernetes Cluster"}
