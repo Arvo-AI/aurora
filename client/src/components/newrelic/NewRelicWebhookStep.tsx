@@ -85,9 +85,32 @@ export function NewRelicWebhookStep({
               <li>Create a new <strong>Webhook</strong> destination with the URL above.</li>
               <li>Under <strong>Workflows</strong>, create or edit a workflow.</li>
               <li>Add a notification channel using the webhook destination.</li>
+              <li>In the channel settings, enable <strong>Use custom payload</strong> and paste the JSON template below.</li>
               <li>Configure the workflow filter for the issues you want Aurora to investigate.</li>
               <li>Save and test the webhook to verify connectivity.</li>
             </ol>
+          </div>
+
+          <div className="space-y-2">
+            <p className="text-sm font-medium">Recommended custom payload template:</p>
+            <pre className="bg-muted p-3 rounded text-xs overflow-x-auto whitespace-pre leading-relaxed">{`{
+  "issueTitle": {{ json annotations.title }},
+  "issueId": {{ json issueId }},
+  "issueUrl": {{ json issuePageUrl }},
+  "state": {{ json stateText }},
+  "priority": {{ json priority }},
+  "conditionName": {{ json accumulations.conditionName }},
+  "policyName": {{ json accumulations.policyName }},
+  "totalIncidents": {{ json totalIncidents }},
+  "entitiesData": {
+    "names": {{ json entitiesData.names }},
+    "types": {{ json entitiesData.types }}
+  },
+  "accountId": {{ json nrAccountId }}
+}`}</pre>
+            <p className="text-xs text-muted-foreground">
+              This ensures Aurora receives the alert title and condition details for accurate incident reports.
+            </p>
           </div>
 
           <a

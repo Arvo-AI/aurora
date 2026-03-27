@@ -234,13 +234,33 @@ def webhook_url(user_id):
         "2. Create a new Webhook destination with the URL above.",
         "3. Under Workflows, create or edit a workflow.",
         "4. Add a notification channel using the webhook destination.",
-        "5. Configure the workflow filter for the issues you want Aurora to investigate.",
-        "6. Save and test the webhook to verify connectivity.",
+        "5. In the webhook channel settings, use a Custom payload with the recommended JSON template below.",
+        "6. Configure the workflow filter for the issues you want Aurora to investigate.",
+        "7. Save and test the webhook to verify connectivity.",
     ]
+
+    custom_payload = (
+        '{\n'
+        '  "issueTitle": {{ json annotations.title }},\n'
+        '  "issueId": {{ json issueId }},\n'
+        '  "issueUrl": {{ json issuePageUrl }},\n'
+        '  "state": {{ json stateText }},\n'
+        '  "priority": {{ json priority }},\n'
+        '  "conditionName": {{ json accumulations.conditionName }},\n'
+        '  "policyName": {{ json accumulations.policyName }},\n'
+        '  "totalIncidents": {{ json totalIncidents }},\n'
+        '  "entitiesData": {\n'
+        '    "names": {{ json entitiesData.names }},\n'
+        '    "types": {{ json entitiesData.types }}\n'
+        '  },\n'
+        '  "accountId": {{ json nrAccountId }}\n'
+        '}'
+    )
 
     return jsonify({
         "webhookUrl": url,
         "instructions": instructions,
+        "customPayload": custom_payload,
     })
 
 
