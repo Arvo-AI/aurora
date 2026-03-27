@@ -2,10 +2,35 @@
 -- Source: New Relic | Cloud: AWS/ECS | Tools: Cloud CLI, GitHub, Terminal, MCP
 -- Generated from live incident 133de658-05b3-488f-b0b3-dd3452de3c8f
 
+-- Ensure the newrelic_events table exists (may not exist if server hasn't started yet)
+CREATE TABLE IF NOT EXISTS newrelic_events (
+    id SERIAL PRIMARY KEY,
+    user_id VARCHAR(255) NOT NULL,
+    org_id VARCHAR(255),
+    issue_id VARCHAR(255),
+    issue_title TEXT,
+    priority VARCHAR(20),
+    state VARCHAR(50),
+    entity_names TEXT,
+    payload JSONB NOT NULL,
+    received_at TIMESTAMP NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Fix: ensure org_id is NULL for demo incidents (matches other demo data)
-UPDATE incidents SET org_id = NULL WHERE id = 'b1c2d3e4-f5a6-4b7c-8d9e-0f1a2b3c4d5e' AND org_id IS NOT NULL;
-UPDATE incident_alerts SET org_id = NULL WHERE incident_id = 'b1c2d3e4-f5a6-4b7c-8d9e-0f1a2b3c4d5e' AND org_id IS NOT NULL;
-UPDATE newrelic_events SET org_id = NULL WHERE issue_id = 'INC-20260326-003' AND user_id = 'ab209180-626b-4601-8042-9f6328d03ae9' AND org_id IS NOT NULL;
+-- Wrapped in a DO block so UPDATE doesn't fail if tables/rows don't exist yet
+DO $$ BEGIN
+  UPDATE incidents SET org_id = NULL WHERE id = 'b1c2d3e4-f5a6-4b7c-8d9e-0f1a2b3c4d5e' AND org_id IS NOT NULL;
+EXCEPTION WHEN undefined_table THEN NULL;
+END $$;
+DO $$ BEGIN
+  UPDATE incident_alerts SET org_id = NULL WHERE incident_id = 'b1c2d3e4-f5a6-4b7c-8d9e-0f1a2b3c4d5e' AND org_id IS NOT NULL;
+EXCEPTION WHEN undefined_table THEN NULL;
+END $$;
+DO $$ BEGIN
+  UPDATE newrelic_events SET org_id = NULL WHERE issue_id = 'INC-20260326-003' AND user_id = 'ab209180-626b-4601-8042-9f6328d03ae9' AND org_id IS NOT NULL;
+EXCEPTION WHEN undefined_table THEN NULL;
+END $$;
 
 DO $$
 DECLARE
