@@ -126,11 +126,15 @@ fi
 
 if [ -f "$SCRIPT_DIR/demo-incident-newrelic.sql" ]; then
     echo "       Importing demo incident (New Relic checkout-service)..."
-    if psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" < "$SCRIPT_DIR/demo-incident-newrelic.sql" >/dev/null 2>&1; then
+    if psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" < "$SCRIPT_DIR/demo-incident-newrelic.sql" 2>&1; then
         echo "       Done"
     else
         echo "       WARNING: Demo incident (New Relic checkout-service) import had errors"
     fi
+    # Verify the incident was actually inserted
+    NR_EXISTS=$(psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" -tAc \
+        "SELECT EXISTS(SELECT 1 FROM incidents WHERE id = 'b1c2d3e4-f5a6-4b7c-8d9e-0f1a2b3c4d5e')" 2>/dev/null || echo "false")
+    echo "       New Relic demo incident exists: $NR_EXISTS"
 fi
 
 # Extract Weaviate data

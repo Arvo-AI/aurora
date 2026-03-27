@@ -318,6 +318,20 @@ jobs:
             echo "VM-3 health check failed (may still be starting)"
           fi
 
+      - name: Verify demo data VM-3
+        if: always()
+        run: |
+          gcloud compute ssh "$VM3_INSTANCE" \
+            --zone "$VM3_ZONE" \
+            --project "$GCP_PROJECT" \
+            --ssh-flag="-o StrictHostKeyChecking=no" \
+            --command="
+              echo '=== demo-init logs ==='
+              sudo docker logs aurora-demo-init 2>&1 | tail -30
+              echo '=== DB verification ==='
+              sudo docker exec aurora-postgres psql -U aurora -d aurora_db -tAc \"SELECT id, source_type, aurora_status FROM incidents WHERE id = 'b1c2d3e4-f5a6-4b7c-8d9e-0f1a2b3c4d5e';\" 2>&1 || echo 'DB query failed'
+            " 2>&1
+
       - name: Unsnooze VM-3 uptime alerts
         if: always()
         run: |
