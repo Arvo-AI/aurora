@@ -149,6 +149,10 @@ def update_org(user_id):
         name = name.strip()
         if not name or len(name) > 100:
             return jsonify({"error": "Name must be 1-100 characters"}), 400
+        import re as _re
+        _org_name_re = _re.compile(r"^[\w\s\-\.,'&()]+$", _re.UNICODE)
+        if not _org_name_re.match(name):
+            return jsonify({"error": "Name can only contain letters, numbers, spaces, hyphens, periods, commas, apostrophes, ampersands, and parentheses"}), 400
 
     if slug:
         slug = slug.strip().lower()
@@ -321,6 +325,124 @@ def remove_member(user_id, target_user_id):
         return jsonify({"error": "Failed to remove member"}), 500
 
 
+@org_bp.route("/my-invitations", methods=["GET", "OPTIONS"])
+@require_auth_only
+def my_invitations(user_id):
+    """Return pending invitations addressed to the current user's email."""
+    if request.method == "OPTIONS":
+        return jsonify({}), 200
+
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT email FROM users WHERE id = %s", (user_id,))
+                user_row = cursor.fetchone()
+                if not user_row:
+                    return jsonify({"invitations": []}), 200
+
+                user_email = user_row[0].lower()
+
+                cursor.execute(
+                    """UPDATE org_invitations SET status = 'expired'
+                       WHERE LOWER(email) = %s AND status = 'pending'
+                         AND expires_at IS NOT NULL AND expires_at <= NOW()""",
+                    (user_email,),
+                )
+                conn.commit()
+
+                cursor.execute(
+                    """SELECT i.id, o.name, i.role, i.created_at, i.expires_at,
+                              u.name AS invited_by_name, u.email AS invited_by_email
+                       FROM org_invitations i
+                       JOIN organizations o ON i.org_id = o.id
+                       LEFT JOIN users u ON i.invited_by = u.id
+                       WHERE LOWER(i.email) = %s AND i.status = 'pending'
+                         AND (i.expires_at IS NULL OR i.expires_at > NOW())
+                       ORDER BY i.created_at DESC""",
+                    (user_email,),
+                )
+                invitations = [
+                    {
+                        "id": row[0],
+                        "orgName": row[1],
+                        "role": row[2],
+                        "createdAt": row[3].isoformat() if row[3] else None,
+                        "expiresAt": row[4].isoformat() if row[4] else None,
+                        "invitedBy": row[5] or row[6],
+                    }
+                    for row in cursor.fetchall()
+                ]
+                return jsonify({"invitations": invitations}), 200
+    except Exception as e:
+        logger.error("Error fetching user invitations: %s", e)
+        return jsonify({"error": "Failed to fetch invitations"}), 500
+
+
+@org_bp.route("/my-invitations/<invitation_id>/decline", methods=["POST", "OPTIONS"])
+@require_auth_only
+def decline_invitation(user_id, invitation_id):
+    """Decline a pending invitation addressed to the current user."""
+    if request.method == "OPTIONS":
+        return jsonify({}), 200
+
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT email FROM users WHERE id = %s", (user_id,))
+                user_row = cursor.fetchone()
+                if not user_row:
+                    return jsonify({"error": "User not found"}), 404
+
+                cursor.execute(
+                    """UPDATE org_invitations SET status = 'declined'
+                       WHERE id = %s AND LOWER(email) = LOWER(%s) AND status = 'pending'
+                       RETURNING id""",
+                    (invitation_id, user_row[0]),
+                )
+                row = cursor.fetchone()
+                conn.commit()
+
+                if not row:
+                    return jsonify({"error": "Invitation not found or already handled"}), 404
+
+                return jsonify({"declined": True}), 200
+    except Exception as e:
+        logger.error("Error declining invitation: %s", e)
+        return jsonify({"error": "Failed to decline invitation"}), 500
+
+
+@org_bp.route("/invitations/<invitation_id>/cancel", methods=["POST", "OPTIONS"])
+@require_permission("users", "manage")
+def cancel_invitation(user_id, invitation_id):
+    """Cancel a pending invitation (admin only)."""
+    if request.method == "OPTIONS":
+        return jsonify({}), 200
+
+    org_id = get_org_id_from_request()
+    if not org_id:
+        return jsonify({"error": "No organization found"}), 404
+
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """UPDATE org_invitations SET status = 'cancelled'
+                       WHERE id = %s AND org_id = %s AND status = 'pending'
+                       RETURNING id""",
+                    (invitation_id, org_id),
+                )
+                row = cursor.fetchone()
+                conn.commit()
+
+                if not row:
+                    return jsonify({"error": "Invitation not found or already handled"}), 404
+
+                return jsonify({"cancelled": True}), 200
+    except Exception as e:
+        logger.error("Error cancelling invitation: %s", e)
+        return jsonify({"error": "Failed to cancel invitation"}), 500
+
+
 @org_bp.route("/invitations", methods=["GET", "POST", "OPTIONS"])
 @require_permission("users", "manage")
 def invitations(user_id):
@@ -343,11 +465,22 @@ def _list_invitations(org_id: str):
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                # Mark any past-due invitations so the status column stays accurate
+                cursor.execute(
+                    """UPDATE org_invitations SET status = 'expired'
+                       WHERE org_id = %s AND status = 'pending'
+                         AND expires_at IS NOT NULL AND expires_at <= NOW()""",
+                    (org_id,),
+                )
+                conn.commit()
+
                 cursor.execute(
                     """SELECT i.id, i.email, i.role, i.status, i.created_at, i.expires_at,
-                              u.name AS invited_by_name, u.email AS invited_by_email
+                              u.name AS invited_by_name, u.email AS invited_by_email,
+                              target.name AS target_name
                        FROM org_invitations i
                        LEFT JOIN users u ON i.invited_by = u.id
+                       LEFT JOIN users target ON LOWER(target.email) = LOWER(i.email)
                        WHERE i.org_id = %s AND i.status = 'pending'
                          AND (i.expires_at IS NULL OR i.expires_at > NOW())
                        ORDER BY i.created_at DESC""",
@@ -357,10 +490,11 @@ def _list_invitations(org_id: str):
                     {
                         "id": row[0],
                         "email": row[1],
+                        "name": row[8],
                         "role": row[2],
                         "status": row[3],
-                        "createdAt": row[4].isoformat() if row[4] else None,
-                        "expiresAt": row[5].isoformat() if row[5] else None,
+                        "invited_at": row[4].isoformat() if row[4] else None,
+                        "expires_at": row[5].isoformat() if row[5] else None,
                         "invitedBy": row[6] or row[7],
                     }
                     for row in cursor.fetchall()
@@ -399,6 +533,12 @@ def _create_invitation(org_id: str, user_id: str):
                 )
                 if cursor.fetchone():
                     return jsonify({"error": "An invitation for this email already exists"}), 409
+
+                cursor.execute(
+                    """DELETE FROM org_invitations
+                       WHERE org_id = %s AND email = %s AND status IN ('cancelled', 'declined', 'expired')""",
+                    (org_id, email),
+                )
 
                 invitation_id = str(uuid.uuid4())
                 expires_at = datetime.now(timezone.utc) + timedelta(days=INVITATION_TTL_DAYS)

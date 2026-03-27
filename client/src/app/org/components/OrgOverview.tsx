@@ -1,7 +1,7 @@
 "use client";
 
 import { useQuery, jsonFetcher } from "@/lib/query";
-import type { OrgMember } from "../page";
+import type { OrgMember } from "@/components/OrgSettings";
 
 interface OrgOverviewProps {
   org: {

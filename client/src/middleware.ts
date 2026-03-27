@@ -46,8 +46,10 @@ export default auth((req) => {
     return NextResponse.redirect(new URL("/change-password", nextUrl))
   }
 
-  // Force org setup: redirect users without an org to create one
-  if (isLoggedIn && !req.auth?.user?.orgId && !isSetupOrgRoute && !isChangePasswordRoute && !isApiRoute) {
+  // Force org setup: redirect users without an org (or in Default Org) to create one
+  const orgName = req.auth?.user?.orgName
+  const needsOrg = !req.auth?.user?.orgId || (orgName && orgName.toLowerCase() === "default organization")
+  if (isLoggedIn && needsOrg && !isSetupOrgRoute && !isChangePasswordRoute && !isApiRoute) {
     return NextResponse.redirect(new URL("/setup-org", nextUrl))
   }
 

@@ -1,22 +1,79 @@
 "use client"
 
-import { useState } from "react"
-import { useSession, signOut } from "next-auth/react"
+import { useState, useEffect } from "react"
+import { useSession } from "next-auth/react"
+import { useRouter } from "next/navigation"
 
 type ActiveTab = "create" | "join"
 
+interface PendingInvitation {
+  id: string
+  orgName: string
+  role: string
+  invitedBy: string | null
+  createdAt: string | null
+}
+
 export default function SetupOrgPage() {
-  const { data: session } = useSession()
+  const { data: session, update } = useSession()
+  const router = useRouter()
   const [activeTab, setActiveTab] = useState<ActiveTab>("create")
 
   const [orgName, setOrgName] = useState("")
   const [createError, setCreateError] = useState("")
   const [isCreating, setIsCreating] = useState(false)
 
-  const [invitationCode, setInvitationCode] = useState("")
   const [joinError, setJoinError] = useState("")
   const [joinSuccess, setJoinSuccess] = useState("")
-  const [isJoining, setIsJoining] = useState(false)
+
+  const [pendingInvitations, setPendingInvitations] = useState<PendingInvitation[]>([])
+  const [loadingInvitations, setLoadingInvitations] = useState(true)
+  const [acceptingId, setAcceptingId] = useState<string | null>(null)
+
+  useEffect(() => {
+    async function fetchInvitations() {
+      try {
+        const res = await fetch("/api/orgs/my-invitations")
+        if (res.ok) {
+          const data = await res.json()
+          setPendingInvitations(data.invitations || [])
+          if (data.invitations?.length > 0) {
+            setActiveTab("join")
+          }
+        }
+      } catch { /* ignore */ }
+      setLoadingInvitations(false)
+    }
+    fetchInvitations()
+  }, [])
+
+  const handleAcceptInvitation = async (invitationId: string) => {
+    setAcceptingId(invitationId)
+    setJoinError("")
+
+    try {
+      const response = await fetch(`/api/orgs/my-invitations/${invitationId}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "accept" }),
+      })
+
+      const data = await response.json()
+
+      if (!response.ok) {
+        setJoinError(data.error || "Failed to join organization")
+        setAcceptingId(null)
+        return
+      }
+
+      setJoinSuccess(`Successfully joined ${data.name || "the organization"}! Redirecting...`)
+      await update()
+      router.push("/")
+    } catch {
+      setJoinError("An error occurred. Please try again.")
+      setAcceptingId(null)
+    }
+  }
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -33,6 +90,11 @@ export default function SetupOrgPage() {
       return
     }
 
+    if (!/^[\w\s\-\.,'&()]+$/u.test(trimmed)) {
+      setCreateError("Organization name can only contain letters, numbers, spaces, hyphens, periods, commas, apostrophes, ampersands, and parentheses")
+      return
+    }
+
     setIsCreating(true)
 
     try {
@@ -46,7 +108,7 @@ export default function SetupOrgPage() {
 
       if (!response.ok) {
         if (response.status === 404) {
-          await signOut({ callbackUrl: "/sign-in" })
+          router.push("/sign-in")
           return
         }
         setCreateError(data.error || "Failed to create organization")
@@ -54,46 +116,11 @@ export default function SetupOrgPage() {
         return
       }
 
-      await signOut({ callbackUrl: "/sign-in" })
+      await update()
+      router.push("/")
     } catch {
       setCreateError("An error occurred. Please try again.")
       setIsCreating(false)
-    }
-  }
-
-  const handleJoin = async (e: React.FormEvent) => {
-    e.preventDefault()
-    setJoinError("")
-    setJoinSuccess("")
-
-    const trimmed = invitationCode.trim()
-    if (!trimmed) {
-      setJoinError("Invitation code is required")
-      return
-    }
-
-    setIsJoining(true)
-
-    try {
-      const response = await fetch("/api/orgs/join", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ invitation_id: trimmed }),
-      })
-
-      const data = await response.json()
-
-      if (!response.ok) {
-        setJoinError(data.error || "Failed to join organization")
-        setIsJoining(false)
-        return
-      }
-
-      setJoinSuccess(`Successfully joined ${data.name || "the organization"}! Redirecting to sign in...`)
-      await signOut({ callbackUrl: "/sign-in" })
-    } catch {
-      setJoinError("An error occurred. Please try again.")
-      setIsJoining(false)
     }
   }
 
@@ -179,7 +206,7 @@ export default function SetupOrgPage() {
                   disabled={isCreating}
                   className="group relative w-full flex justify-center py-2.5 px-4 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                 >
-                  {isCreating ? "Creating — you'll be asked to sign in again..." : "Create Organization"}
+                  {isCreating ? "Creating organization..." : "Create Organization"}
                 </button>
               </form>
             </>
@@ -190,52 +217,59 @@ export default function SetupOrgPage() {
                   Join an existing organization
                 </h3>
                 <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
-                  Paste the invitation code your team admin shared with you.
+                  Accept a pending invitation from your organization admin.
                 </p>
               </div>
-              <form className="space-y-6" onSubmit={handleJoin}>
-                <div>
-                  <label htmlFor="invitation-code" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                    Invitation code
-                  </label>
-                  <input
-                    id="invitation-code"
-                    name="invitation-code"
-                    type="text"
-                    required
-                    value={invitationCode}
-                    onChange={(e) => setInvitationCode(e.target.value)}
-                    className="appearance-none relative block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 placeholder-gray-500 dark:placeholder-gray-400 text-gray-900 dark:text-white rounded-md focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm bg-white dark:bg-gray-700 font-mono"
-                    placeholder="Paste your invitation code"
-                    autoFocus
-                    disabled={isJoining}
-                  />
+
+              {/* Pending invitations */}
+              {!loadingInvitations && pendingInvitations.length > 0 && (
+                <div className="mb-6 space-y-3">
+                  <p className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                    Pending invitations
+                  </p>
+                  {pendingInvitations.map((inv) => (
+                    <div
+                      key={inv.id}
+                      className="flex items-center justify-between p-3 rounded-lg border border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-700/50"
+                    >
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium text-gray-900 dark:text-white truncate">
+                          {inv.orgName}
+                        </p>
+                        <p className="text-xs text-gray-500 dark:text-gray-400">
+                          {inv.invitedBy ? `Invited by ${inv.invitedBy}` : "Invitation"} &middot; Role: {inv.role}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => handleAcceptInvitation(inv.id)}
+                        disabled={acceptingId === inv.id || !!joinSuccess}
+                        className="ml-3 flex-shrink-0 px-3 py-1.5 text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                      >
+                        {acceptingId === inv.id ? "Joining..." : "Accept"}
+                      </button>
+                    </div>
+                  ))}
                 </div>
+              )}
 
-                {joinError && (
-                  <div className="rounded-md bg-red-50 dark:bg-red-900/20 p-4">
-                    <p className="text-sm text-red-800 dark:text-red-200">{joinError}</p>
-                  </div>
-                )}
+              {joinError && (
+                <div className="rounded-md bg-red-50 dark:bg-red-900/20 p-4 mb-4">
+                  <p className="text-sm text-red-800 dark:text-red-200">{joinError}</p>
+                </div>
+              )}
 
-                {joinSuccess && (
-                  <div className="rounded-md bg-green-50 dark:bg-green-900/20 p-4">
-                    <p className="text-sm text-green-800 dark:text-green-200">{joinSuccess}</p>
-                  </div>
-                )}
+              {joinSuccess && (
+                <div className="rounded-md bg-green-50 dark:bg-green-900/20 p-4 mb-4">
+                  <p className="text-sm text-green-800 dark:text-green-200">{joinSuccess}</p>
+                </div>
+              )}
 
-                <button
-                  type="submit"
-                  disabled={isJoining || !!joinSuccess}
-                  className="group relative w-full flex justify-center py-2.5 px-4 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                >
-                  {isJoining
-                    ? "Joining..."
-                    : joinSuccess
-                      ? "Redirecting to sign in..."
-                      : "Join Organization"}
-                </button>
-              </form>
+              {!loadingInvitations && pendingInvitations.length === 0 && !joinSuccess && (
+                <p className="text-sm text-gray-500 dark:text-gray-400 text-center py-6">
+                  No pending invitations. Ask your organization admin to send you one.
+                </p>
+              )}
             </>
           )}
         </div>
