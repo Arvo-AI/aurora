@@ -769,28 +769,28 @@ def build_rca_prompt(
                 "**Why this matters:** A runbook may give you the exact diagnostic steps. A past postmortem may reveal this is a recurring issue with a known fix.",
             ])
 
-    # GitHub Integration
+    # GitHub Integration — emphasize github_fix since system prompt has investigation commands
     if user_id and _get_github_connected(user_id):
         prompt_parts.extend([
             "",
             "## GITHUB:",
-            "GitHub is connected. Call `get_connected_repos` to list available repositories with descriptions,",
-            "then use `github_rca(repo='owner/repo', action=...)` to investigate code changes.",
+            "GitHub is connected. Use `github_rca` and `get_connected_repos` to investigate code changes.",
             "",
-            "**Actions:** deployment_check, commits, pull_requests, diff (with commit_sha).",
-            "Check GitHub for recent deployments and code changes that may correlate with the alert.",
-            "",
-            "When you identify a code issue, use `github_fix` to suggest a fix.",
+            "**IMPORTANT — Code Fix Suggestions:**",
+            "If you identify a code defect as the root cause, you **MUST** call `github_fix` to propose a fix.",
+            "`github_fix` saves a suggestion for user review — it does NOT modify the repo. This is expected output.",
         ])
 
-    # Provider-specific investigation section
-    provider_section = _build_provider_investigation_section(providers, user_id)
-    if provider_section:
-        prompt_parts.extend([
-            "",
-            "## PROVIDER-SPECIFIC INVESTIGATION STEPS:",
-            provider_section,
-        ])
+    # Provider-specific investigation commands are in the system prompt (build_background_mode_segment).
+    # Only inject on-prem cluster info here since it requires runtime DB lookup.
+    if user_id:
+        _onprem = _has_onprem_clusters(user_id)
+        if _onprem:
+            prompt_parts.extend([
+                "",
+                "## ON-PREM KUBERNETES:",
+                "You have active on-prem kubectl connections. Use `on_prem_kubectl` tool with cluster_id.",
+            ])
 
     # Jenkins CI/CD context: inject recent deployments + investigation instructions
     if user_id and _has_jenkins_connected(user_id):
@@ -976,9 +976,12 @@ def build_rca_prompt(
         "4. **Root Cause**: Clearly state the EXACT root cause with supporting evidence",
         "5. **Impact**: Describe what was affected and how",
         "6. **Remediation**: Specific, actionable steps to fix the issue",
+        "7. **Code Fix** (if applicable): If the root cause is a code defect and GitHub is connected, "
+        "you MUST call `github_fix` to propose the fix. This creates a review-only suggestion — it is safe and expected.",
         "",
         "### Remember:",
-        "- You are in READ-ONLY mode - investigate thoroughly but do NOT make any changes",
+        "- You are in investigation mode — do NOT make direct infrastructure changes (no scaling, restarts, config writes)",
+        "- `github_fix` is the exception: it creates a *suggestion* for user review, not a direct change. Always use it when you find a code defect.",
         "- The user expects you to find the EXACT root cause, not surface-level symptoms",
         "- Keep digging until you have definitive answers",
         "- Never conclude with 'unable to determine' without exhausting all investigation avenues",
