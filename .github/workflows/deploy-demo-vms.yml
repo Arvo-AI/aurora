@@ -326,10 +326,29 @@ jobs:
             --project "$GCP_PROJECT" \
             --ssh-flag="-o StrictHostKeyChecking=no" \
             --command="
-              echo '=== demo-init logs ==='
-              sudo docker logs aurora-demo-init 2>&1 | tail -30
-              echo '=== DB verification ==='
-              sudo docker exec aurora-postgres psql -U aurora -d aurora_db -tAc \"SELECT id, source_type, aurora_status FROM incidents WHERE id = 'b1c2d3e4-f5a6-4b7c-8d9e-0f1a2b3c4d5e';\" 2>&1 || echo 'DB query failed'
+              echo '=== demo-init logs (last 50) ==='
+              sudo docker logs aurora-demo-init 2>&1 | tail -50
+              echo ''
+              echo '=== ALL incidents in DB ==='
+              sudo docker exec aurora-postgres psql -U aurora -d aurora_db -tAc \"SELECT id, source_type, aurora_status, org_id, status FROM incidents ORDER BY created_at DESC;\" 2>&1 || echo 'DB query failed'
+              echo ''
+              echo '=== NR incident detail ==='
+              sudo docker exec aurora-postgres psql -U aurora -d aurora_db -tAc \"SELECT id, source_type, aurora_status, org_id, status, alert_title FROM incidents WHERE id = 'b1c2d3e4-f5a6-4b7c-8d9e-0f1a2b3c4d5e';\" 2>&1 || echo 'NR query failed'
+              echo ''
+              echo '=== NR child data counts ==='
+              sudo docker exec aurora-postgres psql -U aurora -d aurora_db -tAc \"SELECT 'thoughts' as tbl, count(*) FROM incident_thoughts WHERE incident_id = 'b1c2d3e4-f5a6-4b7c-8d9e-0f1a2b3c4d5e' UNION ALL SELECT 'citations', count(*) FROM incident_citations WHERE incident_id = 'b1c2d3e4-f5a6-4b7c-8d9e-0f1a2b3c4d5e' UNION ALL SELECT 'suggestions', count(*) FROM incident_suggestions WHERE incident_id = 'b1c2d3e4-f5a6-4b7c-8d9e-0f1a2b3c4d5e' UNION ALL SELECT 'alerts', count(*) FROM incident_alerts WHERE incident_id = 'b1c2d3e4-f5a6-4b7c-8d9e-0f1a2b3c4d5e' UNION ALL SELECT 'chat', count(*) FROM chat_sessions WHERE incident_id = 'b1c2d3e4-f5a6-4b7c-8d9e-0f1a2b3c4d5e';\" 2>&1 || echo 'Child data query failed'
+              echo ''
+              echo '=== RLS policies on incidents ==='
+              sudo docker exec aurora-postgres psql -U aurora -d aurora_db -tAc \"SELECT polname, polcmd, pg_get_expr(polqual, polrelid) FROM pg_policy WHERE polrelid = 'incidents'::regclass;\" 2>&1 || echo 'RLS query failed'
+              echo ''
+              echo '=== RLS enabled? ==='
+              sudo docker exec aurora-postgres psql -U aurora -d aurora_db -tAc \"SELECT relname, relrowsecurity, relforcerowsecurity FROM pg_class WHERE relname = 'incidents';\" 2>&1 || echo 'RLS status query failed'
+              echo ''
+              echo '=== Server container status ==='
+              sudo docker ps --format 'table {{.Names}}\t{{.Status}}' | grep -E 'server|frontend|postgres' 2>&1
+              echo ''
+              echo '=== Server logs (last 20) ==='
+              sudo docker logs aurora-server 2>&1 | tail -20
             " 2>&1
 
       - name: Unsnooze VM-3 uptime alerts
