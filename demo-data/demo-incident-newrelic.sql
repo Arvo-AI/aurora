@@ -7,7 +7,6 @@ DECLARE
   v_incident_id UUID := 'b1c2d3e4-f5a6-4b7c-8d9e-0f1a2b3c4d5e';
   v_chat_session_id VARCHAR(50) := 'c2d3e4f5-a6b7-4c8d-9e0f-1a2b3c4d5e6f';
   v_demo_user_id VARCHAR(255) := 'ab209180-626b-4601-8042-9f6328d03ae9';
-  v_demo_org_id VARCHAR(255);
   v_newrelic_alert_id INTEGER;
   v_incident_exists BOOLEAN;
 BEGIN
@@ -17,19 +16,13 @@ BEGIN
     RETURN;
   END IF;
 
-  -- Get the demo user's org_id (the user gets assigned an org on first login)
-  SELECT org_id INTO v_demo_org_id FROM users WHERE id = v_demo_user_id;
-  IF v_demo_org_id IS NULL THEN
-    v_demo_org_id := v_demo_user_id;
-  END IF;
-
   RAISE NOTICE 'Inserting demo incident (New Relic checkout-service)...';
 
   -- 1. Insert newrelic_events source record
   INSERT INTO newrelic_events (user_id, org_id, issue_id, issue_title, priority, state, entity_names, payload, received_at)
   VALUES (
     v_demo_user_id,
-    v_demo_org_id,
+    NULL,
     'INC-20260326-003',
     'New Relic Alert',
     'CRITICAL',
@@ -48,7 +41,7 @@ BEGIN
     correlated_alert_count, affected_services, visualization_code,
     visualization_updated_at
   ) VALUES (
-    v_incident_id, v_demo_user_id, v_demo_org_id, 'newrelic', v_newrelic_alert_id,
+    v_incident_id, v_demo_user_id, NULL, 'newrelic', v_newrelic_alert_id,
     'analyzed', 'critical',
     'New Relic Alert',
     'checkout-service-high-memory',
@@ -725,7 +718,7 @@ The impact was service-wide across all three production hosts, with the checkout
 
   -- 5. Insert correlated alerts
   INSERT INTO incident_alerts (user_id, org_id, incident_id, source_type, source_alert_id, alert_title, alert_service, alert_severity, correlation_strategy, correlation_score, correlation_details, alert_metadata, received_at) VALUES
-  (v_demo_user_id, v_demo_org_id, v_incident_id, 'newrelic', v_newrelic_alert_id, 'New Relic Alert', 'checkout-service-high-memory', 'critical', 'primary', 1, '{}'::jsonb, '{"issueId": "INC-20260326-003", "targets": [{"name": "checkout-service", "type": "application", "product": null}], "accountId": "7852784", "policyName": "Checkout Service Alerts", "conditionName": "checkout-service-high-memory"}'::jsonb, '2026-03-26T22:00:35.033278');
+  (v_demo_user_id, NULL, v_incident_id, 'newrelic', v_newrelic_alert_id, 'New Relic Alert', 'checkout-service-high-memory', 'critical', 'primary', 1, '{}'::jsonb, '{"issueId": "INC-20260326-003", "targets": [{"name": "checkout-service", "type": "application", "product": null}], "accountId": "7852784", "policyName": "Checkout Service Alerts", "conditionName": "checkout-service-high-memory"}'::jsonb, '2026-03-26T22:00:35.033278');
 
   RAISE NOTICE 'Demo incident (New Relic checkout-service) main data inserted.';
 
