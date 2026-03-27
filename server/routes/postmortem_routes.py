@@ -95,8 +95,8 @@ def get_postmortem(user_id, incident_id):
                               confluence_page_id, confluence_page_url, confluence_exported_at,
                               jira_issue_id, jira_issue_key, jira_issue_url, jira_exported_at
                        FROM postmortems
-                       WHERE incident_id = %s""",
-                    (incident_id,),
+                       WHERE incident_id = %s AND org_id = %s""",
+                    (incident_id, org_id),
                 )
                 row = cursor.fetchone()
 
@@ -358,9 +358,10 @@ def list_postmortems(user_id):
                               p.jira_issue_id, p.jira_issue_key, p.jira_issue_url, p.jira_exported_at
                        FROM postmortems p
                        LEFT JOIN incidents i ON p.incident_id = i.id
+                       WHERE p.org_id = %s
                        ORDER BY p.generated_at DESC
                        LIMIT %s OFFSET %s""",
-                    (limit, offset),
+                    (org_id, limit, offset),
                 )
                 rows = cursor.fetchall()
 

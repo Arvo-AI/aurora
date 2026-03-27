@@ -269,10 +269,12 @@ def get_incidents(user_id):
                         i.visualization_code, i.visualization_updated_at
                     FROM incidents i
                     LEFT JOIN incidents target ON i.merged_into_incident_id = target.id
-                    WHERE i.status != 'merged'
+                    WHERE i.org_id = %s
+                      AND i.status != 'merged'
                     ORDER BY i.started_at DESC
                     LIMIT 100
                     """,
+                    (org_id,),
                 )
                 rows = cursor.fetchall()
 
@@ -326,9 +328,9 @@ def get_incident(user_id, incident_id: str):
                         i.visualization_code, i.visualization_updated_at
                     FROM incidents i
                     LEFT JOIN incidents target ON i.merged_into_incident_id = target.id
-                    WHERE i.id = %s
+                    WHERE i.id = %s AND i.org_id = %s
                     """,
-                    (incident_id,),
+                    (incident_id, org_id),
                 )
                 row = cursor.fetchone()
 
@@ -532,8 +534,12 @@ def get_incident(user_id, incident_id: str):
                     try:
                         alert_id_int = int(source_alert_id)
                         cursor.execute(
-                            "SELECT payload FROM newrelic_events WHERE id = %s",
-                            (alert_id_int,),
+                            """SELECT payload FROM newrelic_events WHERE id = %s
+                               AND (user_id = %s OR EXISTS (
+                                   SELECT 1 FROM incidents WHERE id = %s
+                                   AND (alert_metadata->>'is_demo')::boolean = true
+                               ))""",
+                            (alert_id_int, user_id, incident_id),
                         )
                         alert_row = cursor.fetchone()
                         if alert_row and alert_row[0] is not None:
@@ -711,10 +717,10 @@ def get_incident(user_id, incident_id: str):
                         """
                         SELECT id, title, messages, status, created_at, updated_at
                         FROM chat_sessions
-                        WHERE incident_id = %s AND is_active = true
+                        WHERE incident_id = %s AND org_id = %s AND is_active = true
                         ORDER BY created_at ASC
                         """,
-                        (incident_id,),
+                        (incident_id, org_id),
                     )
                     chat_session_rows = cursor.fetchall()
                 except Exception as chat_err:
@@ -776,8 +782,8 @@ def get_incident_alerts(user_id, incident_id: str):
                 conn.commit()
 
                 cursor.execute(
-                    "SELECT 1 FROM incidents WHERE id = %s",
-                    (incident_id,),
+                    "SELECT 1 FROM incidents WHERE id = %s AND org_id = %s",
+                    (incident_id, org_id),
                 )
                 if not cursor.fetchone():
                     return jsonify({"error": "Incident not found"}), 404
