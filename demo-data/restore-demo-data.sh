@@ -124,6 +124,15 @@ if [ -f "$SCRIPT_DIR/demo-incident-freecharge.sql" ]; then
     fi
 fi
 
+if [ -f "$SCRIPT_DIR/demo-incident-newrelic.sql" ]; then
+    echo "       Importing demo incident (New Relic checkout-service)..."
+    if psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" < "$SCRIPT_DIR/demo-incident-newrelic.sql" >/dev/null 2>&1; then
+        echo "       Done"
+    else
+        echo "       WARNING: Demo incident (New Relic checkout-service) import had errors"
+    fi
+fi
+
 # Extract Weaviate data
 echo "[2/3] Restoring Weaviate vector data..."
 if [ -d "/var/lib/weaviate" ]; then
@@ -164,5 +173,7 @@ echo "  - Demo incident (FreeCharge): 'Elevated transaction failure rate on rech
 echo "    Source: Grafana | Cloud: AWS/EKS | Tools: kubectl, Splunk, GitHub, Web Search"
 echo "  - Demo incident (Coroot): 'Database connectivity issues - catalog service'"
 echo "    Source: Coroot | Shows exact code lines + PR fix | NVIDIA Demo Ready"
+echo "  - Demo incident (New Relic): 'checkout-service High Memory / Connection Pool Exhaustion'"
+echo "    Source: New Relic | Cloud: AWS/ECS | Tools: Cloud CLI, GitHub, Terminal, MCP"
 echo "  - Access: Sign up at http://localhost:3000 to view the incidents"
 echo ""
