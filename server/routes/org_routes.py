@@ -47,10 +47,16 @@ def _cleanup_empty_org(cursor, org_id: str) -> bool:
     return False
 
 
-def _transfer_user_to_org(cursor, user_id: str, old_org_id, new_org_id: str, new_role: str):
-    """Shared logic for moving a user between orgs (used by add_member and join_org)."""
+def _transfer_user_to_org(cursor, user_id: str, old_org_id, new_org_id: str, new_role: str, is_new_org: bool = False):
+    """Move a user between orgs.
+
+    When is_new_org=True (user is creating the org), all their data is migrated.
+    When is_new_org=False (user is joining an existing org), only their user row
+    is updated — connections, tokens, etc. stay in the old org to avoid duplicates.
+    """
     if old_org_id and old_org_id != new_org_id:
-        migrate_user_to_org(cursor, user_id, new_org_id)
+        if is_new_org:
+            migrate_user_to_org(cursor, user_id, new_org_id)
         cursor.execute(
             "UPDATE users SET org_id = %s, role = %s WHERE id = %s RETURNING id, email, name",
             (new_org_id, new_role, user_id),
