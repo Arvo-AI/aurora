@@ -321,8 +321,8 @@ jobs:
       - name: Verify demo data VM-3
         if: always()
         run: |
-          gcloud compute ssh "$VM3_INSTANCE" \
-            --zone "$VM3_ZONE" \
+          gcloud compute ssh "$VM3_NAME" \
+            --zone "$GCP_ZONE" \
             --project "$GCP_PROJECT" \
             --ssh-flag="-o StrictHostKeyChecking=no" \
             --command="
