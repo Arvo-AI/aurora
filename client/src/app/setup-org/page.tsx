@@ -2,7 +2,6 @@
 
 import { useState, useEffect } from "react"
 import { useSession } from "next-auth/react"
-import { useRouter } from "next/navigation"
 
 type ActiveTab = "create" | "join"
 
@@ -15,8 +14,7 @@ interface PendingInvitation {
 }
 
 export default function SetupOrgPage() {
-  const { data: session, update } = useSession()
-  const router = useRouter()
+  const { data: session } = useSession()
   const [activeTab, setActiveTab] = useState<ActiveTab>("create")
 
   const [orgName, setOrgName] = useState("")
@@ -67,8 +65,7 @@ export default function SetupOrgPage() {
       }
 
       setJoinSuccess(`Successfully joined ${data.name || "the organization"}! Redirecting...`)
-      await update()
-      window.location.href = "/"
+      window.location.replace("/org/switching")
     } catch {
       setJoinError("An error occurred. Please try again.")
       setAcceptingId(null)
@@ -108,7 +105,11 @@ export default function SetupOrgPage() {
 
       if (!response.ok) {
         if (response.status === 404) {
-          router.push("/sign-in")
+          window.location.replace("/sign-in")
+          return
+        }
+        if (response.status === 409) {
+          window.location.replace("/org/switching")
           return
         }
         setCreateError(data.error || "Failed to create organization")
@@ -116,8 +117,7 @@ export default function SetupOrgPage() {
         return
       }
 
-      await update()
-      window.location.href = "/"
+      window.location.replace("/org/switching")
     } catch {
       setCreateError("An error occurred. Please try again.")
       setIsCreating(false)
