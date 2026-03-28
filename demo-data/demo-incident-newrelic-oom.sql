@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS newrelic_events (
 );
 
 -- Clean ONLY this demo incident
+DELETE FROM postmortems WHERE incident_id = '859b8ade-7269-4c18-9389-de25468b5905';
 DELETE FROM incident_citations WHERE incident_id = '859b8ade-7269-4c18-9389-de25468b5905';
 DELETE FROM incident_suggestions WHERE incident_id = '859b8ade-7269-4c18-9389-de25468b5905';
 DELETE FROM incident_thoughts WHERE incident_id = '859b8ade-7269-4c18-9389-de25468b5905';
@@ -97,7 +98,7 @@ VALUES (
 SELECT setval('newrelic_events_id_seq', GREATEST(37, (SELECT COALESCE(MAX(id), 0) FROM newrelic_events)));
 
 -- 1. Incident record (base columns only)
-INSERT INTO incidents (id, user_id, org_id, source_type, source_alert_id, status, severity, alert_title, alert_service, alert_environment, aurora_status, aurora_summary, aurora_chat_session_id, started_at, analyzed_at, slack_message_ts, active_tab, created_at, updated_at, merged_into_incident_id) VALUES (E'859b8ade-7269-4c18-9389-de25468b5905', E'ab209180-626b-4601-8042-9f6328d03ae9', E'26db606d-1453-41be-b994-256ea1c7ee5b', E'newrelic', 37, E'analyzed', E'critical', E'checkout-service-oom-risk', E'checkout-service', NULL, E'complete', E'## Incident Report: checkout-service OOM Risk — 2026-03-27\n\nOn March 27, 2026 at 13:10 UTC, a critical OOM-risk alert fired against the `checkout-service` via New Relic, indicating that the service was approaching memory exhaustion. The affected component is the order processing pipeline, which handles checkout transactions including inventory validation, order record creation, and payment initiation [3].\n\nThe root cause is a connection pool leak in `order-processor.js` introduced during a transaction refactor. The refactored code acquires an explicit database client via `getClient()` but fails to call `client.release()` after the transaction completes [2, 3]. This means every call to `processOrder()` holds a connection open indefinitely, exhausting the connection pool and causing memory to accumulate over time. This issue was identified and tracked as a known defect prior to the alert triggering — Jira ticket RCA-45, created March 26, 2026 and assigned to Benjamin Gervais, explicitly documents the missing `client.release()` call as a highest-priority issue [5].\n\nThe leak compounds under checkout load: each unresolved client reference retains associated memory, and without release, the pool cannot reclaim resources between requests. Given that RCA-45 was opened the day before the alert fired and had not yet been resolved, the service continued accumulating leaked connections through normal order traffic until memory pressure reached critical threshold [5, 6].\n\n---\n\n## Suggested Next Steps\n\n1. **Deploy the fix for RCA-45 immediately** — Add `client.release()` calls within `order-processor.js` in all exit paths (success, error, and timeout), ensuring the fix covers both the happy path and any catch/finally blocks [2, 3].\n2. **Restart the checkout-service pod** to clear currently leaked connections and relieve immediate memory pressure, then monitor New Relic for OOM risk metrics returning to baseline.\n3. **Audit the RDS connection pool** — Check active vs. available connections on `generated-mysql-db` to quantify how many leaked connections are currently held, and confirm the pool recovers after the service restart [1].\n4. **Review other refactored transaction handlers** — The `order-processor.js` refactor may not be the only file affected; audit any other services or modules that were updated to use explicit `getClient()` transactions around the same time for the same missing `release()` pattern [2, 5].', E'a7afc8b2-16f9-43cc-81dc-dfe41f610c3b', E'2026-03-27T13:10:38.102289', E'2026-03-27T13:13:25.383844', NULL, E'thoughts', E'2026-03-27T13:10:38.110873', E'2026-03-27T13:13:50.244082', NULL);
+INSERT INTO incidents (id, user_id, org_id, source_type, source_alert_id, status, severity, alert_title, alert_service, alert_environment, aurora_status, aurora_summary, aurora_chat_session_id, started_at, analyzed_at, slack_message_ts, active_tab, created_at, updated_at, merged_into_incident_id) VALUES (E'859b8ade-7269-4c18-9389-de25468b5905', E'ab209180-626b-4601-8042-9f6328d03ae9', E'26db606d-1453-41be-b994-256ea1c7ee5b', E'newrelic', 37, E'resolved', E'critical', E'checkout-service-oom-risk', E'checkout-service', NULL, E'complete', E'## Incident Report: checkout-service OOM Risk — 2026-03-27\n\nOn March 27, 2026 at 13:10 UTC, a critical OOM-risk alert fired against the `checkout-service` via New Relic, indicating that the service was approaching memory exhaustion. The affected component is the order processing pipeline, which handles checkout transactions including inventory validation, order record creation, and payment initiation [3].\n\nThe root cause is a connection pool leak in `order-processor.js` introduced during a transaction refactor. The refactored code acquires an explicit database client via `getClient()` but fails to call `client.release()` after the transaction completes [2, 3]. This means every call to `processOrder()` holds a connection open indefinitely, exhausting the connection pool and causing memory to accumulate over time. This issue was identified and tracked as a known defect prior to the alert triggering — Jira ticket RCA-45, created March 26, 2026 and assigned to Benjamin Gervais, explicitly documents the missing `client.release()` call as a highest-priority issue [5].\n\nThe leak compounds under checkout load: each unresolved client reference retains associated memory, and without release, the pool cannot reclaim resources between requests. Given that RCA-45 was opened the day before the alert fired and had not yet been resolved, the service continued accumulating leaked connections through normal order traffic until memory pressure reached critical threshold [5, 6].\n\n---\n\n## Suggested Next Steps\n\n1. **Deploy the fix for RCA-45 immediately** — Add `client.release()` calls within `order-processor.js` in all exit paths (success, error, and timeout), ensuring the fix covers both the happy path and any catch/finally blocks [2, 3].\n2. **Restart the checkout-service pod** to clear currently leaked connections and relieve immediate memory pressure, then monitor New Relic for OOM risk metrics returning to baseline.\n3. **Audit the RDS connection pool** — Check active vs. available connections on `generated-mysql-db` to quantify how many leaked connections are currently held, and confirm the pool recovers after the service restart [1].\n4. **Review other refactored transaction handlers** — The `order-processor.js` refactor may not be the only file affected; audit any other services or modules that were updated to use explicit `getClient()` transactions around the same time for the same missing `release()` pattern [2, 5].', E'a7afc8b2-16f9-43cc-81dc-dfe41f610c3b', E'2026-03-27T13:10:38.102289', E'2026-03-27T13:13:25.383844', NULL, E'thoughts', E'2026-03-27T13:10:38.110873', E'2026-03-27T13:13:50.244082', NULL);
 
 -- Set migration columns (safe if columns don't exist yet)
 DO $$ BEGIN
@@ -199,6 +200,80 @@ INSERT INTO incident_suggestions (incident_id, title, description, type, risk, c
 INSERT INTO incident_suggestions (incident_id, title, description, type, risk, command, file_path, original_content, suggested_content, user_edited_content, repository, pr_url, pr_number, created_branch, applied_at, created_at) VALUES (E'859b8ade-7269-4c18-9389-de25468b5905', E'Restart checkout-service deployment to clear leaked connections', E'Rolling restart of the checkout-service deployment will terminate pods holding leaked database connections, immediately relieving memory pressure while the RCA-45 code fix is prepared for deployment.', E'mitigation', E'medium', E'kubectl rollout restart deployment/checkout-service -n production && kubectl rollout status deployment/checkout-service -n production --timeout=120s', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, E'2026-03-27T13:13:50.216765');
 INSERT INTO incident_suggestions (incident_id, title, description, type, risk, command, file_path, original_content, suggested_content, user_edited_content, repository, pr_url, pr_number, created_branch, applied_at, created_at) VALUES (E'859b8ade-7269-4c18-9389-de25468b5905', E'Audit other transaction handlers for missing client.release() calls', E'Search the repository source tree for all usages of getClient() that lack a corresponding client.release(), identifying any other files affected by the same refactor pattern documented in RCA-45.', E'diagnostic', E'safe', E'curl -s https://raw.githubusercontent.com/beng360/checkout-service/main/src/services/order-processor.js | grep -n ''getClient\\|client.release\\|client.query\\|BEGIN\\|COMMIT\\|ROLLBACK''', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, E'2026-03-27T13:13:50.216765');
 
+-- Postmortem (auto-generated from RCA)
+INSERT INTO postmortems (incident_id, user_id, org_id, content, generated_at, updated_at)
+VALUES (
+  '859b8ade-7269-4c18-9389-de25468b5905',
+  'ab209180-626b-4601-8042-9f6328d03ae9',
+  '26db606d-1453-41be-b994-256ea1c7ee5b',
+  $postmortem_oom$# Postmortem: checkout-service-oom-risk
+
+**Date:** 2026-03-27 13:10 UTC
+**Duration:** 2m 38s
+**Severity:** critical
+**Service:** checkout-service
+**Source:** newrelic
+
+## Summary
+On March 27, 2026, a critical OOM-risk alert fired against the checkout-service via New Relic, indicating the service was approaching memory exhaustion at 948MB of a 1024MB limit. The root cause was a database connection pool leak introduced in v2.4.1 (commit 526d28c5), where a missing `client.release()` call in `order-processor.js` caused every checkout request to leak a database connection. This exhausted the 50-connection pool, caused a 72% error rate, and resulted in zero successful transactions for over 24 hours with 234 pending refunds.
+
+## Timeline
+- **13:10:38** - Critical OOM-risk alert fired via New Relic for checkout-service (memory at 948MB/1024MB)
+- **13:10:45** - Aurora began RCA investigation; initiated Jira and Confluence context search
+- **13:10:51** - Jira tickets confirmed root cause: RCA-44 (P0 epic), RCA-45 (connection leak bug), RCA-46 (rollback task), RCA-47 (monitoring follow-up)
+- **13:11:04** - GitHub repository analysis started; identified problematic commit 526d28c5 ("refactor: use explicit transactions in order processing")
+- **13:11:09** - Confirmed commit 526d28c5 modified 3 files with 62 additions, 36 deletions across package.json, pool.js, and order-processor.js
+- **13:11:21** - Code inspection revealed the defect: `processOrder()` acquires client via `getClient()` but never calls `client.release()` — connections leak on every request
+- **13:11:39** - AWS CloudWatch logs confirmed two-phase degradation: healthy v2.4.0 operation (6-12/50 connections, 240-278MB memory) followed by critical v2.4.1 failure
+- **13:11:45** - CloudWatch evidence: OOMKilled risk at 833-949MB, pool exhausted at 50/50, HTTP 503s with 29s response times, circuit breaker open
+- **13:12:06** - All evidence gathered; began compiling RCA report and code fix suggestion
+- **13:12:22** - Code fix created: added `finally { client.release(); }` block to `processOrder()` function
+- **13:12:47** - Investigation complete; comprehensive RCA report and five actionable suggestions delivered
+
+## Root Cause
+The refactor to explicit database transactions in v2.4.1 (commit 526d28c5, deployed March 26, 2026 at 18:30 UTC) introduced a connection pool leak in `src/services/order-processor.js`. The `processOrder()` function was updated to acquire a dedicated database client via `getClient()` for transaction management, but the `finally` block that previously released connections was removed during the refactor. As a result, `client.release()` was never called — not on success, not on error, not on exception. Every checkout request permanently leaked one database connection.
+
+Under production checkout traffic, the 50-connection pool was exhausted within minutes. With all connections held in a leaked state, new requests queued indefinitely (up to 194 in the waiting queue), response times degraded from 22-77ms to 2,347-29,323ms, and the circuit breaker tripped at 85-93 failures per 100 requests. The unreleased connections and their associated memory buffers caused heap usage to climb at approximately 5MB per minute, pushing the service from a healthy 240-278MB to 948MB against a 1024MB limit.
+
+This defect was already identified and tracked in Jira as RCA-45 (highest priority, assigned to Benjamin Gervais) one day before the alert fired, but had not yet been resolved.
+
+## Impact
+- **Revenue**: Zero successful checkout transactions for 24+ hours; 234 pending customer refunds
+- **Error Rate**: 72% of checkout requests returning HTTP 503 errors
+- **Connection Pool**: Fully exhausted at 50/50 active connections with no availability for new requests
+- **Memory**: Service at 948MB/1024MB — imminent OOMKill risk
+- **Cascading Failures**: Downstream services affected — cart-service and payment-gateway experiencing failures due to checkout-service unavailability
+- **Response Times**: Degraded from normal 22-77ms to 2,347-29,323ms for requests that did get a connection
+- **Infrastructure**: Circuit breaker in OPEN state, health checks failing with 10-second DB ping timeouts
+- **Affected Hosts**: All 3 production hosts (checkout-prod-1, checkout-prod-2, checkout-prod-3)
+
+## Resolution
+The incident resolution involved two parallel tracks:
+1. **Immediate Mitigation**: Rolling restart of the checkout-service deployment to terminate pods holding leaked connections, clearing the exhausted pool and relieving memory pressure
+2. **Root Cause Fix**: Code change to `src/services/order-processor.js` adding a `finally { client.release(); }` block to the `processOrder()` function, ensuring database connections are returned to the pool on all code paths (success, error, and exception). This fix was prepared as a PR against the `beng360/checkout-service` repository
+
+## Action Items
+- [ ] Review and merge the code fix PR adding `client.release()` in the finally block of `processOrder()` in order-processor.js
+- [ ] Audit all other transaction handlers in the checkout-service repository for missing `client.release()` calls following the same refactor pattern
+- [ ] Quantify leaked connections on the RDS instance (generated-mysql-db) to confirm pool recovery after service restart
+- [ ] Add connection pool monitoring: alert when active connections exceed 80% of pool maximum (40/50)
+- [ ] Add memory usage monitoring: alert when heap exceeds 70% of container limit
+- [ ] Implement connection leak detection — periodic check for connections held longer than a configurable threshold
+- [ ] Add mandatory code review checklist item for database connection lifecycle management (acquire/release pairing)
+- [ ] Run load testing in staging to verify the fix holds under sustained checkout traffic before production deployment
+- [ ] Process the 234 pending customer refunds and send customer communications
+
+## Lessons Learned
+- **Connection lifecycle management is critical**: Any code that acquires a dedicated database client must guarantee release in all code paths. The `try/catch/finally` pattern should be enforced by linting rules or code review checklists for all database transaction code.
+- **Refactoring requires end-to-end review**: The transaction refactor in commit 526d28c5 was a relatively small change (62 additions, 36 deletions) but introduced a catastrophic resource leak. Refactors that change resource acquisition patterns need explicit review of cleanup/release logic.
+- **Known defects need urgency classification**: Jira ticket RCA-45 was created a full day before the production alert fired, identifying the exact defect. A faster response to the known highest-priority bug would have prevented the outage.
+- **Observability gaps delayed detection**: The 24+ hour window between the v2.4.1 deployment and the OOM-risk alert suggests that connection pool utilization and per-pod memory trends were not being monitored with sufficient granularity or alert thresholds.
+- **Circuit breakers worked as designed**: The postgres-primary circuit breaker correctly opened when failures exceeded the threshold, preventing further cascading damage, but the lack of a graceful degradation path meant checkout was fully unavailable rather than partially degraded.$postmortem_oom$,
+  '2026-03-27 13:13:50',
+  '2026-03-27 13:13:50'
+)
+ON CONFLICT (incident_id) DO NOTHING;
+
 -- Fixup: reassign demo data to the first admin user/org in the DB
 -- so the demo works regardless of which users exist
 DO $$
@@ -218,4 +293,5 @@ BEGIN
   UPDATE chat_sessions   SET user_id = v_user_id, org_id = v_org_id WHERE id = 'a7afc8b2-16f9-43cc-81dc-dfe41f610c3b';
   UPDATE incident_alerts SET user_id = v_user_id, org_id = v_org_id WHERE incident_id = '859b8ade-7269-4c18-9389-de25468b5905';
   UPDATE newrelic_events SET user_id = v_user_id, org_id = v_org_id WHERE id = 37;
+  UPDATE postmortems     SET user_id = v_user_id, org_id = v_org_id WHERE incident_id = '859b8ade-7269-4c18-9389-de25468b5905';
 END $$;

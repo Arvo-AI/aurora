@@ -124,19 +124,6 @@ if [ -f "$SCRIPT_DIR/demo-incident-freecharge.sql" ]; then
     fi
 fi
 
-if [ -f "$SCRIPT_DIR/demo-incident-newrelic.sql" ]; then
-    echo "       Importing demo incident (New Relic checkout-service)..."
-    if psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" < "$SCRIPT_DIR/demo-incident-newrelic.sql" 2>&1; then
-        echo "       Done"
-    else
-        echo "       WARNING: Demo incident (New Relic checkout-service) import had errors"
-    fi
-    # Verify the incident was actually inserted
-    NR_EXISTS=$(psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" -tAc \
-        "SELECT EXISTS(SELECT 1 FROM incidents WHERE id = 'b1c2d3e4-f5a6-4b7c-8d9e-0f1a2b3c4d5e')" 2>/dev/null || echo "false")
-    echo "       New Relic demo incident exists: $NR_EXISTS"
-fi
-
 if [ -f "$SCRIPT_DIR/demo-incident-newrelic-oom.sql" ]; then
     echo "       Importing demo incident (New Relic OOM Risk)..."
     if psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" < "$SCRIPT_DIR/demo-incident-newrelic-oom.sql" 2>&1; then
@@ -247,8 +234,6 @@ echo "  - Demo incident (FreeCharge): 'Elevated transaction failure rate on rech
 echo "    Source: Grafana | Cloud: AWS/EKS | Tools: kubectl, Splunk, GitHub, Web Search"
 echo "  - Demo incident (Coroot): 'Database connectivity issues - catalog service'"
 echo "    Source: Coroot | Shows exact code lines + PR fix | NVIDIA Demo Ready"
-echo "  - Demo incident (New Relic): 'checkout-service High Memory / Connection Pool Exhaustion'"
-echo "    Source: New Relic | Cloud: AWS/ECS | Tools: Cloud CLI, GitHub, Terminal, MCP"
 echo "  - Demo incident (New Relic OOM): 'checkout-service OOM Risk'"
 echo "    Source: New Relic | Cloud: AWS/ECS | Tools: Cloud CLI, GitHub, Jira, Terminal"
 echo "  - Access: Sign up at http://localhost:3000 to view the incidents"
