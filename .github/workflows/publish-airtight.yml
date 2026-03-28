@@ -14,13 +14,8 @@ concurrency:
   group: publish-airtight-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  REGISTRY: ghcr.io
-  ORAS_VERSION: "1.2.2"
-
 permissions:
   contents: read
-  packages: write
 
 jobs:
   airtight:
@@ -34,22 +29,12 @@ jobs:
         include:
           - arch: amd64
             platform: linux/amd64
-            package: ghcr.io/arvo-ai/aurora-airtight-amd64
+            bucket: gs://aurora-airtight-bucket
           - arch: arm64
             platform: linux/arm64
-            package: ghcr.io/arvo-ai/aurora-airtight-arm64
+            bucket: gs://aurora-airtight-bucket-arm64
 
     steps:
-      - name: Free disk space
-        run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
-            /usr/local/share/boost /usr/share/swift /opt/hostedtoolcache
-          sudo apt-get -qq purge -y 'dotnet-*' 'aspnetcore-*' 'llvm-*' google-cloud-cli \
-            azure-cli microsoft-edge-stable google-chrome-stable 2>/dev/null || true
-          sudo apt-get -qq autoremove -y
-          docker system prune -af
-          echo "Free space: $(df -h / | tail -1 | awk '{print $4}')"
-
       - name: Checkout repository
         uses: actions/checkout@v5
 
@@ -60,26 +45,22 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
       - name: Compute version tag
         id: version
         run: |
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             echo "tag=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
           else
-            echo "tag=sha-$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+            echo "tag=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
           fi
-
-      - name: Extract metadata (for oras tags)
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ matrix.package }}
-          tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-') }}
-            type=edge,branch=main
-            type=sha,prefix=sha-,format=short
 
       - name: Build Aurora images
         run: |
@@ -134,28 +115,12 @@ jobs:
           echo "filename=$FILENAME" >> "$GITHUB_OUTPUT"
           echo "Bundle: $FILENAME ($(du -h "$FILENAME" | cut -f1))"
 
-      - name: Install oras
-        run: |
-          curl -sLO "https://github.com/oras-project/oras/releases/download/v${ORAS_VERSION}/oras_${ORAS_VERSION}_linux_amd64.tar.gz"
-          tar -xzf "oras_${ORAS_VERSION}_linux_amd64.tar.gz" -C /usr/local/bin oras
-          oras version
-
-      - name: Log in to GHCR
-        run: echo "${{ secrets.GITHUB_TOKEN }}" | oras login ghcr.io -u "${{ github.actor }}" --password-stdin
-
-      - name: Push to GHCR
+      - name: Upload to GCS
         run: |
           FILENAME="${{ steps.tarball.outputs.filename }}"
-
-          # metadata-action outputs newline-separated fully-qualified tags; extract the tag portion
-          TAGS=$(echo "${{ steps.meta.outputs.tags }}" | sed 's|.*/aurora-airtight-[^:]*:||')
-
-          for tag in $TAGS; do
-            echo "Pushing ${{ matrix.package }}:${tag}..."
-            oras push "${{ matrix.package }}:${tag}" \
-              "$FILENAME:application/gzip" \
-              "${FILENAME}.sha256:text/plain"
-          done
+          gcloud storage cp "$FILENAME" "${{ matrix.bucket }}/"
+          gcloud storage cp "${FILENAME}.sha256" "${{ matrix.bucket }}/"
+          echo "Uploaded to ${{ matrix.bucket }}/$FILENAME"
 
   publish-summary:
     name: Airtight Summary

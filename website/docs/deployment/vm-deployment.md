@@ -311,39 +311,20 @@ Use this path when the target VM has restricted or no outbound internet access (
 
 ### 1. Download the Bundle
 
-Prebuilt airtight bundles are published as [GitHub Packages](https://github.com/orgs/Arvo-AI/packages) on every release and push to `main`. Download them on a machine with internet access using the [`oras`](https://oras.land/docs/installation) CLI.
-
-**Install oras:**
+Prebuilt airtight bundles are published to Google Cloud Storage on every release and push to `main`. Download on a machine with internet access:
 
 ```bash
-# macOS
-brew install oras
-
-# Linux
-curl -sLO https://github.com/oras-project/oras/releases/download/v1.2.2/oras_1.2.2_linux_amd64.tar.gz
-sudo tar -xzf oras_1.2.2_linux_amd64.tar.gz -C /usr/local/bin oras
-```
-
-**Download the bundle** (no authentication required):
-
-```bash
-# Latest stable release (amd64)
-oras pull ghcr.io/arvo-ai/aurora-airtight-amd64:latest -o .
-
-# Specific version
-oras pull ghcr.io/arvo-ai/aurora-airtight-amd64:v1.2.3 -o .
-
-# Latest from main branch (edge)
-oras pull ghcr.io/arvo-ai/aurora-airtight-amd64:edge -o .
+# Latest stable (amd64) — replace VERSION with the release tag (e.g. v1.2.3)
+curl -LO https://storage.googleapis.com/aurora-airtight-bucket/aurora-airtight-VERSION-amd64.tar.gz
+curl -LO https://storage.googleapis.com/aurora-airtight-bucket/aurora-airtight-VERSION-amd64.tar.gz.sha256
 
 # ARM64 servers
-oras pull ghcr.io/arvo-ai/aurora-airtight-arm64:latest -o .
+curl -LO https://storage.googleapis.com/aurora-airtight-bucket-arm64/aurora-airtight-VERSION-arm64.tar.gz
+curl -LO https://storage.googleapis.com/aurora-airtight-bucket-arm64/aurora-airtight-VERSION-arm64.tar.gz.sha256
 ```
 
-This downloads the `.tar.gz` tarball and its `.sha256` checksum into the current directory.
-
 :::tip Build your own bundle
-If you prefer to build from source instead of downloading, see [Creating the Air-Tight Bundle](#creating-the-air-tight-bundle) below.
+If you prefer to build from source instead of downloading, see [Creating the Air-Tight Bundle](#creating-the-air-tight-bundle-manual) below.
 :::
 
 ### 2. Transfer the Bundle to the VM
@@ -351,7 +332,7 @@ If you prefer to build from source instead of downloading, see [Creating the Air
 Use whatever transfer method your organization permits:
 
 ```bash
-BUNDLE=aurora-airtight-v1.2.3-amd64.tar.gz  # replace with your bundle filename
+BUNDLE=aurora-airtight.tar.gz  # replace with your bundle filename
 
 # SCP
 VM_USER=user        # replace with your SSH username
@@ -451,7 +432,7 @@ Save and exit (`Ctrl+X`, `Y`, `Enter` in nano).
 Pass the path to the tarball you transferred in step 2:
 
 ```bash
-BUNDLE=aurora-airtight-v1.2.3-amd64.tar.gz  # replace with your bundle filename
+BUNDLE=aurora-airtight.tar.gz  # replace with your bundle filename
 make prod-airtight AIRTIGHT_BUNDLE=~/$BUNDLE
 ```
 
@@ -494,22 +475,21 @@ http://YOUR_VM_IP:3000
 Each new Aurora release requires a fresh bundle. On a machine with internet access:
 
 ```bash
-# Download the new version
-oras pull ghcr.io/arvo-ai/aurora-airtight-amd64:<new-version> -o .
+curl -LO https://storage.googleapis.com/aurora-airtight-bucket/aurora-airtight-<new-version>-amd64.tar.gz
 ```
 
 Transfer the new tarball to the VM, then:
 
 ```bash
 make down
-make prod-airtight AIRTIGHT_BUNDLE=~/aurora-airtight-<new-version>-amd64.tar.gz
+make prod-airtight AIRTIGHT_BUNDLE=~/aurora-airtight.tar.gz
 ```
 
 The `.env` file stays on the VM and is never part of the bundle.
 
 ### Creating the Air-Tight Bundle (Manual)
 
-Prebuilt bundles are available as [GitHub Packages](https://github.com/orgs/Arvo-AI/packages) (see [step 1](#1-download-the-bundle) above). Use this section only if you need to build a custom bundle from source.
+Prebuilt bundles are available for download (see [step 1](#1-download-the-bundle) above). Use this section only if you need to build a custom bundle from source.
 
 ```bash
 git clone https://github.com/arvo-ai/aurora.git && cd aurora

@@ -230,10 +230,10 @@ helm install aurora ./helm/aurora
 
 ### Air-gapped / restricted network
 
-Prebuilt airtight bundles (all images in one tarball) are available as [GitHub Packages](https://github.com/orgs/Arvo-AI/packages). Download with [`oras`](https://oras.land/docs/installation):
+Prebuilt airtight bundles (all images in one tarball) are published on every release. Download with `curl`:
 
 ```bash
-oras pull ghcr.io/arvo-ai/aurora-airtight-amd64:latest -o .   # or :v1.2.3, :edge
+curl -LO https://storage.googleapis.com/aurora-airtight-bucket/aurora-airtight-v1.2.3-amd64.tar.gz
 ```
 
 Transfer the tarball to the target VM and run `make prod-airtight AIRTIGHT_BUNDLE=<file>`. See the [air-tight deployment guide](https://arvo-ai.github.io/aurora/docs/deployment/vm-deployment#secure-deployment-air-tight) for full instructions.
