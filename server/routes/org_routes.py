@@ -114,12 +114,22 @@ def _transfer_user_to_org(cursor, user_id: str, old_org_id, new_org_id: str, new
     """Move a user between orgs.
 
     When is_new_org=True (user is creating the org), all their data is migrated.
-    When is_new_org=False (user is joining an existing org), only their user row
-    is updated — old connections/tokens are deleted to avoid duplicates with
-    whatever the new org already has set up.
+    When leaving a "Default Organization" (the auto-created migration org),
+    data is also migrated since it predates multi-org and belongs to the user.
+    Otherwise (joining an established org), old connections/tokens are deleted
+    to avoid duplicates with whatever the new org already has set up.
     """
     if old_org_id and old_org_id != new_org_id:
-        if is_new_org:
+        should_migrate = is_new_org
+        if not should_migrate:
+            cursor.execute(
+                "SELECT LOWER(name) FROM organizations WHERE id = %s",
+                (old_org_id,),
+            )
+            row = cursor.fetchone()
+            should_migrate = row and row[0] == "default organization"
+
+        if should_migrate:
             migrate_user_to_org(cursor, user_id, new_org_id)
         else:
             _delete_user_org_data(cursor, user_id, old_org_id)
