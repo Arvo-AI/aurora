@@ -29,7 +29,7 @@ This roadmap delivers a Grafana Loki connector for Aurora in four phases, follow
   5. User can disconnect Loki and all credentials are removed from Vault
 **Plans**: 2 plans
 Plans:
-- [ ] 01-01-PLAN.md -- LokiClient HTTP client class and loki_alerts database table
+- [x] 01-01-PLAN.md -- LokiClient HTTP client class and loki_alerts database table
 - [ ] 01-02-PLAN.md -- Flask routes (connect/status/disconnect) and blueprint registration
 
 ### Phase 2: Alert Pipeline
