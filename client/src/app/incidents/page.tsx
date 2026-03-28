@@ -1,14 +1,24 @@
 'use client';
 
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
-import { Zap, Clock, ChevronRight, Loader2, CheckCircle2, Link2, GitMerge } from 'lucide-react';
+import { Zap, Clock, ChevronRight, Loader2, CheckCircle2, Link2, GitMerge, Plus } from 'lucide-react';
 import { Incident, incidentsService } from '@/lib/services/incidents';
 import { useConnectedAccounts } from '@/hooks/useConnectedAccounts';
 import { connectorRegistry } from '@/components/connectors/ConnectorRegistry';
 import { useQuery } from '@/lib/query';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from '@/components/ui/dialog';
+import { useToast } from '@/hooks/use-toast';
 
 const ALERT_CATEGORIES = new Set(['Monitoring', 'Incident Management']);
 
@@ -232,6 +242,19 @@ const alertConnectors = connectorRegistry
   .filter(c => c.category && ALERT_CATEGORIES.has(c.category) && c.path);
 
 function ConnectPlatformCTA() {
+  const [open, setOpen] = useState(false);
+  const [suggestion, setSuggestion] = useState('');
+  const { toast } = useToast();
+
+  const handleSubmit = () => {
+    if (!suggestion.trim()) return;
+    const url = `https://github.com/Arvo-AI/aurora/issues/new?title=${encodeURIComponent(`Connector request: ${suggestion.trim()}`)}&labels=enhancement&body=${encodeURIComponent(`A user requested support for **${suggestion.trim()}** as a monitoring/incident platform connector.`)}`;
+    window.open(url, '_blank');
+    toast({ title: 'Request opened', description: `GitHub issue created for "${suggestion.trim()}"` });
+    setSuggestion('');
+    setOpen(false);
+  };
+
   return (
     <div>
       <p className="font-medium mb-1">Connect a monitoring platform</p>
@@ -257,7 +280,41 @@ function ConnectPlatformCTA() {
             <span className="text-xs font-medium">{c.name}</span>
           </Link>
         ))}
+        <button
+          onClick={() => setOpen(true)}
+          className="flex flex-col items-center gap-2 p-3 rounded-lg border border-dashed border-border hover:border-primary/50 hover:bg-muted/50 transition-colors"
+        >
+          <div className="p-1.5 rounded-md bg-muted">
+            <Plus className="h-6 w-6 text-muted-foreground" />
+          </div>
+          <span className="text-xs font-medium text-muted-foreground">Suggest</span>
+        </button>
       </div>
+
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Suggest a platform</DialogTitle>
+            <DialogDescription>
+              What monitoring platform should we support next?
+            </DialogDescription>
+          </DialogHeader>
+          <form
+            onSubmit={e => { e.preventDefault(); handleSubmit(); }}
+            className="flex gap-2"
+          >
+            <Input
+              value={suggestion}
+              onChange={e => setSuggestion(e.target.value)}
+              placeholder="e.g. Prometheus, Zabbix…"
+              autoFocus
+            />
+            <Button type="submit" disabled={!suggestion.trim()}>
+              Submit
+            </Button>
+          </form>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
