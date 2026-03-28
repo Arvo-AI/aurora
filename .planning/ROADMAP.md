@@ -10,7 +10,7 @@ This roadmap delivers a Grafana Loki connector for Aurora in four phases, follow
 - Integer phases (1, 2, 3, 4): Planned milestone work
 - Decimal phases (e.g., 2.1): Urgent insertions (marked with INSERTED)
 
-- [ ] **Phase 1: Connection Management** - LokiClient, three auth modes, Vault credential storage, connect/status/disconnect routes
+- [x] **Phase 1: Connection Management** - LokiClient, three auth modes, Vault credential storage, connect/status/disconnect routes
 - [ ] **Phase 2: Alert Pipeline** - Webhook endpoint, dual-format detection, alert storage, incident creation, automated RCA
 - [ ] **Phase 3: Frontend Integration** - ConnectorRegistry entry, auth/connection page, webhook URL display, API route proxies
 - [ ] **Phase 4: Query Capabilities** - LogQL range/instant/metric queries, label and series discovery endpoints
@@ -30,7 +30,7 @@ This roadmap delivers a Grafana Loki connector for Aurora in four phases, follow
 **Plans**: 2 plans
 Plans:
 - [x] 01-01-PLAN.md -- LokiClient HTTP client class and loki_alerts database table
-- [ ] 01-02-PLAN.md -- Flask routes (connect/status/disconnect) and blueprint registration
+- [x] 01-02-PLAN.md -- Flask routes (connect/status/disconnect) and blueprint registration
 
 ### Phase 2: Alert Pipeline
 **Goal**: Loki alerts arrive via webhook, are stored and deduplicated, create incidents, and trigger automated root cause analysis
@@ -74,7 +74,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Connection Management | 0/2 | Planning complete | - |
+| 1. Connection Management | 2/2 | Ready for verification | - |
 | 2. Alert Pipeline | 0/0 | Not started | - |
 | 3. Frontend Integration | 0/0 | Not started | - |
 | 4. Query Capabilities | 0/0 | Not started | - |
