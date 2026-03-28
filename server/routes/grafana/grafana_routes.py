@@ -44,7 +44,9 @@ class GrafanaClient:
 
         url = url.rstrip("/")
 
-        if not re.match(r"^https://[A-Za-z0-9._-]+(:[0-9]{2,5})?(\/.*)?$", url):
+        if not re.match(
+            r"^https?://[A-Za-z0-9._-]+(:[0-9]{2,5})?(\/.*)?$", url, re.IGNORECASE
+        ):
             return None
 
         return url
@@ -107,7 +109,11 @@ def connect(user_id):
 
     base_url = GrafanaClient.normalize_base_url(raw_base_url) if raw_base_url else None
     if not base_url:
-        return jsonify({"error": "A valid Grafana baseUrl is required (https://your-stack.grafana.net)"}), 400
+        return jsonify(
+            {
+                "error": "A valid Grafana baseUrl is required (e.g. https://your-stack.grafana.net or http://localhost:3000)",
+            }
+        ), 400
 
     masked_token = mask_credential_value(api_token)
     logger.info(f"[GRAFANA] Connecting user {user_id} to {base_url} (token={masked_token})")
@@ -119,6 +125,17 @@ def connect(user_id):
         user_profile = client.get_user()
     except GrafanaAPIError as exc:
         logger.error(f"[GRAFANA] Connection validation failed for user {user_id}: {exc}")
+        err_text = str(exc)
+        if err_text == "Unable to reach Grafana":
+            return jsonify(
+                {
+                    "error": (
+                        "Unable to reach Grafana from the Aurora server. If Grafana runs on your host "
+                        "and Aurora runs in Docker, use http://host.docker.internal:<port> instead of "
+                        "localhost in the base URL."
+                    ),
+                }
+            ), 502
         return jsonify({"error": "Failed to validate Grafana credentials. Ensure the service account has the Admin role."}), 502
 
     org_name = org_data.get("name") or "Grafana"
@@ -139,7 +156,28 @@ def connect(user_id):
         logger.info(f"[GRAFANA] Stored credentials for user {user_id} (org={org_name})")
     except Exception as exc:
         logger.exception(f"[GRAFANA] Failed to store credentials for user {user_id}: {exc}")
-        return jsonify({"error": "Failed to store Grafana credentials"}), 500
+        exc_msg = str(exc).strip() if exc else ""
+        generic = (
+            "Failed to store Grafana credentials. Aurora saves connector secrets in "
+            "HashiCorp Vault and a reference in Postgres. Check that Vault is healthy, "
+            "VAULT_TOKEN in .env matches your stack, and aurora-server logs for "
+            "[STORE-TOKENS] or [GRAFANA]."
+        )
+        if isinstance(exc, RuntimeError) and "Vault secrets backend" in exc_msg:
+            user_msg = (
+                f"{exc_msg} When using Docker Compose, set VAULT_ADDR=http://vault:8200 and "
+                "set VAULT_TOKEN from the vault-init container logs in your .env."
+            )
+        elif isinstance(exc, requests.exceptions.ConnectionError):
+            user_msg = (
+                "Failed to store Grafana credentials: cannot connect to Vault. "
+                "If aurora-server runs in Docker, set VAULT_ADDR=http://vault:8200 in .env "
+                "(not http://127.0.0.1:8200 — from inside the API container that points at the "
+                "container itself, not the Vault service)."
+            )
+        else:
+            user_msg = generic
+        return jsonify({"error": user_msg}), 500
 
     return jsonify({
         "success": True,
