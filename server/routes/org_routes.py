@@ -36,12 +36,51 @@ def _validate_org_id_for_user(user_id: str, org_id: str) -> bool:
         return False
 
 
+def _purge_vault_secrets(cursor, *, user_id: str = None, org_id: str = None):
+    """Delete Vault secrets referenced by user_tokens rows before they are removed.
+
+    Call this BEFORE deleting rows from user_tokens so that the secret_ref
+    pointers are still available for lookup.  Failures are logged but do not
+    abort the caller — the DB rows will still be cleaned up.
+    """
+    try:
+        if user_id and org_id:
+            cursor.execute(
+                "SELECT secret_ref FROM user_tokens "
+                "WHERE user_id = %s AND org_id = %s AND secret_ref IS NOT NULL",
+                (user_id, org_id),
+            )
+        elif org_id:
+            cursor.execute(
+                "SELECT secret_ref FROM user_tokens "
+                "WHERE org_id = %s AND secret_ref IS NOT NULL",
+                (org_id,),
+            )
+        else:
+            return
+
+        refs = [row[0] for row in cursor.fetchall() if row[0]]
+        if not refs:
+            return
+
+        from utils.secrets.secret_ref_utils import SecretRefManager
+        mgr = SecretRefManager()
+        for ref in refs:
+            try:
+                mgr.delete_secret(ref)
+                logger.info("Deleted Vault secret: %s", ref)
+            except Exception as e:
+                logger.warning("Failed to delete Vault secret %s: %s", ref, e)
+    except Exception as e:
+        logger.warning("Failed to purge Vault secrets: %s", e)
+
+
 def _cleanup_empty_org(cursor, org_id: str) -> bool:
     """Delete an org and all its scoped data if it has no remaining members."""
     cursor.execute("SELECT COUNT(*) FROM users WHERE org_id = %s", (org_id,))
     if cursor.fetchone()[0] == 0:
         cursor.execute("DELETE FROM org_invitations WHERE org_id = %s", (org_id,))
-        # Clean up all org-scoped data so nothing is orphaned
+        _purge_vault_secrets(cursor, org_id=org_id)
         cursor.execute(_USER_SCOPED_TABLES_SQL)
         for (tbl,) in cursor.fetchall():
             try:
@@ -58,7 +97,11 @@ def _delete_user_org_data(cursor, user_id: str, org_id: str):
     """Delete a user's connections, tokens, and other org-scoped data from the old org.
 
     Called when a user joins an existing org so their old data doesn't linger.
+    Vault secrets referenced by user_tokens.secret_ref are deleted first to
+    avoid orphaned secrets.
     """
+    _purge_vault_secrets(cursor, user_id=user_id, org_id=org_id)
+
     cursor.execute(_USER_SCOPED_TABLES_SQL)
     for (tbl,) in cursor.fetchall():
         try:

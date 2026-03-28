@@ -17,7 +17,7 @@ interface Invitation {
 }
 
 export default function OrgInvitations() {
-  const { data: session, update } = useSession();
+  const { data: session } = useSession();
   const [acting, setActing] = useState<string | null>(null);
 
   const { data, isLoading, mutate } = useQuery<{ invitations: Invitation[] }>(
@@ -42,9 +42,13 @@ export default function OrgInvitations() {
         setActing(null);
         return;
       }
-      toast({ title: `Joined ${inv.orgName}`, description: "Redirecting to your new organization..." });
-      await update();
-      window.location.href = "/";
+
+      // Redirect to a standalone transition page that has ZERO SWR hooks or
+      // data-fetching components.  That page awaits the session refresh (which
+      // rewrites the JWT cookie with the new org_id) and only then navigates
+      // to "/".  This avoids the 403 storm caused by other mounted components
+      // firing requests with the stale org while update() is in flight.
+      window.location.replace("/org/switching");
     } catch {
       toast({ title: "Failed to join", variant: "destructive" });
       setActing(null);
