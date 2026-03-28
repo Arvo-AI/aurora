@@ -79,7 +79,14 @@ wait_for_ingress_ip() {
   local attempts=0
   while [[ -z "$ip" && $attempts -lt 40 ]]; do
     ip=$(kubectl get svc "$svc" -n "$ns" -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || true)
-    [[ -z "$ip" ]] && ip=$(kubectl get svc "$svc" -n "$ns" -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || true)
+    if [[ -z "$ip" ]]; then
+      local host
+      host=$(kubectl get svc "$svc" -n "$ns" -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || true)
+      if [[ -n "$host" ]]; then
+        ip=$(dig +short "$host" 2>/dev/null | head -1)
+        [[ -z "$ip" ]] && ip=$(nslookup "$host" 2>/dev/null | awk '/^Address: / { print $2 }' | head -1)
+      fi
+    fi
     [[ -z "$ip" ]] && { sleep 5; (( attempts++ )) || true; }
   done
   echo "$ip"
@@ -139,6 +146,19 @@ elif $PRIVATE_MODE; then
   prompt STORAGE_REGION "Region" "us-east-1"
   prompt STORAGE_ACCESS_KEY "Access key"
   prompt STORAGE_SECRET_KEY "Secret key"
+elif $SKIP_BUILD; then
+  REGISTRY="ghcr.io/arvo-ai"
+  IMAGE_TAG="latest"
+  info "Using prebuilt images from $REGISTRY (tag: $IMAGE_TAG)"
+  info "Ingress IP will be detected automatically after deploy."
+
+  echo ""
+  info "Storage: S3-compatible object storage"
+  prompt STORAGE_BUCKET "Bucket name"
+  prompt STORAGE_ENDPOINT "Endpoint URL" "https://s3.amazonaws.com"
+  prompt STORAGE_REGION "Region" "us-east-1"
+  prompt STORAGE_ACCESS_KEY "Access key"
+  prompt STORAGE_SECRET_KEY "Secret key"
 else
   prompt REGISTRY "Container registry (e.g. gcr.io/my-project, docker.io/myuser, ghcr.io/myorg)"
   IMAGE_TAG=$(git -C "$REPO_ROOT" rev-parse --short HEAD)
@@ -157,6 +177,45 @@ echo ""
 info "LLM provider"
 prompt LLM_PROVIDER "Provider (openrouter, openai, anthropic, google)" "openrouter"
 prompt LLM_API_KEY "API key for $LLM_PROVIDER"
+
+# ─── Validate inputs ─────────────────────────────────────────────────────────
+
+echo ""
+info "Validating inputs..."
+VALIDATION_FAILED=false
+
+if [[ -n "${STORAGE_BUCKET:-}" && -n "${STORAGE_ACCESS_KEY:-}" && -n "${STORAGE_SECRET_KEY:-}" ]]; then
+  ENDPOINT="${STORAGE_ENDPOINT:-https://s3.amazonaws.com}"
+  REGION="${STORAGE_REGION:-us-east-1}"
+  if command -v aws &>/dev/null; then
+    if AWS_ACCESS_KEY_ID="$STORAGE_ACCESS_KEY" AWS_SECRET_ACCESS_KEY="$STORAGE_SECRET_KEY" \
+       aws s3api head-bucket --bucket "$STORAGE_BUCKET" --region "$REGION" \
+       --endpoint-url "$ENDPOINT" 2>/dev/null; then
+      ok "S3 bucket '$STORAGE_BUCKET' is reachable"
+    else
+      warn "Could not reach S3 bucket '$STORAGE_BUCKET' — check bucket name, credentials, endpoint, and region"
+      VALIDATION_FAILED=true
+    fi
+  else
+    info "aws CLI not installed — skipping S3 bucket validation"
+  fi
+fi
+
+case "$LLM_PROVIDER" in
+  openrouter|openai|anthropic|google) ok "LLM provider '$LLM_PROVIDER' is valid" ;;
+  *) warn "Unknown LLM provider '$LLM_PROVIDER' — expected: openrouter, openai, anthropic, or google"; VALIDATION_FAILED=true ;;
+esac
+
+if [[ -z "$LLM_API_KEY" || ${#LLM_API_KEY} -lt 10 ]]; then
+  warn "LLM API key looks too short — double-check it"
+  VALIDATION_FAILED=true
+fi
+
+if $VALIDATION_FAILED; then
+  echo ""
+  read -rp "Warnings found. Continue anyway? [y/N]: " cont
+  [[ "$cont" =~ ^[Yy] ]] || { echo "Aborting."; exit 1; }
+fi
 
 echo ""
 info "Environment"
@@ -345,11 +404,12 @@ else
   ok "Vault initialized"
 
   CREDENTIALS_FILE="$REPO_ROOT/vault-init-${RELEASE}.txt"
-  (umask 077 && cat > "$CREDENTIALS_FILE" <<CEOF
+  umask 077
+  cat > "$CREDENTIALS_FILE" <<CEOF
 Unseal Key: $UNSEAL_KEY
 Root Token: $ROOT_TOKEN
 CEOF
-  )
+  umask 022
   warn "Vault credentials written to $CREDENTIALS_FILE (mode 600). Store securely and delete after use."
   warn "You need the unseal key after every vault restart."
 

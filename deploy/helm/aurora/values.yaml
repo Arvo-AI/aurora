@@ -490,7 +490,7 @@ vault:
     #   # For on-prem: credentials: "/vault/gcp/credentials.json"
 
     # AWS KMS Configuration
-    # See website/docs/deployment/vault-kms-aws.md for setup instructions
+    # See website/docs/deployment/vault-kms-setup.md for setup instructions
     # awskms:
     #   region: "us-east-1"
     #   kms_key_id: "alias/vault-unseal-key"  # Key ID, ARN, or alias

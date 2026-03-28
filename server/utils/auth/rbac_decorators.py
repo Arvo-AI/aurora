@@ -58,11 +58,13 @@ def require_permission(resource: str, action: str):
 
             enforcer = get_enforcer()
             if not enforcer.enforce(user_id, org_id, resource, action):
-                logger.warning(
-                    "RBAC denied: user=%s org=%s resource=%s action=%s endpoint=%s",
-                    user_id, org_id, resource, action, fn.__name__,
-                )
-                return jsonify({"error": "Forbidden"}), 403
+                enforcer.load_policy()
+                if not enforcer.enforce(user_id, org_id, resource, action):
+                    logger.warning(
+                        "RBAC denied: user=%s org=%s resource=%s action=%s endpoint=%s",
+                        user_id, org_id, resource, action, fn.__name__,
+                    )
+                    return jsonify({"error": "Forbidden"}), 403
 
             try:
                 return fn(user_id, *args, **kwargs)
