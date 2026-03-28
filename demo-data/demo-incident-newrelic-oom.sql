@@ -24,6 +24,77 @@ DELETE FROM incident_alerts WHERE incident_id = '859b8ade-7269-4c18-9389-de25468
 DELETE FROM incident_alerts WHERE id = 'b72fb6c7-d573-4b8c-b3a0-360666420896';
 DELETE FROM chat_sessions WHERE id = 'a7afc8b2-16f9-43cc-81dc-dfe41f610c3b';
 DELETE FROM incidents WHERE id = '859b8ade-7269-4c18-9389-de25468b5905';
+DELETE FROM newrelic_events WHERE id = 37;
+
+-- 0. Source alert record (New Relic event)
+INSERT INTO newrelic_events (id, user_id, org_id, issue_id, issue_title, priority, state, entity_names, payload, received_at)
+VALUES (
+  37,
+  'ab209180-626b-4601-8042-9f6328d03ae9',
+  '26db606d-1453-41be-b994-256ea1c7ee5b',
+  'INC-20260327-004',
+  'checkout-service-oom-risk',
+  'CRITICAL',
+  'ACTIVATED',
+  'checkout-service',
+  '{
+    "issueId": "INC-20260327-004",
+    "issueUrl": "https://one.newrelic.com/alerts/incidents/INC-20260327-004",
+    "title": "checkout-service-oom-risk",
+    "priority": "CRITICAL",
+    "totalIncidents": 1,
+    "state": "ACTIVATED",
+    "createdAt": "2026-03-27T13:10:38.000Z",
+    "updatedAt": "2026-03-27T13:10:38.000Z",
+    "sources": ["newrelic"],
+    "alertPolicyNames": ["Checkout Service Alerts"],
+    "alertConditionNames": ["checkout-service-oom-risk"],
+    "accumulations": {
+      "policyName": ["Checkout Service Alerts"],
+      "conditionName": ["checkout-service-oom-risk"],
+      "source": ["newrelic"],
+      "tag": {
+        "account": ["7852784"],
+        "accountId": ["7852784"]
+      }
+    },
+    "impactedEntities": [
+      {
+        "name": "checkout-service",
+        "type": "APPLICATION",
+        "product": "APM",
+        "guid": "NzA1MjgxN3xBUE18QVBQTEVDQVRJT058MjIzNDU2Nzg5"
+      }
+    ],
+    "annotations": {
+      "title": ["checkout-service-oom-risk"],
+      "description": ["P0: checkout-service memory at 948MB/1024MB — OOMKill imminent. DB connection pool exhausted 50/50 active connections. Error rate spiked to 72%. Caused by connection leak in v2.4.1 (commit 526d28c5). Investigate: New Relic account 7852784 SINCE 1 day ago, CloudWatch /ecs/checkout-service us-east-1, GitHub beng360/checkout-service, Jira RCA-44."]
+    },
+    "conditionFamilyId": 483920174,
+    "accountId": 7852784,
+    "conditionName": "checkout-service-oom-risk",
+    "policyName": "Checkout Service Alerts",
+    "targets": [
+      {
+        "name": "checkout-service",
+        "type": "application",
+        "product": null
+      }
+    ],
+    "nrql": {
+      "query": "SELECT average(apm.service.memory.heap.used) FROM Metric WHERE appName = '\''checkout-service'\'' FACET host"
+    },
+    "violationChartUrl": "https://one.newrelic.com/launcher/nrai.nrai-violations?violationId=INC-20260327-004",
+    "incidentId": "INC-20260327-004",
+    "openViolationsCount": 1,
+    "closedViolationsCount": 0,
+    "isCorrelated": false,
+    "trigger": "incident_opened",
+    "timestamp": 1743084638000
+  }'::jsonb,
+  '2026-03-27T13:10:38.114879'
+);
+SELECT setval('newrelic_events_id_seq', GREATEST(37, (SELECT COALESCE(MAX(id), 0) FROM newrelic_events)));
 
 -- 1. Incident record (base columns only)
 INSERT INTO incidents (id, user_id, org_id, source_type, source_alert_id, status, severity, alert_title, alert_service, alert_environment, aurora_status, aurora_summary, aurora_chat_session_id, started_at, analyzed_at, slack_message_ts, active_tab, created_at, updated_at, merged_into_incident_id) VALUES (E'859b8ade-7269-4c18-9389-de25468b5905', E'ab209180-626b-4601-8042-9f6328d03ae9', E'26db606d-1453-41be-b994-256ea1c7ee5b', E'newrelic', 37, E'analyzed', E'critical', E'checkout-service-oom-risk', E'checkout-service', NULL, E'complete', E'## Incident Report: checkout-service OOM Risk — 2026-03-27\n\nOn March 27, 2026 at 13:10 UTC, a critical OOM-risk alert fired against the `checkout-service` via New Relic, indicating that the service was approaching memory exhaustion. The affected component is the order processing pipeline, which handles checkout transactions including inventory validation, order record creation, and payment initiation [3].\n\nThe root cause is a connection pool leak in `order-processor.js` introduced during a transaction refactor. The refactored code acquires an explicit database client via `getClient()` but fails to call `client.release()` after the transaction completes [2, 3]. This means every call to `processOrder()` holds a connection open indefinitely, exhausting the connection pool and causing memory to accumulate over time. This issue was identified and tracked as a known defect prior to the alert triggering — Jira ticket RCA-45, created March 26, 2026 and assigned to Benjamin Gervais, explicitly documents the missing `client.release()` call as a highest-priority issue [5].\n\nThe leak compounds under checkout load: each unresolved client reference retains associated memory, and without release, the pool cannot reclaim resources between requests. Given that RCA-45 was opened the day before the alert fired and had not yet been resolved, the service continued accumulating leaked connections through normal order traffic until memory pressure reached critical threshold [5, 6].\n\n---\n\n## Suggested Next Steps\n\n1. **Deploy the fix for RCA-45 immediately** — Add `client.release()` calls within `order-processor.js` in all exit paths (success, error, and timeout), ensuring the fix covers both the happy path and any catch/finally blocks [2, 3].\n2. **Restart the checkout-service pod** to clear currently leaked connections and relieve immediate memory pressure, then monitor New Relic for OOM risk metrics returning to baseline.\n3. **Audit the RDS connection pool** — Check active vs. available connections on `generated-mysql-db` to quantify how many leaked connections are currently held, and confirm the pool recovers after the service restart [1].\n4. **Review other refactored transaction handlers** — The `order-processor.js` refactor may not be the only file affected; audit any other services or modules that were updated to use explicit `getClient()` transactions around the same time for the same missing `release()` pattern [2, 5].', E'a7afc8b2-16f9-43cc-81dc-dfe41f610c3b', E'2026-03-27T13:10:38.102289', E'2026-03-27T13:13:25.383844', NULL, E'thoughts', E'2026-03-27T13:10:38.110873', E'2026-03-27T13:13:50.244082', NULL);

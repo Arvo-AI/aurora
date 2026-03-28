@@ -168,6 +168,29 @@ echo "       Promoting all users to admin role..."
 psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" -c \
     "UPDATE users SET role = 'admin' WHERE role != 'admin';" 2>/dev/null || true
 
+# Assign all users to the demo org (single shared org for demo)
+DEMO_ORG_ID=$(psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" -tAc \
+    "SELECT org_id FROM users WHERE id = 'ab209180-626b-4601-8042-9f6328d03ae9'" 2>/dev/null || echo "")
+if [ -n "$DEMO_ORG_ID" ]; then
+    echo "       Assigning all users to demo org ($DEMO_ORG_ID)..."
+    psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" -c \
+        "UPDATE users SET org_id = '$DEMO_ORG_ID' WHERE org_id IS NULL OR org_id != '$DEMO_ORG_ID';" 2>/dev/null || true
+
+    # Backfill org_id on all demo data so RLS (select_by_org) works for every user
+    echo "       Backfilling org_id on demo data..."
+    psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" <<BACKFILL >/dev/null 2>&1
+UPDATE incidents       SET org_id = '$DEMO_ORG_ID' WHERE org_id IS NULL;
+UPDATE chat_sessions   SET org_id = '$DEMO_ORG_ID' WHERE org_id IS NULL;
+UPDATE incident_alerts SET org_id = '$DEMO_ORG_ID' WHERE org_id IS NULL;
+UPDATE datadog_events  SET org_id = '$DEMO_ORG_ID' WHERE org_id IS NULL;
+UPDATE grafana_alerts  SET org_id = '$DEMO_ORG_ID' WHERE org_id IS NULL;
+UPDATE netdata_alerts  SET org_id = '$DEMO_ORG_ID' WHERE org_id IS NULL;
+UPDATE splunk_alerts   SET org_id = '$DEMO_ORG_ID' WHERE org_id IS NULL;
+UPDATE postmortems     SET org_id = '$DEMO_ORG_ID' WHERE org_id IS NULL;
+UPDATE newrelic_events SET org_id = '$DEMO_ORG_ID' WHERE org_id IS NULL;
+BACKFILL
+fi
+
 # Create marker table
 echo "[3/3] Setting demo_initialized marker..."
 psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" <<EOF >/dev/null 2>&1

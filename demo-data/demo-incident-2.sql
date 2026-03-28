@@ -6,6 +6,7 @@ DECLARE
   v_incident_id UUID := 'b923d5a1-7e4c-4f8b-9a1d-2c5e8f3b6d90';
   v_chat_session_id VARCHAR(50) := 'c1a2b3d4-5e6f-7a8b-9c0d-1e2f3a4b5c6d';
   v_demo_user_id VARCHAR(255) := 'ab209180-626b-4601-8042-9f6328d03ae9';
+  v_org_id VARCHAR(255) := '26db606d-1453-41be-b994-256ea1c7ee5b';
   v_datadog_event_id INTEGER;
   v_incident_exists BOOLEAN;
 BEGIN
@@ -19,9 +20,10 @@ BEGIN
   RAISE NOTICE 'Inserting demo incident 2...';
 
   -- 1. Insert datadog_events source record
-  INSERT INTO datadog_events (user_id, event_type, event_title, status, scope, payload, received_at)
+  INSERT INTO datadog_events (user_id, org_id, event_type, event_title, status, scope, payload, received_at)
   VALUES (
     v_demo_user_id,
+    v_org_id,
     'alert',
     'Memory leak causing OOMKilled pods - checkout-service',
     'alert',
@@ -44,7 +46,7 @@ BEGIN
 
   -- 2. Insert main incident record
   INSERT INTO incidents (
-    id, user_id, source_type, source_alert_id, status, severity,
+    id, user_id, org_id, source_type, source_alert_id, status, severity,
     alert_title, alert_service, alert_environment, aurora_status,
     aurora_summary, aurora_chat_session_id, started_at, analyzed_at,
     active_tab, created_at, updated_at, alert_metadata,
@@ -53,6 +55,7 @@ BEGIN
   ) VALUES (
     v_incident_id,
     v_demo_user_id,
+    v_org_id,
     'datadog',
     v_datadog_event_id,
     'resolved',
@@ -140,10 +143,10 @@ The impact was moderate: checkout-service pods cycled through OOMKill restarts c
   WHERE id = v_incident_id;
 
   -- 5. Insert correlated alerts
-  INSERT INTO incident_alerts (user_id, incident_id, source_type, source_alert_id, alert_title, alert_service, alert_severity, correlation_strategy, correlation_score, correlation_details, alert_metadata, received_at) VALUES
-  (v_demo_user_id, v_incident_id, 'datadog', v_datadog_event_id, 'OOMKilled: checkout-service pod restarting', 'checkout-service', 'critical', 'primary', 1.0, '{}', '{"tags":["env:production","service:checkout-service"]}'::jsonb, '2026-02-13 10:00:00'),
-  (v_demo_user_id, v_incident_id, 'datadog', v_datadog_event_id + 1, 'High memory usage on checkout-service nodes', 'checkout-service', 'warning', 'time_proximity', 0.92, '{"reason":"Memory spike correlated with OOMKill events"}'::jsonb, '{"tags":["env:production","service:checkout-service","monitor:memory"]}'::jsonb, '2026-02-13 10:01:00'),
-  (v_demo_user_id, v_incident_id, 'datadog', v_datadog_event_id + 2, 'Increased 5xx errors on /api/checkout endpoint', 'api-gateway', 'warning', 'service_dependency', 0.87, '{"reason":"Downstream checkout-service pods restarting"}'::jsonb, '{"tags":["env:production","service:api-gateway","endpoint:/api/checkout"]}'::jsonb, '2026-02-13 10:02:00');
+  INSERT INTO incident_alerts (user_id, org_id, incident_id, source_type, source_alert_id, alert_title, alert_service, alert_severity, correlation_strategy, correlation_score, correlation_details, alert_metadata, received_at) VALUES
+  (v_demo_user_id, v_org_id, v_incident_id, 'datadog', v_datadog_event_id, 'OOMKilled: checkout-service pod restarting', 'checkout-service', 'critical', 'primary', 1.0, '{}', '{"tags":["env:production","service:checkout-service"]}'::jsonb, '2026-02-13 10:00:00'),
+  (v_demo_user_id, v_org_id, v_incident_id, 'datadog', v_datadog_event_id + 1, 'High memory usage on checkout-service nodes', 'checkout-service', 'warning', 'time_proximity', 0.92, '{"reason":"Memory spike correlated with OOMKill events"}'::jsonb, '{"tags":["env:production","service:checkout-service","monitor:memory"]}'::jsonb, '2026-02-13 10:01:00'),
+  (v_demo_user_id, v_org_id, v_incident_id, 'datadog', v_datadog_event_id + 2, 'Increased 5xx errors on /api/checkout endpoint', 'api-gateway', 'warning', 'service_dependency', 0.87, '{"reason":"Downstream checkout-service pods restarting"}'::jsonb, '{"tags":["env:production","service:api-gateway","endpoint:/api/checkout"]}'::jsonb, '2026-02-13 10:02:00');
 
   -- Continue in next section (thoughts, citations, suggestions, chat)
 
@@ -305,8 +308,8 @@ deployment "checkout-svc" successfully rolled out', '2026-02-13 10:08:10');
   (v_incident_id, 'Add memory usage alerting at 70% threshold', 'Create a Datadog monitor that alerts when pod memory usage exceeds 70% of the configured limit. This provides early warning before OOMKill events occur.', 'mitigation', 'safe', NULL, '2026-02-13 10:08:30');
 
   -- 9. Insert chat session with tool calls matching the real format
-  INSERT INTO chat_sessions (id, user_id, title, messages, created_at, updated_at, is_active, status, incident_id) VALUES
-  (v_chat_session_id, v_demo_user_id,
+  INSERT INTO chat_sessions (id, user_id, org_id, title, messages, created_at, updated_at, is_active, status, incident_id) VALUES
+  (v_chat_session_id, v_demo_user_id, v_org_id,
    'RCA: Memory leak causing OOMKilled pods - checkout-service',
    ('[
      {"sender":"user","text":"# ROOT CAUSE ANALYSIS REQUIRED - DATADOG ALERT\n\n## ALERT DETAILS:\n- **Title**: Memory leak causing OOMKilled pods - checkout-service\n- **Status**: alert (priority: normal)\n- **Source**: datadog\n- **Labels/Tags**: env:production, service:checkout-service, kube_namespace:default, kube_cluster:eks-prod-us-east-1, team:platform, alert_type:oomkilled\n- **Host**: ip-10-0-2-47.ec2.internal\n\n## CONNECTED PROVIDERS:\nYou have access to: aws, datadog, github, github_repo_selection\n\n## GITHUB REPOSITORY CONTEXT:\n- **Connected Repository**: acme-corp/platform\n- **Branch**: main\n\n### GITHUB RCA TOOL (RECOMMENDED):\nUse the unified `github_rca` tool for efficient GitHub investigation.\n\n**IMPORTANT: Repository Resolution**\n- Omit `repo=` to auto-resolve from Knowledge Base.\n\n### INVESTIGATION INSTRUCTIONS:\nConduct a thorough Root Cause Analysis following the ReAct methodology.\nUse all available tools to investigate: check pod status, logs, metrics, recent deployments, and code changes.\nCorrelate the timeline of the alert with recent changes.","message_number":1,"isCompleted":true},
@@ -363,10 +366,11 @@ END $$;
 UPDATE incidents SET status = 'resolved' WHERE id = 'b923d5a1-7e4c-4f8b-9a1d-2c5e8f3b6d90' AND status != 'resolved';
 
 -- Postmortem for incident 2 (idempotent)
-INSERT INTO postmortems (incident_id, user_id, content, generated_at, updated_at)
+INSERT INTO postmortems (incident_id, user_id, org_id, content, generated_at, updated_at)
 VALUES (
   'b923d5a1-7e4c-4f8b-9a1d-2c5e8f3b6d90',
   'ab209180-626b-4601-8042-9f6328d03ae9',
+  '26db606d-1453-41be-b994-256ea1c7ee5b',
   $postmortem_2$# Postmortem: Memory leak causing OOMKilled pods - checkout-service
 
 **Date:** 2026-02-13 10:00 UTC
@@ -428,3 +432,15 @@ The incident was resolved through a two-phase approach:
   '2026-02-27 01:55:48'
 )
 ON CONFLICT (incident_id) DO NOTHING;
+
+-- Backfill org_id for existing installs where demo data was inserted without it
+UPDATE incidents SET org_id = '26db606d-1453-41be-b994-256ea1c7ee5b'
+  WHERE id = 'b923d5a1-7e4c-4f8b-9a1d-2c5e8f3b6d90' AND org_id IS NULL;
+UPDATE chat_sessions SET org_id = '26db606d-1453-41be-b994-256ea1c7ee5b'
+  WHERE id = 'c1a2b3d4-5e6f-7a8b-9c0d-1e2f3a4b5c6d' AND org_id IS NULL;
+UPDATE incident_alerts SET org_id = '26db606d-1453-41be-b994-256ea1c7ee5b'
+  WHERE incident_id = 'b923d5a1-7e4c-4f8b-9a1d-2c5e8f3b6d90' AND org_id IS NULL;
+UPDATE datadog_events SET org_id = '26db606d-1453-41be-b994-256ea1c7ee5b'
+  WHERE user_id = 'ab209180-626b-4601-8042-9f6328d03ae9' AND scope = 'checkout-service' AND org_id IS NULL;
+UPDATE postmortems SET org_id = '26db606d-1453-41be-b994-256ea1c7ee5b'
+  WHERE incident_id = 'b923d5a1-7e4c-4f8b-9a1d-2c5e8f3b6d90' AND org_id IS NULL;
