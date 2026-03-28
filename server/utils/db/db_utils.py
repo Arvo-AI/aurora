@@ -1904,23 +1904,31 @@ def initialize_tables():
                     current_casbin = get_user_roles_in_org(uid, uorg)
                     if not current_casbin or current_casbin != [expected_role]:
                         try:
-                            assign_role_to_user(uid, expected_role, uorg)
                             if is_creator and urole != "admin":
+                                cursor.execute("SAVEPOINT sp_role_repair")
                                 cursor.execute(
                                     "UPDATE users SET role = 'admin' WHERE id = %s",
                                     (uid,),
                                 )
+                                cursor.execute("RELEASE SAVEPOINT sp_role_repair")
+                            assign_role_to_user(uid, expected_role, uorg)
                             logging.info(
                                 "Repaired Casbin role for user %s: %s -> %s (creator=%s)",
                                 uid, current_casbin, expected_role, is_creator,
                             )
                         except Exception as casbin_err:
+                            try:
+                                cursor.execute("ROLLBACK TO SAVEPOINT sp_role_repair")
+                            except Exception:
+                                pass
                             logging.warning(
                                 "Failed to repair Casbin role for user %s: %s",
                                 uid, casbin_err,
                             )
+                conn.commit()
             except Exception as e:
                 logging.warning(f"Error in Casbin role repair: {e}")
+                conn.rollback()
 
             # Create org_id indexes for performance
             for tbl in org_id_tables:

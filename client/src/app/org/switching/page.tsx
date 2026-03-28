@@ -116,7 +116,6 @@ export default function OrgSwitchingPage() {
           {STEPS.map(({ label }, i) => {
             const isActive = current === i && !done && !error;
             const isComplete = current > i || done;
-            const isPending = current < i && !done;
 
             return (
               <div

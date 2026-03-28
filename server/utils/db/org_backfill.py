@@ -26,6 +26,11 @@ logger = logging.getLogger(__name__)
 # Schema introspection queries (cached per-call, not per-import)
 # ────────────────────────────────────────────────────────────────────────────
 
+_SKIP_TABLES = frozenset({
+    "users",
+    "user_preferences",   # org_id IS NULL = global fallback scope, not missing data
+})
+
 _USER_SCOPED_TABLES_SQL = """
     SELECT c1.table_name
     FROM information_schema.columns c1
@@ -39,7 +44,7 @@ _USER_SCOPED_TABLES_SQL = """
     WHERE c1.column_name = 'user_id'
       AND c2.column_name = 'org_id'
       AND c1.table_schema = 'public'
-      AND c1.table_name != 'users'
+      AND c1.table_name NOT IN ('users', 'user_preferences')
     ORDER BY c1.table_name;
 """
 
