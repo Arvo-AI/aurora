@@ -311,17 +311,25 @@ Use this path when the target VM has restricted or no outbound internet access (
 
 ### 1. Download the Bundle
 
-Prebuilt airtight bundles are published to Google Cloud Storage on every release and push to `main`. Download on a machine with internet access:
+Prebuilt airtight bundles are published to Google Cloud Storage on every release and push to `main`. Download on a machine with internet access.
+
+**Browse available bundles:**
+- [amd64 bundles](https://storage.googleapis.com/storage/v1/b/aurora-airtight-bucket/o?alt=json&fields=items/name)
+- [arm64 bundles](https://storage.googleapis.com/storage/v1/b/aurora-airtight-bucket-arm64/o?alt=json&fields=items/name)
+
+**Download** (replace the filename with the version you need):
 
 ```bash
-# Latest stable (amd64) — replace VERSION with the release tag (e.g. v1.2.3)
-curl -LO https://storage.googleapis.com/aurora-airtight-bucket/aurora-airtight-VERSION-amd64.tar.gz
-curl -LO https://storage.googleapis.com/aurora-airtight-bucket/aurora-airtight-VERSION-amd64.tar.gz.sha256
+# amd64
+curl -LO https://storage.googleapis.com/aurora-airtight-bucket/aurora-airtight-<version>-amd64.tar.gz
+curl -LO https://storage.googleapis.com/aurora-airtight-bucket/aurora-airtight-<version>-amd64.tar.gz.sha256
 
-# ARM64 servers
-curl -LO https://storage.googleapis.com/aurora-airtight-bucket-arm64/aurora-airtight-VERSION-arm64.tar.gz
-curl -LO https://storage.googleapis.com/aurora-airtight-bucket-arm64/aurora-airtight-VERSION-arm64.tar.gz.sha256
+# ARM64
+curl -LO https://storage.googleapis.com/aurora-airtight-bucket-arm64/aurora-airtight-<version>-arm64.tar.gz
+curl -LO https://storage.googleapis.com/aurora-airtight-bucket-arm64/aurora-airtight-<version>-arm64.tar.gz.sha256
 ```
+
+Version tags (e.g. `v1.2.3`) are published on releases. Commit-based bundles (e.g. `4c92267`) are published on every push to `main`.
 
 :::tip Build your own bundle
 If you prefer to build from source instead of downloading, see [Creating the Air-Tight Bundle](#creating-the-air-tight-bundle-manual) below.
