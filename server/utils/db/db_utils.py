@@ -514,6 +514,26 @@ def initialize_tables():
                     CREATE INDEX IF NOT EXISTS idx_grafana_alerts_state ON grafana_alerts(alert_state);
                     CREATE INDEX IF NOT EXISTS idx_grafana_alerts_received_at ON grafana_alerts(received_at DESC);
                 """,
+                "loki_alerts": """
+                    CREATE TABLE IF NOT EXISTS loki_alerts (
+                        id SERIAL PRIMARY KEY,
+                        user_id VARCHAR(255) NOT NULL,
+                        alert_uid VARCHAR(255),
+                        alert_title TEXT,
+                        alert_state VARCHAR(50),
+                        rule_group TEXT,
+                        rule_name TEXT,
+                        labels JSONB,
+                        annotations JSONB,
+                        payload JSONB NOT NULL,
+                        received_at TIMESTAMP NOT NULL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+
+                    CREATE INDEX IF NOT EXISTS idx_loki_alerts_user_id ON loki_alerts(user_id, received_at DESC);
+                    CREATE INDEX IF NOT EXISTS idx_loki_alerts_state ON loki_alerts(alert_state);
+                    CREATE INDEX IF NOT EXISTS idx_loki_alerts_received_at ON loki_alerts(received_at DESC);
+                """,
                 "datadog_events": """
                     CREATE TABLE IF NOT EXISTS datadog_events (
                         id SERIAL PRIMARY KEY,
