@@ -405,7 +405,11 @@ def build_rca_prompt(
     providers = providers or []
     providers_lower = [p.lower() for p in providers]
 
-    # Extract alert service name early — used by multiple sections below
+    # Extract alert service name early — used by multiple sections below.
+    # Start with the explicit service label, then try richer fallbacks from
+    # the alert message (Condition/Policy/Targets fields) so downstream
+    # consumers (Jenkins deploy lookup, Aurora Learn, prediscovery) get the
+    # same specificity as the Jira search term.
     _label_service = alert_details.get('labels', {}).get('service', '')
     alert_service = _label_service if _label_service and _label_service != 'unknown' else ''
     if not alert_service and source == 'netdata':
@@ -417,6 +421,27 @@ def build_rca_prompt(
     labels = alert_details.get('labels', {})
     message = alert_details.get('message', '')
     values = alert_details.get('values', '')
+
+    # If alert_service is still empty, try to extract a meaningful service/component
+    # name from the message (same heuristic the Jira search uses).
+    _generic_titles = {
+        'new relic alert', 'unknown alert', 'alert', 'unknown',
+        'grafana alert', 'datadog alert', 'splunk alert',
+    }
+    if not alert_service:
+        _candidate = title if title.lower().strip() not in _generic_titles else ''
+        if not _candidate:
+            _msg = message or ''
+            for _part in _msg.replace('.', ',').split(','):
+                _part = _part.strip()
+                for _prefix in ('Condition:', 'Targets:', 'Entities:', 'Policy:', 'Search:'):
+                    if _part.startswith(_prefix):
+                        _candidate = _part[len(_prefix):].strip()
+                        break
+                if _candidate:
+                    break
+        if _candidate:
+            alert_service = _candidate
 
     # Source-specific labels formatting
     if source == 'grafana':
@@ -498,26 +523,8 @@ def build_rca_prompt(
             ])
 
         if has_jira:
-            # Build a meaningful Jira search term from alert details.
-            # Prefer the service label, then fall back to message keywords or title.
-            # Avoid using generic fallback titles like "New Relic Alert".
-            _jira_search_term = alert_details.get('labels', {}).get('service', '')
-            if not _jira_search_term or _jira_search_term == 'unknown':
-                _jira_search_term = title
-            _generic_titles = {
-                'new relic alert', 'unknown alert', 'alert', 'unknown',
-                'grafana alert', 'datadog alert', 'splunk alert',
-            }
-            if _jira_search_term.lower().strip() in _generic_titles:
-                _msg = message or ''
-                _candidates = []
-                for _part in _msg.replace('.', ',').split(','):
-                    _part = _part.strip()
-                    for _prefix in ('Condition:', 'Policy:', 'Entities:', 'Targets:', 'Search:'):
-                        if _part.startswith(_prefix):
-                            _candidates.append(_part[len(_prefix):].strip())
-                            break
-                _jira_search_term = _candidates[0] if _candidates else title
+            # Use the enriched alert_service for Jira search (already has message fallbacks)
+            _jira_search_term = alert_service or title
             escaped_service = _jira_search_term.replace('\\', '\\\\').replace('"', '\\"')
             prompt_parts.extend([
                 "",
