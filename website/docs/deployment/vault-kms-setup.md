@@ -20,25 +20,29 @@ Auto-unseal eliminates manual unsealing after pod restarts by delegating key dec
 ```
 Where does your Vault run?
 │
+├─ AWS (EKS/EC2)
+│   └─ Use AWS KMS → see Vault KMS AWS guide
+│
 ├─ GCP (GKE/Compute Engine)
 │   └─ Use GCP Cloud KMS → see Vault KMS GCP guide
 │
 ├─ On-premises / Other cloud (with internet)
 │   └─ Use GCP Cloud KMS with service account key → see Vault KMS GCP guide
+│   └─ Or use AWS KMS with static credentials → see Vault KMS AWS guide
 │
 └─ Air-gapped / No internet
     └─ Use Shamir seals (manual unsealing required)
 ```
 
-## GCP Cloud KMS (Example)
+## Supported Providers
 
-| | GCP Cloud KMS |
-|---|---------------|
-| **Monthly Cost** | ~$0.06 |
-| **Setup Time** | 25-35 min |
-| **Best For** | GKE, Compute Engine, or on-prem with internet |
-| **On-Prem Support** | Yes (service account key) |
-| **Auth Method** | Workload Identity / Service Account Key |
+| | AWS KMS | GCP Cloud KMS |
+|---|---------|---------------|
+| **Monthly Cost** | ~$1.00 | ~$0.06 |
+| **Setup Time** | 15-25 min | 25-35 min |
+| **Best For** | EKS, EC2, or on-prem with AWS access | GKE, Compute Engine, or on-prem with GCP access |
+| **On-Prem Support** | Yes (static IAM credentials) | Yes (service account key) |
+| **Auth Method** | IRSA / Node Role / Static Keys | Workload Identity / Service Account Key |
 
 ## How It Works
 
@@ -67,8 +71,19 @@ Pod Restart → Vault Sealed → KMS Decrypt Call → Auto-Unseal → Ready
 
 ## Helm Configuration
 
-Add to `values.generated.yaml` (GCP example):
+Add to `values.generated.yaml`:
 
+**AWS KMS:**
+```yaml
+vault:
+  seal:
+    type: "awskms"
+    awskms:
+      region: "us-east-1"
+      kms_key_id: "alias/vault-unseal-key"
+```
+
+**GCP Cloud KMS:**
 ```yaml
 vault:
   seal:
@@ -83,7 +98,8 @@ vault:
 
 ## Next Steps
 
-1. Follow the [GCP Cloud KMS Setup](./vault-kms-gcp) guide (includes GKE, Compute Engine, and on-prem with service account key)
+1. **AWS**: Follow the [AWS KMS Setup](./vault-kms-aws) guide
+2. **GCP**: Follow the [GCP Cloud KMS Setup](./vault-kms-gcp) guide
 
 2. Complete the step-by-step setup
 

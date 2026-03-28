@@ -779,6 +779,7 @@ Eliminate manual unsealing after pod restarts by using cloud KMS. **Only GCP Clo
 
 | Provider | Guide | Cost | Setup Time |
 |----------|-------|------|------------|
+| AWS | [Vault KMS Setup](./vault-kms-aws) | ~$1/mo | 15-25 min |
 | GCP | [Vault KMS Setup](./vault-kms-gcp) | ~$0.06/mo | 25-35 min |
 
 See [Vault Auto-Unseal Overview](./vault-kms-setup) for decision framework and setup guide.
