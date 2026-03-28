@@ -1,162 +1,91 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import Link from 'next/link';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
-import { Zap, Clock, ChevronRight, Loader2, CheckCircle2, AlertTriangle, Link2, GitMerge } from 'lucide-react';
-import { 
-  Incident, 
-  incidentsService 
-} from '@/lib/services/incidents';
-import { grafanaService } from '@/lib/services/grafana';
-import { pagerdutyService } from '@/lib/services/pagerduty';
-import { netdataService } from '@/lib/services/netdata';
-import { splunkService } from '@/lib/services/splunk';
-import { datadogService } from '@/lib/services/datadog';
-import { dynatraceService } from '@/lib/services/dynatrace';
-import { jenkinsService, cloudbeesService } from '@/lib/services/ci-provider';
-import { useRouter } from 'next/navigation';
+import { Zap, Clock, ChevronRight, Loader2, CheckCircle2, Link2, GitMerge } from 'lucide-react';
+import { Incident, incidentsService } from '@/lib/services/incidents';
+import { useConnectedAccounts } from '@/hooks/useConnectedAccounts';
+import { connectorRegistry } from '@/components/connectors/ConnectorRegistry';
+import { useQuery } from '@/lib/query';
+
+const ALERT_CATEGORIES = new Set(['Monitoring', 'Incident Management']);
+
+const ALERT_PROVIDERS = new Set([
+  'grafana', 'datadog', 'netdata', 'splunk', 'dynatrace',
+  'coroot', 'newrelic', 'thousandeyes', 'pagerduty', 'bigpanda',
+]);
+
+interface IncidentsResponse { incidents: any[] }
+
+const incidentsFetcher = async (key: string, signal: AbortSignal) => {
+  const res = await fetch(key, { credentials: 'include', signal });
+  if (!res.ok) throw new Error(`incidents ${res.status}`);
+  const data: IncidentsResponse = await res.json();
+  return (data.incidents || []).map((inc: any): Incident => ({
+    id: inc.id,
+    alert: {
+      source: inc.sourceType,
+      sourceUrl: inc.alert?.sourceUrl || '',
+      rawPayload: '',
+      triggeredAt: inc.startedAt,
+      title: inc.alert.title,
+      severity: inc.severity,
+      service: inc.alert.service,
+    },
+    status: inc.status,
+    auroraStatus: inc.auroraStatus || 'idle',
+    summary: inc.summary || '',
+    streamingThoughts: inc.streamingThoughts || [],
+    suggestions: inc.suggestions || [],
+    correlatedAlertCount: inc.correlatedAlertCount || 0,
+    mergedIntoIncidentId: inc.mergedIntoIncidentId,
+    mergedIntoTitle: inc.mergedIntoTitle,
+    postMortem: inc.postMortem ?? undefined,
+    startedAt: inc.startedAt,
+    analyzedAt: inc.analyzedAt,
+    createdAt: inc.createdAt,
+    updatedAt: inc.updatedAt,
+    activeTab: inc.activeTab || 'thoughts',
+  }));
+};
 
 export default function IncidentsPage() {
-  const [incidents, setIncidents] = useState<Incident[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [isConnectedToIncidentPlatform, setIsConnectedToIncidentPlatform] = useState<boolean | null>(null);
-  const router = useRouter();
+  const { providerIds } = useConnectedAccounts();
 
-  const refreshIncidents = async (silent: boolean = false) => {
-    try {
-      if (!silent) {
-        setLoading(true);
-      }
+  const isConnectedToIncidentPlatform = useMemo(
+    () => providerIds.some(id => ALERT_PROVIDERS.has(id)),
+    [providerIds],
+  );
 
-      const [data, grafanaStatus, pagerdutyStatus, netdataStatus, splunkStatus, datadogStatus, dynatraceStatus, jenkinsStatus, cloudbeesStatus, jenkinsRca, cloudbeesRca] = await Promise.all([
-        incidentsService.getIncidents(),
-        // Only check connection status on initial load (not silent refreshes)
-        silent ? Promise.resolve(null) : grafanaService.getStatus(),
-        silent ? Promise.resolve(null) : pagerdutyService.getStatus(),
-        silent ? Promise.resolve(null) : netdataService.getStatus(),
-        silent ? Promise.resolve(null) : splunkService.getStatus(),
-        silent ? Promise.resolve(null) : datadogService.getStatus(),
-        silent ? Promise.resolve(null) : dynatraceService.getStatus(),
-        silent ? Promise.resolve(null) : jenkinsService.getStatus(),
-        silent ? Promise.resolve(null) : cloudbeesService.getStatus(),
-        silent ? Promise.resolve(null) : jenkinsService.getRcaSettings(),
-        silent ? Promise.resolve(null) : cloudbeesService.getRcaSettings(),
-      ]);
+  const { data: incidents = [], isLoading, mutate } = useQuery<Incident[]>(
+    '/api/incidents',
+    incidentsFetcher,
+    { staleTime: 10_000, revalidateOnFocus: true },
+  );
 
-      // Update connection status if this is initial load
-      // Consider connected if any alerting platform is connected,
-      // or a CI platform is connected AND has RCA enabled
-      if (!silent) {
-        const grafanaConnected = grafanaStatus?.connected ?? false;
-        const pagerdutyConnected = pagerdutyStatus?.connected ?? false;
-        const netdataConnected = netdataStatus?.connected ?? false;
-        const splunkConnected = splunkStatus?.connected ?? false;
-        const datadogConnected = datadogStatus?.connected ?? false;
-        const dynatraceConnected = dynatraceStatus?.connected ?? false;
-        const jenkinsRcaActive = (jenkinsStatus?.connected ?? false) && (jenkinsRca?.rcaEnabled ?? false);
-        const cloudbeesRcaActive = (cloudbeesStatus?.connected ?? false) && (cloudbeesRca?.rcaEnabled ?? false);
-        setIsConnectedToIncidentPlatform(
-          grafanaConnected || pagerdutyConnected || netdataConnected ||
-          splunkConnected || datadogConnected || dynatraceConnected ||
-          jenkinsRcaActive || cloudbeesRcaActive
-        );
-      }
+  const mutateRef = useRef(mutate);
+  mutateRef.current = mutate;
 
-      // Only update state if the list actually changed (prevents unnecessary re-renders)
-      setIncidents(prev => {
-        if (prev.length !== data.length) return data;
-
-        const prevMap = new Map(prev.map(i => [i.id, i]));
-
-        const hasChanges = data.some(next => {
-          const prevIncident = prevMap.get(next.id);
-          return (
-            !prevIncident ||
-            prevIncident.status !== next.status ||
-            prevIncident.auroraStatus !== next.auroraStatus ||
-            prevIncident.summary !== next.summary ||
-            prevIncident.analyzedAt !== next.analyzedAt ||
-            prevIncident.updatedAt !== next.updatedAt
-          );
-        });
-
-        return hasChanges ? data : prev;
-      });
-    } catch (error) {
-      console.error('Failed to refresh incidents:', error instanceof Error ? error.message : 'Unknown error');
-    } finally {
-      if (!silent) {
-        setLoading(false);
-      }
-    }
-  };
-
+  // Real-time updates via SSE — no polling, no manual refresh needed
   useEffect(() => {
-    let mounted = true;
-    
-    const load = async () => {
-      if (mounted) {
-        await refreshIncidents(false);
-      }
-    };
-    
-    load();
-    
-    return () => {
-      mounted = false;
-    };
-  }, []);
-
-  // Real-time updates via Server-Sent Events
-  const refreshIncidentsRef = useRef(refreshIncidents);
-  refreshIncidentsRef.current = refreshIncidents;
-
-  useEffect(() => {
-    // Connect to SSE endpoint for real-time incident updates
     const eventSource = new EventSource('/api/incidents/stream');
-    
     eventSource.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
-
-        // Refresh incidents when we get an update
         if (data.type === 'incident_update') {
-          console.log('[Incidents] Received real-time update:', data);
-          refreshIncidentsRef.current(true); // Silent refresh
+          mutateRef.current();
         }
-      } catch (error) {
-        console.error('[Incidents] Failed to parse SSE message:', error);
-      }
+      } catch { /* ignore malformed messages */ }
     };
-    
-    eventSource.onerror = (error) => {
-      console.error('[Incidents] SSE connection error:', error);
-      // EventSource will automatically reconnect
-    };
-    
-    return () => {
-      eventSource.close();
-    };
+    eventSource.onerror = () => { /* EventSource reconnects automatically */ };
+    return () => eventSource.close();
   }, []);
 
-  // Refresh on window focus to catch new incidents from background (silent)
-  useEffect(() => {
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible') {
-        refreshIncidentsRef.current(true);
-      }
-    };
-
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
-  }, []);
-
-  const activeIncidents = incidents.filter(i => i.status === 'investigating');
-  const analyzedIncidents = incidents.filter(i => i.status === 'analyzed' || i.status === 'resolved');
-  const mergedIncidents = incidents.filter(i => i.status === 'merged');
+  const activeIncidents = useMemo(() => incidents.filter(i => i.status === 'investigating'), [incidents]);
+  const analyzedIncidents = useMemo(() => incidents.filter(i => i.status === 'analyzed' || i.status === 'resolved'), [incidents]);
+  const mergedIncidents = useMemo(() => incidents.filter(i => i.status === 'merged'), [incidents]);
 
   return (
     <div className="max-w-4xl mx-auto py-8 px-4">
@@ -167,13 +96,12 @@ export default function IncidentsPage() {
         </h1>
       </div>
 
-      {loading ? (
+      {isLoading ? (
         <div className="flex justify-center py-12">
           <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
         </div>
       ) : (
         <div className="space-y-8">
-          {/* Active/Investigating Incidents */}
           {activeIncidents.length > 0 && (
             <div>
               <h2 className="text-sm font-medium text-muted-foreground uppercase tracking-wide mb-3 flex items-center gap-2">
@@ -191,7 +119,6 @@ export default function IncidentsPage() {
             </div>
           )}
 
-          {/* Analyzed */}
           {analyzedIncidents.length > 0 && (
             <div>
               <h2 className="text-sm font-medium text-muted-foreground uppercase tracking-wide mb-3 flex items-center gap-2">
@@ -206,7 +133,6 @@ export default function IncidentsPage() {
             </div>
           )}
 
-          {/* Merged */}
           {mergedIncidents.length > 0 && (
             <div>
               <h2 className="text-sm font-medium text-zinc-600 uppercase tracking-wide mb-3 flex items-center gap-2">
@@ -224,20 +150,8 @@ export default function IncidentsPage() {
           {incidents.length === 0 && (
             <Card>
               <CardContent className="py-12 text-center">
-                {isConnectedToIncidentPlatform === false ? (
-                  <>
-                    <AlertTriangle className="h-10 w-10 mx-auto text-orange-500 mb-3" />
-                    <p className="font-medium mb-2">No incident platform connected</p>
-                    <p className="text-sm text-muted-foreground mb-4">
-                      Connect to an incident platform to start receiving and analyzing alerts
-                    </p>
-                    <Button 
-                      onClick={() => router.push('/connectors')}
-                      className="mx-auto"
-                    >
-                      View Connectors
-                    </Button>
-                  </>
+                {!isConnectedToIncidentPlatform ? (
+                  <ConnectPlatformCTA />
                 ) : (
                   <>
                     <CheckCircle2 className="h-10 w-10 mx-auto text-green-500 mb-3" />
@@ -310,5 +224,40 @@ function IncidentRow({ incident }: { incident: Incident }) {
         </CardContent>
       </Card>
     </Link>
+  );
+}
+
+const alertConnectors = connectorRegistry
+  .getAll()
+  .filter(c => c.category && ALERT_CATEGORIES.has(c.category) && c.path);
+
+function ConnectPlatformCTA() {
+  return (
+    <div>
+      <p className="font-medium mb-1">Connect a monitoring platform</p>
+      <p className="text-sm text-muted-foreground mb-6">
+        Pick one to start receiving alerts
+      </p>
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 max-w-lg mx-auto">
+        {alertConnectors.map(c => (
+          <Link
+            key={c.id}
+            href={c.path!}
+            className="flex flex-col items-center gap-2 p-3 rounded-lg border border-border hover:border-primary/50 hover:bg-muted/50 transition-colors"
+          >
+            {c.iconPath ? (
+              <div className={`p-1.5 rounded-md ${c.iconBgColor || 'bg-muted'}`}>
+                <img src={c.iconPath} alt="" className="h-6 w-6 object-contain" />
+              </div>
+            ) : c.icon ? (
+              <div className={`p-1.5 rounded-md ${c.iconBgColor || 'bg-muted'}`}>
+                <c.icon className={`h-6 w-6 ${c.iconColor || 'text-foreground'}`} />
+              </div>
+            ) : null}
+            <span className="text-xs font-medium">{c.name}</span>
+          </Link>
+        ))}
+      </div>
+    </div>
   );
 }
