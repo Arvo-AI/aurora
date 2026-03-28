@@ -304,39 +304,73 @@ Use this path when the target VM has restricted or no outbound internet access (
 
 **Prerequisites:**
 
-- You have received the airtight bundle (a `.tar.gz` file, e.g. `aurora-airtight-4c92267-amd64.tar.gz`)
-- Optionally, its `.sha256` checksum file for integrity verification
 - The target VM meets the [hardware requirements](#1-provision-a-vm) (4+ CPU, 8+ GB RAM, 60 GB SSD)
 - Docker and Docker Compose are installed on the VM (see [Installing Docker](./install-docker) for all OS/architecture combinations, including environments where `curl` and `wget` are blocked)
-- **Optional:** `make` and `jq` installed on the VM — the `Makefile` targets (`make init`, `make prod-airtight`) are convenience wrappers. If you can't install these, see the tip in step 3
+- **Optional:** `make` and `jq` installed on the VM — the `Makefile` targets (`make init`, `make prod-airtight`) are convenience wrappers. If you can't install these, see the tip in step 4
 - You can SSH into the VM
 
-### 1. Transfer the Bundle to the VM
+### 1. Download the Bundle
 
-You need the `.tar.gz` tarball on the VM. The `.sha256` checksum file is optional (for verifying the transfer). Use whatever transfer method your organization permits:
+Prebuilt airtight bundles are published as [GitHub Packages](https://github.com/orgs/Arvo-AI/packages) on every release and push to `main`. Download them on a machine with internet access using the [`oras`](https://oras.land/docs/installation) CLI.
+
+**Install oras:**
 
 ```bash
-BUNDLE=aurora-airtight-4c92267-amd64.tar.gz  # replace with your bundle filename
+# macOS
+brew install oras
+
+# Linux
+curl -sLO https://github.com/oras-project/oras/releases/download/v1.2.2/oras_1.2.2_linux_amd64.tar.gz
+sudo tar -xzf oras_1.2.2_linux_amd64.tar.gz -C /usr/local/bin oras
+```
+
+**Download the bundle** (no authentication required):
+
+```bash
+# Latest stable release (amd64)
+oras pull ghcr.io/arvo-ai/aurora-airtight-amd64:latest -o .
+
+# Specific version
+oras pull ghcr.io/arvo-ai/aurora-airtight-amd64:v1.2.3 -o .
+
+# Latest from main branch (edge)
+oras pull ghcr.io/arvo-ai/aurora-airtight-amd64:edge -o .
+
+# ARM64 servers
+oras pull ghcr.io/arvo-ai/aurora-airtight-arm64:latest -o .
+```
+
+This downloads the `.tar.gz` tarball and its `.sha256` checksum into the current directory.
+
+:::tip Build your own bundle
+If you prefer to build from source instead of downloading, see [Creating the Air-Tight Bundle](#creating-the-air-tight-bundle) below.
+:::
+
+### 2. Transfer the Bundle to the VM
+
+Use whatever transfer method your organization permits:
+
+```bash
+BUNDLE=aurora-airtight-v1.2.3-amd64.tar.gz  # replace with your bundle filename
 
 # SCP
 VM_USER=user        # replace with your SSH username
 VM_IP=10.0.0.5      # replace with your VM's IP
-scp $BUNDLE $VM_USER@$VM_IP:~/
+scp $BUNDLE $BUNDLE.sha256 $VM_USER@$VM_IP:~/
 ```
 
-### 2. (Optional) Verify the Bundle Integrity
+### 3. (Optional) Verify the Bundle Integrity
 
-If you also transferred the `.sha256` checksum file, verify the tarball wasn't corrupted:
+On the VM, verify the tarball wasn't corrupted during transfer:
 
 ```bash
 cd ~
 sha256sum -c $BUNDLE.sha256
-# Expected output: aurora-airtight-4c92267-amd64.tar.gz: OK
 ```
 
 If the check fails, the file was corrupted — re-transfer it.
 
-### 3. Get the Repository
+### 4. Get the Repository
 
 The repo contains configuration files (`docker-compose.airtight.yml`, `Makefile`, `.env.example`) needed to run the stack. No images are pulled during this step.
 
@@ -362,7 +396,7 @@ make init
 If `make` is not available, check the `Makefile` for the underlying commands and run them manually.
 :::
 
-### 4. Configure .env
+### 5. Configure .env
 
 ```bash
 nano .env
@@ -412,12 +446,12 @@ If accessing via VPN, private subnet, or reverse proxy, use that IP/hostname ins
 
 Save and exit (`Ctrl+X`, `Y`, `Enter` in nano).
 
-### 5. Load Images and Start
+### 6. Load Images and Start
 
-Pass the path to the tarball you transferred in step 1:
+Pass the path to the tarball you transferred in step 2:
 
 ```bash
-BUNDLE=aurora-airtight-4c92267-amd64.tar.gz  # replace with your bundle filename
+BUNDLE=aurora-airtight-v1.2.3-amd64.tar.gz  # replace with your bundle filename
 make prod-airtight AIRTIGHT_BUNDLE=~/$BUNDLE
 ```
 
@@ -429,7 +463,7 @@ On subsequent restarts (images already loaded):
 make prod-airtight
 ```
 
-### 6. Get and Set the Vault Token
+### 7. Get and Set the Vault Token
 
 ```bash
 # Wait ~30 seconds for vault-init to finish, then:
@@ -439,17 +473,17 @@ VAULT_TOKEN=$(docker exec aurora-vault cat /vault/init/keys.json | jq -r '.root_
 grep VAULT_TOKEN .env
 ```
 
-### 7. Restart to Apply Vault Token
+### 8. Restart to Apply Vault Token
 
 ```bash
 make down && make prod-airtight
 ```
 
-### 8. Open Firewall Ports
+### 9. Open Firewall Ports
 
 Same as the [standard deployment firewall step](#9-open-firewall-ports) — allow inbound TCP on ports 3000, 5080, and 5006.
 
-### 9. Access Aurora
+### 10. Access Aurora
 
 ```
 http://YOUR_VM_IP:3000
@@ -457,24 +491,25 @@ http://YOUR_VM_IP:3000
 
 ### Deploying Updates (Air-Tight)
 
-Each new Aurora release requires a fresh bundle. On the connected machine:
+Each new Aurora release requires a fresh bundle. On a machine with internet access:
 
 ```bash
-git pull && make package-airtight
+# Download the new version
+oras pull ghcr.io/arvo-ai/aurora-airtight-amd64:<new-version> -o .
 ```
 
-Transfer the new tarball and checksum to the VM, then:
+Transfer the new tarball to the VM, then:
 
 ```bash
 make down
-make prod-airtight AIRTIGHT_BUNDLE=~/aurora-airtight-<new-version>.tar.gz
+make prod-airtight AIRTIGHT_BUNDLE=~/aurora-airtight-<new-version>-amd64.tar.gz
 ```
 
 The `.env` file stays on the VM and is never part of the bundle.
 
-### Creating the Air-Tight Bundle
+### Creating the Air-Tight Bundle (Manual)
 
-This section is for the person building the bundle on a machine with internet access.
+Prebuilt bundles are available as [GitHub Packages](https://github.com/orgs/Arvo-AI/packages) (see [step 1](#1-download-the-bundle) above). Use this section only if you need to build a custom bundle from source.
 
 ```bash
 git clone https://github.com/arvo-ai/aurora.git && cd aurora
