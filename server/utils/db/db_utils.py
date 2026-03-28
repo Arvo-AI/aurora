@@ -1919,8 +1919,11 @@ def initialize_tables():
                         except Exception as casbin_err:
                             try:
                                 cursor.execute("ROLLBACK TO SAVEPOINT sp_role_repair")
-                            except Exception:
-                                pass
+                            except Exception as rollback_err:
+                                logging.warning(
+                                    "Failed to roll back savepoint for user %s during role repair: %s",
+                                    uid, rollback_err,
+                                )
                             logging.warning(
                                 "Failed to repair Casbin role for user %s: %s",
                                 uid, casbin_err,
