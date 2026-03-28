@@ -433,14 +433,23 @@ The incident was resolved through a two-phase approach:
 )
 ON CONFLICT (incident_id) DO NOTHING;
 
--- Backfill org_id for existing installs where demo data was inserted without it
-UPDATE incidents SET org_id = '26db606d-1453-41be-b994-256ea1c7ee5b'
-  WHERE id = 'b923d5a1-7e4c-4f8b-9a1d-2c5e8f3b6d90' AND org_id IS NULL;
-UPDATE chat_sessions SET org_id = '26db606d-1453-41be-b994-256ea1c7ee5b'
-  WHERE id = 'c1a2b3d4-5e6f-7a8b-9c0d-1e2f3a4b5c6d' AND org_id IS NULL;
-UPDATE incident_alerts SET org_id = '26db606d-1453-41be-b994-256ea1c7ee5b'
-  WHERE incident_id = 'b923d5a1-7e4c-4f8b-9a1d-2c5e8f3b6d90' AND org_id IS NULL;
-UPDATE datadog_events SET org_id = '26db606d-1453-41be-b994-256ea1c7ee5b'
-  WHERE user_id = 'ab209180-626b-4601-8042-9f6328d03ae9' AND scope = 'checkout-service' AND org_id IS NULL;
-UPDATE postmortems SET org_id = '26db606d-1453-41be-b994-256ea1c7ee5b'
-  WHERE incident_id = 'b923d5a1-7e4c-4f8b-9a1d-2c5e8f3b6d90' AND org_id IS NULL;
+-- Fixup: reassign demo data to the first admin user/org in the DB
+DO $$
+DECLARE
+  v_user_id TEXT;
+  v_org_id TEXT;
+BEGIN
+  SELECT u.id, u.org_id INTO v_user_id, v_org_id
+    FROM users u WHERE u.org_id IS NOT NULL ORDER BY u.created_at LIMIT 1;
+
+  IF v_user_id IS NULL THEN
+    RAISE NOTICE 'No users with org_id found, skipping fixup';
+    RETURN;
+  END IF;
+
+  UPDATE incidents       SET user_id = v_user_id, org_id = v_org_id WHERE id = 'b923d5a1-7e4c-4f8b-9a1d-2c5e8f3b6d90';
+  UPDATE chat_sessions   SET user_id = v_user_id, org_id = v_org_id WHERE id = 'c1a2b3d4-5e6f-7a8b-9c0d-1e2f3a4b5c6d';
+  UPDATE incident_alerts SET user_id = v_user_id, org_id = v_org_id WHERE incident_id = 'b923d5a1-7e4c-4f8b-9a1d-2c5e8f3b6d90';
+  UPDATE datadog_events  SET user_id = v_user_id, org_id = v_org_id WHERE scope = 'checkout-service';
+  UPDATE postmortems     SET user_id = v_user_id, org_id = v_org_id WHERE incident_id = 'b923d5a1-7e4c-4f8b-9a1d-2c5e8f3b6d90';
+END $$;

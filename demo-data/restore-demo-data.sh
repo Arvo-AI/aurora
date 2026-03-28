@@ -168,27 +168,57 @@ echo "       Promoting all users to admin role..."
 psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" -c \
     "UPDATE users SET role = 'admin' WHERE role != 'admin';" 2>/dev/null || true
 
-# Assign all users to the demo org (single shared org for demo)
-DEMO_ORG_ID=$(psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" -tAc \
-    "SELECT org_id FROM users WHERE id = 'ab209180-626b-4601-8042-9f6328d03ae9'" 2>/dev/null || echo "")
-if [ -n "$DEMO_ORG_ID" ]; then
-    echo "       Assigning all users to demo org ($DEMO_ORG_ID)..."
+# Assign all users to the same org and backfill demo data (single shared org for demo)
+FIRST_ORG_ID=$(psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" -tAc \
+    "SELECT org_id FROM users WHERE org_id IS NOT NULL ORDER BY created_at LIMIT 1" 2>/dev/null | tr -d ' ')
+
+# If no user has an org yet (fresh deploy from aurora_db.sql snapshot), create a demo org
+if [ -z "$FIRST_ORG_ID" ]; then
+    echo "       No org found, creating demo organization..."
+    FIRST_ORG_ID=$(psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" -tAc "
+        INSERT INTO organizations (id, name, slug, created_by, created_at, updated_at)
+        SELECT gen_random_uuid()::TEXT, 'Aurora Demo', 'aurora-demo',
+               (SELECT id FROM users ORDER BY created_at LIMIT 1), NOW(), NOW()
+        WHERE NOT EXISTS (SELECT 1 FROM organizations WHERE slug = 'aurora-demo')
+        RETURNING id;
+    " 2>/dev/null | tr -d ' ')
+    # If org already existed, grab it
+    if [ -z "$FIRST_ORG_ID" ]; then
+        FIRST_ORG_ID=$(psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" -tAc \
+            "SELECT id FROM organizations WHERE slug = 'aurora-demo'" 2>/dev/null | tr -d ' ')
+    fi
+fi
+
+if [ -n "$FIRST_ORG_ID" ]; then
+    echo "       Assigning all users to shared org ($FIRST_ORG_ID)..."
     psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" -c \
-        "UPDATE users SET org_id = '$DEMO_ORG_ID' WHERE org_id IS NULL OR org_id != '$DEMO_ORG_ID';" 2>/dev/null || true
+        "UPDATE users SET org_id = '$FIRST_ORG_ID' WHERE org_id IS NULL OR org_id != '$FIRST_ORG_ID';" 2>/dev/null || true
 
     # Backfill org_id on all demo data so RLS (select_by_org) works for every user
     echo "       Backfilling org_id on demo data..."
     psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" <<BACKFILL >/dev/null 2>&1
-UPDATE incidents       SET org_id = '$DEMO_ORG_ID' WHERE org_id IS NULL;
-UPDATE chat_sessions   SET org_id = '$DEMO_ORG_ID' WHERE org_id IS NULL;
-UPDATE incident_alerts SET org_id = '$DEMO_ORG_ID' WHERE org_id IS NULL;
-UPDATE datadog_events  SET org_id = '$DEMO_ORG_ID' WHERE org_id IS NULL;
-UPDATE grafana_alerts  SET org_id = '$DEMO_ORG_ID' WHERE org_id IS NULL;
-UPDATE netdata_alerts  SET org_id = '$DEMO_ORG_ID' WHERE org_id IS NULL;
-UPDATE splunk_alerts   SET org_id = '$DEMO_ORG_ID' WHERE org_id IS NULL;
-UPDATE postmortems     SET org_id = '$DEMO_ORG_ID' WHERE org_id IS NULL;
-UPDATE newrelic_events SET org_id = '$DEMO_ORG_ID' WHERE org_id IS NULL;
+UPDATE incidents       SET org_id = '$FIRST_ORG_ID' WHERE org_id IS NULL OR org_id != '$FIRST_ORG_ID';
+UPDATE chat_sessions   SET org_id = '$FIRST_ORG_ID' WHERE org_id IS NULL OR org_id != '$FIRST_ORG_ID';
+UPDATE incident_alerts SET org_id = '$FIRST_ORG_ID' WHERE org_id IS NULL OR org_id != '$FIRST_ORG_ID';
+UPDATE datadog_events  SET org_id = '$FIRST_ORG_ID' WHERE org_id IS NULL OR org_id != '$FIRST_ORG_ID';
+UPDATE grafana_alerts  SET org_id = '$FIRST_ORG_ID' WHERE org_id IS NULL OR org_id != '$FIRST_ORG_ID';
+UPDATE netdata_alerts  SET org_id = '$FIRST_ORG_ID' WHERE org_id IS NULL OR org_id != '$FIRST_ORG_ID';
+UPDATE splunk_alerts   SET org_id = '$FIRST_ORG_ID' WHERE org_id IS NULL OR org_id != '$FIRST_ORG_ID';
+UPDATE postmortems     SET org_id = '$FIRST_ORG_ID' WHERE org_id IS NULL OR org_id != '$FIRST_ORG_ID';
+UPDATE newrelic_events SET org_id = '$FIRST_ORG_ID' WHERE org_id IS NULL OR org_id != '$FIRST_ORG_ID';
 BACKFILL
+
+    # Ensure every user has an admin Casbin role for the shared org
+    echo "       Assigning Casbin admin roles for shared org..."
+    psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" <<CASBIN >/dev/null 2>&1
+INSERT INTO casbin_rule (ptype, v0, v1, v2)
+SELECT 'g', u.id, 'admin', '$FIRST_ORG_ID'
+FROM users u
+WHERE NOT EXISTS (
+    SELECT 1 FROM casbin_rule cr
+    WHERE cr.ptype = 'g' AND cr.v0 = u.id::text AND cr.v2 = '$FIRST_ORG_ID'
+);
+CASBIN
 fi
 
 # Create marker table

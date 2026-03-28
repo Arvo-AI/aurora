@@ -348,8 +348,8 @@ def get_incident(user_id, incident_id: str):
                 # to allow any user to see the source payload
 
                 logger.debug(
-                    "[INCIDENTS] Fetching raw payload for incident %s",
-                    incident_id,
+                    "[INCIDENTS] Fetching raw payload for incident %s, source_type=%s, source_alert_id=%s",
+                    incident_id, source_type, source_alert_id,
                 )
 
                 if source_type == "netdata":

@@ -82,7 +82,7 @@ VALUES (
       }
     ],
     "nrql": {
-      "query": "SELECT average(apm.service.memory.heap.used) FROM Metric WHERE appName = '\''checkout-service'\'' FACET host"
+      "query": "SELECT average(apm.service.memory.heap.used) FROM Metric WHERE appName = ''checkout-service'' FACET host"
     },
     "violationChartUrl": "https://one.newrelic.com/launcher/nrai.nrai-violations?violationId=INC-20260327-004",
     "incidentId": "INC-20260327-004",
@@ -198,3 +198,24 @@ INSERT INTO incident_suggestions (incident_id, title, description, type, risk, c
 INSERT INTO incident_suggestions (incident_id, title, description, type, risk, command, file_path, original_content, suggested_content, user_edited_content, repository, pr_url, pr_number, created_branch, applied_at, created_at) VALUES (E'859b8ade-7269-4c18-9389-de25468b5905', E'Inspect checkout-service pod memory and connection logs', E'Stream recent logs from the checkout-service pod to confirm connection pool exhaustion errors and observe memory pressure patterns leading up to the OOM-risk alert.', E'diagnostic', E'safe', E'kubectl logs -n production -l app=checkout-service --tail=200 --since=1h | grep -E ''pool|connection|OOM|memory|getClient|release|error'' ', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, E'2026-03-27T13:13:50.216765');
 INSERT INTO incident_suggestions (incident_id, title, description, type, risk, command, file_path, original_content, suggested_content, user_edited_content, repository, pr_url, pr_number, created_branch, applied_at, created_at) VALUES (E'859b8ade-7269-4c18-9389-de25468b5905', E'Restart checkout-service deployment to clear leaked connections', E'Rolling restart of the checkout-service deployment will terminate pods holding leaked database connections, immediately relieving memory pressure while the RCA-45 code fix is prepared for deployment.', E'mitigation', E'medium', E'kubectl rollout restart deployment/checkout-service -n production && kubectl rollout status deployment/checkout-service -n production --timeout=120s', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, E'2026-03-27T13:13:50.216765');
 INSERT INTO incident_suggestions (incident_id, title, description, type, risk, command, file_path, original_content, suggested_content, user_edited_content, repository, pr_url, pr_number, created_branch, applied_at, created_at) VALUES (E'859b8ade-7269-4c18-9389-de25468b5905', E'Audit other transaction handlers for missing client.release() calls', E'Search the repository source tree for all usages of getClient() that lack a corresponding client.release(), identifying any other files affected by the same refactor pattern documented in RCA-45.', E'diagnostic', E'safe', E'curl -s https://raw.githubusercontent.com/beng360/checkout-service/main/src/services/order-processor.js | grep -n ''getClient\\|client.release\\|client.query\\|BEGIN\\|COMMIT\\|ROLLBACK''', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, E'2026-03-27T13:13:50.216765');
+
+-- Fixup: reassign demo data to the first admin user/org in the DB
+-- so the demo works regardless of which users exist
+DO $$
+DECLARE
+  v_user_id TEXT;
+  v_org_id TEXT;
+BEGIN
+  SELECT u.id, u.org_id INTO v_user_id, v_org_id
+    FROM users u WHERE u.org_id IS NOT NULL ORDER BY u.created_at LIMIT 1;
+
+  IF v_user_id IS NULL THEN
+    RAISE NOTICE 'No users with org_id found, skipping fixup';
+    RETURN;
+  END IF;
+
+  UPDATE incidents       SET user_id = v_user_id, org_id = v_org_id WHERE id = '859b8ade-7269-4c18-9389-de25468b5905';
+  UPDATE chat_sessions   SET user_id = v_user_id, org_id = v_org_id WHERE id = 'a7afc8b2-16f9-43cc-81dc-dfe41f610c3b';
+  UPDATE incident_alerts SET user_id = v_user_id, org_id = v_org_id WHERE incident_id = '859b8ade-7269-4c18-9389-de25468b5905';
+  UPDATE newrelic_events SET user_id = v_user_id, org_id = v_org_id WHERE id = 37;
+END $$;
