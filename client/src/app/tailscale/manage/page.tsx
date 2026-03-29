@@ -66,6 +66,7 @@ export default function ManageTailscalePage() {
         const res = await fetch("/api/tailscale/status");
         if (!res.ok) {
           console.error("Tailscale status check failed:", res.status);
+          toast({ title: "Error", description: "Failed to load Tailscale status", variant: "destructive" });
           setLoadingDevices(false);
           setLoadingSSH(false);
           return;
@@ -78,6 +79,7 @@ export default function ManageTailscalePage() {
         }
       } catch (error) {
         console.error("Error loading Tailscale status:", error);
+        toast({ title: "Error", description: "Failed to load Tailscale status", variant: "destructive" });
         setLoadingDevices(false);
         setLoadingSSH(false);
         return;
@@ -185,19 +187,20 @@ export default function ManageTailscalePage() {
 
   const confirmRemoveDevice = async () => {
     if (!deviceToRemove) return;
+    const { id: deviceId, hostname } = deviceToRemove;
+    setDeviceToRemove(null);
 
     try {
-      setRemovingDevice(deviceToRemove.id);
-      setDeviceToRemove(null);
+      setRemovingDevice(deviceId);
 
-      const res = await fetch(`/api/tailscale/devices/${deviceToRemove.id}`, {
+      const res = await fetch(`/api/tailscale/devices/${deviceId}`, {
         method: "DELETE",
       });
       if (!res.ok) throw new Error("Failed to remove device");
 
       toast({
         title: "Device Removed",
-        description: `${deviceToRemove.hostname} has been removed`,
+        description: `${hostname} has been removed`,
       });
       await loadDevices();
     } catch (error) {
