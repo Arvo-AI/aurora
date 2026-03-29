@@ -41,7 +41,10 @@ Plans:
   2. Alerts are auto-detected by format, normalized, deduplicated by hash, and stored in the loki_alerts table with full payload
   3. Each new alert creates an incident via AlertCorrelator with Loki-specific metadata (labels, annotations, source)
   4. Each new alert triggers automated RCA via Celery background chat with a Loki-specific prompt containing structured alert context
-**Plans**: TBD
+**Plans**: 2 plans
+Plans:
+- [ ] 02-01-PLAN.md -- Webhook helpers (dual-format normalization, dedup), schema fixes, RCA prompt, integration hooks
+- [ ] 02-02-PLAN.md -- Celery alert processing task, webhook/alerts/webhook-url routes
 
 ### Phase 3: Frontend Integration
 **Goal**: Users can connect Loki, configure webhook delivery, and manage connection status through the Aurora UI
@@ -63,7 +66,7 @@ Plans:
   1. User can execute LogQL range queries with time range and limit and receive parsed log stream results
   2. User can execute LogQL instant queries for metric-type expressions and receive vector/matrix results
   3. User can list all stream labels and values for a specific label to assist with query building
-  4. User can execute LogQL metric queries (rate, count_over_time) and receive numeric results
+  4. User can execute LogQL metric queries (rate, count_over_time) via query_range endpoint
   5. User can discover log series via label matchers to explore available log streams
 **Plans**: TBD
 
@@ -75,6 +78,6 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Connection Management | 2/2 | Ready for verification | - |
-| 2. Alert Pipeline | 0/0 | Not started | - |
+| 2. Alert Pipeline | 0/2 | Planned | - |
 | 3. Frontend Integration | 0/0 | Not started | - |
 | 4. Query Capabilities | 0/0 | Not started | - |
