@@ -340,7 +340,7 @@ If you prefer to build from source instead of downloading, see [Creating the Air
 Use whatever transfer method your organization permits:
 
 ```bash
-BUNDLE=aurora-airtight.tar.gz  # replace with your bundle filename
+BUNDLE=aurora-airtight-<version>-amd64.tar.gz  # replace <version> with your bundle version
 
 # SCP
 VM_USER=user        # replace with your SSH username
@@ -440,7 +440,7 @@ Save and exit (`Ctrl+X`, `Y`, `Enter` in nano).
 Pass the path to the tarball you transferred in step 2:
 
 ```bash
-BUNDLE=aurora-airtight.tar.gz  # replace with your bundle filename
+BUNDLE=aurora-airtight-<version>-amd64.tar.gz  # replace <version> with your bundle version
 make prod-airtight AIRTIGHT_BUNDLE=~/$BUNDLE
 ```
 
@@ -490,7 +490,7 @@ Transfer the new tarball to the VM, then:
 
 ```bash
 make down
-make prod-airtight AIRTIGHT_BUNDLE=~/aurora-airtight.tar.gz
+make prod-airtight AIRTIGHT_BUNDLE=~/aurora-airtight-<new-version>-amd64.tar.gz
 ```
 
 The `.env` file stays on the VM and is never part of the bundle.
