@@ -117,6 +117,20 @@ def _build_summary_prompt(
         if raw_payload.get("Tags"):
             key_details.append(f"Tags: {raw_payload['Tags']}")
 
+    elif source_type == "loki":
+        if alert_metadata.get("summary"):
+            key_details.append(f"Summary: {alert_metadata['summary']}")
+        if alert_metadata.get("description"):
+            key_details.append(f"Description: {alert_metadata['description']}")
+        if alert_metadata.get("labels"):
+            labels = alert_metadata["labels"]
+            key_details.append(f"Labels: {json.dumps(labels)}")
+        if alert_metadata.get("annotations"):
+            annotations = alert_metadata["annotations"]
+            key_details.append(f"Annotations: {json.dumps(annotations)}")
+        if alert_metadata.get("generatorUrl"):
+            key_details.append(f"Generator URL: {alert_metadata['generatorUrl']}")
+
     elif source_type == "pagerduty":
         if alert_metadata.get("incidentId"):
             key_details.append(f"Incident ID: {alert_metadata['incidentId']}")

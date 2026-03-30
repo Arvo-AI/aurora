@@ -77,6 +77,9 @@ def _build_source_url(source_type: str, user_id: str) -> str:
         elif source_type in ("jenkins", "cloudbees"):
             creds = get_token_data(user_id, source_type)
             return (creds or {}).get("base_url", "")
+        elif source_type == "loki":
+            creds = get_token_data(user_id, "loki")
+            return (creds or {}).get("base_url", "")
     except Exception as e:
         logger.error(f"[INCIDENTS] Failed to build source URL for {source_type}: {e}")
     return ""

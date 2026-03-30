@@ -94,3 +94,6 @@ aurora-airtight-*.tar.gz.sha256
 
 # Vault init credentials (written by k8s-deploy.sh)
 vault-init-*.txt
+
+# GSD planning docs
+.planning/
