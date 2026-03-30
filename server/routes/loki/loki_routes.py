@@ -494,3 +494,34 @@ def label_values(user_id, name):
     except LokiAPIError as exc:
         logger.error("[LOKI] Failed to fetch label values for user %s, label %s: %s", user_id, name, exc)
         return jsonify({"error": "Failed to fetch label values"}), 502
+
+
+@loki_bp.route("/series", methods=["POST", "OPTIONS"])
+@require_permission("connectors", "read")
+def list_series(user_id):
+    """Discover log series matching label matchers."""
+    creds = _get_stored_loki_credentials(user_id)
+    if not creds:
+        return jsonify({"error": "Loki is not connected"}), 400
+
+    client = _build_loki_client(creds)
+    if not client:
+        return jsonify({"error": "Stored Loki credentials are incomplete"}), 400
+
+    body = request.get_json(force=True, silent=True) or {}
+
+    match = body.get("match")
+    if not match:
+        return jsonify({
+            "error": 'match is required (LogQL stream selector, e.g. {job="myapp"})'
+        }), 400
+
+    start = body.get("start")
+    end = body.get("end")
+
+    try:
+        series_list = client.series(match=match, start=start, end=end)
+        return jsonify({"status": "success", "data": series_list})
+    except LokiAPIError as exc:
+        logger.error("[LOKI] Failed to fetch series for user %s: %s", user_id, exc)
+        return jsonify({"error": "Failed to fetch Loki series"}), 502
