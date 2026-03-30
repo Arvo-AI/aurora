@@ -789,6 +789,29 @@ def initialize_tables():
                     CREATE INDEX IF NOT EXISTS idx_bigpanda_events_status ON bigpanda_events(incident_status);
                     CREATE INDEX IF NOT EXISTS idx_bigpanda_events_received_at ON bigpanda_events(received_at DESC);
                 """,
+                "prometheus_alerts": """
+                    CREATE TABLE IF NOT EXISTS prometheus_alerts (
+                        id SERIAL PRIMARY KEY,
+                        user_id VARCHAR(255) NOT NULL,
+                        alert_name VARCHAR(255),
+                        alert_status VARCHAR(50),
+                        alert_severity VARCHAR(50),
+                        instance VARCHAR(255),
+                        group_name VARCHAR(255),
+                        fingerprint VARCHAR(255),
+                        labels JSONB,
+                        annotations JSONB,
+                        generator_url TEXT,
+                        payload JSONB NOT NULL,
+                        received_at TIMESTAMP NOT NULL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+
+                    CREATE INDEX IF NOT EXISTS idx_prometheus_alerts_user_id ON prometheus_alerts(user_id, received_at DESC);
+                    CREATE INDEX IF NOT EXISTS idx_prometheus_alerts_fingerprint ON prometheus_alerts(fingerprint);
+                    CREATE INDEX IF NOT EXISTS idx_prometheus_alerts_status ON prometheus_alerts(alert_status);
+                    CREATE INDEX IF NOT EXISTS idx_prometheus_alerts_received_at ON prometheus_alerts(received_at DESC);
+                """,
                 "kubectl_agent_tokens": """
                     CREATE TABLE IF NOT EXISTS kubectl_agent_tokens (
                         id SERIAL PRIMARY KEY,
@@ -931,6 +954,7 @@ def initialize_tables():
             rls_tables.append("netdata_verification_tokens")
             rls_tables.append("splunk_alerts")
             rls_tables.append("bigpanda_events")
+            rls_tables.append("prometheus_alerts")
             rls_tables.append("jenkins_deployment_events")
             rls_tables.append("dynatrace_problems")
 

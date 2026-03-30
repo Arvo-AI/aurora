@@ -113,6 +113,18 @@ class ConnectorRegistry {
       });
 
     this.register({
+      id: "prometheus",
+      name: "Prometheus",
+      iconPath: "/prometheus.svg",
+      iconBgColor: "bg-white dark:bg-white",
+      category: "Monitoring",
+      path: "/prometheus/auth",
+      storageKey: "isPrometheusConnected",
+      alertsPath: "/prometheus/alerts",
+      alertsLabel: "View Alerts",
+    });
+
+    this.register({
       id: "pagerduty",
       name: "PagerDuty",
       description: "Connect PagerDuty to receive incident alerts and manage on-call schedules. Integrate with your PagerDuty account for real-time incident management.",

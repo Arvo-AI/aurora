@@ -497,6 +497,8 @@ def build_rca_prompt(
         labels_str = f"entity={entity}, impact={impact}"
     elif source == 'bigpanda':
         labels_str = ", ".join(f"{k}={v}" for k, v in labels.items()) if labels else "none"
+    elif source == 'prometheus':
+        labels_str = ", ".join(f"{k}={v}" for k, v in labels.items()) if labels else "none"
     else:
         labels_str = str(labels)
 
@@ -1113,3 +1115,56 @@ def build_bigpanda_rca_prompt(
     }
 
     return build_rca_prompt('bigpanda', alert_details, providers, user_id)
+
+
+def build_prometheus_rca_prompt(
+    alert: Dict[str, Any],
+    providers: Optional[List[str]] = None,
+    user_id: Optional[str] = None,
+) -> str:
+    """Build RCA prompt from a single Prometheus Alertmanager alert payload."""
+    labels = alert.get("labels", {})
+    annotations = alert.get("annotations", {})
+    alert_name = labels.get("alertname", "Unknown Alert")
+    title = (
+        annotations.get("summary")
+        or annotations.get("description")
+        or alert_name
+    )
+    service = str(
+        labels.get("service")
+        or labels.get("job")
+        or labels.get("namespace")
+        or labels.get("instance")
+        or "unknown"
+    )
+    severity = labels.get("severity", "unknown")
+    status = alert.get("status", "firing")
+    fingerprint = alert.get("fingerprint", "")
+    generator_url = alert.get("generatorURL", "")
+
+    message_parts = [f"Alert: {alert_name}"]
+    if annotations.get("description"):
+        message_parts.append(f"Description: {annotations['description']}")
+    if annotations.get("runbook_url"):
+        message_parts.append(f"Runbook: {annotations['runbook_url']}")
+    if generator_url:
+        message_parts.append(f"Generator: {generator_url}")
+    if fingerprint:
+        message_parts.append(f"Fingerprint: {fingerprint}")
+
+    labels_str = ", ".join(f"{k}={v}" for k, v in labels.items()) if labels else "none"
+
+    alert_details = {
+        'title': title,
+        'status': status,
+        'message': ". ".join(message_parts),
+        'labels': {
+            'service': service,
+            'severity': severity,
+            'alertname': alert_name,
+            **{k: v for k, v in labels.items() if k not in ('service', 'severity', 'alertname')},
+        },
+    }
+
+    return build_rca_prompt('prometheus', alert_details, providers, user_id)
