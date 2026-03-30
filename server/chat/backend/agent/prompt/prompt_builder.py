@@ -1481,6 +1481,28 @@ def build_background_mode_segment(state: Optional[Any]) -> str:
     if 'scaleway' in providers_lower:
         parts.append("Scaleway: instance server list, k8s cluster list")
 
+    # Cloudflare (comes through providers, not integrations)
+    if 'cloudflare' in providers_lower:
+        parts.extend([
+            "",
+            "CLOUDFLARE INVESTIGATION:",
+            "- cloudflare_list_zones() — discover zone IDs",
+            "- query_cloudflare(resource_type='dns_records', zone_id='ZONE_ID')",
+            "- query_cloudflare(resource_type='analytics', zone_id='ZONE_ID', since='-60') — traffic/error stats",
+            "- query_cloudflare(resource_type='firewall_events', zone_id='ZONE_ID') — WAF/security events",
+            "- query_cloudflare(resource_type='firewall_rules', zone_id='ZONE_ID')",
+            "- query_cloudflare(resource_type='rate_limits', zone_id='ZONE_ID')",
+            "- query_cloudflare(resource_type='ssl', zone_id='ZONE_ID')",
+            "- query_cloudflare(resource_type='healthchecks', zone_id='ZONE_ID')",
+            "- query_cloudflare(resource_type='zone_settings', zone_id='ZONE_ID') — security level, cache, dev mode",
+            "- query_cloudflare(resource_type='load_balancers', zone_id='ZONE_ID')",
+            "- query_cloudflare(resource_type='workers')",
+            "- Remediation: cloudflare_action(action_type='purge_cache'|'security_level'|'development_mode'|'dns_update'|'toggle_firewall_rule', zone_id='ZONE_ID')",
+            "Look for: 5xx spikes, WAF false positives, SSL misconfigs, DNS misrouting, healthcheck failures",
+        ])
+
+    # Grafana only raises alerts — no data pull connection yet, so no investigation section
+
     # Tool mapping (critical)
     parts.extend([
         "",
@@ -1580,6 +1602,14 @@ def build_background_mode_segment(state: Optional[Any]) -> str:
             "",
             "Check for recent code changes that may correlate with the alert.",
             "Look for: config changes, k8s manifests, Terraform, dependency updates.",
+            "",
+            "CODE FIX SUGGESTIONS (MANDATORY when root cause is a code defect):",
+            "When you identify a code defect as root cause, you MUST call github_fix to propose a fix.",
+            "github_fix does NOT modify the repository. It saves a suggestion for the user to review.",
+            "This is an EXPECTED output of your investigation, not a prohibited change.",
+            "Steps: 1) Use github_rca diff to see what changed, 2) Fetch current file content,",
+            "3) Call github_fix(file_path='...', suggested_content='<full fixed file>',",
+            "   fix_description='...', root_cause_summary='...')",
         ])
 
     # Confluence search tools (if connected)
