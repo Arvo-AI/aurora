@@ -494,6 +494,9 @@ vault:
     # awskms:
     #   region: "us-east-1"
     #   kms_key_id: "alias/vault-unseal-key"  # Key ID, ARN, or alias
-    #   # For non-EKS (static credentials): uncomment below
-    #   # access_key: ""
-    #   # secret_key: ""
+    #   # For EKS with IRSA: leave credentials unset (uses pod identity)
+    #   # For non-EKS clusters (on-prem, GKE, AKS, etc.): set credentials: true and create
+    #   #   kubectl create secret generic vault-aws-kms \
+    #   #     --from-literal=access_key=AKIA... \
+    #   #     --from-literal=secret_key=...
+    #   # credentials: true

@@ -8,7 +8,7 @@ set -euo pipefail
 #
 # Usage:
 #   ./deploy/preflight.sh
-#   ./deploy/preflight.sh --namespace aurora-oss
+#   ./deploy/preflight.sh aurora-oss
 # ─────────────────────────────────────────────────────────────────────────────
 
 NAMESPACE="${1:-aurora-oss}"
@@ -125,7 +125,7 @@ else
     ok "CPU: ${TOTAL_CPU} cores allocatable"
   fi
 
-  if [[ $TOTAL_MEM_MI -lt 10240 ]]; then
+  if [[ $TOTAL_MEM_MI -lt 12288 ]]; then
     fail "RAM: ${TOTAL_MEM_GB}GB allocatable (need at least 12GB)"
     info "Add more nodes or use larger instance types"
   else

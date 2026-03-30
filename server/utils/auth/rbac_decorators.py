@@ -19,7 +19,7 @@ from flask import jsonify, request
 from werkzeug.exceptions import HTTPException
 
 from utils.auth.stateless_auth import get_user_id_from_request, get_org_id_from_request
-from utils.auth.enforcer import get_enforcer
+from utils.auth.enforcer import get_enforcer, reload_policies
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +58,7 @@ def require_permission(resource: str, action: str):
 
             enforcer = get_enforcer()
             if not enforcer.enforce(user_id, org_id, resource, action):
-                enforcer.load_policy()
+                reload_policies()
                 if not enforcer.enforce(user_id, org_id, resource, action):
                     logger.warning(
                         "RBAC denied: user=%s org=%s resource=%s action=%s endpoint=%s",

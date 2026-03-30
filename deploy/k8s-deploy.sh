@@ -131,8 +131,14 @@ if $LOCAL_MODE; then
     prompt INGRESS_IP "Ingress controller IP (once installed)"
   fi
 elif $PRIVATE_MODE; then
-  prompt REGISTRY "Container registry (e.g. gcr.io/my-project, docker.io/myuser, ghcr.io/myorg)"
-  IMAGE_TAG=$(git -C "$REPO_ROOT" rev-parse --short HEAD)
+  if $SKIP_BUILD; then
+    REGISTRY="ghcr.io/arvo-ai"
+    IMAGE_TAG="latest"
+    info "Using prebuilt images from $REGISTRY (tag: $IMAGE_TAG)"
+  else
+    prompt REGISTRY "Container registry (e.g. gcr.io/my-project, docker.io/myuser, ghcr.io/myorg)"
+    IMAGE_TAG=$(git -C "$REPO_ROOT" rev-parse --short HEAD)
+  fi
   echo ""
   info "Private/VPN mode: the ingress load balancer will use an internal/private IP."
   info "Users must be on your VPN or within your VPC to reach Aurora."
@@ -410,8 +416,14 @@ Unseal Key: $UNSEAL_KEY
 Root Token: $ROOT_TOKEN
 CEOF
   umask 022
-  warn "Vault credentials written to $CREDENTIALS_FILE (mode 600). Store securely and delete after use."
-  warn "You need the unseal key after every vault restart."
+  echo ""
+  warn "╔══════════════════════════════════════════════════════════════╗"
+  warn "║  Vault credentials written to: vault-init-${RELEASE}.txt   ║"
+  warn "║  This file contains your Vault root token and unseal key.  ║"
+  warn "║  → Move it to a password manager or secure vault           ║"
+  warn "║  → Then delete it: rm $CREDENTIALS_FILE                    ║"
+  warn "╚══════════════════════════════════════════════════════════════╝"
+  echo ""
 
   info "Unsealing Vault..."
   kubectl -n "$NAMESPACE" exec statefulset/aurora-oss-vault -- vault operator unseal "$UNSEAL_KEY" >/dev/null 2>&1
@@ -479,5 +491,9 @@ else
   echo "  Frontend:  http://aurora-oss.${INGRESS_IP}.nip.io"
   echo "  API:       http://api.aurora-oss.${INGRESS_IP}.nip.io/health/"
   echo "  WebSocket: ws://ws.aurora-oss.${INGRESS_IP}.nip.io"
+  echo ""
+  warn "These nip.io URLs use a resolved IP that can change (especially on AWS ELB)."
+  warn "For production, set up real DNS CNAME records + TLS with cert-manager."
+  warn "See: website/docs/deployment/kubernetes.md → DNS & TLS"
 fi
 echo ""

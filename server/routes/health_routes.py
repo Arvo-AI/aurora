@@ -100,10 +100,18 @@ def check_celery_health():
 
 async def send_chatbot_test_message():
     """Send a test message to the chatbot and verify the response."""
-    # Use env var for service discovery, with fallback for backwards compatibility
-    chatbot_host = os.getenv('CHATBOT_HOST', 'chatbot')
-    chatbot_port = os.getenv('CHATBOT_PORT', '5006')
-    uri = f"ws://{chatbot_host}:{chatbot_port}"
+    # CHATBOT_INTERNAL_URL is set by the Helm ConfigMap (e.g. http://aurora-chatbot:5007).
+    # Fall back to CHATBOT_HOST/CHATBOT_PORT for Docker Compose compatibility.
+    internal_url = os.getenv('CHATBOT_INTERNAL_URL')
+    if internal_url:
+        from urllib.parse import urlparse
+        parsed = urlparse(internal_url)
+        host = parsed.hostname or 'chatbot'
+        port = parsed.port or 5006
+    else:
+        host = os.getenv('CHATBOT_HOST', 'chatbot')
+        port = int(os.getenv('CHATBOT_PORT', '5006'))
+    uri = f"ws://{host}:{port}"
     
     try:
         async with websockets.connect(uri, ping_interval=None) as websocket:

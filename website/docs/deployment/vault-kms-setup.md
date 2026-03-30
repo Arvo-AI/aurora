@@ -107,6 +107,7 @@ aws iam attach-role-policy --role-name "$NODE_ROLE" \
 
 Add to `deploy/helm/aurora/values.generated.yaml`:
 
+**EKS with IRSA or Node Role (recommended — no static credentials):**
 ```yaml
 vault:
   seal:
@@ -121,6 +122,28 @@ serviceAccount:
     annotations:
       eks.amazonaws.com/role-arn: "arn:aws:iam::<ACCOUNT_ID>:role/VaultKMSUnsealRole"
 ```
+
+**Non-EKS clusters (on-prem, GKE, AKS, etc.) using AWS KMS with static credentials:**
+
+If your cluster isn't on EKS, there's no IRSA or EC2 instance role to provide AWS credentials automatically. Create a Kubernetes Secret with the AWS credentials, then enable the `credentials` flag:
+
+```bash
+kubectl create secret generic vault-aws-kms -n aurora-oss \
+  --from-literal=access_key=AKIA... \
+  --from-literal=secret_key=...
+```
+
+```yaml
+vault:
+  seal:
+    type: "awskms"
+    awskms:
+      region: "us-east-1"
+      kms_key_id: "alias/vault-unseal-key"
+      credentials: true  # mounts vault-aws-kms Secret into Vault pod
+```
+
+The chart mounts the Secret at `/vault/aws/` and configures Vault to read credentials from `file:///vault/aws/access_key` and `file:///vault/aws/secret_key`, keeping the values out of the ConfigMap.
 
 ### 4. Reset & Reinitialize Vault
 

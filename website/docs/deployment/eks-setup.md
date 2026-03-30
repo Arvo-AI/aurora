@@ -136,8 +136,34 @@ aws s3 mb s3://aurora-storage-${AWS_ACCOUNT_ID} --region "$AWS_REGION"
 
 # Create an IAM user for Aurora
 aws iam create-user --user-name aurora-s3
-aws iam attach-user-policy --user-name aurora-s3 \
-  --policy-arn arn:aws:iam::aws:policy/AmazonS3FullAccess
+
+# Create a least-privilege policy scoped to the Aurora bucket only
+AURORA_BUCKET="aurora-storage-${AWS_ACCOUNT_ID}"
+aws iam put-user-policy --user-name aurora-s3 \
+  --policy-name AuroraS3Access \
+  --policy-document "{
+  \"Version\": \"2012-10-17\",
+  \"Statement\": [
+    {
+      \"Effect\": \"Allow\",
+      \"Action\": [
+        \"s3:ListBucket\",
+        \"s3:GetBucketLocation\"
+      ],
+      \"Resource\": \"arn:aws:s3:::${AURORA_BUCKET}\"
+    },
+    {
+      \"Effect\": \"Allow\",
+      \"Action\": [
+        \"s3:GetObject\",
+        \"s3:PutObject\",
+        \"s3:DeleteObject\"
+      ],
+      \"Resource\": \"arn:aws:s3:::${AURORA_BUCKET}/*\"
+    }
+  ]
+}"
+
 aws iam create-access-key --user-name aurora-s3
 ```
 
@@ -214,8 +240,8 @@ aws s3 rb s3://aurora-storage-${AWS_ACCOUNT_ID} --force --region "$AWS_REGION"
 # Delete the IAM user
 aws iam delete-access-key --user-name aurora-s3 \
   --access-key-id $(aws iam list-access-keys --user-name aurora-s3 --query 'AccessKeyMetadata[0].AccessKeyId' --output text)
-aws iam detach-user-policy --user-name aurora-s3 \
-  --policy-arn arn:aws:iam::aws:policy/AmazonS3FullAccess
+aws iam delete-user-policy --user-name aurora-s3 \
+  --policy-name AuroraS3Access
 aws iam delete-user --user-name aurora-s3
 
 # Delete the EKS cluster (takes ~10 minutes)

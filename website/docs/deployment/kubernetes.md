@@ -193,6 +193,10 @@ See [Vault Auto-Unseal with KMS](./vault-kms-setup) for setup. This eliminates m
 
 If the deploy script handled Vault automatically, you're done. If you need to do it manually, **run each command one at a time** (copy-pasting multiple heredoc commands at once breaks in zsh):
 
+:::warning Credentials file
+The deploy script writes `vault-init-aurora-oss.txt` to the repo root containing the Vault root token and unseal key. This file is gitignored but still exists on disk. Move the contents to a password manager or secure vault, then delete the file.
+:::
+
 ```bash
 # Initialize (save the Unseal Key and Root Token!)
 kubectl -n aurora-oss exec -it statefulset/aurora-oss-vault -- \
@@ -344,13 +348,21 @@ ingress:
 
 ## Private / VPN Deployment
 
-For internal-only access (no public internet exposure):
+For deployments where Aurora should only be reachable over a VPN or within your VPC — not exposed to the public internet. This makes the ingress load balancer internal (no public IP); cluster nodes may still have outbound internet access.
 
 ```bash
+# With prebuilt images (nodes must have outbound internet to pull from GHCR)
+./deploy/k8s-deploy.sh --private --skip-build
+
+# With custom-built images (for air-gapped clusters or private registries)
 ./deploy/k8s-deploy.sh --private
 ```
 
-This prompts for a private hostname (e.g. `aurora.internal`), provisions an internal load balancer, and bakes the hostname into the frontend.
+The script prompts for a private hostname (e.g. `aurora.internal`), provisions an internal load balancer, and configures the frontend with your hostname.
+
+:::warning Air-gapped clusters
+`--private` only controls the load balancer type — it does not mean the cluster is air-gapped. If your nodes cannot reach the internet, you must build and push images to a private registry accessible from your cluster. Use `--private` without `--skip-build` and provide your private registry when prompted.
+:::
 
 **DNS:** Your hostname must resolve on the VPN. Options: split-horizon DNS, Tailscale MagicDNS, or `/etc/hosts` entries.
 
