@@ -1345,6 +1345,24 @@ def initialize_tables():
                 logging.warning(f"Error zeroing surcharge_rate: {e}")
                 conn.rollback()
 
+            # Migration: Backfill org_id on llm_usage_tracking from users table
+            try:
+                cursor.execute("""
+                    UPDATE llm_usage_tracking lut
+                    SET org_id = u.org_id
+                    FROM users u
+                    WHERE lut.user_id = u.id::text
+                      AND lut.org_id IS NULL
+                      AND u.org_id IS NOT NULL;
+                """)
+                updated = cursor.rowcount
+                conn.commit()
+                if updated > 0:
+                    logging.info(f"Backfilled org_id on {updated} llm_usage_tracking rows.")
+            except Exception as e:
+                logging.warning(f"Error backfilling org_id on llm_usage_tracking: {e}")
+                conn.rollback()
+
             # Migration: Add secret_ref column to user_tokens for Vault integration
             try:
                 cursor.execute(

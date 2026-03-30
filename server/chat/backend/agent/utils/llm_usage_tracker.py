@@ -24,6 +24,7 @@ class LLMUsage:
     output_tokens: int
     estimated_cost: float
     response_time_ms: int
+    org_id: Optional[str] = None
     error_message: Optional[str] = None
     request_metadata: Optional[Dict[str, Any]] = None
 
@@ -248,6 +249,14 @@ class LLMUsageTracker:
     def store_usage(cls, usage: LLMUsage) -> bool:
         """Store LLM usage data in the database"""
         try:
+            # Resolve org_id from user if not provided
+            if not usage.org_id and usage.user_id:
+                try:
+                    from utils.auth.stateless_auth import get_org_id_for_user
+                    usage.org_id = get_org_id_for_user(usage.user_id)
+                except Exception:
+                    pass
+
             with db_pool.get_user_connection() as conn:
                 cursor = conn.cursor()
 
@@ -258,13 +267,14 @@ class LLMUsageTracker:
                 cursor.execute(
                     """
                     INSERT INTO llm_usage_tracking (
-                        user_id, session_id, model_name, api_provider, request_type,
+                        user_id, org_id, session_id, model_name, api_provider, request_type,
                         input_tokens, output_tokens, estimated_cost, response_time_ms,
                         error_message, request_metadata
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                     (
                         usage.user_id,
+                        usage.org_id,
                         usage.session_id,
                         usage.model_name,
                         usage.api_provider,
@@ -310,6 +320,7 @@ class LLMUsageTracker:
         start_time: Optional[float] = None,
         error_message: Optional[str] = None,
         api_provider: str = "openrouter",
+        org_id: Optional[str] = None,
     ) -> bool:
         """
         Track a complete LLM API call with token counting and cost calculation
@@ -370,6 +381,7 @@ class LLMUsageTracker:
                 output_tokens=output_tokens,
                 estimated_cost=estimated_cost,
                 response_time_ms=response_time_ms,
+                org_id=org_id,
                 error_message=error_message,
                 request_metadata={
                     "has_images": cls._has_image_content(prompt),
@@ -532,6 +544,7 @@ def tracked_invoke(
     model_name: str,
     request_type: str,
     api_provider: str = "openrouter",
+    org_id: Optional[str] = None,
 ):
     """Invoke an LLM and automatically track the usage.
 
@@ -560,6 +573,7 @@ def tracked_invoke(
                 start_time=start_time,
                 error_message=error_message,
                 api_provider=api_provider,
+                org_id=org_id,
             )
         except Exception as track_err:
             logger.warning(f"Failed to track LLM usage for {request_type}: {track_err}")
