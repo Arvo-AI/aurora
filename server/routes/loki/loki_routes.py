@@ -1,6 +1,7 @@
 import logging
 import os
 import re
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from flask import Blueprint, jsonify, request
@@ -51,6 +52,24 @@ def _get_stored_loki_credentials(user_id: str) -> Optional[Dict[str, Any]]:
     except Exception as exc:
         logger.error(f"Failed to retrieve Loki credentials for user {user_id}: {exc}")
         return None
+
+
+def _build_loki_client(creds: Dict[str, Any]) -> Optional[LokiClient]:
+    """Build a LokiClient from stored Vault credentials.
+
+    Returns ``None`` when the credentials are incomplete (missing base_url).
+    """
+    base_url = creds.get("base_url")
+    if not base_url:
+        return None
+    return LokiClient(
+        base_url=base_url,
+        auth_type=creds.get("auth_type", "none"),
+        token=creds.get("token"),
+        username=creds.get("username"),
+        password=creds.get("password"),
+        tenant_id=creds.get("tenant_id"),
+    )
 
 
 @loki_bp.route("/connect", methods=["POST", "OPTIONS"])
@@ -346,3 +365,51 @@ def get_webhook_url(user_id):
             "4. Route Loki-sourced alert rules to this contact point",
         ],
     })
+
+
+@loki_bp.route("/logs/query_range", methods=["POST", "OPTIONS"])
+@require_permission("connectors", "read")
+def query_range(user_id):
+    """Execute a LogQL range query over a time window.
+
+    Also supports metric queries (rate, count_over_time) when the ``step``
+    parameter is provided -- Loki returns matrix-type results instead of
+    streams.
+    """
+    creds = _get_stored_loki_credentials(user_id)
+    if not creds:
+        return jsonify({"error": "Loki is not connected"}), 400
+
+    client = _build_loki_client(creds)
+    if not client:
+        return jsonify({"error": "Stored Loki credentials are incomplete"}), 400
+
+    body = request.get_json(force=True, silent=True) or {}
+
+    query = body.get("query")
+    if not query:
+        return jsonify({"error": "query is required"}), 400
+
+    limit = min(int(body.get("limit") or 100), 5000)
+    direction = body.get("direction", "backward")
+
+    # Default end = now, default start = 1 hour before end (nanosecond epoch)
+    now_ns = str(int(datetime.now(timezone.utc).timestamp() * 1e9))
+    end = body.get("end") or now_ns
+    start = body.get("start") or str(int(end) - 3_600_000_000_000)
+
+    step = body.get("step")  # Optional: triggers metric query when present
+
+    try:
+        data = client.query_range(
+            query=query,
+            start=start,
+            end=end,
+            limit=limit,
+            direction=direction,
+            step=step,
+        )
+        return jsonify(data)
+    except LokiAPIError as exc:
+        logger.error("[LOKI] Range query failed for user %s: %s", user_id, exc)
+        return jsonify({"error": "Failed to query Loki logs"}), 502
