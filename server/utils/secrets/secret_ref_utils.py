@@ -364,9 +364,13 @@ class SecretRefManager:
                 conn.close()
 
     def delete_user_secret(self, user_id: str, provider: str) -> Tuple[bool, int]:
-        """Delete a user's secret from Vault and clear its reference from the database."""
+        """Delete a user's secret from Vault and clear its reference from the database.
+
+        Scoping mirrors get_user_token_data: (user_id OR org_id) so that
+        org-shared credentials are also removed and the status check can't
+        fall back to another member's token after disconnect.
+        """
         org_id = _resolve_org(user_id)
-        clause, params = _org_clause(org_id)
         conn = None
         cursor = None
         delete_success = True
@@ -376,22 +380,26 @@ class SecretRefManager:
             conn = connect_to_db_as_admin()
             cursor = conn.cursor()
 
+            if org_id:
+                scope_where = "(user_id = %s OR org_id = %s)"
+                scope_params: Tuple = (user_id, org_id)
+            else:
+                scope_where = "user_id = %s"
+                scope_params = (user_id,)
+
             cursor.execute(
                 f"SELECT secret_ref FROM user_tokens "
-                f"WHERE user_id = %s AND provider = %s {clause} AND secret_ref IS NOT NULL",
-                (user_id, provider) + params,
+                f"WHERE {scope_where} AND provider = %s AND secret_ref IS NOT NULL",
+                scope_params + (provider,),
             )
-            result = cursor.fetchone()
-
-            if result:
-                secret_ref = result[0]
-                delete_success = self.delete_secret(secret_ref)
-                if not delete_success:
+            for row in cursor.fetchall():
+                if not self.delete_secret(row[0]):
                     logger.warning("Failed to delete secret from Vault for provider %s", provider)
+                    delete_success = False
 
             cursor.execute(
-                f"DELETE FROM user_tokens WHERE user_id = %s AND provider = %s {clause}",
-                (user_id, provider) + params,
+                f"DELETE FROM user_tokens WHERE {scope_where} AND provider = %s",
+                scope_params + (provider,),
             )
             deleted_rows = cursor.rowcount
             conn.commit()
