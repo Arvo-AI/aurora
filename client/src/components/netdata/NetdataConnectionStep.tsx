@@ -49,7 +49,7 @@ export function NetdataConnectionStep({
             </div>
             <div className="flex items-start gap-2">
               <span className="text-muted-foreground mt-0.5">4.</span>
-              <p>Click <strong>+</strong> to create a new token with <code className="px-1.5 py-0.5 bg-muted rounded text-xs">scope:all</code></p>
+              <p>Click <strong>+</strong> to create a new token — any scope works, Aurora does not call the Netdata API directly</p>
             </div>
             <div className="flex items-start gap-2">
               <span className="text-muted-foreground mt-0.5">5.</span>

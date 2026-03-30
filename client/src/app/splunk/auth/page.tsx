@@ -239,12 +239,15 @@ export default function SplunkAuthPage() {
               <div className="bg-muted/50 rounded-lg p-4 text-sm">
                 <p className="font-medium mb-2">How to get your API token:</p>
                 <ol className="list-decimal list-inside space-y-1 text-muted-foreground">
-                  <li>Log in to your Splunk instance</li>
+                  <li>Log in to your Splunk instance as a user with the <strong className="text-foreground">power</strong> role (or a custom role that includes <code className="bg-muted px-1 rounded text-xs">search</code> and <code className="bg-muted px-1 rounded text-xs">indexes_list_all</code> capabilities)</li>
                   <li>Go to Settings → Tokens</li>
                   <li>Click &quot;New Token&quot;</li>
                   <li>Set an expiration and create the token</li>
                   <li>Copy and paste the token above</li>
                 </ol>
+                <p className="text-xs text-muted-foreground mt-3">
+                  Splunk tokens inherit the capabilities of the user who creates them. A basic <strong className="text-foreground">user</strong>-role account can run searches but cannot list indexes — Aurora needs both.
+                </p>
                 <a
                   href="https://docs.splunk.com/Documentation/SplunkCloud/latest/Security/CreateAuthTokens"
                   target="_blank"
