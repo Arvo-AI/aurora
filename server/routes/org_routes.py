@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from flask import Blueprint, request, jsonify
 from utils.db.connection_pool import db_pool
-from utils.db.org_backfill import backfill_user_org_data, migrate_user_to_org, _USER_SCOPED_TABLES_SQL, _INCIDENT_CHILD_TABLES_SQL
+from utils.db.org_backfill import migrate_user_to_org, _USER_SCOPED_TABLES_SQL, _INCIDENT_CHILD_TABLES_SQL
 from utils.auth import VALID_ROLES
 from utils.auth.rbac_decorators import require_permission, require_auth_only
 from utils.auth.stateless_auth import get_org_id_from_request
