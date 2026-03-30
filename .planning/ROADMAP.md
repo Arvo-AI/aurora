@@ -57,7 +57,7 @@ Plans:
   4. Frontend API routes correctly proxy connect, status, and webhook-url requests to the backend
 **Plans**: 2 plans
 Plans:
-- [ ] 03-01-PLAN.md -- Service layer, API route proxies, ConnectorRegistry entry, disconnect wiring, icon
+- [x] 03-01-PLAN.md -- Service layer, API route proxies, ConnectorRegistry entry, disconnect wiring, icon
 - [ ] 03-02-PLAN.md -- Auth page, connection step (3-mode auth form), webhook step with setup instructions
 
 ### Phase 4: Query Capabilities

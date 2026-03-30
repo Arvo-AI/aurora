@@ -37,10 +37,10 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### Frontend
 
-- [ ] **FE-01**: Loki connector is registered in the frontend ConnectorRegistry under "Monitoring" category
+- [x] **FE-01**: Loki connector is registered in the frontend ConnectorRegistry under "Monitoring" category
 - [ ] **FE-02**: Auth/connection page supports Bearer token, Basic auth, and no-auth modes with toggle
 - [ ] **FE-03**: Auth page displays webhook URL with Loki/Alertmanager setup instructions after connection
-- [ ] **FE-04**: Next.js API routes proxy backend Loki endpoints (connect, status, webhook-url)
+- [x] **FE-04**: Next.js API routes proxy backend Loki endpoints (connect, status, webhook-url)
 
 ## v2 Requirements
 
@@ -93,10 +93,10 @@ Which phases cover which requirements. Updated during roadmap creation.
 | ALERT-04 | Phase 2 | Complete |
 | ALERT-05 | Phase 2 | Complete |
 | ALERT-06 | Phase 2 | Complete |
-| FE-01 | Phase 3 | Pending |
+| FE-01 | Phase 3 | Complete |
 | FE-02 | Phase 3 | Pending |
 | FE-03 | Phase 3 | Pending |
-| FE-04 | Phase 3 | Pending |
+| FE-04 | Phase 3 | Complete |
 
 **Coverage:**
 - v1 requirements: 23 total
