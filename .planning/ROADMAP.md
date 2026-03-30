@@ -68,7 +68,10 @@ Plans:
   3. User can list all stream labels and values for a specific label to assist with query building
   4. User can execute LogQL metric queries (rate, count_over_time) via query_range endpoint
   5. User can discover log series via label matchers to explore available log streams
-**Plans**: TBD
+**Plans**: 2 plans
+Plans:
+- [ ] 04-01-PLAN.md -- LogQL query routes (range, instant, metric via step param)
+- [ ] 04-02-PLAN.md -- Label and series discovery routes (labels, label values, series)
 
 ## Progress
 
@@ -80,4 +83,4 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4
 | 1. Connection Management | 2/2 | Ready for verification | - |
 | 2. Alert Pipeline | 2/2 | Complete   | 2026-03-30 |
 | 3. Frontend Integration | 0/0 | Not started | - |
-| 4. Query Capabilities | 0/0 | Not started | - |
+| 4. Query Capabilities | 0/2 | Planned | - |
