@@ -330,3 +330,36 @@ pre[class*="language-"] > code[class*="language-"] {
 .animate-pulse-once {
   animation: pulse-once 2s ease-out;
 }
+
+/* Animated number digit roll */
+@keyframes digitRollIn {
+  0% {
+    transform: translateY(-100%);
+    opacity: 0;
+  }
+  40% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(0);
+  }
+}
+
+/* Smooth collapsible panel */
+.collapsible-panel {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 250ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.collapsible-panel[data-open="true"] {
+  grid-template-rows: 1fr;
+}
+.collapsible-panel > div {
+  overflow: hidden;
+}
+
+/* Token rate sparkline bar */
+@keyframes rateBarPulse {
+  0%, 100% { opacity: 0.6; }
+  50% { opacity: 1; }
+}

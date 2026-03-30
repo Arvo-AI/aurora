@@ -622,42 +622,44 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
       )}
 
       {/* Token Usage Panel (collapsible) */}
-      {showTokenUsage && incident.tokenUsage && (
-        <>
-          <div className="border-t border-zinc-800" />
-          <div className="rounded-lg bg-zinc-900/50 border border-zinc-800 p-4">
-            <h3 className="text-sm font-medium text-zinc-300 mb-3">RCA Token Usage</h3>
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-              <div>
-                <p className="text-[11px] text-zinc-500 uppercase tracking-wider">Input Tokens</p>
-                <p className="text-sm font-mono text-zinc-200 mt-0.5">
-                  {incident.tokenUsage.totalInputTokens.toLocaleString()}
-                </p>
+      {incident.tokenUsage && (
+        <div className="collapsible-panel" data-open={showTokenUsage}>
+          <div>
+            <div className="border-t border-zinc-800 mt-4" />
+            <div className="rounded-lg bg-zinc-900/50 border border-zinc-800 p-4 mt-4">
+              <h3 className="text-sm font-medium text-zinc-300 mb-3">RCA Token Usage</h3>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                <div>
+                  <p className="text-[11px] text-zinc-500 uppercase tracking-wider">Input Tokens</p>
+                  <p className="text-sm font-mono text-zinc-200 mt-0.5">
+                    {incident.tokenUsage.totalInputTokens.toLocaleString()}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-[11px] text-zinc-500 uppercase tracking-wider">Output Tokens</p>
+                  <p className="text-sm font-mono text-zinc-200 mt-0.5">
+                    {incident.tokenUsage.totalOutputTokens.toLocaleString()}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-[11px] text-zinc-500 uppercase tracking-wider">Total Tokens</p>
+                  <p className="text-sm font-mono text-zinc-200 mt-0.5">
+                    {incident.tokenUsage.totalTokens.toLocaleString()}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-[11px] text-zinc-500 uppercase tracking-wider">Estimated Cost</p>
+                  <p className="text-sm font-mono text-green-400 mt-0.5">
+                    ${incident.tokenUsage.totalCost.toFixed(4)}
+                  </p>
+                </div>
               </div>
-              <div>
-                <p className="text-[11px] text-zinc-500 uppercase tracking-wider">Output Tokens</p>
-                <p className="text-sm font-mono text-zinc-200 mt-0.5">
-                  {incident.tokenUsage.totalOutputTokens.toLocaleString()}
-                </p>
-              </div>
-              <div>
-                <p className="text-[11px] text-zinc-500 uppercase tracking-wider">Total Tokens</p>
-                <p className="text-sm font-mono text-zinc-200 mt-0.5">
-                  {incident.tokenUsage.totalTokens.toLocaleString()}
-                </p>
-              </div>
-              <div>
-                <p className="text-[11px] text-zinc-500 uppercase tracking-wider">Estimated Cost</p>
-                <p className="text-sm font-mono text-green-400 mt-0.5">
-                  ${incident.tokenUsage.totalCost.toFixed(4)}
-                </p>
-              </div>
+              <p className="text-[11px] text-zinc-600 mt-3">
+                {incident.tokenUsage.requestCount} LLM request{incident.tokenUsage.requestCount !== 1 ? 's' : ''} during investigation
+              </p>
             </div>
-            <p className="text-[11px] text-zinc-600 mt-3">
-              {incident.tokenUsage.requestCount} LLM request{incident.tokenUsage.requestCount !== 1 ? 's' : ''} during investigation
-            </p>
           </div>
-        </>
+        </div>
       )}
 
       {/* Postmortem Panel */}
