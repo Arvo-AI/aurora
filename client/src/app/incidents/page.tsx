@@ -112,6 +112,10 @@ export default function IncidentsPage() {
         </div>
       ) : (
         <div className="space-y-8">
+          {incidents.length > 0 && !isConnectedToIncidentPlatform && (
+            <DisconnectedBanner />
+          )}
+
           {activeIncidents.length > 0 && (
             <div>
               <h2 className="text-sm font-medium text-muted-foreground uppercase tracking-wide mb-3 flex items-center gap-2">
@@ -234,6 +238,22 @@ function IncidentRow({ incident }: { incident: Incident }) {
         </CardContent>
       </Card>
     </Link>
+  );
+}
+
+function DisconnectedBanner() {
+  return (
+    <div className="flex items-center justify-between rounded-lg border border-dashed border-border px-4 py-3">
+      <p className="text-sm text-muted-foreground">
+        No alerting platform connected — new incidents won&apos;t come through.
+      </p>
+      <Link
+        href="/connectors"
+        className="text-sm font-medium text-foreground hover:underline whitespace-nowrap ml-4"
+      >
+        Connect →
+      </Link>
+    </div>
   );
 }
 
