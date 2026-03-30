@@ -3,7 +3,7 @@ import { useUser } from '@/hooks/useAuthHooks';
 
 // Types for WebSocket messages
 export interface WebSocketMessage {
-  type: 'message' | 'code' | 'status' | 'deployment_step' | 'tool_call' | 'tool_result' | 'tool_error' | 'tool_status' | 'init' | 'usage_info' | 'stop_all_tools' | 'context_compressed' | 'error' | 'control' | 'toast_notification' | 'complete' | 'finished' | 'execution_confirmation';
+  type: 'message' | 'code' | 'status' | 'deployment_step' | 'tool_call' | 'tool_result' | 'tool_error' | 'tool_status' | 'init' | 'usage_info' | 'usage_update' | 'usage_final' | 'stop_all_tools' | 'context_compressed' | 'error' | 'control' | 'toast_notification' | 'complete' | 'finished' | 'execution_confirmation';
   data?: any;
   step_id?: string;
   status?: string;

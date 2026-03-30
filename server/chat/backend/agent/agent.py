@@ -362,7 +362,7 @@ class Agent:
             
             # Create a custom callback for tracking LLM usage
             class AgentLLMUsageCallback(BaseCallbackHandler):
-                """Tracks LLM usage for agent workflows."""
+                """Tracks LLM usage using provider-reported usage_metadata."""
                 def __init__(self, user_id: str, session_id: str, model_name: str, api_provider: str):
                     self.user_id = user_id
                     self.session_id = session_id
@@ -371,51 +371,59 @@ class Agent:
                     self.current_calls = {}
                     
                 def on_llm_start(self, serialized, prompts, run_id=None, **kwargs):
-                    """Track LLM call start."""
+                    """Record call start time."""
                     try:
-                        # Count input tokens
-                        input_tokens = 0
-                        for prompt in prompts:
-                            input_tokens += LLMUsageTracker.count_tokens(str(prompt), self.model_name)
-                        
                         if run_id:
                             self.current_calls[run_id] = {
-                                'input_tokens': input_tokens,
                                 'start_time': time.time()
                             }
-                        logging.debug(f"Agent LLM Start: {self.model_name} - {input_tokens} input tokens")
                     except Exception as e:
                         logging.warning(f"Error tracking agent LLM start: {e}")
                 
                 def on_llm_end(self, response, run_id=None, **kwargs):
-                    """Track LLM call end and store usage."""
+                    """Track LLM call end using provider-reported usage_metadata."""
                     try:
                         if not run_id or run_id not in self.current_calls:
                             return
                         
-                        call_info = self.current_calls[run_id]
+                        call_info = self.current_calls.pop(run_id)
                         
-                        # Count output tokens
+                        input_tokens = 0
                         output_tokens = 0
+
+                        # Extract real token counts from provider usage_metadata
                         if hasattr(response, 'generations'):
                             for gen_list in response.generations:
                                 for gen in gen_list:
-                                    if hasattr(gen, 'text'):
-                                        output_tokens += LLMUsageTracker.count_tokens(gen.text, self.model_name)
-                        
-                        # Calculate cost
+                                    msg = getattr(gen, 'message', None)
+                                    if msg and getattr(msg, 'usage_metadata', None):
+                                        um = msg.usage_metadata
+                                        input_tokens = um.get('input_tokens', 0)
+                                        output_tokens = um.get('output_tokens', 0)
+                                        break
+                                if input_tokens > 0:
+                                    break
+
+                        # Also check llm_output for OpenAI-style token_usage
+                        if input_tokens == 0 and hasattr(response, 'llm_output') and response.llm_output:
+                            token_usage = response.llm_output.get('token_usage', {})
+                            input_tokens = token_usage.get('prompt_tokens', 0)
+                            output_tokens = token_usage.get('completion_tokens', 0)
+
+                        if input_tokens == 0 and output_tokens == 0:
+                            logging.warning(f"No provider usage_metadata for {self.model_name} - tokens will be 0")
+
                         estimated_cost = LLMUsageTracker.calculate_cost(
-                            call_info['input_tokens'], output_tokens, self.model_name
+                            input_tokens, output_tokens, self.model_name
                         )
                         
-                        # Store usage
                         usage = LLMUsage(
                             user_id=self.user_id,
                             session_id=self.session_id,
                             model_name=self.model_name,
                             api_provider=self.api_provider,
                             request_type="agent_workflow",
-                            input_tokens=call_info['input_tokens'],
+                            input_tokens=input_tokens,
                             output_tokens=output_tokens,
                             estimated_cost=estimated_cost,
                             response_time_ms=int((time.time() - call_info['start_time']) * 1000),
@@ -424,11 +432,9 @@ class Agent:
                         )
                         
                         if LLMUsageTracker.store_usage(usage):
-                            logging.info(f"Agent LLM Tracked: {self.model_name} - {call_info['input_tokens']}+{output_tokens} tokens - ${estimated_cost:.6f}")
+                            logging.info(f"Agent LLM Tracked: {self.model_name} - {input_tokens}+{output_tokens} tokens - ${estimated_cost:.6f}")
                         else:
                             logging.warning("Failed to store agent LLM usage")
-                        
-                        del self.current_calls[run_id]
                     except Exception as e:
                         logging.warning(f"Error tracking agent LLM end: {e}")
             
@@ -485,6 +491,7 @@ class Agent:
                     model=openrouter_model_name,
                     temperature=self.llm_manager.main_llm.temperature,
                     streaming=True,
+                    stream_usage=True,
                     openai_api_base="https://openrouter.ai/api/v1",
                     openai_api_key=openrouter_api_key,
                     callbacks=[usage_callback],

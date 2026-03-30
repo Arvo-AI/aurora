@@ -241,7 +241,7 @@ class LLMManager:
             raise
 
         finally:
-            # Track token usage
+            # Track token usage from provider-reported usage_metadata
             if user_id:
                 try:
                     actual_request_type = f"structured_{request_type}" if output_struct else request_type
@@ -249,35 +249,31 @@ class LLMManager:
                     input_tokens = 0
                     output_tokens = 0
 
-                    # Extract usage from LLM response metadata (works for OpenRouter, OpenAI, etc.)
-                    if llm_response and hasattr(llm_response, "response_metadata"):
-                        usage = llm_response.response_metadata.get("token_usage", {})
-                        if not usage:
-                            usage = llm_response.response_metadata.get("usage", {})
-                        if usage:
-                            input_tokens = usage.get("prompt_tokens", 0)
-                            output_tokens = usage.get("completion_tokens", 0)
-                            logger.info(
-                                f"Provider usage: {input_tokens} + {output_tokens} tokens"
-                            )
-
-                    # Fallback to manual counting if no usage data from provider
-                    if input_tokens == 0 and output_tokens == 0:
-                        logger.info("No usage data from provider, using manual counting")
-                        input_tokens = LLMUsageTracker.count_tokens_from_messages(
-                            prompt, model.model_name
+                    # Prefer usage_metadata (standardized across all LangChain providers)
+                    if llm_response and getattr(llm_response, "usage_metadata", None):
+                        um = llm_response.usage_metadata
+                        input_tokens = um.get("input_tokens", 0)
+                        output_tokens = um.get("output_tokens", 0)
+                        logger.info(
+                            f"Provider usage_metadata: {input_tokens} + {output_tokens} tokens"
                         )
-                        if llm_response:
-                            output_tokens = LLMUsageTracker.count_tokens(
-                                str(
-                                    llm_response.content
-                                    if hasattr(llm_response, "content")
-                                    else llm_response
-                                ),
-                                model.model_name,
-                            )
 
-                    # Calculate cost and response time
+                    # Fallback: response_metadata.token_usage (OpenAI-style)
+                    if input_tokens == 0 and output_tokens == 0:
+                        if llm_response and hasattr(llm_response, "response_metadata"):
+                            usage = llm_response.response_metadata.get("token_usage", {})
+                            if not usage:
+                                usage = llm_response.response_metadata.get("usage", {})
+                            if usage:
+                                input_tokens = usage.get("prompt_tokens", 0)
+                                output_tokens = usage.get("completion_tokens", 0)
+                                logger.info(
+                                    f"Provider response_metadata: {input_tokens} + {output_tokens} tokens"
+                                )
+
+                    if input_tokens == 0 and output_tokens == 0:
+                        logger.warning(f"No provider usage data for {model.model_name} - tokens will be 0")
+
                     estimated_cost = LLMUsageTracker.calculate_cost(
                         input_tokens, output_tokens, model.model_name
                     )
@@ -304,7 +300,6 @@ class LLMManager:
                         request_metadata={
                             "has_images": has_images,
                             "provider_mode": self.provider_mode,
-                            "has_usage_data": input_tokens > 0 and output_tokens > 0,
                         },
                     )
 

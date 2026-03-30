@@ -33,6 +33,7 @@ import tiktoken
 from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
 from ..llm import LLMManager
+from .llm_usage_tracker import LLMUsageTracker
 # Import langchain components - direct imports for LangChain 1.2.6+
 from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
 from langchain_core.callbacks import BaseCallbackHandler
@@ -50,17 +51,11 @@ class InternalToolMessage(ToolMessage):
 logger = logging.getLogger(__name__)
 
 # --------------------------------------------------------------------------------------
-# Token counting utility
+# Token counting utility (delegates to LLMUsageTracker for context management only)
 # --------------------------------------------------------------------------------------
 def count_tokens(text: str, model: str = "gpt-4o") -> int:
-    """Count tokens in text using tiktoken for the specified model."""
-    try:
-        encoding = tiktoken.encoding_for_model(model)
-        return len(encoding.encode(text))
-    except KeyError:
-        # Fallback to cl100k_base encoding if model not found
-        encoding = tiktoken.get_encoding("cl100k_base")
-        return len(encoding.encode(text))
+    """Count tokens in text using LLMUsageTracker (for context management, not billing)."""
+    return LLMUsageTracker.count_tokens(text, model)
 
 class ToolContextCapture:
     """Captures complete tool interactions for LLM context history."""

@@ -28,7 +28,7 @@ def get_api_cost(user_id: str) -> float:
 
             cursor.execute(
                 """
-                SELECT COALESCE(SUM(total_cost_with_surcharge), 0) as total_cost
+                SELECT COALESCE(SUM(estimated_cost), 0) as total_cost
                 FROM llm_usage_tracking
                 WHERE user_id = %s
             """, (user_id,))

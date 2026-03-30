@@ -930,6 +930,16 @@ class Workflow:
         _token_count = 0
         _event_count = 0
         _model_turn_tokens = 0  # Tokens yielded in current model turn
+        _model_turn_start = 0.0  # Start time of current model turn
+
+        # Session-level usage accumulator
+        _session_usage = {
+            "total_input_tokens": 0,
+            "total_output_tokens": 0,
+            "total_cost": 0.0,
+            "request_count": 0,
+        }
+        _USAGE_UPDATE_INTERVAL = 10  # Yield usage_update every N output chunks
         
         try:
             async for event in self.app.astream_events(input_state, self.config, version="v2"):
@@ -949,6 +959,7 @@ class Workflow:
                 # Reset per-turn token counter when a new model call starts
                 if event_type == "on_chat_model_start":
                     _model_turn_tokens = 0
+                    _model_turn_start = _time.perf_counter()
 
                 # Handle token streaming from LLM
                 elif event_type == "on_chat_model_stream":
@@ -973,6 +984,15 @@ class Workflow:
                             yield ("token", content)
                             if _token_count <= 5:
                                 logger.debug(f"[WORKFLOW STREAM] Token #{_token_count}: '{content[:30]}'")
+
+                            # Yield periodic usage updates during streaming
+                            if _model_turn_tokens % _USAGE_UPDATE_INTERVAL == 0:
+                                yield ("usage_update", {
+                                    "model": input_state.model,
+                                    "output_tokens": _model_turn_tokens,
+                                    "is_streaming": True,
+                                    "session_totals": _session_usage,
+                                })
 
                 # Capture state from chain end events
                 elif event_type == "on_chain_end" and event_name == "LangGraph":
@@ -1007,6 +1027,45 @@ class Workflow:
                             if content:
                                 logger.info(f"[STREAM FALLBACK] Extracted {len(content)} chars from on_chat_model_end (streaming didn't fire)")
                                 yield ("token", content)
+
+                        # Extract provider-reported usage_metadata for accurate tracking
+                        usage_meta = getattr(output, 'usage_metadata', None)
+                        if usage_meta:
+                            input_tokens = usage_meta.get('input_tokens', 0)
+                            output_tokens = usage_meta.get('output_tokens', 0)
+                            total_tokens = usage_meta.get('total_tokens', 0)
+                            output_details = usage_meta.get('output_token_details', {})
+                            response_time_ms = int((_time.perf_counter() - _model_turn_start) * 1000) if _model_turn_start else 0
+
+                            # Calculate cost from provider-reported counts
+                            from chat.backend.agent.utils.llm_usage_tracker import LLMUsageTracker
+                            estimated_cost = LLMUsageTracker.calculate_cost(
+                                input_tokens, output_tokens, input_state.model or ""
+                            )
+
+                            # Accumulate session totals
+                            _session_usage["total_input_tokens"] += input_tokens
+                            _session_usage["total_output_tokens"] += output_tokens
+                            _session_usage["total_cost"] += estimated_cost
+                            _session_usage["request_count"] += 1
+
+                            logger.info(
+                                f"[USAGE] {input_state.model}: {input_tokens}+{output_tokens} tokens, "
+                                f"${estimated_cost:.6f}, session total: ${_session_usage['total_cost']:.6f}"
+                            )
+
+                            yield ("usage_final", {
+                                "model": input_state.model,
+                                "input_tokens": input_tokens,
+                                "output_tokens": output_tokens,
+                                "total_tokens": total_tokens,
+                                "output_token_details": output_details,
+                                "estimated_cost": estimated_cost,
+                                "response_time_ms": response_time_ms,
+                                "session_totals": _session_usage.copy(),
+                            })
+                        else:
+                            logger.warning(f"[USAGE] No usage_metadata on on_chat_model_end for {input_state.model}")
                 
                 # Periodic state snapshots (for incremental saves)
                 elif event_type == "on_chain_stream":

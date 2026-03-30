@@ -5,8 +5,9 @@ interface ModelUsage {
   model_name: string;
   usage_count: number;
   total_cost: number;
-  total_surcharge: number;
-  total_cost_with_surcharge: number;
+  total_input_tokens: number;
+  total_output_tokens: number;
+  total_tokens: number;
   first_used: string | null;
   last_used: string | null;
 }
@@ -15,6 +16,7 @@ interface BillingSummary {
   total_api_cost: number;
   total_cost: number;
   currency: string;
+  org_total_cost?: number;
 }
 
 interface UsageData {
