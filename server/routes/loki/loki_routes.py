@@ -413,3 +413,38 @@ def query_range(user_id):
     except LokiAPIError as exc:
         logger.error("[LOKI] Range query failed for user %s: %s", user_id, exc)
         return jsonify({"error": "Failed to query Loki logs"}), 502
+
+
+@loki_bp.route("/logs/query", methods=["POST", "OPTIONS"])
+@require_permission("connectors", "read")
+def query_instant(user_id):
+    """Execute a LogQL instant query at a single point in time."""
+    creds = _get_stored_loki_credentials(user_id)
+    if not creds:
+        return jsonify({"error": "Loki is not connected"}), 400
+
+    client = _build_loki_client(creds)
+    if not client:
+        return jsonify({"error": "Stored Loki credentials are incomplete"}), 400
+
+    body = request.get_json(force=True, silent=True) or {}
+
+    query = body.get("query")
+    if not query:
+        return jsonify({"error": "query is required"}), 400
+
+    limit = min(int(body.get("limit") or 100), 5000)
+    time_param = body.get("time")  # Optional point-in-time; Loki uses server time if absent
+    direction = body.get("direction", "backward")
+
+    try:
+        data = client.query(
+            query=query,
+            limit=limit,
+            time=time_param,
+            direction=direction,
+        )
+        return jsonify(data)
+    except LokiAPIError as exc:
+        logger.error("[LOKI] Instant query failed for user %s: %s", user_id, exc)
+        return jsonify({"error": "Failed to query Loki"}), 502
