@@ -85,12 +85,12 @@ The script will prompt you for several values. Here's what to enter:
 | Prompt | What to enter |
 |--------|--------------|
 | Container registry | `ghcr.io/arvo-ai` |
-| Bucket name | Your S3 bucket name from Step 5 |
+| Bucket name | Your S3 bucket name from Step 2 |
 | Endpoint URL | `https://s3.amazonaws.com` (or your provider's endpoint) |
 | Region | `us-east-1` (or your bucket's region) |
-| Access key / Secret key | From Step 5 |
+| Access key / Secret key | From Step 2 |
 | LLM Provider | `openrouter` (or whichever you chose) |
-| API key | Your key from Step 5 |
+| API key | Your key from Step 2 |
 | Environment | `staging` (or `production`) |
 
 The script will:

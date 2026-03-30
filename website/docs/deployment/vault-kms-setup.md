@@ -281,7 +281,7 @@ gcloud iam service-accounts add-iam-policy-binding \
 gcloud iam service-accounts keys create /tmp/vault-kms-key.json \
   --iam-account vault-kms-sa@${GCP_PROJECT}.iam.gserviceaccount.com
 
-kubectl create secret generic vault-gcp-key -n aurora-oss \
+kubectl create secret generic vault-gcp-kms -n aurora-oss \
   --from-file=credentials.json=/tmp/vault-kms-key.json
 rm /tmp/vault-kms-key.json
 ```
