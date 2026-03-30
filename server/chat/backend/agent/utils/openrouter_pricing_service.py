@@ -157,13 +157,13 @@ class OpenRouterPricingService:
 
     def get_model_pricing(self, model_name: str) -> Dict[str, float]:
         """
-        Get pricing for a specific model with Aurora markup
+        Get raw pricing for a specific model.
 
         Args:
             model_name: The model identifier (e.g., "anthropic/claude-opus-4")
 
         Returns:
-            Dictionary with 'input' and 'output' pricing per 1K tokens (includes 1.4x markup)
+            Dictionary with 'input' and 'output' pricing per 1K tokens
         """
         pricing_data = self.get_pricing()
 
@@ -181,11 +181,7 @@ class OpenRouterPricingService:
                 "default", {"input": 0.001, "output": 0.002}
             )
 
-        # Apply Aurora's 1.4x markup for profit
-        return {
-            "input": base_pricing["input"] * 1.4,
-            "output": base_pricing["output"] * 1.4,
-        }
+        return base_pricing
 
     def refresh_pricing(self) -> bool:
         """

@@ -28,6 +28,9 @@ import { SimpleChatUiState } from '@/hooks/useSessionPersistence';
 import { useSessionLoader } from '@/hooks/useSessionLoader';
 import { useChatExpansion } from '@/app/components/ClientShell';
 import { useChatCancellation } from '@/hooks/useChatCancellation';
+import TokenUsageIndicator from "@/components/TokenUsageIndicator";
+import SessionUsagePanel from "@/components/SessionUsagePanel";
+import { useSessionUsage } from '@/hooks/useSessionUsage';
 import { useChatSendHandlers } from "./useChatSendHandlers";
 
 interface ChatClientProps {
@@ -139,6 +142,8 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
     }
   }, [setIsSending]);
 
+  // Session-level token usage tracking
+  const sessionUsage = useSessionUsage(currentSessionId);
 
   // Modular message handler
   const { handleWebSocketMessage } = useMessageHandler({
@@ -151,6 +156,8 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
     hasCreatedSession,
     justCreatedSessionRef,
     currentSessionId,
+    onUsageUpdate: sessionUsage.handleUsageUpdate,
+    onUsageFinal: sessionUsage.handleUsageFinal,
   });
 
   const onUiStateLoaded = useCallback((uiState: SimpleChatUiState) => {
@@ -412,6 +419,10 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
 
         {/* Enhanced Input */}
         <div className="p-4 relative z-10 bg-background flex-shrink-0">
+          <div className="max-w-4xl mx-auto space-y-2">
+            <TokenUsageIndicator sessionUsage={sessionUsage} />
+            <SessionUsagePanel sessionUsage={sessionUsage} />
+          </div>
           <div className="flex justify-center">
             {isReadOnly ? (
               <p className="text-sm text-muted-foreground py-2">Read-only access. Editors and admins can interact with infrastructure.</p>
