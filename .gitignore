@@ -91,3 +91,6 @@ config/searxng/
 # Airtight deployment bundles
 aurora-airtight-*.tar.gz
 aurora-airtight-*.tar.gz.sha256
+
+# GSD planning docs
+.planning/
