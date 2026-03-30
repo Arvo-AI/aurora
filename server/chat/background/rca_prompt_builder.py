@@ -1011,6 +1011,50 @@ def build_netdata_rca_prompt(
     return build_rca_prompt('netdata', alert_details, providers, user_id)
 
 
+def build_loki_rca_prompt(
+    normalized: Dict[str, Any],
+    providers: Optional[List[str]] = None,
+    user_id: Optional[str] = None,
+) -> str:
+    """Build RCA prompt from normalized Loki alert data.
+
+    Args:
+        normalized: Normalized alert dict from normalize_loki_webhook (single alert).
+        providers: Optional list of connected provider names.
+        user_id: Optional user ID for Aurora Learn context injection.
+    """
+    alert_name = normalized.get("alert_name") or "Unknown Alert"
+    alert_state = normalized.get("alert_state") or "unknown"
+    severity = normalized.get("severity") or "unknown"
+    service = normalized.get("service") or "unknown"
+    labels = normalized.get("labels") or {}
+    annotations = normalized.get("annotations") or {}
+    generator_url = normalized.get("generator_url") or ""
+    rule_group = normalized.get("rule_group") or ""
+    fingerprint = normalized.get("fingerprint") or ""
+
+    summary = annotations.get("summary") or annotations.get("description") or ""
+    description = annotations.get("description") or ""
+
+    alert_details = {
+        'title': alert_name,
+        'status': f"{alert_state} (severity: {severity})",
+        'message': summary or description,
+        'labels': labels,
+        'service': service,
+    }
+    if generator_url:
+        alert_details['generatorUrl'] = generator_url
+    if rule_group:
+        alert_details['ruleGroup'] = rule_group
+    if fingerprint:
+        alert_details['fingerprint'] = fingerprint
+    if annotations:
+        alert_details['annotations'] = annotations
+
+    return build_rca_prompt('loki', alert_details, providers, user_id)
+
+
 def build_pagerduty_rca_prompt(
     incident: Dict[str, Any],
     providers: Optional[List[str]] = None,

@@ -518,6 +518,7 @@ def initialize_tables():
                     CREATE TABLE IF NOT EXISTS loki_alerts (
                         id SERIAL PRIMARY KEY,
                         user_id VARCHAR(255) NOT NULL,
+                        org_id VARCHAR(255),
                         alert_uid VARCHAR(255),
                         alert_title TEXT,
                         alert_state VARCHAR(50),
@@ -527,6 +528,7 @@ def initialize_tables():
                         annotations JSONB,
                         payload JSONB NOT NULL,
                         received_at TIMESTAMP NOT NULL,
+                        alert_hash VARCHAR(64) UNIQUE,
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                     );
 
@@ -1084,6 +1086,7 @@ def initialize_tables():
             rls_tables.append("grafana_alerts")
             rls_tables.append("datadog_events")
             rls_tables.append("netdata_alerts")
+            rls_tables.append("loki_alerts")
             rls_tables.append("netdata_verification_tokens")
             rls_tables.append("splunk_alerts")
             rls_tables.append("bigpanda_events")
@@ -1794,7 +1797,7 @@ def initialize_tables():
                 "user_preferences", "workspaces", "aurora_deployments",
                 "deployment_tasks", "deployments", "chat_sessions",
                 "llm_usage_tracking", "cloud_feed_metadata", "cloud_ingestion_state",
-                "grafana_alerts", "datadog_events", "netdata_alerts",
+                "grafana_alerts", "datadog_events", "netdata_alerts", "loki_alerts",
                 "pagerduty_events", "incidents", "incident_alerts",
                 "rca_notification_emails", "splunk_alerts",
                 "jenkins_deployment_events", "dynatrace_problems",
