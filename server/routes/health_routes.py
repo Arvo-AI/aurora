@@ -100,10 +100,18 @@ def check_celery_health():
 
 async def send_chatbot_test_message():
     """Send a test message to the chatbot and verify the response."""
-    # Use env var for service discovery, with fallback for backwards compatibility
-    chatbot_host = os.getenv('CHATBOT_HOST', 'chatbot')
-    chatbot_port = os.getenv('CHATBOT_PORT', '5006')
-    uri = f"ws://{chatbot_host}:{chatbot_port}"
+    # CHATBOT_INTERNAL_URL is set by the Helm ConfigMap (e.g. http://aurora-chatbot:5007).
+    # It points at the HTTP health port (5007), not the WebSocket port (5006).
+    # Extract only the hostname; the WS port is always 5006.
+    internal_url = os.getenv('CHATBOT_INTERNAL_URL')
+    if internal_url:
+        from urllib.parse import urlparse
+        parsed = urlparse(internal_url)
+        host = parsed.hostname or 'chatbot'
+    else:
+        host = os.getenv('CHATBOT_HOST', 'chatbot')
+    port = 5006
+    uri = f"ws://{host}:{port}"
     
     try:
         async with websockets.connect(uri, ping_interval=None) as websocket:
@@ -133,11 +141,16 @@ async def send_chatbot_test_message():
                 return {"status": "unhealthy", "error": "Invalid JSON response from chatbot"}
 
     except asyncio.TimeoutError:
-        return {"status": "unhealthy", "error": "Timeout waiting for chatbot response"}
+        return {"status": "unhealthy", "error": f"Timeout waiting for chatbot response at {uri}"}
     except websockets.exceptions.ConnectionClosed as e:
-        return {"status": "unhealthy", "error": "Chatbot connection closed unexpectedly"}
+        return {"status": "unhealthy", "error": f"Chatbot connection closed unexpectedly at {uri}"}
     except Exception as e:
-        return {"status": "unhealthy", "error": "Chatbot health check failed"}
+        logger.warning("Chatbot WS health check failed at %s: %s", uri, e)
+        return {
+            "status": "unhealthy",
+            "error": f"Chatbot health check failed at {uri}. "
+                     f"WebSocket port is hardcoded to 5006 — if your chatbot uses a different port, update health_routes.py."
+        }
 
 def check_chatbot_websocket():
     """Check chatbot WebSocket service by sending a test message."""
