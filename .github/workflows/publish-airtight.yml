@@ -18,6 +18,7 @@ permissions:
   contents: read
   id-token: write
   attestations: write
+  artifact-metadata: write
 
 jobs:
   airtight:
@@ -133,6 +134,7 @@ jobs:
           subject-path: ${{ steps.tarball.outputs.filename }}
 
       - name: Register linked artifact
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
