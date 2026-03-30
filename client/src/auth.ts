@@ -25,6 +25,8 @@ async function refreshUserFromBackend(userId: string): Promise<{
     if (!res.ok) return null
     return await res.json()
   } catch (err) {
+    // Intentionally return null on failure so the JWT keeps its current
+    // values and the user isn't logged out by a transient backend error.
     console.error("Failed to refresh user from backend:", err)
     return null
   }
@@ -104,6 +106,9 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
       if (trigger === "update" || now - lastRefreshed > ROLE_REVALIDATE_SECONDS) {
         const fresh = await refreshUserFromBackend(token.id as string)
         if (fresh === "not_found") {
+          // User no longer exists in DB (stale session after DB reset).
+          // Wipe the token so the session callback produces an empty
+          // session, which middleware treats as logged-out.
           token.id = undefined
           token.email = undefined
           token.name = undefined
