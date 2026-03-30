@@ -18,7 +18,7 @@ def get_available_models_options():
 @llm_usage_bp.route('/api/llm-usage/models', methods=['GET'])
 @require_permission("llm_usage", "read")
 def get_available_models(user_id):
-    """Get list of models used by the user, with org-level rollup."""
+    """Get list of models used across the org."""
     try:
         org_id = get_org_id_from_request()
         with db_pool.get_user_connection() as conn:
@@ -27,21 +27,39 @@ def get_available_models(user_id):
             if org_id:
                 cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
             
-            cursor.execute("""
-                SELECT 
-                    model_name,
-                    COUNT(*) as usage_count,
-                    SUM(estimated_cost) as total_cost,
-                    SUM(input_tokens) as total_input_tokens,
-                    SUM(output_tokens) as total_output_tokens,
-                    SUM(total_tokens) as total_tokens,
-                    MIN(timestamp) as first_used,
-                    MAX(timestamp) as last_used
-                FROM llm_usage_tracking
-                WHERE user_id = %s
-                GROUP BY model_name
-                ORDER BY usage_count DESC
-            """, (user_id,))
+            # Query org-wide usage when org_id available, else fall back to user
+            if org_id:
+                cursor.execute("""
+                    SELECT 
+                        model_name,
+                        COUNT(*) as usage_count,
+                        SUM(estimated_cost) as total_cost,
+                        SUM(input_tokens) as total_input_tokens,
+                        SUM(output_tokens) as total_output_tokens,
+                        SUM(total_tokens) as total_tokens,
+                        MIN(timestamp) as first_used,
+                        MAX(timestamp) as last_used
+                    FROM llm_usage_tracking
+                    WHERE org_id = %s
+                    GROUP BY model_name
+                    ORDER BY usage_count DESC
+                """, (org_id,))
+            else:
+                cursor.execute("""
+                    SELECT 
+                        model_name,
+                        COUNT(*) as usage_count,
+                        SUM(estimated_cost) as total_cost,
+                        SUM(input_tokens) as total_input_tokens,
+                        SUM(output_tokens) as total_output_tokens,
+                        SUM(total_tokens) as total_tokens,
+                        MIN(timestamp) as first_used,
+                        MAX(timestamp) as last_used
+                    FROM llm_usage_tracking
+                    WHERE user_id = %s
+                    GROUP BY model_name
+                    ORDER BY usage_count DESC
+                """, (user_id,))
             
             models = cursor.fetchall()
             
@@ -98,7 +116,7 @@ def get_session_usage_options(session_id):
 @llm_usage_bp.route('/api/llm-usage/session/<session_id>', methods=['GET'])
 @require_permission("llm_usage", "read")
 def get_session_usage(user_id, session_id):
-    """Get per-request token/cost breakdown for a specific session."""
+    """Get per-request token/cost breakdown for a specific session (org-visible)."""
     try:
         with db_pool.get_user_connection() as conn:
             cursor = conn.cursor()
@@ -111,9 +129,9 @@ def get_session_usage(user_id, session_id):
                     estimated_cost, response_time_ms,
                     request_metadata, timestamp
                 FROM llm_usage_tracking
-                WHERE user_id = %s AND session_id = %s
+                WHERE session_id = %s
                 ORDER BY timestamp ASC
-            """, (user_id, session_id))
+            """, (session_id,))
 
             rows = cursor.fetchall()
 
