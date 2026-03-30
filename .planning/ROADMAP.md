@@ -55,8 +55,10 @@ Plans:
   2. User can connect Loki from the auth page by choosing Bearer token, Basic auth, or no-auth mode and providing credentials
   3. After connecting, user sees the webhook URL with copy-to-clipboard and Alertmanager/Loki Ruler setup instructions
   4. Frontend API routes correctly proxy connect, status, and webhook-url requests to the backend
-**Plans**: TBD
-**UI hint**: yes
+**Plans**: 2 plans
+Plans:
+- [ ] 03-01-PLAN.md -- Service layer, API route proxies, ConnectorRegistry entry, disconnect wiring, icon
+- [ ] 03-02-PLAN.md -- Auth page, connection step (3-mode auth form), webhook step with setup instructions
 
 ### Phase 4: Query Capabilities
 **Goal**: Users and the LangGraph agent can query logs, discover labels, and execute metric queries against the connected Loki instance
@@ -82,5 +84,5 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4
 |-------|----------------|--------|-----------|
 | 1. Connection Management | 2/2 | Ready for verification | - |
 | 2. Alert Pipeline | 2/2 | Complete   | 2026-03-30 |
-| 3. Frontend Integration | 0/0 | Not started | - |
+| 3. Frontend Integration | 0/2 | Planned | - |
 | 4. Query Capabilities | 0/2 | Planned | - |
