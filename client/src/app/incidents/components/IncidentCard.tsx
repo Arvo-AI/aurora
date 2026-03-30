@@ -654,6 +654,35 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
                   </p>
                 </div>
               </div>
+
+              {/* Per-model breakdown */}
+              {incident.tokenUsage.models && incident.tokenUsage.models.length > 0 && (
+                <div className="mt-3 pt-3 border-t border-zinc-800/50">
+                  <p className="text-[11px] text-zinc-500 uppercase tracking-wider mb-2">By Model</p>
+                  <div className="space-y-1.5">
+                    {incident.tokenUsage.models.map((m) => {
+                      const shortName = m.model.includes('/') ? m.model.split('/').pop() : m.model;
+                      return (
+                        <div key={m.model} className="flex items-center justify-between text-xs">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <span className="text-zinc-300 truncate" title={m.model}>{shortName}</span>
+                            <span className="text-zinc-600">x{m.requestCount}</span>
+                          </div>
+                          <div className="flex items-center gap-3 shrink-0 ml-2">
+                            <span className="font-mono tabular-nums text-zinc-500">
+                              {m.inputTokens.toLocaleString()} in / {m.outputTokens.toLocaleString()} out
+                            </span>
+                            <span className="font-mono tabular-nums text-green-400/80 w-16 text-right">
+                              ${m.cost.toFixed(4)}
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
               <p className="text-[11px] text-zinc-600 mt-3">
                 {incident.tokenUsage.requestCount} LLM request{incident.tokenUsage.requestCount !== 1 ? 's' : ''} during investigation
               </p>

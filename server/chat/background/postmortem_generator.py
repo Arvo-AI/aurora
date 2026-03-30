@@ -9,6 +9,7 @@ from langchain_core.messages import HumanMessage
 
 from chat.backend.agent.providers import create_chat_model
 from chat.backend.agent.llm import ModelConfig
+from chat.backend.agent.utils.llm_usage_tracker import tracked_invoke
 
 logger = logging.getLogger(__name__)
 
@@ -450,7 +451,14 @@ def generate_postmortem(self, incident_id: str, user_id: str, org_id: str) -> Di
         )
 
         message = HumanMessage(content=prompt)
-        response = llm.invoke([message])
+        response = tracked_invoke(
+            llm,
+            [message],
+            user_id=user_id,
+            session_id=None,
+            model_name=ModelConfig.EMAIL_REPORT_MODEL,
+            request_type="postmortem_generation",
+        )
 
         postmortem_content = (
             _extract_text_from_response(response.content)

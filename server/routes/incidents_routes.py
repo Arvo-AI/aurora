@@ -712,12 +712,41 @@ def get_incident(user_id, incident_id: str):
                         )
                         urow = cursor.fetchone()
                         if urow and urow[0] > 0:
+                            # Per-model breakdown
+                            cursor.execute(
+                                """
+                                SELECT
+                                    model_name,
+                                    COUNT(*) as request_count,
+                                    COALESCE(SUM(input_tokens), 0),
+                                    COALESCE(SUM(output_tokens), 0),
+                                    COALESCE(SUM(estimated_cost), 0)
+                                FROM llm_usage_tracking
+                                WHERE session_id = %s
+                                GROUP BY model_name
+                                ORDER BY SUM(estimated_cost) DESC
+                                """,
+                                (rca_session_id,),
+                            )
+                            model_rows = cursor.fetchall()
+                            models = [
+                                {
+                                    "model": mrow[0] or "unknown",
+                                    "requestCount": mrow[1],
+                                    "inputTokens": mrow[2] or 0,
+                                    "outputTokens": mrow[3] or 0,
+                                    "cost": float(mrow[4]) if mrow[4] else 0.0,
+                                }
+                                for mrow in model_rows
+                            ]
+
                             usage_totals = {
                                 "requestCount": urow[0],
                                 "totalInputTokens": urow[1] or 0,
                                 "totalOutputTokens": urow[2] or 0,
                                 "totalTokens": urow[3] or 0,
                                 "totalCost": float(urow[4]) if urow[4] else 0.0,
+                                "models": models,
                             }
                     except Exception as usage_err:
                         logger.warning(
