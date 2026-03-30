@@ -448,3 +448,49 @@ def query_instant(user_id):
     except LokiAPIError as exc:
         logger.error("[LOKI] Instant query failed for user %s: %s", user_id, exc)
         return jsonify({"error": "Failed to query Loki"}), 502
+
+
+@loki_bp.route("/labels", methods=["GET", "OPTIONS"])
+@require_permission("connectors", "read")
+def list_labels(user_id):
+    """List all known stream label names from the connected Loki instance."""
+    creds = _get_stored_loki_credentials(user_id)
+    if not creds:
+        return jsonify({"error": "Loki is not connected"}), 400
+
+    client = _build_loki_client(creds)
+    if not client:
+        return jsonify({"error": "Stored Loki credentials are incomplete"}), 400
+
+    start = request.args.get("start")
+    end = request.args.get("end")
+
+    try:
+        labels_list = client.labels(start=start, end=end)
+        return jsonify({"status": "success", "data": labels_list})
+    except LokiAPIError as exc:
+        logger.error("[LOKI] Failed to fetch labels for user %s: %s", user_id, exc)
+        return jsonify({"error": "Failed to fetch Loki labels"}), 502
+
+
+@loki_bp.route("/label/<name>/values", methods=["GET", "OPTIONS"])
+@require_permission("connectors", "read")
+def label_values(user_id, name):
+    """List known values for a specific stream label."""
+    creds = _get_stored_loki_credentials(user_id)
+    if not creds:
+        return jsonify({"error": "Loki is not connected"}), 400
+
+    client = _build_loki_client(creds)
+    if not client:
+        return jsonify({"error": "Stored Loki credentials are incomplete"}), 400
+
+    start = request.args.get("start")
+    end = request.args.get("end")
+
+    try:
+        values_list = client.label_values(label=name, start=start, end=end)
+        return jsonify({"status": "success", "data": values_list})
+    except LokiAPIError as exc:
+        logger.error("[LOKI] Failed to fetch label values for user %s, label %s: %s", user_id, name, exc)
+        return jsonify({"error": "Failed to fetch label values"}), 502
