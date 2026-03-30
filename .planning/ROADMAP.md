@@ -43,7 +43,7 @@ Plans:
   4. Each new alert triggers automated RCA via Celery background chat with a Loki-specific prompt containing structured alert context
 **Plans**: 2 plans
 Plans:
-- [ ] 02-01-PLAN.md -- Webhook helpers (dual-format normalization, dedup), schema fixes, RCA prompt, integration hooks
+- [x] 02-01-PLAN.md -- Webhook helpers (dual-format normalization, dedup), schema fixes, RCA prompt, integration hooks
 - [ ] 02-02-PLAN.md -- Celery alert processing task, webhook/alerts/webhook-url routes
 
 ### Phase 3: Frontend Integration
@@ -78,6 +78,6 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Connection Management | 2/2 | Ready for verification | - |
-| 2. Alert Pipeline | 0/2 | Planned | - |
+| 2. Alert Pipeline | 1/2 | In Progress|  |
 | 3. Frontend Integration | 0/0 | Not started | - |
 | 4. Query Capabilities | 0/0 | Not started | - |
