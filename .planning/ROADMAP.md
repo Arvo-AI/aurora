@@ -11,7 +11,7 @@ This roadmap delivers a Grafana Loki connector for Aurora in four phases, follow
 - Decimal phases (e.g., 2.1): Urgent insertions (marked with INSERTED)
 
 - [x] **Phase 1: Connection Management** - LokiClient, three auth modes, Vault credential storage, connect/status/disconnect routes
-- [ ] **Phase 2: Alert Pipeline** - Webhook endpoint, dual-format detection, alert storage, incident creation, automated RCA
+- [x] **Phase 2: Alert Pipeline** - Webhook endpoint, dual-format detection, alert storage, incident creation, automated RCA (completed 2026-03-30)
 - [ ] **Phase 3: Frontend Integration** - ConnectorRegistry entry, auth/connection page, webhook URL display, API route proxies
 - [ ] **Phase 4: Query Capabilities** - LogQL range/instant/metric queries, label and series discovery endpoints
 
@@ -44,7 +44,7 @@ Plans:
 **Plans**: 2 plans
 Plans:
 - [x] 02-01-PLAN.md -- Webhook helpers (dual-format normalization, dedup), schema fixes, RCA prompt, integration hooks
-- [ ] 02-02-PLAN.md -- Celery alert processing task, webhook/alerts/webhook-url routes
+- [x] 02-02-PLAN.md -- Celery alert processing task, webhook/alerts/webhook-url routes
 
 ### Phase 3: Frontend Integration
 **Goal**: Users can connect Loki, configure webhook delivery, and manage connection status through the Aurora UI
@@ -78,6 +78,6 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Connection Management | 2/2 | Ready for verification | - |
-| 2. Alert Pipeline | 1/2 | In Progress|  |
+| 2. Alert Pipeline | 2/2 | Complete   | 2026-03-30 |
 | 3. Frontend Integration | 0/0 | Not started | - |
 | 4. Query Capabilities | 0/0 | Not started | - |

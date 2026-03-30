@@ -28,11 +28,11 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### Alert Pipeline
 
-- [ ] **ALERT-01**: System receives Loki Ruler/Alertmanager webhook alerts at a dedicated endpoint
+- [x] **ALERT-01**: System receives Loki Ruler/Alertmanager webhook alerts at a dedicated endpoint
 - [x] **ALERT-02**: System auto-detects and normalizes both Alertmanager v4 and Grafana Unified webhook formats
 - [x] **ALERT-03**: Webhook alerts are stored in a dedicated loki_alerts database table with full payload
-- [ ] **ALERT-04**: Webhook alerts create incidents via AlertCorrelator with Loki-specific metadata
-- [ ] **ALERT-05**: Webhook alerts trigger automated RCA via Celery background chat
+- [x] **ALERT-04**: Webhook alerts create incidents via AlertCorrelator with Loki-specific metadata
+- [x] **ALERT-05**: Webhook alerts trigger automated RCA via Celery background chat
 - [x] **ALERT-06**: Loki-specific RCA prompt builder provides structured alert context for investigation
 
 ### Frontend
@@ -87,11 +87,11 @@ Which phases cover which requirements. Updated during roadmap creation.
 | QUERY-04 | Phase 4 | Pending |
 | QUERY-05 | Phase 4 | Pending |
 | QUERY-06 | Phase 4 | Pending |
-| ALERT-01 | Phase 2 | Pending |
+| ALERT-01 | Phase 2 | Complete |
 | ALERT-02 | Phase 2 | Complete |
 | ALERT-03 | Phase 2 | Complete |
-| ALERT-04 | Phase 2 | Pending |
-| ALERT-05 | Phase 2 | Pending |
+| ALERT-04 | Phase 2 | Complete |
+| ALERT-05 | Phase 2 | Complete |
 | ALERT-06 | Phase 2 | Complete |
 | FE-01 | Phase 3 | Pending |
 | FE-02 | Phase 3 | Pending |
