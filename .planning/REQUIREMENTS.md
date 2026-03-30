@@ -21,10 +21,10 @@ Requirements for initial release. Each maps to roadmap phases.
 
 - [x] **QUERY-01**: User can execute LogQL range queries via /loki/api/v1/query_range with time range and limit
 - [x] **QUERY-02**: User can execute LogQL instant queries via /loki/api/v1/query
-- [ ] **QUERY-03**: User can list all stream labels via /loki/api/v1/labels
-- [ ] **QUERY-04**: User can list values for a specific label via /loki/api/v1/label/{name}/values
+- [x] **QUERY-03**: User can list all stream labels via /loki/api/v1/labels
+- [x] **QUERY-04**: User can list values for a specific label via /loki/api/v1/label/{name}/values
 - [x] **QUERY-05**: User can execute LogQL metric queries (rate, count_over_time) via query_range endpoint
-- [ ] **QUERY-06**: User can discover log series via /loki/api/v1/series with label matchers
+- [x] **QUERY-06**: User can discover log series via /loki/api/v1/series with label matchers
 
 ### Alert Pipeline
 
@@ -83,10 +83,10 @@ Which phases cover which requirements. Updated during roadmap creation.
 | CONN-07 | Phase 1 | Complete |
 | QUERY-01 | Phase 4 | Complete |
 | QUERY-02 | Phase 4 | Complete |
-| QUERY-03 | Phase 4 | Pending |
-| QUERY-04 | Phase 4 | Pending |
+| QUERY-03 | Phase 4 | Complete |
+| QUERY-04 | Phase 4 | Complete |
 | QUERY-05 | Phase 4 | Complete |
-| QUERY-06 | Phase 4 | Pending |
+| QUERY-06 | Phase 4 | Complete |
 | ALERT-01 | Phase 2 | Complete |
 | ALERT-02 | Phase 2 | Complete |
 | ALERT-03 | Phase 2 | Complete |
