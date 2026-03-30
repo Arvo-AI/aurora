@@ -93,6 +93,10 @@ def backfill_user_org_data(cursor, user_id: str, org_id: str) -> dict:
       • All tables with (user_id, org_id) — dynamic discovery
       • Incident child tables with (incident_id, org_id) — via parent FK
 
+    Re-stamps rows that already have a stale org_id (e.g. from a defunct
+    Default Organization) in addition to NULL rows, so that pre-RBAC users
+    who never had users.org_id set still get all their data migrated.
+
     Args:
         cursor: An open psycopg2 cursor (caller owns the transaction).
         user_id: The user whose data should be stamped.
@@ -108,8 +112,8 @@ def backfill_user_org_data(cursor, user_id: str, org_id: str) -> dict:
     for (tbl,) in cursor.fetchall():
         n = _safe_update(
             cursor, f"user_{tbl}",
-            f'UPDATE "{tbl}" SET org_id = %s WHERE user_id = %s AND org_id IS NULL',
-            (org_id, user_id),
+            f'UPDATE "{tbl}" SET org_id = %s WHERE user_id = %s AND (org_id IS NULL OR org_id != %s)',
+            (org_id, user_id, org_id),
         )
         if n:
             results[tbl] = n
@@ -121,8 +125,8 @@ def backfill_user_org_data(cursor, user_id: str, org_id: str) -> dict:
             cursor, f"child_{tbl}",
             f'UPDATE "{tbl}" c SET org_id = %s '
             f"FROM incidents i WHERE c.incident_id = i.id "
-            f"AND i.user_id = %s AND c.org_id IS NULL",
-            (org_id, user_id),
+            f"AND i.user_id = %s AND (c.org_id IS NULL OR c.org_id != %s)",
+            (org_id, user_id, org_id),
         )
         if n:
             results[tbl] = n
@@ -146,9 +150,9 @@ def backfill_user_org_data(cursor, user_id: str, org_id: str) -> dict:
 def migrate_user_to_org(cursor, user_id: str, new_org_id: str) -> dict:
     """Move ALL of a user's data from their current org to a new org.
 
-    Unlike backfill_user_org_data (which only stamps NULL → value), this
-    function re-stamps existing org_id values. Used when a user transfers
-    between organizations (e.g. joining a team's org after creating their own).
+    Similar to backfill_user_org_data but used specifically when a user
+    transfers between organizations with a known old org (e.g. joining a
+    team's org after creating their own).
 
     Args:
         cursor: An open psycopg2 cursor (caller owns the transaction).
@@ -213,13 +217,15 @@ def backfill_all_users_at_boot(cursor) -> None:
     results = {}
 
     # Phase 1 — user-scoped tables (bulk JOIN)
+    # Fix NULL org_id AND stale org_id that doesn't match the user's current org
     cursor.execute(_USER_SCOPED_TABLES_SQL)
     for (tbl,) in cursor.fetchall():
         n = _safe_update(
             cursor, f"boot_{tbl}",
             f'UPDATE "{tbl}" t SET org_id = u.org_id '
             f"FROM users u WHERE t.user_id = u.id "
-            f"AND t.org_id IS NULL AND u.org_id IS NOT NULL",
+            f"AND u.org_id IS NOT NULL "
+            f"AND (t.org_id IS NULL OR t.org_id != u.org_id)",
             (),
         )
         if n:
@@ -232,7 +238,8 @@ def backfill_all_users_at_boot(cursor) -> None:
             cursor, f"boot_child_{tbl}",
             f'UPDATE "{tbl}" c SET org_id = i.org_id '
             f"FROM incidents i WHERE c.incident_id = i.id "
-            f"AND c.org_id IS NULL AND i.org_id IS NOT NULL",
+            f"AND i.org_id IS NOT NULL "
+            f"AND (c.org_id IS NULL OR c.org_id != i.org_id)",
             (),
         )
         if n:
