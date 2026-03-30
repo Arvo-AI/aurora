@@ -58,7 +58,7 @@ Plans:
 **Plans**: 2 plans
 Plans:
 - [x] 03-01-PLAN.md -- Service layer, API route proxies, ConnectorRegistry entry, disconnect wiring, icon
-- [ ] 03-02-PLAN.md -- Auth page, connection step (3-mode auth form), webhook step with setup instructions
+- [x] 03-02-PLAN.md -- Auth page, connection step (3-mode auth form), webhook step with setup instructions
 
 ### Phase 4: Query Capabilities
 **Goal**: Users and the LangGraph agent can query logs, discover labels, and execute metric queries against the connected Loki instance
