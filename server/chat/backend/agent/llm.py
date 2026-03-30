@@ -320,7 +320,8 @@ class LLMManager:
             result if result is not None else {"messages": [], "error": error_message}
         )
 
-    def summarize(self, content: str, model: Optional[str] = None) -> str:
+    def summarize(self, content: str, model: Optional[str] = None,
+                  user_id: Optional[str] = None, session_id: Optional[str] = None) -> str:
         """
         Summarize long content to reduce token usage in LLM context.
 
@@ -369,7 +370,18 @@ Summary:"""
                 provider_mode=self.provider_mode,
             )
 
-            response = isolated_summarizer.invoke(summarization_prompt)
+            if user_id:
+                from chat.backend.agent.utils.llm_usage_tracker import tracked_invoke
+                response = tracked_invoke(
+                    isolated_summarizer,
+                    summarization_prompt,
+                    user_id=user_id,
+                    session_id=session_id,
+                    model_name=summarization_model,
+                    request_type="tool_output_summarization",
+                )
+            else:
+                response = isolated_summarizer.invoke(summarization_prompt)
 
             if hasattr(response, "content"):
                 response_content = response.content

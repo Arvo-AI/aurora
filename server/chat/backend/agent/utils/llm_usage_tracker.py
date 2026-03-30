@@ -521,3 +521,45 @@ class LLMUsageTracker:
         except Exception as e:
             logger.error(f"Error refreshing pricing: {e}")
             return False
+
+
+def tracked_invoke(
+    llm,
+    messages,
+    *,
+    user_id: str,
+    session_id: Optional[str] = None,
+    model_name: str,
+    request_type: str,
+    api_provider: str = "openrouter",
+):
+    """Invoke an LLM and automatically track the usage.
+
+    Drop-in replacement for ``llm.invoke(messages)`` that records tokens
+    and cost into ``llm_usage_tracking`` via ``LLMUsageTracker.track_llm_call``.
+    Returns the raw LLM response so callers work exactly as before.
+    """
+    start_time = time.time()
+    error_message = None
+    response = None
+    try:
+        response = llm.invoke(messages)
+        return response
+    except Exception as e:
+        error_message = str(e)
+        raise
+    finally:
+        try:
+            LLMUsageTracker.track_llm_call(
+                user_id=user_id,
+                session_id=session_id,
+                model_name=model_name,
+                request_type=request_type,
+                prompt=messages,
+                response=response,
+                start_time=start_time,
+                error_message=error_message,
+                api_provider=api_provider,
+            )
+        except Exception as track_err:
+            logger.warning(f"Failed to track LLM usage for {request_type}: {track_err}")

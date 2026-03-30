@@ -212,6 +212,13 @@ export interface Incident {
     totalOutputTokens: number;
     totalTokens: number;
     totalCost: number;
+    models?: {
+      model: string;
+      requestCount: number;
+      inputTokens: number;
+      outputTokens: number;
+      cost: number;
+    }[];
   } | null;
 }
 
