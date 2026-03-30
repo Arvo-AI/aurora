@@ -692,6 +692,41 @@ def get_incident(user_id, incident_id: str):
                 incident["citations"] = citations
                 incident["chatSessions"] = chat_sessions
 
+                # Fetch token usage for the RCA session
+                rca_session_id = incident.get("chatSessionId")
+                usage_totals = None
+                if rca_session_id:
+                    try:
+                        cursor.execute(
+                            """
+                            SELECT
+                                COUNT(*) as request_count,
+                                COALESCE(SUM(input_tokens), 0) as total_input_tokens,
+                                COALESCE(SUM(output_tokens), 0) as total_output_tokens,
+                                COALESCE(SUM(total_tokens), 0) as total_tokens,
+                                COALESCE(SUM(estimated_cost), 0) as total_cost
+                            FROM llm_usage_tracking
+                            WHERE session_id = %s
+                            """,
+                            (rca_session_id,),
+                        )
+                        urow = cursor.fetchone()
+                        if urow and urow[0] > 0:
+                            usage_totals = {
+                                "requestCount": urow[0],
+                                "totalInputTokens": urow[1] or 0,
+                                "totalOutputTokens": urow[2] or 0,
+                                "totalTokens": urow[3] or 0,
+                                "totalCost": float(urow[4]) if urow[4] else 0.0,
+                            }
+                    except Exception as usage_err:
+                        logger.warning(
+                            "[INCIDENTS] Failed to fetch usage for session %s: %s",
+                            rca_session_id,
+                            usage_err,
+                        )
+                incident["tokenUsage"] = usage_totals
+
                 logger.info(
                     "[INCIDENTS] Retrieved incident %s for user %s with %d suggestions, %d thoughts, %d citations, %d chat sessions",
                     incident_id,
