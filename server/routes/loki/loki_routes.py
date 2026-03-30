@@ -1,14 +1,19 @@
 import logging
+import os
 import re
 from typing import Any, Dict, Optional
 
 from flask import Blueprint, jsonify, request
 
 from connectors.loki_connector.client import LokiClient, LokiAPIError
+from routes.loki.tasks import process_loki_alert
 from utils.auth.token_management import get_token_data, store_tokens_in_db
-from utils.secrets.secret_ref_utils import delete_user_secret
 from utils.auth.rbac_decorators import require_permission
+from utils.auth.stateless_auth import get_org_id_from_request
+from utils.db.connection_pool import db_pool
 from utils.logging.secure_logging import mask_credential_value
+from utils.secrets.secret_ref_utils import delete_user_secret
+from utils.web.cors_utils import create_cors_response
 
 logger = logging.getLogger(__name__)
 
@@ -189,3 +194,155 @@ def disconnect(user_id):
     except Exception as exc:
         logger.exception("[LOKI] Failed to disconnect provider")
         return jsonify({"error": "Failed to disconnect Loki"}), 500
+
+
+@loki_bp.route("/alerts/webhook/<user_id>", methods=["POST", "OPTIONS"])
+def alert_webhook(user_id: str):
+    """Receive alert webhook from Loki Ruler / Alertmanager."""
+    if request.method == "OPTIONS":
+        return create_cors_response()
+
+    if not user_id:
+        logger.warning("[LOKI] Webhook received without user_id")
+        return jsonify({"error": "user_id is required"}), 400
+
+    # Check if user has Loki connected
+    creds = _get_stored_loki_credentials(user_id)
+    if not creds:
+        logger.warning(
+            "[LOKI] Webhook received for user %s with no Loki connection", user_id
+        )
+        return jsonify({"error": "Loki not connected for this user"}), 404
+
+    payload = request.get_json(silent=True) or {}
+
+    # Log alert summary from top-level status
+    alert_status = payload.get("status", "unknown")
+    alerts_count = len(payload.get("alerts", []))
+    logger.info(
+        "[LOKI] Received webhook for user %s: status=%s alerts=%d",
+        user_id,
+        alert_status,
+        alerts_count,
+    )
+    logger.debug(
+        "[LOKI] Payload keys: %s", list(payload.keys()) if payload else "empty"
+    )
+
+    metadata = {"headers": dict(request.headers), "remote_addr": request.remote_addr}
+    process_loki_alert.delay(payload, metadata, user_id)
+    return jsonify({"received": True})
+
+
+@loki_bp.route("/alerts", methods=["GET", "OPTIONS"])
+@require_permission("connectors", "read")
+def get_alerts(user_id):
+    """Fetch stored Loki alerts for the authenticated user."""
+    org_id = get_org_id_from_request()
+    limit = request.args.get("limit", 50, type=int)
+    offset = request.args.get("offset", 0, type=int)
+    state_filter = request.args.get("state")
+
+    try:
+        with db_pool.get_admin_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SET myapp.current_org_id = %s", (org_id,))
+
+            if state_filter:
+                cursor.execute(
+                    """
+                    SELECT id, alert_uid, alert_title, alert_state, rule_group,
+                           rule_name, labels, annotations, payload, received_at, created_at
+                    FROM loki_alerts
+                    WHERE org_id = %s AND alert_state = %s
+                    ORDER BY received_at DESC
+                    LIMIT %s OFFSET %s
+                    """,
+                    (org_id, state_filter, limit, offset),
+                )
+            else:
+                cursor.execute(
+                    """
+                    SELECT id, alert_uid, alert_title, alert_state, rule_group,
+                           rule_name, labels, annotations, payload, received_at, created_at
+                    FROM loki_alerts
+                    WHERE org_id = %s
+                    ORDER BY received_at DESC
+                    LIMIT %s OFFSET %s
+                    """,
+                    (org_id, limit, offset),
+                )
+
+            alerts = cursor.fetchall()
+
+            if state_filter:
+                cursor.execute(
+                    "SELECT COUNT(*) FROM loki_alerts WHERE org_id = %s AND alert_state = %s",
+                    (org_id, state_filter),
+                )
+            else:
+                cursor.execute(
+                    "SELECT COUNT(*) FROM loki_alerts WHERE org_id = %s",
+                    (org_id,),
+                )
+            total_count = cursor.fetchone()[0]
+
+        return jsonify({
+            "alerts": [
+                {
+                    "id": row[0],
+                    "alertUid": row[1],
+                    "title": row[2],
+                    "state": row[3],
+                    "ruleGroup": row[4],
+                    "ruleName": row[5],
+                    "labels": row[6],
+                    "annotations": row[7],
+                    "payload": row[8],
+                    "receivedAt": row[9].isoformat() if row[9] else None,
+                    "createdAt": row[10].isoformat() if row[10] else None,
+                }
+                for row in alerts
+            ],
+            "total": total_count,
+            "limit": limit,
+            "offset": offset,
+        })
+    except Exception as exc:
+        logger.exception("[LOKI] Failed to fetch alerts: %s", exc)
+        return jsonify({"error": "Failed to fetch alerts"}), 500
+
+
+@loki_bp.route("/alerts/webhook-url", methods=["GET", "OPTIONS"])
+@require_permission("connectors", "read")
+def get_webhook_url(user_id):
+    """Get the webhook URL that should be configured in Loki Ruler / Alertmanager."""
+    ngrok_url = os.getenv("NGROK_URL", "").rstrip("/")
+    backend_url = os.getenv("NEXT_PUBLIC_BACKEND_URL", "").rstrip("/")
+
+    if ngrok_url and backend_url.startswith("http://localhost"):
+        base_url = ngrok_url
+    else:
+        base_url = backend_url
+
+    webhook_url = f"{base_url}/loki/alerts/webhook/{user_id}"
+
+    return jsonify({
+        "webhookUrl": webhook_url,
+        "instructions": [
+            "Option A: Configure Loki Ruler with Alertmanager",
+            "1. Set alertmanager_url in your Loki ruler config to point to an Alertmanager instance",
+            "2. In Alertmanager, add a webhook receiver with the URL above",
+            "3. Example Alertmanager config:",
+            "   receivers:",
+            "     - name: aurora-webhook",
+            "       webhook_configs:",
+            "         - url: <webhook_url>",
+            "",
+            "Option B: Configure Grafana Alerting contact point",
+            "1. In Grafana, go to Alerting > Contact points",
+            "2. Add a new contact point with type 'Webhook'",
+            "3. Paste the webhook URL above",
+            "4. Route Loki-sourced alert rules to this contact point",
+        ],
+    })
