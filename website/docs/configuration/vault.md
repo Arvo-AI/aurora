@@ -109,6 +109,10 @@ For production deployments:
 3. **Use auto-unseal** - Consider cloud KMS for unsealing
 4. **Backup regularly** - The `vault-data` volume contains all secrets
 
+## Alternative: AWS Secrets Manager
+
+If your deployment requires AWS Secrets Manager instead of Vault (e.g., EKS environments where Vault is not approved), see the [AWS Secrets Manager Configuration](./aws-secrets-manager.md) guide.
+
 ## Troubleshooting
 
 ### "Vault is sealed"
