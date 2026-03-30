@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from flask import Blueprint, request, jsonify
 from utils.db.connection_pool import db_pool
-from utils.db.org_backfill import backfill_user_org_data, migrate_user_to_org, _USER_SCOPED_TABLES_SQL
+from utils.db.org_backfill import backfill_user_org_data, migrate_user_to_org, _USER_SCOPED_TABLES_SQL, _INCIDENT_CHILD_TABLES_SQL
 from utils.auth import VALID_ROLES
 from utils.auth.rbac_decorators import require_permission, require_auth_only
 from utils.auth.stateless_auth import get_org_id_from_request
@@ -110,14 +110,53 @@ def _delete_user_org_data(cursor, user_id: str, org_id: str):
             logger.warning("Failed to delete %s data for user %s in org %s: %s", tbl, user_id, org_id, e)
 
 
+_SHARED_ORG_TABLES = frozenset({
+    "user_connections", "user_tokens", "user_manual_vms",
+})
+
+
+def _migrate_user_data_only(cursor, user_id: str, new_org_id: str):
+    """Migrate a user's personal data (incidents, chats) but leave shared org
+    resources (connections, tokens, VMs) behind for other org members.
+
+    Used when a user leaves "Default Organization" by accepting an invite —
+    their incidents and conversations are personal, but connections/tokens
+    may be shared with other members still in that org.
+    """
+    from utils.db.org_backfill import _safe_update
+
+    cursor.execute(_USER_SCOPED_TABLES_SQL)
+    for (tbl,) in cursor.fetchall():
+        if tbl in _SHARED_ORG_TABLES:
+            continue
+        _safe_update(
+            cursor, f"partial_migrate_{tbl}",
+            f'UPDATE "{tbl}" SET org_id = %s WHERE user_id = %s',
+            (new_org_id, user_id),
+        )
+
+    cursor.execute(_INCIDENT_CHILD_TABLES_SQL)
+    for (tbl,) in cursor.fetchall():
+        _safe_update(
+            cursor, f"partial_migrate_child_{tbl}",
+            f'UPDATE "{tbl}" c SET org_id = %s '
+            f"FROM incidents i WHERE c.incident_id = i.id "
+            f"AND i.user_id = %s",
+            (new_org_id, user_id),
+        )
+
+    logger.info("Migrated user-specific data for %s to org %s (left shared resources behind)", user_id, new_org_id)
+
+
 def _transfer_user_to_org(cursor, user_id: str, old_org_id, new_org_id: str, new_role: str, is_new_org: bool = False):
     """Move a user between orgs.
 
     When is_new_org=True (user is creating the org), all their data is migrated.
-    When leaving a "Default Organization" (the auto-created migration org),
-    data is also migrated since it predates multi-org and belongs to the user.
-    Otherwise (joining an established org), old connections/tokens are deleted
-    to avoid duplicates with whatever the new org already has set up.
+    When leaving a "Default Organization" to join an *existing* org, only
+    user-specific data (incidents, chats) migrates — shared org resources
+    (connections, tokens) stay behind so other members aren't affected.
+    Otherwise (joining an established org from another established org),
+    old connections/tokens are deleted.
     """
     if old_org_id and old_org_id != new_org_id:
         should_migrate = is_new_org
@@ -129,8 +168,10 @@ def _transfer_user_to_org(cursor, user_id: str, old_org_id, new_org_id: str, new
             row = cursor.fetchone()
             should_migrate = row and row[0] == "default organization"
 
-        if should_migrate:
+        if should_migrate and is_new_org:
             migrate_user_to_org(cursor, user_id, new_org_id)
+        elif should_migrate:
+            _migrate_user_data_only(cursor, user_id, new_org_id)
         else:
             _delete_user_org_data(cursor, user_id, old_org_id)
         cursor.execute(

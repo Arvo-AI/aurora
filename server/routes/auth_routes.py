@@ -91,7 +91,7 @@ def register():
                     (org_name,)
                 )
                 if cursor.fetchone():
-                    return jsonify({"error": "An organization with this name already exists. Please contact your organization's admin to get an account."}), 409
+                    return jsonify({"error": "An organization with this name already exists. Please contact your organization's admin to get an account.", "code": "duplicate_name"}), 409
 
                 cursor.execute(
                     "SELECT id FROM organizations WHERE slug = %s",
@@ -198,7 +198,7 @@ def setup_org(user_id):
                 is_default_org = existing_org_name and existing_org_name.lower() == "default organization"
 
                 if existing_org_id and not is_default_org:
-                    return jsonify({"error": "You already belong to an organization"}), 409
+                    return jsonify({"error": "You already belong to an organization", "code": "already_has_org"}), 409
 
                 slug = _name_to_slug(org_name)
                 cursor.execute(
@@ -206,7 +206,7 @@ def setup_org(user_id):
                     (org_name,)
                 )
                 if cursor.fetchone():
-                    return jsonify({"error": "An organization with this name already exists. Please contact your organization's admin to get an account."}), 409
+                    return jsonify({"error": "An organization with this name already exists. Please contact your organization's admin to get an account.", "code": "duplicate_name"}), 409
 
                 cursor.execute(
                     "SELECT id FROM organizations WHERE slug = %s",

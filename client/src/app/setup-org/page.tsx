@@ -108,7 +108,7 @@ export default function SetupOrgPage() {
           window.location.replace("/sign-in")
           return
         }
-        if (response.status === 409) {
+        if (response.status === 409 && data.code === "already_has_org") {
           window.location.replace("/org/switching")
           return
         }

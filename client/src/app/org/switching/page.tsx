@@ -20,8 +20,20 @@ async function refreshSession(): Promise<void> {
   });
   if (!res.ok) throw new Error("refresh");
 
-  const session = await res.json();
-  if (!session?.orgId) throw new Error("missing org");
+  // Poll until the session cookie actually reflects the new org.
+  // The POST above triggers the JWT callback, but the browser cookie
+  // jar may not be settled by the time the next request leaves.
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const check = await fetch("/api/auth/session");
+    if (check.ok) {
+      const session = await check.json();
+      if (session?.user?.orgId && session.user.orgName?.toLowerCase() !== "default organization") {
+        return;
+      }
+    }
+    await new Promise((r) => setTimeout(r, 300 + attempt * 200));
+  }
+  throw new Error("session did not update");
 }
 
 async function verifyOrg(): Promise<void> {
@@ -63,10 +75,16 @@ export default function OrgSwitchingPage() {
           await STEPS[i].run();
         } catch {
           if (i === 0) {
-            setError("Session refresh failed. Redirecting…");
-            await new Promise((r) => setTimeout(r, 1500));
-            window.location.replace("/sign-in");
-            return;
+            // Retry once — the session cookie may just need more time to settle
+            await new Promise((r) => setTimeout(r, 1000));
+            try {
+              await STEPS[i].run();
+            } catch {
+              setError("Session refresh failed. Redirecting…");
+              await new Promise((r) => setTimeout(r, 1500));
+              window.location.replace("/sign-in");
+              return;
+            }
           }
         }
       }
