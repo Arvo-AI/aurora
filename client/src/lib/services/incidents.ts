@@ -206,6 +206,13 @@ export interface Incident {
   updatedAt?: string;
   chatSessionId?: string; // RCA chat session ID
   activeTab?: 'thoughts' | 'chat'; // Currently active tab in the UI
+  tokenUsage?: {
+    requestCount: number;
+    totalInputTokens: number;
+    totalOutputTokens: number;
+    totalTokens: number;
+    totalCost: number;
+  } | null;
 }
 
 // Mock data removed - all data now comes from the backend API
@@ -331,6 +338,7 @@ export const incidentsService = {
         updatedAt: inc.updatedAt,
         chatSessionId: inc.chatSessionId,
         activeTab: inc.activeTab || 'thoughts',
+        tokenUsage: inc.tokenUsage || null,
       };
     } catch (error) {
       if ((error as ApiError).status === 404) {
