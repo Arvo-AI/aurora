@@ -204,11 +204,21 @@ def migrate_user_to_org(cursor, user_id: str, new_org_id: str) -> dict:
 # Bulk backfill  (called once at server boot from db_utils.initialize_tables)
 # ────────────────────────────────────────────────────────────────────────────
 
+_BOOT_SKIP_TABLES = frozenset({
+    "user_connections", "user_tokens", "user_manual_vms",
+})
+
+
 def backfill_all_users_at_boot(cursor) -> None:
     """Catch-up backfill for every user who already has an org.
 
     Uses a JOIN against the users table so it stamps all users in one UPDATE
     per table (much faster than looping per-user for large deployments).
+
+    Shared org resources (connections, tokens, VMs) are intentionally skipped
+    because they should only be set by the integration flow, not bulk-stamped.
+    Re-stamping them would resurrect connections that were deleted when a user
+    accepted an invite.
     """
     cursor.execute("SELECT COUNT(*) FROM users WHERE org_id IS NOT NULL")
     if cursor.fetchone()[0] == 0:
@@ -216,10 +226,12 @@ def backfill_all_users_at_boot(cursor) -> None:
 
     results = {}
 
-    # Phase 1 — user-scoped tables (bulk JOIN)
-    # Fix NULL org_id AND stale org_id that doesn't match the user's current org
+    # Phase 1 — user-scoped tables (bulk JOIN), skip shared org resources
     cursor.execute(_USER_SCOPED_TABLES_SQL)
     for (tbl,) in cursor.fetchall():
+        if tbl in _BOOT_SKIP_TABLES:
+            logger.info("[DBG] boot backfill: SKIPPING shared table %s", tbl)
+            continue
         n = _safe_update(
             cursor, f"boot_{tbl}",
             f'UPDATE "{tbl}" t SET org_id = u.org_id '
@@ -230,6 +242,7 @@ def backfill_all_users_at_boot(cursor) -> None:
         )
         if n:
             results[tbl] = n
+            logger.info("[DBG] boot backfill: stamped %d rows in %s", n, tbl)
 
     # Phase 2 — incident child tables (bulk JOIN via incident)
     cursor.execute(_INCIDENT_CHILD_TABLES_SQL)

@@ -50,6 +50,12 @@ def _purge_vault_secrets(cursor, *, user_id: str = None, org_id: str = None):
                 "WHERE user_id = %s AND org_id = %s AND secret_ref IS NOT NULL",
                 (user_id, org_id),
             )
+        elif user_id:
+            cursor.execute(
+                "SELECT secret_ref FROM user_tokens "
+                "WHERE user_id = %s AND secret_ref IS NOT NULL",
+                (user_id,),
+            )
         elif org_id:
             cursor.execute(
                 "SELECT secret_ref FROM user_tokens "
@@ -126,6 +132,8 @@ def _migrate_user_data_only(cursor, user_id: str, new_org_id: str, old_org_id: s
     """
     from utils.db.org_backfill import _safe_update
 
+    logger.info("[DBG] _migrate_user_data_only: user=%s old_org=%s new_org=%s", user_id, old_org_id, new_org_id)
+
     cursor.execute(_USER_SCOPED_TABLES_SQL)
     for (tbl,) in cursor.fetchall():
         if tbl in _SHARED_ORG_TABLES:
@@ -134,6 +142,7 @@ def _migrate_user_data_only(cursor, user_id: str, new_org_id: str, old_org_id: s
                     f'DELETE FROM "{tbl}" WHERE user_id = %s AND org_id = %s',
                     (user_id, old_org_id),
                 )
+                logger.info("[DBG] _migrate_user_data_only: DELETED %d rows from %s (user=%s, old_org=%s)", cursor.rowcount, tbl, user_id, old_org_id)
             except Exception as e:
                 logger.warning("Failed to delete %s for user %s in org %s: %s", tbl, user_id, old_org_id, e)
             continue
@@ -164,9 +173,13 @@ def _transfer_user_to_org(cursor, user_id: str, old_org_id, new_org_id: str, new
     user-specific data (incidents, chats) migrates — shared org resources
     (connections, tokens) are deleted from the old org to prevent ghost
     references in the connector status query.
+    When old_org_id is None (user never had an org), shared resources are
+    deleted and personal data is backfilled to the new org.
     Otherwise (joining an established org from another established org),
     old connections/tokens are deleted.
     """
+    logger.info("[DBG] _transfer_user_to_org: user=%s old_org=%s new_org=%s is_new_org=%s", user_id, old_org_id, new_org_id, is_new_org)
+
     if old_org_id and old_org_id != new_org_id:
         should_migrate = is_new_org
         if not should_migrate:
@@ -178,10 +191,13 @@ def _transfer_user_to_org(cursor, user_id: str, old_org_id, new_org_id: str, new
             should_migrate = row and row[0] == "default organization"
 
         if should_migrate and is_new_org:
+            logger.info("[DBG] _transfer_user_to_org: BRANCH=full_migrate (creating new org)")
             migrate_user_to_org(cursor, user_id, new_org_id)
         elif should_migrate:
+            logger.info("[DBG] _transfer_user_to_org: BRANCH=data_only_migrate (leaving Default Org)")
             _migrate_user_data_only(cursor, user_id, new_org_id, old_org_id)
         else:
+            logger.info("[DBG] _transfer_user_to_org: BRANCH=delete_all (leaving established org)")
             _delete_user_org_data(cursor, user_id, old_org_id)
         cursor.execute(
             "UPDATE users SET org_id = %s, role = %s WHERE id = %s RETURNING id, email, name",
@@ -196,12 +212,28 @@ def _transfer_user_to_org(cursor, user_id: str, old_org_id, new_org_id: str, new
             (new_role, user_id),
         )
     else:
+        logger.info("[DBG] _transfer_user_to_org: BRANCH=orgless_join (old_org_id is None, deleting shared resources)")
         cursor.execute(
             "UPDATE users SET org_id = %s, role = %s WHERE id = %s RETURNING id, email, name",
             (new_org_id, new_role, user_id),
         )
         row = cursor.fetchone()
-        backfill_user_org_data(cursor, user_id, new_org_id)
+        _purge_vault_secrets(cursor, user_id=user_id)
+        cursor.execute(_USER_SCOPED_TABLES_SQL)
+        for (tbl,) in cursor.fetchall():
+            if tbl in _SHARED_ORG_TABLES:
+                try:
+                    cursor.execute(f'DELETE FROM "{tbl}" WHERE user_id = %s', (user_id,))
+                    logger.info("[DBG] _transfer_user_to_org: DELETED %d rows from %s for orgless user %s", cursor.rowcount, tbl, user_id)
+                except Exception as e:
+                    logger.warning("Failed to delete %s for orgless user %s: %s", tbl, user_id, e)
+                continue
+            from utils.db.org_backfill import _safe_update
+            _safe_update(
+                cursor, f"orgless_backfill_{tbl}",
+                f'UPDATE "{tbl}" SET org_id = %s WHERE user_id = %s AND (org_id IS NULL OR org_id != %s)',
+                (new_org_id, user_id, new_org_id),
+            )
         return row
     return cursor.fetchone()
 
