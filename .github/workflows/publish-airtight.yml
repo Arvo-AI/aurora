@@ -16,6 +16,8 @@ concurrency:
 
 permissions:
   contents: read
+  id-token: write
+  attestations: write
 
 jobs:
   airtight:
@@ -30,9 +32,11 @@ jobs:
           - arch: amd64
             platform: linux/amd64
             bucket: gs://aurora-airtight-bucket
+            bucket_url: https://storage.googleapis.com/aurora-airtight-bucket
           - arch: arm64
             platform: linux/arm64
             bucket: gs://aurora-airtight-bucket-arm64
+            bucket_url: https://storage.googleapis.com/aurora-airtight-bucket-arm64
 
     steps:
       - name: Checkout repository
@@ -121,6 +125,30 @@ jobs:
           gcloud storage cp "$FILENAME" "${{ matrix.bucket }}/"
           gcloud storage cp "${FILENAME}.sha256" "${{ matrix.bucket }}/"
           echo "Uploaded to ${{ matrix.bucket }}/$FILENAME"
+
+      - name: Attest build provenance
+        id: attest
+        uses: actions/attest@v2
+        with:
+          subject-path: ${{ steps.tarball.outputs.filename }}
+
+      - name: Register linked artifact
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          FILENAME="${{ steps.tarball.outputs.filename }}"
+          DIGEST="sha256:$(cut -d' ' -f1 "${FILENAME}.sha256")"
+          VERSION="${{ steps.version.outputs.tag }}"
+          ARTIFACT_URL="${{ matrix.bucket_url }}/${FILENAME}"
+
+          gh api -X POST /orgs/Arvo-AI/artifacts/metadata/storage-record \
+            -f name="aurora-airtight-${{ matrix.arch }}" \
+            -f digest="$DIGEST" \
+            -f version="$VERSION" \
+            -f artifact_url="$ARTIFACT_URL" \
+            -f registry_url="${{ matrix.bucket_url }}/" \
+            -f status="active" \
+            -f github_repository="aurora"
 
   publish-summary:
     name: Airtight Summary

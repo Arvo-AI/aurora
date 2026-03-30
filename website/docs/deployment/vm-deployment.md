@@ -317,16 +317,17 @@ Prebuilt airtight bundles are published to Google Cloud Storage on every release
 - [amd64 bundles](https://storage.googleapis.com/storage/v1/b/aurora-airtight-bucket/o?alt=json&fields=items/name)
 - [arm64 bundles](https://storage.googleapis.com/storage/v1/b/aurora-airtight-bucket-arm64/o?alt=json&fields=items/name)
 
-**Download** (replace the filename with the version you need):
+**Download** — set your version and architecture, then download:
 
 ```bash
-# amd64
-curl -LO https://storage.googleapis.com/aurora-airtight-bucket/aurora-airtight-<version>-amd64.tar.gz
-curl -LO https://storage.googleapis.com/aurora-airtight-bucket/aurora-airtight-<version>-amd64.tar.gz.sha256
+VERSION=v1.2.3   # replace with your target version (or commit SHA, e.g. 4c92267)
+ARCH=amd64       # or arm64
 
-# ARM64
-curl -LO https://storage.googleapis.com/aurora-airtight-bucket-arm64/aurora-airtight-<version>-arm64.tar.gz
-curl -LO https://storage.googleapis.com/aurora-airtight-bucket-arm64/aurora-airtight-<version>-arm64.tar.gz.sha256
+# amd64 bundles are in aurora-airtight-bucket, arm64 in aurora-airtight-bucket-arm64
+BUCKET="aurora-airtight-bucket$([ "$ARCH" = "arm64" ] && echo "-arm64")"
+
+curl -LO "https://storage.googleapis.com/${BUCKET}/aurora-airtight-${VERSION}-${ARCH}.tar.gz"
+curl -LO "https://storage.googleapis.com/${BUCKET}/aurora-airtight-${VERSION}-${ARCH}.tar.gz.sha256"
 ```
 
 Version tags (e.g. `v1.2.3`) are published on releases. Commit-based bundles (e.g. `4c92267`) are published on every push to `main`.
@@ -340,9 +341,8 @@ If you prefer to build from source instead of downloading, see [Creating the Air
 Use whatever transfer method your organization permits:
 
 ```bash
-BUNDLE=aurora-airtight-<version>-amd64.tar.gz  # replace <version> with your bundle version
+BUNDLE=aurora-airtight-${VERSION}-${ARCH}.tar.gz
 
-# SCP
 VM_USER=user        # replace with your SSH username
 VM_IP=10.0.0.5      # replace with your VM's IP
 scp $BUNDLE $BUNDLE.sha256 $VM_USER@$VM_IP:~/
@@ -440,8 +440,8 @@ Save and exit (`Ctrl+X`, `Y`, `Enter` in nano).
 Pass the path to the tarball you transferred in step 2:
 
 ```bash
-BUNDLE=aurora-airtight-<version>-amd64.tar.gz  # replace <version> with your bundle version
-make prod-airtight AIRTIGHT_BUNDLE=~/$BUNDLE
+# Use the same VERSION and ARCH from step 1 (e.g. VERSION=v1.2.3 ARCH=amd64)
+make prod-airtight AIRTIGHT_BUNDLE=~/aurora-airtight-${VERSION}-${ARCH}.tar.gz
 ```
 
 This loads every Docker image from the tarball into the local Docker daemon and starts the full Aurora stack. No outbound network calls are made. First run takes a few minutes while images are loaded.
@@ -483,14 +483,18 @@ http://YOUR_VM_IP:3000
 Each new Aurora release requires a fresh bundle. On a machine with internet access:
 
 ```bash
-curl -LO https://storage.googleapis.com/aurora-airtight-bucket/aurora-airtight-<new-version>-amd64.tar.gz
+VERSION=<new-version>  # replace with the new release tag or commit SHA
+ARCH=amd64             # or arm64
+BUCKET="aurora-airtight-bucket$([ "$ARCH" = "arm64" ] && echo "-arm64")"
+
+curl -LO "https://storage.googleapis.com/${BUCKET}/aurora-airtight-${VERSION}-${ARCH}.tar.gz"
 ```
 
 Transfer the new tarball to the VM, then:
 
 ```bash
 make down
-make prod-airtight AIRTIGHT_BUNDLE=~/aurora-airtight-<new-version>-amd64.tar.gz
+make prod-airtight AIRTIGHT_BUNDLE=~/aurora-airtight-${VERSION}-${ARCH}.tar.gz
 ```
 
 The `.env` file stays on the VM and is never part of the bundle.
