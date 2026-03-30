@@ -126,7 +126,7 @@ _RATE_LIMIT_WINDOW_SECONDS = 300  # 5 minute window
 _RATE_LIMIT_MAX_REQUESTS = 5  # Max 5 background chats per window
 
 # RCA sources that use rca_context in system prompt
-_RCA_SOURCES = {'grafana', 'datadog', 'netdata', 'splunk', 'slack', 'pagerduty', 'dynatrace', 'jenkins', 'cloudbees', 'spinnaker'}
+_RCA_SOURCES = {'grafana', 'datadog', 'netdata', 'splunk', 'slack', 'pagerduty', 'dynatrace', 'jenkins', 'cloudbees', 'spinnaker', 'newrelic'}
 
 # Initialize Redis client at module load time - fails if Redis is unavailable
 _redis_client = get_redis_client()
@@ -179,6 +179,7 @@ def _get_connected_integrations(user_id: str) -> Dict[str, bool]:
         'jenkins': False,
         'cloudbees': False,
         'spinnaker': False,
+        'newrelic': False,
     }
 
     try:
@@ -269,6 +270,12 @@ def _get_connected_integrations(user_id: str) -> Dict[str, bool]:
             integrations['spinnaker'] = is_spinnaker_connected(user_id)
     except Exception as e:
         logger.debug(f"[BackgroundChat] Error checking Spinnaker: {e}")
+
+    try:
+        from chat.backend.agent.tools.newrelic_tool import is_newrelic_connected
+        integrations['newrelic'] = is_newrelic_connected(user_id)
+    except Exception as e:
+        logger.debug(f"[BackgroundChat] Error checking New Relic: {e}")
 
     return integrations
 
@@ -606,7 +613,7 @@ def _session_has_successful_jira_action(session_id: str) -> bool:
     return False
 
 
-def _build_jira_followup_prompt(jira_mode: str) -> str:
+def _build_jira_followup_prompt(jira_mode: str, service_name: str = "") -> str:
     """Return the prompt for the Jira filing step after investigation completes."""
     comment_format = (
         "\n\nFormat the comment using markdown — it will be rendered as rich text in Jira.\n"
@@ -666,15 +673,25 @@ def _build_jira_followup_prompt(jira_mode: str) -> str:
         "Include this link in your response as a markdown link: [View in Jira](URL)"
     )
 
+    svc = service_name.replace("\\", "\\\\").replace('"', '\\"') if service_name else ""
+
     base = (
         "Your investigation is complete. Now file your findings in Jira.\n\n"
         "IMPORTANT: Use the project key from issues you already found earlier "
         "in this conversation. Do NOT guess project keys like 'OPS' or 'PROJECT' "
         "— use the real key you saw in search results.\n\n"
         "1. Search for an existing Jira issue related to this incident:\n"
-        "   jira_search_issues(jql='text ~ \"<service_name>\" AND type in "
-        "(Bug, Incident) ORDER BY updated DESC')\n"
     )
+    if svc:
+        base += (
+            f"   jira_search_issues(jql='text ~ \"{svc}\" AND type in "
+            "(Bug, Incident) ORDER BY updated DESC')\n"
+        )
+    else:
+        base += (
+            "   jira_search_issues(jql='text ~ \"<service_name>\" AND type in "
+            "(Bug, Incident) ORDER BY updated DESC')\n"
+        )
     if jira_mode == "comment_only":
         return (
             base
@@ -693,7 +710,7 @@ def _build_jira_followup_prompt(jira_mode: str) -> str:
         "3. If NO matching issue is found:\n"
         "   - Create one using jira_create_issue with:\n"
         "     project_key from the search results, "
-        "summary like 'Incident: <service> — <short description>', issue_type='Bug'.\n"
+        f"summary like 'Incident: {svc or '<service_name>'} — brief description', issue_type='Bug'.\n"
         "   - Put the full RCA findings in the description field.\n"
         "   - Do NOT add a separate comment — the description is enough.\n\n"
         "File EXACTLY ONE Jira action (one comment OR one issue). Never both.\n\n"
@@ -787,7 +804,23 @@ async def _run_jira_action(
     from main_chatbot import process_workflow_async
 
     jira_mode = rca_context.get('integrations', {}).get('jira_mode', 'comment_only')
-    followup_text = _build_jira_followup_prompt(jira_mode)
+
+    service_name = ""
+    if incident_id:
+        try:
+            from utils.db.connection_pool import db_pool
+            from utils.auth.stateless_auth import set_rls_context
+            with db_pool.get_admin_connection() as conn:
+                with conn.cursor() as cur:
+                    set_rls_context(cur, conn, user_id, log_prefix="[JiraAction]")
+                    cur.execute("SELECT alert_service FROM incidents WHERE id = %s", (incident_id,))
+                    row = cur.fetchone()
+                    if row and row[0]:
+                        service_name = row[0]
+        except Exception as exc:
+            logger.debug("[JiraAction] Could not look up service name: %s", exc)
+
+    followup_text = _build_jira_followup_prompt(jira_mode, service_name=service_name)
 
     investigation_messages = _snapshot_session_messages(session_id)
     logger.info(f"[JiraAction] Saved {len(investigation_messages)} investigation messages")

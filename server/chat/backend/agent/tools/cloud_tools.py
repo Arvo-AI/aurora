@@ -115,6 +115,11 @@ from .datadog_tool import (
     is_datadog_connected,
     QueryDatadogArgs,
 )
+from .newrelic_tool import (
+    query_newrelic,
+    is_newrelic_connected,
+    QueryNewRelicArgs,
+)
 from .thousandeyes_tool import (
     thousandeyes_list_tests,
     thousandeyes_get_test_detail,
@@ -1482,6 +1487,29 @@ Once you identify which account has the issue, pass account_id (e.g. '1510256343
             args_schema=QueryDatadogArgs,
         ))
         logging.info(f"Added Datadog tool for user {user_id}")
+
+    # Add New Relic tool if connected
+    if user_id and is_newrelic_connected(user_id):
+        context_wrapped_nr = with_user_context(query_newrelic)
+        notification_wrapped_nr = with_completion_notification(context_wrapped_nr)
+        final_nr_func = wrap_func_with_capture(notification_wrapped_nr, "query_newrelic") if tool_capture else notification_wrapped_nr
+
+        tools.append(StructuredTool.from_function(
+            func=final_nr_func,
+            name="query_newrelic",
+            description=(
+                "Query New Relic via NerdGraph for observability data, alert issues, or entity information. "
+                "resource_type must be 'nrql', 'issues', or 'entities'. "
+                "Use 'nrql' for any NRQL query — logs, metrics, transactions, errors, spans, infrastructure data. "
+                "Examples: query_newrelic(resource_type='nrql', query=\"SELECT count(*) FROM Transaction WHERE appName = 'my-app' SINCE 1 hour ago\") "
+                "or query_newrelic(resource_type='nrql', query=\"SELECT average(cpuPercent) FROM SystemSample FACET hostname SINCE 30 minutes ago\") "
+                "or query_newrelic(resource_type='nrql', query=\"SELECT count(*) FROM Log WHERE level = 'ERROR' FACET service SINCE 1 hour ago\") "
+                "or query_newrelic(resource_type='issues') "
+                "or query_newrelic(resource_type='entities', query='production-api')"
+            ),
+            args_schema=QueryNewRelicArgs,
+        ))
+        logging.info(f"Added New Relic tool for user {user_id}")
 
     # Add Bitbucket tools if connected
     try:

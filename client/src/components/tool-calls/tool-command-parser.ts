@@ -434,6 +434,48 @@ export function parseCloudbeesRcaCommand(toolInput: string): string {
   return parseCIRcaCommand(toolInput, "CloudBees")
 }
 
+export function parseNewRelicCommand(toolInput: string): string {
+  try {
+    let parsed: Record<string, unknown> | null = null
+    try {
+      parsed = JSON.parse(toolInput)
+    } catch {
+      parsed = JSON.parse(toolInput.replace(/'/g, '"'))
+    }
+    const args = ((parsed as Record<string, unknown>)?.kwargs || parsed || {}) as Record<string, unknown>
+    const resourceType = (args.resource_type as string) || ""
+    const query = (args.query as string) || ""
+    const timeRange = (args.time_range as string) || ""
+
+    switch (resourceType.toLowerCase()) {
+      case "nrql": {
+        const upper = (query || "").toUpperCase()
+        let label = "Query data"
+        if (upper.includes("FROM TRANSACTION")) label = "Query transactions"
+        else if (upper.includes("FROM LOG")) label = "Query logs"
+        else if (upper.includes("FROM SYSTEMSAMPLE") || upper.includes("FROM PROCESSSAMPLE")) label = "Query infrastructure"
+        else if (upper.includes("FROM SYNTHETICSCHECK")) label = "Query synthetics"
+        else if (upper.includes("FROM SPAN") || upper.includes("FROM DISTRIBUTEDTRACING")) label = "Query traces"
+        else if (upper.includes("FROM METRIC")) label = "Query metrics"
+        else if (upper.includes("ERROR")) label = "Query errors"
+        const time = timeRange ? ` — ${timeRange}` : ""
+        return `New Relic: ${label}${time}`
+      }
+      case "issues": {
+        return "New Relic: Fetch alert issues"
+      }
+      case "entities": {
+        const search = query.split("|")[0]?.trim() || ""
+        return search ? `New Relic: Search entities — ${search}` : "New Relic: Search entities"
+      }
+      default:
+        return `New Relic: ${resourceType || "query"}`
+    }
+  } catch {
+    return "New Relic: Query"
+  }
+}
+
 export function parseCloudflareCommand(toolName: string, toolInput: string): string {
   const args = (() => {
     try {

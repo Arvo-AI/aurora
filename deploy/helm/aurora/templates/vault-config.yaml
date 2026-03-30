@@ -32,4 +32,18 @@ data:
       {{- end }}
     }
     {{- end }}
+
+    {{- if and .Values.vault.seal (eq .Values.vault.seal.type "awskms") }}
+    seal "awskms" {
+      region     = "{{ .Values.vault.seal.awskms.region }}"
+      kms_key_id = "{{ .Values.vault.seal.awskms.kms_key_id }}"
+      {{- if .Values.vault.seal.awskms.credentials }}
+      access_key = "file:///vault/aws/access_key"
+      secret_key = "file:///vault/aws/secret_key"
+      {{- end }}
+      {{- if .Values.vault.seal.awskms.endpoint }}
+      endpoint   = "{{ .Values.vault.seal.awskms.endpoint }}"
+      {{- end }}
+    }
+    {{- end }}
 {{- end }}

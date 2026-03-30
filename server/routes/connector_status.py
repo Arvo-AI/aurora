@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 connector_status_bp = Blueprint("connector_status", __name__)
 
 LIVE_CHECK_TIMEOUT = 10
-HTTP_TIMEOUT = 8
+HTTP_TIMEOUT = (3.5, 5)
 
 
 # ── Providers with live API validation ──────────────────────────────
@@ -532,6 +532,30 @@ def _check_credentials_only(creds: Dict[str, Any]) -> Dict[str, Any]:
     return {"connected": True}
 
 
+def _check_newrelic(creds: Dict[str, Any]) -> Dict[str, Any]:
+    """Validate New Relic credentials via NerdGraph user query."""
+    api_key = creds.get("api_key")
+    account_id = creds.get("account_id")
+    if not api_key or not account_id:
+        return {"connected": False}
+    region = creds.get("region", "us")
+    endpoint = "https://api.eu.newrelic.com/graphql" if region == "eu" else "https://api.newrelic.com/graphql"
+    try:
+        r = requests.post(
+            endpoint,
+            json={"query": "{ actor { user { email } } }"},
+            headers={"Content-Type": "application/json", "API-Key": api_key},
+            timeout=HTTP_TIMEOUT,
+        )
+        data = r.json()
+        email = data.get("data", {}).get("actor", {}).get("user", {}).get("email")
+        if email:
+            return {"connected": True, "accountId": account_id, "region": region}
+        return {"connected": False}
+    except Exception:
+        return {"connected": False}
+
+
 def _check_netdata(creds: Dict[str, Any]) -> Dict[str, Any]:
     api_token = creds.get("api_token")
     if not api_token:
@@ -566,6 +590,7 @@ PROVIDER_CHECKERS = {
     "tailscale": _check_tailscale,
     # Credential-existence checks (no live API endpoint to validate against)
     "netdata": _check_netdata,
+    "newrelic": _check_newrelic,
     "gcp": _check_credentials_only,
     "aws": _check_credentials_only,
     "azure": _check_credentials_only,

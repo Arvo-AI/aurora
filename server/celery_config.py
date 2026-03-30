@@ -53,6 +53,7 @@ celery_app.conf.update(
         'routes.dynatrace.tasks',
         'routes.bigpanda.tasks',
         'routes.pagerduty.tasks',
+        'routes.newrelic.tasks',
         'routes.jenkins.tasks',
         'routes.spinnaker.tasks',
         'utils.terminal.terminal_pod_cleanup',
@@ -166,6 +167,12 @@ try:
     logging.info("AWS credential refresh task imported successfully")
 except ImportError as e:
     logging.warning(f"Failed to import AWS credential refresh task: {e}")
+
+try:
+    import routes.newrelic.tasks  # noqa: F401
+    logging.info("New Relic tasks imported successfully")
+except ImportError as e:
+    logging.warning(f"Failed to import New Relic tasks: {e}")
 
 try:
     import routes.github.github_repo_metadata  # noqa: F401

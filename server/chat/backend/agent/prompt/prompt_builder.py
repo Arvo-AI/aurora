@@ -1544,6 +1544,25 @@ def build_background_mode_segment(state: Optional[Any]) -> str:
             "Datadog query syntax: service:X, status:error, @http.status_code:5*, host:X, env:production",
         ])
 
+    # New Relic tools (if connected)
+    if integrations.get('newrelic'):
+        parts.extend([
+            "",
+            "NEW RELIC INVESTIGATION:",
+            "IMPORTANT: New Relic is a REMOTE service. Use ONLY the query_newrelic API tool.",
+            "Usage: query_newrelic(resource_type=TYPE, query=QUERY, time_range=RANGE, limit=N)",
+            "Resource types:",
+            "1. 'nrql' - Run NRQL queries. query=NRQL string e.g. \"SELECT count(*) FROM Transaction WHERE error IS true FACET appName\"",
+            "2. 'issues' - Active alert issues. query=state filter (ACTIVATED, CREATED, CLOSED)",
+            "3. 'entities' - Search monitored entities (APM apps, hosts). query=entity name or filter",
+            "Investigation flow:",
+            "1. Check issues for active/related alert context",
+            "2. Search entities to identify affected services and hosts",
+            "3. Use NRQL to query transactions, errors, and metrics around the alert time",
+            "NRQL tips: SELECT ... FROM Transaction/TransactionError/SystemSample, FACET for grouping, TIMESERIES for trends",
+            "Common NRQL: SELECT count(*) FROM TransactionError WHERE appName='X' SINCE 1 hour ago TIMESERIES",
+        ])
+
     # GitHub tools (if connected)
     if integrations.get('github'):
         parts.extend([
