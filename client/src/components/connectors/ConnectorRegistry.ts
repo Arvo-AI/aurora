@@ -115,6 +115,7 @@ class ConnectorRegistry {
     this.register({
       id: "prometheus",
       name: "Prometheus",
+      description: "Connect your Prometheus instance to receive Alertmanager webhook alerts and query metrics for root cause analysis.",
       iconPath: "/prometheus.svg",
       iconBgColor: "bg-white dark:bg-white",
       category: "Monitoring",
