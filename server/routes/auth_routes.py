@@ -235,6 +235,8 @@ def setup_org(user_id):
                 from utils.db.org_backfill import backfill_user_org_data, migrate_user_to_org
                 if existing_org_id:
                     migrate_user_to_org(cursor, user_id, org_id)
+                    from routes.org_routes import _cleanup_empty_org
+                    _cleanup_empty_org(cursor, existing_org_id)
                 else:
                     backfill_user_org_data(cursor, user_id, org_id)
 
