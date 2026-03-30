@@ -20,39 +20,47 @@ async function refreshSession(): Promise<void> {
   });
   if (!res.ok) throw new Error("refresh");
 
-  // Poll until the session cookie actually reflects the new org.
-  // The POST above triggers the JWT callback, but the browser cookie
-  // jar may not be settled by the time the next request leaves.
-  for (let attempt = 0; attempt < 8; attempt++) {
+  for (let attempt = 0; attempt < 10; attempt++) {
     const check = await fetch("/api/auth/session");
     if (check.ok) {
       const session = await check.json();
-      if (session?.user?.orgId && session.user.orgName?.toLowerCase() !== "default organization") {
+      const orgId = session?.user?.orgId;
+      const orgName = session?.user?.orgName?.toLowerCase();
+      if (orgId && orgName !== "default organization") {
         return;
       }
     }
-    await new Promise((r) => setTimeout(r, 300 + attempt * 200));
+    await new Promise((r) => setTimeout(r, 250 + attempt * 150));
   }
   throw new Error("session did not update");
 }
 
 async function verifyOrg(): Promise<void> {
   const res = await fetch("/api/orgs/current");
-  if (!res.ok) throw new Error("org");
+  if (!res.ok) throw new Error("org-verify");
 }
 
-async function prefetchDashboard(): Promise<void> {
-  await Promise.allSettled(
-    ["/api/incidents", "/api/orgs/stats", "/api/llm-usage/models", "/chat_api/sessions"].map(
-      (url) => fetch(url),
-    ),
+async function loadWorkspace(): Promise<void> {
+  const urls = [
+    "/api/incidents",
+    "/api/orgs/stats",
+    "/api/chat-sessions",
+    "/api/connectors/status",
+    "/api/llm-usage/models",
+  ];
+
+  const results = await Promise.allSettled(
+    urls.map((url) => fetch(url)),
   );
+
+  const failed = results.filter((r) => r.status === "rejected").length;
+  if (failed === results.length) throw new Error("all-prefetch-failed");
 }
 
 const STEPS: Step[] = [
   { label: "Refreshing your session", run: refreshSession },
   { label: "Verifying organization access", run: verifyOrg },
-  { label: "Loading your workspace", run: prefetchDashboard },
+  { label: "Loading your workspace", run: loadWorkspace },
 ];
 
 export default function OrgSwitchingPage() {
@@ -71,26 +79,31 @@ export default function OrgSwitchingPage() {
     (async () => {
       for (let i = 0; i < STEPS.length; i++) {
         setCurrent(i);
-        try {
-          await STEPS[i].run();
-        } catch {
-          if (i === 0) {
-            // Retry once — the session cookie may just need more time to settle
-            await new Promise((r) => setTimeout(r, 1000));
-            try {
-              await STEPS[i].run();
-            } catch {
-              setError("Session refresh failed. Redirecting…");
-              await new Promise((r) => setTimeout(r, 1500));
-              window.location.replace("/sign-in");
-              return;
+        let lastErr: unknown;
+
+        for (let retry = 0; retry <= (i === 0 ? 2 : 1); retry++) {
+          try {
+            await STEPS[i].run();
+            lastErr = null;
+            break;
+          } catch (e) {
+            lastErr = e;
+            if (retry < (i === 0 ? 2 : 1)) {
+              await new Promise((r) => setTimeout(r, 800 * (retry + 1)));
             }
           }
+        }
+
+        if (lastErr && i === 0) {
+          setError("Session refresh failed. Redirecting…");
+          await new Promise((r) => setTimeout(r, 1500));
+          window.location.replace("/sign-in");
+          return;
         }
       }
 
       setDone(true);
-      await new Promise((r) => setTimeout(r, 500));
+      await new Promise((r) => setTimeout(r, 400));
       window.location.replace("/");
     })();
   }, []);
