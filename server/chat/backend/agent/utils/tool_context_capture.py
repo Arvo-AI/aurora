@@ -168,11 +168,9 @@ class ToolContextCapture:
                     logger.warning(f"Truncating tool output from {len(content_to_summarize)} to {MAX_SUMMARIZATION_INPUT_CHARS} chars before summarization")
                     content_to_summarize = content_to_summarize[:MAX_SUMMARIZATION_INPUT_CHARS] + "\n\n[Truncated before summarization]"
                 llm = LLMManager()
-                from utils.cloud.cloud_utils import get_user_context
-                ctx = get_user_context()
                 summary = llm.summarize(
                     content_to_summarize, model=ModelConfig.TOOL_OUTPUT_SUMMARIZATION_MODEL,
-                    user_id=ctx.get("user_id"), session_id=ctx.get("session_id"),
+                    user_id=self.user_id, session_id=self.session_id,
                 )
                 summarized_content = summary + '\n\n[Summarized from longer output]'
                 summary_tokens = count_tokens(summarized_content)

@@ -13,6 +13,7 @@ export async function GET(request: NextRequest) {
     const response = await fetch(`${API_BASE_URL}/api/llm-usage/pricing`, {
       method: 'GET',
       headers: authHeaders,
+      signal: AbortSignal.timeout(10_000),
     });
 
     if (!response.ok) {
@@ -25,6 +26,9 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json(await response.json());
   } catch (error) {
+    if (error instanceof DOMException && error.name === 'TimeoutError') {
+      return NextResponse.json({ error: 'Backend timeout fetching pricing' }, { status: 504 });
+    }
     console.error('Error fetching pricing:', error);
     return NextResponse.json({ error: 'Failed to fetch pricing' }, { status: 500 });
   }

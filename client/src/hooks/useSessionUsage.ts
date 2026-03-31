@@ -57,11 +57,11 @@ export function useSessionUsage(sessionId: string | null): SessionUsageState {
   }, [sessionId]);
 
   const handleUsageUpdate = useCallback((data: Record<string, unknown>) => {
-    setCurrentStreaming({
-      model: (data.model as string) || "",
-      output_tokens: (data.output_tokens as number) || 0,
+    setCurrentStreaming((prev) => ({
+      model: (data.model as string) || prev?.model || "",
+      output_tokens: (data.output_chunks as number) ?? (data.output_tokens as number) ?? prev?.output_tokens ?? 0,
       is_streaming: true,
-    });
+    }));
   }, []);
 
   const handleUsageFinal = useCallback((data: Record<string, unknown>) => {

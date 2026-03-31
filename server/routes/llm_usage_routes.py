@@ -191,8 +191,27 @@ def get_pricing(user_id):
         pricing_info = LLMUsageTracker.get_pricing_info()
         provider_mode = os.getenv("LLM_PROVIDER_MODE", "direct")
 
+        effective_pricing = dict(LLMUsageTracker.MODEL_PRICING)
+
+        if provider_mode == "openrouter":
+            try:
+                from chat.backend.agent.utils.openrouter_pricing_service import get_pricing_service
+                svc = get_pricing_service()
+                dynamic = svc.get_pricing()
+                effective_pricing.update(dynamic)
+            except Exception:
+                pass
+        else:
+            try:
+                from chat.backend.agent.utils.provider_pricing_service import get_provider_pricing_service
+                svc = get_provider_pricing_service()
+                dynamic = svc.get_pricing()
+                effective_pricing.update(dynamic)
+            except Exception:
+                pass
+
         models = {}
-        for model_id, prices in LLMUsageTracker.MODEL_PRICING.items():
+        for model_id, prices in effective_pricing.items():
             if model_id == "default":
                 continue
             models[model_id] = {

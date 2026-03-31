@@ -216,8 +216,9 @@ class ProviderPricingService:
                         f"Provider pricing cache updated: {len(new_pricing)} models"
                     )
                 elif not self._cache:
-                    self._last_fetch = datetime.now()
-                    logger.warning("No provider pricing fetched and no cached data")
+                    logger.warning(
+                        "No provider pricing fetched and no cached data; will retry on next call"
+                    )
         finally:
             with self._lock:
                 self._fetch_in_progress = False

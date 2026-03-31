@@ -84,7 +84,7 @@ export default function AnimatedNumber({
                 transition: isAnimating
                   ? `transform ${duration}ms cubic-bezier(0.16, 1, 0.3, 1), opacity ${duration}ms ease-out`
                   : "none",
-                transform: isAnimating ? "translateY(0)" : "translateY(0)",
+                transform: "translateY(0)",
                 animation: isAnimating ? `digitRollIn ${duration}ms cubic-bezier(0.16, 1, 0.3, 1)` : "none",
               }}
             >
