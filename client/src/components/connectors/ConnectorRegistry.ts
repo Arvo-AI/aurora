@@ -78,6 +78,19 @@ class ConnectorRegistry {
     });
 
     this.register({
+      id: "elasticsearch",
+      name: "Elasticsearch",
+      description: "Connect to Elasticsearch or OpenSearch for log analytics, full-text search, and alert monitoring with Watcher.",
+      iconPath: "/elasticsearch.svg",
+      iconBgColor: "bg-white dark:bg-white",
+      category: "Monitoring",
+      path: "/elasticsearch/auth",
+      storageKey: "isElasticsearchConnected",
+      alertsPath: "/elasticsearch/alerts",
+      alertsLabel: "View Alerts",
+    });
+
+    this.register({
         id: "dynatrace",
         name: "Dynatrace",
         description: "Connect to Dynatrace for full-stack observability. Receive problem notifications and query metrics, logs, and entities for root cause analysis.",

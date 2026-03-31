@@ -714,6 +714,26 @@ def initialize_tables():
                     CREATE INDEX IF NOT EXISTS idx_splunk_alerts_state ON splunk_alerts(alert_state);
                     CREATE INDEX IF NOT EXISTS idx_splunk_alerts_received_at ON splunk_alerts(received_at DESC);
                 """,
+                "elasticsearch_alerts": """
+                    CREATE TABLE IF NOT EXISTS elasticsearch_alerts (
+                        id SERIAL PRIMARY KEY,
+                        user_id VARCHAR(255) NOT NULL,
+                        alert_id VARCHAR(255),
+                        alert_title TEXT,
+                        alert_state VARCHAR(50),
+                        watch_id VARCHAR(255),
+                        query TEXT,
+                        result_count INTEGER,
+                        severity VARCHAR(50),
+                        payload JSONB NOT NULL,
+                        received_at TIMESTAMP NOT NULL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+
+                    CREATE INDEX IF NOT EXISTS idx_elasticsearch_alerts_user_id ON elasticsearch_alerts(user_id, received_at DESC);
+                    CREATE INDEX IF NOT EXISTS idx_elasticsearch_alerts_state ON elasticsearch_alerts(alert_state);
+                    CREATE INDEX IF NOT EXISTS idx_elasticsearch_alerts_received_at ON elasticsearch_alerts(received_at DESC);
+                """,
                 "jenkins_deployment_events": """
                     CREATE TABLE IF NOT EXISTS jenkins_deployment_events (
                         id SERIAL PRIMARY KEY,
@@ -930,6 +950,7 @@ def initialize_tables():
             rls_tables.append("netdata_alerts")
             rls_tables.append("netdata_verification_tokens")
             rls_tables.append("splunk_alerts")
+            rls_tables.append("elasticsearch_alerts")
             rls_tables.append("bigpanda_events")
             rls_tables.append("jenkins_deployment_events")
             rls_tables.append("dynatrace_problems")

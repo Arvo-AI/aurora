@@ -149,6 +149,10 @@ CORS(app, origins=FRONTEND_URL, supports_credentials=True,
                        "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
                                          "Authorization", "X-Provider-Preference"],
                        "methods": ["GET", "POST", "DELETE", "OPTIONS"]},
+        r"/elasticsearch/*": {"origins": FRONTEND_URL, "supports_credentials": True,
+                              "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
+                                                "Authorization", "X-Provider-Preference"],
+                              "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"]},
          r"/bigpanda/*": {"origins": FRONTEND_URL, "supports_credentials": True,
                           "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
                                             "Authorization", "X-Provider-Preference"],
@@ -251,6 +255,12 @@ from routes.splunk import bp as splunk_bp, search_bp as splunk_search_bp  # noqa
 import routes.splunk.tasks  # noqa: F401
 app.register_blueprint(splunk_bp, url_prefix="/splunk")
 app.register_blueprint(splunk_search_bp, url_prefix="/splunk")
+
+# --- Elasticsearch Integration Routes ---
+from routes.elasticsearch import bp as elasticsearch_bp, search_bp as elasticsearch_search_bp  # noqa: F401
+import routes.elasticsearch.tasks  # noqa: F401
+app.register_blueprint(elasticsearch_bp, url_prefix="/elasticsearch")
+app.register_blueprint(elasticsearch_search_bp, url_prefix="/elasticsearch")
 
 # --- Coroot Integration Routes ---
 from routes.coroot import bp as coroot_bp  # noqa: F401

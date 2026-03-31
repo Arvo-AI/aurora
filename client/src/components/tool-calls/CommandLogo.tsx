@@ -124,6 +124,14 @@ const logos = {
       onError={(e) => console.error('Failed to load Splunk logo:', e)}
     />
   ),
+  elasticsearch: (
+    <img
+      src="/elasticsearch.svg"
+      className="w-4 h-4 min-w-4 min-h-4 object-contain"
+      alt="Elasticsearch"
+      onError={(e) => console.error('Failed to load Elasticsearch logo:', e)}
+    />
+  ),
   jenkins: (
     <img
       src="/jenkins.svg"
@@ -249,6 +257,11 @@ const getLogoForCommand = (command: string | any, toolName: string, provider?: s
   // Splunk tools
   if (tool.includes('splunk') || tool === 'search_splunk' || tool === 'list_splunk_indexes' || tool === 'list_splunk_sourcetypes') {
     return 'splunk'
+  }
+
+  // Elasticsearch tools
+  if (tool.includes('elasticsearch') || tool === 'search_elasticsearch' || tool === 'list_elasticsearch_indices') {
+    return 'elasticsearch'
   }
 
   // CloudBees tools
