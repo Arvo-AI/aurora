@@ -7,11 +7,10 @@ Flow:
 2. User adds Aurora's public SSH key to their devices' ~/.ssh/authorized_keys
 3. On SSH request: Aurora uses stored private key to SSH into the device
 
-In K8s mode: Uses existing terminal pod, writes SSH key to pod, joins tailnet if needed
+In K8s mode: Uses existing terminal pod, writes SSH key to pod, runs SSH
 In local dev: Uses direct SSH execution with stored keys
 """
 
-import hashlib
 import json
 import logging
 import os
@@ -34,12 +33,8 @@ def _execute_ssh_local(
 ) -> str:
     """Execute SSH command in local development mode.
 
-    Uses regular SSH with key-based authentication to Tailscale IP addresses.
-    The container must be on the tailnet (tailscale up) to reach Tailscale IPs.
-
-    This approach works with any device that has:
-    1. Regular SSH server enabled (sshd)
-    2. SSH key authentication configured
+    Uses regular SSH with key-based authentication.
+    Requires the device to be network-reachable and have SSH key auth configured.
 
     Args:
         device_hostname: Target device hostname or IP
@@ -257,28 +252,6 @@ def tailscale_ssh(
                 "hint": "Go to Settings > Cloud Providers > Tailscale > SSH Setup to get your SSH key."
             })
 
-        # Try to join tailnet if targeting a Tailscale hostname
-        is_tailscale_hostname = device_hostname.endswith(".ts.net") or device_hostname.startswith("100.")
-        if is_tailscale_hostname:
-            import subprocess as sp
-            try:
-                ts_status = sp.run(
-                    ["tailscale", "--socket=/tmp/tailscaled.sock", "status", "--json"],
-                    capture_output=True, text=True, timeout=5
-                )
-                if ts_status.returncode != 0:
-                    tailscale_auth_key = token_data.get("tailscale_auth_key") if token_data else None
-                    if tailscale_auth_key:
-                        user_hash = hashlib.sha256(user_id.encode()).hexdigest()[:8]
-                        aurora_hostname = f"aurora-{user_hash}"
-                        sp.run(
-                            ["tailscale", "--socket=/tmp/tailscaled.sock", "up",
-                             f"--authkey={tailscale_auth_key}", f"--hostname={aurora_hostname}"],
-                            capture_output=True, text=True, timeout=30
-                        )
-            except (FileNotFoundError, sp.TimeoutExpired, Exception) as e:
-                logger.warning(f"Tailscale join failed in local mode: {e}. Continuing with SSH via host network.")
-
         return _execute_ssh_local(device_hostname, command, ssh_user, timeout, ssh_private_key)
 
     # K8S MODE: Use existing terminal pod with stored SSH keys
@@ -289,8 +262,6 @@ def tailscale_ssh(
                 "success": False,
                 "error": "Tailscale not connected. Please connect your Tailscale account first."
             })
-
-        tailscale_auth_key = token_data.get("tailscale_auth_key")
 
         if not ssh_private_key:
             return json.dumps({
@@ -316,9 +287,9 @@ def tailscale_ssh(
                 raise ApiException(status=404)
         except ApiException as e:
             if e.status == 404:
-                logger.info(f"Creating Tailscale terminal pod: {pod_name}")
-                success, pod_info = manager.create_tailscale_terminal_pod(
-                    user_id, session_id, tailscale_auth_key
+                logger.info(f"Creating terminal pod: {pod_name}")
+                success, pod_info = manager.create_terminal_pod(
+                    user_id, session_id
                 )
                 if not success:
                     error_msg = pod_info.get('error', 'Failed to create SSH environment')
@@ -373,56 +344,7 @@ chmod 600 /tmp/.ssh/aurora_key
                 "provider": "tailscale_ssh"
             })
 
-        # Ensure pod is on tailnet (join if not already)
-        # First, restore Tailscale state from DB to reuse existing device identity
-        tailscale_state_restored = False
-        if tailscale_auth_key:
-            try:
-                from utils.terminal.terminal_tailscale_state import restore_tailscale_state
-                tailscale_state_restored = restore_tailscale_state(
-                    manager.core_v1, pod_name, manager.namespace, user_id
-                )
-                if tailscale_state_restored:
-                    logger.info(f"Restored Tailscale state for user {user_id}")
-            except Exception as restore_err:
-                logger.warning(f"Failed to restore Tailscale state: {restore_err}")
-
-            user_hash = hashlib.sha256(user_id.encode()).hexdigest()[:8]
-            aurora_hostname = f"aurora-{user_hash}"
-            state_path = "/home/appuser/.local/share/tailscale/tailscaled.state"
-
-            # Use restored state path if state was restored, otherwise use temp path
-            tailscale_join_cmd = f"""
-if ! timeout 5 tailscale --socket=/tmp/tailscaled.sock status 2>/dev/null | grep -q "100\\."; then
-    if ! pgrep -x tailscaled > /dev/null; then
-        mkdir -p /home/appuser/.local/share/tailscale
-        tailscaled --state={state_path} --socket=/tmp/tailscaled.sock --tun=userspace-networking --statedir=/home/appuser/.local/share/tailscale > /dev/null 2>&1 &
-        sleep 2
-    fi
-    timeout 30 tailscale --socket=/tmp/tailscaled.sock up --authkey={tailscale_auth_key} --hostname={aurora_hostname} --accept-routes 2>&1 || true
-    sleep 1
-fi
-"""
-            try:
-                stream(
-                    manager.core_v1.connect_get_namespaced_pod_exec,
-                    pod_name,
-                    manager.namespace,
-                    command=["/bin/bash", "-c", tailscale_join_cmd],
-                    container="terminal",
-                    stderr=True,
-                    stdin=False,
-                    stdout=True,
-                    tty=False
-                )
-            except Exception as e:
-                logger.warning(f"Tailscale join failed in pod: {e}. Continuing - device may be reachable if already on tailnet.")
-
         # Execute SSH command
-        # Use ProxyCommand with tailscale nc for userspace networking mode
-        # In K8s, Tailscale runs with --tun=userspace-networking which doesn't create
-        # a kernel tun device. Direct SSH to 100.x.x.x IPs fails because the kernel
-        # can't route to them. ProxyCommand routes traffic through Tailscale's tunnel.
         escaped_command = command.replace("'", "'\\''")
         ssh_cmd = (
             f"ssh -i /tmp/.ssh/aurora_key "
@@ -430,7 +352,6 @@ fi
             f"-o UserKnownHostsFile=/dev/null "
             f"-o BatchMode=yes "
             f"-o ConnectTimeout=30 "
-            f"-o ProxyCommand='tailscale --socket=/tmp/tailscaled.sock nc %h %p' "
             f"{ssh_user}@{device_hostname} '{escaped_command}'"
         )
 
@@ -462,17 +383,6 @@ fi
                     "device": device_hostname,
                     "provider": "tailscale_ssh"
                 })
-
-            # Save Tailscale state after successful connection
-            # This preserves device identity for future sessions
-            if tailscale_auth_key:
-                try:
-                    from utils.terminal.terminal_tailscale_state import save_tailscale_state
-                    save_tailscale_state(
-                        manager.core_v1, pod_name, manager.namespace, user_id
-                    )
-                except Exception as save_err:
-                    logger.debug(f"Failed to save Tailscale state: {save_err}")
 
             return json.dumps({
                 "success": True,

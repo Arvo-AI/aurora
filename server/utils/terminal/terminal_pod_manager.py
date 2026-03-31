@@ -69,8 +69,7 @@ class TerminalPodManager:
         self,
         user_id: str,
         session_id: str,
-        env_vars: Optional[Dict[str, str]] = None,
-        enable_tailscale: bool = False
+        env_vars: Optional[Dict[str, str]] = None
     ) -> Tuple[bool, Dict[str, Any]]:
         """Create a new terminal pod for this chat session.
 
@@ -78,7 +77,6 @@ class TerminalPodManager:
             user_id: User ID for isolation
             session_id: Chat session ID
             env_vars: Optional environment variables to inject
-            enable_tailscale: If True, runs tailscale-init.sh on pod startup
 
         Returns:
             Tuple of (success, pod_info_dict)
@@ -177,12 +175,6 @@ class TerminalPodManager:
     ) -> client.V1Pod:
         """Create pod specification with maximum security."""
 
-        # Base command - just keep container alive
-        # Tailscale setup is handled by tailscale_ssh_tool.py which:
-        # 1. Restores state from storage (to reuse existing device identity)
-        # 2. Starts tailscaled and joins tailnet
-        # 3. Saves state back to storage after successful connection
-        # This approach ensures we can restore state BEFORE joining.
         container_command = ["/bin/bash", "-c", "tail -f /dev/null"]
 
         terminal_container = client.V1Container(
@@ -294,86 +286,4 @@ class TerminalPodManager:
             True if pod is ready, False otherwise
         """
         return self._wait_for_pod_ready(pod_name, timeout_seconds)
-
-    def create_tailscale_terminal_pod(
-        self,
-        user_id: str,
-        session_id: str,
-        tailscale_auth_key: str
-    ) -> Tuple[bool, Dict[str, Any]]:
-        """Create terminal pod with Tailscale connectivity.
-
-        Convenience method that creates a terminal pod configured to join
-        a Tailscale tailnet. Uses persistent auth key (one device per user).
-
-        The pod joins tailnet with hostname based on user_id hash, ensuring
-        only ONE Aurora device appears in user's Tailscale admin regardless
-        of how many sessions/pods are created.
-
-        Args:
-            user_id: User ID for isolation (used for Tailscale hostname)
-            session_id: Chat session ID
-            tailscale_auth_key: Reusable Tailscale auth key
-
-        Returns:
-            Tuple of (success, pod_info_dict)
-        """
-        # Pass USER_ID so tailscale-init.sh can compute consistent hostname
-        env_vars = {
-            "TS_AUTH_KEY": tailscale_auth_key,
-            "TAILSCALE_USERSPACE": "1",
-            "USER_ID": user_id  # For consistent one-device-per-user hostname
-        }
-        return self.create_terminal_pod(
-            user_id=user_id,
-            session_id=session_id,
-            env_vars=env_vars,
-            enable_tailscale=True
-        )
-
-    def wait_for_tailscale_ready(
-        self,
-        pod_name: str,
-        timeout_seconds: int = 30
-    ) -> Tuple[bool, Optional[str]]:
-        """Wait for Tailscale to connect in a pod.
-
-        Args:
-            pod_name: Name of the terminal pod
-            timeout_seconds: Maximum time to wait
-
-        Returns:
-            Tuple of (success, error_message)
-        """
-        from kubernetes.stream import stream
-
-        start_time = time.time()
-        while time.time() - start_time < timeout_seconds:
-            try:
-                # Check if tailscale status shows connected
-                result = stream(
-                    self.core_v1.connect_get_namespaced_pod_exec,
-                    pod_name,
-                    self.namespace,
-                    command=[
-                        "/bin/bash", "-c",
-                        "tailscale --socket=/tmp/tailscaled.sock status 2>/dev/null | head -1"
-                    ],
-                    container="terminal",
-                    stderr=True,
-                    stdin=False,
-                    stdout=True,
-                    tty=False
-                )
-
-                if result and "100." in result:
-                    logger.info(f"Tailscale connected in pod {pod_name}")
-                    return True, None
-
-            except Exception as e:
-                logger.debug(f"Tailscale not ready yet in {pod_name}: {e}")
-
-            time.sleep(2)
-
-        return False, f"Tailscale not ready after {timeout_seconds}s"
 
