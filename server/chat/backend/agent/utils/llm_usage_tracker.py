@@ -573,10 +573,12 @@ class LLMUsageTracker:
                 else "static_fallback",
             }
         except Exception as e:
-            logger.warning(f"Error getting pricing info: {e}")
+            # Log full exception details on the server, but do not expose them to clients
+            logger.warning("Error getting pricing info", exc_info=True)
             return {
                 "dynamic_pricing_enabled": False,
-                "error": str(e),
+                # Return a generic error message that does not reveal internal details
+                "error": "Failed to load dynamic pricing data",
                 "fallback_models_count": len(cls.MODEL_PRICING),
                 "pricing_source": "static_fallback",
             }
