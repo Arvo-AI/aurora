@@ -103,6 +103,7 @@ def generate_repo_metadata(self, user_id: str, repo_full_name: str):
 
         from chat.backend.agent.providers import create_chat_model
         from chat.backend.agent.llm import ModelConfig
+        from chat.backend.agent.utils.llm_usage_tracker import tracked_invoke
         from langchain_core.messages import HumanMessage
 
         llm = create_chat_model(
@@ -112,7 +113,13 @@ def generate_repo_metadata(self, user_id: str, repo_full_name: str):
         )
 
         prompt = METADATA_PROMPT.format(context="\n\n".join(context_parts))
-        response = llm.invoke([HumanMessage(content=prompt)])
+        response = tracked_invoke(
+            llm,
+            [HumanMessage(content=prompt)],
+            user_id=user_id,
+            model_name=ModelConfig.INCIDENT_REPORT_SUMMARIZATION_MODEL,
+            request_type="github_repo_metadata",
+        )
 
         summary = response.content.strip() if response.content else "No summary generated"
         _update_metadata(user_id, repo_full_name, summary, "ready")
