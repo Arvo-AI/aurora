@@ -275,7 +275,8 @@ class LLMManager:
                         logger.warning(f"No provider usage data for {model.model_name} - tokens will be 0")
 
                     estimated_cost = LLMUsageTracker.calculate_cost(
-                        input_tokens, output_tokens, model.model_name
+                        input_tokens, output_tokens, model.model_name,
+                        provider_mode=self.provider_mode,
                     )
                     response_time_ms = int((time.time() - start_time) * 1000)
 

@@ -1,4 +1,5 @@
 import logging
+import os
 import time
 from typing import Dict, Optional, Any
 from dataclasses import dataclass
@@ -7,6 +8,7 @@ import tiktoken
 import json
 from utils.db.connection_pool import db_pool
 from .openrouter_pricing_service import get_pricing_service
+from .provider_pricing_service import get_provider_pricing_service
 
 logger = logging.getLogger(__name__)
 
@@ -43,22 +45,30 @@ class LLMUsageTracker:
         "openai/gpt-4.1-mini": {"input": 0.0004, "output": 0.0016},
         "openai/gpt-4o": {"input": 0.0025, "output": 0.01},
         "openai/gpt-4o-mini": {"input": 0.00015, "output": 0.0006},
-        # Anthropic
+        # Anthropic (both dot and hyphen variants for lookup flexibility)
+        "anthropic/claude-opus-4.6": {"input": 0.005, "output": 0.025},
         "anthropic/claude-opus-4-6": {"input": 0.005, "output": 0.025},
+        "anthropic/claude-sonnet-4.6": {"input": 0.003, "output": 0.015},
         "anthropic/claude-sonnet-4-6": {"input": 0.003, "output": 0.015},
+        "anthropic/claude-opus-4.5": {"input": 0.005, "output": 0.025},
         "anthropic/claude-opus-4-5": {"input": 0.005, "output": 0.025},
+        "anthropic/claude-sonnet-4.5": {"input": 0.003, "output": 0.015},
         "anthropic/claude-sonnet-4-5": {"input": 0.003, "output": 0.015},
+        "anthropic/claude-haiku-4.5": {"input": 0.001, "output": 0.005},
         "anthropic/claude-haiku-4-5": {"input": 0.001, "output": 0.005},
         "anthropic/claude-3.5-sonnet": {"input": 0.003, "output": 0.015},
         "anthropic/claude-3-haiku": {"input": 0.00025, "output": 0.00125},
-        # Google AI / Vertex AI
-        "google/gemini-3.1-pro-preview": {"input": 0.00125, "output": 0.01},
+        # Google AI / Vertex AI — verified against Google Cloud Billing Catalog API
+        "google/gemini-3.1-pro-preview": {"input": 0.002, "output": 0.012},
+        "google/gemini-3.1-flash-lite-preview": {"input": 0.00025, "output": 0.0015},
+        "google/gemini-3-pro-preview": {"input": 0.002, "output": 0.012},
         "google/gemini-3-flash": {"input": 0.0005, "output": 0.003},
-        "google/gemini-3-pro-preview": {"input": 0.00125, "output": 0.01},
         "google/gemini-2.5-pro": {"input": 0.00125, "output": 0.01},
         "google/gemini-2.5-flash": {"input": 0.0003, "output": 0.0025},
         "google/gemini-2.5-flash-lite": {"input": 0.0001, "output": 0.0004},
-        "vertex/gemini-3.1-pro-preview": {"input": 0.00125, "output": 0.01},
+        "vertex/gemini-3.1-pro-preview": {"input": 0.002, "output": 0.012},
+        "vertex/gemini-3.1-flash-lite-preview": {"input": 0.00025, "output": 0.0015},
+        "vertex/gemini-3-pro-preview": {"input": 0.002, "output": 0.012},
         "vertex/gemini-3-flash": {"input": 0.0005, "output": 0.003},
         "vertex/gemini-2.5-pro": {"input": 0.00125, "output": 0.01},
         "vertex/gemini-2.5-flash": {"input": 0.0003, "output": 0.0025},
@@ -153,34 +163,51 @@ class LLMUsageTracker:
         output_tokens: int,
         model_name: str,
         use_dynamic_pricing: bool = True,
+        provider_mode: Optional[str] = None,
     ) -> float:
-        """Calculate estimated cost based on token usage and model pricing"""
+        """Calculate estimated cost based on token usage and model pricing.
+
+        Pricing resolution order:
+        1. OpenRouter mode -> OpenRouter dynamic pricing API
+        2. Direct mode, Google/Vertex models -> Google Cloud Billing Catalog API
+        3. Static MODEL_PRICING table (all providers, always available)
+        4. Default fallback
+        """
+        if provider_mode is None:
+            provider_mode = os.getenv("LLM_PROVIDER_MODE")
+
         try:
             pricing = None
 
-            # Try to get dynamic pricing from OpenRouter first
             if use_dynamic_pricing:
-                try:
-                    pricing_service = get_pricing_service()
-                    pricing = pricing_service.get_model_pricing(model_name)
-                    logger.debug(f"Using dynamic pricing for {model_name}: {pricing}")
-                except Exception as e:
-                    logger.warning(
-                        f"Failed to get dynamic pricing for {model_name}: {e}"
-                    )
+                if provider_mode == "openrouter":
+                    try:
+                        pricing_service = get_pricing_service()
+                        pricing = pricing_service.get_model_pricing(model_name)
+                        logger.debug(f"Using OpenRouter dynamic pricing for {model_name}: {pricing}")
+                    except Exception as e:
+                        logger.warning(
+                            f"Failed to get OpenRouter dynamic pricing for {model_name}: {e}"
+                        )
+                else:
+                    # Direct mode: try provider-specific billing API
+                    try:
+                        provider_svc = get_provider_pricing_service()
+                        pricing = provider_svc.get_model_pricing(model_name)
+                        if pricing:
+                            logger.debug(f"Using provider billing API pricing for {model_name}: {pricing}")
+                    except Exception as e:
+                        logger.debug(
+                            f"Provider billing API unavailable for {model_name}: {e}"
+                        )
 
-            # Fallback to static pricing if dynamic pricing fails or is disabled
             if not pricing:
-                # Get pricing for the model (with fallback for version suffixes)
                 pricing = cls.MODEL_PRICING.get(model_name)
 
-                # If exact match not found, try without version suffix
                 if not pricing:
-                    # Remove version suffixes like .1, -v1, etc.
                     base_model = model_name.split(".")[0].split("-v")[0]
                     pricing = cls.MODEL_PRICING.get(base_model)
 
-                # Final fallback to default pricing
                 if not pricing:
                     pricing = cls.MODEL_PRICING["default"]
                     logger.info(
@@ -189,7 +216,6 @@ class LLMUsageTracker:
                 else:
                     logger.debug(f"Using static pricing for {model_name}: {pricing}")
 
-            # Calculate cost (pricing is per 1K tokens)
             input_cost = (input_tokens / 1000) * pricing["input"]
             output_cost = (output_tokens / 1000) * pricing["output"]
 
@@ -503,6 +529,24 @@ class LLMUsageTracker:
     @classmethod
     def get_pricing_info(cls) -> Dict[str, Any]:
         """Get information about current pricing sources and cache status"""
+        provider_mode = os.getenv("LLM_PROVIDER_MODE")
+
+        if provider_mode != "openrouter":
+            provider_cache = {}
+            try:
+                provider_svc = get_provider_pricing_service()
+                provider_cache = provider_svc.get_cache_info()
+            except Exception:
+                pass
+
+            return {
+                "dynamic_pricing_enabled": True,
+                "pricing_source": "provider_billing_api",
+                "fallback_models_count": len(cls.MODEL_PRICING),
+                "provider_mode": provider_mode,
+                "provider_cache": provider_cache,
+            }
+
         try:
             pricing_service = get_pricing_service()
             cache_info = pricing_service.get_cache_info()
