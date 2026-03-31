@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
-import { ChevronDown, BarChart3, Zap, DollarSign, Clock } from "lucide-react";
+import { ChevronDown, BarChart3, Zap, DollarSign } from "lucide-react";
 import { SessionUsageState, RequestUsage } from "@/hooks/useSessionUsage";
 import AnimatedNumber from "@/components/AnimatedNumber";
 

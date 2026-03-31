@@ -926,7 +926,7 @@ class Workflow:
         _token_count = 0
         _event_count = 0
         _model_turn_tokens = 0  # Tokens yielded in current model turn
-        _model_turn_start = 0.0  # Start time of current model turn
+        _model_turn_start: float | None = None  # Start time of current model turn
 
         # Session-level usage accumulator
         _session_usage = {
@@ -1070,6 +1070,7 @@ class Workflow:
                                 "response_time_ms": response_time_ms,
                                 "session_totals": _session_usage.copy(),
                             })
+                            _model_turn_start = None
                         else:
                             logger.warning(f"[USAGE] No usage_metadata on on_chat_model_end for {input_state.model}")
                 

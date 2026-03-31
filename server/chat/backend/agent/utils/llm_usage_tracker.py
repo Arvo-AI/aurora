@@ -85,24 +85,12 @@ class LLMUsageTracker:
     def count_tokens(cls, text: str, model_name: str = "gpt-4") -> int:
         """Count tokens in text using tiktoken"""
         try:
-            # Map model names to tiktoken encodings
-            encoding_map = {
-                "gpt-4": "cl100k_base",
-                "gpt-4o": "o200k_base",
-                "gpt-3.5-turbo": "cl100k_base",
-                "claude": "cl100k_base",  # Use GPT-4 encoding as approximation
-                "default": "cl100k_base",
-            }
-
-            # Determine encoding based on model
             if "gpt-4o" in model_name:
                 encoding_name = "o200k_base"
             elif "gpt-4" in model_name or "gpt-3.5" in model_name:
                 encoding_name = "cl100k_base"
-            elif "claude" in model_name.lower():
-                encoding_name = "cl100k_base"  # Approximation
             else:
-                encoding_name = "cl100k_base"  # Default
+                encoding_name = "cl100k_base"
 
             encoding = tiktoken.get_encoding(encoding_name)
             return len(encoding.encode(str(text)))
@@ -300,8 +288,8 @@ class LLMUsageTracker:
                 try:
                     from utils.auth.stateless_auth import get_org_id_for_user
                     usage.org_id = get_org_id_for_user(usage.user_id)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("Could not resolve org_id for user %s: %s", usage.user_id, e)
 
             with db_pool.get_user_connection() as conn:
                 cursor = conn.cursor()
@@ -561,8 +549,8 @@ class LLMUsageTracker:
             try:
                 provider_svc = get_provider_pricing_service()
                 provider_cache = provider_svc.get_cache_info()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Could not fetch provider pricing cache info: %s", e)
 
             return {
                 "dynamic_pricing_enabled": True,
@@ -612,7 +600,7 @@ def tracked_invoke(
     session_id: Optional[str] = None,
     model_name: str,
     request_type: str,
-    api_provider: str = "openrouter",
+    api_provider: Optional[str] = None,
     org_id: Optional[str] = None,
 ):
     """Invoke an LLM and automatically track the usage.
@@ -624,6 +612,7 @@ def tracked_invoke(
     start_time = time.time()
     error_message = None
     response = None
+    resolved_provider = api_provider or os.getenv("LLM_PROVIDER_MODE", "direct")
     try:
         response = llm.invoke(messages)
         return response
@@ -641,7 +630,7 @@ def tracked_invoke(
                 response=response,
                 start_time=start_time,
                 error_message=error_message,
-                api_provider=api_provider,
+                api_provider=resolved_provider,
                 org_id=org_id,
             )
         except Exception as track_err:

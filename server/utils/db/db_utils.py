@@ -1335,12 +1335,21 @@ def initialize_tables():
                     ALTER COLUMN surcharge_rate SET DEFAULT 0.0000;
                 """)
                 cursor.execute("""
-                    UPDATE llm_usage_tracking
-                    SET surcharge_rate = 0.0000
-                    WHERE surcharge_rate != 0.0000;
+                    SELECT EXISTS(
+                        SELECT 1 FROM llm_usage_tracking
+                        WHERE surcharge_rate != 0.0000
+                        LIMIT 1
+                    );
                 """)
+                has_nonzero = cursor.fetchone()[0]
+                if has_nonzero:
+                    cursor.execute("""
+                        UPDATE llm_usage_tracking
+                        SET surcharge_rate = 0.0000
+                        WHERE surcharge_rate != 0.0000;
+                    """)
+                    logging.info(f"Zeroed surcharge_rate on {cursor.rowcount} llm_usage_tracking rows.")
                 conn.commit()
-                logging.info("Zeroed surcharge_rate on llm_usage_tracking (raw provider costs).")
             except Exception as e:
                 logging.warning(f"Error zeroing surcharge_rate: {e}")
                 conn.rollback()
@@ -1348,17 +1357,26 @@ def initialize_tables():
             # Migration: Backfill org_id on llm_usage_tracking from users table
             try:
                 cursor.execute("""
-                    UPDATE llm_usage_tracking lut
-                    SET org_id = u.org_id
-                    FROM users u
-                    WHERE lut.user_id = u.id::text
-                      AND lut.org_id IS NULL
-                      AND u.org_id IS NOT NULL;
+                    SELECT EXISTS(
+                        SELECT 1 FROM llm_usage_tracking
+                        WHERE org_id IS NULL
+                        LIMIT 1
+                    );
                 """)
-                updated = cursor.rowcount
+                has_null_org = cursor.fetchone()[0]
+                if has_null_org:
+                    cursor.execute("""
+                        UPDATE llm_usage_tracking lut
+                        SET org_id = u.org_id
+                        FROM users u
+                        WHERE lut.user_id = u.id::text
+                          AND lut.org_id IS NULL
+                          AND u.org_id IS NOT NULL;
+                    """)
+                    updated = cursor.rowcount
+                    if updated > 0:
+                        logging.info(f"Backfilled org_id on {updated} llm_usage_tracking rows.")
                 conn.commit()
-                if updated > 0:
-                    logging.info(f"Backfilled org_id on {updated} llm_usage_tracking rows.")
             except Exception as e:
                 logging.warning(f"Error backfilling org_id on llm_usage_tracking: {e}")
                 conn.rollback()

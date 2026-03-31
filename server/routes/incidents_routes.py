@@ -694,12 +694,23 @@ def get_incident(user_id, incident_id: str):
 
                 # Fetch token usage for the RCA session
                 rca_session_id = incident.get("chatSessionId")
-                incident_created = incident.get("createdAt")
                 usage_totals = None
                 if rca_session_id:
                     try:
+                        usage_where = """
+                            session_id = %s
+                            OR (session_id IS NULL
+                                AND user_id = %s
+                                AND request_type = 'incident_initial_summary'
+                                AND timestamp BETWEEN
+                                    (SELECT created_at - INTERVAL '2 minutes' FROM incidents WHERE id = %s)
+                                    AND
+                                    (SELECT created_at + INTERVAL '2 minutes' FROM incidents WHERE id = %s))
+                        """
+                        usage_params = (rca_session_id, user_id, incident_id, incident_id)
+
                         cursor.execute(
-                            """
+                            f"""
                             SELECT
                                 COUNT(*) as request_count,
                                 COALESCE(SUM(input_tokens), 0) as total_input_tokens,
@@ -707,22 +718,14 @@ def get_incident(user_id, incident_id: str):
                                 COALESCE(SUM(total_tokens), 0) as total_tokens,
                                 COALESCE(SUM(estimated_cost), 0) as total_cost
                             FROM llm_usage_tracking
-                            WHERE session_id = %s
-                               OR (session_id IS NULL
-                                   AND user_id = %s
-                                   AND request_type = 'incident_initial_summary'
-                                   AND timestamp BETWEEN
-                                       (SELECT created_at - INTERVAL '2 minutes' FROM incidents WHERE id = %s)
-                                       AND
-                                       (SELECT created_at + INTERVAL '2 minutes' FROM incidents WHERE id = %s))
+                            WHERE {usage_where}
                             """,
-                            (rca_session_id, user_id, incident_id, incident_id),
+                            usage_params,
                         )
                         urow = cursor.fetchone()
                         if urow and urow[0] > 0:
-                            # Per-model breakdown
                             cursor.execute(
-                                """
+                                f"""
                                 SELECT
                                     model_name,
                                     COUNT(*) as request_count,
@@ -730,18 +733,11 @@ def get_incident(user_id, incident_id: str):
                                     COALESCE(SUM(output_tokens), 0),
                                     COALESCE(SUM(estimated_cost), 0)
                                 FROM llm_usage_tracking
-                                WHERE session_id = %s
-                                   OR (session_id IS NULL
-                                       AND user_id = %s
-                                       AND request_type = 'incident_initial_summary'
-                                       AND timestamp BETWEEN
-                                           (SELECT created_at - INTERVAL '2 minutes' FROM incidents WHERE id = %s)
-                                           AND
-                                           (SELECT created_at + INTERVAL '2 minutes' FROM incidents WHERE id = %s))
+                                WHERE {usage_where}
                                 GROUP BY model_name
                                 ORDER BY SUM(estimated_cost) DESC
                                 """,
-                                (rca_session_id, user_id, incident_id, incident_id),
+                                usage_params,
                             )
                             model_rows = cursor.fetchall()
                             models = [
@@ -772,9 +768,7 @@ def get_incident(user_id, incident_id: str):
                 incident["tokenUsage"] = usage_totals
 
                 logger.info(
-                    "[INCIDENTS] Retrieved incident %s for user %s with %d suggestions, %d thoughts, %d citations, %d chat sessions",
-                    incident_id,
-                    user_id,
+                    "[INCIDENTS] Retrieved incident with %d suggestions, %d thoughts, %d citations, %d chat sessions",
                     len(suggestions),
                     len(thoughts),
                     len(citations),

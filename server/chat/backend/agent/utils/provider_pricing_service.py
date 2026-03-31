@@ -10,8 +10,6 @@ Pricing is cached for 24 hours since provider rates rarely change more frequentl
 """
 
 import logging
-import os
-import time
 import requests
 from typing import Dict, Optional
 from datetime import datetime, timedelta
@@ -102,10 +100,9 @@ class ProviderPricingService:
             credentials, _ = google.auth.default()
             credentials.refresh(google.auth.transport.requests.Request())
             return credentials.token
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("GCP ADC credentials unavailable: %s", e)
 
-        # Fallback: try gcloud CLI (for dev environments)
         try:
             import subprocess
             result = subprocess.run(
@@ -114,8 +111,8 @@ class ProviderPricingService:
             )
             if result.returncode == 0:
                 return result.stdout.strip()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("gcloud CLI token retrieval failed: %s", e)
 
         return None
 
@@ -219,6 +216,7 @@ class ProviderPricingService:
                         f"Provider pricing cache updated: {len(new_pricing)} models"
                     )
                 elif not self._cache:
+                    self._last_fetch = datetime.now()
                     logger.warning("No provider pricing fetched and no cached data")
         finally:
             with self._lock:
