@@ -19,9 +19,10 @@ GRAFANA_TIMEOUT = 15
 
 # Shared copy so connect validation and reachability errors stay consistent (localhost vs Docker).
 _GRAFANA_SELF_HOSTED_URL_HINT = (
-    "For self-hosted Grafana with HTTP, use http://localhost:<port> or a private-network IP "
-    "when Aurora can reach Grafana at that address. If Aurora runs in Docker and Grafana on your "
-    "host, use http://host.docker.internal:<port> instead of localhost."
+    "For self-hosted Grafana with HTTP, use http://localhost:<port>, a Docker Compose service "
+    "name (e.g. http://grafana:3000), or a private-network IP when Aurora can reach Grafana. "
+    "If Aurora runs in Docker and Grafana on your host, use http://host.docker.internal:<port> "
+    "instead of localhost."
 )
 
 logger = logging.getLogger(__name__)
@@ -39,6 +40,9 @@ def _host_allows_insecure_http(hostname: str) -> bool:
     if h in ("localhost", "host.docker.internal"):
         return True
     if h.endswith(".local"):
+        return True
+    # Docker / k8s-style single-label names (e.g. grafana, metrics-server) on internal DNS.
+    if "." not in h and 1 <= len(h) <= 63 and all(c.isalnum() or c in "-_" for c in h):
         return True
     try:
         ip = ipaddress.ip_address(h)
@@ -61,6 +65,12 @@ class GrafanaClient:
         if not url:
             return None
 
+        scheme_sep = url.find("://")
+        if scheme_sep != -1:
+            explicit_scheme = url[:scheme_sep].lower()
+            if explicit_scheme not in ("http", "https"):
+                return None
+
         lower = url.lower()
         if not (lower.startswith("http://") or lower.startswith("https://")):
             url = "https://" + url
@@ -72,7 +82,11 @@ class GrafanaClient:
             return None
         if parsed.username is not None or parsed.password is not None:
             return None
-        if parsed.port is not None and not (1 <= parsed.port <= 65535):
+        try:
+            port = parsed.port
+        except ValueError:
+            return None
+        if port is not None and not (1 <= port <= 65535):
             return None
         if parsed.scheme == "http" and not _host_allows_insecure_http(parsed.hostname):
             return None
