@@ -543,6 +543,14 @@ API Token authentication for Grafana Cloud or self-hosted.
 
 Users enter the token and Grafana URL via the Aurora UI.
 
+#### Self-hosted base URL
+
+Use a URL that the **Aurora server** can reach (not only your browser).
+
+- **HTTP** is allowed only for internal targets (e.g. `localhost`, private IPs, Docker/Kubernetes service names like `http://grafana:3000`).
+- **Grafana on your host, Aurora in Docker:** use `http://host.docker.internal:<port>` instead of `localhost`.
+- **Docker Compose:** if Grafana runs in the same compose stack, use the service name and port on that network.
+
 #### Webhook Configuration
 
 1. In Grafana: **Alerting** > **Contact points** > **+ Add contact point**

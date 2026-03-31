@@ -17,13 +17,8 @@ from utils.auth.stateless_auth import get_org_id_from_request
 from utils.secrets.secret_ref_utils import delete_user_secret
 GRAFANA_TIMEOUT = 15
 
-# Shared copy so connect validation and reachability errors stay consistent (localhost vs Docker).
-_GRAFANA_SELF_HOSTED_URL_HINT = (
-    "For self-hosted Grafana with HTTP, use http://localhost:<port>, a Docker Compose service "
-    "name (e.g. http://grafana:3000), or a private-network IP when Aurora can reach Grafana. "
-    "If Aurora runs in Docker and Grafana on your host, use http://host.docker.internal:<port> "
-    "instead of localhost."
-)
+# Short hint for UI toasts; full guidance lives in website/docs and GrafanaConnectionStep.
+_GRAFANA_SELF_HOSTED_URL_HINT = "See Grafana integration docs for self-hosted URL and Docker."
 
 logger = logging.getLogger(__name__)
 
