@@ -354,6 +354,7 @@ class LLMUsageTracker:
         start_time: Optional[float] = None,
         error_message: Optional[str] = None,
         api_provider: str = "openrouter",
+        provider_mode: Optional[str] = None,
         org_id: Optional[str] = None,
     ) -> bool:
         """
@@ -402,6 +403,7 @@ class LLMUsageTracker:
             estimated_cost = cls.calculate_cost(
                 input_tokens, output_tokens, model_name,
                 cached_input_tokens=cached_input_tokens,
+                provider_mode=provider_mode,
             )
 
             # Calculate response time
@@ -603,6 +605,7 @@ def tracked_invoke(
     model_name: str,
     request_type: str,
     api_provider: Optional[str] = None,
+    provider_mode: Optional[str] = None,
     org_id: Optional[str] = None,
 ):
     """Invoke an LLM and automatically track the usage.
@@ -633,6 +636,7 @@ def tracked_invoke(
                 start_time=start_time,
                 error_message=error_message,
                 api_provider=resolved_provider,
+                provider_mode=provider_mode,
                 org_id=org_id,
             )
         except Exception as track_err:

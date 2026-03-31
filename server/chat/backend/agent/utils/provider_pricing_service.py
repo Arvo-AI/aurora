@@ -40,11 +40,23 @@ _GEMINI_SKU_PATTERNS: list[tuple[str, str, list[str], list[str] | None]] = [
     ("gemini-3.1-flash-lite-preview", "output", ["3.1 flash lite", "output", "text"], None),
 ]
 
+_GEMINI_CACHE_SKU_PATTERNS: list[tuple[str, str, list[str], list[str] | None]] = [
+    ("gemini-2.5-flash-lite", "cached_input", ["2.5 flash lite", "cache", "input", "text"], None),
+    ("gemini-2.5-flash", "cached_input", ["2.5 flash", "cache", "input", "text"], ["lite"]),
+    ("gemini-2.5-pro", "cached_input", ["2.5 pro", "cache", "input", "text"], ["experimental", "preview"]),
+    ("gemini-3-flash", "cached_input", ["3 flash", "cache", "input", "text"], ["lite", "3.1"]),
+    ("gemini-3-pro", "cached_input", ["3 pro", "cache", "input", "text"], ["3.1"]),
+    ("gemini-3.1-pro-preview", "cached_input", ["3.1 pro", "cache", "input", "text"], None),
+    ("gemini-3.1-flash-lite-preview", "cached_input", ["3.1 flash lite", "cache", "input", "text"], None),
+]
 
-def _sku_matches(description: str, keywords: list[str], exclude: list[str] | None = None) -> bool:
+
+def _sku_matches(description: str, keywords: list[str], exclude: list[str] | None = None, allow_cache: bool = False) -> bool:
     """Check if a SKU description matches all required keywords and no excluded ones."""
     desc = description.lower()
-    if "batch" in desc or "cache" in desc or "bidi" in desc or "live" in desc:
+    if "batch" in desc or "bidi" in desc or "live" in desc:
+        return False
+    if not allow_cache and "cache" in desc:
         return False
     if "video" in desc or "audio" in desc or "image" in desc:
         return False
@@ -158,11 +170,30 @@ class ProviderPricingService:
 
         for sku in all_skus:
             desc = sku.get("description", "")
-            if "generate" not in desc.lower():
+            desc_lower = desc.lower()
+            if "generate" not in desc_lower and "cache" not in desc_lower:
                 continue
 
             for model_key, direction, keywords, exclude in _GEMINI_SKU_PATTERNS:
                 if _sku_matches(desc, keywords, exclude):
+                    price_per_1k = _extract_price_per_1k(sku)
+                    if price_per_1k <= 0:
+                        continue
+
+                    for prefix in ("google", "vertex"):
+                        full_key = f"{prefix}/{model_key}"
+                        if full_key not in pricing:
+                            pricing[full_key] = {}
+                        if direction not in pricing[full_key]:
+                            pricing[full_key][direction] = price_per_1k
+                            logger.debug(
+                                f"  {full_key} {direction}: ${price_per_1k:.4f}/1K "
+                                f"(from: {desc})"
+                            )
+                    break
+
+            for model_key, direction, keywords, exclude in _GEMINI_CACHE_SKU_PATTERNS:
+                if _sku_matches(desc, keywords, exclude, allow_cache=True):
                     price_per_1k = _extract_price_per_1k(sku)
                     if price_per_1k <= 0:
                         continue

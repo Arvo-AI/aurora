@@ -191,7 +191,7 @@ class OpenRouterPricingService:
                     "default", {"input": 0.001, "output": 0.002}
                 )
 
-        return base_pricing
+        return base_pricing.copy()
 
     def refresh_pricing(self) -> bool:
         """
