@@ -1,7 +1,8 @@
+import ipaddress
 import logging
 import os
-import re
 from typing import Any, Dict, Optional
+from urllib.parse import urlparse
 
 import requests
 from flask import Blueprint, jsonify, request
@@ -16,6 +17,13 @@ from utils.auth.stateless_auth import get_org_id_from_request
 from utils.secrets.secret_ref_utils import delete_user_secret
 GRAFANA_TIMEOUT = 15
 
+# Shared copy so connect validation and reachability errors stay consistent (localhost vs Docker).
+_GRAFANA_SELF_HOSTED_URL_HINT = (
+    "For self-hosted Grafana with HTTP, use http://localhost:<port> or a private-network IP "
+    "when Aurora can reach Grafana at that address. If Aurora runs in Docker and Grafana on your "
+    "host, use http://host.docker.internal:<port> instead of localhost."
+)
+
 logger = logging.getLogger(__name__)
 
 grafana_bp = Blueprint("grafana", __name__)
@@ -23,6 +31,20 @@ grafana_bp = Blueprint("grafana", __name__)
 
 class GrafanaAPIError(Exception):
     """Custom error for Grafana API interactions."""
+
+
+def _host_allows_insecure_http(hostname: str) -> bool:
+    """Allow http:// only for local/self-hosted targets (not public internet hosts)."""
+    h = hostname.strip().lower().rstrip(".")
+    if h in ("localhost", "host.docker.internal"):
+        return True
+    if h.endswith(".local"):
+        return True
+    try:
+        ip = ipaddress.ip_address(h)
+    except ValueError:
+        return False
+    return bool(ip.is_loopback or ip.is_private or ip.is_link_local)
 
 
 class GrafanaClient:
@@ -39,17 +61,23 @@ class GrafanaClient:
         if not url:
             return None
 
-        if not re.match(r"^https?://", url, re.IGNORECASE):
+        lower = url.lower()
+        if not (lower.startswith("http://") or lower.startswith("https://")):
             url = "https://" + url
 
-        url = url.rstrip("/")
-
-        if not re.match(
-            r"^https?://[A-Za-z0-9._-]+(:[0-9]{2,5})?(\/.*)?$", url, re.IGNORECASE
-        ):
+        parsed = urlparse(url)
+        if parsed.scheme not in ("http", "https"):
+            return None
+        if not parsed.netloc or not parsed.hostname:
+            return None
+        if parsed.username is not None or parsed.password is not None:
+            return None
+        if parsed.port is not None and not (1 <= parsed.port <= 65535):
+            return None
+        if parsed.scheme == "http" and not _host_allows_insecure_http(parsed.hostname):
             return None
 
-        return url
+        return url.rstrip("/")
 
     @property
     def headers(self) -> Dict[str, str]:
@@ -111,7 +139,10 @@ def connect(user_id):
     if not base_url:
         return jsonify(
             {
-                "error": "A valid Grafana baseUrl is required (e.g. https://your-stack.grafana.net or http://localhost:3000)",
+                "error": (
+                    "A valid Grafana baseUrl is required (e.g. https://your-stack.grafana.net). "
+                    + _GRAFANA_SELF_HOSTED_URL_HINT
+                ),
             }
         ), 400
 
@@ -130,9 +161,8 @@ def connect(user_id):
             return jsonify(
                 {
                     "error": (
-                        "Unable to reach Grafana from the Aurora server. If Grafana runs on your host "
-                        "and Aurora runs in Docker, use http://host.docker.internal:<port> instead of "
-                        "localhost in the base URL."
+                        "Unable to reach Grafana from the Aurora server. "
+                        + _GRAFANA_SELF_HOSTED_URL_HINT
                     ),
                 }
             ), 502
@@ -156,28 +186,7 @@ def connect(user_id):
         logger.info(f"[GRAFANA] Stored credentials for user {user_id} (org={org_name})")
     except Exception as exc:
         logger.exception(f"[GRAFANA] Failed to store credentials for user {user_id}: {exc}")
-        exc_msg = str(exc).strip() if exc else ""
-        generic = (
-            "Failed to store Grafana credentials. Aurora saves connector secrets in "
-            "HashiCorp Vault and a reference in Postgres. Check that Vault is healthy, "
-            "VAULT_TOKEN in .env matches your stack, and aurora-server logs for "
-            "[STORE-TOKENS] or [GRAFANA]."
-        )
-        if isinstance(exc, RuntimeError) and "Vault secrets backend" in exc_msg:
-            user_msg = (
-                f"{exc_msg} When using Docker Compose, set VAULT_ADDR=http://vault:8200 and "
-                "set VAULT_TOKEN from the vault-init container logs in your .env."
-            )
-        elif isinstance(exc, requests.exceptions.ConnectionError):
-            user_msg = (
-                "Failed to store Grafana credentials: cannot connect to Vault. "
-                "If aurora-server runs in Docker, set VAULT_ADDR=http://vault:8200 in .env "
-                "(not http://127.0.0.1:8200 — from inside the API container that points at the "
-                "container itself, not the Vault service)."
-            )
-        else:
-            user_msg = generic
-        return jsonify({"error": user_msg}), 500
+        return jsonify({"error": "Failed to store Grafana credentials"}), 500
 
     return jsonify({
         "success": True,
@@ -235,6 +244,21 @@ def disconnect(user_id):
     except Exception as exc:
         logger.exception("[GRAFANA] Failed to disconnect provider")
         return jsonify({"error": "Failed to disconnect Grafana"}), 500
+
+
+@grafana_bp.route("/alerts/webhook", methods=["POST", "OPTIONS"], strict_slashes=False)
+def alert_webhook_missing_user_id():
+    """Grafana contact points must use the full URL including your Aurora user id."""
+    if request.method == "OPTIONS":
+        return create_cors_response()
+    return jsonify(
+        {
+            "error": (
+                "Missing user id in the webhook path. Copy the full URL from "
+                "Aurora → Grafana integration (it ends with /grafana/alerts/webhook/<user_id>)."
+            )
+        }
+    ), 400
 
 
 @grafana_bp.route("/alerts/webhook/<user_id>", methods=["POST", "OPTIONS"])
