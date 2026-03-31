@@ -150,13 +150,13 @@ def process_bigpanda_event(
             # 1. Store raw event in bigpanda_events
             cursor.execute(
                 """INSERT INTO bigpanda_events
-                   (user_id, event_type, incident_id, incident_title, incident_status,
+                   (user_id, org_id, event_type, incident_id, incident_title, incident_status,
                     incident_severity, primary_property, secondary_property,
                     source_system, child_alert_count, payload, received_at)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                    RETURNING id""",
                 (
-                    user_id, event_type, incident_id,
+                    user_id, org_id, event_type, incident_id,
                     title[:500] if title else None,
                     bp_status, incident.get("severity"),
                     first_alert.get("primary_property"),

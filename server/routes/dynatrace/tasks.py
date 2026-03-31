@@ -77,12 +77,12 @@ def process_dynatrace_problem(
 
             cursor.execute(
                 """INSERT INTO dynatrace_problems
-                   (user_id, problem_id, pid, problem_title, problem_state, severity,
+                   (user_id, org_id, problem_id, pid, problem_title, problem_state, severity,
                     impact, impacted_entity, problem_url, tags, payload, received_at)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                    RETURNING id""",
                 (
-                    user_id, payload.get("ProblemID"), payload.get("PID"), title,
+                    user_id, org_id, payload.get("ProblemID"), payload.get("PID"), title,
                     payload.get("State", "OPEN"), severity, payload.get("ProblemImpact"),
                     payload.get("ImpactedEntity"), payload.get("ProblemURL"),
                     payload.get("Tags"), json.dumps(payload), received_at,

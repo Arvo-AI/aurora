@@ -21,6 +21,7 @@ const INFRA_PROVIDERS: Record<string, { name: string; icon: string }> = {
   scaleway: { name: 'Scaleway', icon: '/scaleway.svg' },
   tailscale: { name: 'Tailscale', icon: '/tailscale.svg' },
   kubectl: { name: 'Kubernetes', icon: '/kubernetes-svgrepo-com.svg' },
+  onprem: { name: 'Instances SSH Access', icon: '/cloud-server-svgrepo-com.svg' },
 };
 
 /**

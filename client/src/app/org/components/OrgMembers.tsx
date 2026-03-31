@@ -1,42 +1,16 @@
 "use client";
 
-import { useState, useCallback, Fragment } from "react";
-import {
-  Check,
-  Minus,
-  Plus,
-  Loader2,
-  ChevronDown,
-  UserMinus,
-  Users,
-} from "lucide-react";
+import { useState, useCallback, useEffect, Fragment } from "react";
+import { Check, Minus, Plus, Loader2, ChevronDown, UserMinus, Users, Mail, Clock, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from "@/components/ui/dialog";
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@/components/ui/collapsible";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { toast } from "@/hooks/use-toast";
 import { VALID_ROLES, ROLE_META, type UserRole } from "@/lib/roles";
-import type { OrgMember } from "../page";
+import type { OrgMember } from "@/components/OrgSettings";
 
 const PERMISSION_TABLE: {
   category: string;
@@ -83,22 +57,71 @@ const PERMISSION_TABLE: {
 
 function AddUserDialog({ onCreated }: { onCreated: () => void }) {
   const [open, setOpen] = useState(false);
-  const [name, setName] = useState("");
   const [email, setEmail] = useState("");
+  const [name, setName] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [role, setRole] = useState<string>("viewer");
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
+  const [step, setStep] = useState<"email" | "new-user">("email");
+  const [checking, setChecking] = useState(false);
 
   function reset() {
-    setName(""); setEmail(""); setPassword(""); setConfirmPassword(""); setRole("viewer"); setError("");
+    setEmail(""); setName(""); setPassword(""); setConfirmPassword(""); setRole("viewer"); setError(""); setStep("email"); setChecking(false);
   }
 
-  async function handleCreate(e: React.FormEvent) {
+  async function handleEmailSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError("");
-    if (!email || !password) { setError("Email and password are required"); return; }
+    if (!email) { setError("Email is required"); return; }
+
+    setChecking(true);
+    try {
+      const checkRes = await fetch("/api/admin/users", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, role, check_only: true }),
+      });
+      const checkData = await checkRes.json();
+
+      if (!checkRes.ok) { setError(checkData.error || "Something went wrong"); return; }
+
+      if (checkData.exists) {
+        const res = await fetch("/api/admin/users", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email, role }),
+        });
+        const data = await res.json();
+
+        if (!res.ok) { setError(data.error || "Something went wrong"); return; }
+
+        if (data.invited) {
+          toast({
+            title: "Invitation sent",
+            description: `${data.name || data.email} already has an account. They can accept the invitation from the Invitations tab in their Organization settings.`,
+            duration: 8000,
+          });
+          reset();
+          setOpen(false);
+          onCreated();
+          return;
+        }
+      } else {
+        setStep("new-user");
+      }
+    } catch {
+      setError("Something went wrong");
+    } finally {
+      setChecking(false);
+    }
+  }
+
+  async function handleCreateUser(e: React.FormEvent) {
+    e.preventDefault();
+    setError("");
+    if (!password) { setError("Password is required"); return; }
     if (password.length < 8) { setError("Password must be at least 8 characters"); return; }
     if (password !== confirmPassword) { setError("Passwords do not match"); return; }
 
@@ -111,7 +134,8 @@ function AddUserDialog({ onCreated }: { onCreated: () => void }) {
       });
       const data = await res.json();
       if (!res.ok) { setError(data.error || "Failed to create user"); return; }
-      toast({ title: "Member added", description: `${name || email} joined as ${role}` });
+
+      toast({ title: "Member added", description: `${data.name || data.email || email} joined as ${role}` });
       reset();
       setOpen(false);
       onCreated();
@@ -131,61 +155,94 @@ function AddUserDialog({ onCreated }: { onCreated: () => void }) {
         </Button>
       </DialogTrigger>
       <DialogContent className="sm:max-w-md">
-        <form onSubmit={handleCreate}>
-          <DialogHeader>
-            <DialogTitle>Add team member</DialogTitle>
-            <DialogDescription>
-              Create an account. They&apos;ll sign in with these credentials.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="grid gap-4 py-4">
-            <div className="grid gap-1.5">
-              <Label htmlFor="add-name" className="text-xs">Name</Label>
-              <Input id="add-name" placeholder="Jane Smith" value={name} onChange={(e) => setName(e.target.value)} className="h-9" />
-            </div>
-            <div className="grid gap-1.5">
-              <Label htmlFor="add-email" className="text-xs">Email</Label>
-              <Input id="add-email" type="email" placeholder="jane@company.com" required value={email} onChange={(e) => setEmail(e.target.value)} className="h-9" />
-            </div>
-            <div className="grid grid-cols-2 gap-3">
+        {step === "email" ? (
+          <form onSubmit={handleEmailSubmit}>
+            <DialogHeader>
+              <DialogTitle>Add team member</DialogTitle>
+              <DialogDescription>
+                Enter their email address. If they already have an account, they&apos;ll receive an invitation to join your organization.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="grid gap-4 py-4">
               <div className="grid gap-1.5">
-                <Label htmlFor="add-pw" className="text-xs">Temporary Password</Label>
-                <Input id="add-pw" type="password" placeholder="Min 8 chars" required value={password} onChange={(e) => setPassword(e.target.value)} className="h-9" />
+                <Label htmlFor="add-email" className="text-xs">Email</Label>
+                <Input id="add-email" type="email" placeholder="jane@company.com" required value={email} onChange={(e) => setEmail(e.target.value)} className="h-9" autoFocus />
               </div>
               <div className="grid gap-1.5">
-                <Label htmlFor="add-cpw" className="text-xs">Confirm</Label>
-                <Input id="add-cpw" type="password" placeholder="Re-enter" required value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} className="h-9" />
+                <Label className="text-xs">Role</Label>
+                <Select value={role} onValueChange={setRole}>
+                  <SelectTrigger className="h-9 w-full [&>span]:line-clamp-none"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {VALID_ROLES.map((r) => (
+                      <SelectItem key={r} value={r}>
+                        <span className="flex items-center gap-2">
+                          {ROLE_META[r].label}
+                          <span className="text-muted-foreground text-xs">— {ROLE_META[r].desc}</span>
+                        </span>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
+              {error && <p className="text-sm text-destructive">{error}</p>}
             </div>
-            <p className="text-xs text-muted-foreground">The user will be required to change this password on their first login.</p>
-            <div className="grid gap-1.5">
-              <Label className="text-xs">Role</Label>
-              <Select value={role} onValueChange={setRole}>
-                <SelectTrigger className="h-9 w-full [&>span]:line-clamp-none"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  {VALID_ROLES.map((r) => (
-                    <SelectItem key={r} value={r}>
-                      <span className="flex items-center gap-2">
-                        {ROLE_META[r].label}
-                        <span className="text-muted-foreground text-xs">— {ROLE_META[r].desc}</span>
-                      </span>
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+            <DialogFooter>
+              <Button type="submit" disabled={checking} size="sm" className="gap-2">
+                {checking && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                Continue
+              </Button>
+            </DialogFooter>
+          </form>
+        ) : (
+          <form onSubmit={handleCreateUser}>
+            <DialogHeader>
+              <DialogTitle>Create new account</DialogTitle>
+              <DialogDescription>
+                No account found for <span className="font-medium text-foreground">{email}</span>. Set up their credentials below.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="grid gap-4 py-4">
+              <div className="grid gap-1.5">
+                <Label htmlFor="add-name" className="text-xs">Name</Label>
+                <Input id="add-name" placeholder="Jane Smith" value={name} onChange={(e) => setName(e.target.value)} className="h-9" autoFocus />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="grid gap-1.5">
+                  <Label htmlFor="add-pw" className="text-xs">Temporary password</Label>
+                  <Input id="add-pw" type="password" placeholder="Min 8 chars" required value={password} onChange={(e) => setPassword(e.target.value)} className="h-9" />
+                </div>
+                <div className="grid gap-1.5">
+                  <Label htmlFor="add-cpw" className="text-xs">Confirm</Label>
+                  <Input id="add-cpw" type="password" placeholder="Re-enter" required value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} className="h-9" />
+                </div>
+              </div>
+              <p className="text-xs text-muted-foreground">They will be required to change this password on first login.</p>
+              {error && <p className="text-sm text-destructive">{error}</p>}
             </div>
-            {error && <p className="text-sm text-destructive">{error}</p>}
-          </div>
-          <DialogFooter>
-            <Button type="submit" disabled={saving} size="sm" className="gap-2">
-              {saving && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-              Create
-            </Button>
-          </DialogFooter>
-        </form>
+            <DialogFooter className="gap-2 sm:gap-0">
+              <Button type="button" variant="outline" size="sm" onClick={() => { setStep("email"); setError(""); }}>
+                Back
+              </Button>
+              <Button type="submit" disabled={saving} size="sm" className="gap-2">
+                {saving && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                Create Account
+              </Button>
+            </DialogFooter>
+          </form>
+        )}
       </DialogContent>
     </Dialog>
   );
+}
+
+interface PendingInvite {
+  id: string;
+  email: string;
+  name: string | null;
+  role: string;
+  status: string;
+  invited_at: string;
+  expires_at: string;
 }
 
 interface OrgMembersProps {
@@ -199,6 +256,41 @@ export default function OrgMembers({ org, currentUserId, isAdmin, onMembersChang
   const [updating, setUpdating] = useState<string | null>(null);
   const [removing, setRemoving] = useState<string | null>(null);
   const [permOpen, setPermOpen] = useState(false);
+  const [pendingInvites, setPendingInvites] = useState<PendingInvite[]>([]);
+  const [cancellingInvite, setCancellingInvite] = useState<string | null>(null);
+
+  const fetchPendingInvites = useCallback(async () => {
+    if (!isAdmin) return;
+    try {
+      const res = await fetch("/api/orgs/invitations");
+      if (res.ok) {
+        const data = await res.json();
+        setPendingInvites((data.invitations || []).filter((i: PendingInvite) => i.status === "pending"));
+      }
+    } catch { /* silent */ }
+  }, [isAdmin]);
+
+  useEffect(() => {
+    fetchPendingInvites();
+  }, [fetchPendingInvites]);
+
+  async function handleCancelInvite(inviteId: string) {
+    setCancellingInvite(inviteId);
+    try {
+      const res = await fetch(`/api/orgs/invitations/${inviteId}/cancel`, { method: "POST" });
+      if (res.ok) {
+        toast({ title: "Invitation cancelled" });
+        fetchPendingInvites();
+      } else {
+        const data = await res.json().catch(() => ({}));
+        toast({ title: "Failed", description: data.error || "Could not cancel invitation", variant: "destructive" });
+      }
+    } catch {
+      toast({ title: "Failed", description: "Could not reach server", variant: "destructive" });
+    } finally {
+      setCancellingInvite(null);
+    }
+  }
 
   const handleRoleChange = useCallback(
     async (targetUserId: string, newRole: string) => {
@@ -244,13 +336,18 @@ export default function OrgMembers({ org, currentUserId, isAdmin, onMembersChang
     }
   }
 
+  function handleAddUserCreated() {
+    onMembersChanged();
+    fetchPendingInvites();
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <p className="text-sm text-muted-foreground">
           {org.members.length} member{org.members.length !== 1 ? "s" : ""}
         </p>
-        {isAdmin && <AddUserDialog onCreated={onMembersChanged} />}
+        {isAdmin && <AddUserDialog onCreated={handleAddUserCreated} />}
       </div>
 
       {/* Clean table — no heavy borders, just rows */}
@@ -344,6 +441,70 @@ export default function OrgMembers({ org, currentUserId, isAdmin, onMembersChang
           </div>
         )}
       </div>
+
+      {/* Pending invitations sent by admins */}
+      {isAdmin && pendingInvites.length > 0 && (
+        <div className="space-y-3">
+          <div className="flex items-center gap-2">
+            <Mail className="h-3.5 w-3.5 text-muted-foreground" />
+            <p className="text-sm font-medium text-muted-foreground">
+              Pending invitations ({pendingInvites.length})
+            </p>
+          </div>
+          <div className="text-sm">
+            <div className="grid grid-cols-[1fr_80px_100px_auto] gap-x-4 px-1 pb-2 text-xs text-muted-foreground font-medium border-b border-border">
+              <span>Email</span>
+              <span>Role</span>
+              <span>Sent</span>
+              <span className="w-8" />
+            </div>
+            {pendingInvites.map((invite) => (
+              <div
+                key={invite.id}
+                className="grid grid-cols-[1fr_80px_100px_auto] gap-x-4 items-center px-1 py-3 border-b border-border/40 last:border-0 group"
+              >
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <div className="h-6 w-6 rounded-full bg-muted/50 border border-dashed border-border flex items-center justify-center text-[10px] font-medium text-muted-foreground flex-shrink-0">
+                      {invite.email.charAt(0).toUpperCase()}
+                    </div>
+                    <div className="min-w-0">
+                      <span className="font-medium truncate block">{invite.name || invite.email}</span>
+                      {invite.name && <p className="text-xs text-muted-foreground truncate">{invite.email}</p>}
+                    </div>
+                  </div>
+                </div>
+                <span className="text-xs text-muted-foreground capitalize">{invite.role}</span>
+                <div className="flex items-center gap-1 text-xs text-muted-foreground tabular-nums">
+                  <Clock className="h-3 w-3" />
+                  {invite.invited_at
+                    ? new Date(invite.invited_at).toLocaleDateString(undefined, {
+                        month: "short",
+                        day: "numeric",
+                      })
+                    : "—"}
+                </div>
+                <div className="w-8 flex justify-end">
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-destructive"
+                    onClick={() => handleCancelInvite(invite.id)}
+                    disabled={cancellingInvite === invite.id}
+                    title="Cancel invitation"
+                  >
+                    {cancellingInvite === invite.id ? (
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                    ) : (
+                      <X className="h-3 w-3" />
+                    )}
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Permissions reference — collapsed by default */}
       <Collapsible open={permOpen} onOpenChange={setPermOpen}>

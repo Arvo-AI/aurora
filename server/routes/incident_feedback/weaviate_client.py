@@ -120,6 +120,7 @@ def _ensure_collection(client: weaviate.WeaviateClient):
             properties=[
                 # Metadata - stored but not vectorized
                 Property(name="user_id", data_type=DataType.TEXT, skip_vectorization=True),
+                Property(name="org_id", data_type=DataType.TEXT, skip_vectorization=True),
                 Property(name="incident_id", data_type=DataType.TEXT, skip_vectorization=True),
                 Property(name="feedback_id", data_type=DataType.TEXT, skip_vectorization=True),
                 # Core matching signals - vectorized
@@ -155,6 +156,7 @@ def store_good_rca(
     aurora_summary: str,
     thoughts: List[Dict[str, Any]],
     citations: List[Dict[str, Any]],
+    org_id: str = None,
 ) -> bool:
     """
     Store a positively-rated RCA in Weaviate for future reference.
@@ -198,6 +200,7 @@ Investigation:
 
         properties = {
             "user_id": user_id,
+            "org_id": org_id or "",
             "incident_id": incident_id,
             "feedback_id": feedback_id,
             "alert_title": alert_title,
@@ -234,8 +237,11 @@ def search_similar_good_rcas(
     """
     Search for similar past incidents with positive feedback.
 
+    Resolves org_id from user_id and filters by org so all org members
+    benefit from shared Aurora Learn knowledge.
+
     Args:
-        user_id: User identifier
+        user_id: User identifier (used to resolve org_id)
         alert_title: Title of the current alert
         alert_service: Service of the current alert
         source_type: Source type of the current alert
@@ -248,17 +254,22 @@ def search_similar_good_rcas(
     try:
         _, collection = _get_weaviate_client()
 
-        # Build search query combining alert details
         search_query = f"Alert: {alert_title} Service: {alert_service} Source: {source_type}"
 
-        # Build user filter
-        user_filter = Filter.by_property("user_id").equal(user_id)
+        from utils.auth.stateless_auth import get_org_id_for_user
+        org_id = get_org_id_for_user(user_id)
+
+        if org_id:
+            search_filter = Filter.by_property("org_id").equal(org_id)
+        else:
+            logger.warning("No org_id found for user %s, falling back to user_id filter", user_id)
+            search_filter = Filter.by_property("user_id").equal(user_id)
 
         # Perform vector search
         response = collection.query.near_text(
             query=search_query,
             limit=limit,
-            filters=user_filter,
+            filters=search_filter,
             return_metadata=MetadataQuery(distance=True),
         )
 

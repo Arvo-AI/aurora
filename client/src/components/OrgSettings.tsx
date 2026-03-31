@@ -12,6 +12,7 @@ import { toast } from "@/hooks/use-toast";
 import OrgOverview from "@/app/org/components/OrgOverview";
 import OrgMembers from "@/app/org/components/OrgMembers";
 import OrgActivity from "@/app/org/components/OrgActivity";
+import OrgInvitations from "@/app/org/components/OrgInvitations";
 
 interface OrgData {
   id: string;
@@ -22,7 +23,7 @@ interface OrgData {
   members: OrgMember[];
 }
 
-interface OrgMember {
+export interface OrgMember {
   id: string;
   email: string;
   name: string | null;
@@ -68,6 +69,10 @@ export function OrgSettings() {
     const trimmed = nameInput.trim();
     if (!trimmed || trimmed === org?.name) {
       setEditingName(false);
+      return;
+    }
+    if (!/^[\w\s\-\.,'&()]+$/u.test(trimmed)) {
+      toast({ title: "Invalid name", description: "Only letters, numbers, spaces, hyphens, periods, commas, apostrophes, ampersands, and parentheses are allowed", variant: "destructive" });
       return;
     }
     setSavingName(true);
@@ -170,7 +175,7 @@ export function OrgSettings() {
       <Tabs defaultValue="overview" className="w-full">
         <div className="border-b border-border mb-6">
           <TabsList className="h-auto p-0 bg-transparent rounded-none gap-5">
-            {["overview", "members", "activity"].map((tab) => (
+            {["overview", "members", "invitations", "activity"].map((tab) => (
               <TabsTrigger
                 key={tab}
                 value={tab}
@@ -187,6 +192,9 @@ export function OrgSettings() {
         </TabsContent>
         <TabsContent value="members">
           <OrgMembers org={org} currentUserId={user?.id || ""} isAdmin={isAdmin} onMembersChanged={fetchOrg} />
+        </TabsContent>
+        <TabsContent value="invitations">
+          <OrgInvitations />
         </TabsContent>
         <TabsContent value="activity">
           <OrgActivity />

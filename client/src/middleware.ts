@@ -35,6 +35,7 @@ export default auth((req) => {
   const isAdminRoute = nextUrl.pathname.startsWith('/admin') || nextUrl.pathname.startsWith('/api/admin')
   const isChangePasswordRoute = nextUrl.pathname.startsWith('/change-password')
   const isSetupOrgRoute = nextUrl.pathname.startsWith('/setup-org')
+  const isOrgSwitching = nextUrl.pathname.startsWith('/org/switching')
 
   // If user is logged in and tries to access auth pages, redirect to home
   if (isAuthRoute && isLoggedIn) {
@@ -46,8 +47,10 @@ export default auth((req) => {
     return NextResponse.redirect(new URL("/change-password", nextUrl))
   }
 
-  // Force org setup: redirect users without an org to create one
-  if (isLoggedIn && !req.auth?.user?.orgId && !isSetupOrgRoute && !isChangePasswordRoute && !isApiRoute) {
+  // Force org setup: redirect users without an org (or in Default Org) to create one
+  const orgName = req.auth?.user?.orgName
+  const needsOrg = !req.auth?.user?.orgId || (orgName && orgName.toLowerCase() === "default organization")
+  if (isLoggedIn && needsOrg && !isSetupOrgRoute && !isOrgSwitching && !isChangePasswordRoute && !isApiRoute) {
     return NextResponse.redirect(new URL("/setup-org", nextUrl))
   }
 

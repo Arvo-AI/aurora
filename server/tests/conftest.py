@@ -15,6 +15,8 @@ if os.path.abspath(_server_dir) not in sys.path:
 # neo4j is required by services.graph.memgraph_client but may not be present
 # in a lightweight test environment.  Provide a minimal stub so the module
 # can be imported and patched normally.
-if "neo4j" not in sys.modules:
-    _neo4j_stub = MagicMock()
-    sys.modules["neo4j"] = _neo4j_stub
+for _pkg in ("neo4j", "casbin", "casbin_sqlalchemy_adapter", "sqlalchemy",
+              "hvac", "redis", "celery", "weaviate", "flask_socketio",
+              "flask_cors", "langchain", "langgraph"):
+    if _pkg not in sys.modules:
+        sys.modules[_pkg] = MagicMock()
