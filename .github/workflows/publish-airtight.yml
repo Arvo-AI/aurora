@@ -23,7 +23,7 @@ permissions:
 jobs:
   airtight:
     name: Airtight ${{ matrix.arch }}
-    runs-on: ubuntu-24.04
+    runs-on: ${{ matrix.runner }}
     if: github.repository == 'Arvo-AI/aurora'
 
     strategy:
@@ -32,20 +32,33 @@ jobs:
         include:
           - arch: amd64
             platform: linux/amd64
+            runner: ubuntu-24.04
             bucket: gs://aurora-airtight-bucket
             bucket_url: https://storage.googleapis.com/aurora-airtight-bucket
           - arch: arm64
             platform: linux/arm64
+            runner: ubuntu-24.04-arm
             bucket: gs://aurora-airtight-bucket-arm64
             bucket_url: https://storage.googleapis.com/aurora-airtight-bucket-arm64
+
+    env:
+      AURORA_IMAGES: "aurora_server:latest aurora_celery-worker:latest aurora_celery-beat:latest aurora_chatbot:latest aurora_frontend:latest"
+      THIRD_PARTY_IMAGES: >-
+        postgres:15-alpine
+        redis:7-alpine
+        hashicorp/vault:1.15
+        busybox:1.37.0
+        searxng/searxng:2025.5.8-7ca24eee4
+        chrislusf/seaweedfs:4.07
+        amazon/aws-cli:2.34.6
+        memgraph/memgraph-mage:3.8.1
+        memgraph/lab:3.8.0
+        cr.weaviate.io/semitechnologies/weaviate:1.27.6
+        cr.weaviate.io/semitechnologies/transformers-inference:sentence-transformers-all-MiniLM-L6-v2
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
-
-      - name: Set up QEMU
-        if: matrix.arch == 'arm64'
-        uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -71,7 +84,10 @@ jobs:
         run: |
           docker buildx build --platform ${{ matrix.platform }} \
             -f server/Dockerfile --target prod \
-            -t aurora_server:latest --load ./server
+            -t aurora_server:latest --load \
+            --cache-from type=gha,scope=airtight-server-${{ matrix.arch }} \
+            --cache-to type=gha,mode=max,scope=airtight-server-${{ matrix.arch }} \
+            ./server
 
           docker tag aurora_server:latest aurora_celery-worker:latest
           docker tag aurora_server:latest aurora_celery-beat:latest
@@ -79,24 +95,14 @@ jobs:
 
           docker buildx build --platform ${{ matrix.platform }} \
             -f client/Dockerfile --target prod \
-            -t aurora_frontend:latest --load ./client
+            -t aurora_frontend:latest --load \
+            --cache-from type=gha,scope=airtight-frontend-${{ matrix.arch }} \
+            --cache-to type=gha,mode=max,scope=airtight-frontend-${{ matrix.arch }} \
+            ./client
 
       - name: Pull third-party images
         run: |
-          images=(
-            "postgres:15-alpine"
-            "redis:7-alpine"
-            "hashicorp/vault:1.15"
-            "busybox:1.37.0"
-            "searxng/searxng:2025.5.8-7ca24eee4"
-            "chrislusf/seaweedfs:4.07"
-            "amazon/aws-cli:2.34.6"
-            "memgraph/memgraph-mage:3.8.1"
-            "memgraph/lab:3.8.0"
-            "cr.weaviate.io/semitechnologies/weaviate:1.27.6"
-            "cr.weaviate.io/semitechnologies/transformers-inference:sentence-transformers-all-MiniLM-L6-v2"
-          )
-          for img in "${images[@]}"; do
+          for img in $THIRD_PARTY_IMAGES; do
             echo "Pulling $img..."
             docker pull --platform ${{ matrix.platform }} "$img"
           done
@@ -105,17 +111,7 @@ jobs:
         id: tarball
         run: |
           FILENAME="aurora-airtight-${{ steps.version.outputs.tag }}-${{ matrix.arch }}.tar.gz"
-
-          docker save \
-            aurora_server:latest aurora_celery-worker:latest aurora_celery-beat:latest \
-            aurora_chatbot:latest aurora_frontend:latest \
-            postgres:15-alpine redis:7-alpine hashicorp/vault:1.15 busybox:1.37.0 \
-            "searxng/searxng:2025.5.8-7ca24eee4" "chrislusf/seaweedfs:4.07" \
-            "amazon/aws-cli:2.34.6" "memgraph/memgraph-mage:3.8.1" "memgraph/lab:3.8.0" \
-            "cr.weaviate.io/semitechnologies/weaviate:1.27.6" \
-            "cr.weaviate.io/semitechnologies/transformers-inference:sentence-transformers-all-MiniLM-L6-v2" \
-          | gzip > "$FILENAME"
-
+          docker save $AURORA_IMAGES $THIRD_PARTY_IMAGES | gzip > "$FILENAME"
           sha256sum "$FILENAME" > "${FILENAME}.sha256"
           echo "filename=$FILENAME" >> "$GITHUB_OUTPUT"
           echo "Bundle: $FILENAME ($(du -h "$FILENAME" | cut -f1))"
@@ -134,7 +130,6 @@ jobs:
           subject-path: ${{ steps.tarball.outputs.filename }}
 
       - name: Register linked artifact
-        continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -143,14 +138,16 @@ jobs:
           VERSION="${{ steps.version.outputs.tag }}"
           ARTIFACT_URL="${{ matrix.bucket_url }}/${FILENAME}"
 
-          gh api -X POST /orgs/Arvo-AI/artifacts/metadata/storage-record \
+          if ! gh api -X POST /orgs/Arvo-AI/artifacts/metadata/storage-record \
             -f name="aurora-airtight-${{ matrix.arch }}" \
             -f digest="$DIGEST" \
             -f version="$VERSION" \
             -f artifact_url="$ARTIFACT_URL" \
             -f registry_url="${{ matrix.bucket_url }}/" \
             -f status="active" \
-            -f github_repository="aurora"
+            -f github_repository="aurora"; then
+            echo "::warning::Failed to register linked artifact -- GCS upload succeeded, but the artifact won't appear on the GitHub linked artifacts page"
+          fi
 
   publish-summary:
     name: Airtight Summary
