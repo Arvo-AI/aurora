@@ -199,8 +199,9 @@ def get_pricing(user_id):
                 svc = get_pricing_service()
                 dynamic = svc.get_pricing()
                 effective_pricing.update(dynamic)
-            except Exception:
-                pass
+            except Exception as e:
+                # Fall back to static pricing if OpenRouter dynamic pricing fails.
+                logger.warning(f"Failed to fetch OpenRouter dynamic pricing, using static pricing only: {e}")
         else:
             try:
                 from chat.backend.agent.utils.provider_pricing_service import get_provider_pricing_service
