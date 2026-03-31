@@ -248,14 +248,18 @@ class LLMManager:
 
                     input_tokens = 0
                     output_tokens = 0
+                    cached_input_tokens = 0
 
                     # Prefer usage_metadata (standardized across all LangChain providers)
                     if llm_response and getattr(llm_response, "usage_metadata", None):
                         um = llm_response.usage_metadata
                         input_tokens = um.get("input_tokens", 0)
                         output_tokens = um.get("output_tokens", 0)
+                        input_details = um.get("input_token_details", {})
+                        cached_input_tokens = input_details.get("cache_read", 0) if isinstance(input_details, dict) else 0
                         logger.info(
                             f"Provider usage_metadata: {input_tokens} + {output_tokens} tokens"
+                            + (f" ({cached_input_tokens} cached)" if cached_input_tokens else "")
                         )
 
                     # Fallback: response_metadata.token_usage (OpenAI-style)
@@ -277,6 +281,7 @@ class LLMManager:
                     estimated_cost = LLMUsageTracker.calculate_cost(
                         input_tokens, output_tokens, model.model_name,
                         provider_mode=self.provider_mode,
+                        cached_input_tokens=cached_input_tokens,
                     )
                     response_time_ms = int((time.time() - start_time) * 1000)
 
