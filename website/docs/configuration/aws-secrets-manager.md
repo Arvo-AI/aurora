@@ -146,7 +146,7 @@ helm upgrade --install aurora ./deploy/helm/aurora -f values.generated.yaml
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `SECRETS_BACKEND` | Yes | `vault` | Set to `aws_secrets_manager` |
+| `SECRETS_BACKEND` | No | `vault` | Set to `aws_secrets_manager` |
 | `AWS_SM_REGION` | Yes | — | AWS region for Secrets Manager |
 | `AWS_SM_PREFIX` | No | `aurora/users` | Path prefix for secret names |
 | `AWS_ACCESS_KEY_ID` | No* | — | AWS access key (*not needed with IRSA) |
@@ -156,7 +156,7 @@ helm upgrade --install aurora ./deploy/helm/aurora -f values.generated.yaml
 
 Secrets are stored in the database with the reference format:
 
-```
+```text
 awssm:{region}:{prefix}/{secret_name}
 ```
 

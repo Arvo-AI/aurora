@@ -96,8 +96,12 @@ class AWSSecretsManagerBackend(SecretsBackend):
             raise ValueError(f"Invalid AWS SM secret reference format: {secret_ref}")
 
         ref_body = secret_ref[len(AWSSM_REF_PREFIX):]
-        colon_idx = ref_body.index(":")
-        return ref_body[colon_idx + 1:]
+        parts = ref_body.split(":", 1)
+        if len(parts) != 2 or not parts[0] or not parts[1]:
+            raise ValueError(
+                f"Invalid AWS SM secret reference format: missing region:secret in {secret_ref}"
+            )
+        return parts[1]
 
     def _ensure_client(self) -> None:
         """Ensure the backend is initialized and available."""
