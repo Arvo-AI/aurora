@@ -32,8 +32,8 @@ _GEMINI_SKU_PATTERNS: list[tuple[str, str, list[str], list[str] | None]] = [
     ("gemini-2.5-pro", "output", ["2.5 pro", "output", "short", "text"], ["experimental", "preview"]),
     ("gemini-3-flash", "input", ["3 flash", "input", "text"], ["lite", "3.1"]),
     ("gemini-3-flash", "output", ["3 flash", "output", "text"], ["lite", "3.1"]),
-    ("gemini-3-pro", "input", ["3 pro", "input", "short", "text"], ["3.1"]),
-    ("gemini-3-pro", "output", ["3 pro", "output", "short", "text"], ["3.1"]),
+    ("gemini-3-pro-preview", "input", ["3 pro", "input", "short", "text"], ["3.1"]),
+    ("gemini-3-pro-preview", "output", ["3 pro", "output", "short", "text"], ["3.1"]),
     ("gemini-3.1-pro-preview", "input", ["3.1 pro", "input", "text"], None),
     ("gemini-3.1-pro-preview", "output", ["3.1 pro", "output", "text"], None),
     ("gemini-3.1-flash-lite-preview", "input", ["3.1 flash lite", "input", "text"], None),
@@ -45,7 +45,7 @@ _GEMINI_CACHE_SKU_PATTERNS: list[tuple[str, str, list[str], list[str] | None]] =
     ("gemini-2.5-flash", "cached_input", ["2.5 flash", "cache", "input", "text"], ["lite"]),
     ("gemini-2.5-pro", "cached_input", ["2.5 pro", "cache", "input", "text"], ["experimental", "preview"]),
     ("gemini-3-flash", "cached_input", ["3 flash", "cache", "input", "text"], ["lite", "3.1"]),
-    ("gemini-3-pro", "cached_input", ["3 pro", "cache", "input", "text"], ["3.1"]),
+    ("gemini-3-pro-preview", "cached_input", ["3 pro", "cache", "input", "text"], ["3.1"]),
     ("gemini-3.1-pro-preview", "cached_input", ["3.1 pro", "cache", "input", "text"], None),
     ("gemini-3.1-flash-lite-preview", "cached_input", ["3.1 flash lite", "cache", "input", "text"], None),
 ]
@@ -246,7 +246,12 @@ class ProviderPricingService:
                     logger.info(
                         f"Provider pricing cache updated: {len(new_pricing)} models"
                     )
-                elif not self._cache:
+                elif self._cache:
+                    self._last_fetch = datetime.now()
+                    logger.info(
+                        "Provider pricing refresh failed; retaining stale cache for another TTL window"
+                    )
+                else:
                     logger.warning(
                         "No provider pricing fetched and no cached data; will retry on next call"
                     )

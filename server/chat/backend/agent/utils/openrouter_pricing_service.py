@@ -191,7 +191,15 @@ class OpenRouterPricingService:
                     "default", {"input": 0.001, "output": 0.002}
                 )
 
-        return base_pricing.copy()
+        result = base_pricing.copy()
+
+        if "cached_input" not in result:
+            from chat.backend.agent.utils.llm_usage_tracker import LLMUsageTracker
+            static = LLMUsageTracker.MODEL_PRICING.get(model_name, {})
+            if "cached_input" in static:
+                result["cached_input"] = static["cached_input"]
+
+        return result
 
     def refresh_pricing(self) -> bool:
         """
