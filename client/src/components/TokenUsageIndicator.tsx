@@ -112,7 +112,14 @@ export default function TokenUsageIndicator({ sessionUsage }: TokenUsageIndicato
     }
   }, [currentStreaming]);
 
-  if (totals.request_count === 0 && !currentStreaming) return null;
+  if (totals.request_count === 0 && !currentStreaming) {
+    return (
+      <div className="flex items-center gap-2 text-xs text-zinc-500 px-1 py-1">
+        <Zap className="h-3 w-3 text-zinc-600" />
+        <span>Waiting for LLM activity...</span>
+      </div>
+    );
+  }
 
   return (
     <div className="flex items-center gap-3 text-xs text-zinc-400 px-1 py-1">
