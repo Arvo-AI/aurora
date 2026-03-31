@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 from flask import Blueprint, jsonify, request
 from psycopg2.extras import RealDictCursor
 from utils.auth.rbac_decorators import require_permission
+from utils.auth.stateless_auth import get_org_id_from_request
 from utils.db.db_adapters import connect_to_db_as_user
 from utils.web.limiter_ext import limiter
 
@@ -32,14 +33,17 @@ def create_token(user_id):
         expires_days = data.get('expires_days')
         token = generate_token()
         expires_at = datetime.now() + timedelta(days=expires_days) if expires_days else None
+        org_id = get_org_id_from_request()
+        if not org_id:
+            return jsonify({'error': 'Organization context required to create kubectl tokens'}), 400
         conn = connect_to_db_as_user()
         try:
             cursor = conn.cursor(cursor_factory=RealDictCursor)
             cursor.execute("""
-                INSERT INTO kubectl_agent_tokens (token, user_id, cluster_name, notes, expires_at, status)
-                VALUES (%s, %s, %s, %s, %s, 'active')
+                INSERT INTO kubectl_agent_tokens (token, user_id, org_id, cluster_name, notes, expires_at, status)
+                VALUES (%s, %s, %s, %s, %s, %s, 'active')
                 RETURNING id, token, cluster_name, created_at, expires_at
-            """, (token, user_id, cluster_name, notes, expires_at))
+            """, (token, user_id, org_id, cluster_name, notes, expires_at))
             result = cursor.fetchone()
             conn.commit()
             cursor.close()

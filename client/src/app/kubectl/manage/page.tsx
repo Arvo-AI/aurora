@@ -126,11 +126,11 @@ export default function ManageKubectlClustersPage() {
           <Button
             variant="ghost"
             size="sm"
-            onClick={() => router.push('/kubectl/auth')}
+            onClick={() => router.push('/connectors')}
             className="text-zinc-400 hover:text-white"
           >
             <ArrowLeft className="h-4 w-4 mr-2" />
-            Back to Setup
+            Back to Connectors
           </Button>
         </div>
 

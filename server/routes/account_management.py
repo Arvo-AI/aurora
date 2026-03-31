@@ -7,6 +7,7 @@ from utils.db.db_utils import connect_to_db_as_admin, connect_to_db_as_user
 from utils.auth.token_management import get_token_data
 from utils.auth.stateless_auth import get_org_id_from_request
 from utils.secrets.secret_ref_utils import delete_user_secret, SUPPORTED_SECRET_PROVIDERS
+from routes.connector_status import _check_kubectl, _check_onprem
 import requests
 import os
 
@@ -155,9 +156,25 @@ def get_connected_accounts(user_id, target_user_id):
 
             accounts[provider] = account_info
 
+        # ------------------------------
+        # 3) Kubectl agent connections
+        # ------------------------------
+        if "kubectl" not in accounts:
+            result = _check_kubectl(user_id, org_id)
+            if result.get("connected"):
+                accounts["kubectl"] = {"isConnected": True, "name": "Kubernetes", "displayText": "Kubernetes Cluster"}
+
+        # ------------------------------
+        # 4) On-prem VM connections
+        # ------------------------------
+        if "onprem" not in accounts:
+            result = _check_onprem(user_id, org_id)
+            if result.get("connected"):
+                accounts["onprem"] = {"isConnected": True, "name": "Instances SSH Access", "displayText": "VM SSH Access"}
+
         cursor.close()
         conn.close()
-        
+
         return jsonify({"accounts": accounts})
 
     except Exception as e:
