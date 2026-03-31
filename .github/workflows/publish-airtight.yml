@@ -110,6 +110,7 @@ jobs:
       - name: Create tarball and checksum
         id: tarball
         run: |
+          set -o pipefail
           FILENAME="aurora-airtight-${{ steps.version.outputs.tag }}-${{ matrix.arch }}.tar.gz"
           docker save $AURORA_IMAGES $THIRD_PARTY_IMAGES | gzip > "$FILENAME"
           sha256sum "$FILENAME" > "${FILENAME}.sha256"
