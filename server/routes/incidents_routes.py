@@ -718,14 +718,14 @@ def get_incident(user_id, incident_id: str):
                         if not urow or urow[0] == 0:
                             fallback_where = """
                                 session_id IS NULL
-                                AND user_id = %s
+                                AND user_id = (SELECT user_id FROM incidents WHERE id = %s)
                                 AND request_type = 'incident_initial_summary'
                                 AND timestamp BETWEEN
                                     (SELECT created_at - INTERVAL '2 minutes' FROM incidents WHERE id = %s)
                                     AND
                                     (SELECT created_at + INTERVAL '2 minutes' FROM incidents WHERE id = %s)
                             """
-                            fallback_params = (user_id, incident_id, incident_id)
+                            fallback_params = (incident_id, incident_id, incident_id)
                             cursor.execute(
                                 f"""
                                 SELECT

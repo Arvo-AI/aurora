@@ -118,9 +118,12 @@ def get_session_usage_options(session_id):
 def get_session_usage(user_id, session_id):
     """Get per-request token/cost breakdown for a specific session (org-visible)."""
     try:
+        org_id = get_org_id_from_request()
         with db_pool.get_user_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
+            if org_id:
+                cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
 
             cursor.execute("""
                 SELECT

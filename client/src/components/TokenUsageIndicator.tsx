@@ -87,7 +87,7 @@ function RateArrow({ trend, tokPerSec }: { trend: RateTrend; tokPerSec: number }
     <span className={`inline-flex items-center gap-0.5 ${color}`}>
       <Icon className="h-3 w-3" />
       <span className="text-[10px] font-mono tabular-nums">
-        {Math.round(tokPerSec)}t/s
+        {Math.round(tokPerSec)}c/s
       </span>
     </span>
   );
