@@ -94,7 +94,7 @@ The script will prompt you for several values. Here's what to enter:
 | Environment | `staging` (or `production`) |
 
 The script will:
-1. Install nginx ingress controller if missing
+1. Install an ingress controller if missing (default: nginx, but any controller works — see [Ingress Controller](#ingress-controller) below)
 2. Detect the ingress IP (resolves AWS ELB hostnames to IPs automatically)
 3. Generate `values.generated.yaml` with your config + auto-generated secrets
 4. Deploy with Helm
@@ -147,7 +147,8 @@ ingress:
 ```
 
 ```bash
-# 2. Install nginx ingress (if not already installed)
+# 2. Install an ingress controller if not already installed (see Ingress Controller section below)
+# Example: nginx ingress (optional — use any controller that supports the Kubernetes Ingress API)
 kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.8.1/deploy/static/provider/cloud/deploy.yaml
 
 # 3. Deploy
@@ -255,12 +256,37 @@ curl http://api.aurora-oss.<IP>.nip.io/health/
 
 Open the frontend URL in your browser. The first user to register becomes the admin.
 
+## Ingress Controller
+
+Aurora's Helm chart is **controller-agnostic** — it uses the standard Kubernetes `ingressClassName` field. Set `ingress.className` in your values to match your controller.
+
+Any ingress controller that supports the Kubernetes Ingress API will work. Common options:
+
+| Controller | `className` | Install |
+|-----------|-------------|---------|
+| NGINX Ingress | `nginx` | `helm install ingress-nginx ingress-nginx/ingress-nginx -n ingress-nginx --create-namespace` |
+| Traefik | `traefik` | Often bundled with k3s; or `helm install traefik traefik/traefik -n traefik --create-namespace` |
+| AWS ALB | `alb` | Install [AWS Load Balancer Controller](https://kubernetes-sigs.github.io/aws-load-balancer-controller/) |
+| HAProxy | `haproxy` | `helm install haproxy haproxytech/kubernetes-ingress -n haproxy --create-namespace` |
+
+### Required controller settings
+
+Regardless of which controller you use, ensure these are configured:
+
+| Setting | Value | Why |
+|---------|-------|-----|
+| Request/read timeout | `3600s` | RCA analysis can run 30+ minutes |
+| HTTP version | `1.1` | Required for WebSocket upgrade |
+| Max body/upload size | `50m` | File uploads |
+
+When `className` is `nginx`, these are auto-applied as annotations by the Helm chart. For other controllers, configure equivalent settings via `ingress.annotations` or your controller's configuration.
+
 ## EKS: Fixing nip.io URLs
 
 AWS load balancers return a hostname instead of an IP. The deploy script resolves this automatically, but if your URLs aren't working, see the [EKS setup guide](./eks-setup) or resolve manually:
 
 ```bash
-# Resolve the ELB hostname to an IP
+# Resolve the ELB hostname to an IP (adjust service name/namespace for your controller)
 ELB_HOST=$(kubectl get svc -n ingress-nginx ingress-nginx-controller \
   -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
 INGRESS_IP=$(dig +short "$ELB_HOST" | head -1)
@@ -317,7 +343,7 @@ spec:
     solvers:
     - http01:
         ingress:
-          class: nginx
+          class: nginx  # Change to match your ingress controller
 EOF
 ```
 
