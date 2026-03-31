@@ -1035,12 +1035,15 @@ class Workflow:
                             output_tokens = usage_meta.get('output_tokens', 0)
                             total_tokens = usage_meta.get('total_tokens', 0)
                             output_details = usage_meta.get('output_token_details', {})
+                            input_details = usage_meta.get('input_token_details', {})
+                            cached_input_tokens = input_details.get('cache_read', 0) if isinstance(input_details, dict) else 0
                             response_time_ms = int((_time.perf_counter() - _model_turn_start) * 1000) if _model_turn_start else 0
 
                             # Calculate cost from provider-reported counts
                             from chat.backend.agent.utils.llm_usage_tracker import LLMUsageTracker
                             estimated_cost = LLMUsageTracker.calculate_cost(
-                                input_tokens, output_tokens, input_state.model or ""
+                                input_tokens, output_tokens, input_state.model or "",
+                                cached_input_tokens=cached_input_tokens,
                             )
 
                             # Accumulate session totals
@@ -1049,10 +1052,17 @@ class Workflow:
                             _session_usage["total_cost"] += estimated_cost
                             _session_usage["request_count"] += 1
 
-                            logger.info(
-                                f"[USAGE] {input_state.model}: {input_tokens}+{output_tokens} tokens, "
-                                f"${estimated_cost:.6f}, session total: ${_session_usage['total_cost']:.6f}"
-                            )
+                            if cached_input_tokens > 0:
+                                logger.info(
+                                    f"[USAGE] {input_state.model}: {input_tokens}+{output_tokens} tokens "
+                                    f"({cached_input_tokens} cached), "
+                                    f"${estimated_cost:.6f}, session total: ${_session_usage['total_cost']:.6f}"
+                                )
+                            else:
+                                logger.info(
+                                    f"[USAGE] {input_state.model}: {input_tokens}+{output_tokens} tokens, "
+                                    f"${estimated_cost:.6f}, session total: ${_session_usage['total_cost']:.6f}"
+                                )
 
                             yield ("usage_final", {
                                 "model": input_state.model,

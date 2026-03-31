@@ -36,43 +36,44 @@ class LLMUsageTracker:
 
     MODEL_PRICING = {
         # OpenAI (direct API pricing per 1K tokens)
-        "openai/gpt-5.4": {"input": 0.0025, "output": 0.015},
-        "openai/gpt-5.2": {"input": 0.00175, "output": 0.014},
-        "openai/o3": {"input": 0.002, "output": 0.008},
-        "openai/o3-mini": {"input": 0.0011, "output": 0.0044},
-        "openai/o4-mini": {"input": 0.0011, "output": 0.0044},
-        "openai/gpt-4.1": {"input": 0.002, "output": 0.008},
-        "openai/gpt-4.1-mini": {"input": 0.0004, "output": 0.0016},
-        "openai/gpt-4o": {"input": 0.0025, "output": 0.01},
-        "openai/gpt-4o-mini": {"input": 0.00015, "output": 0.0006},
-        # Anthropic (both dot and hyphen variants for lookup flexibility)
-        "anthropic/claude-opus-4.6": {"input": 0.005, "output": 0.025},
-        "anthropic/claude-opus-4-6": {"input": 0.005, "output": 0.025},
-        "anthropic/claude-sonnet-4.6": {"input": 0.003, "output": 0.015},
-        "anthropic/claude-sonnet-4-6": {"input": 0.003, "output": 0.015},
-        "anthropic/claude-opus-4.5": {"input": 0.005, "output": 0.025},
-        "anthropic/claude-opus-4-5": {"input": 0.005, "output": 0.025},
-        "anthropic/claude-sonnet-4.5": {"input": 0.003, "output": 0.015},
-        "anthropic/claude-sonnet-4-5": {"input": 0.003, "output": 0.015},
-        "anthropic/claude-haiku-4.5": {"input": 0.001, "output": 0.005},
-        "anthropic/claude-haiku-4-5": {"input": 0.001, "output": 0.005},
-        "anthropic/claude-3.5-sonnet": {"input": 0.003, "output": 0.015},
-        "anthropic/claude-3-haiku": {"input": 0.00025, "output": 0.00125},
-        # Google AI / Vertex AI — verified against Google Cloud Billing Catalog API
-        "google/gemini-3.1-pro-preview": {"input": 0.002, "output": 0.012},
-        "google/gemini-3.1-flash-lite-preview": {"input": 0.00025, "output": 0.0015},
-        "google/gemini-3-pro-preview": {"input": 0.002, "output": 0.012},
-        "google/gemini-3-flash": {"input": 0.0005, "output": 0.003},
-        "google/gemini-2.5-pro": {"input": 0.00125, "output": 0.01},
-        "google/gemini-2.5-flash": {"input": 0.0003, "output": 0.0025},
-        "google/gemini-2.5-flash-lite": {"input": 0.0001, "output": 0.0004},
-        "vertex/gemini-3.1-pro-preview": {"input": 0.002, "output": 0.012},
-        "vertex/gemini-3.1-flash-lite-preview": {"input": 0.00025, "output": 0.0015},
-        "vertex/gemini-3-pro-preview": {"input": 0.002, "output": 0.012},
-        "vertex/gemini-3-flash": {"input": 0.0005, "output": 0.003},
-        "vertex/gemini-2.5-pro": {"input": 0.00125, "output": 0.01},
-        "vertex/gemini-2.5-flash": {"input": 0.0003, "output": 0.0025},
-        "vertex/gemini-2.5-flash-lite": {"input": 0.0001, "output": 0.0004},
+        # cached_input = automatic prompt caching discount
+        "openai/gpt-5.4": {"input": 0.0025, "output": 0.015, "cached_input": 0.000625},
+        "openai/gpt-5.2": {"input": 0.00175, "output": 0.014, "cached_input": 0.0004375},
+        "openai/o3": {"input": 0.002, "output": 0.008, "cached_input": 0.0005},
+        "openai/o3-mini": {"input": 0.0011, "output": 0.0044, "cached_input": 0.000275},
+        "openai/o4-mini": {"input": 0.0011, "output": 0.0044, "cached_input": 0.000275},
+        "openai/gpt-4.1": {"input": 0.002, "output": 0.008, "cached_input": 0.0005},
+        "openai/gpt-4.1-mini": {"input": 0.0004, "output": 0.0016, "cached_input": 0.0001},
+        "openai/gpt-4o": {"input": 0.0025, "output": 0.01, "cached_input": 0.00125},
+        "openai/gpt-4o-mini": {"input": 0.00015, "output": 0.0006, "cached_input": 0.000075},
+        # Anthropic (cached input = 90% discount)
+        "anthropic/claude-opus-4.6": {"input": 0.005, "output": 0.025, "cached_input": 0.0005},
+        "anthropic/claude-opus-4-6": {"input": 0.005, "output": 0.025, "cached_input": 0.0005},
+        "anthropic/claude-sonnet-4.6": {"input": 0.003, "output": 0.015, "cached_input": 0.0003},
+        "anthropic/claude-sonnet-4-6": {"input": 0.003, "output": 0.015, "cached_input": 0.0003},
+        "anthropic/claude-opus-4.5": {"input": 0.005, "output": 0.025, "cached_input": 0.0005},
+        "anthropic/claude-opus-4-5": {"input": 0.005, "output": 0.025, "cached_input": 0.0005},
+        "anthropic/claude-sonnet-4.5": {"input": 0.003, "output": 0.015, "cached_input": 0.0003},
+        "anthropic/claude-sonnet-4-5": {"input": 0.003, "output": 0.015, "cached_input": 0.0003},
+        "anthropic/claude-haiku-4.5": {"input": 0.001, "output": 0.005, "cached_input": 0.0001},
+        "anthropic/claude-haiku-4-5": {"input": 0.001, "output": 0.005, "cached_input": 0.0001},
+        "anthropic/claude-3.5-sonnet": {"input": 0.003, "output": 0.015, "cached_input": 0.0003},
+        "anthropic/claude-3-haiku": {"input": 0.00025, "output": 0.00125, "cached_input": 0.000025},
+        # Google AI / Vertex AI (cached input = 75% discount)
+        "google/gemini-3.1-pro-preview": {"input": 0.002, "output": 0.012, "cached_input": 0.0005},
+        "google/gemini-3.1-flash-lite-preview": {"input": 0.00025, "output": 0.0015, "cached_input": 0.0000625},
+        "google/gemini-3-pro-preview": {"input": 0.002, "output": 0.012, "cached_input": 0.0005},
+        "google/gemini-3-flash": {"input": 0.0005, "output": 0.003, "cached_input": 0.000125},
+        "google/gemini-2.5-pro": {"input": 0.00125, "output": 0.01, "cached_input": 0.0003125},
+        "google/gemini-2.5-flash": {"input": 0.0003, "output": 0.0025, "cached_input": 0.000075},
+        "google/gemini-2.5-flash-lite": {"input": 0.0001, "output": 0.0004, "cached_input": 0.000025},
+        "vertex/gemini-3.1-pro-preview": {"input": 0.002, "output": 0.012, "cached_input": 0.0005},
+        "vertex/gemini-3.1-flash-lite-preview": {"input": 0.00025, "output": 0.0015, "cached_input": 0.0000625},
+        "vertex/gemini-3-pro-preview": {"input": 0.002, "output": 0.012, "cached_input": 0.0005},
+        "vertex/gemini-3-flash": {"input": 0.0005, "output": 0.003, "cached_input": 0.000125},
+        "vertex/gemini-2.5-pro": {"input": 0.00125, "output": 0.01, "cached_input": 0.0003125},
+        "vertex/gemini-2.5-flash": {"input": 0.0003, "output": 0.0025, "cached_input": 0.000075},
+        "vertex/gemini-2.5-flash-lite": {"input": 0.0001, "output": 0.0004, "cached_input": 0.000025},
         # Ollama (local, free)
         "ollama/llama3.1": {"input": 0.0, "output": 0.0},
         "ollama/qwen2.5": {"input": 0.0, "output": 0.0},
@@ -164,6 +165,7 @@ class LLMUsageTracker:
         model_name: str,
         use_dynamic_pricing: bool = True,
         provider_mode: Optional[str] = None,
+        cached_input_tokens: int = 0,
     ) -> float:
         """Calculate estimated cost based on token usage and model pricing.
 
@@ -172,6 +174,9 @@ class LLMUsageTracker:
         2. Direct mode, Google/Vertex models -> Google Cloud Billing Catalog API
         3. Static MODEL_PRICING table (all providers, always available)
         4. Default fallback
+
+        When cached_input_tokens > 0, those tokens are charged at the
+        discounted cached_input rate instead of the full input rate.
         """
         if provider_mode is None:
             provider_mode = os.getenv("LLM_PROVIDER_MODE")
@@ -216,7 +221,12 @@ class LLMUsageTracker:
                 else:
                     logger.debug(f"Using static pricing for {model_name}: {pricing}")
 
-            input_cost = (input_tokens / 1000) * pricing["input"]
+            non_cached_input = max(input_tokens - cached_input_tokens, 0)
+            input_cost = (non_cached_input / 1000) * pricing["input"]
+            if cached_input_tokens > 0 and "cached_input" in pricing:
+                input_cost += (cached_input_tokens / 1000) * pricing["cached_input"]
+            elif cached_input_tokens > 0:
+                input_cost += (cached_input_tokens / 1000) * pricing["input"]
             output_cost = (output_tokens / 1000) * pricing["output"]
 
             return round(input_cost + output_cost, 6)
@@ -229,7 +239,7 @@ class LLMUsageTracker:
     def extract_usage_from_response(cls, response: Any) -> Dict[str, int]:
         """Extract token usage from API response when available"""
         try:
-            usage = {"input_tokens": 0, "output_tokens": 0}
+            usage = {"input_tokens": 0, "output_tokens": 0, "cached_input_tokens": 0}
 
             # Try to extract from various response formats
             # 1 Newer OpenRouter / OpenAI style: usage_metadata dict
@@ -241,6 +251,9 @@ class LLMUsageTracker:
                 usage["output_tokens"] = usage_data.get(
                     "completion_tokens", usage_data.get("output_tokens", 0)
                 )
+                input_details = usage_data.get("input_token_details", {})
+                if isinstance(input_details, dict):
+                    usage["cached_input_tokens"] = input_details.get("cache_read", 0)
 
             # 2 Traditional attribute-based usage object
             elif hasattr(response, "usage"):
@@ -248,6 +261,10 @@ class LLMUsageTracker:
                     usage["input_tokens"] = response.usage.prompt_tokens
                 if hasattr(response.usage, "completion_tokens"):
                     usage["output_tokens"] = response.usage.completion_tokens
+                if hasattr(response.usage, "prompt_tokens_details"):
+                    details = response.usage.prompt_tokens_details
+                    if hasattr(details, "cached_tokens"):
+                        usage["cached_input_tokens"] = details.cached_tokens
 
             # 3 Dict-based responses (e.g. OpenAI v1 chat API style)
             elif isinstance(response, dict):
@@ -260,6 +277,9 @@ class LLMUsageTracker:
                     usage["output_tokens"] = usage_data.get(
                         "completion_tokens", usage_data.get("output_tokens", 0)
                     )
+                    input_details = usage_data.get("input_token_details", {})
+                    if isinstance(input_details, dict):
+                        usage["cached_input_tokens"] = input_details.get("cache_read", 0)
                 elif "usage" in response:
                     usage_data = response["usage"]
                     usage["input_tokens"] = usage_data.get("prompt_tokens", 0)
@@ -269,7 +289,7 @@ class LLMUsageTracker:
 
         except Exception as e:
             logger.warning(f"Error extracting usage from response: {e}")
-            return {"input_tokens": 0, "output_tokens": 0}
+            return {"input_tokens": 0, "output_tokens": 0, "cached_input_tokens": 0}
 
     @classmethod
     def store_usage(cls, usage: LLMUsage) -> bool:
@@ -368,11 +388,13 @@ class LLMUsageTracker:
 
             # Count output tokens
             output_tokens = 0
+            cached_input_tokens = 0
             if response:
                 # Try to extract from API response first
                 usage_data = cls.extract_usage_from_response(response)
                 if usage_data["input_tokens"] > 0:
                     input_tokens = usage_data["input_tokens"]
+                cached_input_tokens = usage_data.get("cached_input_tokens", 0)
                 if usage_data["output_tokens"] > 0:
                     output_tokens = usage_data["output_tokens"]
                 else:
@@ -389,7 +411,10 @@ class LLMUsageTracker:
                         output_tokens = cls.count_tokens(str(response), model_name)
 
             # Calculate cost
-            estimated_cost = cls.calculate_cost(input_tokens, output_tokens, model_name)
+            estimated_cost = cls.calculate_cost(
+                input_tokens, output_tokens, model_name,
+                cached_input_tokens=cached_input_tokens,
+            )
 
             # Calculate response time
             response_time_ms = (
