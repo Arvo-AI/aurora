@@ -80,7 +80,45 @@ eksctl create iamserviceaccount \
   --approve
 ```
 
-### 2. Configure values.yaml
+### 2. Install the EBS CSI Driver
+
+Aurora's stateful services (Postgres, Redis, Weaviate) require persistent volumes. A fresh EKS cluster needs the EBS CSI driver and a default StorageClass:
+
+```bash
+# Create IRSA for the driver
+eksctl create iamserviceaccount \
+  --name ebs-csi-controller-sa \
+  --namespace kube-system \
+  --cluster YOUR_CLUSTER \
+  --attach-policy-arn arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy \
+  --approve
+
+# Install the addon
+EBS_ROLE_ARN=$(kubectl get sa ebs-csi-controller-sa -n kube-system \
+  -o jsonpath='{.metadata.annotations.eks\.amazonaws\.com/role-arn}')
+
+eksctl create addon \
+  --name aws-ebs-csi-driver \
+  --cluster YOUR_CLUSTER \
+  --service-account-role-arn "$EBS_ROLE_ARN" \
+  --force
+
+# Create a default StorageClass
+kubectl apply -f - <<EOF
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: gp3
+  annotations:
+    storageclass.kubernetes.io/is-default-class: "true"
+provisioner: ebs.csi.aws.com
+volumeBindingMode: WaitForFirstConsumer
+parameters:
+  type: gp3
+EOF
+```
+
+### 3. Configure values.yaml
 
 ```yaml
 services:
@@ -98,7 +136,7 @@ serviceAccount:
     eks.amazonaws.com/role-arn: arn:aws:iam::YOUR_ACCOUNT:role/aurora-backend
 ```
 
-### 3. Deploy
+### 4. Deploy
 
 ```bash
 helm upgrade --install aurora ./deploy/helm/aurora -f values.generated.yaml
@@ -133,7 +171,17 @@ Example: `awssm:us-east-1:aurora/users/aurora-dev-ed952f31-b494-4b98-97a4-b68ac5
 3. Test connectivity from inside the container:
 
 ```bash
+# Docker Compose
 docker exec aurora-server python -c "
+import boto3
+client = boto3.client('secretsmanager', region_name='us-east-1')
+r = client.create_secret(Name='aurora/users/test-hello', SecretString='it works')
+print('OK:', r['Name'])
+client.delete_secret(SecretId='aurora/users/test-hello', ForceDeleteWithoutRecovery=True)
+"
+
+# EKS
+kubectl exec -n aurora <server-pod> -- python -c "
 import boto3
 client = boto3.client('secretsmanager', region_name='us-east-1')
 r = client.create_secret(Name='aurora/users/test-hello', SecretString='it works')
