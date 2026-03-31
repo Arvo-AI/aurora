@@ -185,14 +185,14 @@ def get_pricing_options():
 def get_pricing(user_id):
     """Get current raw model pricing (per 1K tokens, no markup)."""
     try:
-        from chat.backend.agent.utils.openrouter_pricing_service import get_pricing_service
+        from chat.backend.agent.utils.llm_usage_tracker import LLMUsageTracker
+        import os
 
-        service = get_pricing_service()
-        pricing_data = service.get_pricing()
-        cache_info = service.get_cache_info()
+        pricing_info = LLMUsageTracker.get_pricing_info()
+        provider_mode = os.getenv("LLM_PROVIDER_MODE", "direct")
 
         models = {}
-        for model_id, prices in pricing_data.items():
+        for model_id, prices in LLMUsageTracker.MODEL_PRICING.items():
             if model_id == "default":
                 continue
             models[model_id] = {
@@ -204,7 +204,8 @@ def get_pricing(user_id):
 
         return jsonify({
             "models": models,
-            "cache_info": cache_info,
+            "provider_mode": provider_mode,
+            "pricing_info": pricing_info,
             "currency": "USD",
         })
 
