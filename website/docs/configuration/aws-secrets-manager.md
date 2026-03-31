@@ -91,6 +91,7 @@ config:
   SECRETS_BACKEND: "aws_secrets_manager"
   AWS_SM_REGION: "us-east-1"
   AWS_SM_PREFIX: "aurora/users"
+  ENABLE_POD_ISOLATION: "true"   # Required for IRSA token mounting
 
 serviceAccount:
   annotations:
@@ -144,6 +145,33 @@ client.delete_secret(SecretId='aurora/users/test-hello', ForceDeleteWithoutRecov
 ### "AccessDeniedException"
 
 Your IAM policy is missing required permissions. Ensure all four actions (`CreateSecret`, `GetSecretValue`, `PutSecretValue`, `DeleteSecret`) are allowed on the `aurora/users/*` resource.
+
+### IRSA: "no IAM OIDC provider associated with cluster"
+
+Your EKS cluster doesn't have an OIDC provider. Create one before setting up the service account:
+
+```bash
+eksctl utils associate-iam-oidc-provider --region us-east-1 --cluster YOUR_CLUSTER --approve
+```
+
+To avoid this, create the cluster with `eksctl create cluster --with-oidc`.
+
+### IRSA: credentials not working despite role annotation
+
+Two common causes:
+
+1. **`ENABLE_POD_ISOLATION` is not `"true"`** — Without this, `automountServiceAccountToken` is `false` and the IRSA token file is never mounted into the pod. Verify with:
+   ```bash
+   kubectl exec -n aurora <server-pod> -- env | grep AWS_WEB_IDENTITY
+   ```
+   If empty, set `ENABLE_POD_ISOLATION: "true"` in your values.
+
+2. **Trust policy mismatch** — The IAM role's trust policy must allow the Helm-created ServiceAccounts (e.g., `aurora-aurora-oss-server`), not just the eksctl-created one. Use a wildcard in the trust policy condition:
+   ```json
+   "StringLike": {
+     "oidc.eks.<region>.amazonaws.com/id/<OIDC_ID>:sub": "system:serviceaccount:aurora:*"
+   }
+   ```
 
 ### Migrating from Vault
 
