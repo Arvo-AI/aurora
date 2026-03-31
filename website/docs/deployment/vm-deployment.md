@@ -314,8 +314,8 @@ Use this path when the target VM has restricted or no outbound internet access (
 Prebuilt airtight bundles are published to Google Cloud Storage on every release and push to `main`. Download on a machine with internet access.
 
 **Browse available bundles:**
-- [amd64 bundles](https://storage.googleapis.com/storage/v1/b/aurora-airtight-bucket/o?alt=json&fields=items/name)
-- [arm64 bundles](https://storage.googleapis.com/storage/v1/b/aurora-airtight-bucket-arm64/o?alt=json&fields=items/name)
+- [amd64 bundles](https://storage.googleapis.com/aurora-airtight-bucket)
+- [arm64 bundles](https://storage.googleapis.com/aurora-airtight-bucket-arm64)
 
 **Download** — set your version and architecture, then download:
 

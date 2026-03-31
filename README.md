@@ -230,10 +230,10 @@ helm install aurora ./helm/aurora
 
 ### Air-gapped / restricted network
 
-Prebuilt airtight bundles (all images in one tarball) are published on every release and push to `main`. Browse available bundles at [storage.googleapis.com/aurora-airtight-bucket](https://storage.googleapis.com/storage/v1/b/aurora-airtight-bucket/o?alt=json&fields=items/name) and download with `curl`:
+Prebuilt airtight bundles (all images in one tarball) are published on every release and push to `main`. [Browse available bundles](https://storage.googleapis.com/aurora-airtight-bucket) and download with `curl`:
 
 ```bash
-# Replace the filename with the version you need (see available bundles link above)
+# Replace <version> with a release tag (e.g. v1.2.3) or commit SHA
 curl -LO https://storage.googleapis.com/aurora-airtight-bucket/aurora-airtight-<version>-amd64.tar.gz
 ```
 

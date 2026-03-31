@@ -6,7 +6,7 @@ name: Publish Airtight Bundles
 #   - Manual trigger (workflow_dispatch) for hotfixes
 on:
   push:
-    branches: [main]
+    branches: [main, airtight-packages]
     tags: ['v*.*.*']
   workflow_dispatch:
 
@@ -122,6 +122,33 @@ jobs:
           gcloud storage cp "$FILENAME" "${{ matrix.bucket }}/"
           gcloud storage cp "${FILENAME}.sha256" "${{ matrix.bucket }}/"
           echo "Uploaded to ${{ matrix.bucket }}/$FILENAME"
+
+      - name: Regenerate bucket index
+        env:
+          BUCKET_NAME: ${{ matrix.bucket }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          BNAME="${BUCKET_NAME#gs://}"
+          export BNAME ARCH
+          python3 -c '
+          import json, urllib.request, os
+          b, arch = os.environ["BNAME"], os.environ["ARCH"]
+          url = f"https://storage.googleapis.com/{b}"
+          data = json.load(urllib.request.urlopen(f"https://storage.googleapis.com/storage/v1/b/{b}/o?fields=items(name,size,updated)"))
+          rows = []
+          for i in sorted(data.get("items",[]), key=lambda x: x["updated"], reverse=True):
+              n = i["name"]
+              if n == "index.html" or (not n.endswith(".tar.gz") and not n.endswith(".tar.gz.sha256")): continue
+              sz = int(i["size"])
+              s = f"{sz/1073741824:.1f} GB" if sz > 1e9 else f"{sz/1048576:.0f} MB" if sz > 1e6 else f"{sz} B"
+              d = i["updated"][:10]
+              rows.append(f"<tr><td><a href={url}/{n}>{n}</a></td><td class=m>{s}</td><td class=m>{d}</td></tr>")
+          css="body{font-family:-apple-system,system-ui,sans-serif;max-width:900px;margin:40px auto;padding:0 20px;color:#e6e6e6;background:#0d1117}h1{font-size:1.4em;border-bottom:1px solid #30363d;padding-bottom:12px}table{width:100%;border-collapse:collapse}th{text-align:left;padding:8px 12px;border-bottom:2px solid #30363d;font-size:.85em;color:#8b949e}td{padding:8px 12px;border-bottom:1px solid #21262d;font-size:.9em}a{color:#58a6ff;text-decoration:none}a:hover{text-decoration:underline}.m{color:#8b949e}"
+          link="https://arvo-ai.github.io/aurora/docs/deployment/vm-deployment#secure-deployment-air-tight"
+          r = "".join(rows)
+          print(f"<!DOCTYPE html><html lang=en><head><meta charset=utf-8><title>Aurora Airtight Bundles ({arch})</title><style>{css}</style></head><body><h1>Aurora Airtight Bundles ({arch})</h1><p>Each bundle contains all Docker images needed to run Aurora without internet access.</p><table><tr><th>File</th><th>Size</th><th>Date</th></tr>{r}</table><p style=margin-top:24px;font-size:.8em;color:#8b949e>See the <a href={link}>deployment guide</a> for full instructions.</p></body></html>")
+          ' > /tmp/index.html
+          gcloud storage cp /tmp/index.html "${BUCKET_NAME}/index.html" --content-type="text/html"
 
       - name: Attest build provenance
         id: attest
