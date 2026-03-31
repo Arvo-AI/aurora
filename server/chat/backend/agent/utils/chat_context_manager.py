@@ -131,8 +131,11 @@ Provide a detailed summary that preserves essential context:"""
             # Create isolated LLM instance for summarization
             from ..llm import ModelConfig
             llm_manager = LLMManager()
+            from utils.cloud.cloud_utils import get_user_context
+            ctx = get_user_context()
             summary = llm_manager.summarize(
-                conversation_text, model=ModelConfig.INCIDENT_REPORT_SUMMARIZATION_MODEL
+                conversation_text, model=ModelConfig.INCIDENT_REPORT_SUMMARIZATION_MODEL,
+                user_id=ctx.get("user_id"), session_id=ctx.get("session_id"),
             )
 
             logger.info(f"Generated conversation summary ({len(summary)} chars)")
