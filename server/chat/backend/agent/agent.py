@@ -388,6 +388,7 @@ class Agent:
                         output_tokens = 0
 
                         # Extract real token counts from provider usage_metadata
+                        cached_input_tokens = 0
                         if hasattr(response, 'generations'):
                             for gen_list in response.generations:
                                 for gen in gen_list:
@@ -396,6 +397,9 @@ class Agent:
                                         um = msg.usage_metadata
                                         input_tokens = um.get('input_tokens', 0)
                                         output_tokens = um.get('output_tokens', 0)
+                                        details = um.get('input_token_details', {})
+                                        if isinstance(details, dict):
+                                            cached_input_tokens = details.get('cache_read', 0)
                                         break
                                 if input_tokens > 0:
                                     break
@@ -405,12 +409,16 @@ class Agent:
                             token_usage = response.llm_output.get('token_usage', {})
                             input_tokens = token_usage.get('prompt_tokens', 0)
                             output_tokens = token_usage.get('completion_tokens', 0)
+                            prompt_details = token_usage.get('prompt_tokens_details', {})
+                            if isinstance(prompt_details, dict):
+                                cached_input_tokens = prompt_details.get('cached_tokens', 0)
 
                         if input_tokens == 0 and output_tokens == 0:
                             logging.warning(f"No provider usage_metadata for {self.model_name} - tokens will be 0")
 
                         estimated_cost = LLMUsageTracker.calculate_cost(
-                            input_tokens, output_tokens, self.model_name
+                            input_tokens, output_tokens, self.model_name,
+                            cached_input_tokens=cached_input_tokens,
                         )
                         
                         usage = LLMUsage(

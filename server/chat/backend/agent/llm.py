@@ -218,12 +218,18 @@ class LLMManager:
         llm_response = None  # Store the raw LLM response for usage extraction
 
         try:
-            # Pydantic provides type validation, but not output streaming support
             if output_struct:
-                llm_response = model.with_structured_output(
-                    schema=output_struct
+                raw_result = model.with_structured_output(
+                    schema=output_struct, include_raw=True
                 ).invoke(prompt)
-                result = dict(llm_response)
+                llm_response = raw_result.get("raw")
+                parsed = raw_result.get("parsed")
+                if parsed is None:
+                    parsing_error = raw_result.get("parsing_error")
+                    logger.warning(f"Structured output parsing failed: {parsing_error}")
+                    result = {}
+                else:
+                    result = dict(parsed)
                 logger.info(f"Structured output result: {str(result)[:200]}...")
             else:
                 llm_response = model.invoke(prompt)
