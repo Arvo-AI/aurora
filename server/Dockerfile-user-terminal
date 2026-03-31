@@ -138,9 +138,6 @@ RUN ARCH=$(uname -m) && \
     curl -fsSL "https://github.com/scaleway/scaleway-cli/releases/download/v2.48.0/scaleway-cli_2.48.0_linux_${SCW_CLI_ARCH}" -o /usr/local/bin/scw && \
     chmod +x /usr/local/bin/scw
 
-# Install Tailscale CLI (for SSH to tailnet devices)
-RUN curl -fsSL https://tailscale.com/install.sh | sh
-
 # Install Ansible
 RUN pip3 install --no-cache-dir ansible
 
@@ -153,13 +150,9 @@ RUN rm -rf /var/run/secrets/kubernetes.io /etc/kubernetes
 
 # Create non-root user
 RUN useradd -m -s /bin/bash -u 10000 appuser && \
-    mkdir -p /home/appuser/.kube /home/appuser/.config /home/appuser/.aws /home/appuser/.azure /home/appuser/.terraform.d /home/appuser/.pulumi /home/appuser/.ansible /home/appuser/.ssh /home/appuser/.config/scw /home/appuser/.ovh /home/appuser/.local/share/tailscale && \
+    mkdir -p /home/appuser/.kube /home/appuser/.config /home/appuser/.aws /home/appuser/.azure /home/appuser/.terraform.d /home/appuser/.pulumi /home/appuser/.ansible /home/appuser/.ssh /home/appuser/.config/scw /home/appuser/.ovh && \
     chmod 700 /home/appuser/.ssh && \
     chown -R appuser:appuser /home/appuser
-
-# Copy Tailscale init script
-COPY utils/terminal/tailscale-init.sh /home/appuser/tailscale-init.sh
-RUN chmod +x /home/appuser/tailscale-init.sh && chown appuser:appuser /home/appuser/tailscale-init.sh
 
 USER appuser
 WORKDIR /home/appuser

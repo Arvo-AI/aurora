@@ -127,9 +127,6 @@ RUN ARCH=$(uname -m) && \
     curl -fsSL "https://github.com/scaleway/scaleway-cli/releases/download/v2.48.0/scaleway-cli_2.48.0_linux_${SCW_CLI_ARCH}" -o /usr/local/bin/scw && \
     chmod +x /usr/local/bin/scw
 
-# Install Tailscale CLI (for local dev SSH to tailnet devices)
-RUN curl -fsSL https://tailscale.com/install.sh | sh
-
 # Install Node.js for MCP servers
 RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
     apt-get install -y nodejs && \
