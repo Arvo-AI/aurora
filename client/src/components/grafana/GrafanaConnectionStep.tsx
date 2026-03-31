@@ -76,13 +76,13 @@ export function GrafanaConnectionStep({
           <div className="bg-muted/50 rounded-lg p-4 text-sm">
             <p className="font-medium mb-2">How to create a service account token:</p>
             <ol className="list-decimal list-inside space-y-1 text-muted-foreground">
-              <li>Log in to Grafana as an <strong className="text-foreground">Admin</strong> user</li>
+              <li>Log in to Grafana as an <strong className="text-foreground">Admin</strong> user (required to create service accounts)</li>
               <li>Go to Administration &gt; Service accounts</li>
-              <li>Create a new service account with the <strong className="text-foreground">Viewer</strong> role</li>
+              <li>Create a new service account with the <strong className="text-foreground">Viewer</strong> role — Aurora only needs read access</li>
               <li>Generate a token for the service account and paste it above</li>
             </ol>
             <p className="text-xs text-muted-foreground mt-3">
-              You must be a Grafana Organization Admin to create service accounts. The service account only needs the <strong className="text-foreground">Viewer</strong> role — Aurora uses the token to verify connectivity and receives all alert data via webhook (Grafana pushes to Aurora, not the other way around).
+              The <strong className="text-foreground">Viewer</strong> role is sufficient. Aurora uses the token only to verify connectivity — all alert data arrives via webhook (Grafana pushes to Aurora).
             </p>
             <a
               href="https://grafana.com/docs/grafana/latest/administration/service-accounts/"
