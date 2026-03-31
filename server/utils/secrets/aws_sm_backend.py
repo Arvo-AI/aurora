@@ -142,8 +142,8 @@ class AWSSecretsManagerBackend(SecretsBackend):
         except Exception as e:
             elapsed_ms = (time.perf_counter() - start_time) * 1000
             logger.error(
-                "Failed to store secret '%s' (%.1fms): %s",
-                secret_name, elapsed_ms, e,
+                "Failed to store secret in AWS Secrets Manager (%.1fms): %s",
+                elapsed_ms, e,
             )
             raise
 
@@ -151,8 +151,8 @@ class AWSSecretsManagerBackend(SecretsBackend):
         secret_ref = f"{AWSSM_REF_PREFIX}{self.region}:{full_name}"
 
         logger.info(
-            "Stored secret '%s' in AWS Secrets Manager (%.1fms)",
-            secret_name, elapsed_ms,
+            "Stored secret in AWS Secrets Manager (%.1fms)",
+            elapsed_ms,
         )
 
         return secret_ref
@@ -185,8 +185,8 @@ class AWSSecretsManagerBackend(SecretsBackend):
         except Exception as e:
             elapsed_ms = (time.perf_counter() - start_time) * 1000
             logger.error(
-                "Failed to retrieve secret (%.1fms): %s (%s), ref: %s",
-                elapsed_ms, e, type(e).__name__, secret_ref,
+                "Failed to retrieve secret (%.1fms): %s (%s)",
+                elapsed_ms, e, type(e).__name__,
             )
             raise
 
@@ -216,8 +216,8 @@ class AWSSecretsManagerBackend(SecretsBackend):
 
             elapsed_ms = (time.perf_counter() - start_time) * 1000
             logger.info(
-                "Deleted secret '%s' from AWS Secrets Manager (%.1fms)",
-                secret_name, elapsed_ms,
+                "Deleted secret from AWS Secrets Manager (%.1fms)",
+                elapsed_ms,
             )
 
         except Exception as e:
