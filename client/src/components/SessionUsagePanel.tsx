@@ -56,7 +56,16 @@ export default function SessionUsagePanel({ sessionUsage }: SessionUsagePanelPro
   const [isExpanded, setIsExpanded] = useState(false);
   const { sessionUsage: totals, requestHistory } = sessionUsage;
 
-  if (totals.request_count === 0) return null;
+  if (totals.request_count === 0) {
+    return (
+      <div className="rounded-lg border border-zinc-700/50 bg-zinc-800/40 text-sm overflow-hidden">
+        <div className="flex items-center gap-2 px-3 py-2">
+          <BarChart3 className="h-3.5 w-3.5 text-zinc-600" />
+          <span className="text-zinc-500 text-xs">Token usage will appear here once the session starts</span>
+        </div>
+      </div>
+    );
+  }
 
   const modelBreakdown = requestHistory.reduce<
     Record<string, { count: number; input: number; output: number; cost: number }>
