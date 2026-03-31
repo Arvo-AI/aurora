@@ -66,11 +66,13 @@ class VisualizationExtractor:
         import time as _time
         start_time = _time.time()
         try:
-            extractor = self.llm.with_structured_output(VisualizationData)
-            new_viz = extractor.invoke(prompt)
+            extractor = self.llm.with_structured_output(VisualizationData, include_raw=True)
+            result = extractor.invoke(prompt)
+            new_viz = result["parsed"]
+            raw_response = result.get("raw")
             
             if user_id:
-                self._track_usage(prompt, user_id, session_id, start_time)
+                self._track_usage(prompt, user_id, session_id, start_time, raw_response)
             
             if existing_viz:
                 merged = self._merge(existing_viz, new_viz)
@@ -84,7 +86,7 @@ class VisualizationExtractor:
             logger.error(f"[VizExtractor] Extraction failed: {e}")
             return existing_viz or VisualizationData()
     
-    def _track_usage(self, prompt: str, user_id: str, session_id: str, start_time: float):
+    def _track_usage(self, prompt: str, user_id: str, session_id: str, start_time: float, response=None):
         """Track visualization extraction LLM usage."""
         try:
             from chat.backend.agent.llm import ModelConfig
@@ -95,7 +97,7 @@ class VisualizationExtractor:
                 model_name=ModelConfig.VISUALIZATION_MODEL,
                 request_type="visualization_extraction",
                 prompt=prompt,
-                response=None,
+                response=response,
                 start_time=start_time,
                 api_provider="openrouter",
             )

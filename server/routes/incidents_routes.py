@@ -694,6 +694,7 @@ def get_incident(user_id, incident_id: str):
 
                 # Fetch token usage for the RCA session
                 rca_session_id = incident.get("chatSessionId")
+                incident_created = incident.get("createdAt")
                 usage_totals = None
                 if rca_session_id:
                     try:
@@ -707,8 +708,15 @@ def get_incident(user_id, incident_id: str):
                                 COALESCE(SUM(estimated_cost), 0) as total_cost
                             FROM llm_usage_tracking
                             WHERE session_id = %s
+                               OR (session_id IS NULL
+                                   AND user_id = %s
+                                   AND request_type = 'incident_initial_summary'
+                                   AND timestamp BETWEEN
+                                       (SELECT created_at - INTERVAL '2 minutes' FROM incidents WHERE id = %s)
+                                       AND
+                                       (SELECT created_at + INTERVAL '2 minutes' FROM incidents WHERE id = %s))
                             """,
-                            (rca_session_id,),
+                            (rca_session_id, user_id, incident_id, incident_id),
                         )
                         urow = cursor.fetchone()
                         if urow and urow[0] > 0:
@@ -723,10 +731,17 @@ def get_incident(user_id, incident_id: str):
                                     COALESCE(SUM(estimated_cost), 0)
                                 FROM llm_usage_tracking
                                 WHERE session_id = %s
+                                   OR (session_id IS NULL
+                                       AND user_id = %s
+                                       AND request_type = 'incident_initial_summary'
+                                       AND timestamp BETWEEN
+                                           (SELECT created_at - INTERVAL '2 minutes' FROM incidents WHERE id = %s)
+                                           AND
+                                           (SELECT created_at + INTERVAL '2 minutes' FROM incidents WHERE id = %s))
                                 GROUP BY model_name
                                 ORDER BY SUM(estimated_cost) DESC
                                 """,
-                                (rca_session_id,),
+                                (rca_session_id, user_id, incident_id, incident_id),
                             )
                             model_rows = cursor.fetchall()
                             models = [

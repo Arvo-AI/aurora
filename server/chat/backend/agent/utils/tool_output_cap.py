@@ -55,11 +55,16 @@ def cap_tool_output(output: str, tool_name: str = "unknown") -> str:
 
     try:
         from ..llm import LLMManager, ModelConfig
+        from utils.cloud.cloud_utils import get_user_context
+
+        ctx = get_user_context()
 
         llm = LLMManager()
         summary = llm.summarize(
             content_to_summarize,
             model=ModelConfig.TOOL_OUTPUT_SUMMARIZATION_MODEL,
+            user_id=ctx.get("user_id"),
+            session_id=ctx.get("session_id"),
         )
         summary_with_marker = summary + "\n\n[Summarized from larger output]"
         logger.info(
