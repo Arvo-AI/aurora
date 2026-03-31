@@ -233,13 +233,15 @@ def search_similar_good_rcas(
     source_type: str,
     limit: int = 2,
     min_score: float = 0.7,
-    org_id: str = None,
 ) -> List[Dict[str, Any]]:
     """
     Search for similar past incidents with positive feedback.
 
+    Resolves org_id from user_id and filters by org so all org members
+    benefit from shared Aurora Learn knowledge.
+
     Args:
-        user_id: User identifier
+        user_id: User identifier (used to resolve org_id)
         alert_title: Title of the current alert
         alert_service: Service of the current alert
         source_type: Source type of the current alert
@@ -252,13 +254,15 @@ def search_similar_good_rcas(
     try:
         _, collection = _get_weaviate_client()
 
-        # Build search query combining alert details
         search_query = f"Alert: {alert_title} Service: {alert_service} Source: {source_type}"
 
-        # Build org filter — search across the entire org's learnings
+        from utils.auth.stateless_auth import get_org_id_for_user
+        org_id = get_org_id_for_user(user_id)
+
         if org_id:
             search_filter = Filter.by_property("org_id").equal(org_id)
         else:
+            logger.warning("No org_id found for user %s, falling back to user_id filter", user_id)
             search_filter = Filter.by_property("user_id").equal(user_id)
 
         # Perform vector search

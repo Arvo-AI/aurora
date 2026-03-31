@@ -1755,26 +1755,6 @@ def initialize_tables():
                 logging.warning(f"Error adding role column to users: {e}")
                 cursor.execute("ROLLBACK TO SAVEPOINT sp_role_col")
 
-            # Fix: Promote org creators back to admin.
-            # The ALTER TABLE DEFAULT 'viewer' sets all existing rows to viewer,
-            # so we explicitly restore admin for anyone who created their org.
-            try:
-                cursor.execute("SAVEPOINT sp_role_fix")
-                cursor.execute("""
-                    UPDATE users u SET role = 'admin'
-                    FROM organizations o
-                    WHERE u.org_id = o.id
-                      AND o.created_by = u.id
-                      AND u.role != 'admin';
-                """)
-                promoted = cursor.rowcount
-                if promoted > 0:
-                    logging.info("Promoted %d org creator(s) back to admin role.", promoted)
-                cursor.execute("RELEASE SAVEPOINT sp_role_fix")
-            except Exception as e:
-                logging.warning(f"Error promoting org creators to admin: {e}")
-                cursor.execute("ROLLBACK TO SAVEPOINT sp_role_fix")
-
             # Migration: Add must_change_password column to users table
             try:
                 cursor.execute("SAVEPOINT sp_mcp_col")
