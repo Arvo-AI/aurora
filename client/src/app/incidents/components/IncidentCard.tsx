@@ -632,25 +632,25 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
                 <div>
                   <p className="text-[11px] text-zinc-500 uppercase tracking-wider">Input Tokens</p>
                   <p className="text-sm font-mono text-zinc-200 mt-0.5">
-                    {incident.tokenUsage.totalInputTokens.toLocaleString()}
+                    {(incident.tokenUsage.totalInputTokens ?? 0).toLocaleString()}
                   </p>
                 </div>
                 <div>
                   <p className="text-[11px] text-zinc-500 uppercase tracking-wider">Output Tokens</p>
                   <p className="text-sm font-mono text-zinc-200 mt-0.5">
-                    {incident.tokenUsage.totalOutputTokens.toLocaleString()}
+                    {(incident.tokenUsage.totalOutputTokens ?? 0).toLocaleString()}
                   </p>
                 </div>
                 <div>
                   <p className="text-[11px] text-zinc-500 uppercase tracking-wider">Total Tokens</p>
                   <p className="text-sm font-mono text-zinc-200 mt-0.5">
-                    {incident.tokenUsage.totalTokens.toLocaleString()}
+                    {(incident.tokenUsage.totalTokens ?? 0).toLocaleString()}
                   </p>
                 </div>
                 <div>
                   <p className="text-[11px] text-zinc-500 uppercase tracking-wider">Estimated Cost</p>
                   <p className="text-sm font-mono text-green-400 mt-0.5">
-                    ${incident.tokenUsage.totalCost.toFixed(4)}
+                    ${(incident.tokenUsage.totalCost ?? 0).toFixed(4)}
                   </p>
                 </div>
               </div>
@@ -666,14 +666,14 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
                         <div key={m.model} className="flex items-center justify-between text-xs">
                           <div className="flex items-center gap-2 min-w-0">
                             <span className="text-zinc-300 truncate" title={m.model}>{shortName}</span>
-                            <span className="text-zinc-600">x{m.requestCount}</span>
+                            <span className="text-zinc-600">x{m.requestCount ?? 0}</span>
                           </div>
                           <div className="flex items-center gap-3 shrink-0 ml-2">
                             <span className="font-mono tabular-nums text-zinc-500">
-                              {m.inputTokens.toLocaleString()} in / {m.outputTokens.toLocaleString()} out
+                              {(m.inputTokens ?? 0).toLocaleString()} in / {(m.outputTokens ?? 0).toLocaleString()} out
                             </span>
                             <span className="font-mono tabular-nums text-green-400/80 w-16 text-right">
-                              ${m.cost.toFixed(4)}
+                              ${(m.cost ?? 0).toFixed(4)}
                             </span>
                           </div>
                         </div>
@@ -684,7 +684,7 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
               )}
 
               <p className="text-[11px] text-zinc-600 mt-3">
-                {incident.tokenUsage.requestCount} LLM request{incident.tokenUsage.requestCount !== 1 ? 's' : ''} during investigation
+                {incident.tokenUsage.requestCount ?? 0} LLM request{(incident.tokenUsage.requestCount ?? 0) !== 1 ? 's' : ''} during investigation
               </p>
             </div>
           </div>

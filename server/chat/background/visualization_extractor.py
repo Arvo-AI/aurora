@@ -71,6 +71,13 @@ class VisualizationExtractor:
             new_viz = result["parsed"]
             raw_response = result.get("raw")
             
+            if new_viz is None:
+                parsing_error = result.get("parsing_error")
+                logger.warning(f"[VizExtractor] Parsing failed: {parsing_error}")
+                if user_id and raw_response:
+                    self._track_usage(prompt, user_id, session_id, start_time, raw_response)
+                return existing_viz or VisualizationData()
+            
             if user_id:
                 self._track_usage(prompt, user_id, session_id, start_time, raw_response)
             

@@ -173,16 +173,23 @@ class OpenRouterPricingService:
         # Try exact match first
         if model_name in pricing_data:
             base_pricing = pricing_data[model_name]
-        # Try without version suffix
-        elif model_name.split(".")[0].split("-v")[0] in pricing_data:
-            base_model = model_name.split(".")[0].split("-v")[0]
-            base_pricing = pricing_data[base_model]
         else:
-            # Return default pricing
-            logger.warning(f"No pricing found for model {model_name}, using default")
-            base_pricing = pricing_data.get(
-                "default", {"input": 0.001, "output": 0.002}
-            )
+            # Try prefix matching: find the longest key that is a prefix of model_name
+            best_match = None
+            best_len = 0
+            for key in pricing_data:
+                if key == "default":
+                    continue
+                if model_name.startswith(key) and len(key) > best_len:
+                    best_match = key
+                    best_len = len(key)
+            if best_match:
+                base_pricing = pricing_data[best_match]
+            else:
+                logger.warning(f"No pricing found for model {model_name}, using default")
+                base_pricing = pricing_data.get(
+                    "default", {"input": 0.001, "output": 0.002}
+                )
 
         return base_pricing
 

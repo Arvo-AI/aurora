@@ -989,7 +989,7 @@ class Workflow:
                             if _model_turn_tokens % _USAGE_UPDATE_INTERVAL == 0:
                                 yield ("usage_update", {
                                     "model": input_state.model,
-                                    "output_tokens": _model_turn_tokens,
+                                    "output_chunks": _model_turn_tokens,
                                     "is_streaming": True,
                                     "session_totals": _session_usage,
                                 })

@@ -131,7 +131,7 @@ export default function TokenUsageIndicator({ sessionUsage }: TokenUsageIndicato
             format={formatTokens}
             className="text-yellow-300 text-xs"
           />
-          <span className="text-yellow-300/60">tokens</span>
+          <span className="text-yellow-300/60">chunks</span>
           <RateArrow trend={trend} tokPerSec={tokPerSec} />
         </div>
       ) : lastRequest ? (
