@@ -90,7 +90,7 @@ class ToolContextCapture:
         self._step_counter += 1
         return self._step_counter
 
-    def _record_step_start(self, tool_name: str, tool_input: Any) -> Optional[int]:
+    def _record_step_start(self, tool_name: str, tool_input: Any, tool_call_id: str = None) -> Optional[int]:
         """INSERT a running execution_step row. Returns the row id or None."""
         if not self.incident_id:
             return None
@@ -103,11 +103,11 @@ class ToolContextCapture:
                     cur.execute(
                         """INSERT INTO execution_steps
                            (incident_id, session_id, org_id, step_index, tool_name,
-                            tool_input, status, started_at)
-                           VALUES (%s, %s, %s, %s, %s, %s, 'running', %s)
+                            tool_call_id, tool_input, status, started_at)
+                           VALUES (%s, %s, %s, %s, %s, %s, %s, 'running', %s)
                            RETURNING id""",
                         (self.incident_id, self.session_id, self.org_id,
-                         step_index, tool_name, input_json,
+                         step_index, tool_name, tool_call_id, input_json,
                          datetime.now(timezone.utc)),
                     )
                     row_id = cur.fetchone()[0]
@@ -181,7 +181,7 @@ class ToolContextCapture:
             "start_time": datetime.now(),
             "call_id": tool_call_id,
             "signature": tool_signature,
-            "step_id": self._record_step_start(tool_name, tool_input),
+            "step_id": self._record_step_start(tool_name, tool_input, tool_call_id=tool_call_id),
         }
         
         logger.info(f"Captured tool start: {tool_name} with ID {tool_call_id}")

@@ -389,13 +389,11 @@ app.register_blueprint(postmortem_bp)
 from routes.visualization_stream import visualization_bp
 app.register_blueprint(visualization_bp)
 
-# --- Monitor Routes (Agent Fleet / Waterfall / System Health) ---
+# --- Monitor Routes (Agent Fleet / Waterfall) ---
 from routes.monitor.fleet_routes import fleet_bp
 from routes.monitor.waterfall_routes import waterfall_bp
-from routes.monitor.health_routes import monitor_health_bp
 app.register_blueprint(fleet_bp)
 app.register_blueprint(waterfall_bp)
-app.register_blueprint(monitor_health_bp)
 
 # --- User & Auth Routes ---
 from routes.user_preferences import user_preferences_bp

@@ -88,8 +88,8 @@ def fleet_summary(user_id):
     query = """
         SELECT
             COUNT(*) FILTER (WHERE cs.id IS NOT NULL) AS total_agent_runs,
-            COUNT(*) FILTER (WHERE i.aurora_status = 'analyzing') AS active_count,
-            COUNT(*) FILTER (WHERE i.aurora_status = 'completed') AS completed_count,
+            COUNT(*) FILTER (WHERE i.aurora_status IN ('running', 'analyzing', 'pending')) AS active_count,
+            COUNT(*) FILTER (WHERE i.aurora_status IN ('complete', 'completed', 'resolved', 'analyzed')) AS completed_count,
             COUNT(*) FILTER (WHERE i.aurora_status = 'error') AS error_count,
             AVG(EXTRACT(EPOCH FROM (i.analyzed_at - i.created_at)))
                 FILTER (WHERE i.analyzed_at IS NOT NULL) AS avg_rca_duration_seconds

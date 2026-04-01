@@ -3,8 +3,6 @@ import { getAuthenticatedUser } from '@/lib/auth-helper';
 
 const API_BASE_URL = process.env.BACKEND_URL;
 
-const SSE_PATHS = new Set(['health/stream']);
-
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ path: string[] }> }
@@ -24,20 +22,12 @@ export async function GET(
       method: 'GET',
       headers: authResult.headers,
       credentials: 'include',
-      ...(SSE_PATHS.has(subpath) ? {} : { cache: 'no-store' as const }),
+      cache: 'no-store' as const,
     });
 
     if (!response.ok) {
       const text = await response.text();
-      return SSE_PATHS.has(subpath)
-        ? new Response(text || 'Stream error', { status: response.status })
-        : NextResponse.json({ error: text || 'Backend error' }, { status: response.status });
-    }
-
-    if (SSE_PATHS.has(subpath)) {
-      return new Response(response.body, {
-        headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive' },
-      });
+      return NextResponse.json({ error: text || 'Backend error' }, { status: response.status });
     }
 
     const data = await response.json();

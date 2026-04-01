@@ -736,11 +736,69 @@ def initialize_tables():
                         command TEXT,
                         output TEXT NOT NULL,
                         executed_at TIMESTAMP,
+                        duration_ms INTEGER,
+                        status VARCHAR(20) DEFAULT 'success',
+                        error_message TEXT,
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         UNIQUE(incident_id, citation_key)
                     );
 
                     CREATE INDEX IF NOT EXISTS idx_incident_citations_incident_id ON incident_citations(incident_id);
+                """,
+                "agent_sessions": """
+                    CREATE TABLE IF NOT EXISTS agent_sessions (
+                        id SERIAL PRIMARY KEY,
+                        session_id VARCHAR(50) NOT NULL,
+                        incident_id UUID REFERENCES incidents(id) ON DELETE CASCADE,
+                        user_id VARCHAR(255) NOT NULL,
+                        org_id VARCHAR(255),
+                        -- Model & routing
+                        model_name VARCHAR(255),
+                        detected_provider VARCHAR(50),
+                        provider_mode VARCHAR(20),
+                        use_direct_sdk BOOLEAN,
+                        temperature REAL,
+                        mode VARCHAR(20),
+                        is_background BOOLEAN DEFAULT FALSE,
+                        recursion_limit INTEGER,
+                        -- Context
+                        context_messages_loaded INTEGER,
+                        context_load_ms INTEGER,
+                        rca_compression_applied BOOLEAN DEFAULT FALSE,
+                        rca_compression_before INTEGER,
+                        rca_compression_after INTEGER,
+                        preflight_compression_applied BOOLEAN DEFAULT FALSE,
+                        middleware_trim_applied BOOLEAN DEFAULT FALSE,
+                        middleware_tokens_before INTEGER,
+                        middleware_tokens_after INTEGER,
+                        -- Execution stats
+                        time_to_first_token_ms INTEGER,
+                        total_events INTEGER,
+                        total_tokens_streamed INTEGER,
+                        model_turns INTEGER DEFAULT 0,
+                        tool_calls_count INTEGER DEFAULT 0,
+                        tool_errors_count INTEGER DEFAULT 0,
+                        retry_attempts INTEGER DEFAULT 0,
+                        last_retry_error TEXT,
+                        -- LLM totals (aggregated from llm_usage_tracking)
+                        total_input_tokens INTEGER,
+                        total_output_tokens INTEGER,
+                        total_llm_calls INTEGER,
+                        total_cost NUMERIC(10,6),
+                        -- Outcome
+                        status VARCHAR(20) DEFAULT 'running',
+                        error_message TEXT,
+                        placeholder_warning BOOLEAN DEFAULT FALSE,
+                        last_tool_failure JSONB,
+                        -- Timing
+                        started_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        completed_at TIMESTAMPTZ,
+                        duration_ms INTEGER,
+                        created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_agent_sessions_session ON agent_sessions(session_id);
+                    CREATE INDEX IF NOT EXISTS idx_agent_sessions_incident ON agent_sessions(incident_id);
+                    CREATE INDEX IF NOT EXISTS idx_agent_sessions_org_time ON agent_sessions(org_id, started_at);
                 """,
                 "execution_steps": """
                     CREATE TABLE IF NOT EXISTS execution_steps (
@@ -750,6 +808,7 @@ def initialize_tables():
                         org_id VARCHAR(255),
                         step_index INTEGER NOT NULL,
                         tool_name VARCHAR(255) NOT NULL,
+                        tool_call_id VARCHAR(255),
                         tool_input JSONB DEFAULT '{}'::jsonb,
                         tool_output TEXT,
                         status VARCHAR(20) NOT NULL DEFAULT 'running',
@@ -1899,6 +1958,34 @@ def initialize_tables():
                 except Exception as e:
                     logging.warning(f"Error adding org_id to {tbl}: {e}")
                     cursor.execute(f"ROLLBACK TO SAVEPOINT sp_org_id_{tbl}")
+
+            # Add execution-tracking columns to incident_citations
+            for col_def in [
+                "duration_ms INTEGER",
+                "status VARCHAR(20) DEFAULT 'success'",
+                "error_message TEXT",
+            ]:
+                col_name = col_def.split()[0]
+                try:
+                    cursor.execute(f"SAVEPOINT sp_cit_{col_name}")
+                    cursor.execute(
+                        f"ALTER TABLE incident_citations ADD COLUMN IF NOT EXISTS {col_def};"
+                    )
+                    cursor.execute(f"RELEASE SAVEPOINT sp_cit_{col_name}")
+                except Exception as e:
+                    logging.warning(f"Error adding {col_name} to incident_citations: {e}")
+                    cursor.execute(f"ROLLBACK TO SAVEPOINT sp_cit_{col_name}")
+
+            # Add tool_call_id to execution_steps for precise citation matching
+            try:
+                cursor.execute("SAVEPOINT sp_es_tcid")
+                cursor.execute(
+                    "ALTER TABLE execution_steps ADD COLUMN IF NOT EXISTS tool_call_id VARCHAR(255);"
+                )
+                cursor.execute("RELEASE SAVEPOINT sp_es_tcid")
+            except Exception as e:
+                logging.warning(f"Error adding tool_call_id to execution_steps: {e}")
+                cursor.execute("ROLLBACK TO SAVEPOINT sp_es_tcid")
 
             # DB triggers: auto-inherit org_id from parent incident on INSERT.
             # This means no INSERT statement in the codebase ever needs to set
