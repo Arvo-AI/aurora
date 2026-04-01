@@ -93,13 +93,17 @@ class AWSSecretsManagerBackend(SecretsBackend):
     def _parse_ref(self, secret_ref: str) -> str:
         """Extract the secret name from an awssm: reference string."""
         if not secret_ref.startswith(AWSSM_REF_PREFIX):
-            raise ValueError(f"Invalid AWS SM secret reference format: {secret_ref}")
+            raise ValueError("Invalid AWS SM secret reference format: bad prefix")
 
         ref_body = secret_ref[len(AWSSM_REF_PREFIX):]
         parts = ref_body.split(":", 1)
         if len(parts) != 2 or not parts[0] or not parts[1]:
+            raise ValueError("Invalid AWS SM secret reference format: missing region or secret name")
+
+        region = parts[0]
+        if region != self.region:
             raise ValueError(
-                f"Invalid AWS SM secret reference format: missing region:secret in {secret_ref}"
+                f"Secret region '{region}' does not match configured AWS_SM_REGION '{self.region}'"
             )
         return parts[1]
 
@@ -134,15 +138,16 @@ class AWSSecretsManagerBackend(SecretsBackend):
 
         try:
             # put_secret_value is the common case (update existing secret)
-            self._client.put_secret_value(
-                SecretId=full_name,
-                SecretString=secret_value,
-            )
-        except self._client.exceptions.ResourceNotFoundException:
-            self._client.create_secret(
-                Name=full_name,
-                SecretString=secret_value,
-            )
+            try:
+                self._client.put_secret_value(
+                    SecretId=full_name,
+                    SecretString=secret_value,
+                )
+            except self._client.exceptions.ResourceNotFoundException:
+                self._client.create_secret(
+                    Name=full_name,
+                    SecretString=secret_value,
+                )
         except Exception as e:
             elapsed_ms = (time.perf_counter() - start_time) * 1000
             logger.error(
