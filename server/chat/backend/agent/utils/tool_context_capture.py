@@ -125,15 +125,32 @@ class ToolContextCapture:
             from utils.db.connection_pool import db_pool
             now = datetime.now(timezone.utc)
             truncated_output = output[:10240] if output else ""
+
+            # Detect errors from output content even when no exception was raised
+            if not is_error and output:
+                try:
+                    import json as _json
+                    parsed = _json.loads(output) if output.strip().startswith('{') else None
+                    if parsed and isinstance(parsed, dict):
+                        has_error_field = "error" in parsed and parsed["error"]
+                        has_success_false = parsed.get("success") is False
+                        if has_error_field or has_success_false:
+                            is_error = True
+                except Exception:
+                    pass
+
             status = "error" if is_error else "success"
-            error_msg = output[:2048] if is_error else None
+            error_msg = None
+            if is_error:
+                error_msg = (output[:2048] if output else None)
+
             with db_pool.get_admin_connection() as conn:
                 with conn.cursor() as cur:
                     cur.execute(
                         """UPDATE execution_steps
                            SET status = %s,
                                completed_at = %s,
-                               duration_ms = EXTRACT(EPOCH FROM (%s - started_at))::int * 1000,
+                               duration_ms = (EXTRACT(EPOCH FROM (%s - started_at)) * 1000)::int,
                                tool_output = %s,
                                error_message = %s
                            WHERE id = %s""",

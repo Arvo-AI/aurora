@@ -18,6 +18,8 @@ export async function GET(
     const searchParams = request.nextUrl.searchParams.toString();
     const backendUrl = `${API_BASE_URL}/api/monitor/${subpath}${searchParams ? `?${searchParams}` : ''}`;
 
+    const isSSE = subpath.endsWith('/stream');
+
     const response = await fetch(backendUrl, {
       method: 'GET',
       headers: authResult.headers,
@@ -28,6 +30,17 @@ export async function GET(
     if (!response.ok) {
       const text = await response.text();
       return NextResponse.json({ error: text || 'Backend error' }, { status: response.status });
+    }
+
+    if (isSSE && response.body) {
+      return new Response(response.body, {
+        headers: {
+          'Content-Type': 'text/event-stream',
+          'Cache-Control': 'no-cache',
+          'Connection': 'keep-alive',
+          'X-Accel-Buffering': 'no',
+        },
+      });
     }
 
     const data = await response.json();

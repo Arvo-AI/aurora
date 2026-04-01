@@ -6,8 +6,10 @@ Pulls from three data sources:
   - incident_thoughts: agent reasoning steps
   - llm_usage_tracking: LLM calls with token counts, costs, response times
 """
+import json
 import logging
-from flask import Blueprint, request, jsonify
+import time
+from flask import Blueprint, request, jsonify, Response
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context
 from utils.db.connection_pool import db_pool
@@ -20,84 +22,56 @@ waterfall_bp = Blueprint("monitor_waterfall", __name__)
 @waterfall_bp.route("/api/monitor/incidents/<incident_id>/timeline", methods=["GET"])
 @require_permission("incidents", "read")
 def incident_timeline(user_id, incident_id):
-    """Full execution timeline for one incident: tool calls, thoughts, LLM calls merged chronologically."""
+    """Execution timeline for one incident.
+
+    Returns:
+      steps    – tool call execution from execution_steps (authoritative)
+      llm_calls – LLM invocations with token counts and costs
+      thoughts  – agent reasoning (separate, not interleaved)
+      summary   – aggregate counters
+      agent_session – session-level telemetry
+    """
     org_id = get_org_id_from_request()
 
-    query = """
-        WITH timeline AS (
-            -- Tool calls from citations, enriched with execution_steps timing
-            (
-                SELECT 'tool_call' AS event_type,
-                       ic.tool_name AS label,
-                       ic.command AS detail,
-                       LEFT(ic.output, 2000) AS output,
-                       NULL::int AS tokens,
-                       NULL::numeric AS cost,
-                       COALESCE(es.duration_ms, ic.duration_ms) AS response_time_ms,
-                       COALESCE(es.status, ic.status, 'success') AS step_status,
-                       COALESCE(es.error_message, ic.error_message) AS step_error,
-                       ic.executed_at AS event_time,
-                       ic.citation_key AS sort_key
-                FROM incident_citations ic
-                LEFT JOIN execution_steps es
-                    ON es.incident_id = ic.incident_id
-                   AND es.tool_name = ic.tool_name
-                   AND es.step_index = CAST(ic.citation_key AS INTEGER)
-                WHERE ic.incident_id = %s
-            )
-            UNION ALL
-            -- Agent reasoning
-            (
-                SELECT 'thought' AS event_type,
-                       it.thought_type AS label,
-                       LEFT(it.content, 2000) AS detail,
-                       NULL AS output,
-                       NULL::int AS tokens,
-                       NULL::numeric AS cost,
-                       NULL::int AS response_time_ms,
-                       NULL AS step_status,
-                       NULL AS step_error,
-                       COALESCE(it.timestamp, it.created_at) AS event_time,
-                       NULL AS sort_key
-                FROM incident_thoughts it
-                WHERE it.incident_id = %s
-            )
-            UNION ALL
-            -- LLM calls
-            (
-                SELECT 'llm_call' AS event_type,
-                       lu.model_name AS label,
-                       lu.request_type AS detail,
-                       lu.error_message AS output,
-                       lu.total_tokens AS tokens,
-                       lu.total_cost_with_surcharge AS cost,
-                       lu.response_time_ms,
-                       CASE WHEN lu.error_message IS NOT NULL THEN 'error' ELSE 'success' END AS step_status,
-                       lu.error_message AS step_error,
-                       lu.timestamp AS event_time,
-                       NULL AS sort_key
-                FROM llm_usage_tracking lu
-                WHERE lu.session_id = (
-                    SELECT aurora_chat_session_id::text FROM incidents WHERE id = %s
-                )
-            )
+    steps_query = """
+        SELECT es.id, es.tool_name, es.tool_input, LEFT(es.tool_output, 4000) AS tool_output,
+               es.step_index, es.status, es.error_message, es.duration_ms,
+               es.started_at, es.completed_at
+        FROM execution_steps es
+        WHERE es.incident_id = %s
+        ORDER BY es.started_at ASC, es.step_index ASC
+    """
+
+    llm_query = """
+        SELECT lu.id, lu.model_name, lu.request_type,
+               lu.total_tokens, lu.input_tokens, lu.output_tokens,
+               lu.total_cost_with_surcharge AS cost,
+               lu.response_time_ms, lu.error_message, lu.timestamp
+        FROM llm_usage_tracking lu
+        WHERE lu.session_id = (
+            SELECT aurora_chat_session_id::text FROM incidents WHERE id = %s
         )
-        SELECT * FROM timeline
-        ORDER BY event_time ASC NULLS LAST, sort_key ASC NULLS LAST
+        ORDER BY lu.timestamp ASC
+    """
+
+    thoughts_query = """
+        SELECT it.id, it.thought_type, LEFT(it.content, 2000) AS content,
+               COALESCE(it.timestamp, it.created_at) AS event_time
+        FROM incident_thoughts it
+        WHERE it.incident_id = %s
+        ORDER BY COALESCE(it.timestamp, it.created_at) ASC
     """
 
     summary_query = """
         SELECT
-            COUNT(DISTINCT ic.id) AS total_tool_calls,
-            COUNT(DISTINCT it.id) AS total_thoughts,
+            (SELECT COUNT(*) FROM execution_steps es WHERE es.incident_id = i.id) AS total_tool_calls,
+            (SELECT COUNT(*) FROM incident_thoughts it WHERE it.incident_id = i.id) AS total_thoughts,
             (SELECT COUNT(*) FROM llm_usage_tracking lu
              WHERE lu.session_id = i.aurora_chat_session_id::text) AS total_llm_calls,
             (SELECT SUM(lu.total_tokens) FROM llm_usage_tracking lu
              WHERE lu.session_id = i.aurora_chat_session_id::text) AS total_tokens,
             (SELECT SUM(lu.total_cost_with_surcharge) FROM llm_usage_tracking lu
              WHERE lu.session_id = i.aurora_chat_session_id::text) AS total_cost,
-            (SELECT ROUND(AVG(lu.response_time_ms)) FROM llm_usage_tracking lu
-             WHERE lu.session_id = i.aurora_chat_session_id::text) AS avg_llm_response_ms,
             (SELECT COUNT(*) FROM execution_steps es
              WHERE es.incident_id = i.id AND es.status = 'error') AS tool_errors,
             (SELECT ROUND(AVG(es.duration_ms)) FROM execution_steps es
@@ -107,10 +81,7 @@ def incident_timeline(user_id, incident_id):
             i.analyzed_at AS completed_at,
             EXTRACT(EPOCH FROM (i.analyzed_at - i.created_at))::int AS duration_seconds
         FROM incidents i
-        LEFT JOIN incident_citations ic ON ic.incident_id = i.id
-        LEFT JOIN incident_thoughts it ON it.incident_id = i.id
         WHERE i.id = %s AND i.org_id = %s
-        GROUP BY i.id
     """
 
     try:
@@ -118,14 +89,18 @@ def incident_timeline(user_id, incident_id):
             with conn.cursor() as cur:
                 set_rls_context(cur, conn, user_id, log_prefix="[TIMELINE]")
 
-                cur.execute(query, (incident_id, incident_id, incident_id))
-                cols = [d[0] for d in cur.description]
-                events = [dict(zip(cols, row)) for row in cur.fetchall()]
+                cur.execute(steps_query, (incident_id,))
+                steps = [dict(zip([d[0] for d in cur.description], row)) for row in cur.fetchall()]
+
+                cur.execute(llm_query, (incident_id,))
+                llm_calls = [dict(zip([d[0] for d in cur.description], row)) for row in cur.fetchall()]
+
+                cur.execute(thoughts_query, (incident_id,))
+                thoughts = [dict(zip([d[0] for d in cur.description], row)) for row in cur.fetchall()]
 
                 cur.execute(summary_query, (incident_id, org_id))
                 summary_row = cur.fetchone()
 
-                # Agent session telemetry for this incident
                 cur.execute("""
                     SELECT model_name, detected_provider, provider_mode, use_direct_sdk,
                            temperature, mode, is_background, recursion_limit,
@@ -147,40 +122,41 @@ def incident_timeline(user_id, incident_id):
                 agent_session_cols = [d[0] for d in cur.description] if cur.description else []
                 agent_session = dict(zip(agent_session_cols, as_row)) if as_row else None
 
-        for ev in events:
-            for k, v in ev.items():
+        def _ser(obj):
+            for k, v in obj.items():
                 if hasattr(v, "isoformat"):
-                    ev[k] = v.isoformat()
-                elif isinstance(v, type(None)):
-                    pass
-                elif hasattr(v, "__float__"):
-                    ev[k] = float(v)
-
-        if agent_session:
-            for k, v in agent_session.items():
-                if hasattr(v, "isoformat"):
-                    agent_session[k] = v.isoformat()
-                elif isinstance(v, type(None)):
+                    obj[k] = v.isoformat()
+                elif v is None:
                     pass
                 elif hasattr(v, "__float__") and not isinstance(v, (int, float)):
-                    agent_session[k] = float(v)
+                    obj[k] = float(v)
+            return obj
+
+        for s in steps:
+            _ser(s)
+        for l in llm_calls:
+            _ser(l)
+        for t in thoughts:
+            _ser(t)
+        if agent_session:
+            _ser(agent_session)
 
         summary = {}
         if summary_row:
             summary_cols = ["total_tool_calls", "total_thoughts", "total_llm_calls",
-                            "total_tokens", "total_cost", "avg_llm_response_ms",
+                            "total_tokens", "total_cost",
                             "tool_errors", "avg_tool_duration_ms",
                             "aurora_status", "started_at", "completed_at", "duration_seconds"]
-            summary = dict(zip(summary_cols, summary_row))
-            for k, v in summary.items():
-                if hasattr(v, "isoformat"):
-                    summary[k] = v.isoformat()
-                elif isinstance(v, type(None)):
-                    pass
-                elif hasattr(v, "__float__"):
-                    summary[k] = float(v)
+            summary = _ser(dict(zip(summary_cols, summary_row)))
 
-        return jsonify({"incident_id": incident_id, "summary": summary, "events": events, "agent_session": agent_session}), 200
+        return jsonify({
+            "incident_id": incident_id,
+            "summary": summary,
+            "steps": steps,
+            "llm_calls": llm_calls,
+            "thoughts": thoughts,
+            "agent_session": agent_session,
+        }), 200
     except Exception:
         logger.exception("incident_timeline failed")
         return jsonify({"error": "Failed to fetch timeline"}), 500
@@ -197,25 +173,21 @@ def tool_stats(user_id):
 
     query = """
         SELECT
-            ic.tool_name,
+            es.tool_name,
             COUNT(*) AS call_count,
-            COUNT(DISTINCT ic.incident_id) AS incident_count,
-            ROUND(AVG(es.duration_ms)) AS avg_duration_ms,
+            COUNT(DISTINCT es.incident_id) AS incident_count,
+            ROUND(AVG(es.duration_ms) FILTER (WHERE es.duration_ms IS NOT NULL)) AS avg_duration_ms,
             ROUND(PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY es.duration_ms)
                   FILTER (WHERE es.duration_ms IS NOT NULL)) AS p95_duration_ms,
-            COUNT(*) FILTER (WHERE COALESCE(es.status, ic.status) = 'error') AS error_count,
-            ROUND(100.0 * COUNT(*) FILTER (WHERE COALESCE(es.status, ic.status, 'success') != 'error')
+            COUNT(*) FILTER (WHERE es.status = 'error') AS error_count,
+            ROUND(100.0 * COUNT(*) FILTER (WHERE es.status != 'error')
                   / GREATEST(COUNT(*), 1), 1) AS success_rate
-        FROM incident_citations ic
-        JOIN incidents i ON i.id = ic.incident_id
-        LEFT JOIN execution_steps es
-            ON es.incident_id = ic.incident_id
-           AND es.tool_name = ic.tool_name
-           AND es.step_index = CAST(ic.citation_key AS INTEGER)
+        FROM execution_steps es
+        JOIN incidents i ON i.id = es.incident_id
         WHERE i.org_id = %s
-          AND ic.created_at >= NOW() - %s::interval
-          AND ic.tool_name IS NOT NULL
-        GROUP BY ic.tool_name
+          AND es.started_at >= NOW() - %s::interval
+          AND es.tool_name IS NOT NULL
+        GROUP BY es.tool_name
         ORDER BY call_count DESC
     """
 
@@ -225,7 +197,7 @@ def tool_stats(user_id):
             COUNT(*) FILTER (WHERE i.aurora_status IN ('complete', 'completed', 'resolved', 'analyzed')) AS successful_rcas,
             COUNT(*) FILTER (WHERE i.aurora_status = 'error') AS failed_rcas,
             ROUND(AVG(
-                (SELECT COUNT(*) FROM incident_citations ic2 WHERE ic2.incident_id = i.id)
+                (SELECT COUNT(*) FROM execution_steps es2 WHERE es2.incident_id = i.id)
             ), 1) AS avg_tool_calls_per_rca,
             ROUND(AVG(
                 (SELECT COUNT(*) FROM incident_thoughts it2 WHERE it2.incident_id = i.id)
@@ -241,8 +213,8 @@ def tool_stats(user_id):
                  WHERE lu.session_id = i.aurora_chat_session_id::text)
             )::numeric, 4) AS avg_cost_per_rca,
             ROUND(AVG(
-                (SELECT AVG(es.duration_ms) FROM execution_steps es
-                 WHERE es.incident_id = i.id AND es.duration_ms IS NOT NULL)
+                (SELECT AVG(es3.duration_ms) FROM execution_steps es3
+                 WHERE es3.incident_id = i.id AND es3.duration_ms IS NOT NULL)
             ), 0) AS avg_tool_duration_ms
         FROM incidents i
         LEFT JOIN chat_sessions cs ON cs.id = i.aurora_chat_session_id::text
@@ -408,3 +380,155 @@ def agent_sessions(user_id):
     except Exception:
         logger.exception("agent_sessions failed")
         return jsonify({"error": "Failed to fetch agent sessions"}), 500
+
+
+# ---------- SSE live stream for an incident's execution timeline ----------
+
+def _serialize_row(row_dict):
+    """JSON-safe serialisation for a DB row dict."""
+    for k, v in row_dict.items():
+        if hasattr(v, "isoformat"):
+            row_dict[k] = v.isoformat()
+        elif isinstance(v, type(None)):
+            pass
+        elif hasattr(v, "__float__") and not isinstance(v, (int, float)):
+            row_dict[k] = float(v)
+    return row_dict
+
+
+@waterfall_bp.route("/api/monitor/incidents/<incident_id>/stream", methods=["GET"])
+@require_permission("incidents", "read")
+def incident_stream(user_id, incident_id):
+    """SSE stream that pushes new execution_steps, thoughts, llm_calls, and agent_session
+    changes as they happen for a running incident.
+
+    The client receives events:
+      event: step       – new or updated execution_step row
+      event: thought    – new incident_thought
+      event: llm_call   – new llm_usage_tracking row
+      event: session    – agent_session snapshot (model info, status, counters)
+      event: done       – incident has finished (status is terminal)
+    """
+    org_id = get_org_id_from_request()
+
+    POLL_INTERVAL = 1.5          # seconds between DB polls
+    MAX_IDLE = 600               # stop after 10 min with no terminal state
+    TERMINAL_STATUSES = {"complete", "completed", "resolved", "analyzed", "error"}
+
+    def generate():
+        seen_step_ids = set()
+        seen_thought_ids = set()
+        seen_llm_ids = set()
+        last_session_hash = None
+        elapsed = 0
+
+        while elapsed < MAX_IDLE:
+            try:
+                with db_pool.get_admin_connection() as conn:
+                    with conn.cursor() as cur:
+                        set_rls_context(cur, conn, user_id, log_prefix="[STREAM]")
+
+                        # 1. Execution steps
+                        cur.execute("""
+                            SELECT id, incident_id, tool_name, tool_input, tool_output,
+                                   step_index, status, error_message, duration_ms,
+                                   started_at, completed_at
+                            FROM execution_steps
+                            WHERE incident_id = %s
+                            ORDER BY started_at ASC
+                        """, (incident_id,))
+                        cols = [d[0] for d in cur.description]
+                        for row in cur.fetchall():
+                            d = dict(zip(cols, row))
+                            step_key = (d["id"], d.get("status"), d.get("duration_ms"))
+                            if step_key not in seen_step_ids:
+                                seen_step_ids.add(step_key)
+                                _serialize_row(d)
+                                yield f"event: step\ndata: {json.dumps(d)}\n\n"
+
+                        # 2. Thoughts
+                        cur.execute("""
+                            SELECT id, thought_type, content, created_at,
+                                   COALESCE(timestamp, created_at) AS event_time
+                            FROM incident_thoughts
+                            WHERE incident_id = %s
+                            ORDER BY COALESCE(timestamp, created_at) ASC
+                        """, (incident_id,))
+                        cols = [d[0] for d in cur.description]
+                        for row in cur.fetchall():
+                            d = dict(zip(cols, row))
+                            if d["id"] not in seen_thought_ids:
+                                seen_thought_ids.add(d["id"])
+                                _serialize_row(d)
+                                yield f"event: thought\ndata: {json.dumps(d)}\n\n"
+
+                        # 3. LLM calls
+                        cur.execute("""
+                            SELECT lu.id, lu.model_name, lu.request_type,
+                                   lu.total_tokens, lu.total_cost_with_surcharge AS cost,
+                                   lu.response_time_ms, lu.error_message, lu.timestamp
+                            FROM llm_usage_tracking lu
+                            WHERE lu.session_id = (
+                                SELECT aurora_chat_session_id::text
+                                FROM incidents WHERE id = %s
+                            )
+                            ORDER BY lu.timestamp ASC
+                        """, (incident_id,))
+                        cols = [d[0] for d in cur.description]
+                        for row in cur.fetchall():
+                            d = dict(zip(cols, row))
+                            if d["id"] not in seen_llm_ids:
+                                seen_llm_ids.add(d["id"])
+                                _serialize_row(d)
+                                yield f"event: llm_call\ndata: {json.dumps(d)}\n\n"
+
+                        # 4. Agent session snapshot
+                        cur.execute("""
+                            SELECT model_name, detected_provider, provider_mode,
+                                   status, model_turns, tool_calls_count, tool_errors_count,
+                                   retry_attempts, total_input_tokens, total_output_tokens,
+                                   total_llm_calls, total_cost,
+                                   time_to_first_token_ms, duration_ms,
+                                   started_at, completed_at,
+                                   rca_compression_applied, preflight_compression_applied,
+                                   middleware_trim_applied, error_message
+                            FROM agent_sessions
+                            WHERE incident_id = %s
+                            ORDER BY started_at DESC LIMIT 1
+                        """, (incident_id,))
+                        as_row = cur.fetchone()
+                        if as_row:
+                            as_cols = [d[0] for d in cur.description]
+                            session_dict = _serialize_row(dict(zip(as_cols, as_row)))
+                            session_hash = json.dumps(session_dict, sort_keys=True)
+                            if session_hash != last_session_hash:
+                                last_session_hash = session_hash
+                                yield f"event: session\ndata: {json.dumps(session_dict)}\n\n"
+
+                        # 5. Check incident terminal status
+                        cur.execute("""
+                            SELECT aurora_status FROM incidents WHERE id = %s
+                        """, (incident_id,))
+                        status_row = cur.fetchone()
+                        if status_row and status_row[0] in TERMINAL_STATUSES:
+                            yield f"event: done\ndata: {json.dumps({'status': status_row[0]})}\n\n"
+                            return
+
+            except Exception:
+                logger.exception("SSE stream poll error")
+                yield f"event: error\ndata: {json.dumps({'error': 'poll_error'})}\n\n"
+
+            time.sleep(POLL_INTERVAL)
+            elapsed += POLL_INTERVAL
+
+        yield f"event: done\ndata: {json.dumps({'status': 'timeout', 'message': 'Stream max idle reached'})}\n\n"
+
+    return Response(
+        generate(),
+        mimetype="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )

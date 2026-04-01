@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -9,7 +9,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import {
   Activity, Server, Clock, CheckCircle2, RefreshCw, ChevronRight,
   Wrench, Brain, Sparkles, AlertTriangle, DollarSign, Zap, Hash,
-  Cpu, Gauge, RotateCcw, Layers, Timer,
+  Cpu, Gauge, RotateCcw, Layers, Timer, Radio,
 } from 'lucide-react';
 
 /* ================================================================
@@ -105,14 +105,27 @@ function FleetTab({ onViewTimeline }: { onViewTimeline: (id: string) => void }) 
 /* ================================================================
    Execution Waterfall Tab
    ================================================================ */
+
+interface TimelineData {
+  summary: Record<string, unknown>;
+  steps: Record<string, unknown>[];
+  llm_calls: Record<string, unknown>[];
+  thoughts: Record<string, unknown>[];
+  agent_session?: AgentSession | null;
+}
+
+const RUNNING_STATUSES = new Set(['analyzing', 'running', 'pending']);
+
 function WaterfallTab({ preselectedIncidentId }: { preselectedIncidentId?: string | null }) {
   const [incidents, setIncidents] = useState<Record<string, unknown>[]>([]);
   const [selectedId, setSelectedId] = useState<string>(preselectedIncidentId || '');
-  const [timeline, setTimeline] = useState<{ summary: Record<string, unknown>; events: Record<string, unknown>[]; agent_session?: AgentSession | null } | null>(null);
+  const [timeline, setTimeline] = useState<TimelineData | null>(null);
   const [toolStats, setToolStats] = useState<{ tools: Record<string, unknown>[]; rca_summary: Record<string, unknown> } | null>(null);
   const [loading, setLoading] = useState(false);
   const [statsLoading, setStatsLoading] = useState(true);
   const [incidentsLoading, setIncidentsLoading] = useState(true);
+  const [streaming, setStreaming] = useState(false);
+  const eventSourceRef = useRef<EventSource | null>(null);
 
   useEffect(() => {
     fetch('/api/monitor/fleet')
@@ -127,16 +140,99 @@ function WaterfallTab({ preselectedIncidentId }: { preselectedIncidentId?: strin
       .finally(() => setStatsLoading(false));
   }, []);
 
+  useEffect(() => {
+    return () => { eventSourceRef.current?.close(); };
+  }, []);
+
+  const connectSSE = useCallback((incidentId: string) => {
+    eventSourceRef.current?.close();
+    const es = new EventSource(`/api/monitor/incidents/${incidentId}/stream`);
+    eventSourceRef.current = es;
+    setStreaming(true);
+
+    es.addEventListener('step', (e: MessageEvent) => {
+      try {
+        const step = JSON.parse(e.data);
+        setTimeline(prev => {
+          if (!prev) return prev;
+          const idx = prev.steps.findIndex(s => s.id === step.id);
+          const updated = [...prev.steps];
+          if (idx >= 0) updated[idx] = step;
+          else updated.push(step);
+          return { ...prev, steps: updated };
+        });
+      } catch { /* */ }
+    });
+
+    es.addEventListener('thought', (e: MessageEvent) => {
+      try {
+        const thought = JSON.parse(e.data);
+        setTimeline(prev => {
+          if (!prev) return prev;
+          if (prev.thoughts.some(t => t.id === thought.id)) return prev;
+          return { ...prev, thoughts: [...prev.thoughts, thought] };
+        });
+      } catch { /* */ }
+    });
+
+    es.addEventListener('llm_call', (e: MessageEvent) => {
+      try {
+        const llm = JSON.parse(e.data);
+        setTimeline(prev => {
+          if (!prev) return prev;
+          if (prev.llm_calls.some(l => l.id === llm.id)) return prev;
+          return { ...prev, llm_calls: [...prev.llm_calls, llm] };
+        });
+      } catch { /* */ }
+    });
+
+    es.addEventListener('session', (e: MessageEvent) => {
+      try {
+        const session = JSON.parse(e.data);
+        setTimeline(prev => {
+          if (!prev) return prev;
+          return { ...prev, agent_session: { ...prev.agent_session, ...session } as AgentSession };
+        });
+      } catch { /* */ }
+    });
+
+    es.addEventListener('done', (e: MessageEvent) => {
+      try {
+        const data = JSON.parse(e.data);
+        setTimeline(prev => prev ? { ...prev, summary: { ...prev.summary, aurora_status: data.status } } : prev);
+      } catch { /* */ }
+      es.close();
+      eventSourceRef.current = null;
+      setStreaming(false);
+    });
+
+    es.addEventListener('error', () => {
+      if (es.readyState === EventSource.CLOSED) {
+        setStreaming(false);
+        eventSourceRef.current = null;
+      }
+    });
+  }, []);
+
   const loadTimeline = useCallback(async (id: string) => {
     if (!id) return;
+    eventSourceRef.current?.close();
+    eventSourceRef.current = null;
+    setStreaming(false);
     setSelectedId(id);
     setLoading(true);
     setTimeline(null);
     try {
       const res = await fetch(`/api/monitor/incidents/${id}/timeline`);
-      if (res.ok) setTimeline(await res.json());
+      if (res.ok) {
+        const data: TimelineData = await res.json();
+        setTimeline(data);
+        if (RUNNING_STATUSES.has(String(data.summary?.aurora_status ?? ''))) {
+          connectSSE(id);
+        }
+      }
     } catch { /* */ } finally { setLoading(false); }
-  }, []);
+  }, [connectSSE]);
 
   useEffect(() => {
     if (preselectedIncidentId) loadTimeline(preselectedIncidentId);
@@ -146,7 +242,6 @@ function WaterfallTab({ preselectedIncidentId }: { preselectedIncidentId?: strin
 
   return (
     <div className="space-y-6">
-      {/* RCA aggregate stats */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <StatCard label="Total RCAs" value={rcaStats?.total_rcas} icon={<Zap size={16} />} loading={statsLoading} />
         <StatCard label="Avg Tools/RCA" value={rcaStats?.avg_tool_calls_per_rca} icon={<Wrench size={16} className="text-blue-500" />} loading={statsLoading} />
@@ -154,10 +249,9 @@ function WaterfallTab({ preselectedIncidentId }: { preselectedIncidentId?: strin
         <StatCard label="Avg Cost/RCA" value={rcaStats?.avg_cost_per_rca != null ? `$${Number(rcaStats.avg_cost_per_rca).toFixed(3)}` : '—'} icon={<DollarSign size={16} className="text-green-500" />} loading={statsLoading} />
       </div>
 
-      {/* Tool breakdown */}
       <Card>
         <CardHeader className="pb-3">
-          <CardTitle className="text-base flex items-center gap-2"><Wrench size={16} /> Tool Usage (last 30d)</CardTitle>
+          <CardTitle className="text-base flex items-center gap-2"><Wrench size={16} /> Tool Performance (last 30d)</CardTitle>
         </CardHeader>
         <CardContent className="p-0">
           {statsLoading ? (
@@ -171,7 +265,6 @@ function WaterfallTab({ preselectedIncidentId }: { preselectedIncidentId?: strin
                   <tr className="border-b bg-muted/40">
                     <th className="text-left px-4 py-2.5 font-medium text-muted-foreground">Tool</th>
                     <th className="text-right px-4 py-2.5 font-medium text-muted-foreground">Calls</th>
-                    <th className="text-right px-4 py-2.5 font-medium text-muted-foreground">Incidents</th>
                     <th className="text-right px-4 py-2.5 font-medium text-muted-foreground">Avg (ms)</th>
                     <th className="text-right px-4 py-2.5 font-medium text-muted-foreground">P95 (ms)</th>
                     <th className="text-right px-4 py-2.5 font-medium text-muted-foreground">Errors</th>
@@ -183,7 +276,6 @@ function WaterfallTab({ preselectedIncidentId }: { preselectedIncidentId?: strin
                     <tr key={i} className="border-b hover:bg-muted/30 transition-colors">
                       <td className="px-4 py-2.5 font-medium font-mono text-xs">{String(t.tool_name)}</td>
                       <td className="px-4 py-2.5 text-right">{String(t.call_count)}</td>
-                      <td className="px-4 py-2.5 text-right text-muted-foreground">{String(t.incident_count)}</td>
                       <td className="px-4 py-2.5 text-right text-muted-foreground">{t.avg_duration_ms != null ? Number(t.avg_duration_ms).toLocaleString() : '—'}</td>
                       <td className="px-4 py-2.5 text-right text-muted-foreground">{t.p95_duration_ms != null ? Number(t.p95_duration_ms).toLocaleString() : '—'}</td>
                       <td className={`px-4 py-2.5 text-right ${Number(t.error_count ?? 0) > 0 ? 'text-destructive font-medium' : 'text-muted-foreground'}`}>{String(t.error_count ?? 0)}</td>
@@ -197,10 +289,9 @@ function WaterfallTab({ preselectedIncidentId }: { preselectedIncidentId?: strin
         </CardContent>
       </Card>
 
-      {/* Incident picker */}
       <Card>
         <CardHeader className="pb-3">
-          <CardTitle className="text-base">Select Incident for Timeline</CardTitle>
+          <CardTitle className="text-base">Select Incident</CardTitle>
         </CardHeader>
         <CardContent>
           {incidentsLoading ? (
@@ -209,7 +300,7 @@ function WaterfallTab({ preselectedIncidentId }: { preselectedIncidentId?: strin
             <p className="text-sm text-muted-foreground">No incidents with agent runs found</p>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
-              {incidents.slice(0, 12).map((inc, i) => {
+              {incidents.map((inc, i) => {
                 const id = String(inc.incident_id);
                 const isSelected = selectedId === id;
                 return (
@@ -230,24 +321,28 @@ function WaterfallTab({ preselectedIncidentId }: { preselectedIncidentId?: strin
         </CardContent>
       </Card>
 
-      {/* Timeline */}
       {loading && (
         <Card><CardContent className="pt-6"><div className="space-y-3">{[...Array(6)].map((_, i) => <Skeleton key={i} className="h-14 w-full" />)}</div></CardContent></Card>
       )}
-      {timeline && <TimelineView timeline={timeline} />}
+      {timeline && <TimelineView data={timeline} streaming={streaming} />}
     </div>
   );
 }
 
 /* ================================================================
-   Timeline View
+   Timeline View — clean separation: steps, LLM calls, thoughts
    ================================================================ */
-function TimelineView({ timeline }: { timeline: { summary: Record<string, unknown>; events: Record<string, unknown>[]; agent_session?: AgentSession | null } }) {
-  const { summary, events, agent_session } = timeline;
+function TimelineView({ data, streaming }: { data: TimelineData; streaming?: boolean }) {
+  const { summary, steps, llm_calls, thoughts, agent_session } = data;
+  const endRef = useRef<HTMLDivElement>(null);
+  const [showThoughts, setShowThoughts] = useState(false);
 
-  const toolCalls = events.filter(e => e.event_type === 'tool_call');
-  const llmCalls = events.filter(e => e.event_type === 'llm_call');
-  const maxDuration = Math.max(...toolCalls.map(e => Number(e.response_time_ms ?? 0)), 1);
+  useEffect(() => {
+    if (streaming && endRef.current) endRef.current.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }, [streaming, steps.length]);
+
+  const maxDuration = Math.max(...steps.map(s => Number(s.duration_ms ?? 0)), 1);
+  const errorSteps = steps.filter(s => s.status === 'error');
 
   return (
     <div className="space-y-4">
@@ -257,19 +352,28 @@ function TimelineView({ timeline }: { timeline: { summary: Record<string, unknow
           <div className="flex flex-wrap gap-x-6 gap-y-2 text-sm">
             <span className="flex items-center gap-1.5">
               <StatusBadge status={String(summary.aurora_status ?? '')} />
+              {streaming && (
+                <span className="inline-flex items-center gap-1 ml-1 text-xs text-green-500 font-medium">
+                  <Radio size={12} className="animate-pulse" /> Live
+                </span>
+              )}
             </span>
             <span className="flex items-center gap-1.5 text-muted-foreground">
-              <Wrench size={14} /> <strong className="text-foreground">{String(summary.total_tool_calls ?? 0)}</strong> tool calls
+              <Wrench size={14} /> <strong className="text-foreground">{steps.length}</strong> tool calls
             </span>
+            {errorSteps.length > 0 && (
+              <span className="flex items-center gap-1.5 text-destructive">
+                <AlertTriangle size={14} /> <strong>{errorSteps.length}</strong> errors
+              </span>
+            )}
             <span className="flex items-center gap-1.5 text-muted-foreground">
-              <Brain size={14} /> <strong className="text-foreground">{String(summary.total_thoughts ?? 0)}</strong> thoughts
+              <Sparkles size={14} /> <strong className="text-foreground">{llm_calls.length}</strong> LLM calls
             </span>
-            <span className="flex items-center gap-1.5 text-muted-foreground">
-              <Sparkles size={14} /> <strong className="text-foreground">{String(summary.total_llm_calls ?? 0)}</strong> LLM calls
-            </span>
-            <span className="flex items-center gap-1.5 text-muted-foreground">
-              <Hash size={14} /> <strong className="text-foreground">{summary.total_tokens != null ? Number(summary.total_tokens).toLocaleString() : '—'}</strong> tokens
-            </span>
+            {summary.total_tokens != null && (
+              <span className="flex items-center gap-1.5 text-muted-foreground">
+                <Hash size={14} /> <strong className="text-foreground">{Number(summary.total_tokens).toLocaleString()}</strong> tokens
+              </span>
+            )}
             {summary.total_cost != null && (
               <span className="flex items-center gap-1.5 text-muted-foreground">
                 <DollarSign size={14} /> <strong className="text-foreground">${Number(summary.total_cost).toFixed(3)}</strong>
@@ -280,42 +384,50 @@ function TimelineView({ timeline }: { timeline: { summary: Record<string, unknow
                 <Clock size={14} /> <strong className="text-foreground">{formatDuration(Number(summary.duration_seconds))}</strong>
               </span>
             )}
-            {Number(summary.tool_errors ?? 0) > 0 && (
-              <span className="flex items-center gap-1.5 text-destructive">
-                <AlertTriangle size={14} /> <strong>{String(summary.tool_errors)}</strong> tool errors
-              </span>
-            )}
             {summary.avg_tool_duration_ms != null && (
               <span className="flex items-center gap-1.5 text-muted-foreground">
-                <Zap size={14} /> avg tool <strong className="text-foreground">{Number(summary.avg_tool_duration_ms).toLocaleString()}ms</strong>
+                <Zap size={14} /> avg <strong className="text-foreground">{Number(summary.avg_tool_duration_ms).toLocaleString()}ms</strong>
               </span>
             )}
           </div>
         </CardContent>
       </Card>
 
-      {/* Agent session telemetry */}
-      {agent_session && <AgentSessionDetail session={agent_session as AgentSession} />}
-
-      {/* Event timeline */}
+      {/* Tool call waterfall */}
       <Card>
         <CardHeader className="pb-3">
-          <CardTitle className="text-base">Execution Timeline ({events.length} events)</CardTitle>
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-base flex items-center gap-2">
+              <Wrench size={16} /> Tool Calls ({steps.length})
+            </CardTitle>
+            {streaming && (
+              <div className="flex items-center gap-1.5 text-xs text-green-500 animate-pulse">
+                <Radio size={14} /> <span className="font-medium">Live</span>
+              </div>
+            )}
+          </div>
         </CardHeader>
         <CardContent className="p-0">
           <div className="divide-y">
-            {events.map((ev, i) => (
-              <TimelineEvent key={i} event={ev} index={i} maxDuration={maxDuration} />
+            {steps.map((step) => (
+              <StepRow key={step.id as number} step={step} maxDuration={maxDuration} />
             ))}
+            {streaming && (
+              <div className="px-4 py-3 flex items-center gap-2 text-xs text-muted-foreground bg-muted/20">
+                <div className="w-2.5 h-2.5 rounded-full bg-green-500 animate-pulse ring-2 ring-background" />
+                <span>Waiting for next tool call...</span>
+              </div>
+            )}
           </div>
+          <div ref={endRef} />
         </CardContent>
       </Card>
 
-      {/* LLM call breakdown */}
-      {llmCalls.length > 0 && (
+      {/* LLM calls table */}
+      {llm_calls.length > 0 && (
         <Card>
           <CardHeader className="pb-3">
-            <CardTitle className="text-base flex items-center gap-2"><Sparkles size={16} /> LLM Calls ({llmCalls.length})</CardTitle>
+            <CardTitle className="text-base flex items-center gap-2"><Sparkles size={16} /> LLM Calls ({llm_calls.length})</CardTitle>
           </CardHeader>
           <CardContent className="p-0">
             <div className="overflow-x-auto">
@@ -325,20 +437,20 @@ function TimelineView({ timeline }: { timeline: { summary: Record<string, unknow
                     <th className="text-left px-4 py-2 font-medium text-muted-foreground">Model</th>
                     <th className="text-left px-4 py-2 font-medium text-muted-foreground">Type</th>
                     <th className="text-right px-4 py-2 font-medium text-muted-foreground">Tokens</th>
-                    <th className="text-right px-4 py-2 font-medium text-muted-foreground">Response (ms)</th>
+                    <th className="text-right px-4 py-2 font-medium text-muted-foreground">Latency</th>
                     <th className="text-right px-4 py-2 font-medium text-muted-foreground">Cost</th>
                     <th className="text-left px-4 py-2 font-medium text-muted-foreground">Time</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {llmCalls.map((ev, i) => (
-                    <tr key={i} className={`border-b hover:bg-muted/30 ${ev.output ? 'bg-destructive/5' : ''}`}>
-                      <td className="px-4 py-2 font-mono text-xs">{String(ev.label ?? '—')}</td>
-                      <td className="px-4 py-2 text-muted-foreground text-xs">{String(ev.detail ?? '—')}</td>
-                      <td className="px-4 py-2 text-right">{ev.tokens != null ? Number(ev.tokens).toLocaleString() : '—'}</td>
-                      <td className="px-4 py-2 text-right text-muted-foreground">{ev.response_time_ms != null ? Number(ev.response_time_ms).toLocaleString() : '—'}</td>
-                      <td className="px-4 py-2 text-right">{ev.cost != null ? `$${Number(ev.cost).toFixed(4)}` : '—'}</td>
-                      <td className="px-4 py-2 text-muted-foreground text-xs">{ev.event_time ? new Date(String(ev.event_time)).toLocaleTimeString() : ''}</td>
+                  {llm_calls.map((lc) => (
+                    <tr key={lc.id as number} className={`border-b hover:bg-muted/30 ${lc.error_message ? 'bg-destructive/5' : ''}`}>
+                      <td className="px-4 py-2 font-mono text-xs">{String(lc.model_name ?? '—')}</td>
+                      <td className="px-4 py-2 text-muted-foreground text-xs">{String(lc.request_type ?? '—')}</td>
+                      <td className="px-4 py-2 text-right">{lc.total_tokens != null ? Number(lc.total_tokens).toLocaleString() : '—'}</td>
+                      <td className="px-4 py-2 text-right text-muted-foreground">{lc.response_time_ms != null ? `${Number(lc.response_time_ms).toLocaleString()}ms` : '—'}</td>
+                      <td className="px-4 py-2 text-right">{lc.cost != null ? `$${Number(lc.cost).toFixed(4)}` : '—'}</td>
+                      <td className="px-4 py-2 text-muted-foreground text-xs">{lc.timestamp ? new Date(String(lc.timestamp)).toLocaleTimeString() : ''}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -347,105 +459,120 @@ function TimelineView({ timeline }: { timeline: { summary: Record<string, unknow
           </CardContent>
         </Card>
       )}
+
+      {/* Thoughts — collapsed by default */}
+      {thoughts.length > 0 && (
+        <Card>
+          <CardHeader className="pb-0">
+            <button onClick={() => setShowThoughts(!showThoughts)} className="flex items-center gap-2 text-sm hover:text-foreground text-muted-foreground transition-colors">
+              <Brain size={16} />
+              <span className="font-medium">{thoughts.length} Agent Thoughts</span>
+              <ChevronRight size={14} className={`transition-transform ${showThoughts ? 'rotate-90' : ''}`} />
+            </button>
+          </CardHeader>
+          {showThoughts && (
+            <CardContent className="pt-3">
+              <div className="space-y-2 max-h-96 overflow-y-auto">
+                {thoughts.map((t) => (
+                  <div key={t.id as number} className="text-xs border-l-2 border-purple-500/30 pl-3 py-1">
+                    <span className="text-muted-foreground">{t.event_time ? new Date(String(t.event_time)).toLocaleTimeString() : ''}</span>
+                    <span className="ml-2 text-purple-500 font-medium">{String(t.thought_type ?? '')}</span>
+                    <p className="mt-0.5 text-muted-foreground">{String(t.content ?? '')}</p>
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          )}
+        </Card>
+      )}
+
+      {/* Agent session telemetry — collapsible */}
+      {agent_session && <AgentSessionCollapsible session={agent_session as AgentSession} />}
     </div>
   );
 }
 
-function TimelineEvent({ event: ev, index, maxDuration }: { event: Record<string, unknown>; index: number; maxDuration: number }) {
+function StepRow({ step, maxDuration }: { step: Record<string, unknown>; maxDuration: number }) {
   const [expanded, setExpanded] = useState(false);
-  const eventType = String(ev.event_type);
-  const isToolCall = eventType === 'tool_call';
-  const isThought = eventType === 'thought';
-  const isLlm = eventType === 'llm_call';
-  const isError = String(ev.step_status ?? '') === 'error';
-  const durationMs = ev.response_time_ms != null ? Number(ev.response_time_ms) : null;
-
-  const icon = isToolCall ? <Wrench size={14} /> : isThought ? <Brain size={14} /> : <Sparkles size={14} />;
-  const color = isError ? 'text-destructive' : isToolCall ? 'text-blue-500' : isThought ? 'text-purple-500' : 'text-amber-500';
-  const bgColor = isError ? 'bg-destructive' : isToolCall ? 'bg-blue-500' : isThought ? 'bg-purple-500' : 'bg-amber-500';
-
-  const hasDetail = (isToolCall && (ev.detail || ev.output)) || (isThought && ev.detail);
+  const isError = step.status === 'error';
+  const isRunning = step.status === 'running';
+  const durationMs = step.duration_ms != null ? Number(step.duration_ms) : null;
+  const inputStr = step.tool_input ? (typeof step.tool_input === 'string' ? step.tool_input : JSON.stringify(step.tool_input, null, 2)) : null;
+  const outputStr = step.tool_output ? String(step.tool_output) : null;
 
   return (
-    <div className={`relative ${isError ? 'bg-destructive/5' : ''}`}>
-      <button
-        onClick={() => hasDetail && setExpanded(!expanded)}
-        className={`w-full text-left px-4 py-3 flex items-start gap-3 transition-colors ${hasDetail ? 'hover:bg-muted/30 cursor-pointer' : ''}`}
-      >
-        <div className="flex flex-col items-center pt-0.5 shrink-0">
-          <div className={`w-2.5 h-2.5 rounded-full ${bgColor} ring-2 ring-background`} />
-        </div>
-
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className={color}>{icon}</span>
-            <span className="font-medium text-sm">{String(ev.label ?? '—')}</span>
-            <EventBadge type={eventType} />
-            {isError && (
-              <span className="inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium bg-destructive/10 text-destructive">
-                <AlertTriangle size={10} className="mr-0.5" /> error
-              </span>
-            )}
-            {isToolCall && durationMs != null && (
-              <span className="text-xs text-muted-foreground">{durationMs.toLocaleString()}ms</span>
-            )}
-            {isLlm && ev.tokens != null && (
-              <span className="text-xs text-muted-foreground">{Number(ev.tokens).toLocaleString()} tokens</span>
-            )}
-            {isLlm && durationMs != null && (
-              <span className="text-xs text-muted-foreground">{durationMs.toLocaleString()}ms</span>
-            )}
+    <div className={isError ? 'bg-destructive/5' : ''}>
+      <button onClick={() => setExpanded(!expanded)}
+        className="w-full text-left px-4 py-2.5 flex items-center gap-3 hover:bg-muted/30 transition-colors">
+        <div className={`w-2 h-2 rounded-full shrink-0 ${isError ? 'bg-destructive' : isRunning ? 'bg-amber-500 animate-pulse' : 'bg-blue-500'}`} />
+        <span className="font-mono text-xs font-medium min-w-0 truncate">{String(step.tool_name ?? '—')}</span>
+        {isError && (
+          <span className="inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium bg-destructive/10 text-destructive shrink-0">
+            <AlertTriangle size={10} className="mr-0.5" /> error
+          </span>
+        )}
+        {isRunning && (
+          <span className="inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 animate-pulse shrink-0">
+            <RefreshCw size={10} className="mr-0.5 animate-spin" /> running
+          </span>
+        )}
+        {durationMs != null && (
+          <div className="flex items-center gap-2 flex-1 min-w-0">
+            <div className="flex-1 h-1.5 bg-muted rounded-full overflow-hidden max-w-[180px]">
+              <div className={`h-full rounded-full ${isError ? 'bg-destructive' : 'bg-blue-500'}`}
+                style={{ width: `${Math.max(3, (durationMs / maxDuration) * 100)}%` }} />
+            </div>
+            <span className="text-xs text-muted-foreground shrink-0">{durationMs.toLocaleString()}ms</span>
           </div>
-          {isToolCall && ev.detail && (
-            <p className="text-xs text-muted-foreground mt-0.5 truncate">{String(ev.detail)}</p>
-          )}
-          {/* Duration bar for tool calls */}
-          {isToolCall && durationMs != null && maxDuration > 0 && (
-            <div className="mt-1.5 flex items-center gap-2">
-              <div className="flex-1 h-1.5 bg-muted rounded-full overflow-hidden max-w-[200px]">
-                <div
-                  className={`h-full rounded-full ${isError ? 'bg-destructive' : 'bg-blue-500'}`}
-                  style={{ width: `${Math.max(2, (durationMs / maxDuration) * 100)}%` }}
-                />
-              </div>
-            </div>
-          )}
-        </div>
-
-        <span className="text-xs text-muted-foreground whitespace-nowrap shrink-0">
-          {ev.event_time ? new Date(String(ev.event_time)).toLocaleTimeString() : ''}
+        )}
+        <span className="text-xs text-muted-foreground shrink-0 ml-auto">
+          {step.started_at ? new Date(String(step.started_at)).toLocaleTimeString() : ''}
         </span>
+        <ChevronRight size={12} className={`text-muted-foreground transition-transform shrink-0 ${expanded ? 'rotate-90' : ''}`} />
       </button>
-
-      {expanded && hasDetail && (
-        <div className="px-4 pb-3 ml-[26px]">
-          {isError && ev.step_error && (
-            <div className="bg-destructive/10 border border-destructive/20 rounded p-2 text-xs text-destructive mb-2">
-              <strong>Error:</strong> {String(ev.step_error)}
+      {expanded && (
+        <div className="px-4 pb-3 ml-5 space-y-2">
+          {isError && step.error_message && (
+            <div className="bg-destructive/10 border border-destructive/20 rounded p-2 text-xs text-destructive">
+              <strong>Error:</strong> {String(step.error_message)}
             </div>
           )}
-          {isThought && ev.detail && (
-            <div className="bg-muted/50 rounded p-3 text-xs whitespace-pre-wrap max-h-48 overflow-y-auto">
-              {String(ev.detail)}
+          {inputStr && (
+            <div>
+              <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Input</span>
+              <pre className="bg-muted/50 rounded p-2 text-xs mt-0.5 overflow-x-auto max-h-32 overflow-y-auto">{inputStr}</pre>
             </div>
           )}
-          {isToolCall && ev.detail && (
-            <div className="space-y-2">
-              <div>
-                <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Command</span>
-                <pre className="bg-muted/50 rounded p-2 text-xs mt-0.5 overflow-x-auto">{String(ev.detail)}</pre>
-              </div>
-              {ev.output && (
-                <div>
-                  <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Output</span>
-                  <pre className="bg-muted/50 rounded p-2 text-xs mt-0.5 max-h-40 overflow-y-auto overflow-x-auto">{String(ev.output)}</pre>
-                </div>
-              )}
+          {outputStr && (
+            <div>
+              <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Output</span>
+              <pre className="bg-muted/50 rounded p-2 text-xs mt-0.5 overflow-x-auto max-h-40 overflow-y-auto">{outputStr}</pre>
             </div>
           )}
         </div>
       )}
     </div>
+  );
+}
+
+function AgentSessionCollapsible({ session }: { session: AgentSession }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <Card>
+      <CardHeader className="pb-0">
+        <button onClick={() => setOpen(!open)} className="flex items-center gap-2 text-sm hover:text-foreground text-muted-foreground transition-colors">
+          <Cpu size={16} />
+          <span className="font-medium">Agent Session Telemetry</span>
+          {session.model_name && <span className="text-xs font-mono">{session.model_name}</span>}
+          <ChevronRight size={14} className={`transition-transform ${open ? 'rotate-90' : ''}`} />
+        </button>
+      </CardHeader>
+      {open && (
+        <CardContent className="pt-3">
+          <AgentSessionDetail session={session} />
+        </CardContent>
+      )}
+    </Card>
   );
 }
 
@@ -493,20 +620,6 @@ function SeverityBadge({ severity }: { severity: string }) {
   return (
     <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${colors[severity] || 'bg-muted text-muted-foreground'}`}>
       {severity || '—'}
-    </span>
-  );
-}
-
-function EventBadge({ type }: { type: string }) {
-  const styles: Record<string, string> = {
-    tool_call: 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400',
-    thought: 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400',
-    llm_call: 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400',
-  };
-  const labels: Record<string, string> = { tool_call: 'tool', thought: 'thought', llm_call: 'llm' };
-  return (
-    <span className={`inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium ${styles[type] || 'bg-muted text-muted-foreground'}`}>
-      {labels[type] || type}
     </span>
   );
 }
@@ -664,51 +777,34 @@ function AgentSessionsTab() {
 }
 
 function AgentSessionDetail({ session: s }: { session: AgentSession }) {
+  const hasCompression = s.rca_compression_applied || s.preflight_compression_applied || s.middleware_trim_applied || (s.context_messages_loaded != null && s.context_messages_loaded > 0);
+
   return (
-    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
-      {/* Model & Routing */}
+    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 text-xs">
       <Card className="bg-muted/30">
         <CardHeader className="pb-2 pt-3 px-3"><CardTitle className="text-xs flex items-center gap-1.5"><Cpu size={12} /> Model & Routing</CardTitle></CardHeader>
         <CardContent className="px-3 pb-3 space-y-1">
           <DetailRow label="Model" value={s.model_name} />
           <DetailRow label="Provider" value={s.detected_provider} />
           <DetailRow label="Mode" value={s.provider_mode} />
-          <DetailRow label="Direct SDK" value={s.use_direct_sdk != null ? String(s.use_direct_sdk) : null} />
           <DetailRow label="Temperature" value={s.temperature != null ? String(s.temperature) : null} />
-          <DetailRow label="Chat Mode" value={s.mode} />
           <DetailRow label="Recursion Limit" value={s.recursion_limit != null ? String(s.recursion_limit) : null} />
         </CardContent>
       </Card>
 
-      {/* Context & Compression */}
-      <Card className="bg-muted/30">
-        <CardHeader className="pb-2 pt-3 px-3"><CardTitle className="text-xs flex items-center gap-1.5"><Gauge size={12} /> Context & Compression</CardTitle></CardHeader>
-        <CardContent className="px-3 pb-3 space-y-1">
-          <DetailRow label="Messages Loaded" value={s.context_messages_loaded != null ? String(s.context_messages_loaded) : null} />
-          <DetailRow label="Context Load" value={s.context_load_ms != null ? `${s.context_load_ms}ms` : null} />
-          <DetailRow label="RCA Compression" value={s.rca_compression_applied ? `${s.rca_compression_before} → ${s.rca_compression_after} msgs` : 'No'} />
-          <DetailRow label="Preflight Compress" value={s.preflight_compression_applied ? 'Yes' : 'No'} />
-          <DetailRow label="Middleware Trim" value={s.middleware_trim_applied ? `${s.middleware_tokens_before} → ${s.middleware_tokens_after} tokens` : 'No'} />
-        </CardContent>
-      </Card>
-
-      {/* Execution Stats */}
       <Card className="bg-muted/30">
         <CardHeader className="pb-2 pt-3 px-3"><CardTitle className="text-xs flex items-center gap-1.5"><Zap size={12} /> Execution</CardTitle></CardHeader>
         <CardContent className="px-3 pb-3 space-y-1">
           <DetailRow label="Duration" value={s.duration_ms != null ? formatDuration(s.duration_ms / 1000) : null} />
-          <DetailRow label="Time to First Token" value={s.time_to_first_token_ms != null ? `${s.time_to_first_token_ms.toLocaleString()}ms` : null} />
+          <DetailRow label="TTFT" value={s.time_to_first_token_ms != null ? `${s.time_to_first_token_ms.toLocaleString()}ms` : null} />
           <DetailRow label="Model Turns" value={s.model_turns != null ? String(s.model_turns) : null} />
           <DetailRow label="Tool Calls" value={s.tool_calls_count != null ? String(s.tool_calls_count) : null} />
           <DetailRow label="Tool Errors" value={s.tool_errors_count != null ? String(s.tool_errors_count) : null} highlight={!!s.tool_errors_count} />
-          <DetailRow label="Total Events" value={s.total_events != null ? String(s.total_events) : null} />
-          <DetailRow label="Tokens Streamed" value={s.total_tokens_streamed != null ? s.total_tokens_streamed.toLocaleString() : null} />
           <DetailRow label="Retries" value={s.retry_attempts != null ? String(s.retry_attempts) : null} highlight={!!s.retry_attempts} />
           {s.last_retry_error && <DetailRow label="Last Retry Error" value={s.last_retry_error} highlight />}
         </CardContent>
       </Card>
 
-      {/* LLM Usage */}
       <Card className="bg-muted/30">
         <CardHeader className="pb-2 pt-3 px-3"><CardTitle className="text-xs flex items-center gap-1.5"><Sparkles size={12} /> LLM Usage</CardTitle></CardHeader>
         <CardContent className="px-3 pb-3 space-y-1">
@@ -719,17 +815,27 @@ function AgentSessionDetail({ session: s }: { session: AgentSession }) {
         </CardContent>
       </Card>
 
-      {/* Outcome */}
-      <Card className="bg-muted/30 md:col-span-2">
+      {hasCompression && (
+        <Card className="bg-muted/30">
+          <CardHeader className="pb-2 pt-3 px-3"><CardTitle className="text-xs flex items-center gap-1.5"><Gauge size={12} /> Context & Compression</CardTitle></CardHeader>
+          <CardContent className="px-3 pb-3 space-y-1">
+            {(s.context_messages_loaded ?? 0) > 0 && <DetailRow label="Messages Loaded" value={String(s.context_messages_loaded)} />}
+            {(s.context_load_ms ?? 0) > 0 && <DetailRow label="Context Load" value={`${s.context_load_ms}ms`} />}
+            {s.rca_compression_applied && <DetailRow label="RCA Compression" value={`${s.rca_compression_before} → ${s.rca_compression_after} msgs`} />}
+            {s.preflight_compression_applied && <DetailRow label="Preflight Compress" value="Yes" />}
+            {s.middleware_trim_applied && <DetailRow label="Middleware Trim" value={`${s.middleware_tokens_before} → ${s.middleware_tokens_after} tokens`} />}
+          </CardContent>
+        </Card>
+      )}
+
+      <Card className={`bg-muted/30 ${hasCompression ? '' : 'md:col-span-2'}`}>
         <CardHeader className="pb-2 pt-3 px-3"><CardTitle className="text-xs flex items-center gap-1.5"><CheckCircle2 size={12} /> Outcome</CardTitle></CardHeader>
         <CardContent className="px-3 pb-3 space-y-1">
           <DetailRow label="Status" value={s.status} />
           {s.error_message && <DetailRow label="Error" value={s.error_message} highlight />}
-          <DetailRow label="Placeholder Warning" value={s.placeholder_warning ? 'Yes — AI output contained placeholder tokens' : 'No'} highlight={s.placeholder_warning} />
+          {s.placeholder_warning && <DetailRow label="Placeholder Warning" value="AI output contained placeholder tokens" highlight />}
           <DetailRow label="Started" value={s.started_at ? new Date(s.started_at).toLocaleString() : null} />
           <DetailRow label="Completed" value={s.completed_at ? new Date(s.completed_at).toLocaleString() : null} />
-          {s.alert_title && <DetailRow label="Alert" value={s.alert_title} />}
-          {s.severity && <DetailRow label="Severity" value={s.severity} />}
         </CardContent>
       </Card>
     </div>
