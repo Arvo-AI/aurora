@@ -1,9 +1,8 @@
 "use client";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
-import { ChevronDown, Zap, TrendingUp, TrendingDown, Minus } from "lucide-react";
+import { ChevronDown, Activity, TrendingUp, TrendingDown, Minus } from "lucide-react";
 import { SessionUsageState, RequestUsage } from "@/hooks/useSessionUsage";
-import AnimatedNumber from "@/components/AnimatedNumber";
 
 function formatCost(cost: number): string {
   if (cost < 0.01) return `$${cost.toFixed(4)}`;
@@ -18,7 +17,7 @@ function formatTokens(n: number): string {
 
 function formatTime(iso: string): string {
   const d = new Date(iso);
-  return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
 }
 
 type RateTrend = "up" | "down" | "flat";
@@ -85,7 +84,7 @@ interface SessionUsagePanelProps {
 
 export default function SessionUsagePanel({ sessionUsage }: SessionUsagePanelProps) {
   const [isExpanded, setIsExpanded] = useState(false);
-  const { currentStreaming, sessionUsage: totals, requestHistory } = sessionUsage;
+  const { currentStreaming, sessionUsage: totals, requestHistory, wasCanceled } = sessionUsage;
 
   const { tokPerSec, trend } = useTokenRate(
     currentStreaming?.output_tokens ?? 0,
@@ -94,14 +93,14 @@ export default function SessionUsagePanel({ sessionUsage }: SessionUsagePanelPro
 
   const wasStreamingRef = useRef(false);
   useEffect(() => {
-    if (currentStreaming && !wasStreamingRef.current) wasStreamingRef.current = true;
-    else if (!currentStreaming) wasStreamingRef.current = false;
+    if (currentStreaming) wasStreamingRef.current = true;
+    else wasStreamingRef.current = false;
   }, [currentStreaming]);
 
   if (totals.request_count === 0 && !currentStreaming) {
     return (
       <div className="flex items-center gap-2 px-2 py-2 text-sm text-zinc-500">
-        <Zap className="h-3.5 w-3.5 text-zinc-600" />
+        <Activity className="h-3.5 w-3.5 text-zinc-600" />
         <span>Waiting for LLM activity...</span>
       </div>
     );
@@ -120,12 +119,8 @@ export default function SessionUsagePanel({ sessionUsage }: SessionUsagePanelPro
         <div className="flex items-center gap-2 text-zinc-400">
           {currentStreaming ? (
             <>
-              <Zap className="h-3.5 w-3.5 text-yellow-400 animate-pulse" />
-              <AnimatedNumber
-                value={currentStreaming.output_tokens}
-                format={formatTokens}
-                className="text-yellow-300 text-sm"
-              />
+              <Activity className="h-3.5 w-3.5 text-yellow-400 animate-pulse" />
+              <span className="text-yellow-300 font-mono tabular-nums">{formatTokens(currentStreaming.output_tokens)}</span>
               <span className="text-yellow-300/50 text-xs">chunks</span>
               {tokPerSec > 0 && (
                 <span className={`inline-flex items-center gap-0.5 text-xs ${trendColor}`}>
@@ -135,22 +130,17 @@ export default function SessionUsagePanel({ sessionUsage }: SessionUsagePanelPro
               )}
             </>
           ) : (
-            <Zap className="h-3.5 w-3.5 text-zinc-600" />
+            <>
+              <Activity className={`h-3.5 w-3.5 transition-colors duration-300 ${wasCanceled ? "text-red-400" : "text-zinc-600"}`} />
+              {wasCanceled && <span className="text-red-400/80 text-xs">Operation cancelled</span>}
+            </>
           )}
         </div>
 
         {/* Right: session totals */}
         <div className="flex items-center gap-3 font-mono tabular-nums text-zinc-400">
-          <AnimatedNumber
-            value={totals.total_input_tokens + totals.total_output_tokens}
-            format={(n) => `${formatTokens(n)} tok`}
-            className="text-zinc-400 text-sm"
-          />
-          <AnimatedNumber
-            value={totals.total_cost}
-            format={formatCost}
-            className="text-zinc-300 text-sm"
-          />
+          <span>{formatTokens(totals.total_input_tokens + totals.total_output_tokens)} tok</span>
+          <span className="text-zinc-300">{formatCost(totals.total_cost)}</span>
           <span className="text-zinc-500 text-xs">{totals.request_count} req</span>
           <ChevronDown
             className={`h-3.5 w-3.5 text-zinc-500 transition-transform duration-200 ${isExpanded ? "rotate-180" : ""}`}

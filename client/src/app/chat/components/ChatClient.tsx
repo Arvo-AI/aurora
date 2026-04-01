@@ -243,9 +243,8 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
   const handleCancel = useCallback(async () => {
     try {
       await cancelCurrentMessage();
-      // Reset sending state on frontend immediately
       setIsSending(false);
-      // Stop any current streaming and preserve the message
+      sessionUsage.handleCancel();
       const finalMessage = finishStreamingMessage();
       if (finalMessage) {
         onNewMessage(finalMessage);
@@ -253,7 +252,7 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
     } catch (error) {
       console.error('Error cancelling message:', error);
     }
-  }, [cancelCurrentMessage, finishStreamingMessage, onNewMessage]);
+  }, [cancelCurrentMessage, finishStreamingMessage, onNewMessage, sessionUsage]);
 
   // Reset streaming/sending state when switching sessions to avoid stale in-flight UI
   const previousSessionIdRef = useRef<string | null>(null);
