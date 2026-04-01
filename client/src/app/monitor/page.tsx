@@ -5,18 +5,17 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useSystemHealthStream } from '@/hooks/useSystemHealthStream';
 import {
   Activity, Server, Cpu, Clock, AlertTriangle, CheckCircle2,
-  XCircle, Search, RefreshCw, Wifi, WifiOff, ChevronRight,
+  XCircle, RefreshCw, Wifi, WifiOff, ChevronRight,
 } from 'lucide-react';
 
 /* ================================================================
    Fleet Tab
    ================================================================ */
-function FleetTab() {
+function FleetTab({ onViewWaterfall }: { onViewWaterfall: (id: string) => void }) {
   const [fleet, setFleet] = useState<Record<string, unknown>[] | null>(null);
   const [summary, setSummary] = useState<Record<string, unknown> | null>(null);
   const [activity, setActivity] = useState<Record<string, unknown>[] | null>(null);
@@ -112,7 +111,7 @@ function FleetTab() {
                     <th className="text-left px-4 py-2.5 font-medium text-muted-foreground">Severity</th>
                     <th className="text-left px-4 py-2.5 font-medium text-muted-foreground">Source</th>
                     <th className="text-left px-4 py-2.5 font-medium text-muted-foreground">Started</th>
-                    <th className="w-8" />
+                    <th className="w-20" />
                   </tr>
                 </thead>
                 <tbody>
@@ -137,7 +136,14 @@ function FleetTab() {
                         {row.started_at ? new Date(String(row.started_at)).toLocaleString() : '—'}
                       </td>
                       <td className="px-2">
-                        <ChevronRight size={14} className="text-muted-foreground" />
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 text-xs"
+                          onClick={(e) => { e.stopPropagation(); onViewWaterfall(String(row.incident_id)); }}
+                        >
+                          Steps <ChevronRight size={12} className="ml-0.5" />
+                        </Button>
                       </td>
                     </tr>
                   ))}
@@ -195,29 +201,21 @@ function FleetTab() {
 /* ================================================================
    Waterfall Tab
    ================================================================ */
-function WaterfallTab() {
-  const [incidentId, setIncidentId] = useState('');
+function WaterfallTab({ preselectedIncidentId }: { preselectedIncidentId?: string | null }) {
+  const [incidents, setIncidents] = useState<Record<string, unknown>[]>([]);
+  const [selectedId, setSelectedId] = useState<string>(preselectedIncidentId || '');
   const [waterfall, setWaterfall] = useState<Record<string, unknown> | null>(null);
   const [toolPerf, setToolPerf] = useState<Record<string, unknown>[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [perfLoading, setPerfLoading] = useState(true);
-
-  const loadWaterfall = async () => {
-    if (!incidentId.trim()) return;
-    setLoading(true);
-    setWaterfall(null);
-    try {
-      const res = await fetch(`/api/monitor/incidents/${incidentId}/waterfall`);
-      if (res.ok) setWaterfall(await res.json());
-    } catch {
-      // silently fail
-    } finally {
-      setLoading(false);
-    }
-  };
+  const [incidentsLoading, setIncidentsLoading] = useState(true);
 
   useEffect(() => {
-    setPerfLoading(true);
+    fetch('/api/monitor/fleet')
+      .then((r) => r.ok ? r.json() : [])
+      .then((d) => setIncidents(Array.isArray(d) ? d : []))
+      .catch(() => {})
+      .finally(() => setIncidentsLoading(false));
     fetch('/api/monitor/tools/performance')
       .then((r) => r.ok ? r.json() : null)
       .then((d) => { if (d) setToolPerf(d); })
@@ -225,31 +223,67 @@ function WaterfallTab() {
       .finally(() => setPerfLoading(false));
   }, []);
 
+  const loadWaterfall = useCallback(async (id: string) => {
+    if (!id) return;
+    setSelectedId(id);
+    setLoading(true);
+    setWaterfall(null);
+    try {
+      const res = await fetch(`/api/monitor/incidents/${id}/waterfall`);
+      if (res.ok) setWaterfall(await res.json());
+    } catch {
+      // silently fail
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (preselectedIncidentId) loadWaterfall(preselectedIncidentId);
+  }, [preselectedIncidentId, loadWaterfall]);
+
   const steps = waterfall && Array.isArray((waterfall as Record<string, unknown>).steps)
     ? (waterfall as Record<string, unknown>).steps as Record<string, unknown>[]
     : [];
 
   return (
     <div className="space-y-6">
-      {/* Search bar */}
+      {/* Incident picker */}
       <Card>
         <CardContent className="pt-6">
-          <div className="flex gap-2">
-            <div className="relative flex-1">
-              <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                value={incidentId}
-                onChange={(e) => setIncidentId(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && loadWaterfall()}
-                placeholder="Enter incident ID to load execution waterfall..."
-                className="pl-9"
-              />
+          <label className="text-sm font-medium text-muted-foreground mb-2 block">Select an incident</label>
+          {incidentsLoading ? (
+            <Skeleton className="h-10 w-full" />
+          ) : incidents.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No incidents with agent runs found</p>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
+              {incidents.slice(0, 12).map((inc, i) => {
+                const id = String(inc.incident_id);
+                const isSelected = selectedId === id;
+                return (
+                  <button
+                    key={i}
+                    onClick={() => loadWaterfall(id)}
+                    className={`text-left p-3 rounded-md border text-sm transition-colors ${
+                      isSelected
+                        ? 'border-primary bg-primary/5'
+                        : 'border-border/50 hover:border-border hover:bg-muted/30'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="font-medium truncate">{String(inc.alert_service ?? 'Unknown')}</span>
+                      <StatusBadge status={String(inc.aurora_status ?? '')} />
+                    </div>
+                    <div className="text-xs text-muted-foreground truncate">
+                      {String(inc.alert_environment ?? '')} &middot; {String(inc.source_type ?? '')}
+                    </div>
+                    <div className="text-[10px] text-muted-foreground/60 mt-1 font-mono truncate">{id}</div>
+                  </button>
+                );
+              })}
             </div>
-            <Button onClick={loadWaterfall} disabled={loading || !incidentId.trim()}>
-              {loading ? <RefreshCw size={14} className="animate-spin mr-1.5" /> : <Search size={14} className="mr-1.5" />}
-              Load
-            </Button>
-          </div>
+          )}
         </CardContent>
       </Card>
 
@@ -544,6 +578,14 @@ function EventTypeBadge({ type }: { type: string }) {
    Page
    ================================================================ */
 export default function MonitorPage() {
+  const [activeTab, setActiveTab] = useState('fleet');
+  const [waterfallIncidentId, setWaterfallIncidentId] = useState<string | null>(null);
+
+  const openWaterfall = (incidentId: string) => {
+    setWaterfallIncidentId(incidentId);
+    setActiveTab('waterfall');
+  };
+
   return (
     <div className="p-6 max-w-7xl mx-auto">
       <div className="mb-6">
@@ -551,7 +593,7 @@ export default function MonitorPage() {
         <p className="text-sm text-muted-foreground mt-1">Agent fleet, execution timelines, and system health</p>
       </div>
 
-      <Tabs defaultValue="fleet">
+      <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList>
           <TabsTrigger value="fleet" className="gap-1.5">
             <Server size={14} /> Fleet
@@ -564,8 +606,8 @@ export default function MonitorPage() {
           </TabsTrigger>
         </TabsList>
 
-        <TabsContent value="fleet"><FleetTab /></TabsContent>
-        <TabsContent value="waterfall"><WaterfallTab /></TabsContent>
+        <TabsContent value="fleet"><FleetTab onViewWaterfall={openWaterfall} /></TabsContent>
+        <TabsContent value="waterfall"><WaterfallTab preselectedIncidentId={waterfallIncidentId} /></TabsContent>
         <TabsContent value="health"><HealthTab /></TabsContent>
       </Tabs>
     </div>
