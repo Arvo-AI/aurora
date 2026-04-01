@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useRef, useMemo } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { ChevronDown, Activity, TrendingUp, TrendingDown, Minus } from "lucide-react";
 import { SessionUsageState, RequestUsage } from "@/hooks/useSessionUsage";
 
@@ -25,18 +25,20 @@ type RateTrend = "up" | "down" | "flat";
 function useTokenRate(outputTokens: number, isStreaming: boolean): { tokPerSec: number; trend: RateTrend } {
   const samplesRef = useRef<{ time: number; tokens: number }[]>([]);
   const prevRef = useRef(0);
+  const [rate, setRate] = useState<{ tokPerSec: number; trend: RateTrend }>({ tokPerSec: 0, trend: "flat" });
 
-  return useMemo(() => {
+  useEffect(() => {
     if (!isStreaming || outputTokens === 0) {
       samplesRef.current = [];
       prevRef.current = 0;
-      return { tokPerSec: 0, trend: "flat" as RateTrend };
+      setRate({ tokPerSec: 0, trend: "flat" });
+      return;
     }
     const now = Date.now();
     const samples = samplesRef.current;
     samples.push({ time: now, tokens: outputTokens });
     while (samples.length > 1 && samples[0].time < now - 3000) samples.shift();
-    if (samples.length < 2) return { tokPerSec: 0, trend: "flat" as RateTrend };
+    if (samples.length < 2) return;
 
     const dt = (samples[samples.length - 1].time - samples[0].time) / 1000;
     const dT = samples[samples.length - 1].tokens - samples[0].tokens;
@@ -44,8 +46,10 @@ function useTokenRate(outputTokens: number, isStreaming: boolean): { tokPerSec: 
     const prev = prevRef.current;
     prevRef.current = tokPerSec;
     const trend: RateTrend = tokPerSec > prev + 3 ? "up" : tokPerSec < prev - 3 ? "down" : "flat";
-    return { tokPerSec, trend };
+    setRate({ tokPerSec, trend });
   }, [outputTokens, isStreaming]);
+
+  return rate;
 }
 
 function RequestRow({ request }: { request: RequestUsage }) {
