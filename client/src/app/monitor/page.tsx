@@ -1,55 +1,41 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { useSystemHealthStream, SystemHealthData } from '@/hooks/useSystemHealthStream';
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Skeleton } from '@/components/ui/skeleton';
+import { useSystemHealthStream } from '@/hooks/useSystemHealthStream';
+import {
+  Activity, Server, Cpu, Clock, AlertTriangle, CheckCircle2,
+  XCircle, Search, RefreshCw, Wifi, WifiOff, ChevronRight,
+} from 'lucide-react';
 
-type Tab = 'fleet' | 'waterfall' | 'health';
-
-export default function MonitorPage() {
-  const [activeTab, setActiveTab] = useState<Tab>('fleet');
-
-  return (
-    <div className="p-6 max-w-7xl mx-auto space-y-4">
-      <h1 className="text-2xl font-bold">Monitor (PR 3 temp page)</h1>
-      <div className="flex gap-2 border-b pb-2">
-        {(['fleet', 'waterfall', 'health'] as Tab[]).map((t) => (
-          <button
-            key={t}
-            onClick={() => setActiveTab(t)}
-            className={`px-4 py-2 rounded-t text-sm font-medium ${
-              activeTab === t ? 'bg-white border border-b-0 text-black' : 'text-gray-500 hover:text-gray-700'
-            }`}
-          >
-            {t.charAt(0).toUpperCase() + t.slice(1)}
-          </button>
-        ))}
-      </div>
-      {activeTab === 'fleet' && <FleetSection />}
-      {activeTab === 'waterfall' && <WaterfallSection />}
-      {activeTab === 'health' && <HealthSection />}
-    </div>
-  );
-}
-
-/* ---------- Fleet Tab ---------- */
-function FleetSection() {
+/* ================================================================
+   Fleet Tab
+   ================================================================ */
+function FleetTab() {
   const [fleet, setFleet] = useState<Record<string, unknown>[] | null>(null);
   const [summary, setSummary] = useState<Record<string, unknown> | null>(null);
   const [activity, setActivity] = useState<Record<string, unknown>[] | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
 
   const fetchFleet = useCallback(async () => {
+    setLoading(true);
     try {
       const [fleetRes, summaryRes] = await Promise.all([
         fetch('/api/monitor/fleet'),
         fetch('/api/monitor/fleet/summary'),
       ]);
       if (fleetRes.ok) setFleet(await fleetRes.json());
-      else setError(`Fleet: ${fleetRes.status}`);
       if (summaryRes.ok) setSummary(await summaryRes.json());
-    } catch (e) {
-      setError(String(e));
+    } catch {
+      // silently fail
+    } finally {
+      setLoading(false);
     }
   }, []);
 
@@ -57,208 +43,531 @@ function FleetSection() {
 
   const loadActivity = async (incidentId: string) => {
     setSelectedId(incidentId);
+    setActivity(null);
     try {
       const res = await fetch(`/api/monitor/fleet/${incidentId}/activity`);
       if (res.ok) setActivity(await res.json());
-    } catch (e) {
-      setActivity(null);
+    } catch {
+      setActivity([]);
     }
   };
 
   return (
-    <div className="space-y-4">
-      <h2 className="text-lg font-semibold">Fleet Summary</h2>
-      {summary && <JsonBlock data={summary} />}
-      {error && <p className="text-red-500">{error}</p>}
-
-      <h2 className="text-lg font-semibold">Agent Runs</h2>
-      {fleet && fleet.length > 0 ? (
-        <div className="overflow-x-auto">
-          <table className="min-w-full text-xs border">
-            <thead>
-              <tr className="bg-gray-100">
-                {Object.keys(fleet[0]).map((k) => (
-                  <th key={k} className="px-2 py-1 border text-left">{k}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {fleet.map((row, i) => (
-                <tr
-                  key={i}
-                  onClick={() => loadActivity(String(row.incident_id))}
-                  className={`cursor-pointer hover:bg-blue-50 ${
-                    selectedId === String(row.incident_id) ? 'bg-blue-100' : ''
-                  }`}
-                >
-                  {Object.values(row).map((v, j) => (
-                    <td key={j} className="px-2 py-1 border whitespace-nowrap">{String(v ?? '')}</td>
-                  ))}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      ) : (
-        <p className="text-gray-400 text-sm">No agent runs found</p>
-      )}
-
-      {selectedId && (
-        <>
-          <h2 className="text-lg font-semibold">Activity for {selectedId}</h2>
-          {activity ? <JsonBlock data={activity} /> : <p className="text-gray-400 text-sm">Loading...</p>}
-        </>
-      )}
-    </div>
-  );
-}
-
-/* ---------- Waterfall Tab ---------- */
-function WaterfallSection() {
-  const [incidentId, setIncidentId] = useState('');
-  const [waterfall, setWaterfall] = useState<Record<string, unknown> | null>(null);
-  const [toolPerf, setToolPerf] = useState<Record<string, unknown>[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  const loadWaterfall = async () => {
-    if (!incidentId.trim()) return;
-    setError(null);
-    try {
-      const res = await fetch(`/api/monitor/incidents/${incidentId}/waterfall`);
-      if (res.ok) setWaterfall(await res.json());
-      else setError(`Waterfall: ${res.status}`);
-    } catch (e) {
-      setError(String(e));
-    }
-  };
-
-  useEffect(() => {
-    fetch('/api/monitor/tools/performance')
-      .then((r) => r.ok ? r.json() : null)
-      .then((d) => d && setToolPerf(d))
-      .catch(() => {});
-  }, []);
-
-  return (
-    <div className="space-y-4">
-      <h2 className="text-lg font-semibold">Execution Waterfall</h2>
-      <div className="flex gap-2 items-center">
-        <input
-          value={incidentId}
-          onChange={(e) => setIncidentId(e.target.value)}
-          placeholder="Paste incident ID..."
-          className="border rounded px-3 py-1 text-sm w-96"
+    <div className="space-y-6">
+      {/* Summary cards */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <SummaryCard
+          label="Total Runs"
+          value={summary?.total_agent_runs}
+          icon={<Server size={18} />}
+          loading={loading}
         />
-        <button onClick={loadWaterfall} className="bg-blue-600 text-white px-3 py-1 rounded text-sm">Load</button>
+        <SummaryCard
+          label="Active"
+          value={summary?.active_count}
+          icon={<Activity size={18} className="text-blue-500" />}
+          loading={loading}
+        />
+        <SummaryCard
+          label="Completed"
+          value={summary?.completed_count}
+          icon={<CheckCircle2 size={18} className="text-green-500" />}
+          loading={loading}
+        />
+        <SummaryCard
+          label="Avg Duration"
+          value={summary?.avg_rca_duration_seconds != null
+            ? `${Math.round(summary.avg_rca_duration_seconds as number)}s`
+            : '—'}
+          icon={<Clock size={18} className="text-muted-foreground" />}
+          loading={loading}
+        />
       </div>
-      {error && <p className="text-red-500 text-sm">{error}</p>}
 
-      {waterfall && (
-        <>
-          <div className="text-sm text-gray-600">
-            Steps: {String((waterfall as Record<string, unknown>).total_steps)} |
-            Duration: {String((waterfall as Record<string, unknown>).total_duration_ms)}ms |
-            Errors: {String((waterfall as Record<string, unknown>).error_count)}
-          </div>
-          {Array.isArray((waterfall as Record<string, unknown>).steps) && (
+      {/* Fleet table */}
+      <Card>
+        <CardHeader className="pb-3 flex flex-row items-center justify-between">
+          <CardTitle className="text-base">Agent Runs</CardTitle>
+          <Button variant="ghost" size="sm" onClick={fetchFleet}>
+            <RefreshCw size={14} className="mr-1.5" /> Refresh
+          </Button>
+        </CardHeader>
+        <CardContent className="p-0">
+          {loading ? (
+            <div className="p-6 space-y-3">
+              {[...Array(5)].map((_, i) => <Skeleton key={i} className="h-10 w-full" />)}
+            </div>
+          ) : !fleet || fleet.length === 0 ? (
+            <div className="p-8 text-center text-muted-foreground text-sm">
+              No agent runs found
+            </div>
+          ) : (
             <div className="overflow-x-auto">
-              <table className="min-w-full text-xs border">
+              <table className="w-full text-sm">
                 <thead>
-                  <tr className="bg-gray-100">
-                    <th className="px-2 py-1 border">step</th>
-                    <th className="px-2 py-1 border">tool</th>
-                    <th className="px-2 py-1 border">status</th>
-                    <th className="px-2 py-1 border">duration_ms</th>
-                    <th className="px-2 py-1 border">error</th>
+                  <tr className="border-b bg-muted/40">
+                    <th className="text-left px-4 py-2.5 font-medium text-muted-foreground">Service</th>
+                    <th className="text-left px-4 py-2.5 font-medium text-muted-foreground">Environment</th>
+                    <th className="text-left px-4 py-2.5 font-medium text-muted-foreground">Status</th>
+                    <th className="text-left px-4 py-2.5 font-medium text-muted-foreground">Severity</th>
+                    <th className="text-left px-4 py-2.5 font-medium text-muted-foreground">Source</th>
+                    <th className="text-left px-4 py-2.5 font-medium text-muted-foreground">Started</th>
+                    <th className="w-8" />
                   </tr>
                 </thead>
                 <tbody>
-                  {((waterfall as Record<string, unknown>).steps as Record<string, unknown>[]).map((s, i) => (
-                    <tr key={i} className={s.status === 'error' ? 'bg-red-50' : ''}>
-                      <td className="px-2 py-1 border">{String(s.step_index)}</td>
-                      <td className="px-2 py-1 border">{String(s.tool_name)}</td>
-                      <td className="px-2 py-1 border">{String(s.status)}</td>
-                      <td className="px-2 py-1 border">{String(s.duration_ms ?? '-')}</td>
-                      <td className="px-2 py-1 border text-red-600">{String(s.error_message ?? '')}</td>
+                  {fleet.map((row, i) => (
+                    <tr
+                      key={i}
+                      onClick={() => loadActivity(String(row.incident_id))}
+                      className={`border-b cursor-pointer transition-colors hover:bg-muted/30 ${
+                        selectedId === String(row.incident_id) ? 'bg-primary/5' : ''
+                      }`}
+                    >
+                      <td className="px-4 py-2.5 font-medium">{String(row.alert_service ?? '—')}</td>
+                      <td className="px-4 py-2.5 text-muted-foreground">{String(row.alert_environment ?? '—')}</td>
+                      <td className="px-4 py-2.5">
+                        <StatusBadge status={String(row.aurora_status ?? '')} />
+                      </td>
+                      <td className="px-4 py-2.5">
+                        <SeverityBadge severity={String(row.severity ?? '')} />
+                      </td>
+                      <td className="px-4 py-2.5 text-muted-foreground">{String(row.source_type ?? '—')}</td>
+                      <td className="px-4 py-2.5 text-muted-foreground text-xs">
+                        {row.started_at ? new Date(String(row.started_at)).toLocaleString() : '—'}
+                      </td>
+                      <td className="px-2">
+                        <ChevronRight size={14} className="text-muted-foreground" />
+                      </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
           )}
-        </>
-      )}
+        </CardContent>
+      </Card>
 
-      <h2 className="text-lg font-semibold mt-6">Tool Performance (last 7d)</h2>
-      {toolPerf && toolPerf.length > 0 ? (
-        <div className="overflow-x-auto">
-          <table className="min-w-full text-xs border">
-            <thead>
-              <tr className="bg-gray-100">
-                {Object.keys(toolPerf[0]).map((k) => (
-                  <th key={k} className="px-2 py-1 border text-left">{k}</th>
+      {/* Activity drill-down */}
+      {selectedId && (
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-base flex items-center gap-2">
+              <Activity size={16} /> Activity Timeline
+              <span className="text-xs text-muted-foreground font-normal ml-1">{selectedId}</span>
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {activity === null ? (
+              <div className="space-y-2">
+                {[...Array(4)].map((_, i) => <Skeleton key={i} className="h-8 w-full" />)}
+              </div>
+            ) : activity.length === 0 ? (
+              <p className="text-sm text-muted-foreground">No activity recorded for this incident</p>
+            ) : (
+              <div className="space-y-1.5">
+                {activity.map((ev, i) => (
+                  <div key={i} className="flex items-start gap-3 text-sm py-1.5 border-b border-border/30 last:border-0">
+                    <EventTypeBadge type={String(ev.event_type)} />
+                    <div className="flex-1 min-w-0">
+                      <span className="font-medium">{String(ev.label ?? '—')}</span>
+                      {ev.duration_ms != null && (
+                        <span className="text-muted-foreground ml-2 text-xs">{String(ev.duration_ms)}ms</span>
+                      )}
+                      {ev.error_message && (
+                        <p className="text-destructive text-xs mt-0.5">{String(ev.error_message)}</p>
+                      )}
+                    </div>
+                    <span className="text-xs text-muted-foreground whitespace-nowrap">
+                      {ev.event_time ? new Date(String(ev.event_time)).toLocaleTimeString() : ''}
+                    </span>
+                  </div>
                 ))}
-              </tr>
-            </thead>
-            <tbody>
-              {toolPerf.map((row, i) => (
-                <tr key={i}>
-                  {Object.values(row).map((v, j) => (
-                    <td key={j} className="px-2 py-1 border">{String(v ?? '')}</td>
-                  ))}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      ) : (
-        <p className="text-gray-400 text-sm">No tool performance data yet</p>
+              </div>
+            )}
+          </CardContent>
+        </Card>
       )}
     </div>
   );
 }
 
-/* ---------- Health Tab ---------- */
-function HealthSection() {
+/* ================================================================
+   Waterfall Tab
+   ================================================================ */
+function WaterfallTab() {
+  const [incidentId, setIncidentId] = useState('');
+  const [waterfall, setWaterfall] = useState<Record<string, unknown> | null>(null);
+  const [toolPerf, setToolPerf] = useState<Record<string, unknown>[] | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [perfLoading, setPerfLoading] = useState(true);
+
+  const loadWaterfall = async () => {
+    if (!incidentId.trim()) return;
+    setLoading(true);
+    setWaterfall(null);
+    try {
+      const res = await fetch(`/api/monitor/incidents/${incidentId}/waterfall`);
+      if (res.ok) setWaterfall(await res.json());
+    } catch {
+      // silently fail
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    setPerfLoading(true);
+    fetch('/api/monitor/tools/performance')
+      .then((r) => r.ok ? r.json() : null)
+      .then((d) => { if (d) setToolPerf(d); })
+      .catch(() => {})
+      .finally(() => setPerfLoading(false));
+  }, []);
+
+  const steps = waterfall && Array.isArray((waterfall as Record<string, unknown>).steps)
+    ? (waterfall as Record<string, unknown>).steps as Record<string, unknown>[]
+    : [];
+
+  return (
+    <div className="space-y-6">
+      {/* Search bar */}
+      <Card>
+        <CardContent className="pt-6">
+          <div className="flex gap-2">
+            <div className="relative flex-1">
+              <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                value={incidentId}
+                onChange={(e) => setIncidentId(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && loadWaterfall()}
+                placeholder="Enter incident ID to load execution waterfall..."
+                className="pl-9"
+              />
+            </div>
+            <Button onClick={loadWaterfall} disabled={loading || !incidentId.trim()}>
+              {loading ? <RefreshCw size={14} className="animate-spin mr-1.5" /> : <Search size={14} className="mr-1.5" />}
+              Load
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Waterfall results */}
+      {waterfall && (
+        <Card>
+          <CardHeader className="pb-3">
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-base">Execution Steps</CardTitle>
+              <div className="flex gap-4 text-sm">
+                <span className="text-muted-foreground">
+                  <span className="font-semibold text-foreground">{String((waterfall as Record<string, unknown>).total_steps)}</span> steps
+                </span>
+                <span className="text-muted-foreground">
+                  <span className="font-semibold text-foreground">{String((waterfall as Record<string, unknown>).total_duration_ms)}</span>ms total
+                </span>
+                {Number((waterfall as Record<string, unknown>).error_count) > 0 && (
+                  <span className="text-destructive">
+                    <span className="font-semibold">{String((waterfall as Record<string, unknown>).error_count)}</span> errors
+                  </span>
+                )}
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent className="p-0">
+            {steps.length === 0 ? (
+              <div className="p-8 text-center text-muted-foreground text-sm">No steps recorded</div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b bg-muted/40">
+                      <th className="text-left px-4 py-2.5 font-medium text-muted-foreground w-12">#</th>
+                      <th className="text-left px-4 py-2.5 font-medium text-muted-foreground">Tool</th>
+                      <th className="text-left px-4 py-2.5 font-medium text-muted-foreground">Status</th>
+                      <th className="text-right px-4 py-2.5 font-medium text-muted-foreground">Duration</th>
+                      <th className="text-left px-4 py-2.5 font-medium text-muted-foreground">Error</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {steps.map((s, i) => (
+                      <tr key={i} className={`border-b transition-colors ${s.status === 'error' ? 'bg-destructive/5' : 'hover:bg-muted/30'}`}>
+                        <td className="px-4 py-2.5 text-muted-foreground">{String(s.step_index)}</td>
+                        <td className="px-4 py-2.5 font-medium font-mono text-xs">{String(s.tool_name)}</td>
+                        <td className="px-4 py-2.5"><StatusBadge status={String(s.status)} /></td>
+                        <td className="px-4 py-2.5 text-right text-muted-foreground">
+                          {s.duration_ms != null ? `${String(s.duration_ms)}ms` : '—'}
+                        </td>
+                        <td className="px-4 py-2.5 text-destructive text-xs max-w-xs truncate">
+                          {String(s.error_message ?? '')}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Tool performance */}
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base flex items-center gap-2">
+            <Cpu size={16} /> Tool Performance
+            <span className="text-xs text-muted-foreground font-normal">Last 7 days</span>
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="p-0">
+          {perfLoading ? (
+            <div className="p-6 space-y-3">
+              {[...Array(4)].map((_, i) => <Skeleton key={i} className="h-8 w-full" />)}
+            </div>
+          ) : !toolPerf || toolPerf.length === 0 ? (
+            <div className="p-8 text-center text-muted-foreground text-sm">
+              No tool performance data yet
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b bg-muted/40">
+                    <th className="text-left px-4 py-2.5 font-medium text-muted-foreground">Tool</th>
+                    <th className="text-right px-4 py-2.5 font-medium text-muted-foreground">Calls</th>
+                    <th className="text-right px-4 py-2.5 font-medium text-muted-foreground">Avg (ms)</th>
+                    <th className="text-right px-4 py-2.5 font-medium text-muted-foreground">P95 (ms)</th>
+                    <th className="text-right px-4 py-2.5 font-medium text-muted-foreground">Success %</th>
+                    <th className="text-right px-4 py-2.5 font-medium text-muted-foreground">Errors</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {toolPerf.map((row, i) => (
+                    <tr key={i} className="border-b hover:bg-muted/30 transition-colors">
+                      <td className="px-4 py-2.5 font-medium font-mono text-xs">{String(row.tool_name)}</td>
+                      <td className="px-4 py-2.5 text-right">{String(row.call_count)}</td>
+                      <td className="px-4 py-2.5 text-right text-muted-foreground">{String(row.avg_duration_ms ?? '—')}</td>
+                      <td className="px-4 py-2.5 text-right text-muted-foreground">{row.p95_duration_ms != null ? Math.round(Number(row.p95_duration_ms)) : '—'}</td>
+                      <td className="px-4 py-2.5 text-right">
+                        <span className={Number(row.success_rate) >= 95 ? 'text-green-500' : Number(row.success_rate) >= 80 ? 'text-yellow-500' : 'text-destructive'}>
+                          {row.success_rate != null ? `${String(row.success_rate)}%` : '—'}
+                        </span>
+                      </td>
+                      <td className="px-4 py-2.5 text-right">
+                        {Number(row.error_count) > 0
+                          ? <span className="text-destructive">{String(row.error_count)}</span>
+                          : <span className="text-muted-foreground">0</span>}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+/* ================================================================
+   Health Tab
+   ================================================================ */
+function HealthTab() {
   const { health, isConnected, error, eventLog } = useSystemHealthStream();
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center gap-2">
-        <span className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green-500' : 'bg-red-500'}`} />
-        <span className="text-sm text-gray-600">{isConnected ? 'Connected' : 'Disconnected'}</span>
-        {error && <span className="text-red-500 text-sm ml-2">{error}</span>}
+    <div className="space-y-6">
+      {/* Connection status */}
+      <div className="flex items-center gap-2 text-sm">
+        {isConnected
+          ? <><Wifi size={14} className="text-green-500" /> <span className="text-green-500 font-medium">Live</span></>
+          : <><WifiOff size={14} className="text-destructive" /> <span className="text-destructive font-medium">Disconnected</span></>}
+        {error && <span className="text-muted-foreground ml-2">({error})</span>}
+        <span className="text-muted-foreground">Refreshes every 10s</span>
       </div>
 
-      <h2 className="text-lg font-semibold">Latest Health Snapshot</h2>
-      {health ? <JsonBlock data={health} /> : <p className="text-gray-400 text-sm">Waiting for first event...</p>}
-
-      <h2 className="text-lg font-semibold">Event Log ({eventLog.length} events)</h2>
-      <div className="max-h-96 overflow-y-auto border rounded p-2 bg-gray-50 text-xs font-mono space-y-1">
-        {eventLog.length === 0 && <p className="text-gray-400">No events yet</p>}
-        {[...eventLog].reverse().map((ev, i) => (
-          <div key={i} className="border-b pb-1">
-            <span className="text-gray-500">[{ev.timestamp}]</span>{' '}
-            {Object.entries(ev.services || {}).map(([name, svc]) => (
-              <span key={name} className={`mr-2 ${svc.status === 'healthy' ? 'text-green-700' : 'text-red-700'}`}>
-                {name}:{svc.status}
-              </span>
+      {!health ? (
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          {[...Array(4)].map((_, i) => (
+            <Card key={i}><CardContent className="pt-6"><Skeleton className="h-16 w-full" /></CardContent></Card>
+          ))}
+        </div>
+      ) : (
+        <>
+          {/* Service status cards */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            {Object.entries(health.services).map(([name, svc]) => (
+              <Card key={name} className={svc.status === 'healthy' ? '' : 'border-destructive/50'}>
+                <CardContent className="pt-5 pb-4">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-sm font-medium capitalize">{name}</span>
+                    {svc.status === 'healthy'
+                      ? <CheckCircle2 size={16} className="text-green-500" />
+                      : svc.status === 'degraded'
+                        ? <AlertTriangle size={16} className="text-yellow-500" />
+                        : <XCircle size={16} className="text-destructive" />}
+                  </div>
+                  <Badge variant={svc.status === 'healthy' ? 'secondary' : 'destructive'} className="text-xs">
+                    {svc.status}
+                  </Badge>
+                </CardContent>
+              </Card>
             ))}
-            <span className="text-blue-700">
-              workers:{ev.celery?.worker_count} active:{ev.celery?.active_tasks} queue:{ev.celery?.queue_depth ?? '?'}
-            </span>
           </div>
-        ))}
-      </div>
+
+          {/* Celery stats */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <SummaryCard label="Workers" value={health.celery.worker_count} icon={<Server size={18} />} />
+            <SummaryCard label="Active Tasks" value={health.celery.active_tasks} icon={<Activity size={18} className="text-blue-500" />} />
+            <SummaryCard label="Reserved" value={health.celery.reserved_tasks} icon={<Clock size={18} className="text-yellow-500" />} />
+            <SummaryCard label="Queue Depth" value={health.celery.queue_depth ?? '—'} icon={<Cpu size={18} className="text-muted-foreground" />} />
+          </div>
+
+          {health.celery.workers.length > 0 && (
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm">Workers</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="flex flex-wrap gap-2">
+                  {health.celery.workers.map((w) => (
+                    <Badge key={w} variant="outline" className="font-mono text-xs">{w}</Badge>
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
+          )}
+        </>
+      )}
+
+      {/* Event log */}
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm flex items-center gap-2">
+            Event Log
+            <Badge variant="secondary" className="text-xs font-normal">{eventLog.length}</Badge>
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="max-h-64 overflow-y-auto space-y-1 font-mono text-xs">
+            {eventLog.length === 0 ? (
+              <p className="text-muted-foreground py-4 text-center text-sm font-sans">Waiting for events...</p>
+            ) : (
+              [...eventLog].reverse().map((ev, i) => (
+                <div key={i} className="flex items-center gap-2 py-1 border-b border-border/20 last:border-0">
+                  <span className="text-muted-foreground shrink-0">
+                    {new Date(ev.timestamp).toLocaleTimeString()}
+                  </span>
+                  <div className="flex flex-wrap gap-x-3 gap-y-0.5">
+                    {Object.entries(ev.services || {}).map(([name, svc]) => (
+                      <span key={name} className={svc.status === 'healthy' ? 'text-green-600 dark:text-green-400' : 'text-destructive'}>
+                        {name}
+                      </span>
+                    ))}
+                    <span className="text-blue-600 dark:text-blue-400">
+                      q:{ev.celery?.queue_depth ?? '?'} w:{ev.celery?.worker_count} a:{ev.celery?.active_tasks}
+                    </span>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </CardContent>
+      </Card>
     </div>
   );
 }
 
-/* ---------- Shared ---------- */
-function JsonBlock({ data }: { data: unknown }) {
+/* ================================================================
+   Shared components
+   ================================================================ */
+function SummaryCard({ label, value, icon, loading }: {
+  label: string; value: unknown; icon: React.ReactNode; loading?: boolean;
+}) {
   return (
-    <pre className="bg-gray-50 border rounded p-3 text-xs overflow-x-auto max-h-80 overflow-y-auto">
-      {JSON.stringify(data, null, 2)}
-    </pre>
+    <Card>
+      <CardContent className="pt-5 pb-4">
+        <div className="flex items-center justify-between mb-1">
+          <span className="text-xs text-muted-foreground">{label}</span>
+          {icon}
+        </div>
+        {loading
+          ? <Skeleton className="h-7 w-16" />
+          : <p className="text-2xl font-semibold">{String(value ?? '—')}</p>}
+      </CardContent>
+    </Card>
+  );
+}
+
+function StatusBadge({ status }: { status: string }) {
+  const map: Record<string, { variant: 'default' | 'secondary' | 'destructive' | 'outline'; label: string }> = {
+    analyzing: { variant: 'default', label: 'Analyzing' },
+    completed: { variant: 'secondary', label: 'Completed' },
+    success: { variant: 'secondary', label: 'Success' },
+    running: { variant: 'default', label: 'Running' },
+    error: { variant: 'destructive', label: 'Error' },
+    idle: { variant: 'outline', label: 'Idle' },
+  };
+  const cfg = map[status] || { variant: 'outline' as const, label: status || '—' };
+  return <Badge variant={cfg.variant} className="text-xs">{cfg.label}</Badge>;
+}
+
+function SeverityBadge({ severity }: { severity: string }) {
+  const colors: Record<string, string> = {
+    critical: 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400',
+    high: 'bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400',
+    medium: 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400',
+    low: 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400',
+  };
+  return (
+    <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${colors[severity] || 'bg-muted text-muted-foreground'}`}>
+      {severity || '—'}
+    </span>
+  );
+}
+
+function EventTypeBadge({ type }: { type: string }) {
+  const styles: Record<string, string> = {
+    execution_step: 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400',
+    thought: 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400',
+    citation: 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400',
+  };
+  return (
+    <span className={`inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium shrink-0 ${styles[type] || 'bg-muted text-muted-foreground'}`}>
+      {type}
+    </span>
+  );
+}
+
+/* ================================================================
+   Page
+   ================================================================ */
+export default function MonitorPage() {
+  return (
+    <div className="p-6 max-w-7xl mx-auto">
+      <div className="mb-6">
+        <h1 className="text-2xl font-bold tracking-tight">Monitor</h1>
+        <p className="text-sm text-muted-foreground mt-1">Agent fleet, execution timelines, and system health</p>
+      </div>
+
+      <Tabs defaultValue="fleet">
+        <TabsList>
+          <TabsTrigger value="fleet" className="gap-1.5">
+            <Server size={14} /> Fleet
+          </TabsTrigger>
+          <TabsTrigger value="waterfall" className="gap-1.5">
+            <Activity size={14} /> Waterfall
+          </TabsTrigger>
+          <TabsTrigger value="health" className="gap-1.5">
+            <Cpu size={14} /> Health
+          </TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="fleet"><FleetTab /></TabsContent>
+        <TabsContent value="waterfall"><WaterfallTab /></TabsContent>
+        <TabsContent value="health"><HealthTab /></TabsContent>
+      </Tabs>
+    </div>
   );
 }

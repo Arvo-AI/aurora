@@ -52,7 +52,7 @@ def fleet_list(user_id):
                i.updated_at,
                cs.id AS session_id
         FROM incidents i
-        LEFT JOIN chat_sessions cs ON cs.id = i.aurora_chat_session_id
+        LEFT JOIN chat_sessions cs ON cs.id = i.aurora_chat_session_id::text
         WHERE {where}
         ORDER BY i.created_at DESC
         LIMIT 200
@@ -94,7 +94,7 @@ def fleet_summary(user_id):
             AVG(EXTRACT(EPOCH FROM (i.analyzed_at - i.created_at)))
                 FILTER (WHERE i.analyzed_at IS NOT NULL) AS avg_rca_duration_seconds
         FROM incidents i
-        LEFT JOIN chat_sessions cs ON cs.id = i.aurora_chat_session_id
+        LEFT JOIN chat_sessions cs ON cs.id = i.aurora_chat_session_id::text
         WHERE i.org_id = %s
     """
 
