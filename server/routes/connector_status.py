@@ -648,8 +648,10 @@ def _check_all_connectors(user_id: str, org_id: str) -> Dict[str, Dict[str, Any]
     results: Dict[str, Dict[str, Any]] = {}
 
     def _run_check(provider: str, token_owner_id: str) -> tuple:
+        if provider == "onprem":
+            return provider, _check_onprem(user_id, org_id)
         if provider == "kubectl":
-            return provider, _check_kubectl(org_id)
+            return provider, _check_kubectl(user_id, org_id)
         creds = get_token_data(token_owner_id, provider)
         if not creds:
             with db_pool.get_admin_connection() as fallback_conn:
@@ -669,6 +671,7 @@ def _check_all_connectors(user_id: str, org_id: str) -> Dict[str, Dict[str, Any]
             logger.warning("[STATUS] %s check raised: %s", provider, exc)
             return provider, {"connected": False}
 
+    providers.setdefault("onprem", user_id)
     providers.setdefault("kubectl", user_id)
 
     with ThreadPoolExecutor(max_workers=12) as pool:
@@ -688,17 +691,35 @@ def _check_all_connectors(user_id: str, org_id: str) -> Dict[str, Dict[str, Any]
     return results
 
 
-def _check_kubectl(org_id: str) -> Dict[str, Any]:
+def _check_onprem(user_id: str, org_id: str) -> Dict[str, Any]:
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """SELECT COUNT(*) FROM user_manual_vms
+                       WHERE (user_id = %s OR org_id = %s)
+                         AND connection_verified = TRUE""",
+                    (user_id, org_id),
+                )
+                count = cursor.fetchone()[0]
+        return {"connected": count > 0}
+    except Exception as e:
+        logger.warning("[STATUS] onprem check failed (user=%s, org=%s): %s", user_id, org_id, e, exc_info=True)
+        return {"connected": False}
+
+
+def _check_kubectl(user_id: str, org_id: str) -> Dict[str, Any]:
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
                 cursor.execute(
                     """SELECT COUNT(*) FROM active_kubectl_connections ac
                        JOIN kubectl_agent_tokens kat ON ac.token = kat.token
-                       WHERE kat.org_id = %s AND ac.status = 'active'""",
-                    (org_id,),
+                       WHERE (kat.user_id = %s OR kat.org_id = %s) AND ac.status = 'active'""",
+                    (user_id, org_id),
                 )
                 count = cursor.fetchone()[0]
         return {"connected": count > 0}
-    except Exception:
+    except Exception as e:
+        logger.warning("[STATUS] kubectl check failed (user=%s, org=%s): %s", user_id, org_id, e, exc_info=True)
         return {"connected": False}

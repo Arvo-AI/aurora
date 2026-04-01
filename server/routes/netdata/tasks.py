@@ -72,15 +72,16 @@ def process_netdata_alert(
                     # Use ON CONFLICT to make insert idempotent
                     cursor.execute(
                         """
-                        INSERT INTO netdata_alerts 
-                        (user_id, alert_name, alert_status, alert_class, alert_family, 
+                        INSERT INTO netdata_alerts
+                        (user_id, org_id, alert_name, alert_status, alert_class, alert_family,
                          chart, host, space, room, value, message, payload, received_at, alert_hash)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         ON CONFLICT (alert_hash) DO NOTHING
                         RETURNING id
                         """,
                         (
                             user_id,
+                            org_id,
                             data["name"],
                             data["status"],
                             data["class"],

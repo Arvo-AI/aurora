@@ -36,6 +36,16 @@ export default function SignUpPage() {
       return
     }
 
+    if (orgName.trim().length > 100) {
+      setError("Organization name must be 100 characters or less")
+      return
+    }
+
+    if (!/^[\w\s\-\.,'&()]+$/u.test(orgName.trim())) {
+      setError("Organization name can only contain letters, numbers, spaces, hyphens, periods, commas, apostrophes, ampersands, and parentheses")
+      return
+    }
+
     setIsLoading(true)
 
     try {

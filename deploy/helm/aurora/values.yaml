@@ -477,7 +477,7 @@ ingress:
 # WARNING: If KMS key is deleted, Vault data is permanently unrecoverable.
 vault:
   seal:
-    # Options: "shamir" (default), "gcpckms"
+    # Options: "shamir" (default), "gcpckms", "awskms"
     type: "shamir"
     
     # GCP Cloud KMS Configuration
@@ -488,3 +488,15 @@ vault:
     #   key_ring: "vault-keyring"
     #   crypto_key: "vault-unseal-key"
     #   # For on-prem: credentials: "/vault/gcp/credentials.json"
+
+    # AWS KMS Configuration
+    # See website/docs/deployment/vault-kms-setup.md for setup instructions
+    # awskms:
+    #   region: "us-east-1"
+    #   kms_key_id: "alias/vault-unseal-key"  # Key ID, ARN, or alias
+    #   # For EKS with IRSA: leave credentials unset (uses pod identity)
+    #   # For non-EKS clusters (on-prem, GKE, AKS, etc.): set credentials: true and create
+    #   #   kubectl create secret generic vault-aws-kms \
+    #   #     --from-literal=access_key=AKIA... \
+    #   #     --from-literal=secret_key=...
+    #   # credentials: true
