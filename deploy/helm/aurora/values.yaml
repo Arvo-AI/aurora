@@ -400,7 +400,7 @@ ingress:
   #
   # WARNING: Regardless of which controller you use, you MUST ensure these
   # settings are configured (via annotations, IngressClass params, or controller config):
-  #   - Request timeout: 3600s - Required for long-running RCA analysis
+  #   - Read and send timeout: 3600s - Required for long-running RCA analysis
   #   - HTTP version: 1.1 - Required for WebSocket upgrade
   #   - Max body size: 50m - Required for file uploads
   # Without these, you'll experience WebSocket disconnects, failed upgrades,

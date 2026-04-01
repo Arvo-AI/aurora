@@ -343,7 +343,7 @@ spec:
     solvers:
     - http01:
         ingress:
-          class: nginx  # Change to match your ingress controller
+          ingressClassName: nginx  # Change to match your ingress controller
 EOF
 ```
 
