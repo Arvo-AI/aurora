@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 
 export interface RequestUsage {
   model: string;
@@ -30,30 +30,40 @@ export interface SessionUsageState {
   currentStreaming: CurrentStreamingUsage | null;
   sessionUsage: SessionUsage;
   requestHistory: RequestUsage[];
+  wasCanceled: boolean;
   handleUsageUpdate: (data: Record<string, unknown>) => void;
   handleUsageFinal: (data: Record<string, unknown>) => void;
+  handleCancel: () => void;
   reset: () => void;
 }
 
-const EMPTY_SESSION: SessionUsage = {
-  total_input_tokens: 0,
-  total_output_tokens: 0,
-  total_cost: 0,
-  request_count: 0,
-};
-
 export function useSessionUsage(sessionId: string | null): SessionUsageState {
   const [currentStreaming, setCurrentStreaming] = useState<CurrentStreamingUsage | null>(null);
-  const [sessionUsage, setSessionUsage] = useState<SessionUsage>(EMPTY_SESSION);
   const [requestHistory, setRequestHistory] = useState<RequestUsage[]>([]);
+  const [wasCanceled, setWasCanceled] = useState(false);
   const prevSessionRef = useRef<string | null>(null);
   const liveCountRef = useRef(0);
+  const cancelTimerRef = useRef<ReturnType<typeof setTimeout>>();
+
+  const sessionUsage = useMemo<SessionUsage>(() => {
+    let input = 0, output = 0, cost = 0;
+    for (const r of requestHistory) {
+      input += r.input_tokens;
+      output += r.output_tokens;
+      cost += r.estimated_cost;
+    }
+    return {
+      total_input_tokens: input,
+      total_output_tokens: output,
+      total_cost: cost,
+      request_count: requestHistory.length,
+    };
+  }, [requestHistory]);
 
   useEffect(() => {
     if (sessionId === prevSessionRef.current) return;
     prevSessionRef.current = sessionId;
     setCurrentStreaming(null);
-    setSessionUsage(EMPTY_SESSION);
     setRequestHistory([]);
     liveCountRef.current = 0;
 
@@ -75,19 +85,10 @@ export function useSessionUsage(sessionId: string | null): SessionUsageState {
             timestamp: (r.timestamp as string) || "",
           })
         );
-        const totals = data.totals as SessionUsage | undefined;
         setRequestHistory((prev) => {
           const liveSlice = prev.slice(prev.length - liveCountRef.current);
           return [...reqs, ...liveSlice];
         });
-        if (totals) {
-          setSessionUsage((prev) => ({
-            total_input_tokens: (totals.total_input_tokens || 0) + prev.total_input_tokens,
-            total_output_tokens: (totals.total_output_tokens || 0) + prev.total_output_tokens,
-            total_cost: (totals.total_cost || 0) + prev.total_cost,
-            request_count: (totals.request_count || 0) + prev.request_count,
-          }));
-        }
       })
       .catch(() => {});
 
@@ -117,22 +118,19 @@ export function useSessionUsage(sessionId: string | null): SessionUsageState {
     };
     liveCountRef.current += 1;
     setRequestHistory(prev => [...prev, request]);
+  }, []);
 
-    const totals = data.session_totals as SessionUsage | undefined;
-    if (totals) {
-      setSessionUsage({
-        total_input_tokens: totals.total_input_tokens || 0,
-        total_output_tokens: totals.total_output_tokens || 0,
-        total_cost: totals.total_cost || 0,
-        request_count: totals.request_count || 0,
-      });
-    }
+  const handleCancel = useCallback(() => {
+    setCurrentStreaming(null);
+    setWasCanceled(true);
+    if (cancelTimerRef.current) clearTimeout(cancelTimerRef.current);
+    cancelTimerRef.current = setTimeout(() => setWasCanceled(false), 2500);
   }, []);
 
   const reset = useCallback(() => {
     setCurrentStreaming(null);
-    setSessionUsage(EMPTY_SESSION);
     setRequestHistory([]);
+    setWasCanceled(false);
     liveCountRef.current = 0;
   }, []);
 
@@ -140,8 +138,10 @@ export function useSessionUsage(sessionId: string | null): SessionUsageState {
     currentStreaming,
     sessionUsage,
     requestHistory,
+    wasCanceled,
     handleUsageUpdate,
     handleUsageFinal,
+    handleCancel,
     reset,
   };
 }
