@@ -1068,6 +1068,7 @@ class Workflow:
                                 "output_token_details": output_details,
                                 "estimated_cost": estimated_cost,
                                 "response_time_ms": response_time_ms,
+                                "timestamp": datetime.utcnow().isoformat() + "Z",
                                 "session_totals": _session_usage.copy(),
                             })
                             _model_turn_start = None

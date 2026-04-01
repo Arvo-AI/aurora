@@ -106,3 +106,68 @@ def get_available_models(user_id):
     except Exception as e:
         logger.error(f"Error retrieving available models: {e}")
         return jsonify({"error": "Failed to retrieve models"}), 500
+
+
+@llm_usage_bp.route('/api/llm-usage/session/<session_id>', methods=['OPTIONS'])
+def get_session_usage_options(session_id):
+    return create_cors_response()
+
+
+@llm_usage_bp.route('/api/llm-usage/session/<session_id>', methods=['GET'])
+@require_permission("llm_usage", "read")
+def get_session_usage(user_id, session_id):
+    """Get per-request token/cost breakdown for a session."""
+    try:
+        org_id = get_org_id_from_request()
+        with db_pool.get_user_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
+            if org_id:
+                cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
+
+            cursor.execute("""
+                SELECT
+                    model_name, input_tokens, output_tokens, total_tokens,
+                    estimated_cost, response_time_ms, timestamp
+                FROM llm_usage_tracking
+                WHERE session_id = %s
+                ORDER BY timestamp ASC
+            """, (session_id,))
+
+            rows = cursor.fetchall()
+
+            requests = []
+            total_input = 0
+            total_output = 0
+            total_cost = 0.0
+
+            for row in rows:
+                inp = row[1] or 0
+                out = row[2] or 0
+                cost = float(row[4]) if row[4] else 0.0
+                requests.append({
+                    "model": row[0],
+                    "input_tokens": inp,
+                    "output_tokens": out,
+                    "total_tokens": row[3] or 0,
+                    "estimated_cost": cost,
+                    "response_time_ms": row[5] or 0,
+                    "timestamp": row[6].isoformat() + "Z" if row[6] else None,
+                })
+                total_input += inp
+                total_output += out
+                total_cost += cost
+
+        return jsonify({
+            "requests": requests,
+            "totals": {
+                "total_input_tokens": total_input,
+                "total_output_tokens": total_output,
+                "total_cost": total_cost,
+                "request_count": len(requests),
+            },
+        })
+
+    except Exception as e:
+        logger.error(f"Error retrieving session usage for {session_id}: {e}")
+        return jsonify({"error": "Failed to retrieve session usage"}), 500

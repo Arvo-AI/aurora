@@ -28,7 +28,6 @@ import { SimpleChatUiState } from '@/hooks/useSessionPersistence';
 import { useSessionLoader } from '@/hooks/useSessionLoader';
 import { useChatExpansion } from '@/app/components/ClientShell';
 import { useChatCancellation } from '@/hooks/useChatCancellation';
-import TokenUsageIndicator from "@/components/TokenUsageIndicator";
 import SessionUsagePanel from "@/components/SessionUsagePanel";
 import { useSessionUsage } from '@/hooks/useSessionUsage';
 import { useChatSendHandlers } from "./useChatSendHandlers";
@@ -420,7 +419,6 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
         {/* Enhanced Input */}
         <div className="p-4 relative z-10 bg-background flex-shrink-0">
           <div className="max-w-4xl mx-auto space-y-2">
-            <TokenUsageIndicator sessionUsage={sessionUsage} />
             <SessionUsagePanel sessionUsage={sessionUsage} />
           </div>
           <div className="flex justify-center">
