@@ -8,6 +8,7 @@ AWS Secrets Manager is the approved secrets store (e.g., EKS with IRSA).
 
 import os
 import logging
+import threading
 import time
 
 from .base import SecretsBackend
@@ -33,6 +34,7 @@ class AWSSecretsManagerBackend(SecretsBackend):
         self._client = None
         self._initialized = False
         self._available = False
+        self._init_lock = threading.Lock()
         self.region = os.getenv("AWS_SM_REGION", "")
         self.prefix = os.getenv("AWS_SM_PREFIX", "aurora/users")
 
@@ -41,44 +43,48 @@ class AWSSecretsManagerBackend(SecretsBackend):
 
         Only attempts initialization once to avoid repeated failures
         on startup when the backend may not be needed.
+        Thread-safe via _init_lock.
         """
-        if self._initialized:
-            return
+        with self._init_lock:
+            if self._initialized:
+                return
 
-        self._initialized = True
+            if not self.region:
+                logger.warning(
+                    "AWS_SM_REGION not set. AWS Secrets Manager backend will not be available."
+                )
+                self._available = False
+                self._initialized = True
+                return
 
-        if not self.region:
-            logger.warning(
-                "AWS_SM_REGION not set. AWS Secrets Manager backend will not be available."
-            )
-            self._available = False
-            return
+            try:
+                import boto3
+            except ImportError:
+                logger.warning(
+                    "boto3 package not installed. Install with: pip install boto3"
+                )
+                self._available = False
+                self._initialized = True
+                return
 
-        try:
-            import boto3
-        except ImportError:
-            logger.warning(
-                "boto3 package not installed. Install with: pip install boto3"
-            )
-            self._available = False
-            return
+            try:
+                self._client = boto3.client(
+                    "secretsmanager",
+                    region_name=self.region,
+                )
 
-        try:
-            self._client = boto3.client(
-                "secretsmanager",
-                region_name=self.region,
-            )
+                self._available = True
+                logger.info(
+                    "AWSSecretsManagerBackend initialized (region: %s, prefix: %s)",
+                    self.region,
+                    self.prefix,
+                )
 
-            self._available = True
-            logger.info(
-                "AWSSecretsManagerBackend initialized (region: %s, prefix: %s)",
-                self.region,
-                self.prefix,
-            )
+            except Exception as e:
+                logger.error("Failed to initialize AWS Secrets Manager client: %s", e)
+                self._available = False
 
-        except Exception as e:
-            logger.error("Failed to initialize AWS Secrets Manager client: %s", e)
-            self._available = False
+            self._initialized = True
 
     def is_available(self) -> bool:
         """Check if AWS Secrets Manager backend is configured and available."""
