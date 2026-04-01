@@ -742,6 +742,28 @@ def initialize_tables():
 
                     CREATE INDEX IF NOT EXISTS idx_incident_citations_incident_id ON incident_citations(incident_id);
                 """,
+                "execution_steps": """
+                    CREATE TABLE IF NOT EXISTS execution_steps (
+                        id SERIAL PRIMARY KEY,
+                        incident_id UUID NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
+                        session_id VARCHAR(50) NOT NULL,
+                        org_id VARCHAR(255),
+                        step_index INTEGER NOT NULL,
+                        tool_name VARCHAR(255) NOT NULL,
+                        tool_input JSONB DEFAULT '{}'::jsonb,
+                        tool_output TEXT,
+                        status VARCHAR(20) NOT NULL DEFAULT 'running',
+                        started_at TIMESTAMPTZ NOT NULL,
+                        completed_at TIMESTAMPTZ,
+                        duration_ms INTEGER,
+                        error_message TEXT,
+                        created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+                    );
+
+                    CREATE INDEX IF NOT EXISTS idx_execution_steps_incident ON execution_steps(incident_id, step_index);
+                    CREATE INDEX IF NOT EXISTS idx_execution_steps_session ON execution_steps(session_id);
+                    CREATE INDEX IF NOT EXISTS idx_execution_steps_org_time ON execution_steps(org_id, started_at);
+                """,
                 "rca_notification_emails": """
                     CREATE TABLE IF NOT EXISTS rca_notification_emails (
                         id SERIAL PRIMARY KEY,
@@ -1079,6 +1101,7 @@ def initialize_tables():
             rls_tables.append("incident_feedback")
             rls_tables.append("postmortems")
             rls_tables.append("github_connected_repos")
+            rls_tables.append("execution_steps")
 
 
             # Migration: Add rca_celery_task_id column to incidents table if it doesn't exist

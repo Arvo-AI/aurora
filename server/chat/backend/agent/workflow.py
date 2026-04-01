@@ -831,7 +831,11 @@ class Workflow:
         # Initialize tool context capture for this session
         tool_capture = None
         if input_state.session_id and input_state.user_id:
-            tool_capture = ToolContextCapture(input_state.session_id, input_state.user_id)
+            tool_capture = ToolContextCapture(
+                input_state.session_id, input_state.user_id,
+                incident_id=getattr(input_state, 'incident_id', None),
+                org_id=getattr(input_state, 'org_id', None),
+            )
             self.agent.set_tool_capture(tool_capture)
             
             # Set workflow context for tools to access during confirmation

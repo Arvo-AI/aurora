@@ -2,7 +2,7 @@
 
 import Link from "next/link"
 import { usePathname, useRouter } from "next/navigation"
-import { ChevronLeft, Settings, LogOut, User, Zap, Plug } from "lucide-react"
+import { ChevronLeft, Settings, LogOut, User, Zap, Plug, Activity } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import ChatHistory from "@/components/ChatHistory"
@@ -185,6 +185,22 @@ export default function Navigation({
               <div className="flex items-center">
                 <Plug size={16} />
                 <span className="ml-2">Connectors</span>
+              </div>
+            </Link>
+          </li>
+
+          {/* Monitor (temp) */}
+          <li>
+            <Link
+              href="/monitor"
+              className={cn(
+                "w-full flex items-center justify-between px-2.5 py-1.5 rounded-md hover:bg-primary/10 transition-colors text-sm border border-transparent hover:border-border/50",
+                pathname === "/monitor" && "bg-primary/10 border-border/50 font-medium"
+              )}
+            >
+              <div className="flex items-center">
+                <Activity size={16} />
+                <span className="ml-2">Monitor</span>
               </div>
             </Link>
           </li>
