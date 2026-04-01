@@ -78,15 +78,6 @@ class ContextSafetyMiddleware(AgentMiddleware):
             f"(limit: {self.max_tokens}) across {len(request.messages)} messages"
         )
 
-        try:
-            from utils.cloud.cloud_utils import _workflow_var
-            _wf = _workflow_var.get()
-            if _wf and hasattr(_wf, '_telemetry') and _wf._telemetry:
-                _wf._telemetry.middleware_trim_applied = True
-                _wf._telemetry.middleware_tokens_before = estimated_tokens
-        except Exception:
-            pass
-
         trimmed = trim_messages(
             request.messages,
             strategy="last",
@@ -105,14 +96,6 @@ class ContextSafetyMiddleware(AgentMiddleware):
             f"[ContextSafety] Trimmed: {len(request.messages)} -> {len(trimmed)} messages, "
             f"~{estimated_tokens} -> ~{count_tokens_approximately(trimmed)} tokens"
         )
-
-        try:
-            from utils.cloud.cloud_utils import _workflow_var
-            _wf = _workflow_var.get()
-            if _wf and hasattr(_wf, '_telemetry') and _wf._telemetry:
-                _wf._telemetry.middleware_tokens_after = count_tokens_approximately(trimmed)
-        except Exception:
-            pass
 
         return await handler(request.override(messages=trimmed))
 

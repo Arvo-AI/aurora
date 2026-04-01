@@ -29,7 +29,6 @@ Usage:
 import json
 import logging
 import threading
-import tiktoken
 from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
 from ..llm import LLMManager
@@ -126,19 +125,6 @@ class ToolContextCapture:
             now = datetime.now(timezone.utc)
             truncated_output = output[:10240] if output else ""
 
-            # Detect errors from output content even when no exception was raised
-            if not is_error and output:
-                try:
-                    import json as _json
-                    parsed = _json.loads(output) if output.strip().startswith('{') else None
-                    if parsed and isinstance(parsed, dict):
-                        has_error_field = "error" in parsed and parsed["error"]
-                        has_success_false = parsed.get("success") is False
-                        if has_error_field or has_success_false:
-                            is_error = True
-                except Exception:
-                    pass
-
             status = "error" if is_error else "success"
             error_msg = None
             if is_error:
@@ -182,9 +168,12 @@ class ToolContextCapture:
                     normalized_existing_input = str(call_info['input'])
                 existing_signature = f"{call_info['tool_name']}_{normalized_existing_input}"
                 if existing_signature == tool_signature:
-                    # Check if the tool call is recent (within 30 seconds) to avoid stale matches
                     time_diff = (datetime.now() - call_info['start_time']).total_seconds()
                     if time_diff < 30:
+                        if "step_id" not in call_info:
+                            call_info["step_id"] = self._record_step_start(
+                                tool_name, tool_input, tool_call_id=existing_call_id
+                            )
                         logger.info(f"Detected duplicate tool execution for {tool_name}, reusing existing call_id: {existing_call_id}")
                         return existing_call_id
                     else:

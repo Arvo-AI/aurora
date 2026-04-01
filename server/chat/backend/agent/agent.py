@@ -467,18 +467,6 @@ class Agent:
 
             logging.info(f"Provider routing: model={model_name}, detected={detected_provider}, mode={provider_mode}, use_direct={_use_direct}")
 
-            # Capture model/routing telemetry
-            _t = getattr(self, '_session_telemetry', None)
-            if _t:
-                _t.set_model_info(
-                    model_name=model_name,
-                    detected_provider=detected_provider,
-                    provider_mode=provider_mode,
-                    use_direct=_use_direct,
-                    temperature=self.llm_manager.main_llm.temperature,
-                )
-                _t.recursion_limit = int(os.environ.get("AGENT_RECURSION_LIMIT", 25))
-
             if _use_direct:
                 streaming_llm = create_chat_model(
                     model=model_name,
@@ -616,9 +604,6 @@ class Agent:
                                 "[END SUMMARY]"
                             )]
                             logging.info(f"Preflight context compression applied for session {state.session_id}")
-                            _t = getattr(self, '_session_telemetry', None)
-                            if _t:
-                                _t.preflight_compression_applied = True
                     except Exception as e:
                         logging.warning(f"Preflight context compression failed: {e}")
 
@@ -755,9 +740,6 @@ class Agent:
                             ]) or "RemoteProtocolError" in error_type
                             if attempt < 2 and is_network_error:
                                 logging.warning(f"Network error (attempt {attempt+1}/3): {e}. Retrying...")
-                                _t = getattr(self, '_session_telemetry', None)
-                                if _t:
-                                    _t.record_retry(str(e))
                                 await asyncio.sleep(2 * (attempt + 1))
                             else:
                                 raise

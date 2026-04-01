@@ -1,6 +1,5 @@
 """Fleet routes -- agent-run list, summary counts, per-incident activity drill-down."""
 import logging
-import json
 from flask import Blueprint, request, jsonify
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context
@@ -146,7 +145,7 @@ def fleet_activity(user_id, incident_id):
                    LEFT(it.content, 500) AS detail,
                    NULL AS error_message
             FROM incident_thoughts it
-            WHERE it.incident_id = %s AND it.org_id = %s
+            WHERE it.incident_id = %s
         )
         UNION ALL
         (
@@ -158,7 +157,7 @@ def fleet_activity(user_id, incident_id):
                    ic.citation_key AS detail,
                    NULL AS error_message
             FROM incident_citations ic
-            WHERE ic.incident_id = %s AND ic.org_id = %s
+            WHERE ic.incident_id = %s
         )
         ORDER BY event_time ASC NULLS LAST
     """
@@ -167,7 +166,7 @@ def fleet_activity(user_id, incident_id):
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
                 set_rls_context(cur, conn, user_id, log_prefix="[FLEET_ACTIVITY]")
-                cur.execute(query, (incident_id, org_id, incident_id, org_id, incident_id, org_id))
+                cur.execute(query, (incident_id, org_id, incident_id, incident_id))
                 cols = [d[0] for d in cur.description]
                 rows = [dict(zip(cols, row)) for row in cur.fetchall()]
 

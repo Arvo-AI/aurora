@@ -9,7 +9,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import {
   Activity, Server, Clock, CheckCircle2, RefreshCw, ChevronRight,
   Wrench, Brain, Sparkles, AlertTriangle, DollarSign, Zap, Hash,
-  Cpu, Gauge, RotateCcw, Layers, Timer, Radio,
+  Radio,
 } from 'lucide-react';
 
 /* ================================================================
@@ -111,7 +111,6 @@ interface TimelineData {
   steps: Record<string, unknown>[];
   llm_calls: Record<string, unknown>[];
   thoughts: Record<string, unknown>[];
-  agent_session?: AgentSession | null;
 }
 
 const RUNNING_STATUSES = new Set(['analyzing', 'running', 'pending']);
@@ -182,16 +181,6 @@ function WaterfallTab({ preselectedIncidentId }: { preselectedIncidentId?: strin
           if (!prev) return prev;
           if (prev.llm_calls.some(l => l.id === llm.id)) return prev;
           return { ...prev, llm_calls: [...prev.llm_calls, llm] };
-        });
-      } catch { /* */ }
-    });
-
-    es.addEventListener('session', (e: MessageEvent) => {
-      try {
-        const session = JSON.parse(e.data);
-        setTimeline(prev => {
-          if (!prev) return prev;
-          return { ...prev, agent_session: { ...prev.agent_session, ...session } as AgentSession };
         });
       } catch { /* */ }
     });
@@ -333,7 +322,7 @@ function WaterfallTab({ preselectedIncidentId }: { preselectedIncidentId?: strin
    Timeline View — clean separation: steps, LLM calls, thoughts
    ================================================================ */
 function TimelineView({ data, streaming }: { data: TimelineData; streaming?: boolean }) {
-  const { summary, steps, llm_calls, thoughts, agent_session } = data;
+  const { summary, steps, llm_calls, thoughts } = data;
   const endRef = useRef<HTMLDivElement>(null);
   const [showThoughts, setShowThoughts] = useState(false);
 
@@ -486,8 +475,6 @@ function TimelineView({ data, streaming }: { data: TimelineData; streaming?: boo
         </Card>
       )}
 
-      {/* Agent session telemetry — collapsible */}
-      {agent_session && <AgentSessionCollapsible session={agent_session as AgentSession} />}
     </div>
   );
 }
@@ -555,29 +542,8 @@ function StepRow({ step, maxDuration }: { step: Record<string, unknown>; maxDura
   );
 }
 
-function AgentSessionCollapsible({ session }: { session: AgentSession }) {
-  const [open, setOpen] = useState(false);
-  return (
-    <Card>
-      <CardHeader className="pb-0">
-        <button onClick={() => setOpen(!open)} className="flex items-center gap-2 text-sm hover:text-foreground text-muted-foreground transition-colors">
-          <Cpu size={16} />
-          <span className="font-medium">Agent Session Telemetry</span>
-          {session.model_name && <span className="text-xs font-mono">{session.model_name}</span>}
-          <ChevronRight size={14} className={`transition-transform ${open ? 'rotate-90' : ''}`} />
-        </button>
-      </CardHeader>
-      {open && (
-        <CardContent className="pt-3">
-          <AgentSessionDetail session={session} />
-        </CardContent>
-      )}
-    </Card>
-  );
-}
-
 /* ================================================================
-   Shared components
+   Page
    ================================================================ */
 function StatCard({ label, value, icon, loading }: { label: string; value: unknown; icon: React.ReactNode; loading?: boolean }) {
   return (
@@ -631,227 +597,6 @@ function formatDuration(seconds: number): string {
 }
 
 /* ================================================================
-   Agent Sessions Tab — full telemetry for every agent run
-   ================================================================ */
-interface AgentSession {
-  id: number;
-  session_id: string;
-  incident_id: string | null;
-  model_name: string | null;
-  detected_provider: string | null;
-  provider_mode: string | null;
-  use_direct_sdk: boolean | null;
-  temperature: number | null;
-  mode: string | null;
-  is_background: boolean;
-  recursion_limit: number | null;
-  context_messages_loaded: number | null;
-  context_load_ms: number | null;
-  rca_compression_applied: boolean;
-  rca_compression_before: number | null;
-  rca_compression_after: number | null;
-  preflight_compression_applied: boolean;
-  middleware_trim_applied: boolean;
-  middleware_tokens_before: number | null;
-  middleware_tokens_after: number | null;
-  time_to_first_token_ms: number | null;
-  total_events: number | null;
-  total_tokens_streamed: number | null;
-  model_turns: number | null;
-  tool_calls_count: number | null;
-  tool_errors_count: number | null;
-  retry_attempts: number | null;
-  last_retry_error: string | null;
-  total_input_tokens: number | null;
-  total_output_tokens: number | null;
-  total_llm_calls: number | null;
-  total_cost: number | null;
-  status: string;
-  error_message: string | null;
-  placeholder_warning: boolean;
-  duration_ms: number | null;
-  started_at: string | null;
-  completed_at: string | null;
-  alert_service: string | null;
-  alert_title: string | null;
-  severity: string | null;
-}
-
-function AgentSessionsTab() {
-  const [sessions, setSessions] = useState<AgentSession[]>([]);
-  const [summary, setSummary] = useState<Record<string, unknown> | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [expanded, setExpanded] = useState<number | null>(null);
-
-  const fetchSessions = useCallback(async () => {
-    setLoading(true);
-    try {
-      const res = await fetch('/api/monitor/agent-sessions');
-      if (res.ok) {
-        const data = await res.json();
-        setSessions(data.sessions ?? []);
-        setSummary(data.summary ?? null);
-      }
-    } catch { /* */ } finally { setLoading(false); }
-  }, []);
-
-  useEffect(() => { fetchSessions(); }, [fetchSessions]);
-
-  return (
-    <div className="space-y-6">
-      {/* Aggregate stats */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-        <StatCard label="Total Sessions" value={summary?.total_sessions} icon={<Layers size={16} />} loading={loading} />
-        <StatCard label="Avg TTFT" value={summary?.avg_ttft_ms != null ? `${Number(summary.avg_ttft_ms).toLocaleString()}ms` : '—'} icon={<Timer size={16} className="text-blue-500" />} loading={loading} />
-        <StatCard label="Avg Duration" value={summary?.avg_duration_ms != null ? formatDuration(Number(summary.avg_duration_ms) / 1000) : '—'} icon={<Clock size={16} className="text-muted-foreground" />} loading={loading} />
-        <StatCard label="Avg Cost" value={summary?.avg_cost != null ? `$${Number(summary.avg_cost).toFixed(3)}` : '—'} icon={<DollarSign size={16} className="text-green-500" />} loading={loading} />
-        <StatCard label="Total Retries" value={summary?.total_retries ?? 0} icon={<RotateCcw size={16} className="text-orange-500" />} loading={loading} />
-      </div>
-
-      <div className="grid grid-cols-3 md:grid-cols-6 gap-3">
-        <StatCard label="Completed" value={summary?.completed} icon={<CheckCircle2 size={16} className="text-green-500" />} loading={loading} />
-        <StatCard label="Errors" value={summary?.errored} icon={<AlertTriangle size={16} className="text-destructive" />} loading={loading} />
-        <StatCard label="Avg Model Turns" value={summary?.avg_model_turns} icon={<Cpu size={16} className="text-purple-500" />} loading={loading} />
-        <StatCard label="Avg Tool Calls" value={summary?.avg_tool_calls} icon={<Wrench size={16} className="text-blue-500" />} loading={loading} />
-        <StatCard label="Context Compressions" value={Number(summary?.rca_compressions ?? 0) + Number(summary?.preflight_compressions ?? 0)} icon={<Gauge size={16} className="text-amber-500" />} loading={loading} />
-        <StatCard label="Middleware Trims" value={summary?.middleware_trims} icon={<AlertTriangle size={16} className="text-orange-500" />} loading={loading} />
-      </div>
-
-      {/* Sessions list */}
-      <Card>
-        <CardHeader className="pb-3 flex flex-row items-center justify-between">
-          <CardTitle className="text-base">Agent Sessions</CardTitle>
-          <Button variant="ghost" size="sm" onClick={fetchSessions}><RefreshCw size={14} className="mr-1.5" /> Refresh</Button>
-        </CardHeader>
-        <CardContent className="p-0">
-          {loading ? (
-            <div className="p-6 space-y-3">{[...Array(5)].map((_, i) => <Skeleton key={i} className="h-10 w-full" />)}</div>
-          ) : sessions.length === 0 ? (
-            <div className="p-8 text-center text-muted-foreground text-sm">No agent sessions recorded yet. Sessions will appear after the next agent run.</div>
-          ) : (
-            <div className="divide-y">
-              {sessions.map((s) => (
-                <div key={s.id}>
-                  <button
-                    onClick={() => setExpanded(expanded === s.id ? null : s.id)}
-                    className="w-full text-left px-4 py-3 hover:bg-muted/30 transition-colors"
-                  >
-                    <div className="flex items-center gap-3">
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className="font-medium text-sm">{s.alert_service ?? s.session_id.slice(0, 8)}</span>
-                          <StatusBadge status={s.status} />
-                          {s.is_background && <Badge variant="outline" className="text-[10px]">background</Badge>}
-                          {s.model_name && <span className="text-xs font-mono text-muted-foreground">{s.model_name}</span>}
-                        </div>
-                        <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground flex-wrap">
-                          {s.duration_ms != null && <span><Clock size={10} className="inline mr-0.5" />{formatDuration(s.duration_ms / 1000)}</span>}
-                          {s.time_to_first_token_ms != null && <span>TTFT: {s.time_to_first_token_ms.toLocaleString()}ms</span>}
-                          {s.model_turns != null && <span>{s.model_turns} turns</span>}
-                          {s.tool_calls_count != null && <span>{s.tool_calls_count} tools</span>}
-                          {s.total_cost != null && <span>${Number(s.total_cost).toFixed(3)}</span>}
-                          {(s.retry_attempts ?? 0) > 0 && <span className="text-orange-500">{s.retry_attempts} retries</span>}
-                          {(s.tool_errors_count ?? 0) > 0 && <span className="text-destructive">{s.tool_errors_count} errors</span>}
-                        </div>
-                      </div>
-                      <span className="text-xs text-muted-foreground shrink-0">
-                        {s.started_at ? new Date(s.started_at).toLocaleString() : ''}
-                      </span>
-                      <ChevronRight size={14} className={`text-muted-foreground transition-transform ${expanded === s.id ? 'rotate-90' : ''}`} />
-                    </div>
-                  </button>
-
-                  {expanded === s.id && (
-                    <div className="px-4 pb-4">
-                      <AgentSessionDetail session={s} />
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
-        </CardContent>
-      </Card>
-    </div>
-  );
-}
-
-function AgentSessionDetail({ session: s }: { session: AgentSession }) {
-  const hasCompression = s.rca_compression_applied || s.preflight_compression_applied || s.middleware_trim_applied || (s.context_messages_loaded != null && s.context_messages_loaded > 0);
-
-  return (
-    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 text-xs">
-      <Card className="bg-muted/30">
-        <CardHeader className="pb-2 pt-3 px-3"><CardTitle className="text-xs flex items-center gap-1.5"><Cpu size={12} /> Model & Routing</CardTitle></CardHeader>
-        <CardContent className="px-3 pb-3 space-y-1">
-          <DetailRow label="Model" value={s.model_name} />
-          <DetailRow label="Provider" value={s.detected_provider} />
-          <DetailRow label="Mode" value={s.provider_mode} />
-          <DetailRow label="Temperature" value={s.temperature != null ? String(s.temperature) : null} />
-          <DetailRow label="Recursion Limit" value={s.recursion_limit != null ? String(s.recursion_limit) : null} />
-        </CardContent>
-      </Card>
-
-      <Card className="bg-muted/30">
-        <CardHeader className="pb-2 pt-3 px-3"><CardTitle className="text-xs flex items-center gap-1.5"><Zap size={12} /> Execution</CardTitle></CardHeader>
-        <CardContent className="px-3 pb-3 space-y-1">
-          <DetailRow label="Duration" value={s.duration_ms != null ? formatDuration(s.duration_ms / 1000) : null} />
-          <DetailRow label="TTFT" value={s.time_to_first_token_ms != null ? `${s.time_to_first_token_ms.toLocaleString()}ms` : null} />
-          <DetailRow label="Model Turns" value={s.model_turns != null ? String(s.model_turns) : null} />
-          <DetailRow label="Tool Calls" value={s.tool_calls_count != null ? String(s.tool_calls_count) : null} />
-          <DetailRow label="Tool Errors" value={s.tool_errors_count != null ? String(s.tool_errors_count) : null} highlight={!!s.tool_errors_count} />
-          <DetailRow label="Retries" value={s.retry_attempts != null ? String(s.retry_attempts) : null} highlight={!!s.retry_attempts} />
-          {s.last_retry_error && <DetailRow label="Last Retry Error" value={s.last_retry_error} highlight />}
-        </CardContent>
-      </Card>
-
-      <Card className="bg-muted/30">
-        <CardHeader className="pb-2 pt-3 px-3"><CardTitle className="text-xs flex items-center gap-1.5"><Sparkles size={12} /> LLM Usage</CardTitle></CardHeader>
-        <CardContent className="px-3 pb-3 space-y-1">
-          <DetailRow label="LLM Calls" value={s.total_llm_calls != null ? String(s.total_llm_calls) : null} />
-          <DetailRow label="Input Tokens" value={s.total_input_tokens != null ? s.total_input_tokens.toLocaleString() : null} />
-          <DetailRow label="Output Tokens" value={s.total_output_tokens != null ? s.total_output_tokens.toLocaleString() : null} />
-          <DetailRow label="Total Cost" value={s.total_cost != null ? `$${Number(s.total_cost).toFixed(4)}` : null} />
-        </CardContent>
-      </Card>
-
-      {hasCompression && (
-        <Card className="bg-muted/30">
-          <CardHeader className="pb-2 pt-3 px-3"><CardTitle className="text-xs flex items-center gap-1.5"><Gauge size={12} /> Context & Compression</CardTitle></CardHeader>
-          <CardContent className="px-3 pb-3 space-y-1">
-            {(s.context_messages_loaded ?? 0) > 0 && <DetailRow label="Messages Loaded" value={String(s.context_messages_loaded)} />}
-            {(s.context_load_ms ?? 0) > 0 && <DetailRow label="Context Load" value={`${s.context_load_ms}ms`} />}
-            {s.rca_compression_applied && <DetailRow label="RCA Compression" value={`${s.rca_compression_before} → ${s.rca_compression_after} msgs`} />}
-            {s.preflight_compression_applied && <DetailRow label="Preflight Compress" value="Yes" />}
-            {s.middleware_trim_applied && <DetailRow label="Middleware Trim" value={`${s.middleware_tokens_before} → ${s.middleware_tokens_after} tokens`} />}
-          </CardContent>
-        </Card>
-      )}
-
-      <Card className={`bg-muted/30 ${hasCompression ? '' : 'md:col-span-2'}`}>
-        <CardHeader className="pb-2 pt-3 px-3"><CardTitle className="text-xs flex items-center gap-1.5"><CheckCircle2 size={12} /> Outcome</CardTitle></CardHeader>
-        <CardContent className="px-3 pb-3 space-y-1">
-          <DetailRow label="Status" value={s.status} />
-          {s.error_message && <DetailRow label="Error" value={s.error_message} highlight />}
-          {s.placeholder_warning && <DetailRow label="Placeholder Warning" value="AI output contained placeholder tokens" highlight />}
-          <DetailRow label="Started" value={s.started_at ? new Date(s.started_at).toLocaleString() : null} />
-          <DetailRow label="Completed" value={s.completed_at ? new Date(s.completed_at).toLocaleString() : null} />
-        </CardContent>
-      </Card>
-    </div>
-  );
-}
-
-function DetailRow({ label, value, highlight }: { label: string; value: string | null | undefined; highlight?: boolean }) {
-  return (
-    <div className="flex justify-between gap-2">
-      <span className="text-muted-foreground shrink-0">{label}</span>
-      <span className={`text-right truncate font-mono ${highlight ? 'text-destructive font-medium' : ''}`}>{value ?? '—'}</span>
-    </div>
-  );
-}
-
-/* ================================================================
    Page
    ================================================================ */
 export default function MonitorPage() {
@@ -874,11 +619,9 @@ export default function MonitorPage() {
         <TabsList>
           <TabsTrigger value="fleet" className="gap-1.5"><Server size={14} /> Fleet</TabsTrigger>
           <TabsTrigger value="waterfall" className="gap-1.5"><Activity size={14} /> Execution Waterfall</TabsTrigger>
-          <TabsTrigger value="sessions" className="gap-1.5"><Cpu size={14} /> Agent Sessions</TabsTrigger>
         </TabsList>
         <TabsContent value="fleet"><FleetTab onViewTimeline={openTimeline} /></TabsContent>
         <TabsContent value="waterfall"><WaterfallTab preselectedIncidentId={timelineIncidentId} /></TabsContent>
-        <TabsContent value="sessions"><AgentSessionsTab /></TabsContent>
       </Tabs>
     </div>
   );

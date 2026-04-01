@@ -285,7 +285,6 @@ class Workflow:
                 existing_call["signature"] = self._build_tool_signature(tool_name, tool_input)
         else:
             signature = self._build_tool_signature(tool_name, tool_input) if meaningful_input else self._build_tool_signature(tool_name, "__placeholder__")
-            step_id = tool_capture._record_step_start(tool_name, tool_input, tool_call_id=tool_call_id) if hasattr(tool_capture, '_record_step_start') else None
             tool_capture.current_tool_calls[tool_call_id] = {
                 "tool_name": tool_name,
                 "input": tool_input,
@@ -293,7 +292,7 @@ class Workflow:
                 "call_id": tool_call_id,
                 "run_id": run_id,
                 "signature": signature,
-                "step_id": step_id,
+                "step_id": tool_capture._record_step_start(tool_name, tool_input, tool_call_id=tool_call_id),
             }
 
     def _merge_tool_call_args(self, existing_args, new_args):
@@ -846,28 +845,6 @@ class Workflow:
         from chat.backend.agent.utils.llm_context_manager import LLMContextManager
         from chat.backend.agent.utils.chat_context_manager import ChatContextManager
         from chat.backend.agent.utils.tool_context_capture import ToolContextCapture
-        from chat.backend.agent.utils.agent_session_telemetry import AgentSessionTelemetry
-
-        # Initialize session telemetry
-        telemetry = None
-        if input_state.session_id and input_state.user_id:
-            org_id = getattr(input_state, 'org_id', None)
-            if not org_id:
-                try:
-                    from utils.auth.stateless_auth import get_org_id_for_user
-                    org_id = get_org_id_for_user(input_state.user_id)
-                except Exception:
-                    pass
-            telemetry = AgentSessionTelemetry(
-                session_id=input_state.session_id,
-                user_id=input_state.user_id,
-                incident_id=getattr(input_state, 'incident_id', None),
-                org_id=org_id,
-            )
-            telemetry.mode = getattr(input_state, 'mode', None)
-            telemetry.is_background = getattr(input_state, 'is_background', False)
-            telemetry.record_start()
-        self._telemetry = telemetry
 
         # Initialize tool context capture for this session
         tool_capture = None
@@ -878,10 +855,6 @@ class Workflow:
                 org_id=getattr(input_state, 'org_id', None),
             )
             self.agent.set_tool_capture(tool_capture)
-
-            # Make telemetry accessible to the agent
-            if telemetry:
-                self.agent._session_telemetry = telemetry
             
             # Set workflow context for tools to access during confirmation
             from chat.backend.agent.tools.cloud_tools import _set_ctx
@@ -897,8 +870,6 @@ class Workflow:
             )
             _ctx_ms = (_time.perf_counter() - _ctx_start) * 1000.0
             logger.info(f"Context load took {_ctx_ms:.1f} ms for session {input_state.session_id}")
-            if telemetry:
-                telemetry.set_context_stats(len(existing_context) if existing_context else 0, int(_ctx_ms))
             
             if existing_context:
                 rca_info = self._get_rca_context_for_session(
@@ -910,8 +881,6 @@ class Workflow:
                     combined_messages = []
                     combined_messages.extend(compressed)
                     combined_messages.extend(input_state.messages)
-                    if telemetry:
-                        telemetry.set_rca_compression(len(existing_context), len(compressed))
                     input_state.messages = combined_messages
                     logger.info(
                         f"[RCA-Context] Using compressed context for session {input_state.session_id}: "
@@ -1009,8 +978,6 @@ class Workflow:
                 if event_type == "on_chat_model_start":
                     _model_turn_tokens = 0
                     _model_turn_start = _time.perf_counter()
-                    if telemetry:
-                        telemetry.record_model_turn()
 
                 # Handle token streaming from LLM
                 elif event_type == "on_chat_model_stream":
@@ -1032,8 +999,6 @@ class Workflow:
                         # Only yield if we have actual text content
                         if content:
                             _model_turn_tokens += 1
-                            if telemetry:
-                                telemetry.record_first_token()
                             yield ("token", content)
                             if _token_count <= 5:
                                 logger.debug(f"[WORKFLOW STREAM] Token #{_token_count}: '{content[:30]}'")
@@ -1066,9 +1031,6 @@ class Workflow:
                         if hasattr(output, 'tool_calls') and output.tool_calls:
                             self._process_tool_calls_from_chunk(output, tool_capture)
                             logger.debug(f"[WORKFLOW STREAM] Detected {len(output.tool_calls)} tool calls")
-                            if telemetry:
-                                for _tc in output.tool_calls:
-                                    telemetry.record_tool_call()
 
                         # Fallback: if streaming didn't yield tokens for this turn,
                         # extract thinking + text from the complete response.
@@ -1146,25 +1108,12 @@ class Workflow:
                             self._last_state.update(stream_data)
                 
             logger.info(f"[WORKFLOW STREAM] Completed: {_event_count} events, {_token_count} tokens streamed")
-            if telemetry:
-                telemetry.total_events = _event_count
-                telemetry.total_tokens_streamed = _token_count
         except Exception as stream_exception:
             logger.error(f"[WORKFLOW STREAM ERROR] Exception in workflow stream for session {input_state.session_id}: {stream_exception}", exc_info=True)
-            if telemetry:
-                telemetry.status = "error"
-                telemetry.error_message = str(stream_exception)
             raise
         
         # Consolidate message chunks and save final state
         self._consolidate_message_chunks()
-
-        # Capture outcome metadata for telemetry
-        if telemetry and self._last_state:
-            telemetry.placeholder_warning = bool(self._get_state_attr(self._last_state, 'placeholder_warning', False))
-            telemetry.last_tool_failure = self._get_state_attr(self._last_state, 'last_tool_failure', None)
-            if telemetry.status == "running":
-                telemetry.status = "completed"
         
         # Save final state (only if we have more than just the initial user message)
         if self._last_state and input_state.session_id and input_state.user_id:
@@ -1202,10 +1151,6 @@ class Workflow:
                 logger.debug(f"[WORKFLOW FINAL] Skipping save - only user message present (already saved immediately)")
             else:
                 logger.debug(f"[WORKFLOW FINAL] Skipping save - no messages to save")
-
-        # Write telemetry at the very end
-        if telemetry:
-            telemetry.record_completion()
 
     def _consolidate_message_chunks(self):
         """Consolidate AIMessageChunk objects into proper AIMessage objects."""

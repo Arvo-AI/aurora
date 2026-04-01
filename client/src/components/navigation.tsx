@@ -189,7 +189,7 @@ export default function Navigation({
             </Link>
           </li>
 
-          {/* Monitor (temp) */}
+          {/* Monitor */}
           <li>
             <Link
               href="/monitor"

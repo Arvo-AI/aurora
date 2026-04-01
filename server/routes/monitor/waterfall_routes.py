@@ -29,7 +29,6 @@ def incident_timeline(user_id, incident_id):
       llm_calls – LLM invocations with token counts and costs
       thoughts  – agent reasoning (separate, not interleaved)
       summary   – aggregate counters
-      agent_session – session-level telemetry
     """
     org_id = get_org_id_from_request()
 
@@ -101,27 +100,6 @@ def incident_timeline(user_id, incident_id):
                 cur.execute(summary_query, (incident_id, org_id))
                 summary_row = cur.fetchone()
 
-                cur.execute("""
-                    SELECT model_name, detected_provider, provider_mode, use_direct_sdk,
-                           temperature, mode, is_background, recursion_limit,
-                           context_messages_loaded, context_load_ms,
-                           rca_compression_applied, rca_compression_before, rca_compression_after,
-                           preflight_compression_applied,
-                           middleware_trim_applied, middleware_tokens_before, middleware_tokens_after,
-                           time_to_first_token_ms, total_events, total_tokens_streamed,
-                           model_turns, tool_calls_count, tool_errors_count,
-                           retry_attempts, last_retry_error,
-                           total_input_tokens, total_output_tokens, total_llm_calls, total_cost,
-                           status, error_message, placeholder_warning, duration_ms,
-                           started_at, completed_at
-                    FROM agent_sessions
-                    WHERE incident_id = %s
-                    ORDER BY started_at DESC LIMIT 1
-                """, (incident_id,))
-                as_row = cur.fetchone()
-                agent_session_cols = [d[0] for d in cur.description] if cur.description else []
-                agent_session = dict(zip(agent_session_cols, as_row)) if as_row else None
-
         def _ser(obj):
             for k, v in obj.items():
                 if hasattr(v, "isoformat"):
@@ -138,8 +116,6 @@ def incident_timeline(user_id, incident_id):
             _ser(l)
         for t in thoughts:
             _ser(t)
-        if agent_session:
-            _ser(agent_session)
 
         summary = {}
         if summary_row:
@@ -155,7 +131,6 @@ def incident_timeline(user_id, incident_id):
             "steps": steps,
             "llm_calls": llm_calls,
             "thoughts": thoughts,
-            "agent_session": agent_session,
         }), 200
     except Exception:
         logger.exception("incident_timeline failed")
@@ -261,127 +236,6 @@ def tool_stats(user_id):
         return jsonify({"error": "Failed to fetch tool stats"}), 500
 
 
-@waterfall_bp.route("/api/monitor/agent-sessions", methods=["GET"])
-@require_permission("incidents", "read")
-def agent_sessions(user_id):
-    """Recent agent session telemetry — model, timing, context, retries, outcome."""
-    org_id = get_org_id_from_request()
-    time_range = request.args.get("time_range", "30d")
-    interval_map = {"1d": "1 day", "7d": "7 days", "30d": "30 days", "90d": "90 days"}
-    pg_interval = interval_map.get(time_range, "30 days")
-
-    query = """
-        SELECT
-            a.id,
-            a.session_id,
-            a.incident_id,
-            a.model_name,
-            a.detected_provider,
-            a.provider_mode,
-            a.use_direct_sdk,
-            a.temperature,
-            a.mode,
-            a.is_background,
-            a.recursion_limit,
-            a.context_messages_loaded,
-            a.context_load_ms,
-            a.rca_compression_applied,
-            a.rca_compression_before,
-            a.rca_compression_after,
-            a.preflight_compression_applied,
-            a.middleware_trim_applied,
-            a.middleware_tokens_before,
-            a.middleware_tokens_after,
-            a.time_to_first_token_ms,
-            a.total_events,
-            a.total_tokens_streamed,
-            a.model_turns,
-            a.tool_calls_count,
-            a.tool_errors_count,
-            a.retry_attempts,
-            a.last_retry_error,
-            a.total_input_tokens,
-            a.total_output_tokens,
-            a.total_llm_calls,
-            a.total_cost,
-            a.status,
-            a.error_message,
-            a.placeholder_warning,
-            a.duration_ms,
-            a.started_at,
-            a.completed_at,
-            i.alert_service,
-            i.alert_title,
-            i.severity
-        FROM agent_sessions a
-        LEFT JOIN incidents i ON i.id = a.incident_id
-        WHERE a.org_id = %s
-          AND a.started_at >= NOW() - %s::interval
-        ORDER BY a.started_at DESC
-        LIMIT 50
-    """
-
-    summary_query = """
-        SELECT
-            COUNT(*) AS total_sessions,
-            COUNT(*) FILTER (WHERE status = 'completed') AS completed,
-            COUNT(*) FILTER (WHERE status = 'error') AS errored,
-            ROUND(AVG(duration_ms) FILTER (WHERE duration_ms IS NOT NULL)) AS avg_duration_ms,
-            ROUND(AVG(time_to_first_token_ms) FILTER (WHERE time_to_first_token_ms IS NOT NULL)) AS avg_ttft_ms,
-            ROUND(AVG(total_tokens_streamed) FILTER (WHERE total_tokens_streamed IS NOT NULL)) AS avg_tokens_streamed,
-            ROUND(AVG(model_turns) FILTER (WHERE model_turns IS NOT NULL), 1) AS avg_model_turns,
-            ROUND(AVG(tool_calls_count) FILTER (WHERE tool_calls_count IS NOT NULL), 1) AS avg_tool_calls,
-            ROUND(AVG(total_cost::numeric) FILTER (WHERE total_cost IS NOT NULL), 4) AS avg_cost,
-            SUM(retry_attempts) AS total_retries,
-            COUNT(*) FILTER (WHERE rca_compression_applied) AS rca_compressions,
-            COUNT(*) FILTER (WHERE preflight_compression_applied) AS preflight_compressions,
-            COUNT(*) FILTER (WHERE middleware_trim_applied) AS middleware_trims
-        FROM agent_sessions
-        WHERE org_id = %s
-          AND started_at >= NOW() - %s::interval
-    """
-
-    try:
-        with db_pool.get_admin_connection() as conn:
-            with conn.cursor() as cur:
-                set_rls_context(cur, conn, user_id, log_prefix="[AGENT_SESSIONS]")
-
-                cur.execute(query, (org_id, pg_interval))
-                cols = [d[0] for d in cur.description]
-                sessions = [dict(zip(cols, row)) for row in cur.fetchall()]
-
-                cur.execute(summary_query, (org_id, pg_interval))
-                summary_row = cur.fetchone()
-
-        def _serialize(obj):
-            for k, v in obj.items():
-                if hasattr(v, "isoformat"):
-                    obj[k] = v.isoformat()
-                elif isinstance(v, type(None)):
-                    pass
-                elif hasattr(v, "__float__") and not isinstance(v, (int, float)):
-                    obj[k] = float(v)
-
-        for s in sessions:
-            _serialize(s)
-
-        summary = {}
-        if summary_row:
-            summary_cols = [
-                "total_sessions", "completed", "errored", "avg_duration_ms",
-                "avg_ttft_ms", "avg_tokens_streamed", "avg_model_turns",
-                "avg_tool_calls", "avg_cost", "total_retries",
-                "rca_compressions", "preflight_compressions", "middleware_trims",
-            ]
-            summary = dict(zip(summary_cols, summary_row))
-            _serialize(summary)
-
-        return jsonify({"sessions": sessions, "summary": summary}), 200
-    except Exception:
-        logger.exception("agent_sessions failed")
-        return jsonify({"error": "Failed to fetch agent sessions"}), 500
-
-
 # ---------- SSE live stream for an incident's execution timeline ----------
 
 def _serialize_row(row_dict):
@@ -399,14 +253,13 @@ def _serialize_row(row_dict):
 @waterfall_bp.route("/api/monitor/incidents/<incident_id>/stream", methods=["GET"])
 @require_permission("incidents", "read")
 def incident_stream(user_id, incident_id):
-    """SSE stream that pushes new execution_steps, thoughts, llm_calls, and agent_session
-    changes as they happen for a running incident.
+    """SSE stream that pushes new execution_steps, thoughts, and llm_calls
+    as they happen for a running incident.
 
     The client receives events:
       event: step       – new or updated execution_step row
       event: thought    – new incident_thought
       event: llm_call   – new llm_usage_tracking row
-      event: session    – agent_session snapshot (model info, status, counters)
       event: done       – incident has finished (status is terminal)
     """
     org_id = get_org_id_from_request()
@@ -419,7 +272,6 @@ def incident_stream(user_id, incident_id):
         seen_step_ids = set()
         seen_thought_ids = set()
         seen_llm_ids = set()
-        last_session_hash = None
         elapsed = 0
 
         while elapsed < MAX_IDLE:
@@ -482,30 +334,7 @@ def incident_stream(user_id, incident_id):
                                 _serialize_row(d)
                                 yield f"event: llm_call\ndata: {json.dumps(d)}\n\n"
 
-                        # 4. Agent session snapshot
-                        cur.execute("""
-                            SELECT model_name, detected_provider, provider_mode,
-                                   status, model_turns, tool_calls_count, tool_errors_count,
-                                   retry_attempts, total_input_tokens, total_output_tokens,
-                                   total_llm_calls, total_cost,
-                                   time_to_first_token_ms, duration_ms,
-                                   started_at, completed_at,
-                                   rca_compression_applied, preflight_compression_applied,
-                                   middleware_trim_applied, error_message
-                            FROM agent_sessions
-                            WHERE incident_id = %s
-                            ORDER BY started_at DESC LIMIT 1
-                        """, (incident_id,))
-                        as_row = cur.fetchone()
-                        if as_row:
-                            as_cols = [d[0] for d in cur.description]
-                            session_dict = _serialize_row(dict(zip(as_cols, as_row)))
-                            session_hash = json.dumps(session_dict, sort_keys=True)
-                            if session_hash != last_session_hash:
-                                last_session_hash = session_hash
-                                yield f"event: session\ndata: {json.dumps(session_dict)}\n\n"
-
-                        # 5. Check incident terminal status
+                        # 4. Check incident terminal status
                         cur.execute("""
                             SELECT aurora_status FROM incidents WHERE id = %s
                         """, (incident_id,))
