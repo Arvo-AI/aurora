@@ -331,20 +331,6 @@ pre[class*="language-"] > code[class*="language-"] {
   animation: pulse-once 2s ease-out;
 }
 
-/* Animated number digit roll */
-@keyframes digitRollIn {
-  0% {
-    transform: translateY(-100%);
-    opacity: 0;
-  }
-  40% {
-    opacity: 1;
-  }
-  100% {
-    transform: translateY(0);
-  }
-}
-
 /* Smooth collapsible panel */
 .collapsible-panel {
   display: grid;
@@ -356,6 +342,7 @@ pre[class*="language-"] > code[class*="language-"] {
 }
 .collapsible-panel > div {
   overflow: hidden;
+  min-height: 0;
 }
 
 /* Token rate sparkline bar */

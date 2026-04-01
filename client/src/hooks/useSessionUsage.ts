@@ -9,6 +9,7 @@ export interface RequestUsage {
   total_tokens: number;
   estimated_cost: number;
   response_time_ms: number;
+  timestamp: string;
   output_token_details?: Record<string, number>;
 }
 
@@ -46,14 +47,51 @@ export function useSessionUsage(sessionId: string | null): SessionUsageState {
   const [sessionUsage, setSessionUsage] = useState<SessionUsage>(EMPTY_SESSION);
   const [requestHistory, setRequestHistory] = useState<RequestUsage[]>([]);
   const prevSessionRef = useRef<string | null>(null);
+  const liveCountRef = useRef(0);
 
   useEffect(() => {
-    if (sessionId !== prevSessionRef.current) {
-      prevSessionRef.current = sessionId;
-      setCurrentStreaming(null);
-      setSessionUsage(EMPTY_SESSION);
-      setRequestHistory([]);
-    }
+    if (sessionId === prevSessionRef.current) return;
+    prevSessionRef.current = sessionId;
+    setCurrentStreaming(null);
+    setSessionUsage(EMPTY_SESSION);
+    setRequestHistory([]);
+    liveCountRef.current = 0;
+
+    if (!sessionId) return;
+
+    let cancelled = false;
+    fetch(`/api/llm-usage/session/${sessionId}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (cancelled || !data) return;
+        const reqs: RequestUsage[] = (data.requests || []).map(
+          (r: Record<string, unknown>) => ({
+            model: (r.model as string) || "",
+            input_tokens: (r.input_tokens as number) || 0,
+            output_tokens: (r.output_tokens as number) || 0,
+            total_tokens: (r.total_tokens as number) || 0,
+            estimated_cost: (r.estimated_cost as number) || 0,
+            response_time_ms: (r.response_time_ms as number) || 0,
+            timestamp: (r.timestamp as string) || "",
+          })
+        );
+        const totals = data.totals as SessionUsage | undefined;
+        setRequestHistory((prev) => {
+          const liveSlice = prev.slice(prev.length - liveCountRef.current);
+          return [...reqs, ...liveSlice];
+        });
+        if (totals) {
+          setSessionUsage((prev) => ({
+            total_input_tokens: (totals.total_input_tokens || 0) + prev.total_input_tokens,
+            total_output_tokens: (totals.total_output_tokens || 0) + prev.total_output_tokens,
+            total_cost: (totals.total_cost || 0) + prev.total_cost,
+            request_count: (totals.request_count || 0) + prev.request_count,
+          }));
+        }
+      })
+      .catch(() => {});
+
+    return () => { cancelled = true; };
   }, [sessionId]);
 
   const handleUsageUpdate = useCallback((data: Record<string, unknown>) => {
@@ -74,8 +112,10 @@ export function useSessionUsage(sessionId: string | null): SessionUsageState {
       total_tokens: (data.total_tokens as number) || 0,
       estimated_cost: (data.estimated_cost as number) || 0,
       response_time_ms: (data.response_time_ms as number) || 0,
+      timestamp: (data.timestamp as string) || new Date().toISOString(),
       output_token_details: data.output_token_details as Record<string, number> | undefined,
     };
+    liveCountRef.current += 1;
     setRequestHistory(prev => [...prev, request]);
 
     const totals = data.session_totals as SessionUsage | undefined;
@@ -93,6 +133,7 @@ export function useSessionUsage(sessionId: string | null): SessionUsageState {
     setCurrentStreaming(null);
     setSessionUsage(EMPTY_SESSION);
     setRequestHistory([]);
+    liveCountRef.current = 0;
   }, []);
 
   return {
