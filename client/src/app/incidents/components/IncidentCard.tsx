@@ -627,7 +627,7 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
           <div>
             <div className="border-t border-zinc-800 mt-4" />
             <div className="rounded-lg bg-zinc-900/50 border border-zinc-800 p-4 mt-4">
-              <h3 className="text-sm font-medium text-zinc-300 mb-3">RCA Token Usage</h3>
+              <h3 className="text-sm font-medium text-zinc-300 mb-3">Investigation Token Usage</h3>
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
                 <div>
                   <p className="text-[11px] text-zinc-500 uppercase tracking-wider">Input Tokens</p>

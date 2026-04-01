@@ -692,13 +692,19 @@ def get_incident(user_id, incident_id: str):
                 incident["citations"] = citations
                 incident["chatSessions"] = chat_sessions
 
-                # Fetch token usage for the RCA session
+                # Fetch token usage for ALL sessions linked to this incident
                 rca_session_id = incident.get("chatSessionId")
                 usage_totals = None
-                if rca_session_id:
+
+                all_session_ids = [cs["id"] for cs in chat_sessions]
+                if rca_session_id and rca_session_id not in all_session_ids:
+                    all_session_ids.insert(0, rca_session_id)
+
+                if all_session_ids:
                     try:
-                        session_where = "session_id = %s"
-                        session_params = (rca_session_id,)
+                        placeholders = ",".join(["%s"] * len(all_session_ids))
+                        session_where = f"session_id IN ({placeholders})"
+                        session_params = tuple(all_session_ids)
 
                         cursor.execute(
                             f"""
