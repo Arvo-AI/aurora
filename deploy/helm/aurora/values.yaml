@@ -257,9 +257,6 @@ secrets:
     OPENAI_API_KEY: ""           # Get from: https://platform.openai.com/api-keys
     ANTHROPIC_API_KEY: ""        # Get from: https://console.anthropic.com/
     GOOGLE_AI_API_KEY: ""        # Get from: https://makersuite.google.com/app/apikey
-    
-    # --- Optional: Web Search ---
-    TAVILY_API_KEY: ""           # Get from: https://tavily.com/
 
 # ------------------------------------------------------------------------------
 # Resource requests and limits
