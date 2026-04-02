@@ -10,13 +10,43 @@ Deploy Aurora on a Kubernetes cluster with no internet access. All container ima
 
 - Kubernetes 1.25+ with a default StorageClass
 - A private container registry accessible from the cluster (Harbor, Docker Distribution, Zot, etc.) — if you don't have one, see [Setting Up a Private Registry](#setting-up-a-private-registry)
-- `kubectl`, `helm`, `docker`, `yq` on a machine that can reach the registry
+- `kubectl`, `helm`, `yq`, and `skopeo` (or `docker`) on a machine that can reach the registry
 - Network access from cluster nodes to the private registry
-- You can SSH (or equivalent) into a machine that can reach the cluster and the registry
 
-:::tip Already familiar with air-gapped deployments?
-Skip to the [Quick Reference](#quick-reference) for the condensed command sequence.
-:::
+## Guided Deployment (Single Command)
+
+The deploy script walks you through every step — download, push, configure, and deploy:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/arvo-ai/aurora/main/scripts/deploy-k8s.sh | bash -s -- <your-registry>
+```
+
+For example:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/arvo-ai/aurora/main/scripts/deploy-k8s.sh | bash -s -- registry.internal:5000
+```
+
+The script will:
+1. Download the latest image bundle and source archive from GitHub/GCS
+2. Extract the source archive (Helm chart + scripts)
+3. Push all images to your registry (uses `skopeo` if available, falls back to `docker`)
+4. Prompt you for LLM provider, API key, URLs, and generate secrets
+5. Deploy with Helm
+
+To pin a specific version:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/arvo-ai/aurora/main/scripts/deploy-k8s.sh | bash -s -- registry.internal:5000 v1.2.3
+```
+
+After deployment, set up Vault (first deploy only) — see [Vault Setup](./kubernetes#vault-setup).
+
+---
+
+## Step-by-Step (Manual)
+
+If you prefer to run each step yourself, or if you need to customize the process:
 
 ### 1. Download the Bundle
 
@@ -26,7 +56,7 @@ On a machine with internet access, download the latest airtight bundle:
 curl -fsSL https://raw.githubusercontent.com/arvo-ai/aurora/main/scripts/download-bundle.sh | bash
 ```
 
-This auto-resolves the latest release from GitHub and downloads the tarball + checksum from GCS (~11 GB).
+This auto-resolves the latest release from GitHub and downloads the tarball + source archive from GCS (~11 GB).
 
 To specify a version or architecture:
 
@@ -46,9 +76,9 @@ curl -fsSL https://raw.githubusercontent.com/arvo-ai/aurora/main/scripts/downloa
 If you prefer to build from source instead of downloading, see [Creating the Air-Tight Bundle](#creating-the-air-tight-bundle) below.
 :::
 
-### 2. Extract and Load Images
+### 2. Extract and Push Images
 
-The download script also downloads the matching source archive. Extract it and run the push script:
+Extract the source archive and push all images to your registry:
 
 ```bash
 tar xzf aurora-*.tar.gz
@@ -56,11 +86,7 @@ cd aurora-*/
 ./scripts/push-to-registry.sh registry.internal:5000
 ```
 
-The script:
-1. Runs `docker load` to import all images from the tarball
-2. Retags every image with the `registry.internal:5000/` prefix
-3. Pushes each image to the registry
-4. Creates `values.generated.yaml` and sets `image.registry` and `thirdPartyImages.registry` automatically
+The script uses `skopeo` if available (streams directly, no extra disk needed) or falls back to `docker load`/`tag`/`push`.
 
 <details>
 <summary><strong>Manual alternative (without the script)</strong></summary>
@@ -109,13 +135,17 @@ cp deploy/helm/aurora/values.yaml deploy/helm/aurora/values.generated.yaml
 
 ### 3. Configure Helm Values
 
-The script already set the registry values. Edit `values.generated.yaml` to configure everything else:
+Run the interactive configuration script to set up LLM provider, secrets, and URLs:
 
 ```bash
-nano deploy/helm/aurora/values.generated.yaml
+./scripts/configure-helm.sh
 ```
 
-If your registry requires auth, create a pull secret and reference it:
+The script generates secure secrets automatically and prompts for:
+- LLM provider and API key
+- Public URLs (frontend, API, WebSocket)
+
+If your registry requires auth, create a pull secret and add it to `values.generated.yaml`:
 
 ```bash
 kubectl create namespace aurora
@@ -132,27 +162,11 @@ image:
     - name: regcred
 ```
 
-**LLM API Key** — set at least one:
-
-```yaml
-config:
-  OPENROUTER_API_KEY: "sk-or-v1-..."     # Recommended — one key, many models
-  LLM_PROVIDER_MODE: "openrouter"
-```
-
 :::tip No outbound internet? Use Ollama
-If the cluster cannot reach external LLM APIs, run models locally with [Ollama](https://ollama.com/). Transfer the Ollama binary and model weights offline, then configure:
-```yaml
-config:
-  LLM_PROVIDER_MODE: "direct"
-  OLLAMA_BASE_URL: "http://ollama-service:11434"
-  MAIN_MODEL: "ollama/llama3.1"
-  RCA_MODEL: "ollama/llama3.1"
-```
-See [LLM Providers — Ollama](/docs/integrations/llm-providers#ollama-local-models) for full setup details.
+If the cluster cannot reach external LLM APIs, run models locally with [Ollama](https://ollama.com/). The configuration script includes an Ollama option, or see [LLM Providers — Ollama](/docs/integrations/llm-providers#ollama-local-models) for full setup details.
 :::
 
-**URLs, secrets, storage, ingress** — configure these the same as a standard Kubernetes deployment. See the [Kubernetes deployment guide](./kubernetes#step-2-configure-required-values) for full details.
+For all other configuration options (storage, ingress, etc.), see the [Kubernetes deployment guide](./kubernetes#step-2-configure-required-values).
 
 ### 4. Deploy with Helm
 
@@ -182,18 +196,24 @@ kubectl get events -n aurora --sort-by='.lastTimestamp'
 
 ### Deploying Updates
 
-Each new Aurora release requires a fresh bundle. On a machine with internet access:
+Each new Aurora release requires a fresh bundle:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/arvo-ai/aurora/main/scripts/deploy-k8s.sh | bash -s -- registry.internal:5000
+```
+
+Or manually:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/arvo-ai/aurora/main/scripts/download-bundle.sh | bash
-```
-
-Transfer the new tarball, then from the repo root:
-
-```bash
+tar xzf aurora-*.tar.gz && cd aurora-*/
 ./scripts/push-to-registry.sh registry.internal:5000
 helm upgrade aurora-oss ./deploy/helm/aurora -n aurora --reset-values -f deploy/helm/aurora/values.generated.yaml
 ```
+
+---
+
+## Reference
 
 ### Creating the Air-Tight Bundle
 
@@ -214,13 +234,11 @@ PLATFORM=linux/arm64 make package-airtight
 
 If building on Apple Silicon for an x86 cluster, the default `linux/amd64` cross-compiles automatically — no extra flags needed.
 
----
-
-## Setting Up a Private Registry
+### Setting Up a Private Registry
 
 If your air-gapped cluster doesn't have a registry yet, here are two options.
 
-### Option A: Docker Distribution (simplest)
+#### Option A: Docker Distribution (simplest)
 
 Deploy the official Docker registry as a single pod inside the cluster:
 
@@ -247,38 +265,9 @@ kubectl -n registry port-forward pod/registry 5000:5000 &
 # Then push to localhost:5000, which forwards into the cluster
 ```
 
-### Option B: Harbor (enterprise)
+#### Option B: Harbor (enterprise)
 
 [Harbor](https://goharbor.io/) provides vulnerability scanning, RBAC, replication, and a web UI. It can be installed via its own Helm chart — include the Harbor images in your airgap tarball.
-
----
-
-## Quick Reference
-
-Condensed command sequence for experienced operators:
-
-```bash
-# === INTERNET-CONNECTED MACHINE ===
-curl -fsSL https://raw.githubusercontent.com/arvo-ai/aurora/main/scripts/download-bundle.sh | bash
-
-# === DEPLOY MACHINE (with access to cluster + registry) ===
-tar xzf aurora-*.tar.gz && cd aurora-*/
-./scripts/push-to-registry.sh registry.internal:5000
-
-# Edit values.generated.yaml: LLM key, URLs, secrets, storage, ingress
-nano deploy/helm/aurora/values.generated.yaml
-
-helm upgrade --install aurora-oss ./deploy/helm/aurora \
-  -n aurora --create-namespace --reset-values \
-  -f deploy/helm/aurora/values.generated.yaml
-
-# Vault init (first deploy only)
-kubectl -n aurora exec -it statefulset/aurora-oss-vault -- vault operator init -key-shares=1 -key-threshold=1
-kubectl -n aurora exec -it statefulset/aurora-oss-vault -- vault operator unseal <UNSEAL_KEY>
-# Add VAULT_TOKEN to values.generated.yaml, redeploy
-
-kubectl get pods -n aurora
-```
 
 ---
 
