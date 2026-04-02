@@ -526,6 +526,14 @@ def process_pagerduty_event(
                 if not event_db_id:
                     return
 
+                alert_fired_at = None
+                pd_created_at = incident.get("created_at")
+                if pd_created_at:
+                    try:
+                        alert_fired_at = datetime.fromisoformat(pd_created_at.replace("Z", "+00:00"))
+                    except (ValueError, TypeError):
+                        pass
+
                 severity = _extract_severity(incident)
                 aurora_status = _normalize_incident_status(incident_status)
 
@@ -611,20 +619,21 @@ def process_pagerduty_event(
                 # Insert or update incident
                 cursor.execute(
                     """
-                    INSERT INTO incidents 
-                    (user_id, org_id, source_type, source_alert_id, alert_title, alert_service, 
-                     severity, status, started_at, alert_metadata)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    INSERT INTO incidents
+                    (user_id, org_id, source_type, source_alert_id, alert_title, alert_service,
+                     severity, status, started_at, alert_metadata, alert_fired_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (org_id, source_type, source_alert_id, user_id) DO UPDATE
                     SET updated_at = CURRENT_TIMESTAMP,
                         status = EXCLUDED.status,
                         severity = EXCLUDED.severity,
-                        started_at = CASE 
-                            WHEN incidents.status = 'resolved' AND EXCLUDED.status != 'resolved' 
+                        started_at = CASE
+                            WHEN incidents.status = 'resolved' AND EXCLUDED.status != 'resolved'
                             THEN EXCLUDED.started_at
                             ELSE incidents.started_at
                         END,
-                        alert_metadata = EXCLUDED.alert_metadata
+                        alert_metadata = EXCLUDED.alert_metadata,
+                        alert_fired_at = COALESCE(EXCLUDED.alert_fired_at, incidents.alert_fired_at)
                     RETURNING id
                     """,
                     (
@@ -638,6 +647,7 @@ def process_pagerduty_event(
                         aurora_status,
                         received_at,
                         json.dumps(alert_metadata),
+                        alert_fired_at,
                     ),
                 )
                 incident_row = cursor.fetchone()
@@ -674,6 +684,19 @@ def process_pagerduty_event(
                         logger.warning(
                             "[PAGERDUTY] Failed to record primary alert: %s", e
                         )
+
+                # Record lifecycle event for new incidents
+                if incident_db_id and event_type == "incident.triggered":
+                    try:
+                        cursor.execute(
+                            """INSERT INTO incident_lifecycle_events
+                               (incident_id, user_id, org_id, event_type, new_value)
+                               VALUES (%s, %s, %s, %s, %s)""",
+                            (incident_db_id, user_id, org_id, 'created', 'investigating'),
+                        )
+                        conn.commit()
+                    except Exception:
+                        pass
 
                 if incident_db_id:
                     if event_type == "incident.triggered":

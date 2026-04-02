@@ -15,6 +15,7 @@ import {
   GitBranch,
   FileText,
   Coins,
+  Activity,
 } from 'lucide-react';
 import React, { useState, useMemo, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
@@ -34,6 +35,7 @@ import RecentAlertsSection from './RecentAlertsSection';
 import PostmortemPanel from './PostmortemPanel';
 import { Suggestion } from '@/lib/services/incidents';
 import InfrastructureVisualization from '@/components/incidents/InfrastructureVisualization';
+import ExecutionWaterfall from './ExecutionWaterfall';
 import { ReactFlowProvider } from '@xyflow/react';
 
 interface IncidentCardProps {
@@ -105,6 +107,7 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
   const [showVisualization, setShowVisualization] = useState(false);
   const [showPostmortem, setShowPostmortem] = useState(false);
   const [showTokenUsage, setShowTokenUsage] = useState(false);
+  const [showWaterfall, setShowWaterfall] = useState(false);
   const [resolvingIncident, setResolvingIncident] = useState(false);
   const alert = incident.alert;
   const router = useRouter();
@@ -611,6 +614,22 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
               <ChevronRight className={`w-3 h-3 transition-transform ${showTokenUsage ? 'rotate-90' : ''}`} />
             </button>
           )}
+
+          {/* Waterfall button */}
+          {(incident.auroraStatus === 'complete' || incident.auroraStatus === 'running' || incident.auroraStatus === 'summarizing') && (
+            <button
+              onClick={() => setShowWaterfall(!showWaterfall)}
+              className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-md text-xs transition-colors ${
+                showWaterfall
+                  ? 'text-orange-300 bg-orange-500/10'
+                  : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800'
+              }`}
+            >
+              <Activity className="w-3 h-3" />
+              Waterfall
+              <ChevronRight className={`w-3 h-3 transition-transform ${showWaterfall ? 'rotate-90' : ''}`} />
+            </button>
+          )}
         </div>
       )}
 
@@ -690,6 +709,16 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
           </div>
         </div>
       )}
+
+      {/* Waterfall Panel (collapsible) */}
+      <div className="collapsible-panel" data-open={showWaterfall}>
+        <div>
+          <div className="border-t border-zinc-800 mt-4" />
+          <div className="mt-4">
+            <ExecutionWaterfall incidentId={incident.id} />
+          </div>
+        </div>
+      </div>
 
       {/* Postmortem Panel */}
       <PostmortemPanel

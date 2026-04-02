@@ -2,7 +2,7 @@
 
 import Link from "next/link"
 import { usePathname, useRouter } from "next/navigation"
-import { ChevronLeft, Settings, LogOut, User, Zap, Plug } from "lucide-react"
+import { ChevronLeft, Settings, LogOut, User, Zap, Plug, BarChart3 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import ChatHistory from "@/components/ChatHistory"
@@ -171,14 +171,32 @@ export default function Navigation({
               </Link>
             </li>
 
+          {/* Metrics Navigation Item */}
+          <li>
+            <Link
+              href="/metrics"
+              className={cn(
+                "w-full flex items-center justify-between px-2.5 py-1.5 rounded-md hover:bg-primary/10 transition-colors text-sm border border-transparent hover:border-border/50",
+                pathname?.startsWith("/metrics")
+                  ? "bg-card rounded-lg border border-border shadow-sm"
+                  : "text-muted-foreground"
+              )}
+            >
+              <div className="flex items-center">
+                <BarChart3 size={16} />
+                <span className="ml-2">Metrics</span>
+              </div>
+            </Link>
+          </li>
+
           {/* Connectors Navigation Item */}
           <li>
             <Link
               href="/connectors"
               className={cn(
                 "w-full flex items-center justify-between px-2.5 py-1.5 rounded-md hover:bg-primary/10 transition-colors text-sm border border-transparent hover:border-border/50",
-                pathname === "/connectors" 
-                  ? "bg-card rounded-lg border border-border shadow-sm" 
+                pathname === "/connectors"
+                  ? "bg-card rounded-lg border border-border shadow-sm"
                   : "text-muted-foreground"
               )}
             >

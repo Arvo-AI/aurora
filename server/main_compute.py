@@ -385,6 +385,10 @@ app.register_blueprint(incident_feedback_bp)
 from routes.postmortem_routes import postmortem_bp
 app.register_blueprint(postmortem_bp)
 
+# --- SRE Metrics Routes ---
+from routes.metrics_routes import metrics_bp
+app.register_blueprint(metrics_bp)
+
 # --- Visualization Streaming Routes ---
 from routes.visualization_stream import visualization_bp
 app.register_blueprint(visualization_bp)

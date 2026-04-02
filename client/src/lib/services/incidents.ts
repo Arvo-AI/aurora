@@ -202,6 +202,8 @@ export interface Incident {
   postMortem?: PostmortemData;
   startedAt: string;
   analyzedAt?: string;
+  resolvedAt?: string;
+  alertFiredAt?: string;
   createdAt?: string;
   updatedAt?: string;
   chatSessionId?: string; // RCA chat session ID
