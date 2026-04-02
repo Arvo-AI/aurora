@@ -547,8 +547,8 @@ def _check_newrelic(creds: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _check_netdata(creds: Dict[str, Any]) -> Dict[str, Any]:
-    api_token = creds.get("api_token")
-    if not api_token:
+    base_url = creds.get("base_url")
+    if not base_url:
         return {"connected": False}
     return {"connected": True, "spaceName": creds.get("space_name")}
 
