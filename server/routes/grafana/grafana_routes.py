@@ -133,20 +133,23 @@ def alert_webhook(user_id: str):
         skip_rca = True
         external_url = (payload.get("externalURL") or "").strip().rstrip("/")
         if not row_exists:
-            base_url = external_url or "unknown"
-            logger.info("[GRAFANA] Auto-connecting user %s via webhook (externalURL=%s)", user_id, base_url)
-            try:
-                store_tokens_in_db(user_id, {"base_url": base_url}, "grafana")
-            except Exception as exc:
-                logger.exception("[GRAFANA] Failed to auto-connect user %s: %s", user_id, exc)
-                return jsonify({"error": "Failed to create Grafana connection"}), 500
+            if not external_url:
+                logger.warning("[GRAFANA] Webhook from user %s has no externalURL, skipping auto-connect", user_id)
+            else:
+                logger.info("[GRAFANA] Auto-connecting user %s via webhook (externalURL=%s)", user_id, external_url)
+                try:
+                    store_tokens_in_db(user_id, {"base_url": external_url}, "grafana")
+                except Exception as exc:
+                    logger.exception("[GRAFANA] Failed to auto-connect user %s: %s", user_id, exc)
+                    return jsonify({"error": "Failed to create Grafana connection"}), 500
         else:
             reactivated = False
             if external_url:
                 try:
                     store_tokens_in_db(user_id, {"base_url": external_url}, "grafana")
                     reactivated = True
-                except Exception:
+                except Exception as exc:
+                    logger.warning("[GRAFANA] Failed to refresh base_url during reactivation for user %s: %s", user_id, exc)
                     reactivated = _set_grafana_active(user_id, True)
             else:
                 reactivated = _set_grafana_active(user_id, True)

@@ -8,10 +8,7 @@ import { GrafanaWebhookStep } from "@/components/grafana/GrafanaWebhookStep";
 import { getUserFriendlyError, copyToClipboard } from "@/lib/utils";
 import ConnectorAuthGuard from "@/components/connectors/ConnectorAuthGuard";
 
-const CACHE_KEYS = {
-  STATUS: 'grafana_connection_status',
-  WEBHOOK: 'grafana_webhook_url',
-};
+const STATUS_CACHE_KEY = 'grafana_connected';
 
 function setConnectedState(connected: boolean) {
   if (typeof window === "undefined") return;
@@ -35,9 +32,6 @@ export default function GrafanaAuthPage() {
     try {
       const response = await grafanaService.getWebhookUrl();
       setWebhookUrl(response.webhookUrl);
-      if (typeof window !== "undefined") {
-        localStorage.setItem(CACHE_KEYS.WEBHOOK, response.webhookUrl);
-      }
     } catch (err) {
       console.error("Failed to load webhook URL", err);
     }
@@ -48,11 +42,13 @@ export default function GrafanaAuthPage() {
       const result = await grafanaService.getStatus();
       setStatus(result);
       if (typeof window !== "undefined") {
-        localStorage.setItem(CACHE_KEYS.STATUS, JSON.stringify(result));
+        localStorage.setItem(STATUS_CACHE_KEY, result?.connected ? "1" : "0");
       }
       if (result?.connected) {
         setConnectedState(true);
         await loadWebhookUrl();
+      } else {
+        setConnectedState(false);
       }
     } catch (err) {
       console.error("Failed to load Grafana status", err);
@@ -60,16 +56,9 @@ export default function GrafanaAuthPage() {
   }, [loadWebhookUrl]);
 
   useEffect(() => {
-    const cached = typeof window !== "undefined" ? localStorage.getItem(CACHE_KEYS.STATUS) : null;
-    if (cached) {
-      try {
-        const parsed = JSON.parse(cached);
-        setStatus(parsed);
-        if (parsed?.connected) {
-          const cachedWebhook = localStorage.getItem(CACHE_KEYS.WEBHOOK);
-          if (cachedWebhook) setWebhookUrl(cachedWebhook);
-        }
-      } catch {}
+    const cached = typeof window !== "undefined" ? localStorage.getItem(STATUS_CACHE_KEY) : null;
+    if (cached === "1") {
+      setStatus({ connected: true });
     }
     refreshStatus();
   }, [refreshStatus]);
@@ -99,8 +88,7 @@ export default function GrafanaAuthPage() {
         setStatus({ connected: false });
         setWebhookUrl(null);
         if (typeof window !== "undefined") {
-          localStorage.removeItem(CACHE_KEYS.STATUS);
-          localStorage.removeItem(CACHE_KEYS.WEBHOOK);
+          localStorage.removeItem(STATUS_CACHE_KEY);
         }
         setConnectedState(false);
         try {
