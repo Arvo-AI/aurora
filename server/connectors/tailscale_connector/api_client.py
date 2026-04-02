@@ -695,7 +695,7 @@ def create_reusable_auth_key_for_aurora(
     success, data, error = client.create_auth_key(
         tailnet=tailnet,
         reusable=True,  # Can be reused across pod restarts/sessions
-        ephemeral=True,        # Device removed from tailnet automatically on disconnect
+        ephemeral=False,  # Device PERSISTS - only removed manually by user
         preauthorized=True,
         tags=["tag:aurora"],  # Requires ACL: "tagOwners": {"tag:aurora": ["autogroup:admin"]}
         expiry_seconds=expiry_seconds,

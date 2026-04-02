@@ -24,17 +24,23 @@ else:
 
 REDIRECT_URI = f"{base_url}/slack/callback"
 
-# Required OAuth scopes for Aurora Slack integration.
-# Scope changes only take effect on new OAuth installs; existing connections are unaffected.
+# Required OAuth scopes for Aurora Slack integration
 SLACK_SCOPES = [
-    "app_mentions:read",  # Listen for @Aurora mentions in channels
-    "chat:write",         # Send messages as Aurora
-    "channels:join",      # Join public channels (required to join aurora_incidents)
-    "channels:manage",    # Create incident channels, set topics, invite members
-    "channels:read",      # List public channels to locate or create incident channels
-    "channels:history",   # Read public channel history for context
-    "groups:read",        # List private channels (check membership, avoid duplicates)
-    "users:read",         # Resolve user display names and IDs
+    "app_mentions:read",    # Listen for @Aurora mentions in channels
+    "chat:write",           # Send messages
+    "channels:join",        # Join public channels (required to join aurora_incidents)
+    "channels:manage",      # Create channels, invite users, set topics
+    "channels:read",        # List public channels
+    "channels:history",     # Read public channel history
+    "groups:read",          # List private channels
+    "groups:history",       # Read private channel history
+    "groups:write",         # Create private channels (optional)
+    "im:write",             # Send direct messages
+    "im:history",           # Read direct message history
+    "mpim:write",           # Send group direct messages
+    "mpim:history",         # Read group direct message history
+    "users:read",           # Read user info
+    "users:read.email",     # Read user email addresses
 ]
 
 def get_auth_url(state: str) -> str:

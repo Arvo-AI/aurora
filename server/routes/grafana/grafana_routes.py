@@ -1,174 +1,112 @@
 import logging
 import os
-import re
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
-import requests
 from flask import Blueprint, jsonify, request
 
 from routes.grafana.tasks import process_grafana_alert
 from utils.db.connection_pool import db_pool
+from utils.db.db_utils import connect_to_db_as_admin
 from utils.web.cors_utils import create_cors_response
-from utils.logging.secure_logging import mask_credential_value
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import get_org_id_from_request
-from utils.secrets.secret_ref_utils import delete_user_secret
-GRAFANA_TIMEOUT = 15
 
 logger = logging.getLogger(__name__)
 
 grafana_bp = Blueprint("grafana", __name__)
 
 
-class GrafanaAPIError(Exception):
-    """Custom error for Grafana API interactions."""
+def _has_grafana_row(user_id: str) -> Tuple[bool, bool]:
+    """Check if a user_tokens row exists for Grafana (regardless of is_active).
+
+    Returns (row_exists, is_active).
+    """
+    try:
+        conn = connect_to_db_as_admin()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT is_active FROM user_tokens WHERE user_id = %s AND provider = 'grafana' LIMIT 1",
+            (user_id,),
+        )
+        row = cursor.fetchone()
+        cursor.close()
+        conn.close()
+        if row is None:
+            return False, False
+        return True, bool(row[0])
+    except Exception as exc:
+        logger.error("[GRAFANA] Failed to check user_tokens row: %s", exc)
+        return False, False
 
 
-class GrafanaClient:
-    def __init__(self, base_url: str, api_token: str):
-        self.base_url = base_url
-        self.api_token = api_token
-
-    @staticmethod
-    def normalize_base_url(raw_url: str) -> Optional[str]:
-        if not raw_url:
-            return None
-
-        url = raw_url.strip()
-        if not url:
-            return None
-
-        if not re.match(r"^https?://", url, re.IGNORECASE):
-            url = "https://" + url
-
-        url = url.rstrip("/")
-
-        if not re.match(r"^https://[A-Za-z0-9._-]+(:[0-9]{2,5})?(\/.*)?$", url):
-            return None
-
-        return url
-
-    @property
-    def headers(self) -> Dict[str, str]:
-        return {
-            "Authorization": f"Bearer {self.api_token}",
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-        }
-
-    def _request(self, method: str, path: str, **kwargs) -> requests.Response:
-        url = f"{self.base_url}{path}"
-        try:
-            response = requests.request(method, url, headers=self.headers, timeout=GRAFANA_TIMEOUT, **kwargs)
-            response.raise_for_status()
-            return response
-        except requests.HTTPError as exc:
-            logger.error(f"[GRAFANA] {method} {url} failed: {exc}")
-            raise GrafanaAPIError(str(exc)) from exc
-        except requests.RequestException as exc:
-            logger.error(f"[GRAFANA] {method} {url} error: {exc}")
-            raise GrafanaAPIError("Unable to reach Grafana") from exc
-
-    def get_org(self) -> Dict[str, Any]:
-        return self._request("GET", "/api/org").json()
-
-    def get_user(self) -> Optional[Dict[str, Any]]:
-        try:
-            return self._request("GET", "/api/user").json()
-        except GrafanaAPIError:
-            logger.debug("[GRAFANA] Unable to fetch user profile", exc_info=True)
-            return None
+def _set_grafana_active(user_id: str, active: bool) -> bool:
+    """Flip is_active on the existing Grafana user_tokens row."""
+    try:
+        conn = connect_to_db_as_admin()
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE user_tokens SET is_active = %s, timestamp = CURRENT_TIMESTAMP "
+            "WHERE user_id = %s AND provider = 'grafana'",
+            (active, user_id),
+        )
+        updated = cursor.rowcount > 0
+        conn.commit()
+        cursor.close()
+        conn.close()
+        return updated
+    except Exception as exc:
+        logger.error("[GRAFANA] Failed to set is_active=%s: %s", active, exc)
+        return False
 
 
 def _get_stored_grafana_credentials(user_id: str) -> Optional[Dict[str, Any]]:
     try:
         return get_token_data(user_id, "grafana")
     except Exception as exc:
-        logger.error(f"Failed to retrieve Grafana credentials for user {user_id}: {exc}")
+        logger.error("Failed to retrieve Grafana credentials for user %s: %s", user_id, exc)
         return None
 
 
-@grafana_bp.route("/connect", methods=["POST", "OPTIONS"])
+@grafana_bp.route("/reconnect", methods=["POST", "OPTIONS"])
 @require_permission("connectors", "write")
-def connect(user_id):
-    """Store Grafana API token and validate connectivity."""
-    try:
-        data = request.get_json(force=True, silent=True) or {}
-    except Exception:
-        data = {}
+def reconnect(user_id):
+    """Re-enable a previously disconnected Grafana connection."""
+    row_exists, is_active = _has_grafana_row(user_id)
+    if not row_exists:
+        return jsonify({"error": "No previous Grafana connection found"}), 404
+    if is_active:
+        return jsonify({"success": True, "message": "Already connected"}), 200
 
-    api_token = (data.get("apiToken") or data.get("token") or "").strip()
-    raw_base_url = data.get("baseUrl")
-    stack_slug = data.get("stackSlug")
+    if _set_grafana_active(user_id, True):
+        logger.info("[GRAFANA] Reconnected for user %s", user_id)
+        return jsonify({"success": True, "message": "Grafana reconnected"}), 200
 
-    if not api_token or not isinstance(api_token, str):
-        return jsonify({"error": "Grafana API token is required"}), 400
-
-    base_url = GrafanaClient.normalize_base_url(raw_base_url) if raw_base_url else None
-    if not base_url:
-        return jsonify({"error": "A valid Grafana baseUrl is required (https://your-stack.grafana.net)"}), 400
-
-    masked_token = mask_credential_value(api_token)
-    logger.info(f"[GRAFANA] Connecting user {user_id} to {base_url} (token={masked_token})")
-
-    client = GrafanaClient(base_url, api_token)
-
-    try:
-        org_data = client.get_org()
-        user_profile = client.get_user()
-    except GrafanaAPIError as exc:
-        logger.error(f"[GRAFANA] Connection validation failed for user {user_id}: {exc}")
-        return jsonify({"error": "Failed to validate Grafana credentials. Ensure the service account has the Admin role."}), 502
-
-    org_name = org_data.get("name") or "Grafana"
-    org_id = str(org_data.get("id")) if org_data.get("id") is not None else None
-    user_email = user_profile.get("email") if user_profile else None
-
-    token_payload = {
-        "api_token": api_token,
-        "base_url": base_url,
-        "stack_slug": stack_slug,
-        "org_name": org_name,
-        "org_id": org_id,
-        "user_email": user_email,
-    }
-
-    try:
-        store_tokens_in_db(user_id, token_payload, "grafana")
-        logger.info(f"[GRAFANA] Stored credentials for user {user_id} (org={org_name})")
-    except Exception as exc:
-        logger.exception(f"[GRAFANA] Failed to store credentials for user {user_id}: {exc}")
-        return jsonify({"error": "Failed to store Grafana credentials"}), 500
-
-    return jsonify({
-        "success": True,
-        "org": {
-            "name": org_name,
-            "id": org_id,
-        },
-        "baseUrl": base_url,
-        "stackSlug": stack_slug,
-        "userEmail": user_email,
-    })
+    return jsonify({"error": "Failed to reconnect"}), 500
 
 
 @grafana_bp.route("/status", methods=["GET", "OPTIONS"])
 @require_permission("connectors", "read")
 def status(user_id):
+    row_exists, is_active = _has_grafana_row(user_id)
+
+    if not row_exists:
+        return jsonify({"connected": False, "hasConnection": False})
+
+    if not is_active:
+        return jsonify({"connected": False, "hasConnection": True})
+
     creds = _get_stored_grafana_credentials(user_id)
     if not creds:
-        return jsonify({"connected": False})
+        return jsonify({"connected": False, "hasConnection": True})
 
-    api_token = creds.get("api_token")
     base_url = creds.get("base_url")
-
-    if not api_token or not base_url:
-        logger.warning(f"[GRAFANA] Incomplete credentials for user {user_id}")
-        return jsonify({"connected": False})
+    if not base_url:
+        return jsonify({"connected": False, "hasConnection": True})
 
     return jsonify({
         "connected": True,
+        "hasConnection": True,
         "org": {"name": creds.get("org_name"), "id": creds.get("org_id")},
         "user": {"email": creds.get("user_email")} if creds.get("user_email") else None,
         "baseUrl": base_url,
@@ -179,21 +117,20 @@ def status(user_id):
 @grafana_bp.route("/disconnect", methods=["POST", "DELETE", "OPTIONS"])
 @require_permission("connectors", "write")
 def disconnect(user_id):
-    """Disconnect Grafana by removing stored credentials."""
+    """Disconnect Grafana by deactivating the stored connection."""
     try:
-        success, deleted_count = delete_user_secret(user_id, "grafana")
-        if not success:
-            logger.warning("[GRAFANA] Failed to clean up secrets during disconnect")
-            return jsonify({"success": False, "error": "Failed to delete stored credentials"}), 500
+        row_exists, is_active = _has_grafana_row(user_id)
+        if not row_exists:
+            return jsonify({"success": True, "message": "No connection to disconnect"}), 200
 
-        logger.info("[GRAFANA] Disconnected provider (deleted %s token entries)", deleted_count)
+        if not is_active:
+            return jsonify({"success": True, "message": "Already disconnected"}), 200
 
-        return jsonify({
-            "success": True,
-            "message": "Grafana disconnected successfully",
-            "deleted": deleted_count
-        }), 200
+        if _set_grafana_active(user_id, False):
+            logger.info("[GRAFANA] Disconnected for user %s", user_id)
+            return jsonify({"success": True, "message": "Grafana disconnected successfully"}), 200
 
+        return jsonify({"error": "Failed to disconnect Grafana"}), 500
     except Exception as exc:
         logger.exception("[GRAFANA] Failed to disconnect provider")
         return jsonify({"error": "Failed to disconnect Grafana"}), 500
@@ -201,7 +138,11 @@ def disconnect(user_id):
 
 @grafana_bp.route("/alerts/webhook/<user_id>", methods=["POST", "OPTIONS"])
 def alert_webhook(user_id: str):
-    """Receive alert webhook from Grafana for a specific user."""
+    """Receive alert webhook from Grafana for a specific user.
+
+    Auto-creates or re-activates a connection record when needed.
+    Always stores the alert; skips RCA for connection webhooks.
+    """
     if request.method == "OPTIONS":
         return create_cors_response()
 
@@ -209,16 +150,32 @@ def alert_webhook(user_id: str):
         logger.warning("[GRAFANA] Webhook received without user_id")
         return jsonify({"error": "user_id is required"}), 400
 
-    # Check if user has Grafana connected
-    creds = get_token_data(user_id, "grafana")
-    if not creds:
-        logger.warning("[GRAFANA] Webhook received for user %s with no Grafana connection", user_id)
-        return jsonify({"error": "Grafana not connected for this user"}), 404
-
-    # Webhook signature verification removed for OSS version
-
+    row_exists, is_active = _has_grafana_row(user_id)
 
     payload = request.get_json(silent=True) or {}
+    skip_rca = False
+
+    if not row_exists or (row_exists and not is_active):
+        skip_rca = True
+        external_url = (payload.get("externalURL") or "").strip().rstrip("/")
+        if not row_exists:
+            base_url = external_url or "unknown"
+            logger.info("[GRAFANA] Auto-connecting user %s via webhook (externalURL=%s)", user_id, base_url)
+            try:
+                store_tokens_in_db(user_id, {"base_url": base_url}, "grafana")
+            except Exception as exc:
+                logger.exception("[GRAFANA] Failed to auto-connect user %s: %s", user_id, exc)
+                return jsonify({"error": "Failed to create Grafana connection"}), 500
+        else:
+            if external_url:
+                try:
+                    store_tokens_in_db(user_id, {"base_url": external_url}, "grafana")
+                except Exception:
+                    _set_grafana_active(user_id, True)
+            else:
+                _set_grafana_active(user_id, True)
+            logger.info("[GRAFANA] Re-activated connection for user %s via webhook", user_id)
+
     logger.info("[GRAFANA] Received alert webhook for user %s: %s", user_id, payload.get("title", "unknown"))
 
     metadata = {
@@ -226,7 +183,7 @@ def alert_webhook(user_id: str):
         "remote_addr": request.remote_addr,
     }
 
-    process_grafana_alert.delay(payload, metadata, user_id)
+    process_grafana_alert.delay(payload, metadata, user_id, skip_rca=skip_rca)
 
     return jsonify({"received": True})
 
@@ -331,11 +288,11 @@ def get_webhook_url(user_id):
         "webhookUrl": webhook_url,
         "instructions": [
             "1. Go to your Grafana instance",
-            "2. Navigate to Alerting → Contact points",
-            "3. Add a new contact point or edit existing one",
-            "4. Select 'Webhook' as the type",
-            "5. Paste the webhook URL above",
-            "6. (Optional) Add X-Grafana-Signature header for security",
+            "2. Navigate to Alerts & IRM > Notification Configuration > Contact points",
+            "3. Click New contact point",
+            "4. Select 'Webhook' as the integration type",
+            "5. Paste the webhook URL above into the URL field",
+            "6. Click Test to send a test notification",
             "7. Save the contact point and add it to your notification policies"
         ]
     })
