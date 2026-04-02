@@ -216,66 +216,84 @@ class Workflow:
 
     def _process_tool_calls_from_chunk(self, msg_chunk, tool_capture):
         """Process tool calls from a message chunk and capture them."""
-        if not tool_capture or not hasattr(msg_chunk, 'additional_kwargs'):
+        if not tool_capture:
             return
-            
-        tool_calls = msg_chunk.additional_kwargs.get('tool_calls', [])
-        if not tool_calls:
+
+        # LangChain puts tool calls in two places:
+        # 1. msg.tool_calls — normalized LangChain format [{name, args, id, type}]
+        # 2. msg.additional_kwargs['tool_calls'] — raw OpenAI format [{id, function: {name, arguments}}]
+        # Try LangChain-native format first (more reliable), fall back to additional_kwargs
+        lc_tool_calls = getattr(msg_chunk, 'tool_calls', None) or []
+        raw_tool_calls = getattr(msg_chunk, 'additional_kwargs', {}).get('tool_calls', [])
+
+        if lc_tool_calls:
+            run_id = getattr(msg_chunk, 'id', None)
+            if not run_id:
+                logger.warning("WORKFLOW: AIMessage with tool calls has no ID, cannot track properly")
+                return
+
+            logger.debug(f" WORKFLOW: Capturing {len(lc_tool_calls)} tool calls (lc format) for run ID: {run_id}")
+            for i, tc in enumerate(lc_tool_calls):
+                tool_name = tc.get('name', 'unknown') if isinstance(tc, dict) else getattr(tc, 'name', 'unknown')
+                tool_input = tc.get('args', {}) if isinstance(tc, dict) else getattr(tc, 'args', {})
+                tool_call_id = tc.get('id', f"{run_id}_{i}") if isinstance(tc, dict) else getattr(tc, 'id', f"{run_id}_{i}")
+                self._register_tool_call(tool_capture, tool_name, tool_input, tool_call_id, run_id)
+
+        elif raw_tool_calls:
+            run_id = getattr(msg_chunk, 'id', None)
+            if not run_id:
+                logger.warning("WORKFLOW: AIMessage chunk with tool calls has no ID, cannot track properly")
+                return
+
+            logger.debug(f" WORKFLOW: Capturing {len(raw_tool_calls)} tool calls (raw format) for run ID: {run_id}")
+            for i, tool_call in enumerate(raw_tool_calls):
+                tool_name = tool_call.get('function', {}).get('name', 'unknown')
+                tool_args = tool_call.get('function', {}).get('arguments', '{}')
+                tool_call_id = tool_call.get('id', f"{run_id}_{i}")
+                try:
+                    tool_input = json.loads(tool_args) if isinstance(tool_args, str) else tool_args
+                except Exception:
+                    tool_input = tool_args
+                self._register_tool_call(tool_capture, tool_name, tool_input, tool_call_id, run_id)
+
+    def _register_tool_call(self, tool_capture, tool_name, tool_input, tool_call_id, run_id):
+        """Register a single tool call in the capture system and write execution_step."""
+        if tool_call_id is None:
             return
-            
-        run_id = getattr(msg_chunk, 'id', None)
-        if not run_id:
-            logger.warning(f"WORKFLOW: AIMessage chunk with tool calls has no ID, cannot track properly")
-            return
-            
-        logger.debug(f" WORKFLOW: Capturing {len(tool_calls)} tool calls for run ID: {run_id}")
-        for i, tool_call in enumerate(tool_calls):
-            tool_name = tool_call.get('function', {}).get('name', 'unknown')
-            tool_args = tool_call.get('function', {}).get('arguments', '{}')
-            tool_call_id = tool_call.get('id', f"{run_id}_{i}")
 
-            if tool_call_id is None:
-                logger.debug("WORKFLOW: Skipping tool call without id (run_id=%s, index=%s)", run_id, i)
-                continue
-            
-            try:
-                tool_input = json.loads(tool_args) if isinstance(tool_args, str) else tool_args
-            except:
-                tool_input = tool_args
-            
-            logger.debug(f"WORKFLOW: Capturing tool call: '{tool_name}' with tool_call_id={tool_call_id}, run_id={run_id}")
+        logger.debug(f"WORKFLOW: Capturing tool call: '{tool_name}' with tool_call_id={tool_call_id}, run_id={run_id}")
 
-            existing_call = tool_capture.current_tool_calls.get(tool_call_id)
+        existing_call = tool_capture.current_tool_calls.get(tool_call_id)
 
-            def _is_meaningful(value):
-                if isinstance(value, dict):
-                    return bool(value)
-                if isinstance(value, str):
-                    return bool(value.strip())
-                return value is not None
+        def _is_meaningful(value):
+            if isinstance(value, dict):
+                return bool(value)
+            if isinstance(value, str):
+                return bool(value.strip())
+            return value is not None
 
-            meaningful_input = _is_meaningful(tool_input)
+        meaningful_input = _is_meaningful(tool_input)
 
-            if existing_call:
-                # Preserve earlier metadata but refresh with richer payloads when available
-                existing_call.setdefault("tool_name", tool_name)
-                existing_call.setdefault("call_id", tool_call_id)
-                existing_call.setdefault("run_id", run_id)
-                existing_call.setdefault("start_time", datetime.now())
+        if existing_call:
+            existing_call.setdefault("tool_name", tool_name)
+            existing_call.setdefault("call_id", tool_call_id)
+            existing_call.setdefault("run_id", run_id)
+            existing_call.setdefault("start_time", datetime.now())
 
-                if meaningful_input:
-                    existing_call["input"] = tool_input
-                    existing_call["signature"] = self._build_tool_signature(tool_name, tool_input)
-            else:
-                signature = self._build_tool_signature(tool_name, tool_input) if meaningful_input else self._build_tool_signature(tool_name, "__placeholder__")
-                tool_capture.current_tool_calls[tool_call_id] = {
-                    "tool_name": tool_name,
-                    "input": tool_input if meaningful_input else tool_input,
-                    "start_time": datetime.now(),
-                    "call_id": tool_call_id,
-                    "run_id": run_id,
-                    "signature": signature
-                }
+            if meaningful_input:
+                existing_call["input"] = tool_input
+                existing_call["signature"] = self._build_tool_signature(tool_name, tool_input)
+        else:
+            signature = self._build_tool_signature(tool_name, tool_input) if meaningful_input else self._build_tool_signature(tool_name, "__placeholder__")
+            tool_capture.current_tool_calls[tool_call_id] = {
+                "tool_name": tool_name,
+                "input": tool_input,
+                "start_time": datetime.now(),
+                "call_id": tool_call_id,
+                "run_id": run_id,
+                "signature": signature,
+                "step_id": tool_capture._record_step_start(tool_name, tool_input, tool_call_id=tool_call_id),
+            }
 
     def _merge_tool_call_args(self, existing_args, new_args):
         """Merge tool call arguments intelligently."""
@@ -827,11 +845,15 @@ class Workflow:
         from chat.backend.agent.utils.llm_context_manager import LLMContextManager
         from chat.backend.agent.utils.chat_context_manager import ChatContextManager
         from chat.backend.agent.utils.tool_context_capture import ToolContextCapture
-        
+
         # Initialize tool context capture for this session
         tool_capture = None
         if input_state.session_id and input_state.user_id:
-            tool_capture = ToolContextCapture(input_state.session_id, input_state.user_id)
+            tool_capture = ToolContextCapture(
+                input_state.session_id, input_state.user_id,
+                incident_id=getattr(input_state, 'incident_id', None),
+                org_id=getattr(input_state, 'org_id', None),
+            )
             self.agent.set_tool_capture(tool_capture)
             
             # Set workflow context for tools to access during confirmation

@@ -29,7 +29,7 @@ Usage:
 import json
 import logging
 import threading
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
 from ..llm import LLMManager
 from .llm_usage_tracker import LLMUsageTracker
@@ -59,9 +59,18 @@ def count_tokens(text: str, model: str = "gpt-4o") -> int:
 class ToolContextCapture:
     """Captures complete tool interactions for LLM context history."""
     
-    def __init__(self, session_id: str, user_id: str):
+    def __init__(self, session_id: str, user_id: str, incident_id: Optional[str] = None, org_id: Optional[str] = None):
         self.session_id = session_id
         self.user_id = user_id
+        self.incident_id = incident_id
+        self.org_id = org_id
+        if self.incident_id and not self.org_id:
+            try:
+                from utils.auth.stateless_auth import get_org_id_for_user
+                self.org_id = get_org_id_for_user(user_id)
+            except Exception:
+                pass
+        self._step_counter = 0
         self.current_tool_calls = {}  # Track ongoing tool calls
         self.collected_tool_messages = []  # Store tool messages for batch addition
         self.tool_execution_signatures = set()  # Track unique tool executions to prevent duplicates
@@ -71,6 +80,96 @@ class ToolContextCapture:
         self.lock = threading.Lock()
         # Enforce sequential tool execution per session
         self.execution_lock = threading.Lock()
+
+    # ------------------------------------------------------------------
+    # execution_steps persistence (only for incident-linked sessions)
+    # ------------------------------------------------------------------
+
+    def _next_step_index(self) -> int:
+        self._step_counter += 1
+        return self._step_counter
+
+    def _record_step_start(self, tool_name: str, tool_input: Any, tool_call_id: str = None) -> Optional[int]:
+        """INSERT a running execution_step row. Returns the row id or None."""
+        if not self.incident_id:
+            return None
+        try:
+            from utils.db.connection_pool import db_pool
+            input_json = json.dumps(tool_input) if isinstance(tool_input, dict) else json.dumps(str(tool_input))
+            step_index = self._next_step_index()
+            with db_pool.get_admin_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """INSERT INTO execution_steps
+                           (incident_id, session_id, org_id, step_index, tool_name,
+                            tool_call_id, tool_input, status, started_at)
+                           VALUES (%s, %s, %s, %s, %s, %s, %s, 'running', %s)
+                           RETURNING id""",
+                        (self.incident_id, self.session_id, self.org_id,
+                         step_index, tool_name, tool_call_id, input_json,
+                         datetime.now(timezone.utc)),
+                    )
+                    row_id = cur.fetchone()[0]
+                conn.commit()
+            return row_id
+        except Exception:
+            logger.exception("Failed to record execution_step start")
+            return None
+
+    @staticmethod
+    def _output_indicates_error(output: str) -> bool:
+        """Check if tool output content contains error indicators regardless of whether
+        a Python exception was raised. Covers all providers (Datadog, AWS, GCP, Azure, etc.)."""
+        if not output:
+            return False
+        try:
+            parsed = json.loads(output)
+            if isinstance(parsed, dict):
+                if "error" in parsed:
+                    return True
+                if parsed.get("success") is False:
+                    return True
+                if parsed.get("status") == "error":
+                    return True
+                errors = parsed.get("errors")
+                if isinstance(errors, list) and len(errors) > 0:
+                    return True
+        except (json.JSONDecodeError, TypeError, ValueError):
+            pass
+        return False
+
+    def _record_step_end(self, step_id: Optional[int], output: str, is_error: bool = False):
+        """UPDATE an execution_step row with completion data."""
+        if step_id is None:
+            return
+        try:
+            from utils.db.connection_pool import db_pool
+            now = datetime.now(timezone.utc)
+            truncated_output = output[:10240] if output else ""
+
+            if not is_error:
+                is_error = self._output_indicates_error(output)
+
+            status = "error" if is_error else "success"
+            error_msg = None
+            if is_error:
+                error_msg = (output[:2048] if output else None)
+
+            with db_pool.get_admin_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """UPDATE execution_steps
+                           SET status = %s,
+                               completed_at = %s,
+                               duration_ms = (EXTRACT(EPOCH FROM (%s - started_at)) * 1000)::int,
+                               tool_output = %s,
+                               error_message = %s
+                           WHERE id = %s""",
+                        (status, now, now, truncated_output, error_msg, step_id),
+                    )
+                conn.commit()
+        except Exception:
+            logger.exception("Failed to record execution_step end")
         
     def capture_tool_start(self, tool_name: str, tool_input: Any, tool_call_id: Optional[str] = None) -> str:
         """Capture the start of a tool execution with improved ID management."""    
@@ -94,9 +193,12 @@ class ToolContextCapture:
                     normalized_existing_input = str(call_info['input'])
                 existing_signature = f"{call_info['tool_name']}_{normalized_existing_input}"
                 if existing_signature == tool_signature:
-                    # Check if the tool call is recent (within 30 seconds) to avoid stale matches
                     time_diff = (datetime.now() - call_info['start_time']).total_seconds()
                     if time_diff < 30:
+                        if "step_id" not in call_info:
+                            call_info["step_id"] = self._record_step_start(
+                                tool_name, tool_input, tool_call_id=existing_call_id
+                            )
                         logger.info(f"Detected duplicate tool execution for {tool_name}, reusing existing call_id: {existing_call_id}")
                         return existing_call_id
                     else:
@@ -109,7 +211,8 @@ class ToolContextCapture:
             "input": tool_input,
             "start_time": datetime.now(),
             "call_id": tool_call_id,
-            "signature": tool_signature
+            "signature": tool_signature,
+            "step_id": self._record_step_start(tool_name, tool_input, tool_call_id=tool_call_id),
         }
         
         logger.info(f"Captured tool start: {tool_name} with ID {tool_call_id}")
@@ -128,6 +231,8 @@ class ToolContextCapture:
         tool_name = tool_info["tool_name"]
         tool_input = tool_info["input"]
         run_id = tool_info.get("run_id")  # Get the run_id from the tool info
+        
+        self._record_step_end(tool_info.get("step_id"), output, is_error)
         
         logger.debug(f"Tool info: {tool_name}, input: {tool_input}, run_id: {run_id}")
         
