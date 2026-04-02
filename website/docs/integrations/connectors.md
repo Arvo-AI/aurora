@@ -522,33 +522,22 @@ Users enter API keys and site via the Aurora UI.
 
 ### Grafana
 
-API Token authentication for Grafana Cloud or self-hosted.
+Webhook-based connection for Grafana Cloud or self-hosted instances. No API key required.
 
-#### 1. Create Service Account Token
+#### Setup
 
-**Grafana Cloud:**
+1. Open the **Grafana** integration page in Aurora
+2. Copy the webhook URL shown on screen
+3. In Grafana: **Alerts & IRM** > **Notification Configuration** > **Contact points** > **New contact point**
+   - Type: **Webhook**
+   - URL: paste the Aurora webhook URL (`https://your-aurora-domain/grafana/alerts/webhook/{user_id}`)
+4. Click **Test** to send a test notification
+5. Aurora auto-connects when it receives the test webhook
+6. Save the contact point, then add it to a notification policy under **Notification Configuration** > **Notification policies**
 
-1. Go to [Grafana Cloud](https://grafana.com/) > your stack
-2. **Administration** > **Service accounts** > **Add service account**
-   - Name: `Aurora`
-   - Role: `Viewer`
-3. Click **Add service account token**
-4. Copy the token
+#### Disconnect / Reconnect
 
-**Self-hosted:**
-
-1. Go to **Administration** > **Service accounts**
-2. Create account with `Viewer` role
-3. Generate token
-
-Users enter the token and Grafana URL via the Aurora UI.
-
-#### Webhook Configuration
-
-1. In Grafana: **Alerting** > **Contact points** > **+ Add contact point**
-2. Type: **Webhook**
-3. URL: `https://your-aurora-domain/grafana/alerts/webhook/{user_id}`
-4. In **Notification policies**, route alerts to the Aurora contact point
+Disconnecting in Aurora deactivates the connection — incoming webhooks are rejected until the user clicks **Reconnect**. The Grafana contact point does not need to be reconfigured.
 
 #### How Aurora Processes Grafana Webhooks
 

@@ -15,17 +15,12 @@ interface GrafanaUser {
 
 export interface GrafanaStatus {
   connected: boolean;
+  hasConnection?: boolean;
   baseUrl?: string;
   stackSlug?: string;
   org?: GrafanaOrg | null;
   user?: GrafanaUser | null;
   error?: string;
-}
-
-export interface GrafanaConnectPayload {
-  baseUrl: string;
-  apiToken: string;
-  stackSlug?: string;
 }
 
 const API_BASE = '/api/grafana';
@@ -64,6 +59,7 @@ export const grafanaService = {
       });
       return {
         connected: Boolean(raw?.connected),
+        hasConnection: Boolean(raw?.hasConnection),
         baseUrl: raw?.baseUrl ?? raw?.base_url,
         stackSlug: raw?.stackSlug ?? raw?.stack_slug,
         org: raw?.org ?? null,
@@ -76,19 +72,11 @@ export const grafanaService = {
     }
   },
 
-  async connect(payload: GrafanaConnectPayload): Promise<GrafanaStatus> {
-    const raw = await apiRequest<Record<string, any>>(`${API_BASE}/connect`, {
+  async reconnect(): Promise<{ success: boolean }> {
+    return apiRequest<{ success: boolean }>(`${API_BASE}/reconnect`, {
       method: 'POST',
-      body: JSON.stringify(payload),
       cache: 'no-store',
     });
-    return {
-      connected: Boolean(raw?.success ?? true),
-      baseUrl: raw?.baseUrl ?? payload.baseUrl,
-      stackSlug: raw?.stackSlug ?? payload.stackSlug,
-      org: raw?.org ?? null,
-      user: raw?.user ?? (raw?.userEmail ? { email: raw.userEmail } : null),
-    };
   },
 
   async getAlerts(limit = 50, offset = 0, state?: string): Promise<GrafanaAlertsResponse> {
