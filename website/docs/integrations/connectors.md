@@ -648,6 +648,53 @@ Users enter the token via the Aurora UI.
 
 ---
 
+### Splunk
+
+API Token authentication for Splunk Cloud or Enterprise.
+
+#### 1. Create a Minimal Role (Recommended)
+
+Aurora only needs the `search` capability. You can use the built-in **power** role, or create a minimal custom role:
+
+1. In Splunk: **Settings** > **Roles** > **New Role**
+   - Name: `aurora_readonly`
+   - Capabilities: check **search** only
+   - Under **Indexes**, set **Indexes searched by default** to `All non-internal indexes` (or specific indexes you want Aurora to access)
+2. Create a user with this role, or assign it to an existing user
+
+#### 2. Create an API Token
+
+1. Go to **Settings** > **Tokens** > **New Token**
+2. Select the user with the role above
+3. Set an expiration and create the token
+4. Copy the token
+
+#### 3. Connect via Aurora UI
+
+1. Navigate to **Connectors** > **Splunk**
+2. Enter your Splunk instance URL (e.g., `https://your-splunk:8089`)
+3. Paste the API token
+4. Click **Connect**
+
+#### What Aurora Queries
+
+Aurora uses the Splunk REST API to:
+- **Search logs** via `/services/search/jobs/export` (SPL queries)
+- **List indexes** via `/services/data/indexes`
+- **List sourcetypes** for targeted searches
+
+All calls use Bearer token auth over HTTPS on port 8089.
+
+#### Troubleshooting
+
+| Error | Solution |
+|-------|----------|
+| "Authentication failed" | Token may be expired or the user lacks the `search` capability |
+| "Connection refused" | Verify the URL includes port 8089 and is reachable from Aurora |
+| "No results" | Check that the role has the correct indexes in "Indexes searched by default" |
+
+---
+
 ## Kubernetes
 
 Aurora can connect to Kubernetes clusters via the kubectl agent.

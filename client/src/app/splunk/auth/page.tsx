@@ -239,14 +239,14 @@ export default function SplunkAuthPage() {
               <div className="bg-muted/50 rounded-lg p-4 text-sm">
                 <p className="font-medium mb-2">How to get your API token:</p>
                 <ol className="list-decimal list-inside space-y-1 text-muted-foreground">
-                  <li>Log in to your Splunk instance as a user with the <strong className="text-foreground">power</strong> role (or a custom role that includes <code className="bg-muted px-1 rounded text-xs">search</code> and <code className="bg-muted px-1 rounded text-xs">indexes_list_all</code> capabilities)</li>
-                  <li>Go to Settings → Tokens</li>
-                  <li>Click &quot;New Token&quot;</li>
-                  <li>Set an expiration and create the token</li>
+                  <li>Create a role with the <code className="bg-muted px-1 rounded text-xs">search</code> capability and <strong className="text-foreground">Indexes searched by default</strong> set to <code className="bg-muted px-1 rounded text-xs">*</code> (or assign the built-in <strong className="text-foreground">power</strong> role)</li>
+                  <li>Create a user with that role (or use an existing one)</li>
+                  <li>Go to <strong className="text-foreground">Settings → Tokens</strong></li>
+                  <li>Click <strong className="text-foreground">New Token</strong>, select the user, set an expiration, and create it</li>
                   <li>Copy and paste the token above</li>
                 </ol>
                 <p className="text-xs text-muted-foreground mt-3">
-                  Splunk tokens inherit the capabilities of the user who creates them. A basic <strong className="text-foreground">user</strong>-role account can run searches but cannot list indexes — Aurora needs both.
+                  Splunk tokens inherit the capabilities of the user who creates them. Aurora only needs the <code className="bg-muted px-1 rounded text-xs">search</code> capability to run searches and list indexes.
                 </p>
                 <a
                   href="https://docs.splunk.com/Documentation/SplunkCloud/latest/Security/CreateAuthTokens"
