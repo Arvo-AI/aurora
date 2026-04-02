@@ -68,9 +68,9 @@ class ToolContextCapture:
             try:
                 from utils.auth.stateless_auth import get_org_id_for_user
                 self.org_id = get_org_id_for_user(user_id)
-            except Exception:
-                pass
-        self._step_counter = 0
+            except Exception as e:
+                logger.warning(f"Failed to resolve org_id for user {user_id}, execution-step persistence disabled: {e}")
+        self._persist_steps = bool(self.incident_id and self.org_id)
         self.current_tool_calls = {}  # Track ongoing tool calls
         self.collected_tool_messages = []  # Store tool messages for batch addition
         self.tool_execution_signatures = set()  # Track unique tool executions to prevent duplicates
@@ -85,20 +85,20 @@ class ToolContextCapture:
     # execution_steps persistence (only for incident-linked sessions)
     # ------------------------------------------------------------------
 
-    def _next_step_index(self) -> int:
-        self._step_counter += 1
-        return self._step_counter
-
-    def _record_step_start(self, tool_name: str, tool_input: Any, tool_call_id: str = None) -> Optional[int]:
+    def _record_step_start(self, tool_name: str, tool_input: Any, tool_call_id: str | None = None) -> Optional[int]:
         """INSERT a running execution_step row. Returns the row id or None."""
-        if not self.incident_id:
+        if not self._persist_steps:
             return None
         try:
             from utils.db.connection_pool import db_pool
             input_json = json.dumps(tool_input) if isinstance(tool_input, dict) else json.dumps(str(tool_input))
-            step_index = self._next_step_index()
             with db_pool.get_admin_connection() as conn:
                 with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT COALESCE(MAX(step_index), 0) + 1 FROM execution_steps WHERE incident_id = %s",
+                        (self.incident_id,),
+                    )
+                    step_index = cur.fetchone()[0]
                     cur.execute(
                         """INSERT INTO execution_steps
                            (incident_id, session_id, org_id, step_index, tool_name,

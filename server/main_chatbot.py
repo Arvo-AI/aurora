@@ -1203,14 +1203,15 @@ async def handle_connection(websocket) -> None:
 
             # Resolve incident_id if this session is linked to an incident
             _incident_id = None
-            if session_id:
+            if session_id and org_id:
                 try:
                     from utils.db.connection_pool import db_pool
                     with db_pool.get_admin_connection() as _conn:
                         with _conn.cursor() as _cur:
                             _cur.execute(
-                                "SELECT incident_id FROM chat_sessions WHERE id = %s AND incident_id IS NOT NULL",
-                                (session_id,),
+                                """SELECT incident_id FROM chat_sessions
+                                   WHERE id = %s AND org_id = %s AND incident_id IS NOT NULL""",
+                                (session_id, org_id),
                             )
                             _row = _cur.fetchone()
                             if _row:

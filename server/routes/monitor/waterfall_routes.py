@@ -159,8 +159,8 @@ def tool_stats(user_id):
             ROUND(PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY es.duration_ms)
                   FILTER (WHERE es.duration_ms IS NOT NULL)) AS p95_duration_ms,
             COUNT(*) FILTER (WHERE es.status = 'error') AS error_count,
-            ROUND(100.0 * COUNT(*) FILTER (WHERE es.status != 'error')
-                  / GREATEST(COUNT(*), 1), 1) AS success_rate
+            ROUND(100.0 * COUNT(*) FILTER (WHERE es.status = 'success')
+                  / GREATEST(COUNT(*) FILTER (WHERE es.status IN ('success', 'error')), 1), 1) AS success_rate
         FROM execution_steps es
         JOIN incidents i ON i.id = es.incident_id
         WHERE i.org_id = %s
@@ -267,6 +267,21 @@ def incident_stream(user_id, incident_id):
       event: done       – incident has finished (status is terminal)
     """
     org_id = get_org_id_from_request()
+
+    # Preflight: verify the incident exists and belongs to this org before starting the SSE loop
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cur:
+                set_rls_context(cur, conn, user_id, log_prefix="[STREAM_PREFLIGHT]")
+                cur.execute(
+                    "SELECT 1 FROM incidents WHERE id = %s AND org_id = %s",
+                    (incident_id, org_id),
+                )
+                if cur.fetchone() is None:
+                    return jsonify({"error": "Incident not found"}), 404
+    except Exception:
+        logger.exception("incident_stream preflight failed")
+        return jsonify({"error": "Failed to open stream"}), 500
 
     POLL_INTERVAL = 1.5          # seconds between DB polls
     MAX_IDLE = 600               # stop after 10 min with no terminal state

@@ -263,8 +263,6 @@ class Workflow:
 
         logger.debug(f"WORKFLOW: Capturing tool call: '{tool_name}' with tool_call_id={tool_call_id}, run_id={run_id}")
 
-        existing_call = tool_capture.current_tool_calls.get(tool_call_id)
-
         def _is_meaningful(value):
             if isinstance(value, dict):
                 return bool(value)
@@ -274,26 +272,25 @@ class Workflow:
 
         meaningful_input = _is_meaningful(tool_input)
 
-        if existing_call:
-            existing_call.setdefault("tool_name", tool_name)
-            existing_call.setdefault("call_id", tool_call_id)
-            existing_call.setdefault("run_id", run_id)
-            existing_call.setdefault("start_time", datetime.now())
+        with tool_capture.lock:
+            existing_call = tool_capture.current_tool_calls.get(tool_call_id)
 
-            if meaningful_input:
-                existing_call["input"] = tool_input
-                existing_call["signature"] = self._build_tool_signature(tool_name, tool_input)
-        else:
-            signature = self._build_tool_signature(tool_name, tool_input) if meaningful_input else self._build_tool_signature(tool_name, "__placeholder__")
-            tool_capture.current_tool_calls[tool_call_id] = {
-                "tool_name": tool_name,
-                "input": tool_input,
-                "start_time": datetime.now(),
-                "call_id": tool_call_id,
-                "run_id": run_id,
-                "signature": signature,
-                "step_id": tool_capture._record_step_start(tool_name, tool_input, tool_call_id=tool_call_id),
-            }
+            if existing_call:
+                existing_call.setdefault("tool_name", tool_name)
+                existing_call.setdefault("call_id", tool_call_id)
+                existing_call.setdefault("run_id", run_id)
+                existing_call.setdefault("start_time", datetime.now())
+
+                if meaningful_input:
+                    existing_call["input"] = tool_input
+                    existing_call["signature"] = self._build_tool_signature(tool_name, tool_input)
+            else:
+                # Delegate to capture_tool_start for centralized locking, dedup, and step creation
+                tool_capture.capture_tool_start(tool_name, tool_input, tool_call_id=tool_call_id)
+                # Ensure run_id is recorded on the entry created by capture_tool_start
+                entry = tool_capture.current_tool_calls.get(tool_call_id)
+                if entry:
+                    entry["run_id"] = run_id
 
     def _merge_tool_call_args(self, existing_args, new_args):
         """Merge tool call arguments intelligently."""
@@ -1028,9 +1025,11 @@ class Workflow:
                     output = chunk_data.get("output")
                     if output:
                         # Process tool calls
-                        if hasattr(output, 'tool_calls') and output.tool_calls:
+                        has_tool_calls = getattr(output, 'tool_calls', None)
+                        has_raw_tool_calls = getattr(output, 'additional_kwargs', {}).get('tool_calls')
+                        if has_tool_calls or has_raw_tool_calls:
                             self._process_tool_calls_from_chunk(output, tool_capture)
-                            logger.debug(f"[WORKFLOW STREAM] Detected {len(output.tool_calls)} tool calls")
+                            logger.debug(f"[WORKFLOW STREAM] Detected tool calls (lc={bool(has_tool_calls)}, raw={bool(has_raw_tool_calls)})")
 
                         # Fallback: if streaming didn't yield tokens for this turn,
                         # extract thinking + text from the complete response.
