@@ -15,6 +15,10 @@ Deploy Aurora on Kubernetes using Helm.
 - TLS certificate (wildcard certificate recommended for subdomains)
 - S3-compatible object storage (AWS S3, MinIO, Cloudflare R2, GCS, etc.)
 
+:::tip Air-gapped / offline cluster?
+If your cluster has no internet access, see the dedicated [Air-Gapped Kubernetes Deployment](./kubernetes-airgap) guide instead.
+:::
+
 **Cluster resources**: The default configuration requires approximately 4 CPU cores and 12GB memory across all pods. Adjust `resources` in `values.yaml` for smaller clusters.
 
 ## Quick Start

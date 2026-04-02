@@ -28,7 +28,7 @@ spec:
         fsGroup: 977
       containers:
         - name: searxng
-          image: searxng/searxng:2025.5.8-7ca24eee4
+          image: {{ include "aurora.thirdPartyImage" (dict "root" $ "image" "searxng:2025.5.8-7ca24eee4" "default" "searxng/searxng:2025.5.8-7ca24eee4") }}
           imagePullPolicy: IfNotPresent
           securityContext:
             runAsUser: 977

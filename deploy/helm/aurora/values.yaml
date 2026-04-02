@@ -49,7 +49,7 @@ serviceAccount:
 # Container images
 # ------------------------------------------------------------------------------
 image:
-  # Container registry where images are stored
+  # Container registry where cluster pulls Aurora images from
   registry: "your-registry"  #Examples: docker.io/myorg, gcr.io/project-id, ghcr.io/myorg
   
   # Image tag (version) to deploy
@@ -58,6 +58,13 @@ image:
   # Optional: Pull secrets for private registries
   # pullSecrets:
   #   - name: regcred
+
+# Third-party images used by in-cluster stateful services.
+# For air-gapped deployments with a private registry, set thirdPartyImages.registry
+# to your private registry URL. All third-party images will be pulled as
+# <registry>/<short-name>:<tag>. Leave empty to pull from upstream public registries.
+thirdPartyImages:
+  registry: ""  # e.g. "registry.internal:5000" for air-gapped clusters
 
 # ------------------------------------------------------------------------------
 # Replica counts per service
