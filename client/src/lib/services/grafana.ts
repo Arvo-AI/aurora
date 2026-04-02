@@ -15,7 +15,6 @@ interface GrafanaUser {
 
 export interface GrafanaStatus {
   connected: boolean;
-  hasConnection?: boolean;
   baseUrl?: string;
   stackSlug?: string;
   org?: GrafanaOrg | null;
@@ -59,7 +58,6 @@ export const grafanaService = {
       });
       return {
         connected: Boolean(raw?.connected),
-        hasConnection: Boolean(raw?.hasConnection),
         baseUrl: raw?.baseUrl ?? raw?.base_url,
         stackSlug: raw?.stackSlug ?? raw?.stack_slug,
         org: raw?.org ?? null,
@@ -70,13 +68,6 @@ export const grafanaService = {
       console.error('[grafanaService] Failed to fetch status:', error);
       return null;
     }
-  },
-
-  async reconnect(): Promise<{ success: boolean }> {
-    return apiRequest<{ success: boolean }>(`${API_BASE}/reconnect`, {
-      method: 'POST',
-      cache: 'no-store',
-    });
   },
 
   async getAlerts(limit = 50, offset = 0, state?: string): Promise<GrafanaAlertsResponse> {

@@ -76,7 +76,8 @@ class PagerDutyClient:
                     return parsed.hostname.replace(".pagerduty.com", "")
         except Exception:
             return None
-    
+
+
 def validate_token(client: PagerDutyClient) -> Dict[str, Any]:
     """Validate token and extract info."""
     result = {"validated_at": datetime.now(timezone.utc).isoformat(), "capabilities": {"can_read_incidents": True}}

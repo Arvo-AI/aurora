@@ -31,7 +31,7 @@ export default function GrafanaAuthPage() {
   const [webhookUrl, setWebhookUrl] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
-  const loadWebhookUrl = async () => {
+  const loadWebhookUrl = useCallback(async () => {
     try {
       const response = await grafanaService.getWebhookUrl();
       setWebhookUrl(response.webhookUrl);
@@ -41,7 +41,7 @@ export default function GrafanaAuthPage() {
     } catch (err) {
       console.error("Failed to load webhook URL", err);
     }
-  };
+  }, []);
 
   const refreshStatus = useCallback(async () => {
     try {
@@ -57,7 +57,7 @@ export default function GrafanaAuthPage() {
     } catch (err) {
       console.error("Failed to load Grafana status", err);
     }
-  }, []);
+  }, [loadWebhookUrl]);
 
   useEffect(() => {
     const cached = typeof window !== "undefined" ? localStorage.getItem(CACHE_KEYS.STATUS) : null;

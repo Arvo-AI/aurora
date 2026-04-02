@@ -6,7 +6,6 @@ from flask import Blueprint, jsonify, request
 
 from routes.grafana.tasks import process_grafana_alert
 from utils.db.connection_pool import db_pool
-from utils.db.db_utils import connect_to_db_as_admin
 from utils.web.cors_utils import create_cors_response
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.auth.rbac_decorators import require_permission
@@ -23,18 +22,16 @@ def _has_grafana_row(user_id: str) -> Tuple[bool, bool]:
     Returns (row_exists, is_active).
     """
     try:
-        conn = connect_to_db_as_admin()
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT is_active FROM user_tokens WHERE user_id = %s AND provider = 'grafana' LIMIT 1",
-            (user_id,),
-        )
-        row = cursor.fetchone()
-        cursor.close()
-        conn.close()
-        if row is None:
-            return False, False
-        return True, bool(row[0])
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT is_active FROM user_tokens WHERE user_id = %s AND provider = 'grafana' LIMIT 1",
+                    (user_id,),
+                )
+                row = cursor.fetchone()
+                if row is None:
+                    return False, False
+                return True, bool(row[0])
     except Exception as exc:
         logger.error("[GRAFANA] Failed to check user_tokens row: %s", exc)
         return False, False
@@ -43,18 +40,16 @@ def _has_grafana_row(user_id: str) -> Tuple[bool, bool]:
 def _set_grafana_active(user_id: str, active: bool) -> bool:
     """Flip is_active on the existing Grafana user_tokens row."""
     try:
-        conn = connect_to_db_as_admin()
-        cursor = conn.cursor()
-        cursor.execute(
-            "UPDATE user_tokens SET is_active = %s, timestamp = CURRENT_TIMESTAMP "
-            "WHERE user_id = %s AND provider = 'grafana'",
-            (active, user_id),
-        )
-        updated = cursor.rowcount > 0
-        conn.commit()
-        cursor.close()
-        conn.close()
-        return updated
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "UPDATE user_tokens SET is_active = %s, timestamp = CURRENT_TIMESTAMP "
+                    "WHERE user_id = %s AND provider = 'grafana'",
+                    (active, user_id),
+                )
+                updated = cursor.rowcount > 0
+            conn.commit()
+            return updated
     except Exception as exc:
         logger.error("[GRAFANA] Failed to set is_active=%s: %s", active, exc)
         return False
@@ -68,45 +63,24 @@ def _get_stored_grafana_credentials(user_id: str) -> Optional[Dict[str, Any]]:
         return None
 
 
-@grafana_bp.route("/reconnect", methods=["POST", "OPTIONS"])
-@require_permission("connectors", "write")
-def reconnect(user_id):
-    """Re-enable a previously disconnected Grafana connection."""
-    row_exists, is_active = _has_grafana_row(user_id)
-    if not row_exists:
-        return jsonify({"error": "No previous Grafana connection found"}), 404
-    if is_active:
-        return jsonify({"success": True, "message": "Already connected"}), 200
-
-    if _set_grafana_active(user_id, True):
-        logger.info("[GRAFANA] Reconnected for user %s", user_id)
-        return jsonify({"success": True, "message": "Grafana reconnected"}), 200
-
-    return jsonify({"error": "Failed to reconnect"}), 500
-
-
 @grafana_bp.route("/status", methods=["GET", "OPTIONS"])
 @require_permission("connectors", "read")
 def status(user_id):
     row_exists, is_active = _has_grafana_row(user_id)
 
-    if not row_exists:
-        return jsonify({"connected": False, "hasConnection": False})
-
-    if not is_active:
-        return jsonify({"connected": False, "hasConnection": True})
+    if not row_exists or not is_active:
+        return jsonify({"connected": False})
 
     creds = _get_stored_grafana_credentials(user_id)
     if not creds:
-        return jsonify({"connected": False, "hasConnection": True})
+        return jsonify({"connected": False})
 
     base_url = creds.get("base_url")
     if not base_url:
-        return jsonify({"connected": False, "hasConnection": True})
+        return jsonify({"connected": False})
 
     return jsonify({
         "connected": True,
-        "hasConnection": True,
         "org": {"name": creds.get("org_name"), "id": creds.get("org_id")},
         "user": {"email": creds.get("user_email")} if creds.get("user_email") else None,
         "baseUrl": base_url,
@@ -167,14 +141,19 @@ def alert_webhook(user_id: str):
                 logger.exception("[GRAFANA] Failed to auto-connect user %s: %s", user_id, exc)
                 return jsonify({"error": "Failed to create Grafana connection"}), 500
         else:
+            reactivated = False
             if external_url:
                 try:
                     store_tokens_in_db(user_id, {"base_url": external_url}, "grafana")
+                    reactivated = True
                 except Exception:
-                    _set_grafana_active(user_id, True)
+                    reactivated = _set_grafana_active(user_id, True)
             else:
-                _set_grafana_active(user_id, True)
-            logger.info("[GRAFANA] Re-activated connection for user %s via webhook", user_id)
+                reactivated = _set_grafana_active(user_id, True)
+            if not reactivated:
+                logger.warning("[GRAFANA] Failed to re-activate connection for user %s via webhook", user_id)
+            else:
+                logger.info("[GRAFANA] Re-activated connection for user %s via webhook", user_id)
 
     logger.info("[GRAFANA] Received alert webhook for user %s: %s", user_id, payload.get("title", "unknown"))
 
