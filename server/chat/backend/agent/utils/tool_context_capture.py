@@ -116,6 +116,28 @@ class ToolContextCapture:
             logger.exception("Failed to record execution_step start")
             return None
 
+    @staticmethod
+    def _output_indicates_error(output: str) -> bool:
+        """Check if tool output content contains error indicators regardless of whether
+        a Python exception was raised. Covers all providers (Datadog, AWS, GCP, Azure, etc.)."""
+        if not output:
+            return False
+        try:
+            parsed = json.loads(output)
+            if isinstance(parsed, dict):
+                if "error" in parsed:
+                    return True
+                if parsed.get("success") is False:
+                    return True
+                if parsed.get("status") == "error":
+                    return True
+                errors = parsed.get("errors")
+                if isinstance(errors, list) and len(errors) > 0:
+                    return True
+        except (json.JSONDecodeError, TypeError, ValueError):
+            pass
+        return False
+
     def _record_step_end(self, step_id: Optional[int], output: str, is_error: bool = False):
         """UPDATE an execution_step row with completion data."""
         if step_id is None:
@@ -124,6 +146,9 @@ class ToolContextCapture:
             from utils.db.connection_pool import db_pool
             now = datetime.now(timezone.utc)
             truncated_output = output[:10240] if output else ""
+
+            if not is_error:
+                is_error = self._output_indicates_error(output)
 
             status = "error" if is_error else "success"
             error_msg = None

@@ -148,7 +148,11 @@ def tool_stats(user_id):
 
     query = """
         SELECT
-            es.tool_name,
+            CASE
+              WHEN es.tool_name = 'cloud_exec' AND es.tool_input IS NOT NULL
+              THEN COALESCE(es.tool_input::jsonb ->> 'provider', 'cloud') || '_exec'
+              ELSE es.tool_name
+            END AS tool_name,
             COUNT(*) AS call_count,
             COUNT(DISTINCT es.incident_id) AS incident_count,
             ROUND(AVG(es.duration_ms) FILTER (WHERE es.duration_ms IS NOT NULL)) AS avg_duration_ms,
@@ -162,7 +166,7 @@ def tool_stats(user_id):
         WHERE i.org_id = %s
           AND es.started_at >= NOW() - %s::interval
           AND es.tool_name IS NOT NULL
-        GROUP BY es.tool_name
+        GROUP BY 1
         ORDER BY call_count DESC
     """
 

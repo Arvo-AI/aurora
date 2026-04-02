@@ -481,18 +481,45 @@ function TimelineView({ data, streaming }: { data: TimelineData; streaming?: boo
 
 function StepRow({ step, maxDuration }: { step: Record<string, unknown>; maxDuration: number }) {
   const [expanded, setExpanded] = useState(false);
-  const isError = step.status === 'error';
-  const isRunning = step.status === 'running';
   const durationMs = step.duration_ms != null ? Number(step.duration_ms) : null;
   const inputStr = step.tool_input ? (typeof step.tool_input === 'string' ? step.tool_input : JSON.stringify(step.tool_input, null, 2)) : null;
   const outputStr = step.tool_output ? String(step.tool_output) : null;
+
+  const outputError = (() => {
+    if (!outputStr) return null;
+    try {
+      const parsed = JSON.parse(outputStr);
+      if (typeof parsed === 'object' && parsed !== null) {
+        if (parsed.error) return String(parsed.error);
+        if (parsed.success === false) return parsed.message || parsed.error || 'Tool returned success: false';
+        if (parsed.status === 'error') return parsed.message || parsed.error || 'Tool returned status: error';
+        if (Array.isArray(parsed.errors) && parsed.errors.length > 0) return parsed.errors.join('; ');
+      }
+    } catch { /* not json */ }
+    return null;
+  })();
+
+  const isError = step.status === 'error' || !!outputError;
+  const isRunning = step.status === 'running';
+  const errorDetail = outputError || (step.error_message ? String(step.error_message) : null);
+
+  const toolLabel = (() => {
+    const name = String(step.tool_name ?? '—');
+    if (name === 'cloud_exec' && step.tool_input) {
+      try {
+        const inp = typeof step.tool_input === 'string' ? JSON.parse(step.tool_input) : step.tool_input;
+        if (inp?.provider) return `${inp.provider} exec`;
+      } catch { /* use default */ }
+    }
+    return name;
+  })();
 
   return (
     <div className={isError ? 'bg-destructive/5' : ''}>
       <button onClick={() => setExpanded(!expanded)}
         className="w-full text-left px-4 py-2.5 flex items-center gap-3 hover:bg-muted/30 transition-colors">
         <div className={`w-2 h-2 rounded-full shrink-0 ${isError ? 'bg-destructive' : isRunning ? 'bg-amber-500 animate-pulse' : 'bg-blue-500'}`} />
-        <span className="font-mono text-xs font-medium min-w-0 truncate">{String(step.tool_name ?? '—')}</span>
+        <span className="font-mono text-xs font-medium min-w-0 truncate">{toolLabel}</span>
         {isError && (
           <span className="inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium bg-destructive/10 text-destructive shrink-0">
             <AlertTriangle size={10} className="mr-0.5" /> error
@@ -519,9 +546,10 @@ function StepRow({ step, maxDuration }: { step: Record<string, unknown>; maxDura
       </button>
       {expanded && (
         <div className="px-4 pb-3 ml-5 space-y-2">
-          {isError && step.error_message && (
-            <div className="bg-destructive/10 border border-destructive/20 rounded p-2 text-xs text-destructive">
-              <strong>Error:</strong> {String(step.error_message)}
+          {isError && errorDetail && (
+            <div className="space-y-1">
+              <div className="text-red-600 dark:text-red-400 text-xs font-medium">Error</div>
+              <pre className="text-red-600 dark:text-red-300 text-xs leading-relaxed whitespace-pre-wrap bg-destructive/5 border border-destructive/20 rounded p-2">{errorDetail}</pre>
             </div>
           )}
           {inputStr && (
