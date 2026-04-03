@@ -157,6 +157,7 @@ CONFIG_MISSING=""
 if [ -f "$VALUES_FILE" ]; then
   for path in \
     '.secrets.db.POSTGRES_PASSWORD' \
+    '.secrets.db.MEMGRAPH_PASSWORD' \
     '.secrets.app.FLASK_SECRET_KEY' \
     '.secrets.app.AUTH_SECRET' \
     '.secrets.app.SEARXNG_SECRET'; do

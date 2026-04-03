@@ -54,6 +54,14 @@ else
   echo "  POSTGRES_PASSWORD already set, skipping"
 fi
 
+MEMGRAPH_PW=$(yq '.secrets.db.MEMGRAPH_PASSWORD' "$VALUES_FILE")
+if [ -z "$MEMGRAPH_PW" ] || [ "$MEMGRAPH_PW" = "null" ]; then
+  yq -i ".secrets.db.MEMGRAPH_PASSWORD = \"$(generate_secret)\"" "$VALUES_FILE"
+  echo "  Generated MEMGRAPH_PASSWORD"
+else
+  echo "  MEMGRAPH_PASSWORD already set, skipping"
+fi
+
 for key in FLASK_SECRET_KEY AUTH_SECRET SEARXNG_SECRET; do
   CURRENT=$(yq ".secrets.app.${key}" "$VALUES_FILE")
   if [ -z "$CURRENT" ] || [ "$CURRENT" = "null" ]; then

@@ -90,6 +90,7 @@ declare -a IMAGE_MAP=(
   "minio/mc:RELEASE.2025-04-16T18-13-26Z|mc:RELEASE.2025-04-16T18-13-26Z"
   "registry.k8s.io/ingress-nginx/controller:v1.8.1|ingress-nginx/controller:v1.8.1"
   "registry.k8s.io/ingress-nginx/kube-webhook-certgen:v20230407|ingress-nginx/kube-webhook-certgen:v20230407"
+  "memgraph/memgraph-mage:3.8.1|memgraph-mage:3.8.1"
 )
 
 TOTAL=${#IMAGE_MAP[@]}
