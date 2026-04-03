@@ -54,7 +54,7 @@ python-dotenv==1.0.1
 requests==2.32.5
 rsa==4.9
 six==1.17.0
-typing_extensions==4.12.2
+typing_extensions>=4.13.0
 urllib3==2.6.3
 Werkzeug==3.1.6
 weaviate_client>=4.15.0  # Updated for httpx>=0.28 compatibility
