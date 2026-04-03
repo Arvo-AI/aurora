@@ -284,13 +284,17 @@ class Workflow:
                 if meaningful_input:
                     existing_call["input"] = tool_input
                     existing_call["signature"] = self._build_tool_signature(tool_name, tool_input)
-            else:
-                # Delegate to capture_tool_start for centralized locking, dedup, and step creation
-                tool_capture.capture_tool_start(tool_name, tool_input, tool_call_id=tool_call_id)
-                # Ensure run_id is recorded on the entry created by capture_tool_start
-                entry = tool_capture.current_tool_calls.get(tool_call_id)
-                if entry:
-                    entry["run_id"] = run_id
+                return
+
+        # Release the lock before calling capture_tool_start which acquires it internally.
+        # threading.Lock is not reentrant so holding it here would deadlock.
+        canonical_call_id = tool_capture.capture_tool_start(
+            tool_name, tool_input, tool_call_id=tool_call_id
+        )
+        with tool_capture.lock:
+            entry = tool_capture.current_tool_calls.get(canonical_call_id)
+            if entry:
+                entry["run_id"] = run_id
 
     def _merge_tool_call_args(self, existing_args, new_args):
         """Merge tool call arguments intelligently."""

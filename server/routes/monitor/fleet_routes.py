@@ -24,7 +24,7 @@ def fleet_list(user_id):
     interval_map = {"1d": "1 day", "7d": "7 days", "30d": "30 days", "90d": "90 days"}
     pg_interval = interval_map.get(time_range, "7 days")
 
-    conditions = ["i.org_id = %s", "cs.id IS NOT NULL", "i.created_at >= NOW() - %s::interval"]
+    conditions = ["i.org_id = %s", "i.created_at >= NOW() - %s::interval"]
     params: list = [org_id, pg_interval]
 
     if status_filter:
@@ -51,7 +51,7 @@ def fleet_list(user_id):
                i.updated_at,
                cs.id AS session_id
         FROM incidents i
-        LEFT JOIN chat_sessions cs ON cs.id = i.aurora_chat_session_id::text
+        JOIN chat_sessions cs ON cs.id = i.aurora_chat_session_id::text
         WHERE {where}
         ORDER BY i.created_at DESC
         LIMIT 200
@@ -145,7 +145,8 @@ def fleet_activity(user_id, incident_id):
                    LEFT(it.content, 500) AS detail,
                    NULL AS error_message
             FROM incident_thoughts it
-            WHERE it.incident_id = %s
+            JOIN incidents i ON i.id = it.incident_id
+            WHERE it.incident_id = %s AND i.org_id = %s
         )
         UNION ALL
         (
@@ -157,16 +158,18 @@ def fleet_activity(user_id, incident_id):
                    ic.citation_key AS detail,
                    NULL AS error_message
             FROM incident_citations ic
-            WHERE ic.incident_id = %s
+            JOIN incidents i ON i.id = ic.incident_id
+            WHERE ic.incident_id = %s AND i.org_id = %s
         )
         ORDER BY event_time ASC NULLS LAST
+        LIMIT 500
     """
 
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
                 set_rls_context(cur, conn, user_id, log_prefix="[FLEET_ACTIVITY]")
-                cur.execute(query, (incident_id, org_id, incident_id, incident_id))
+                cur.execute(query, (incident_id, org_id, incident_id, org_id, incident_id, org_id))
                 cols = [d[0] for d in cur.description]
                 rows = [dict(zip(cols, row)) for row in cur.fetchall()]
 

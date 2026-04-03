@@ -150,7 +150,7 @@ def tool_stats(user_id):
         SELECT
             CASE
               WHEN es.tool_name = 'cloud_exec' AND es.tool_input IS NOT NULL
-              THEN COALESCE(es.tool_input::jsonb ->> 'provider', 'cloud') || '_exec'
+              THEN COALESCE(es.tool_input ->> 'provider', 'cloud') || '_exec'
               ELSE es.tool_name
             END AS tool_name,
             COUNT(*) AS call_count,
@@ -175,30 +175,30 @@ def tool_stats(user_id):
             COUNT(*) AS total_rcas,
             COUNT(*) FILTER (WHERE i.aurora_status IN ('complete', 'completed', 'resolved', 'analyzed')) AS successful_rcas,
             COUNT(*) FILTER (WHERE i.aurora_status = 'error') AS failed_rcas,
-            ROUND(AVG(
-                (SELECT COUNT(*) FROM execution_steps es2 WHERE es2.incident_id = i.id)
-            ), 1) AS avg_tool_calls_per_rca,
-            ROUND(AVG(
-                (SELECT COUNT(*) FROM incident_thoughts it2 WHERE it2.incident_id = i.id)
-            ), 1) AS avg_thoughts_per_rca,
+            ROUND(AVG(es_agg.cnt), 1) AS avg_tool_calls_per_rca,
+            ROUND(AVG(th_agg.cnt), 1) AS avg_thoughts_per_rca,
             ROUND(AVG(EXTRACT(EPOCH FROM (i.analyzed_at - i.created_at)))
                 FILTER (WHERE i.analyzed_at IS NOT NULL), 0) AS avg_rca_duration_seconds,
-            ROUND(AVG(
-                (SELECT SUM(lu.total_tokens) FROM llm_usage_tracking lu
-                 WHERE lu.session_id = i.aurora_chat_session_id::text)
-            ), 0) AS avg_tokens_per_rca,
-            ROUND(AVG(
-                (SELECT SUM(lu.total_cost_with_surcharge) FROM llm_usage_tracking lu
-                 WHERE lu.session_id = i.aurora_chat_session_id::text)
-            )::numeric, 4) AS avg_cost_per_rca,
-            ROUND(AVG(
-                (SELECT AVG(es3.duration_ms) FROM execution_steps es3
-                 WHERE es3.incident_id = i.id AND es3.duration_ms IS NOT NULL)
-            ), 0) AS avg_tool_duration_ms
+            ROUND(AVG(lu_agg.total_tokens), 0) AS avg_tokens_per_rca,
+            ROUND(AVG(lu_agg.total_cost)::numeric, 4) AS avg_cost_per_rca,
+            ROUND(AVG(es_agg.avg_dur), 0) AS avg_tool_duration_ms
         FROM incidents i
-        LEFT JOIN chat_sessions cs ON cs.id = i.aurora_chat_session_id::text
+        JOIN chat_sessions cs ON cs.id = i.aurora_chat_session_id::text
+        LEFT JOIN LATERAL (
+            SELECT COUNT(*) AS cnt, AVG(es.duration_ms) FILTER (WHERE es.duration_ms IS NOT NULL) AS avg_dur
+            FROM execution_steps es WHERE es.incident_id = i.id
+        ) es_agg ON true
+        LEFT JOIN LATERAL (
+            SELECT COUNT(*) AS cnt
+            FROM incident_thoughts it WHERE it.incident_id = i.id
+        ) th_agg ON true
+        LEFT JOIN LATERAL (
+            SELECT SUM(lu.total_tokens) AS total_tokens,
+                   SUM(lu.total_cost_with_surcharge) AS total_cost
+            FROM llm_usage_tracking lu
+            WHERE lu.session_id = i.aurora_chat_session_id::text
+        ) lu_agg ON true
         WHERE i.org_id = %s
-          AND cs.id IS NOT NULL
           AND i.created_at >= NOW() - %s::interval
     """
 
@@ -288,6 +288,7 @@ def incident_stream(user_id, incident_id):
     TERMINAL_STATUSES = {"complete", "completed", "resolved", "analyzed", "error"}
 
     def generate():
+        last_step_ts = None
         seen_step_ids = set()
         seen_thought_ids = set()
         seen_llm_ids = set()
@@ -299,21 +300,34 @@ def incident_stream(user_id, incident_id):
                     with conn.cursor() as cur:
                         set_rls_context(cur, conn, user_id, log_prefix="[STREAM]")
 
-                        # 1. Execution steps
-                        cur.execute("""
-                            SELECT id, incident_id, tool_name, tool_input, tool_output,
-                                   step_index, status, error_message, duration_ms,
-                                   started_at, completed_at
-                            FROM execution_steps
-                            WHERE incident_id = %s
-                            ORDER BY started_at ASC
-                        """, (incident_id,))
+                        # 1. Execution steps — incremental: fetch new or changed rows
+                        if last_step_ts:
+                            cur.execute("""
+                                SELECT id, incident_id, tool_name, tool_input, tool_output,
+                                       step_index, status, error_message, duration_ms,
+                                       started_at, completed_at
+                                FROM execution_steps
+                                WHERE incident_id = %s
+                                  AND (started_at >= %s OR status = 'running')
+                                ORDER BY started_at ASC
+                            """, (incident_id, last_step_ts))
+                        else:
+                            cur.execute("""
+                                SELECT id, incident_id, tool_name, tool_input, tool_output,
+                                       step_index, status, error_message, duration_ms,
+                                       started_at, completed_at
+                                FROM execution_steps
+                                WHERE incident_id = %s
+                                ORDER BY started_at ASC
+                            """, (incident_id,))
                         cols = [d[0] for d in cur.description]
                         for row in cur.fetchall():
                             d = dict(zip(cols, row))
                             step_key = (d["id"], d.get("status"), d.get("duration_ms"))
                             if step_key not in seen_step_ids:
                                 seen_step_ids.add(step_key)
+                                if d.get("started_at") and hasattr(d["started_at"], "isoformat"):
+                                    last_step_ts = d["started_at"]
                                 _serialize_row(d)
                                 yield f"event: step\ndata: {json.dumps(d)}\n\n"
 

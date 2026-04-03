@@ -95,19 +95,17 @@ class ToolContextCapture:
             with db_pool.get_admin_connection() as conn:
                 with conn.cursor() as cur:
                     cur.execute(
-                        "SELECT COALESCE(MAX(step_index), 0) + 1 FROM execution_steps WHERE incident_id = %s",
-                        (self.incident_id,),
-                    )
-                    step_index = cur.fetchone()[0]
-                    cur.execute(
                         """INSERT INTO execution_steps
                            (incident_id, session_id, org_id, step_index, tool_name,
                             tool_call_id, tool_input, status, started_at)
-                           VALUES (%s, %s, %s, %s, %s, %s, %s, 'running', %s)
+                           SELECT %s, %s, %s,
+                                  COALESCE(MAX(step_index), 0) + 1,
+                                  %s, %s, %s, 'running', %s
+                           FROM execution_steps WHERE incident_id = %s
                            RETURNING id""",
                         (self.incident_id, self.session_id, self.org_id,
-                         step_index, tool_name, tool_call_id, input_json,
-                         datetime.now(timezone.utc)),
+                         tool_name, tool_call_id, input_json,
+                         datetime.now(timezone.utc), self.incident_id),
                     )
                     row_id = cur.fetchone()[0]
                 conn.commit()
@@ -135,7 +133,8 @@ class ToolContextCapture:
                 if isinstance(errors, list) and len(errors) > 0:
                     return True
         except (json.JSONDecodeError, TypeError, ValueError):
-            pass
+            # Non-JSON output — treat as not having explicit error indicators
+            logger.debug("Non-JSON tool output, skipping structured error check")
         return False
 
     def _record_step_end(self, step_id: Optional[int], output: str, is_error: bool = False):
@@ -456,6 +455,14 @@ class ToolContextCapture:
                 tool_name = tool_info.get('tool_name', 'unknown')
                 tool_input = tool_info.get('input', {})
                 run_id = tool_info.get('run_id')
+                
+                # Close the persisted execution_step so it doesn't stay 'running' forever
+                cancellation_output = json.dumps({
+                    "success": False,
+                    "cancelled": True,
+                    "message": "Tool execution was cancelled before completion",
+                })
+                self._record_step_end(tool_info.get("step_id"), cancellation_output, is_error=True)
                 
                 # Create AIMessage with tool call (parent message)
                 tool_call_msg = AIMessage(
