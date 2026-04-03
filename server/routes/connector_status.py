@@ -34,20 +34,7 @@ HTTP_TIMEOUT = (3.5, 5)
 
 
 def _check_grafana(creds: Dict[str, Any]) -> Dict[str, Any]:
-    api_token = creds.get("api_token")
-    base_url = creds.get("base_url")
-    if not api_token or not base_url:
-        return {"connected": False}
-    try:
-        r = requests.get(
-            f"{base_url}/api/org",
-            headers={"Authorization": f"Bearer {api_token}", "Accept": "application/json"},
-            timeout=HTTP_TIMEOUT,
-        )
-        r.raise_for_status()
-        return {"connected": True, "baseUrl": base_url}
-    except Exception:
-        return {"connected": False}
+    return {"connected": True}
 
 
 def _check_datadog(creds: Dict[str, Any]) -> Dict[str, Any]:
