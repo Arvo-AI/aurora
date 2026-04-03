@@ -120,7 +120,8 @@ def _extract_service(payload: Dict[str, Any]) -> str:
         or payload.get("watch_id")
         or payload.get("alert_name")
         or payload.get("monitor_name")
-        or "unknown"
+        or payload.get("metadata", {}).get("name")
+        or "Elasticsearch Alert"
     )
     return str(service)[:255]
 
@@ -174,10 +175,16 @@ def process_elasticsearch_alert(
                 with db_pool.get_admin_connection() as conn:
                     with conn.cursor() as cursor:
                         received_at = datetime.now(timezone.utc)
-                        alert_id = payload.get("watch_id") or payload.get("alert_id")
-                        alert_title = payload.get("alert_name") or payload.get("watch_id") or payload.get("monitor_name")
+                        alert_id = payload.get("watch_id") or payload.get("alert_id") or payload.get("metadata", {}).get("name")
+                        alert_title = (
+                            payload.get("alert_name")
+                            or payload.get("watch_id")
+                            or payload.get("monitor_name")
+                            or payload.get("metadata", {}).get("name")
+                            or "Elasticsearch Alert"
+                        )
                         alert_state = "triggered"
-                        watch_id = payload.get("watch_id") or payload.get("monitor_id")
+                        watch_id = payload.get("watch_id") or payload.get("monitor_id") or payload.get("metadata", {}).get("name")
                         query = json.dumps(
                             payload.get("input", {}).get("search", {}).get("request", {}).get("body", {}).get("query")
                             or payload.get("result", {}).get("input", {}).get("search", {}).get("request", {}).get("body", {}).get("query")
