@@ -215,7 +215,13 @@ if [ "$CONFIG_COMPLETE" = true ]; then
 else
   echo "=== Step 4/5: Configure deployment (missing: ${CONFIG_MISSING}) ==="
   echo ""
-  bash ./scripts/configure-helm.sh
+  if [ -t 0 ]; then
+    bash ./scripts/configure-helm.sh
+  else
+    warn "Non-interactive mode — generating secrets only. Configure LLM keys and domain later:"
+    bash ./scripts/configure-helm.sh --non-interactive
+    echo "  Edit ${VALUES_FILE} then re-run this script."
+  fi
 fi
 echo ""
 
@@ -417,10 +423,15 @@ if [ -n "$EXTERNAL_IP" ]; then
   FRONTEND_HOST=$(yq '.ingress.hosts.frontend // "aurora.example.com"' "$VALUES_FILE" 2>/dev/null || echo "aurora.example.com")
   API_HOST=$(yq '.ingress.hosts.api // "api.aurora.example.com"' "$VALUES_FILE" 2>/dev/null || echo "api.aurora.example.com")
   WS_HOST=$(yq '.ingress.hosts.ws // "ws.aurora.example.com"' "$VALUES_FILE" 2>/dev/null || echo "ws.aurora.example.com")
-  SCHEME="https"
+  TLS_ENABLED=$(yq '.ingress.tls.enabled // false' "$VALUES_FILE" 2>/dev/null || echo "false")
+  if [ "$TLS_ENABLED" = "true" ]; then
+    SCHEME="https"; WS_SCHEME="wss"
+  else
+    SCHEME="http"; WS_SCHEME="ws"
+  fi
   echo "  Frontend:  ${SCHEME}://${FRONTEND_HOST}"
   echo "  API:       ${SCHEME}://${API_HOST}/health/"
-  echo "  WebSocket: wss://${WS_HOST}"
+  echo "  WebSocket: ${WS_SCHEME}://${WS_HOST}"
   echo ""
   echo "  Ingress IP: ${EXTERNAL_IP}"
   echo ""
@@ -428,5 +439,5 @@ fi
 
 echo "Post-deploy:"
 echo "  (Recommended) Set up KMS auto-unseal so Vault auto-unseals on pod restarts:"
-echo "  See docs/deployment/vault-kms.md"
+echo "  See docs/deployment/vault-kms-setup.md"
 echo ""

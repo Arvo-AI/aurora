@@ -48,9 +48,17 @@ curl -LO "${BASE_URL}/${FILENAME}.sha256"
 
 echo ""
 echo "Verifying checksum..."
-if sha256sum -c "${FILENAME}.sha256"; then
-  echo "  Checksum OK"
+CHECKSUM_OK=false
+if command -v sha256sum &>/dev/null; then
+  sha256sum -c "${FILENAME}.sha256" && CHECKSUM_OK=true
+elif command -v shasum &>/dev/null; then
+  shasum -a 256 -c "${FILENAME}.sha256" && CHECKSUM_OK=true
 else
+  echo "WARNING: neither sha256sum nor shasum found, skipping verification."
+  CHECKSUM_OK=true
+fi
+
+if [ "$CHECKSUM_OK" != true ]; then
   echo ""
   echo "ERROR: checksum verification failed. The file may be corrupted or the version may not exist."
   echo "Browse available bundles:"

@@ -185,23 +185,12 @@ if [ -n "$BASE_DOMAIN" ]; then
   echo "    api:      ${API_HOST}"
   echo "    ws:       ${WS_HOST}"
 
-  # Public URLs (derived from ingress hosts)
-  SCHEME="https"
-  yq -i ".config.FRONTEND_URL = \"${SCHEME}://${FRONTEND_HOST}\"" "$VALUES_FILE"
-  yq -i ".config.NEXT_PUBLIC_BACKEND_URL = \"${SCHEME}://${API_HOST}\"" "$VALUES_FILE"
-  yq -i ".config.NEXT_PUBLIC_WEBSOCKET_URL = \"wss://${WS_HOST}\"" "$VALUES_FILE"
-  yq -i ".config.SEARXNG_BASE_URL = \"${SCHEME}://${FRONTEND_HOST}\"" "$VALUES_FILE"
-  echo "  Public URLs set automatically from domain"
-
   # TLS
   echo ""
-  printf "Enable TLS with cert-manager (auto Let's Encrypt)? [Y/n]: "
+  printf "Enable TLS with cert-manager? (requires cert-manager installed in cluster) [y/N]: "
   read -r TLS_CHOICE
-  TLS_CHOICE="${TLS_CHOICE:-Y}"
-  if [ "$TLS_CHOICE" = "n" ] || [ "$TLS_CHOICE" = "N" ]; then
-    yq -i '.ingress.tls.enabled = false' "$VALUES_FILE"
-    echo "  TLS disabled"
-  else
+  TLS_CHOICE="${TLS_CHOICE:-N}"
+  if [ "$TLS_CHOICE" = "y" ] || [ "$TLS_CHOICE" = "Y" ]; then
     yq -i '.ingress.tls.enabled = true' "$VALUES_FILE"
     yq -i '.ingress.tls.certManager.enabled = true' "$VALUES_FILE"
     printf "  cert-manager email (for Let's Encrypt): "
@@ -210,7 +199,20 @@ if [ -n "$BASE_DOMAIN" ]; then
       yq -i ".ingress.tls.certManager.email = \"${CERT_EMAIL}\"" "$VALUES_FILE"
     fi
     echo "  TLS enabled with cert-manager"
+    SCHEME="https"
+    WS_SCHEME="wss"
+  else
+    yq -i '.ingress.tls.enabled = false' "$VALUES_FILE"
+    echo "  TLS disabled"
+    SCHEME="http"
+    WS_SCHEME="ws"
   fi
+
+  yq -i ".config.FRONTEND_URL = \"${SCHEME}://${FRONTEND_HOST}\"" "$VALUES_FILE"
+  yq -i ".config.NEXT_PUBLIC_BACKEND_URL = \"${SCHEME}://${API_HOST}\"" "$VALUES_FILE"
+  yq -i ".config.NEXT_PUBLIC_WEBSOCKET_URL = \"${WS_SCHEME}://${WS_HOST}\"" "$VALUES_FILE"
+  yq -i ".config.SEARXNG_BASE_URL = \"${SCHEME}://${FRONTEND_HOST}\"" "$VALUES_FILE"
+  echo "  Public URLs updated for ${SCHEME}://"
 else
   echo "  Skipping domain configuration. Set it later in ${VALUES_FILE}"
 fi

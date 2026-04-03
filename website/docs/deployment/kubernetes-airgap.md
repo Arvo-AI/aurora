@@ -33,6 +33,7 @@ The script will:
 3. Push all images to your registry (uses `skopeo` if available, falls back to `docker`)
 4. Prompt you for LLM provider, API key, URLs, and generate secrets
 5. Deploy with Helm
+6. Initialize and unseal Vault automatically
 
 To pin a specific version:
 
@@ -40,7 +41,7 @@ To pin a specific version:
 curl -fsSL https://raw.githubusercontent.com/arvo-ai/aurora/main/scripts/deploy-k8s.sh | bash -s -- registry.internal:5000 v1.2.3
 ```
 
-After deployment, set up Vault (first deploy only) — see [Vault Setup](./kubernetes#vault-setup).
+After deployment, optionally set up KMS auto-unseal so Vault auto-unseals on pod restarts — see [Vault KMS Setup](./vault-kms-setup).
 
 ---
 
@@ -81,8 +82,12 @@ If you prefer to build from source instead of downloading, see [Creating the Air
 Extract the source archive and push all images to your registry:
 
 ```bash
-tar xzf aurora-*.tar.gz
-cd aurora-*/
+# Extract source archive (Helm chart + scripts)
+VERSION="v1.2.3"   # replace with your downloaded version
+tar xzf "aurora-${VERSION#v}.tar.gz"
+cd "aurora-${VERSION#v}/"
+
+# Push images to your registry
 ./scripts/push-to-registry.sh registry.internal:5000
 ```
 
@@ -206,7 +211,8 @@ Or manually:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/arvo-ai/aurora/main/scripts/download-bundle.sh | bash
-tar xzf aurora-*.tar.gz && cd aurora-*/
+# Extract — replace VERSION with the downloaded version
+tar xzf aurora-<VERSION>.tar.gz && cd aurora-<VERSION>/
 ./scripts/push-to-registry.sh registry.internal:5000
 helm upgrade aurora-oss ./deploy/helm/aurora -n aurora --reset-values -f deploy/helm/aurora/values.generated.yaml
 ```
