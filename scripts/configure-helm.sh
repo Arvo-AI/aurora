@@ -46,9 +46,9 @@ echo ""
 
 # --- Generate secrets (always, idempotent) ---
 echo "Generating secrets..."
-POSTGRES_PW=$(yq '.secrets.postgres.POSTGRES_PASSWORD' "$VALUES_FILE")
+POSTGRES_PW=$(yq '.secrets.db.POSTGRES_PASSWORD' "$VALUES_FILE")
 if [ -z "$POSTGRES_PW" ] || [ "$POSTGRES_PW" = "null" ]; then
-  yq -i ".secrets.postgres.POSTGRES_PASSWORD = \"$(generate_secret)\"" "$VALUES_FILE"
+  yq -i ".secrets.db.POSTGRES_PASSWORD = \"$(generate_secret)\"" "$VALUES_FILE"
   echo "  Generated POSTGRES_PASSWORD"
 else
   echo "  POSTGRES_PASSWORD already set, skipping"
@@ -89,31 +89,31 @@ case "$LLM_CHOICE" in
     printf "OpenRouter API key: "
     read -r API_KEY
     if [ -n "$API_KEY" ]; then
-      yq -i ".secrets.app.OPENROUTER_API_KEY = \"${API_KEY}\"" "$VALUES_FILE"
+      yq -i ".secrets.llm.OPENROUTER_API_KEY = \"${API_KEY}\"" "$VALUES_FILE"
     fi
     ;;
   2)
-    yq -i '.config.LLM_PROVIDER_MODE = "openai"' "$VALUES_FILE"
+    yq -i '.config.LLM_PROVIDER_MODE = "direct"' "$VALUES_FILE"
     printf "OpenAI API key: "
     read -r API_KEY
     if [ -n "$API_KEY" ]; then
-      yq -i ".secrets.app.OPENAI_API_KEY = \"${API_KEY}\"" "$VALUES_FILE"
+      yq -i ".secrets.llm.OPENAI_API_KEY = \"${API_KEY}\"" "$VALUES_FILE"
     fi
     ;;
   3)
-    yq -i '.config.LLM_PROVIDER_MODE = "anthropic"' "$VALUES_FILE"
+    yq -i '.config.LLM_PROVIDER_MODE = "direct"' "$VALUES_FILE"
     printf "Anthropic API key: "
     read -r API_KEY
     if [ -n "$API_KEY" ]; then
-      yq -i ".secrets.app.ANTHROPIC_API_KEY = \"${API_KEY}\"" "$VALUES_FILE"
+      yq -i ".secrets.llm.ANTHROPIC_API_KEY = \"${API_KEY}\"" "$VALUES_FILE"
     fi
     ;;
   4)
-    yq -i '.config.LLM_PROVIDER_MODE = "google"' "$VALUES_FILE"
+    yq -i '.config.LLM_PROVIDER_MODE = "direct"' "$VALUES_FILE"
     printf "Google AI API key: "
     read -r API_KEY
     if [ -n "$API_KEY" ]; then
-      yq -i ".secrets.app.GOOGLE_AI_API_KEY = \"${API_KEY}\"" "$VALUES_FILE"
+      yq -i ".secrets.llm.GOOGLE_AI_API_KEY = \"${API_KEY}\"" "$VALUES_FILE"
     fi
     ;;
   5)

@@ -156,7 +156,7 @@ CONFIG_COMPLETE=true
 CONFIG_MISSING=""
 if [ -f "$VALUES_FILE" ]; then
   for path in \
-    '.secrets.postgres.POSTGRES_PASSWORD' \
+    '.secrets.db.POSTGRES_PASSWORD' \
     '.secrets.app.FLASK_SECRET_KEY' \
     '.secrets.app.AUTH_SECRET' \
     '.secrets.app.SEARXNG_SECRET'; do
@@ -172,10 +172,10 @@ if [ -f "$VALUES_FILE" ]; then
   if [ "$CONFIG_COMPLETE" = true ]; then
     HAS_LLM=false
     for key in \
-      '.secrets.app.OPENROUTER_API_KEY' \
-      '.secrets.app.OPENAI_API_KEY' \
-      '.secrets.app.ANTHROPIC_API_KEY' \
-      '.secrets.app.GOOGLE_AI_API_KEY'; do
+      '.secrets.llm.OPENROUTER_API_KEY' \
+      '.secrets.llm.OPENAI_API_KEY' \
+      '.secrets.llm.ANTHROPIC_API_KEY' \
+      '.secrets.llm.GOOGLE_AI_API_KEY'; do
       VAL=$(yq "${key} // \"\"" "$VALUES_FILE" 2>/dev/null || true)
       if [ -n "$VAL" ] && [ "$VAL" != "null" ]; then
         HAS_LLM=true
