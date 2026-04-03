@@ -127,7 +127,7 @@ _RATE_LIMIT_WINDOW_SECONDS = 300  # 5 minute window
 _RATE_LIMIT_MAX_REQUESTS = 5  # Max 5 background chats per window
 
 # RCA sources that use rca_context in system prompt
-_RCA_SOURCES = {'grafana', 'datadog', 'netdata', 'splunk', 'slack', 'pagerduty', 'dynatrace', 'jenkins', 'cloudbees'}
+_RCA_SOURCES = {'grafana', 'datadog', 'netdata', 'splunk', 'slack', 'pagerduty', 'dynatrace', 'jenkins', 'cloudbees', 'elasticsearch'}
 
 # Initialize Redis client at module load time - fails if Redis is unavailable
 _redis_client = get_redis_client()
@@ -177,6 +177,7 @@ def _get_connected_integrations(user_id: str) -> Dict[str, bool]:
         'coroot': False,
         'jenkins': False,
         'cloudbees': False,
+        'elasticsearch': False,
     }
 
     try:
@@ -239,6 +240,13 @@ def _get_connected_integrations(user_id: str) -> Dict[str, bool]:
         integrations['cloudbees'] = bool(cloudbees_creds and cloudbees_creds.get("base_url"))
     except Exception as e:
         logger.debug(f"[BackgroundChat] Error checking CloudBees: {e}")
+
+    try:
+        from utils.auth.token_management import get_token_data
+        es_creds = get_token_data(user_id, "elasticsearch")
+        integrations['elasticsearch'] = bool(es_creds and es_creds.get("host"))
+    except Exception as e:
+        logger.debug(f"[BackgroundChat] Error checking Elasticsearch: {e}")
 
     return integrations
 
