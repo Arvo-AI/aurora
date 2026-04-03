@@ -2,6 +2,8 @@
 
 import ModelSelector from "@/components/ModelSelector";
 import ModeSelector from "@/components/ModeSelector";
+import { Button } from "@/components/ui/button";
+import { Radar } from "lucide-react";
 import { useConnectedAccounts } from "@/hooks/useConnectedAccounts";
 
 interface ChatControlsProps {
@@ -12,6 +14,8 @@ interface ChatControlsProps {
   selectedProviders?: string[]; // Kept for compatibility but not used
   disabled?: boolean;
   className?: string;
+  onTriggerRCA?: () => void;
+  rcaDisabled?: boolean;
 }
 
 export default function ChatControls({
@@ -20,21 +24,35 @@ export default function ChatControls({
   selectedMode,
   onModeChange,
   disabled = false,
-  className = ""
+  className = "",
+  onTriggerRCA,
+  rcaDisabled = false,
 }: ChatControlsProps) {
   // Get all connected providers from database
   const { infraProviders } = useConnectedAccounts();
 
   return (
     <div className={`flex items-center justify-between ${className}`}>
-      {/* Left: Mode selector only */}
-      <div className="flex items-center">
+      {/* Left: Mode selector + Trigger RCA */}
+      <div className="flex items-center gap-1">
         <ModeSelector
           selectedMode={selectedMode}
           onModeChange={onModeChange}
           disabled={disabled}
           className="h-7 text-sm"
         />
+        {onTriggerRCA && (
+          <Button
+            variant="ghost"
+            onClick={onTriggerRCA}
+            disabled={rcaDisabled}
+            className="h-6 px-2 text-xs font-medium text-muted-foreground hover:text-orange-500 hover:bg-orange-500/10 transition-colors gap-1"
+            title="Trigger RCA Investigation"
+          >
+            <Radar className="h-3 w-3" />
+            <span>RCA</span>
+          </Button>
+        )}
       </div>
 
       {/* Right: Model selector + Provider logos */}

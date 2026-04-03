@@ -223,6 +223,16 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
     }
   }, [chatWebSocket, handleSend, input, activeIncidentContext]);
 
+  const handleTriggerRCA = useCallback(async () => {
+    const finalMessage = input.trim();
+    if (!finalMessage) return;
+    const sent = await handleSend(finalMessage, chatWebSocket, undefined, { triggerRca: true });
+    if (sent) {
+      setInput("");
+      setImages([]);
+    }
+  }, [chatWebSocket, handleSend, input]);
+
   const handlePromptClickWithSocket = useCallback((prompt: string) => {
     setInput(prompt);
     handlePromptClick(prompt, chatWebSocket);
@@ -428,6 +438,7 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
               input={input}
               setInput={setInput}
               onSend={handleSendWithInput}
+              onTriggerRCA={handleTriggerRCA}
               isSending={isSending}
               selectedModel={selectedModel}
               onModelChange={setSelectedModel}
@@ -466,6 +477,7 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
             input={input}
             setInput={setInput}
             onSend={handleSendWithInput}
+            onTriggerRCA={handleTriggerRCA}
             isSending={isSending}
             selectedModel={selectedModel}
             onModelChange={setSelectedModel}
