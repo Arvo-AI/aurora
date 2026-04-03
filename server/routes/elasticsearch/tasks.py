@@ -39,11 +39,26 @@ def _build_rca_prompt_from_alert(
     """
     watch_id = payload.get("watch_id") or payload.get("alert_name") or payload.get("monitor_name") or "Unknown Alert"
     condition_met = payload.get("condition", {}).get("met", True)
-    query = payload.get("input", {}).get("search", {}).get("request", {}).get("body", {}).get("query")
-    result_count = payload.get("result_count") or payload.get("ctx", {}).get("payload", {}).get("hits", {}).get("total", 0)
 
-    # Extract result sample if available
-    results = payload.get("results") or payload.get("ctx", {}).get("payload", {}).get("hits", {}).get("hits", [])
+    # Watcher nests under result.search, OpenSearch under ctx.payload
+    search_result = payload.get("result", {}).get("search", {})
+    query = (
+        payload.get("input", {}).get("search", {}).get("request", {}).get("body", {}).get("query")
+        or search_result.get("request", {}).get("body", {}).get("query")
+        or payload.get("result", {}).get("input", {}).get("search", {}).get("request", {}).get("body", {}).get("query")
+    )
+    result_count = (
+        payload.get("result_count")
+        or search_result.get("total")
+        or payload.get("ctx", {}).get("payload", {}).get("hits", {}).get("total", 0)
+    )
+
+    # Extract hits from Watcher (result.search.hits.hits) or OpenSearch (ctx.payload.hits.hits)
+    results = (
+        payload.get("results")
+        or search_result.get("hits", {}).get("hits", [])
+        or payload.get("ctx", {}).get("payload", {}).get("hits", {}).get("hits", [])
+    )
     results_str = ""
     if results:
         if isinstance(results, list):
@@ -83,7 +98,13 @@ def _build_rca_prompt_from_alert(
 
 def _extract_severity(payload: Dict[str, Any]) -> str:
     """Extract severity from Elasticsearch alert payload."""
-    severity = payload.get("severity") or payload.get("alert_severity") or payload.get("trigger", {}).get("severity")
+    severity = (
+        payload.get("severity")
+        or payload.get("alert_severity")
+        or payload.get("trigger", {}).get("severity")
+        or payload.get("metadata", {}).get("severity")
+        or payload.get("ctx", {}).get("metadata", {}).get("severity")
+    )
     if severity:
         severity = str(severity).lower()
         if severity in ("critical", "high", "medium", "low"):
@@ -107,7 +128,11 @@ def _extract_service(payload: Dict[str, Any]) -> str:
 def _format_alert_summary(payload: Dict[str, Any]) -> str:
     """Format alert summary for logging."""
     name = payload.get("watch_id") or payload.get("alert_name") or payload.get("monitor_name") or "Unnamed Alert"
-    result_count = payload.get("result_count") or 0
+    result_count = (
+        payload.get("result_count")
+        or payload.get("result", {}).get("search", {}).get("total")
+        or 0
+    )
     return f"{name} (results={result_count})"
 
 
@@ -153,8 +178,15 @@ def process_elasticsearch_alert(
                         alert_title = payload.get("alert_name") or payload.get("watch_id") or payload.get("monitor_name")
                         alert_state = "triggered"
                         watch_id = payload.get("watch_id") or payload.get("monitor_id")
-                        query = json.dumps(payload.get("input", {}).get("search", {}).get("request", {}).get("body", {}).get("query", {}))
-                        result_count = payload.get("result_count")
+                        query = json.dumps(
+                            payload.get("input", {}).get("search", {}).get("request", {}).get("body", {}).get("query")
+                            or payload.get("result", {}).get("input", {}).get("search", {}).get("request", {}).get("body", {}).get("query")
+                            or {}
+                        )
+                        result_count = (
+                            payload.get("result_count")
+                            or payload.get("result", {}).get("search", {}).get("total")
+                        )
                         severity = _extract_severity(payload)
 
                         cursor.execute(
@@ -361,6 +393,17 @@ def process_elasticsearch_alert(
                                 rca_prompt = _build_rca_prompt_from_alert(
                                     payload, user_id=user_id
                                 )
+
+                                try:
+                                    from chat.background.rca_prompt_builder import build_elasticsearch_rca_prompt
+                                    rca_prompt = build_elasticsearch_rca_prompt(
+                                        payload, user_id=user_id
+                                    )
+                                except Exception as prompt_exc:
+                                    logger.warning(
+                                        "[ELASTICSEARCH] Full prompt builder failed, using simple prompt: %s",
+                                        prompt_exc,
+                                    )
 
                                 task = run_background_chat.delay(
                                     user_id=user_id,
