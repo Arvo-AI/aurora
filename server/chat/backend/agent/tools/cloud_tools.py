@@ -32,6 +32,7 @@ from .github_repos_tool import get_connected_repos, GetConnectedReposArgs
 from .jenkins_rca_tool import jenkins_rca, JenkinsRCAArgs
 from .cloudbees_rca_tool import cloudbees_rca, CloudBeesRCAArgs
 from .spinnaker_rca_tool import spinnaker_rca, SpinnakerRCAArgs
+from .trigger_rca_tool import trigger_rca, TriggerRCAArgs
 
 # Visualization trigger caching
 from cachetools import TTLCache
@@ -1163,6 +1164,7 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
         (confluence_runbook_parse, "confluence_runbook_parse"),
         (on_prem_kubectl, "on_prem_kubectl"),
         (analyze_zip_file, "analyze_zip_file"),
+        (trigger_rca, "trigger_rca"),
         # (web_search, "web_search"),  # Moved to dedicated registration below with explicit args_schema
     ]
     
@@ -1318,6 +1320,20 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                 name=name,
                 description="Fetch and parse a Confluence runbook into markdown and steps for LLM use. Parameter: page_url (string, required).",
                 args_schema=ConfluenceRunbookArgs,
+            )
+        elif name == 'trigger_rca':
+            tool = StructuredTool.from_function(
+                func=final_func,
+                name=name,
+                description=(
+                    "Trigger a full automated Root Cause Analysis investigation. "
+                    "Use this when the user reports an operational incident or describes symptoms "
+                    "that warrant investigation (e.g. high CPU, errors, latency spikes, outages). "
+                    "Creates an incident and dispatches a background RCA using all connected integrations. "
+                    "Parameters: issue_description (required), title (optional), service (optional), "
+                    "severity (optional: critical/high/medium/low)."
+                ),
+                args_schema=TriggerRCAArgs,
             )
         else:
             tool = StructuredTool.from_function(final_func)
