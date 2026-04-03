@@ -23,12 +23,29 @@ export async function forwardAuthenticatedGet(
       ? `${API_BASE_URL}${backendPath}?${qs}`
       : `${API_BASE_URL}${backendPath}`;
 
-    const response = await fetch(url, {
-      method: 'GET',
-      headers: authHeaders,
-      credentials: 'include',
-      cache: 'no-store',
-    });
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10_000);
+
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        method: 'GET',
+        headers: authHeaders,
+        credentials: 'include',
+        cache: 'no-store',
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+    } catch (fetchErr: unknown) {
+      clearTimeout(timeoutId);
+      if (fetchErr instanceof Error && fetchErr.name === 'AbortError') {
+        return NextResponse.json(
+          { error: `Request timeout for ${errorLabel}` },
+          { status: 504 },
+        );
+      }
+      throw fetchErr;
+    }
 
     if (!response.ok) {
       const text = await response.text();

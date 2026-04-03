@@ -78,19 +78,36 @@ export default function IncidentsPage() {
   const mutateRef = useRef(mutate);
   mutateRef.current = mutate;
 
-  // Real-time updates via SSE — no polling, no manual refresh needed
+  // Real-time updates via SSE — reconnects on stale connection detection
   useEffect(() => {
-    const eventSource = new EventSource('/api/incidents/stream');
-    eventSource.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data);
-        if (data.type === 'incident_update') {
-          mutateRef.current();
-        }
-      } catch { /* ignore malformed messages */ }
+    let es: EventSource | null = null;
+
+    const connect = () => {
+      es?.close();
+      es = new EventSource('/api/incidents/stream');
+      es.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          if (data.type === 'incident_update') {
+            mutateRef.current();
+          }
+        } catch { /* ignore malformed messages */ }
+      };
+      es.onerror = () => { /* EventSource reconnects automatically */ };
     };
-    eventSource.onerror = () => { /* EventSource reconnects automatically */ };
-    return () => eventSource.close();
+
+    const onStale = () => {
+      connect();
+      mutateRef.current();
+    };
+
+    connect();
+    window.addEventListener('aurora:connection-stale', onStale);
+
+    return () => {
+      es?.close();
+      window.removeEventListener('aurora:connection-stale', onStale);
+    };
   }, []);
 
   const activeIncidents = useMemo(() => incidents.filter(i => i.status === 'investigating'), [incidents]);
