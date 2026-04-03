@@ -9,7 +9,7 @@ from utils.db.connection_pool import db_pool
 from utils.web.cors_utils import create_cors_response
 from utils.auth.token_management import store_tokens_in_db
 from utils.auth.rbac_decorators import require_permission
-from utils.auth.stateless_auth import get_org_id_from_request
+from utils.auth.stateless_auth import get_org_id_from_request, validate_user_exists
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +101,9 @@ def alert_webhook(user_id: str):
     if not user_id:
         logger.warning("[GRAFANA] Webhook received without user_id")
         return jsonify({"error": "user_id is required"}), 400
+
+    if not validate_user_exists(user_id):
+        return jsonify({"error": "Unknown user"}), 404
 
     row_exists, is_active = _has_grafana_row(user_id)
 
