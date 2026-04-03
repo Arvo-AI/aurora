@@ -569,6 +569,7 @@ def initialize_tables():
                      CREATE INDEX IF NOT EXISTS idx_incidents_user_id ON incidents(user_id, started_at DESC);
                      CREATE INDEX IF NOT EXISTS idx_incidents_status ON incidents(status);
                      CREATE INDEX IF NOT EXISTS idx_incidents_source ON incidents(source_type, source_alert_id);
+                     CREATE UNIQUE INDEX IF NOT EXISTS idx_incidents_null_org ON incidents(source_type, source_alert_id, user_id) WHERE org_id IS NULL;
                      CREATE INDEX IF NOT EXISTS idx_incidents_merged ON incidents(merged_into_incident_id) WHERE merged_into_incident_id IS NOT NULL;
                  """,
                 "incident_alerts": """
