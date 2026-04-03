@@ -304,39 +304,62 @@ Use this path when the target VM has restricted or no outbound internet access (
 
 **Prerequisites:**
 
-- You have received the airtight bundle (a `.tar.gz` file, e.g. `aurora-airtight-4c92267-amd64.tar.gz`)
-- Optionally, its `.sha256` checksum file for integrity verification
 - The target VM meets the [hardware requirements](#1-provision-a-vm) (4+ CPU, 8+ GB RAM, 60 GB SSD)
 - Docker and Docker Compose are installed on the VM (see [Installing Docker](./install-docker) for all OS/architecture combinations, including environments where `curl` and `wget` are blocked)
-- **Optional:** `make` and `jq` installed on the VM — the `Makefile` targets (`make init`, `make prod-airtight`) are convenience wrappers. If you can't install these, see the tip in step 3
+- **Optional:** `make` and `jq` installed on the VM — the `Makefile` targets (`make init`, `make prod-airtight`) are convenience wrappers. If you can't install these, see the tip in step 4
 - You can SSH into the VM
 
-### 1. Transfer the Bundle to the VM
+### 1. Download the Bundle
 
-You need the `.tar.gz` tarball on the VM. The `.sha256` checksum file is optional (for verifying the transfer). Use whatever transfer method your organization permits:
+Prebuilt airtight bundles are published to Google Cloud Storage on every release and push to `main`. Download on a machine with internet access.
+
+**Browse available bundles:**
+- [amd64 bundles](https://storage.googleapis.com/aurora-airtight-bucket/index.html)
+- [arm64 bundles](https://storage.googleapis.com/aurora-airtight-bucket-arm64/index.html)
+
+**Download** — set your version and architecture, then download:
 
 ```bash
-BUNDLE=aurora-airtight-4c92267-amd64.tar.gz  # replace with your bundle filename
+VERSION=v1.2.3   # replace with your target version (or commit SHA, e.g. 4c92267)
+ARCH=amd64       # or arm64
 
-# SCP
-VM_USER=user        # replace with your SSH username
-VM_IP=10.0.0.5      # replace with your VM's IP
-scp $BUNDLE $VM_USER@$VM_IP:~/
+# amd64 bundles are in aurora-airtight-bucket, arm64 in aurora-airtight-bucket-arm64
+BUCKET="aurora-airtight-bucket$([ "$ARCH" = "arm64" ] && echo "-arm64")"
+
+curl -LO "https://storage.googleapis.com/${BUCKET}/aurora-airtight-${VERSION}-${ARCH}.tar.gz"
+curl -LO "https://storage.googleapis.com/${BUCKET}/aurora-airtight-${VERSION}-${ARCH}.tar.gz.sha256"
 ```
 
-### 2. (Optional) Verify the Bundle Integrity
+Version tags (e.g. `v1.2.3`) are published on releases. Commit-based bundles (e.g. `4c92267`) are published on every push to `main`.
 
-If you also transferred the `.sha256` checksum file, verify the tarball wasn't corrupted:
+:::tip Build your own bundle
+If you prefer to build from source instead of downloading, see [Creating the Air-Tight Bundle](#creating-the-air-tight-bundle-manual) below.
+:::
+
+### 2. Transfer the Bundle to the VM
+
+Use whatever transfer method your organization permits:
+
+```bash
+BUNDLE=aurora-airtight-${VERSION}-${ARCH}.tar.gz
+
+VM_USER=user        # replace with your SSH username
+VM_IP=10.0.0.5      # replace with your VM's IP
+scp $BUNDLE $BUNDLE.sha256 $VM_USER@$VM_IP:~/
+```
+
+### 3. (Optional) Verify the Bundle Integrity
+
+On the VM, verify the tarball wasn't corrupted during transfer:
 
 ```bash
 cd ~
 sha256sum -c $BUNDLE.sha256
-# Expected output: aurora-airtight-4c92267-amd64.tar.gz: OK
 ```
 
 If the check fails, the file was corrupted — re-transfer it.
 
-### 3. Get the Repository
+### 4. Get the Repository
 
 The repo contains configuration files (`docker-compose.airtight.yml`, `Makefile`, `.env.example`) needed to run the stack. No images are pulled during this step.
 
@@ -362,7 +385,7 @@ make init
 If `make` is not available, check the `Makefile` for the underlying commands and run them manually.
 :::
 
-### 4. Configure .env
+### 5. Configure .env
 
 ```bash
 nano .env
@@ -412,13 +435,13 @@ If accessing via VPN, private subnet, or reverse proxy, use that IP/hostname ins
 
 Save and exit (`Ctrl+X`, `Y`, `Enter` in nano).
 
-### 5. Load Images and Start
+### 6. Load Images and Start
 
-Pass the path to the tarball you transferred in step 1:
+Pass the path to the tarball you transferred in step 2:
 
 ```bash
-BUNDLE=aurora-airtight-4c92267-amd64.tar.gz  # replace with your bundle filename
-make prod-airtight AIRTIGHT_BUNDLE=~/$BUNDLE
+# Use the same VERSION and ARCH from step 1 (e.g. VERSION=v1.2.3 ARCH=amd64)
+make prod-airtight AIRTIGHT_BUNDLE=~/aurora-airtight-${VERSION}-${ARCH}.tar.gz
 ```
 
 This loads every Docker image from the tarball into the local Docker daemon and starts the full Aurora stack. No outbound network calls are made. First run takes a few minutes while images are loaded.
@@ -429,7 +452,7 @@ On subsequent restarts (images already loaded):
 make prod-airtight
 ```
 
-### 6. Get and Set the Vault Token
+### 7. Get and Set the Vault Token
 
 ```bash
 # Wait ~30 seconds for vault-init to finish, then:
@@ -439,17 +462,17 @@ VAULT_TOKEN=$(docker exec aurora-vault cat /vault/init/keys.json | jq -r '.root_
 grep VAULT_TOKEN .env
 ```
 
-### 7. Restart to Apply Vault Token
+### 8. Restart to Apply Vault Token
 
 ```bash
 make down && make prod-airtight
 ```
 
-### 8. Open Firewall Ports
+### 9. Open Firewall Ports
 
 Same as the [standard deployment firewall step](#9-open-firewall-ports) — allow inbound TCP on ports 3000, 5080, and 5006.
 
-### 9. Access Aurora
+### 10. Access Aurora
 
 ```
 http://YOUR_VM_IP:3000
@@ -457,24 +480,28 @@ http://YOUR_VM_IP:3000
 
 ### Deploying Updates (Air-Tight)
 
-Each new Aurora release requires a fresh bundle. On the connected machine:
+Each new Aurora release requires a fresh bundle. On a machine with internet access:
 
 ```bash
-git pull && make package-airtight
+VERSION=<new-version>  # replace with the new release tag or commit SHA
+ARCH=amd64             # or arm64
+BUCKET="aurora-airtight-bucket$([ "$ARCH" = "arm64" ] && echo "-arm64")"
+
+curl -LO "https://storage.googleapis.com/${BUCKET}/aurora-airtight-${VERSION}-${ARCH}.tar.gz"
 ```
 
-Transfer the new tarball and checksum to the VM, then:
+Transfer the new tarball to the VM, then:
 
 ```bash
 make down
-make prod-airtight AIRTIGHT_BUNDLE=~/aurora-airtight-<new-version>.tar.gz
+make prod-airtight AIRTIGHT_BUNDLE=~/aurora-airtight-${VERSION}-${ARCH}.tar.gz
 ```
 
 The `.env` file stays on the VM and is never part of the bundle.
 
-### Creating the Air-Tight Bundle
+### Creating the Air-Tight Bundle (Manual)
 
-This section is for the person building the bundle on a machine with internet access.
+Prebuilt bundles are available for download (see [step 1](#1-download-the-bundle) above). Use this section only if you need to build a custom bundle from source.
 
 ```bash
 git clone https://github.com/arvo-ai/aurora.git && cd aurora
