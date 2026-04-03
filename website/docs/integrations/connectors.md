@@ -528,12 +528,12 @@ Webhook-based connection for Grafana Cloud or self-hosted instances. No API key 
 
 1. Open the **Grafana** integration page in Aurora
 2. Copy the webhook URL shown on screen
-3. In Grafana: **Alerts & IRM** > **Notification Configuration** > **Contact points** > **New contact point**
+3. In Grafana: **Alerts & IRM** > **Alerting** > **Notification Configuration** > **Contact points** > **New contact point**
    - Type: **Webhook**
    - URL: paste the Aurora webhook URL (`https://your-aurora-domain/grafana/alerts/webhook/{user_id}`)
 4. Click **Test** to send a test notification
 5. Aurora auto-connects when it receives the test webhook
-6. Save the contact point, then add it to a notification policy under **Notification Configuration** > **Notification policies**
+6. Save the contact point, then add it to a notification policy under **Alerting** > **Notification Configuration** > **Notification policies**
 
 #### Disconnect / Reconnect
 

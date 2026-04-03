@@ -72,12 +72,12 @@ export function GrafanaWebhookStep({
           <div className="bg-muted/50 rounded-lg p-4 text-sm">
             <p className="font-medium mb-2">Setup instructions:</p>
             <ol className="list-decimal list-inside space-y-1 text-muted-foreground">
-              <li>Go to Alerts &amp; IRM &gt; Notification Configuration &gt; Contact points in Grafana</li>
+              <li>Go to Alerts &amp; IRM &gt; Alerting &gt; Notification Configuration &gt; Contact points in Grafana</li>
               <li>Click <strong className="text-foreground">New contact point</strong></li>
               <li>Select <strong className="text-foreground">Webhook</strong> as the integration type</li>
               <li>Paste the webhook URL above into the URL field</li>
               <li>Click <strong className="text-foreground">Test</strong> to verify, then save</li>
-              <li>Add the contact point to a notification policy under Notification Configuration &gt; Notification policies</li>
+              <li>Add the contact point to a notification policy under Alerting &gt; Notification Configuration &gt; Notification policies</li>
             </ol>
             <a
               href="https://grafana.com/docs/grafana/latest/alerting/configure-notifications/manage-contact-points/integrations/webhook-notifier/"
