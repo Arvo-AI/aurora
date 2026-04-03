@@ -868,10 +868,11 @@ def get_cloud_tools():
     # - When no tool_capture is active we can safely cache per-user
     # - When a tool_capture **is** active we additionally key on the `id()` of the object so each
     #   session gets its own wrapped functions that close over the *right* capture instance.
+    rca_flag = getattr(state_context, 'trigger_rca_requested', False) if state_context else False
     if tool_capture is None:
-        cache_key = f"{user_id}:nocapture:{mode_suffix}"
+        cache_key = f"{user_id}:nocapture:{mode_suffix}:rca={rca_flag}"
     else:
-        cache_key = f"{user_id}:capture:{id(tool_capture)}:{mode_suffix}"
+        cache_key = f"{user_id}:capture:{id(tool_capture)}:{mode_suffix}:rca={rca_flag}"
     
     if user_id:
         current_time = time.time()
@@ -1164,9 +1165,12 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
         (confluence_runbook_parse, "confluence_runbook_parse"),
         (on_prem_kubectl, "on_prem_kubectl"),
         (analyze_zip_file, "analyze_zip_file"),
-        (trigger_rca, "trigger_rca"),
         # (web_search, "web_search"),  # Moved to dedicated registration below with explicit args_schema
     ]
+
+    # Only include trigger_rca when the user explicitly requested it via the UI button
+    if state_context and getattr(state_context, 'trigger_rca_requested', False):
+        tool_functions.append((trigger_rca, "trigger_rca"))
     
     # Process Aurora native tools
     for func, name in tool_functions:
