@@ -213,7 +213,7 @@ services:
       context: ./server
       dockerfile: Dockerfile
       target: prod
-    image: aurora_celery-worker:latest
+    image: aurora_server:latest
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
@@ -260,7 +260,7 @@ services:
       context: ./server
       dockerfile: Dockerfile
       target: prod
-    image: aurora_celery-beat:latest
+    image: aurora_server:latest
     environment:
       <<: *common-env
       OTEL_SERVICE_NAME: celery-beat
@@ -349,7 +349,7 @@ services:
       context: ./server
       dockerfile: Dockerfile
       target: prod
-    image: aurora_chatbot:latest
+    image: aurora_server:latest
     extra_hosts:
       - "host.docker.internal:host-gateway"
     stdin_open: true

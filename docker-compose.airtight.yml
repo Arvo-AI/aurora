@@ -182,7 +182,7 @@ services:
     restart: unless-stopped
 
   celery_worker:
-    image: aurora_celery-worker:latest
+    image: aurora_server:latest
     pull_policy: never
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -219,7 +219,7 @@ services:
     restart: unless-stopped
 
   celery_beat:
-    image: aurora_celery-beat:latest
+    image: aurora_server:latest
     pull_policy: never
     environment:
       <<: *common-env
@@ -302,7 +302,7 @@ services:
         condition: service_healthy
 
   chatbot:
-    image: aurora_chatbot:latest
+    image: aurora_server:latest
     pull_policy: never
     extra_hosts:
       - "host.docker.internal:host-gateway"

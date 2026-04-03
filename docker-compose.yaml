@@ -211,7 +211,7 @@ services:
       context: ./server
       dockerfile: Dockerfile
       target: dev
-    image: aurora_celery-worker:latest
+    image: aurora_server:latest
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
@@ -328,7 +328,7 @@ services:
       context: ./server
       dockerfile: Dockerfile
       target: dev
-    image: aurora_chatbot:latest
+    image: aurora_server:latest
     extra_hosts:
       - "host.docker.internal:host-gateway"
     stdin_open: true

@@ -37,9 +37,6 @@ THIRD_PARTY_IMAGES=(
 
 AURORA_IMAGES=(
   "aurora_server:latest"
-  "aurora_celery-worker:latest"
-  "aurora_celery-beat:latest"
-  "aurora_chatbot:latest"
   "aurora_frontend:latest"
 )
 
@@ -55,9 +52,6 @@ docker buildx build --platform "$PLATFORM" \
   -f "$REPO_ROOT/server/Dockerfile" --target prod \
   -t aurora_server:latest --load "$REPO_ROOT/server"
 
-docker tag aurora_server:latest aurora_celery-worker:latest
-docker tag aurora_server:latest aurora_celery-beat:latest
-docker tag aurora_server:latest aurora_chatbot:latest
 
 docker buildx build --platform "$PLATFORM" \
   -f "$REPO_ROOT/client/Dockerfile" --target prod \
