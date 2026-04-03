@@ -8,10 +8,6 @@ import { Label } from "@/components/ui/label";
 import { GrafanaStatus } from "@/lib/services/grafana";
 import { CheckCircle2, Copy, ExternalLink } from "lucide-react";
 
-function safeHostname(url: string): string {
-  try { return new URL(url).hostname; } catch { return url; }
-}
-
 interface GrafanaWebhookStepProps {
   status: GrafanaStatus;
   webhookUrl: string;
@@ -33,9 +29,7 @@ export function GrafanaWebhookStep({
 
   const label = status.org?.name
     ? `Connected to ${status.org.name}`
-    : status.baseUrl
-      ? `Connected to ${safeHostname(status.baseUrl)}`
-      : "Your Grafana instance is connected";
+    : "Your Grafana instance is connected";
 
   return (
     <div className="space-y-4">

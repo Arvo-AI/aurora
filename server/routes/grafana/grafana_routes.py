@@ -1,13 +1,13 @@
 import logging
 import os
-from typing import Any, Dict, Optional, Tuple
+from typing import Tuple
 
 from flask import Blueprint, jsonify, request
 
 from routes.grafana.tasks import process_grafana_alert
 from utils.db.connection_pool import db_pool
 from utils.web.cors_utils import create_cors_response
-from utils.auth.token_management import get_token_data, store_tokens_in_db
+from utils.auth.token_management import store_tokens_in_db
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import get_org_id_from_request
 
@@ -55,14 +55,6 @@ def _set_grafana_active(user_id: str, active: bool) -> bool:
         return False
 
 
-def _get_stored_grafana_credentials(user_id: str) -> Optional[Dict[str, Any]]:
-    try:
-        return get_token_data(user_id, "grafana")
-    except Exception as exc:
-        logger.error("Failed to retrieve Grafana credentials for user %s: %s", user_id, exc)
-        return None
-
-
 @grafana_bp.route("/status", methods=["GET", "OPTIONS"])
 @require_permission("connectors", "read")
 def status(user_id):
@@ -71,21 +63,7 @@ def status(user_id):
     if not row_exists or not is_active:
         return jsonify({"connected": False})
 
-    creds = _get_stored_grafana_credentials(user_id)
-    if not creds:
-        return jsonify({"connected": False})
-
-    base_url = creds.get("base_url")
-    if not base_url:
-        return jsonify({"connected": False})
-
-    return jsonify({
-        "connected": True,
-        "org": {"name": creds.get("org_name"), "id": creds.get("org_id")},
-        "user": {"email": creds.get("user_email")} if creds.get("user_email") else None,
-        "baseUrl": base_url,
-        "stackSlug": creds.get("stack_slug"),
-    })
+    return jsonify({"connected": True})
 
 
 @grafana_bp.route("/disconnect", methods=["POST", "DELETE", "OPTIONS"])
@@ -131,28 +109,15 @@ def alert_webhook(user_id: str):
 
     if not row_exists or (row_exists and not is_active):
         skip_rca = True
-        external_url = (payload.get("externalURL") or "").strip().rstrip("/")
         if not row_exists:
-            if not external_url:
-                logger.warning("[GRAFANA] Webhook from user %s has no externalURL, skipping auto-connect", user_id)
-            else:
-                logger.info("[GRAFANA] Auto-connecting user %s via webhook (externalURL=%s)", user_id, external_url)
-                try:
-                    store_tokens_in_db(user_id, {"base_url": external_url}, "grafana")
-                except Exception as exc:
-                    logger.exception("[GRAFANA] Failed to auto-connect user %s: %s", user_id, exc)
-                    return jsonify({"error": "Failed to create Grafana connection"}), 500
+            logger.info("[GRAFANA] Auto-connecting user %s via webhook", user_id)
+            try:
+                store_tokens_in_db(user_id, {}, "grafana")
+            except Exception as exc:
+                logger.exception("[GRAFANA] Failed to auto-connect user %s: %s", user_id, exc)
+                return jsonify({"error": "Failed to create Grafana connection"}), 500
         else:
-            reactivated = False
-            if external_url:
-                try:
-                    store_tokens_in_db(user_id, {"base_url": external_url}, "grafana")
-                    reactivated = True
-                except Exception as exc:
-                    logger.warning("[GRAFANA] Failed to refresh base_url during reactivation for user %s: %s", user_id, exc)
-                    reactivated = _set_grafana_active(user_id, True)
-            else:
-                reactivated = _set_grafana_active(user_id, True)
+            reactivated = _set_grafana_active(user_id, True)
             if not reactivated:
                 logger.warning("[GRAFANA] Failed to re-activate connection for user %s via webhook", user_id)
             else:

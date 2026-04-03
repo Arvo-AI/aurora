@@ -15,7 +15,6 @@ interface GrafanaUser {
 
 export interface GrafanaStatus {
   connected: boolean;
-  baseUrl?: string;
   stackSlug?: string;
   org?: GrafanaOrg | null;
   user?: GrafanaUser | null;
@@ -58,7 +57,6 @@ export const grafanaService = {
       });
       return {
         connected: Boolean(raw?.connected),
-        baseUrl: raw?.baseUrl ?? raw?.base_url,
         stackSlug: raw?.stackSlug ?? raw?.stack_slug,
         org: raw?.org ?? null,
         user: raw?.user ?? (raw?.userEmail ? { email: raw.userEmail } : null),

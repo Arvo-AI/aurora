@@ -34,10 +34,7 @@ HTTP_TIMEOUT = (3.5, 5)
 
 
 def _check_grafana(creds: Dict[str, Any]) -> Dict[str, Any]:
-    base_url = creds.get("base_url")
-    if not base_url:
-        return {"connected": False}
-    return {"connected": True, "baseUrl": base_url}
+    return {"connected": True}
 
 
 def _check_datadog(creds: Dict[str, Any]) -> Dict[str, Any]:

@@ -65,7 +65,6 @@ export default function GrafanaAuthPage() {
 
   const handleConnected = useCallback(async () => {
     await refreshStatus();
-    setConnectedState(true);
     try {
       await fetch("/api/provider-preferences", {
         method: "POST",
