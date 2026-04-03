@@ -60,21 +60,43 @@ ok()   { echo -e "\033[1;32m✓\033[0m $1"; }
 warn() { echo -e "\033[1;33m!\033[0m $1"; }
 
 # ---- Step 1: Download ----
-echo "Resolving latest version from GitHub..."
-LATEST_VERSION=$(curl -fsSL "https://api.github.com/repos/arvo-ai/aurora/releases/latest" 2>/dev/null | grep '"tag_name"' | cut -d'"' -f4 || true)
-TARGET_VERSION="$VERSION"
-if [ "$TARGET_VERSION" = "latest" ] && [ -n "$LATEST_VERSION" ]; then
-  TARGET_VERSION="$LATEST_VERSION"
-fi
-
+# On air-gapped boxes, skip the GitHub API call if we already have a tarball
 TARBALL=""
 for f in aurora-airtight-*.tar.gz; do
   [ -f "$f" ] || continue
-  if echo "$f" | grep -q "$TARGET_VERSION"; then
-    TARBALL="$f"
-    break
-  fi
+  TARBALL="$f"
+  break
 done
+
+TARGET_VERSION="$VERSION"
+if [ "$TARGET_VERSION" = "latest" ]; then
+  if [ -n "$TARBALL" ]; then
+    # Extract version from existing tarball filename (e.g. aurora-airtight-v1.2.3-amd64.tar.gz)
+    TARGET_VERSION=$(echo "$TARBALL" | sed 's/aurora-airtight-\(.*\)-[a-z0-9]*\.tar\.gz/\1/')
+    echo "Using local tarball: $TARBALL (version: $TARGET_VERSION)"
+  else
+    echo "Resolving latest version from GitHub..."
+    LATEST_VERSION=$(curl -fsSL --connect-timeout 10 "https://api.github.com/repos/arvo-ai/aurora/releases/latest" 2>/dev/null | grep '"tag_name"' | cut -d'"' -f4 || true)
+    if [ -n "$LATEST_VERSION" ]; then
+      TARGET_VERSION="$LATEST_VERSION"
+    else
+      echo "Error: could not resolve latest version and no local tarball found."
+      echo "Either specify a version or place the tarball in the current directory."
+      echo "  $0 $REGISTRY v1.2.3"
+      exit 1
+    fi
+  fi
+elif [ -n "$TARBALL" ] && ! echo "$TARBALL" | grep -q "$TARGET_VERSION"; then
+  # Pinned version doesn't match local tarball — re-scan for matching one
+  TARBALL=""
+  for f in aurora-airtight-*.tar.gz; do
+    [ -f "$f" ] || continue
+    if echo "$f" | grep -q "$TARGET_VERSION"; then
+      TARBALL="$f"
+      break
+    fi
+  done
+fi
 
 SOURCE_ARCHIVE=""
 if [ -n "$TARBALL" ]; then

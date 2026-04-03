@@ -15,7 +15,7 @@ Deploy Aurora on a Kubernetes cluster with no internet access. All container ima
 
 ## Guided Deployment (Single Command)
 
-The deploy script walks you through every step — download, push, configure, and deploy:
+Run this from a machine that can reach **both** the internet (to download) **and** the target cluster's registry. If your registry machine has no internet access, use the [step-by-step manual flow](#step-by-step-manual) instead — download the bundle separately, transfer it, then run locally.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/arvo-ai/aurora/main/scripts/deploy-k8s.sh | bash -s -- <your-registry>
@@ -25,6 +25,12 @@ For example:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/arvo-ai/aurora/main/scripts/deploy-k8s.sh | bash -s -- registry.internal:5000
+```
+
+**Already have the bundle and repo locally?** Run directly — no internet needed:
+
+```bash
+./scripts/deploy-k8s.sh registry.internal:5000
 ```
 
 The script will:
@@ -77,6 +83,8 @@ curl -fsSL https://raw.githubusercontent.com/arvo-ai/aurora/main/scripts/downloa
 If you prefer to build from source instead of downloading, see [Creating the Air-Tight Bundle](#creating-the-air-tight-bundle) below.
 :::
 
+If you downloaded on a separate machine, transfer both files (`aurora-airtight-*.tar.gz` and `aurora-*.tar.gz`) to the machine that can reach the cluster registry (e.g. via `scp`, USB drive, or your org's file transfer tool).
+
 ### 2. Extract and Push Images
 
 Extract the source archive and push all images to your registry:
@@ -101,7 +109,7 @@ The script uses `skopeo` if available (streams directly, no extra disk needed) o
 docker load < /tmp/aurora-airtight-*.tar.gz
 
 # 2. List what was loaded
-docker images | grep -E 'aurora_|postgres|redis|vault|weaviate|searxng|transformers|minio'
+docker images | grep -E 'aurora_|postgres|redis|vault|weaviate|searxng|transformers|minio|memgraph|ingress-nginx'
 
 # 3. Retag and push each image
 REGISTRY=registry.internal:5000
@@ -112,7 +120,7 @@ for img in aurora-server aurora-frontend; do
   docker push $REGISTRY/$img:latest
 done
 
-# Third-party images
+# Third-party images (showing subset — see push-to-registry.sh for full list)
 docker tag postgres:15-alpine $REGISTRY/postgres:15-alpine
 docker push $REGISTRY/postgres:15-alpine
 
@@ -131,6 +139,12 @@ docker push $REGISTRY/transformers-inference:sentence-transformers-all-MiniLM-L6
 docker tag "searxng/searxng:2025.5.8-7ca24eee4" $REGISTRY/searxng:2025.5.8-7ca24eee4
 docker push $REGISTRY/searxng:2025.5.8-7ca24eee4
 
+docker tag "memgraph/memgraph-mage:3.8.1" $REGISTRY/memgraph-mage:3.8.1
+docker push $REGISTRY/memgraph-mage:3.8.1
+
+# See scripts/push-to-registry.sh for the complete IMAGE_MAP
+# (includes minio, ingress-nginx controller, kube-webhook-certgen)
+
 # 4. Manually create values.generated.yaml
 cp deploy/helm/aurora/values.yaml deploy/helm/aurora/values.generated.yaml
 # Set image.registry, image.tag, and thirdPartyImages.registry to your registry URL
@@ -148,7 +162,8 @@ Run the interactive configuration script to set up LLM provider, secrets, and UR
 
 The script generates secure secrets automatically and prompts for:
 - LLM provider and API key
-- Public URLs (frontend, API, WebSocket)
+- Base domain (derives ingress hosts and public URLs)
+- TLS configuration
 
 If your registry requires auth, create a pull secret and add it to `values.generated.yaml`:
 

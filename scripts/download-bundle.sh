@@ -24,7 +24,7 @@ fi
 
 if [ "$VERSION" = "latest" ]; then
   echo "Resolving latest release from GitHub..."
-  VERSION=$(curl -fsSL "https://api.github.com/repos/arvo-ai/aurora/releases/latest" | grep '"tag_name"' | cut -d'"' -f4)
+  VERSION=$(curl -fsSL --connect-timeout 10 "https://api.github.com/repos/arvo-ai/aurora/releases/latest" | grep '"tag_name"' | cut -d'"' -f4)
   if [ -z "$VERSION" ]; then
     echo "Error: could not resolve latest version from GitHub API."
     echo "Specify a version manually: $0 <version> [arch]"
