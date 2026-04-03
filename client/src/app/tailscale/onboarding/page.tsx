@@ -150,7 +150,7 @@ export default function TailscaleOnboardingPage() {
           <div>
             <p className="text-sm font-medium text-blue-500">Recommended OAuth Scopes</p>
             <p className="text-xs text-blue-400 mt-1">
-              devices, keys, dns, acl, routes (read and write as needed)
+              Devices &rarr; Core (read &amp; write), DNS (read), Policy File (read), Auth Keys (read &amp; write)
             </p>
           </div>
         </div>
@@ -188,24 +188,23 @@ export default function TailscaleOnboardingPage() {
           <h3 className="text-lg font-semibold mb-3 text-foreground">How to create an OAuth client</h3>
           <ol className="list-decimal list-inside space-y-2 text-sm text-muted-foreground">
             <li>Go to the Tailscale Admin Console</li>
-            <li>Navigate to Settings &rarr; OAuth clients</li>
-            <li>Click &quot;Generate OAuth client&quot;</li>
+            <li>Navigate to Settings &rarr; Trust credentials</li>
+            <li>Click &quot;Credential&quot; then select &quot;OAuth&quot;</li>
             <li>Enter a description (e.g., &quot;Aurora Integration&quot;)</li>
-            <li>Select the required scopes:
+            <li>Select &quot;Custom scopes&quot; and enable the following:
               <ul className="list-disc list-inside ml-4 mt-1">
-                <li><code className="text-xs bg-muted px-1 rounded">devices:read</code> - List and view devices</li>
-                <li><code className="text-xs bg-muted px-1 rounded">devices:write</code> - Authorize/remove devices</li>
-                <li><code className="text-xs bg-muted px-1 rounded">keys:read</code> - List auth keys</li>
-                <li><code className="text-xs bg-muted px-1 rounded">keys:write</code> - Create auth keys</li>
-                <li><code className="text-xs bg-muted px-1 rounded">dns:read</code> - View DNS settings</li>
-                <li><code className="text-xs bg-muted px-1 rounded">acl:read</code> - View ACL policy</li>
+                <li><code className="text-xs bg-muted px-1 rounded">Devices &rarr; Core</code> - Read &amp; Write (list, authorize, remove devices)</li>
+                <li><code className="text-xs bg-muted px-1 rounded">Devices &rarr; Routes</code> - Read (view subnet routes)</li>
+                <li><code className="text-xs bg-muted px-1 rounded">General &rarr; DNS</code> - Read (view DNS settings)</li>
+                <li><code className="text-xs bg-muted px-1 rounded">General &rarr; Policy File</code> - Read (view ACL policy)</li>
+                <li><code className="text-xs bg-muted px-1 rounded">Keys &rarr; Auth Keys</code> - Read &amp; Write (create auth keys)</li>
               </ul>
             </li>
-            <li>Click &quot;Generate client&quot;</li>
+            <li>Click &quot;Generate credential&quot;</li>
             <li>Copy the Client ID and Client Secret (secret is only shown once!)</li>
           </ol>
           <a
-            href="https://login.tailscale.com/admin/settings/oauth"
+            href="https://login.tailscale.com/admin/settings/trust-credentials"
             target="_blank"
             rel="noopener noreferrer"
             className="inline-flex items-center mt-4 text-primary hover:underline"
