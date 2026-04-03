@@ -497,6 +497,8 @@ def build_rca_prompt(
         labels_str = f"entity={entity}, impact={impact}"
     elif source == 'bigpanda':
         labels_str = ", ".join(f"{k}={v}" for k, v in labels.items()) if labels else "none"
+    elif source == 'elasticsearch':
+        labels_str = ", ".join(f"{k}={v}" for k, v in labels.items()) if labels else "none"
     else:
         labels_str = str(labels)
 
@@ -1113,3 +1115,69 @@ def build_bigpanda_rca_prompt(
     }
 
     return build_rca_prompt('bigpanda', alert_details, providers, user_id)
+
+
+def build_elasticsearch_rca_prompt(
+    payload: Dict[str, Any],
+    providers: Optional[List[str]] = None,
+    user_id: Optional[str] = None,
+) -> str:
+    """Build RCA prompt from Elasticsearch Watcher / OpenSearch Alerting payload."""
+    watch_id = (
+        payload.get("watch_id")
+        or payload.get("alert_name")
+        or payload.get("monitor_name")
+        or "Unknown Alert"
+    )
+    severity = (
+        payload.get("severity")
+        or payload.get("alert_severity")
+        or payload.get("metadata", {}).get("severity")
+        or payload.get("trigger", {}).get("severity")
+        or "unknown"
+    )
+    condition_met = payload.get("condition", {}).get("met", True)
+
+    search_result = payload.get("result", {}).get("search", {})
+    query = (
+        payload.get("input", {}).get("search", {}).get("request", {}).get("body", {}).get("query")
+        or search_result.get("request", {}).get("body", {}).get("query")
+        or payload.get("result", {}).get("input", {}).get("search", {}).get("request", {}).get("body", {}).get("query")
+    )
+    result_count = (
+        payload.get("result_count")
+        or search_result.get("total")
+        or payload.get("ctx", {}).get("payload", {}).get("hits", {}).get("total", 0)
+    )
+
+    hits = (
+        payload.get("results")
+        or search_result.get("hits", {}).get("hits", [])
+        or payload.get("ctx", {}).get("payload", {}).get("hits", {}).get("hits", [])
+    )
+
+    import json as _json
+
+    message_parts = [f"Condition met: {condition_met}"]
+    if query:
+        message_parts.append(f"Query: {_json.dumps(query)}")
+    if result_count:
+        message_parts.append(f"Result count: {result_count}")
+    if hits and isinstance(hits, list):
+        sample = "\n".join(_json.dumps(h) for h in hits[:5])
+        message_parts.append(f"Sample results:\n{sample}")
+
+    alert_details = {
+        'title': watch_id,
+        'status': 'triggered' if condition_met else 'resolved',
+        'message': "\n".join(message_parts),
+        'labels': {
+            'watch_id': watch_id,
+            'severity': str(severity).lower(),
+            'result_count': str(result_count),
+        },
+    }
+    if payload.get("index"):
+        alert_details['labels']['index'] = payload["index"]
+
+    return build_rca_prompt('elasticsearch', alert_details, providers, user_id)

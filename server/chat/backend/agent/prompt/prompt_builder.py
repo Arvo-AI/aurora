@@ -1530,6 +1530,23 @@ def build_background_mode_segment(state: Optional[Any]) -> str:
             "Start with problems to understand the issue, then drill into entities and logs.",
         ])
 
+    # Elasticsearch tools (if connected)
+    if integrations.get('elasticsearch'):
+        parts.extend([
+            "",
+            "ELASTICSEARCH INVESTIGATION:",
+            "IMPORTANT: Elasticsearch is a REMOTE service. Do NOT search local filesystem for ES data.",
+            "Use ONLY these Elasticsearch API tools:",
+            "1. list_elasticsearch_indices() - discover available indices",
+            "2. search_elasticsearch(query='...', index='...', earliest_time='now-1h') - search logs/data",
+            "3. elasticsearch_cluster_health() - check cluster health and node status",
+            "Query supports Lucene syntax and JSON DSL:",
+            "   search_elasticsearch(query='error AND service:api-gateway', index='logs-*', earliest_time='now-1h')",
+            "   search_elasticsearch(query='http.response.status_code:>=500', index='filebeat-*', earliest_time='now-30m')",
+            "Tips: Use AND/OR operators, field:value syntax, wildcards (*), ranges (>=, <=).",
+            "After Elasticsearch analysis, correlate with cloud resources if providers connected.",
+        ])
+
     # GitHub tools (if connected)
     if integrations.get('github'):
         parts.extend([
