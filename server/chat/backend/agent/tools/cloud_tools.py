@@ -72,6 +72,15 @@ from .splunk_tool import (
     SplunkListIndexesArgs,
     SplunkListSourcetypesArgs,
 )
+from .elasticsearch_tool import (
+    search_elasticsearch,
+    list_elasticsearch_indices,
+    elasticsearch_cluster_health,
+    is_elasticsearch_connected,
+    ElasticsearchSearchArgs,
+    ElasticsearchListIndicesArgs,
+    ElasticsearchClusterHealthArgs,
+)
 from .coroot_tool import (
     coroot_get_incidents,
     coroot_get_incident_detail,
@@ -1366,6 +1375,51 @@ Once you identify which account has the issue, pass account_id (e.g. '1510256343
         logging.info(f"Added 3 Splunk tools for user {user_id}")
     else:
         logging.debug(f"Splunk tools not added - user {user_id} not connected to Splunk")
+
+    # Add Elasticsearch tools if connected
+    if user_id and is_elasticsearch_connected(user_id):
+        context_wrapped_es_search = with_user_context(search_elasticsearch)
+        notification_wrapped_es_search = with_completion_notification(context_wrapped_es_search)
+        final_es_search = wrap_func_with_capture(notification_wrapped_es_search, "search_elasticsearch") if tool_capture else notification_wrapped_es_search
+
+        tools.append(StructuredTool.from_function(
+            func=final_es_search,
+            name="search_elasticsearch",
+            description=(
+                "Execute queries against Elasticsearch/OpenSearch to search logs and data. "
+                "Supports Lucene query strings (e.g., 'error AND service:api-gateway') "
+                "and full JSON query DSL. "
+                "First use list_elasticsearch_indices to discover available indices, then construct targeted queries. "
+                "Example: search_elasticsearch(query='error AND http.response.status_code:>=500', index='logs-*', earliest_time='now-1h')"
+            ),
+            args_schema=ElasticsearchSearchArgs,
+        ))
+
+        context_wrapped_es_indices = with_user_context(list_elasticsearch_indices)
+        notification_wrapped_es_indices = with_completion_notification(context_wrapped_es_indices)
+        final_es_indices = wrap_func_with_capture(notification_wrapped_es_indices, "list_elasticsearch_indices") if tool_capture else notification_wrapped_es_indices
+
+        tools.append(StructuredTool.from_function(
+            func=final_es_indices,
+            name="list_elasticsearch_indices",
+            description="List available Elasticsearch indices to discover what log data and metrics are available for searching.",
+            args_schema=ElasticsearchListIndicesArgs,
+        ))
+
+        context_wrapped_es_health = with_user_context(elasticsearch_cluster_health)
+        notification_wrapped_es_health = with_completion_notification(context_wrapped_es_health)
+        final_es_health = wrap_func_with_capture(notification_wrapped_es_health, "elasticsearch_cluster_health") if tool_capture else notification_wrapped_es_health
+
+        tools.append(StructuredTool.from_function(
+            func=final_es_health,
+            name="elasticsearch_cluster_health",
+            description="Get Elasticsearch cluster health status including node count, shard allocation, and overall cluster state.",
+            args_schema=ElasticsearchClusterHealthArgs,
+        ))
+
+        logging.info(f"Added 3 Elasticsearch tools for user {user_id}")
+    else:
+        logging.debug(f"Elasticsearch tools not added - user {user_id} not connected to Elasticsearch")
 
     # Add Dynatrace tool if connected
     if user_id and is_dynatrace_connected(user_id):
