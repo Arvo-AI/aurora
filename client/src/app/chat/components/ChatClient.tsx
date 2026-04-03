@@ -418,7 +418,7 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
         {/* Enhanced Input */}
         <div className="p-4 relative z-10 bg-background flex-shrink-0">
           <div className="max-w-4xl mx-auto space-y-2">
-            <SessionUsagePanel sessionUsage={sessionUsage} />
+            <SessionUsagePanel sessionUsage={sessionUsage} isSending={isSending} />
           </div>
           <div className="flex justify-center">
             {isReadOnly ? (
