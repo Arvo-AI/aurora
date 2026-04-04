@@ -3,6 +3,7 @@
 import React, { useMemo } from "react";
 import ReactMarkdown from 'react-markdown';
 import rehypeRaw from 'rehype-raw';
+import rehypeSanitize, { defaultSchema } from 'rehype-sanitize';
 import remarkGfm from 'remark-gfm';
 import remarkBreaks from 'remark-breaks';
 import { CodeBlock } from "./code-block";
@@ -428,7 +429,25 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
     return (
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkBreaks]}
-        rehypePlugins={[rehypeRaw]}
+        rehypePlugins={[
+          rehypeRaw,
+          [rehypeSanitize, {
+            ...defaultSchema,
+            tagNames: [
+              ...(defaultSchema.tagNames || []),
+              'details', 'summary', 'mark', 'kbd', 'samp', 'var',
+              'ruby', 'rt', 'rp', 'figure', 'figcaption', 'picture',
+            ],
+            attributes: {
+              ...defaultSchema.attributes,
+              code: [...(defaultSchema.attributes?.code || []), 'className'],
+              span: [...(defaultSchema.attributes?.span || []), 'className', 'style'],
+              div: [...(defaultSchema.attributes?.div || []), 'className', 'style'],
+              pre: [...(defaultSchema.attributes?.pre || []), 'className'],
+              a: ['href', 'title', 'target', 'rel'],
+            },
+          }],
+        ]}
         className={baseClasses}
         components={components}
       >

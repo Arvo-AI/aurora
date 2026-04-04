@@ -608,19 +608,33 @@ class Agent:
                             logging.info(f"Dropping orphaned ToolMessage (tool_call_id={tc_id})")
                             continue
                     if isinstance(m, AIMessage) and getattr(m, 'tool_calls', None):
-                        # Check that all tool_calls have matching ToolMessage responses
                         tc_ids = []
                         for tc in m.tool_calls:
                             tc_id = tc.get('id') if isinstance(tc, dict) else getattr(tc, 'id', None)
                             if tc_id:
                                 tc_ids.append(tc_id)
-                        if tc_ids and not any(tid in answered_tool_call_ids for tid in tc_ids):
-                            # No responses exist for any tool calls — strip tool_calls
-                            # and keep only the text content as a regular AI message.
+                        answered = [tid for tid in tc_ids if tid in answered_tool_call_ids]
+                        unanswered = [tid for tid in tc_ids if tid not in answered_tool_call_ids]
+
+                        if tc_ids and not answered:
                             text = m.content or ""
                             if text:
                                 cleaned_history.append(AIMessage(content=text))
                             logging.info(f"Stripped orphaned tool_calls from AIMessage ({len(tc_ids)} calls)")
+                            continue
+                        elif unanswered:
+                            kept_calls = [
+                                tc for tc in m.tool_calls
+                                if (tc.get('id') if isinstance(tc, dict) else getattr(tc, 'id', None)) in answered_tool_call_ids
+                            ]
+                            patched = AIMessage(content=m.content or "", tool_calls=kept_calls)
+                            cleaned_history.append(patched)
+                            for uid in unanswered:
+                                available_tool_call_ids.discard(uid)
+                            logging.info(
+                                f"Removed {len(unanswered)} unanswered tool_calls from AIMessage "
+                                f"(kept {len(kept_calls)})"
+                            )
                             continue
                     cleaned_history.append(m)
                 chat_history = cleaned_history
@@ -675,6 +689,11 @@ class Agent:
                             if isinstance(content, list):
                                 text_parts = [p.get('text', '') if isinstance(p, dict) else str(p) for p in content]
                                 content = ' '.join(text_parts)
+                            if isinstance(content, str) and (
+                                content.startswith("[Tool Result:") or
+                                content.startswith("[CONVERSATION SUMMARY")
+                            ):
+                                continue
                             original_request = content
                             break
                     

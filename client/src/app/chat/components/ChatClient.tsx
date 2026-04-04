@@ -302,7 +302,18 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
 
   // Load session once user is determined
   useEffect(() => {
-    if (!userId || !initialSessionId) return;
+    if (!userId) return;
+
+    // New chat (no sessionId): clear previous session state
+    if (!initialSessionId) {
+      if (currentSessionId) {
+        setCurrentSessionId(null);
+        setHasCreatedSession(false);
+        onClearMessages();
+        lastLoadedSessionRef.current = null;
+      }
+      return;
+    }
     
     // Skip if we've already loaded this session
     if (lastLoadedSessionRef.current === initialSessionId) {
