@@ -344,6 +344,10 @@ app.register_blueprint(pagerduty_bp, url_prefix="/pagerduty")
 from routes.knowledge_base import bp as knowledge_base_bp  # noqa: F401
 app.register_blueprint(knowledge_base_bp, url_prefix="/api/knowledge-base")
 
+# --- Skills Routes ---
+from routes.skills import bp as skills_bp  # noqa: F401
+app.register_blueprint(skills_bp, url_prefix="/api/skills")
+
 
 # --- Confluence Integration Routes ---
 from routes.confluence import bp as confluence_bp  # noqa: F401

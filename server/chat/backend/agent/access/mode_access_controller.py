@@ -47,6 +47,8 @@ class ModeAccessController:
             "web_search",
             "analyze_zip_file",
             "rag_index_zip",
+            "load_skill",
+            "read_skill_resource",
         ),
         blocked_tool_prefixes=("mcp_",),  # Block MCP tools by default
         iac_safe_actions=(

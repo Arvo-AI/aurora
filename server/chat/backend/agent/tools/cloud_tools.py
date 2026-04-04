@@ -1368,6 +1368,49 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
         except Exception as e:
             logging.warning(f"Failed to add knowledge_base_search tool: {e}")
 
+    # Add skill tools for authenticated users
+    if user_id:
+        try:
+            from chat.backend.agent.tools.skill_tools import (
+                load_skill,
+                read_skill_resource,
+                LoadSkillArgs,
+                ReadSkillResourceArgs,
+                LOAD_SKILL_DESCRIPTION,
+                READ_SKILL_RESOURCE_DESCRIPTION,
+            )
+
+            context_wrapped_ls = with_user_context(load_skill)
+            notification_wrapped_ls = with_completion_notification(context_wrapped_ls)
+            if tool_capture:
+                final_ls_func = wrap_func_with_capture(notification_wrapped_ls, "load_skill")
+            else:
+                final_ls_func = notification_wrapped_ls
+
+            tools.append(StructuredTool.from_function(
+                func=final_ls_func,
+                name="load_skill",
+                description=LOAD_SKILL_DESCRIPTION,
+                args_schema=LoadSkillArgs,
+            ))
+
+            context_wrapped_rsr = with_user_context(read_skill_resource)
+            notification_wrapped_rsr = with_completion_notification(context_wrapped_rsr)
+            if tool_capture:
+                final_rsr_func = wrap_func_with_capture(notification_wrapped_rsr, "read_skill_resource")
+            else:
+                final_rsr_func = notification_wrapped_rsr
+
+            tools.append(StructuredTool.from_function(
+                func=final_rsr_func,
+                name="read_skill_resource",
+                description=READ_SKILL_RESOURCE_DESCRIPTION,
+                args_schema=ReadSkillResourceArgs,
+            ))
+            logging.info(f"Added skill tools (load_skill, read_skill_resource) for user {user_id}")
+        except Exception as e:
+            logging.warning(f"Failed to add skill tools: {e}")
+
     # Add discovery finding tool for prediscovery mode
     if user_id and mode_suffix == "prediscovery":
         try:

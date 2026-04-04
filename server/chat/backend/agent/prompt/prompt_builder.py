@@ -37,6 +37,7 @@ class PromptSegments:
     kubectl_onprem: str = ""
     background_mode: str = ""  # Background chat autonomous operation instructions
     knowledge_base_memory: str = ""  # User's knowledge base memory context
+    skills_catalog: str = ""  # On-demand skills catalog for agent
 
 
 def _normalize_providers(provider_preference: Optional[Any]) -> List[str]:
@@ -1934,6 +1935,26 @@ def build_knowledge_base_memory_segment(user_id: Optional[str]) -> str:
     return ""
 
 
+def build_skills_catalog_segment(
+    user_id: str,
+    org_id: Optional[str] = None,
+    provider_preference: Optional[Any] = None,
+    mode: Optional[str] = None,
+) -> str:
+    try:
+        from chat.backend.agent.skills.skill_store import SkillStore
+
+        if not org_id:
+            from utils.auth.stateless_auth import get_org_id_for_user
+            org_id = get_org_id_for_user(user_id) or ""
+
+        providers = _normalize_providers(provider_preference) if provider_preference else None
+        return SkillStore.get_instance().build_catalog_prompt(user_id, org_id, providers, mode)
+    except Exception as e:
+        logging.getLogger(__name__).warning(f"[Skills] Error building skills catalog: {e}")
+        return ""
+
+
 def build_prompt_segments(provider_preference: Optional[Any], mode: Optional[str], has_zip_reference: bool, state: Optional[Any] = None) -> PromptSegments:
     _, _, provider_constraints = build_provider_constraints(provider_preference)
 
@@ -1984,6 +2005,16 @@ def build_prompt_segments(provider_preference: Optional[Any], mode: Optional[str
     if state and hasattr(state, 'user_id'):
         knowledge_base_memory = build_knowledge_base_memory_segment(state.user_id)
 
+    # Build skills catalog for authenticated users
+    skills_catalog = ""
+    if state and hasattr(state, 'user_id'):
+        skills_catalog = build_skills_catalog_segment(
+            user_id=state.user_id,
+            org_id=getattr(state, 'org_id', None),
+            provider_preference=provider_preference,
+            mode=mode,
+        )
+
     return PromptSegments(
         system_invariant=system_invariant,
         provider_constraints=provider_constraints,
@@ -2001,6 +2032,7 @@ def build_prompt_segments(provider_preference: Optional[Any], mode: Optional[str
         manual_vm_access=manual_vm_access,
         kubectl_onprem=kubectl_onprem,
         knowledge_base_memory=knowledge_base_memory,
+        skills_catalog=skills_catalog,
     )
 
 
@@ -2012,6 +2044,8 @@ def assemble_system_prompt(segments: PromptSegments) -> str: #main prompt builde
     # Knowledge base memory comes early (user-provided context for all investigations)
     if segments.knowledge_base_memory:
         parts.append(segments.knowledge_base_memory)
+    if segments.skills_catalog:
+        parts.append(segments.skills_catalog)
     if segments.ephemeral_rules:
         parts.append(segments.ephemeral_rules)
     if segments.model_overlay:
@@ -2121,6 +2155,14 @@ def register_prompt_cache_breakpoints(
         pcm.register_segment(
             segment_name="failure_recovery",
             content=segments.failure_recovery,
+            provider=provider,
+            tenant_id=tenant_id,
+            ttl_s=PREFIX_CACHE_EPHEMERAL_TTL,
+        )
+    if segments.skills_catalog:
+        pcm.register_segment(
+            segment_name="skills_catalog",
+            content=segments.skills_catalog,
             provider=provider,
             tenant_id=tenant_id,
             ttl_s=PREFIX_CACHE_EPHEMERAL_TTL,
