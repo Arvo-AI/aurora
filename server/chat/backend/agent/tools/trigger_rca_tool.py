@@ -66,6 +66,10 @@ def trigger_rca(
     if not user_id:
         return json.dumps({"error": "No user context available. Cannot trigger RCA."})
 
+    issue_description = (issue_description or "").strip()
+    if not issue_description:
+        return json.dumps({"error": "issue_description must be non-empty."})
+
     try:
         from chat.backend.agent.tools.cloud_tools import get_state_context
         state = get_state_context()
@@ -74,8 +78,9 @@ def trigger_rca(
                 "error": "Cannot trigger RCA from within a background RCA session. "
                 "This tool is only available in interactive chat."
             })
-    except Exception:
-        pass  # If we can't check, proceed — the rate limiter is the safety net
+    except Exception as e:
+        logger.error(f"[TriggerRCA] Failed to check background state: {e}")
+        return json.dumps({"error": "Unable to verify session state. Please try again."})
 
     try:
         from chat.background.task import is_background_chat_allowed

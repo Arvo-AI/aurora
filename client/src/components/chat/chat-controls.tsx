@@ -45,6 +45,8 @@ export default function ChatControls({
           <Button
             variant="ghost"
             onClick={onToggleRCA}
+            disabled={disabled}
+            aria-pressed={rcaActive}
             className={`h-6 px-2 text-xs font-medium transition-colors gap-1 ${
               rcaActive
                 ? "text-orange-500 bg-orange-500/15 hover:bg-orange-500/20"
