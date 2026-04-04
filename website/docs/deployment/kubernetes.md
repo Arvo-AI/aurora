@@ -13,6 +13,10 @@ You need a Kubernetes cluster with:
 - A **working default StorageClass** (GKE and AKS have this out of the box; EKS needs setup)
 - `kubectl` connected to the cluster
 
+:::tip Air-gapped / offline cluster?
+If your cluster has no internet access, see the dedicated [Air-Gapped Kubernetes Deployment](./kubernetes-airgap) guide instead.
+:::
+
 **Don't have a cluster yet?** Follow one of these setup guides first:
 - **AWS EKS:** [EKS Cluster Setup for Aurora](./eks-setup) — includes CSI driver and S3 bucket creation
 - **GCP GKE / Azure AKS:** Create a cluster with default settings — both include working storage out of the box

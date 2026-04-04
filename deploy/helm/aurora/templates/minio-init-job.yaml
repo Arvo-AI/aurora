@@ -15,7 +15,7 @@ spec:
       restartPolicy: OnFailure
       containers:
         - name: minio-init
-          image: minio/mc:RELEASE.2025-04-16T18-13-26Z
+          image: {{ include "aurora.thirdPartyImage" (dict "root" $ "image" "mc:RELEASE.2025-04-16T18-13-26Z" "default" "minio/mc:RELEASE.2025-04-16T18-13-26Z") }}
           command:
             - /bin/sh
             - -c

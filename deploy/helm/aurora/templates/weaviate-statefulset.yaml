@@ -22,7 +22,7 @@ spec:
       automountServiceAccountToken: false
       containers:
         - name: weaviate
-          image: cr.weaviate.io/semitechnologies/weaviate:1.27.6
+          image: {{ include "aurora.thirdPartyImage" (dict "root" $ "image" "weaviate:1.27.6" "default" "cr.weaviate.io/semitechnologies/weaviate:1.27.6") }}
           imagePullPolicy: IfNotPresent
           securityContext:
             allowPrivilegeEscalation: false

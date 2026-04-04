@@ -31,6 +31,8 @@ THIRD_PARTY_IMAGES=(
   "memgraph/lab:3.8.0"
   "cr.weaviate.io/semitechnologies/weaviate:1.27.6"
   "cr.weaviate.io/semitechnologies/transformers-inference:sentence-transformers-all-MiniLM-L6-v2"
+  "registry.k8s.io/ingress-nginx/controller:v1.8.1"
+  "registry.k8s.io/ingress-nginx/kube-webhook-certgen:v20230407"
 )
 
 AURORA_IMAGES=(
