@@ -24,104 +24,88 @@ The diagram below shows the full deployment pipeline. Each numbered step matches
                                        │
                        ┌───────────────┴───────────────┐
                        ▼                               ▼
-              ┌─────────────────┐             ┌─────────────────┐
-              │   PATH A          │             │   PATH B          │
-              │ Internet access │             │ True air-gap    │
-              └────────┬────────┘             └────────┬────────┘
+              ┌─────────────────┐             ┌──────────────────┐
+              │     PATH A      │             │      PATH B      │
+              │ Internet access │             │  True air-gap    │
+              └────────┬────────┘             └────────┬─────────┘
                        │                               │
-  ╔════════════════════╪═══════════════════════════════╪════════════════════════╗
-  ║  STEP 1            │   Get the source              │                       ║
-  ║  ──────────        │                               │                       ║
-  ║                    ▼                               ▼                       ║
-  ║          git clone / curl              download-bundle.sh                  ║
-  ║          from GitHub                   (images tarball + source archive)   ║
-  ╚════════════════════╪═══════════════════════════════╪════════════════════════╝
+  ╔════════════════════╪═══════════════════════════════╪═══════════════════════╗
+  ║  STEP 1            │   Get the source              │                      ║
+  ║  ──────────        ▼                               ▼                      ║
+  ║          git clone / curl              download-bundle.sh                 ║
+  ║          from GitHub                   (images tarball + source archive)  ║
+  ║          (on your workstation)         (on a connected machine)           ║
+  ╚════════════════════╪═══════════════════════════════╪═══════════════════════╝
                        │                               │
-  ╔════════════════════╪═══════════════════════════════╪════════════════════════╗
-  ║  STEP 2            │   Push images to registry     │                       ║
-  ║  ──────────        │                               │                       ║
-  ║                    │                       ┌───────┴────────┐              ║
-  ║                    │                       │ Transfer both  │              ║
-  ║                    │                       │ to bastion /   │              ║
-  ║                    │                       │ jump host      │              ║
-  ║                    │                       │ (scp, usb ...) │              ║
-  ║                    │                       └───────┬────────┘              ║
-  ║                    │                               │                       ║
-  ║                    ▼                               ▼                       ║
-  ║         push-to-registry.sh            push-to-registry.sh                ║
-  ║         (on your workstation)          (on the bastion)                   ║
-  ║                    │                               │                       ║
-  ║         ┌──────────┴──────────┐         ┌──────────┴──────────┐           ║
-  ║         │ Auto-detect:        │         │ Auto-detect:        │           ║
-  ║         │ GHCR reachable →    │         │ no internet →       │           ║
-  ║         │ skopeo copy or      │         │ finds local tarball │           ║
-  ║         │ docker pull/push    │         │ docker load/tag/    │           ║
-  ║         │ (registry-to-reg)   │         │ push to registry    │           ║
-  ║         └──────────┬──────────┘         └──────────┬──────────┘           ║
-  ║                    │                               │                       ║
-  ║                    └──────────────┬────────────────┘                       ║
-  ║                                   ▼                                        ║
-  ║                        Updates values.generated.yaml                       ║
-  ║                        (registry + image tags)                             ║
-  ╚═══════════════════════════════════╪════════════════════════════════════════╝
-                                      │
-  ╔═══════════════════════════════════╪════════════════════════════════════════╗
-  ║  STEP 3            Configure      │                                       ║
-  ║  ──────────                       ▼                                       ║
-  ║                          configure-helm.sh                                ║
-  ║                                   │                                       ║
-  ║                    ┌──────────────┼──────────────┐                        ║
-  ║                    ▼              ▼              ▼                         ║
-  ║              LLM provider    Base domain    TLS / certs                   ║
-  ║              + API key       + ingress      (cert-manager)                ║
-  ║                    │              │              │                         ║
-  ║                    └──────────────┼──────────────┘                        ║
+                       │                       ┌───────┴────────┐
+                       │                       │ Transfer both  │
+                       │                       │ to bastion     │
+                       │                       │ (scp, usb ...) │
+                       │                       └───────┬────────┘
+                       │                               │
+                       │                    ┌──────────┴──────────────┐
+                       │                    │ From here on, everything│
+                       │                    │ runs on the bastion     │
+                       │                    └──────────┬──────────────┘
+                       │                               │
+  ╔════════════════════╪═══════════════════════════════╪═══════════════════════╗
+  ║  STEP 2            │   Push images to registry     │                      ║
+  ║  ──────────        ▼                               ▼                      ║
+  ║         push-to-registry.sh            push-to-registry.sh               ║
+  ║                    │                               │                      ║
+  ║         ┌──────────┴──────────┐         ┌──────────┴──────────┐          ║
+  ║         │ Auto-detect:        │         │ Auto-detect:        │          ║
+  ║         │ GHCR reachable →    │         │ no internet →       │          ║
+  ║         │ skopeo copy or      │         │ finds local tarball │          ║
+  ║         │ docker pull/push    │         │ docker load/tag/    │          ║
+  ║         │ (registry-to-reg)   │         │ push to registry    │          ║
+  ║         └──────────┬──────────┘         └──────────┬──────────┘          ║
+  ║                    │                               │                      ║
+  ║                    └──────────────┬────────────────┘                      ║
   ║                                   ▼                                       ║
-  ║                        values.generated.yaml                              ║
-  ║                        (secrets + URLs + config)                          ║
-  ╚═══════════════════════════════════╪════════════════════════════════════════╝
+  ║                        Updates values.generated.yaml                      ║
+  ║                        (registry + image tags)                            ║
+  ╚═══════════════════════════════════╪═══════════════════════════════════════╝
                                       │
-  ╔═══════════════════════════════════╪════════════════════════════════════════╗
-  ║  STEP 4            Deploy         │                                       ║
-  ║  ──────────                       ▼                                       ║
-  ║                    ┌──────────────────────────────┐                       ║
-  ║                    │   kubectl reachable?          │                       ║
-  ║                    └──────────┬───────────────────┘                       ║
-  ║                    ┌──────────┴──────────┐                                ║
-  ║                    ▼                     ▼                                ║
-  ║                  Yes                    No                                ║
-  ║                    │           ┌──────────────────────┐                   ║
-  ║                    │           │ Transfer values file  │                   ║
-  ║                    │           │ + Helm chart to a     │                   ║
-  ║                    │           │ machine with cluster  │                   ║
-  ║                    │           │ access, then run:     │                   ║
-  ║                    │           │                       │                   ║
-  ║                    │           │ helm upgrade --install│                   ║
-  ║                    │           │   aurora-oss ...      │                   ║
-  ║                    │           │   -f values.generated │                   ║
-  ║                    │           │       .yaml           │                   ║
-  ║                    │           │                       │                   ║
-  ║                    │           │ See: Step 4 in the    │                   ║
-  ║                    │           │ guide below.          │                   ║
-  ║                    │           └──────────────────────┘                   ║
-  ║                    ▼                                                      ║
-  ║           helm upgrade --install                                          ║
-  ║           aurora-oss ./deploy/helm/aurora                                 ║
-  ║                    │                                                      ║
-  ╚════════════════════╪══════════════════════════════════════════════════════╝
-                       │
-  ╔════════════════════╪══════════════════════════════════════════════════════╗
-  ║  STEP 5            │   Post-deploy                                       ║
-  ║  ──────────        ▼                                                     ║
-  ║           ┌──────────────────┐                                           ║
-  ║           │  Vault init +    │                                           ║
-  ║           │  unseal          │──── Optional: KMS auto-unseal             ║
-  ║           └────────┬─────────┘                                           ║
-  ║                    ▼                                                     ║
-  ║           kubectl get pods -n aurora                                     ║
-  ║           (verify all running)                                           ║
-  ╚════════════════════════════════════════════════════════════════════════════╝
+  ╔═══════════════════════════════════╪═══════════════════════════════════════╗
+  ║  STEP 3            Configure      │                                      ║
+  ║  ──────────                       ▼                                      ║
+  ║                          configure-helm.sh                               ║
+  ║                                   │                                      ║
+  ║                    ┌──────────────┼──────────────┐                       ║
+  ║                    ▼              ▼              ▼                        ║
+  ║              LLM provider    Base domain    TLS / certs                  ║
+  ║              + API key       + ingress      (cert-manager)               ║
+  ║                    │              │              │                        ║
+  ║                    └──────────────┼──────────────┘                       ║
+  ║                                   ▼                                      ║
+  ║                        values.generated.yaml                             ║
+  ║                        (secrets + URLs + config)                         ║
+  ╚═══════════════════════════════════╪═══════════════════════════════════════╝
+                                      │
+  ╔═══════════════════════════════════╪═══════════════════════════════════════╗
+  ║  STEP 4            Deploy         │                                      ║
+  ║  ──────────                       ▼                                      ║
+  ║                    helm upgrade --install aurora-oss                      ║
+  ║                      ./deploy/helm/aurora                                ║
+  ║                      -f values.generated.yaml                            ║
+  ╚═══════════════════════════════════╪═══════════════════════════════════════╝
+                                      │
+  ╔═══════════════════════════════════╪═══════════════════════════════════════╗
+  ║  STEP 5            Post-deploy    │                                      ║
+  ║  ──────────                       ▼                                      ║
+  ║                    ┌──────────────────┐                                  ║
+  ║                    │  Vault init +    │                                  ║
+  ║                    │  unseal          │── Optional: KMS auto-unseal      ║
+  ║                    └────────┬─────────┘                                  ║
+  ║                             ▼                                            ║
+  ║                    kubectl get pods -n aurora                            ║
+  ║                    (verify all running)                                  ║
+  ╚══════════════════════════════════════════════════════════════════════════╝
 ```
+
+> **Path A** runs all steps from your workstation (which has internet + cluster access).
+> **Path B** runs Step 1 on a connected machine, then Steps 2–5 on the bastion (which has registry + cluster access).
 
 :::tip Using the guided script
 `deploy-k8s.sh` walks through **all 5 steps** automatically, detecting your environment at each stage. You can also run each step individually using the scripts shown above.

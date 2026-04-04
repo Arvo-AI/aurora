@@ -304,23 +304,17 @@ echo "=== Step 5/5: Deploy to cluster ==="
 echo ""
 
 if [ "$HAS_KUBECTL" != true ]; then
-  warn "Cannot reach Kubernetes cluster (kubectl not available or cluster unreachable)."
+  warn "Cannot reach Kubernetes cluster from this machine."
   echo ""
-  echo "  Steps 1-4 are complete. To finish deployment from a machine with cluster access:"
+  echo "  Steps 1–4 are complete. To finish, run the Helm install on a machine"
+  echo "  with cluster access (e.g., your bastion or jump host):"
   echo ""
-  if [ "$IN_REPO" = true ]; then
-    echo "    # From this directory:"
-    echo "    $0 $REGISTRY --skip-push"
-  else
-    echo "    # Transfer the repo and values file to your bastion/jump host, then:"
-    echo "    cd $(basename "$PWD")"
-    echo "    $0 $REGISTRY --skip-push"
-  fi
-  echo ""
-  echo "  Or deploy manually:"
   echo "    helm upgrade --install aurora-oss ./deploy/helm/aurora \\"
   echo "      --namespace aurora --create-namespace --reset-values \\"
   echo "      -f $VALUES_FILE"
+  echo ""
+  echo "  Make sure to transfer the source directory and $VALUES_FILE to that machine."
+  echo "  Then continue with Vault setup: see the 'Vault Setup' section in the docs."
   exit 0
 fi
 
