@@ -182,8 +182,8 @@ class LLMUsageTracker:
                         logger.warning(
                             f"Failed to get OpenRouter dynamic pricing for {model_name}: {e}"
                         )
-                else:
-                    # Direct mode: try provider-specific billing API
+                elif any(kw in model_name.lower() for kw in ("gemini", "google", "vertex")):
+                    # Only call GCP Billing Catalog API for Google/Gemini models
                     try:
                         provider_svc = get_provider_pricing_service()
                         pricing = provider_svc.get_model_pricing(model_name)

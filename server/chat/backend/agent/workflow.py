@@ -935,7 +935,7 @@ class Workflow:
             "total_cost": 0.0,
             "request_count": 0,
         }
-        _USAGE_UPDATE_INTERVAL = 10  # Yield usage_update every N output chunks
+        _USAGE_UPDATE_INTERVAL = 3  # Yield usage_update every N output chunks
         
         try:
             async for event in self.app.astream_events(input_state, self.config, version="v2"):
@@ -981,8 +981,8 @@ class Workflow:
                             if _token_count <= 5:
                                 logger.debug(f"[WORKFLOW STREAM] Token #{_token_count}: '{content[:30]}'")
 
-                            # Yield periodic usage updates during streaming
-                            if _model_turn_tokens % _USAGE_UPDATE_INTERVAL == 0:
+                            # Yield usage_update on first chunk and then periodically
+                            if _model_turn_tokens == 1 or _model_turn_tokens % _USAGE_UPDATE_INTERVAL == 0:
                                 yield ("usage_update", {
                                     "model": input_state.model,
                                     "output_chunks": _model_turn_tokens,
