@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useCallback, useState } from "react";
-import { Send, Loader2, Square, X, ImageIcon, Radar } from "lucide-react";
+import { Send, Loader2, Square, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { AutoResizeTextarea } from "@/components/ui/auto-resize-textarea";
 import ChatControls from "./chat-controls";
