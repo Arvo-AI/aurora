@@ -93,6 +93,8 @@ class ProviderPricingService:
     the in-memory cache.
     """
 
+    _RETRY_INTERVAL = timedelta(minutes=5)
+
     def __init__(self, cache_ttl_hours: int = 24):
         self._cache: Dict[str, Dict[str, float]] = {}
         self._last_fetch: Optional[datetime] = None
@@ -117,36 +119,51 @@ class ProviderPricingService:
 
     def _refresh_loop(self) -> None:
         """Runs in a background daemon thread.  Fetches immediately, then
-        sleeps for the TTL interval before refreshing again."""
+        sleeps for the TTL interval before refreshing again.
+
+        If the fetch fails and the cache is empty, retries on a short
+        interval (_RETRY_INTERVAL) instead of the full TTL so transient
+        startup failures don't leave pricing unavailable for hours.
+        """
         import time as _time
         while True:
-            self._do_fetch()
-            _time.sleep(self._cache_ttl.total_seconds())
+            success = self._do_fetch()
+            with self._lock:
+                cache_populated = bool(self._cache)
+            if success and cache_populated:
+                _time.sleep(self._cache_ttl.total_seconds())
+            else:
+                _time.sleep(self._RETRY_INTERVAL.total_seconds())
 
-    def _do_fetch(self) -> None:
+    def _do_fetch(self) -> bool:
+        """Attempt to fetch pricing.  Returns True if new data was loaded."""
         with self._lock:
             if self._fetch_in_progress:
-                return
+                return False
             self._fetch_in_progress = True
 
         try:
             new_pricing = self._fetch_gemini_pricing()
 
             with self._lock:
-                self._last_fetch = datetime.now()
                 if new_pricing:
                     self._cache = new_pricing
+                    self._last_fetch = datetime.now()
                     logger.info(
                         f"Provider pricing cache updated: {len(new_pricing)} models"
                     )
+                    return True
                 elif self._cache:
+                    self._last_fetch = datetime.now()
                     logger.info(
                         "Provider pricing refresh failed; retaining stale cache for another TTL window"
                     )
+                    return True
                 else:
                     logger.warning(
-                        "No provider pricing fetched and no cached data; will retry next cycle"
+                        "No provider pricing fetched and no cached data; will retry shortly"
                     )
+                    return False
         finally:
             with self._lock:
                 self._fetch_in_progress = False
@@ -269,7 +286,7 @@ class ProviderPricingService:
         )
         return complete
 
-    def get_pricing(self, force_refresh: bool = False) -> Dict[str, Dict[str, float]]:
+    def get_pricing(self) -> Dict[str, Dict[str, float]]:
         """Return cached provider pricing.  Never blocks on a network call.
 
         The background thread handles refreshing.  If the cache is empty
