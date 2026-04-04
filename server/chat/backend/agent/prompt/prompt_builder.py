@@ -31,12 +31,10 @@ class PromptSegments:
     terraform_validation: str
     model_overlay: str
     failure_recovery: str
-    github_context: str
-    bitbucket_context: str = ""
     manual_vm_access: str = ""  # Manual VM access hints with managed keys
-    kubectl_onprem: str = ""
     background_mode: str = ""  # Background chat autonomous operation instructions
     knowledge_base_memory: str = ""  # User's knowledge base memory context
+    integration_index: str = ""  # Skills-based: compact index of connected integrations
 
 
 def _normalize_providers(provider_preference: Optional[Any]) -> List[str]:
@@ -133,312 +131,8 @@ def build_provider_context_segment(provider_preference: Optional[Any], selected_
                 parts.append(
                     "- Fetch the Azure subscription before writing Terraform: cloud_exec('azure', \"account show --query 'id' -o tsv\"). Use the concrete subscription ID in code.\n"
                 )
-            elif provider not in ("ovh", "scaleway", "tailscale", "cloudflare", "grafana"):
-                parts.append(
-                    "- Identify the correct project or subscription with the matching CLI command before writing infrastructure code.\n"
-                )
-
-    for provider in normalized or []:
-        if provider == "ovh":
-            parts.append(
-                "## OVHcloud Reference:\n\n"
-                    "### CLI COMMANDS (use cloud_exec with 'ovh'):\n\n"
-                    "**Discovery Commands:**\n"
-                    "- List projects: `cloud_exec('ovh', 'cloud project list --json')`\n"
-                    "- List regions: `cloud_exec('ovh', 'cloud region list --cloud-project <PROJECT_ID> --json')`\n"
-                    "- List flavors: `cloud_exec('ovh', 'cloud reference list-flavors --cloud-project <PROJECT_ID> --region <REGION> --json')`\n"
-                    "- List images: `cloud_exec('ovh', 'cloud reference list-images --cloud-project <PROJECT_ID> --region <REGION> --json')`\n\n"
-                    "**Instance Management:**\n"
-                    "- List instances: `cloud_exec('ovh', 'cloud instance list --cloud-project <PROJECT_ID> --json')`\n"
-                    "- Create instance: `cloud_exec('ovh', 'cloud instance create <REGION> --cloud-project <PROJECT_ID> --name <NAME> --boot-from.image <IMAGE_UUID> --flavor <FLAVOR_UUID> --network.public --wait --json')`\n"
-                    "- With SSH key: `cloud_exec('ovh', 'cloud instance create <REGION> --cloud-project <PROJECT_ID> --name <NAME> --boot-from.image <IMAGE_UUID> --flavor <FLAVOR_UUID> --ssh-key.create.name my-key --ssh-key.create.public-key \"<PUBKEY>\" --network.public --wait --json')`\n"
-                    "- Stop/Start/Reboot: `cloud_exec('ovh', 'cloud instance stop|start|reboot <INSTANCE_ID> --cloud-project <PROJECT_ID>')`\n"
-                    "- Delete: `cloud_exec('ovh', 'cloud instance delete <INSTANCE_ID> --cloud-project <PROJECT_ID>')`\n\n"
-                    "**Kubernetes (MKS):**\n"
-                    "- List clusters: `cloud_exec('ovh', 'cloud kube list --cloud-project <PROJECT_ID> --json')`\n"
-                    "- Create cluster: `cloud_exec('ovh', 'cloud kube create --cloud-project <PROJECT_ID> --name <NAME> --region <REGION> --version 1.28')`\n"
-                    "- Get kubeconfig: `cloud_exec('ovh', 'cloud kube kubeconfig generate <CLUSTER_ID> --cloud-project <PROJECT_ID>')`\n"
-                    "- Create nodepool: `cloud_exec('ovh', 'cloud kube nodepool create <CLUSTER_ID> --cloud-project <PROJECT_ID> --name worker-pool --flavor b2-7 --desired-nodes 3 --autoscale true')`\n\n"
-                    "**KUBECTL WORKFLOW (for OVH clusters):**\n"
-                    "1. Save kubeconfig to file: `cloud_exec('ovh', 'cloud kube kubeconfig generate <CLUSTER_ID> --cloud-project <PROJECT_ID>', output_file='/tmp/kubeconfig.yaml')`\n"
-                    "2. Run kubectl: `terminal_exec('kubectl --kubeconfig=/tmp/kubeconfig.yaml get pods -A')`\n"
-                    "3. CRITICAL: Use output_file parameter to save kubeconfig directly - avoids shell escaping issues\n"
-                    "4. Do NOT try to embed kubeconfig YAML in echo commands - it will break due to special characters\n\n"
-                    "**Networks:**\n"
-                    "- List networks: `cloud_exec('ovh', 'cloud network list --cloud-project <PROJECT_ID> --json')`\n"
-                    "- Create network: `cloud_exec('ovh', 'cloud network create --cloud-project <PROJECT_ID> --name <NAME> --vlan-id <ID> --regions <REGION>')`\n\n"
-                    "**Object Storage (S3):**\n"
-                    "- List S3 users: `cloud_exec('ovh', 'cloud storage-s3 list --cloud-project <PROJECT_ID> --json')`\n"
-                    "- Create S3 user: `cloud_exec('ovh', 'cloud storage-s3 create --cloud-project <PROJECT_ID> --region <REGION>')`\n\n"
-                    "### TERRAFORM FOR OVH:\n"
-                    "Use iac_tool - provider.tf is AUTO-GENERATED, just write the resource!\n"
-                    "**INSTANCE EXAMPLE (MUST use nested blocks, NOT flat attributes):**\n"
-                    "```hcl\n"
-                    "resource \"ovh_cloud_project_instance\" \"vm\" {{\n"
-                    "  service_name   = \"<PROJECT_ID>\"\n"
-                    "  region         = \"US-EAST-VA-1\"\n"
-                    "  billing_period = \"hourly\"\n"
-                    "  name           = \"my-vm\"\n"
-                    "  flavor {{\n"
-                    "    flavor_id = \"<FLAVOR_UUID>\"\n"
-                    "  }}\n"
-                    "  boot_from {{\n"
-                    "    image_id = \"<IMAGE_UUID>\"\n"
-                    "  }}\n"
-                    "  network {{\n"
-                    "    public = true\n"
-                    "  }}\n"
-                    "  # SSH key options (use ONE):\n"
-                    "  # Option 1: Reference existing SSH key by name\n"
-                    "  ssh_key {{\n"
-                    "    name = \"my-ssh-key\"  # Must exist in OVH first\n"
-                    "  }}\n"
-                    "  # Option 2: Create new SSH key inline\n"
-                    "  # ssh_key_create {{\n"
-                    "  #   name = \"my-new-key\"\n"
-                    "  #   public_key = \"ssh-rsa AAAA...\"\n"
-                    "  # }}\n"
-                    "}}\n"
-                    "```\n"
-                    "**SSH KEY IMPORTANT:** Use `ssh_key` to reference existing key, or `ssh_key_create` to create new one inline. If unsure, query Context7 with topic='ovh_cloud_project_instance ssh_key'.\n"
-                    "**Other resources:** `ovh_cloud_project_kube`, `ovh_cloud_project_kube_nodepool`, `ovh_cloud_project_database`\n"
-                    "DO NOT write terraform{{}} or provider{{}} blocks - they are auto-generated!\n\n"
-                    "### CRITICAL RULES:\n"
-                    "- Use **UUID** from 'id' field for flavor/image, NOT names!\n"
-                    "- Use `--cloud-project <ID>` NOT `--project-id`\n"
-                    "- Region is POSITIONAL in create commands: `cloud instance create <REGION> ...`\n"
-                    "- Use `kube` NOT `kubernetes` subcommand\n"
-                    "- Use `--network.public` for public IP (not `--network <ID>`)\n\n"
-                    "### DYNAMIC/RUNTIME DATA (versions, flavors, images):\n"
-                    "Context7 docs do NOT contain runtime data. For dynamic values, use CLI:\n"
-                    "- **K8s versions**: For Terraform, omit `version` to use latest stable, or use `1.31`, `1.32` (check `cloud kube create --help` for valid versions)\n"
-                    "- **Flavors**: `cloud_exec('ovh', 'cloud reference list-flavors --cloud-project <ID> --region <REGION> --json')`\n"
-                    "- **Images**: `cloud_exec('ovh', 'cloud reference list-images --cloud-project <ID> --region <REGION> --json')`\n"
-                    "- **Regions**: `cloud_exec('ovh', 'cloud region list --cloud-project <ID> --json')`\n"
-                    "Always query flavors/images/regions BEFORE creating resources.\n\n"
-                    "###️ MANDATORY: ON ANY OVH ERROR OR FAILURE:\n"
-                    "**YOU MUST** use Context7 MCP to look up correct syntax BEFORE retrying. Choose the RIGHT library:\n\n"
-                    "**If `iac_tool` (Terraform) fails** → Use TERRAFORM docs:\n"
-                    "`mcp_context7_get_library_docs(context7CompatibleLibraryID='/ovh/terraform-provider-ovh', topic='ovh_cloud_project_instance')`\n"
-                    "Topic should be the **resource type** (e.g., 'ovh_cloud_project_instance', 'ovh_cloud_project_kube', 'ssh_key block')\n\n"
-                    "**If `cloud_exec` (CLI) fails** → Use CLI docs:\n"
-                    "`mcp_context7_get_library_docs(context7CompatibleLibraryID='/ovh/ovhcloud-cli', topic='cloud instance create')`\n"
-                    "Topic should be the **CLI command** (e.g., 'cloud instance create', 'cloud kube list')\n\n"
-                    "️ Do NOT mix them up! Terraform errors need Terraform docs, CLI errors need CLI docs.\n"
-                )
-        elif provider == "scaleway":
-            parts.append(
-                    "## Scaleway Reference:\n\n"
-                    "### CLI COMMANDS (use cloud_exec with 'scaleway'):\n\n"
-                    "**CRITICAL: Always use cloud_exec('scaleway', 'command') for Scaleway commands, NOT terminal_exec!**\n"
-                    "The cloud_exec tool has your Scaleway credentials configured.\n\n"
-                    "**Discovery Commands:**\n"
-                    "- List projects: `cloud_exec('scaleway', 'account project list')`\n"
-                    "- List zones: `cloud_exec('scaleway', 'instance zone list')`\n"
-                    "- List instance types: `cloud_exec('scaleway', 'instance server-type list')`\n"
-                    "- List images: `cloud_exec('scaleway', 'instance image list')`\n\n"
-                    "**Instance Management:**\n"
-                    "- List instances: `cloud_exec('scaleway', 'instance server list')`\n"
-                    "- Create instance: `cloud_exec('scaleway', 'instance server create type=DEV1-S image=ubuntu_jammy name=my-vm')`\n"
-                    "- With zone: `cloud_exec('scaleway', 'instance server create type=DEV1-S image=ubuntu_jammy name=my-vm zone=fr-par-1')`\n"
-                    "- Start/Stop/Reboot: `cloud_exec('scaleway', 'instance server start|stop|reboot <SERVER_ID>')`\n"
-                    "- Delete: `cloud_exec('scaleway', 'instance server delete <SERVER_ID>')`\n"
-                    "- SSH into server: `cloud_exec('scaleway', 'instance server ssh <SERVER_ID>')`\n\n"
-                    "**Kubernetes (Kapsule):**\n"
-                    "- List clusters: `cloud_exec('scaleway', 'k8s cluster list')`\n"
-                    "- Create cluster: `cloud_exec('scaleway', 'k8s cluster create name=my-cluster version=1.28 cni=cilium')`\n"
-                    "- Get kubeconfig: `cloud_exec('scaleway', 'k8s kubeconfig get <CLUSTER_ID>')`\n"
-                    "- List pools: `cloud_exec('scaleway', 'k8s pool list cluster-id=<CLUSTER_ID>')`\n"
-                    "- Create pool: `cloud_exec('scaleway', 'k8s pool create cluster-id=<CLUSTER_ID> name=worker-pool node-type=DEV1-M size=3')`\n\n"
-                    "**Object Storage:**\n"
-                    "- List buckets: `cloud_exec('scaleway', 'object bucket list')`\n"
-                    "- Create bucket: `cloud_exec('scaleway', 'object bucket create name=my-bucket')`\n\n"
-                    "**Databases:**\n"
-                    "- List instances: `cloud_exec('scaleway', 'rdb instance list')`\n"
-                    "- Create instance: `cloud_exec('scaleway', 'rdb instance create name=my-db engine=PostgreSQL-15 node-type=DB-DEV-S')`\n\n"
-                    "### TERRAFORM FOR SCALEWAY:\n"
-                    "Use iac_tool - provider.tf is AUTO-GENERATED, just write the resource!\n"
-                    "Scaleway Terraform provider: https://registry.terraform.io/providers/scaleway/scaleway/latest/docs\n\n"
-                    "**INSTANCE EXAMPLE:**\n"
-                    "```hcl\n"
-                    "resource \"scaleway_instance_server\" \"vm\" {{\n"
-                    "  name  = \"my-vm\"\n"
-                    "  type  = \"DEV1-S\"\n"
-                    "  image = \"ubuntu_jammy\"\n"
-                    "  # Optional: specify zone (defaults to fr-par-1)\n"
-                    "  # zone = \"fr-par-1\"\n"
-                    "}}\n"
-                    "```\n\n"
-                    "**KUBERNETES (KAPSULE) CLUSTER:**\n"
-                    "```hcl\n"
-                    "resource \"scaleway_k8s_cluster\" \"cluster\" {{\n"
-                    "  name    = \"my-cluster\"\n"
-                    "  version = \"1.28\"\n"
-                    "  cni     = \"cilium\"\n"
-                    "}}\n\n"
-                    "resource \"scaleway_k8s_pool\" \"pool\" {{\n"
-                    "  cluster_id = scaleway_k8s_cluster.cluster.id\n"
-                    "  name       = \"worker-pool\"\n"
-                    "  node_type  = \"DEV1-M\"\n"
-                    "  size       = 3\n"
-                    "}}\n"
-                    "```\n\n"
-                    "**OBJECT STORAGE BUCKET:**\n"
-                    "```hcl\n"
-                    "resource \"scaleway_object_bucket\" \"bucket\" {{\n"
-                    "  name = \"my-bucket\"\n"
-                    "}}\n"
-                    "```\n\n"
-                    "**DATABASE (RDB) INSTANCE:**\n"
-                    "```hcl\n"
-                    "resource \"scaleway_rdb_instance\" \"db\" {{\n"
-                    "  name           = \"my-database\"\n"
-                    "  engine         = \"PostgreSQL-15\"\n"
-                    "  node_type      = \"DB-DEV-S\"\n"
-                    "  is_ha_cluster  = false\n"
-                    "  disable_backup = false\n"
-                    "}}\n"
-                    "```\n\n"
-                    "**Common Scaleway Terraform resources:**\n"
-                    "- `scaleway_instance_server` - Virtual machines\n"
-                    "- `scaleway_instance_ip` - Public IP addresses\n"
-                    "- `scaleway_instance_security_group` - Firewall rules\n"
-                    "- `scaleway_k8s_cluster` - Kubernetes clusters\n"
-                    "- `scaleway_k8s_pool` - Kubernetes node pools\n"
-                    "- `scaleway_object_bucket` - Object storage buckets\n"
-                    "- `scaleway_rdb_instance` - Managed databases\n"
-                    "- `scaleway_vpc_private_network` - Private networks\n"
-                    "- `scaleway_lb` - Load balancers\n\n"
-                    "DO NOT write terraform{{}} or provider{{}} blocks - they are auto-generated!\n"
-                    "When to use Terraform vs CLI:\n"
-                    "- **CLI (cloud_exec)**: Quick single resource ops, listing, inspection\n"
-                    "- **Terraform (iac_tool)**: Complex deployments, multi-resource setups, user explicitly requests 'terraform' or 'IaC'\n\n"
-                    "### CRITICAL RULES:\n"
-                    "- **ALWAYS** use `cloud_exec('scaleway', ...)` NOT `terminal_exec` for Scaleway commands!\n"
-                    "- Scaleway CLI uses `key=value` syntax, NOT `--key value` for most parameters\n"
-                    "- Common instance types: DEV1-S, DEV1-M, DEV1-L, GP1-XS, GP1-S, GP1-M\n"
-                    "- Common images: ubuntu_jammy, ubuntu_focal, debian_bookworm, debian_bullseye\n"
-                    "- Default region: fr-par, zones: fr-par-1, fr-par-2, fr-par-3\n"
-                    "- Default SSH username for instances: `root`\n\n"
-                )
-        elif provider == "tailscale":
-            parts.append(
-                    "## Tailscale Reference:\n\n"
-                    "Tailscale is a mesh VPN/network provider. It connects your devices into a secure private network called a 'tailnet'.\n"
-                    "Unlike cloud providers (GCP, AWS, Azure), Tailscale doesn't provision infrastructure - it networks existing devices.\n\n"
-                    "### DEVICE MANAGEMENT:\n"
-                    "- List all devices: `cloud_exec('tailscale', 'device list')`\n"
-                    "- Get device details: `cloud_exec('tailscale', 'device get <DEVICE_ID>')`\n"
-                    "- Authorize a device: `cloud_exec('tailscale', 'device authorize <DEVICE_ID>')`\n"
-                    "- Delete a device: `cloud_exec('tailscale', 'device delete <DEVICE_ID>')`\n"
-                    "- Set device tags: `cloud_exec('tailscale', 'device tag <DEVICE_ID> tag:server')`\n\n"
-                    "### SSH ACCESS (execute commands on devices):\n"
-                    "- Run command on device: `tailscale_ssh('hostname', 'command', 'user')`\n"
-                    "- Example - check uptime: `tailscale_ssh('myserver', 'uptime', 'root')`\n"
-                    "- Example - docker status: `tailscale_ssh('web-prod', 'docker ps', 'admin')`\n"
-                    "- Example - disk usage: `tailscale_ssh('database-1', 'df -h', 'ubuntu')`\n"
-                    "- SETUP REQUIRED: User must add Aurora's SSH public key to target devices\n"
-                    "  (Get key from Settings > Tailscale > SSH Setup)\n"
-                    "- Targets must have SSH server running (Linux: sshd, macOS: Remote Login)\n"
-                    "- If 'Permission denied' error: remind user to add Aurora's SSH key to the device\n\n"
-                    "### AUTH KEYS (for adding devices programmatically):\n"
-                    "- List auth keys: `cloud_exec('tailscale', 'key list')`\n"
-                    "- Create auth key: `cloud_exec('tailscale', 'key create --ephemeral --reusable --tags tag:server')`\n"
-                    "- Delete auth key: `cloud_exec('tailscale', 'key delete <KEY_ID>')`\n\n"
-                    "### ACL (Access Control Lists):\n"
-                    "- Get current ACL: `cloud_exec('tailscale', 'acl get')`\n"
-                    "- Update ACL: `cloud_exec('tailscale', 'acl set <ACL_JSON>')`\n\n"
-                    "### DNS & NETWORK:\n"
-                    "- Get DNS settings: `cloud_exec('tailscale', 'dns get')`\n"
-                    "- List subnet routes: `cloud_exec('tailscale', 'routes list')`\n\n"
-                    "### KEY CONCEPTS:\n"
-                    "- **Tailnet**: Your private Tailscale network\n"
-                    "- **Device**: Any machine connected to your tailnet\n"
-                    "- **Tags**: Labels for devices (must start with 'tag:' prefix)\n"
-                    "- **Auth Key**: Token to add devices programmatically\n"
-                    "- **ACL**: Access Control List for device communication\n\n"
-                    "### CRITICAL RULES:\n"
-                    "- Use cloud_exec('tailscale', ...) for device/key/ACL management\n"
-                    "- Use tailscale_ssh('hostname', 'command', 'user') to run commands on devices\n"
-                    "- Tags must start with 'tag:' prefix (e.g., tag:server)\n"
-                    "- Auth key values are only shown once at creation\n"
-                    "- Tailscale does NOT provision infrastructure\n\n"
-                )
-        elif provider == "cloudflare":
-            parts.append(
-                    "## Cloudflare Reference:\n\n"
-                    "Cloudflare is connected for DNS, CDN, WAF, and edge diagnostics with full remediation capabilities.\n\n"
-                    "### IMPORTANT — NO CLI SUPPORT:\n"
-                    "- Do NOT use `cloud_exec('cloudflare', ...)` — there is no Cloudflare CLI connector.\n"
-                    "- Use the dedicated `query_cloudflare`, `cloudflare_list_zones`, and `cloudflare_action` tools instead.\n\n"
-                    "### OBSERVATION TOOLS (read-only):\n"
-                    "- **List zones**: `cloudflare_list_zones()` — discover all zones with IDs, names, and status.\n"
-                    "- **DNS records**: `query_cloudflare(resource_type='dns_records', zone_id='...')` — list A, AAAA, CNAME, MX, TXT records.\n"
-                    "- **Analytics**: `query_cloudflare(resource_type='analytics', zone_id='...')` — traffic, bandwidth, threats, HTTP status codes, content types, HTTP versions, SSL protocols, IP classification.\n"
-                    "  - Pass `since` (e.g. '-60' for last hour, or ISO-8601) and `until` (ISO-8601) to control the time window.\n"
-                    "  - Bucket granularity is auto-selected: minute buckets for ≤100 min, hourly for ≤100 h, daily beyond that.\n"
-                    "  - Default limit=50 returns a bucketed time-series (e.g., last 24h yields multiple hourly buckets). Set `limit=1` to force a single aggregate covering the entire window.\n"
-                    "- **Security events**: `query_cloudflare(resource_type='firewall_events', zone_id='...')` — recent WAF blocks, challenges, JS challenges.\n"
-                    "- **Firewall rules**: `query_cloudflare(resource_type='firewall_rules', zone_id='...')` — active firewall rules and expressions.\n"
-                    "- **Rate limits**: `query_cloudflare(resource_type='rate_limits', zone_id='...')` — rate limiting rules (thresholds, actions, URL patterns).\n"
-                    "- **Zone settings**: `query_cloudflare(resource_type='zone_settings', zone_id='...')` — ALL zone settings (security level, caching, dev mode, WAF, TLS version, minification, etc.).\n"
-                    "- **Page rules**: `query_cloudflare(resource_type='page_rules', zone_id='...')` — URL-based redirects, forwarding, cache overrides.\n"
-                    "- **Workers**: `query_cloudflare(resource_type='workers')` — list Cloudflare Workers scripts.\n"
-                    "- **Load balancers**: `query_cloudflare(resource_type='load_balancers', zone_id='...')` — LB config, pools, failover.\n"
-                    "- **SSL/TLS**: `query_cloudflare(resource_type='ssl', zone_id='...')` — TLS mode (off/flexible/full/strict) and cert status.\n"
-                    "- **Healthchecks**: `query_cloudflare(resource_type='healthchecks', zone_id='...')` — origin health monitors.\n\n"
-                    "### REMEDIATION TOOLS (write actions via `cloudflare_action`):\n"
-                    "All remediation uses one tool: `cloudflare_action(action_type='...', zone_id='...', ...)`\n\n"
-                    "- **Purge cache**: `cloudflare_action(action_type='purge_cache', zone_id='...', files=['https://...'])` — clear cached content.\n"
-                    "  - Omit `files` to purge everything (use with caution — spikes origin load).\n"
-                    "- **Under Attack Mode**: `cloudflare_action(action_type='security_level', zone_id='...', value='under_attack')` — enable JS challenge for all visitors.\n"
-                    "  - Other values: 'high', 'medium', 'low', 'essentially_off'.\n"
-                    "  - Use during active DDoS or abuse. Remember to lower it after the incident.\n"
-                    "- **Development mode**: `cloudflare_action(action_type='development_mode', zone_id='...', value='on')` — bypass cache entirely.\n"
-                    "  - Useful for debugging stale content issues. Auto-expires after 3 hours.\n"
-                    "- **DNS update**: `cloudflare_action(action_type='dns_update', zone_id='...', record_id='...', content='1.2.3.4')` — change a DNS record.\n"
-                    "  - Use for failover to backup origin, maintenance page, or IP migration.\n"
-                    "  - Get record_id from `query_cloudflare(resource_type='dns_records')`.\n"
-                    "  - Also supports `proxied` (bool) and `ttl` (int, 1=auto).\n"
-                    "- **Toggle firewall rule**: `cloudflare_action(action_type='toggle_firewall_rule', zone_id='...', rule_id='...', paused=True)` — disable a rule.\n"
-                    "  - Use to unblock false-positive blocks or emergency-enable a blocking rule.\n"
-                    "  - Get rule_id from `query_cloudflare(resource_type='firewall_rules')`.\n\n"
-                    "### RCA WORKFLOW:\n"
-                    "1. Start with `cloudflare_list_zones()` to discover zone IDs.\n"
-                    "2. Check `zone_settings` for current security level, dev mode, caching config.\n"
-                    "3. Check `analytics` for traffic spikes, elevated error rates (5xx), or threat surges.\n"
-                    "4. Check `firewall_events` if traffic is being blocked unexpectedly.\n"
-                    "5. Check `firewall_rules` and `rate_limits` if legitimate traffic appears throttled.\n"
-                    "6. Check `dns_records` if a domain resolution issue is suspected.\n"
-                    "7. Check `ssl` if TLS handshake errors are reported.\n"
-                    "8. Check `healthchecks` and `load_balancers` if origin availability is degraded.\n"
-                    "9. Check `page_rules` if redirects or caching overrides are misbehaving.\n\n"
-                    "### CRITICAL RULES:\n"
-                    "- NEVER call cloud_exec with provider='cloudflare' — it will fail.\n"
-                    "- NEVER use query_cloudflare to list zones — use `cloudflare_list_zones()` instead.\n"
-                    "- Always get zone IDs first before querying zone-specific data.\n"
-                    "- Only zones enabled by the user are accessible; others will be rejected.\n"
-                    "- Analytics covers the last 24h by default; use the `since` parameter for custom ranges.\n"
-                    "- Remediation actions require write permissions on the token; if a 403 is returned, tell the user which permission to add.\n\n"
-                )
-        elif provider == "grafana":
-            parts.append(
-                    "## Grafana Reference:\n\n"
-                    "Grafana is connected as an **observation-only** provider for alert ingestion and dashboard monitoring.\n\n"
-                    "### IMPORTANT — NO CLI SUPPORT:\n"
-                    "- Do NOT use `cloud_exec('grafana', ...)` — there is no Grafana CLI connector.\n"
-                    "- Do NOT use `terminal_exec` with `grafana-cli` — it is not installed.\n"
-                    "- Grafana data (alerts) is available through Aurora's internal API, not through CLI tools.\n\n"
-                    "### WHAT YOU CAN DO:\n"
-                    "- **View alerts**: Grafana alerts are automatically ingested via webhook and stored in Aurora's database.\n"
-                    "  Reference the alert context provided in the conversation to answer questions about Grafana alerts.\n"
-                    "- **Investigate infrastructure**: If an alert references a specific cloud resource (VM, pod, service),\n"
-                    "  use the appropriate cloud provider tool (cloud_exec with 'gcp', 'aws', 'azure', etc.) to investigate.\n\n"
-                    "### CRITICAL RULES:\n"
-                    "- NEVER call cloud_exec with provider='grafana' — it will fail.\n"
-                    "- Use the alert context already available in the conversation.\n"
-                    "- For deeper investigation, identify the underlying cloud provider from the alert and use that provider's tools.\n\n"
-                )
+    # Provider-specific reference guides are now in skill files.
+    # The agent loads them on-demand via load_skill().
 
     return "".join(parts)
 
@@ -563,152 +257,6 @@ def build_failure_recovery_segment(state: Optional[Any]) -> str:
     )
 
     return "".join(parts)
-
-
-def build_github_context_segment(user_id: Optional[str]) -> str:
-    """Build GitHub context segment -- lightweight, repos are fetched via tool call."""
-    if not user_id:
-        return ""
-    try:
-        from utils.auth.stateless_auth import get_credentials_from_db
-        github_creds = get_credentials_from_db(user_id, 'github')
-        if not github_creds or not github_creds.get('username'):
-            return ""
-
-        return (
-            "GITHUB INTEGRATION:\n"
-            f"- Connected account: {github_creds['username']}\n"
-            "- Call get_connected_repos to list available repositories with descriptions.\n"
-            "- Always pass repo='owner/repo' to github_rca and MCP tools.\n"
-            "- Use github_rca for RCA (deployment_check, commits, diff, pull_requests).\n"
-            "- Use MCP tools (mcp_*) for direct GitHub API operations.\n"
-        )
-    except Exception as e:
-        import logging
-        logging.warning(f"Error building GitHub context segment: {e}")
-        return ""
-
-
-def build_bitbucket_context_segment(user_id: Optional[str]) -> str:
-    """Build Bitbucket context segment with connected account and selected repo info."""
-    import logging
-
-    if not user_id:
-        return ""
-
-    try:
-        from utils.auth.stateless_auth import get_credentials_from_db
-
-        parts: List[str] = []
-
-        bb_creds = get_credentials_from_db(user_id, "bitbucket")
-        if not bb_creds:
-            return ""
-
-        username = bb_creds.get("username", "")
-        display_name = bb_creds.get("display_name", username)
-        if not username and not display_name:
-            return ""
-
-        parts.append("BITBUCKET INTEGRATION CONTEXT:\n")
-        parts.append(f"- Connected Bitbucket account: {display_name or username}\n")
-
-        from chat.backend.agent.tools.bitbucket.utils import _extract_field
-
-        selection = get_credentials_from_db(user_id, "bitbucket_workspace_selection") or {}
-
-        ws_slug = _extract_field(selection.get("workspace"), "slug")
-        repo_slug = _extract_field(selection.get("repository"), "slug")
-        repo_name = _extract_field(selection.get("repository"), "name", default=repo_slug)
-        branch_name = _extract_field(selection.get("branch"), "name")
-
-        if ws_slug:
-            parts.append(f"- Selected workspace: {ws_slug}\n")
-        if repo_slug:
-            parts.append(f"- Selected repository: {repo_name or repo_slug}\n")
-            parts.append(f"- Repository slug: {repo_slug}\n")
-        if branch_name:
-            parts.append(f"- Selected branch: {branch_name}\n")
-
-        parts.append("\n")
-        parts.append("BITBUCKET NATIVE TOOLS AVAILABLE (5 tools, 41 actions):\n\n")
-
-        parts.append("**bitbucket_repos** — Repository, File & Code Operations:\n")
-        parts.append("- list_repos, get_repo, get_file_contents, create_or_update_file, delete_file\n")
-        parts.append("- get_directory_tree, search_code, list_workspaces, get_workspace\n\n")
-
-        parts.append("**bitbucket_branches** — Branch & Commit Operations:\n")
-        parts.append("- list_branches, create_branch, delete_branch, list_commits, get_commit, get_diff, compare\n\n")
-
-        parts.append("**bitbucket_pull_requests** — Pull Request Operations:\n")
-        parts.append("- list_prs, get_pr, create_pr, update_pr, merge_pr, approve_pr, unapprove_pr, decline_pr\n")
-        parts.append("- list_pr_comments, add_pr_comment, get_pr_diff, get_pr_activity\n\n")
-
-        parts.append("**bitbucket_issues** — Issue Operations:\n")
-        parts.append("- list_issues, get_issue, create_issue, update_issue, list_issue_comments, add_issue_comment\n\n")
-
-        parts.append("**bitbucket_pipelines** — CI/CD Pipeline Operations:\n")
-        parts.append("- list_pipelines, get_pipeline, trigger_pipeline, stop_pipeline\n")
-        parts.append("- list_pipeline_steps, get_step_log, get_pipeline_step\n\n")
-
-        parts.append("BITBUCKET TOOL USAGE RULES:\n")
-        parts.append("- When user asks about PRs, issues, repos, or branches WITHOUT specifying a repository, use the selected workspace/repo above.\n")
-        parts.append("- Workspace and repo_slug auto-resolve from saved selection if not passed explicitly.\n")
-        parts.append("- Destructive actions (delete branch, delete file, merge PR, decline PR, trigger/stop pipeline) require user confirmation and will prompt automatically.\n")
-        parts.append("- Non-destructive operations (create branch, create PR, update PR, approve, comment, create issue) proceed without extra confirmation.\n")
-        parts.append("- If no repository is selected and user doesn't specify one, ask which repository they want to work with.\n")
-
-        return "".join(parts)
-
-    except Exception as e:
-        logging.warning(f"Error building Bitbucket context segment: {e}")
-        return ""
-
-
-def build_kubectl_onprem_segment(user_id: Optional[str]) -> str:
-    """List available on-prem kubectl clusters for agent awareness."""
-    if not user_id:
-        return ""
-    
-    try:
-        from utils.db.db_adapters import connect_to_db_as_user
-        conn = connect_to_db_as_user()
-        try:
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT c.cluster_id, t.cluster_name, t.notes, c.status, c.last_heartbeat
-                FROM active_kubectl_connections c
-                JOIN kubectl_agent_tokens t ON c.token = t.token
-                WHERE t.user_id = %s AND c.status = 'active'
-                ORDER BY t.cluster_name
-            """, (user_id,))
-            clusters = cursor.fetchall()
-            cursor.close()
-        finally:
-            conn.close()
-        
-        if not clusters:
-            return ""
-        
-        parts = []
-        parts.append("ON-PREM KUBERNETES CLUSTERS:\n")
-        parts.append("The following on-prem clusters are connected and available:\n\n")
-        
-        for cluster_id, cluster_name, notes, status, heartbeat in clusters:
-            parts.append(f"  - {cluster_name} (cluster_id: {cluster_id})\n")
-            if notes and notes.strip():
-                parts.append(f"    Description: {notes.strip()}\n")
-        
-        parts.append("\nTo run kubectl commands on these on-prem clusters, use the on_prem_kubectl tool.\n")
-        parts.append("Specify the cluster using the cluster_id.\n")
-        parts.append("For cloud-managed clusters (GCP GKE, AWS EKS, Azure AKS), use terminal_exec with kubectl commands.\n\n")
-        
-        return "".join(parts)
-        
-    except Exception as e:
-        import logging
-        logging.warning(f"Error building kubectl on-prem segment: {e}")
-        return ""
 
 
 def build_system_invariant() -> str:
@@ -1466,281 +1014,32 @@ def build_background_mode_segment(state: Optional[Any]) -> str:
         "",
     ]
 
-    # Provider-specific commands (concise)
-    if 'gcp' in providers_lower:
-        parts.append("GCP: kubectl get pods -n NS, kubectl describe pod POD -n NS, kubectl logs POD -n NS, gcloud logging read")
-    if 'aws' in providers_lower:
-        parts.append("AWS (MULTI-ACCOUNT): Your first cloud_exec('aws', ...) call fans out to ALL connected accounts. "
-                      "Check results_by_account to find the affected account. Then pass account_id='<ID>' on all "
-                      "subsequent calls to target only that account. "
-                      "Commands: kubectl get pods, aws logs filter-log-events, eks describe-cluster, ec2 describe-instances")
-    if 'azure' in providers_lower:
-        parts.append("Azure: kubectl get pods, az monitor log-analytics query, aks show")
-    if 'ovh' in providers_lower:
-        parts.append("OVH: cloud instance list, kubectl via kubeconfig")
-    if 'scaleway' in providers_lower:
-        parts.append("Scaleway: instance server list, k8s cluster list")
-
-    # Tool mapping (critical)
+    # Provider CLI commands and integration guidance loaded from skill files
     parts.extend([
         "",
-        "TOOLS: cloud_tool() = cloud_exec | terminal_tool() = terminal_exec",
+        f"Providers: {', '.join(providers) if providers else 'none'} — use load_skill for detailed commands.",
+        "TOOLS: cloud_exec for cloud CLI | terminal_exec for shell commands",
     ])
 
-    # Splunk tools (if connected - available for any alert source)
-    if integrations.get('splunk'):
-        parts.extend([
-            "",
-            "SPLUNK INVESTIGATION:",
-            "IMPORTANT: Splunk is a REMOTE service. Do NOT search local filesystem for Splunk files.",
-            "Use ONLY these Splunk API tools:",
-            "1. list_splunk_indexes() - discover indexes",
-            "2. list_splunk_sourcetypes(index='X') - find log types",
-            "3. search_splunk(query='SPL query', earliest_time='-1h') - query logs",
-            "Common SPL patterns:",
-            "   search_splunk(query='index=X error | stats count by host', earliest_time='-1h')",
-            "   search_splunk(query='index=X status>=500 | head 50', earliest_time='-30m')",
-            "SPL tips: | head N, | stats count by FIELD, | timechart",
-            "After Splunk analysis, correlate with cloud resources if providers connected.",
-        ])
+    # Load integration-specific RCA guidance from skill files
+    try:
+        from chat.backend.agent.skills.registry import SkillRegistry
+        user_id = rca_context.get('user_id', '')
+        registry = SkillRegistry.get_instance()
+        rca_skills_content = registry.load_skills_for_rca(
+            user_id=user_id,
+            source=source,
+            providers=providers,
+            integrations=integrations,
+        )
+        if rca_skills_content:
+            parts.extend(["", rca_skills_content])
+    except Exception as e:
+        import logging
+        logging.warning(f"Failed to load RCA skills: {e}")
 
-    # Dynatrace tools (if connected)
-    if integrations.get('dynatrace'):
-        parts.extend([
-            "",
-            "DYNATRACE INVESTIGATION:",
-            "IMPORTANT: Dynatrace is a REMOTE service. Use ONLY the query_dynatrace API tool.",
-            "Usage: query_dynatrace(resource_type=TYPE, query=SELECTOR, time_from=START)",
-            "Resource types:",
-            "1. 'problems' - Active/recent problems. query=problem selector e.g. status(\"open\")",
-            "2. 'entities' - Monitored hosts/services/processes. query=entity selector e.g. type(\"HOST\")",
-            "3. 'logs' - Log entries. query=search string",
-            "4. 'metrics' - Metric time series. query=metric selector e.g. builtin:host.cpu.usage",
-            "Start with problems to understand the issue, then drill into entities and logs.",
-        ])
-
-    # Datadog tools (if connected)
-    if integrations.get('datadog'):
-        parts.extend([
-            "",
-            "DATADOG INVESTIGATION:",
-            "IMPORTANT: Datadog is a REMOTE service. Use ONLY the query_datadog API tool.",
-            "Usage: query_datadog(resource_type=TYPE, query=QUERY, time_from=START)",
-            "Resource types:",
-            "1. 'logs' - Search log entries. query=Datadog log query syntax e.g. \"service:web status:error\"",
-            "2. 'metrics' - Query metric timeseries. query=metric query e.g. \"avg:system.cpu.user{*}\"",
-            "3. 'monitors' - List monitors with status. query=name filter (optional)",
-            "4. 'events' - Platform events. query=source filter (optional)",
-            "5. 'traces' - APM spans/traces. query=span query e.g. \"service:web @http.status_code:500\"",
-            "6. 'hosts' - Infrastructure hosts. query=host filter (optional)",
-            "7. 'incidents' - Datadog incidents. Lists active/recent incidents (requires Incident Management; may 403 if not enabled).",
-            "Investigation flow:",
-            "1. Search logs for errors around the alert time",
-            "2. Check traces for failing requests and latency",
-            "3. Query metrics for resource correlation (CPU, memory, error rates)",
-            "4. List monitors to understand alerting context",
-            "5. Check hosts for infrastructure health",
-            "6. Review incidents for related/correlated issues",
-            "Datadog query syntax: service:X, status:error, @http.status_code:5*, host:X, env:production",
-        ])
-
-    # New Relic tools (if connected)
-    if integrations.get('newrelic'):
-        parts.extend([
-            "",
-            "NEW RELIC INVESTIGATION:",
-            "IMPORTANT: New Relic is a REMOTE service. Use ONLY the query_newrelic API tool.",
-            "Usage: query_newrelic(resource_type=TYPE, query=QUERY, time_range=RANGE, limit=N)",
-            "Resource types:",
-            "1. 'nrql' - Run NRQL queries. query=NRQL string e.g. \"SELECT count(*) FROM Transaction WHERE error IS true FACET appName\"",
-            "2. 'issues' - Active alert issues. query=state filter (ACTIVATED, CREATED, CLOSED)",
-            "3. 'entities' - Search monitored entities (APM apps, hosts). query=entity name or filter",
-            "Investigation flow:",
-            "1. Check issues for active/related alert context",
-            "2. Search entities to identify affected services and hosts",
-            "3. Use NRQL to query transactions, errors, and metrics around the alert time",
-            "NRQL tips: SELECT ... FROM Transaction/TransactionError/SystemSample, FACET for grouping, TIMESERIES for trends",
-            "Common NRQL: SELECT count(*) FROM TransactionError WHERE appName='X' SINCE 1 hour ago TIMESERIES",
-        ])
-
-    # GitHub tools (if connected)
-    if integrations.get('github'):
-        parts.extend([
-            "",
-            "GITHUB INVESTIGATION:",
-            "Use github_rca tool for structured code change investigation.",
-            "Always pass repo='owner/repo' to specify which repository.",
-            "If unsure which repo is relevant to the alert, call get_connected_repos first.",
-            "",
-            "Commands:",
-            "- github_rca(repo='owner/repo', action='deployment_check') - Recent GitHub Actions runs",
-            "- github_rca(repo='owner/repo', action='commits', incident_time='ALERT_TIME') - Recent commits",
-            "- github_rca(repo='owner/repo', action='diff', commit_sha='SHA') - Diff for specific commits",
-            "- github_rca(repo='owner/repo', action='pull_requests') - Recently merged PRs",
-            "",
-            "Check for recent code changes that may correlate with the alert.",
-            "Look for: config changes, k8s manifests, Terraform, dependency updates.",
-        ])
-
-    # Confluence search tools (if connected)
-    if integrations.get('confluence'):
-        parts.extend([
-            "",
-            "CONFLUENCE INVESTIGATION:",
-            "Use Confluence search tools to find prior incidents and runbooks:",
-            "- confluence_search_similar(keywords=['error msg'], service_name='svc') - Find postmortems / past incidents",
-            "- confluence_search_runbooks(service_name='svc') - Find runbooks / SOPs / playbooks",
-            "- confluence_fetch_page(page_id='12345') - Read full page content as markdown",
-            "",
-            "Workflow: search first, then fetch promising pages for detailed procedures.",
-            "Cross-reference Confluence findings with live infrastructure state.",
-        ])
-
-    # Jira integration (if connected)
-    if integrations.get('jira'):
-        jira_mode = integrations.get('jira_mode', 'comment_only')
-        parts.extend([
-            "",
-            "JIRA INTEGRATION:",
-            "Jira is connected. Use Jira tools to gain context during investigation AND to track the incident afterward:",
-            "",
-            "Investigation (use EARLY to narrow scope):",
-            "- jira_search_issues(jql='text ~ \"service\" AND updated >= -7d ORDER BY updated DESC') - Find recent work on the affected service",
-            "- jira_search_issues(jql='type in (Bug, Incident) AND status != Done ORDER BY updated DESC') - Find open bugs/incidents",
-            "- jira_get_issue(issue_key='PROJ-123') - Read issue details, linked PRs, comments for change context",
-            "",
-        ])
-        if jira_mode == "comment_only":
-            parts.extend([
-                "Post-analysis (comment on existing issues only):",
-                "- jira_add_comment(issue_key='PROJ-123', comment='update') - Add findings to existing issue",
-                "NOTE: You are configured to COMMENT ONLY. Do NOT create new issues or link issues.",
-                "After adding a comment or creating an issue, the tool returns a `url` field. Always share this link with the user as a markdown link so they can click through to Jira.",
-                "Write comments as short, clean plain text. No markdown syntax. Structure: Title, Root Cause, Impact, Evidence, Remediation. Under 15 lines.",
-            ])
-        else:
-            parts.extend([
-                "Post-analysis (create tracking issue):",
-                "- jira_create_issue(project_key='PROJ', summary='title', description='details', issue_type='Bug') - Create incident tracking issue",
-                "- jira_add_comment(issue_key='PROJ-123', comment='update') - Add findings to existing issue",
-                "After adding a comment or creating an issue, the tool returns a `url` field. Always share this link with the user as a markdown link so they can click through to Jira.",
-                "Write comments as short, clean plain text. No markdown syntax. Structure: Title, Root Cause, Impact, Evidence, Remediation. Under 15 lines.",
-            ])
-
-    # SharePoint search tools (if connected)
-    if integrations.get('sharepoint'):
-        parts.extend([
-            "",
-            "SHAREPOINT INVESTIGATION:",
-            "Use SharePoint tools to search documents and pages via Microsoft Graph API:",
-            "- sharepoint_search(query='error keywords', site_id='optional-site-id') - Search across SharePoint for pages, documents, and list items",
-            "- sharepoint_fetch_page(site_id='site-id', page_id='page-id') - Read full page content as markdown",
-            "- sharepoint_fetch_document(drive_id='drive-id', item_id='item-id') - Extract text from Word docs, PDFs, etc.",
-            "",
-            "Workflow: search first to find relevant documents and pages, then fetch content for detailed review.",
-        ])
-
-    # Coroot observability (if connected)
-    if integrations.get('coroot'):
-        parts.extend([
-            "",
-            "COROOT OBSERVABILITY (CONNECTED - USE THESE TOOLS):",
-            "Coroot is an eBPF-powered observability platform. Its node agent instruments at the KERNEL level,",
-            "capturing data that applications cannot self-report and requires NO code changes or SDK integration.",
-            "",
-            "WHAT eBPF GIVES YOU (data invisible to application logs):",
-            "- TCP connections: every connect/accept/close between services, including failed connects and retransmissions",
-            "- Network latency: actual round-trip time measured at the kernel, not application-reported",
-            "- DNS queries: every resolution with latency, NXDOMAIN errors, and server failures",
-            "- Disk I/O: per-process read/write latency and throughput at the block device level",
-            "- Container resources: CPU usage, memory RSS, OOM kills, throttling — from cgroups",
-            "- L7 protocol parsing: HTTP, PostgreSQL, MySQL, Redis, MongoDB, Memcached request/response metrics",
-            "  extracted from TCP streams without application instrumentation",
-            "- Service map: automatically discovered from observed TCP connections — not configured manually",
-            "",
-            "This means Coroot sees issues BEFORE they appear in application logs:",
-            "- A service failing to connect to a dependency (TCP connect failures)",
-            "- Network packet loss and retransmissions between pods/nodes",
-            "- DNS resolution failures causing timeouts",
-            "- Disk I/O saturation causing slow queries",
-            "- OOM kills that happen before the app can log anything",
-            "- Container CPU throttling invisible to the application",
-            "",
-            "INVESTIGATION FLOW:",
-            "1. coroot_get_incidents(lookback_hours=24) — List incidents with RCA summaries, root cause, and fixes",
-            "2. coroot_get_overview_logs(severity='Error', limit=50) — Search all logs cluster-wide for errors",
-            "   (includes Kubernetes Events: OOMKilled, Evicted, CrashLoopBackOff, FailedScheduling)",
-            "3. coroot_get_incident_detail(incident_key='KEY') — Full incident detail with propagation map",
-            "4. coroot_get_app_detail(app_id='ID') — Audit reports for affected app (35+ health checks)",
-            "5. coroot_get_app_logs(app_id='ID', severity='Error') — Error logs with trace correlation",
-            "6. coroot_get_traces(service_name='svc', status_error=True) — Error traces across services",
-            "7. coroot_get_traces(trace_id='ID') — Full trace tree for a specific request",
-            "",
-            "PROACTIVE HEALTH SCAN:",
-            "1. coroot_get_applications() — All apps sorted by status (CRITICAL first)",
-            "2. coroot_get_service_map() — Auto-discovered dependencies from eBPF TCP tracking",
-            "3. coroot_get_deployments(lookback_hours=24) — Correlate deploys with failures",
-            "4. coroot_get_risks() — Security and availability risks (single-instance, single-AZ, exposed ports)",
-            "",
-            "NODE INVESTIGATION:",
-            "1. coroot_get_nodes() — List all nodes with health status",
-            "2. coroot_get_node_detail(node_name='NODE') — Full audit (CPU, memory, disk, network per-interface)",
-            "",
-            "COST INVESTIGATION:",
-            "1. coroot_get_costs(lookback_hours=24) — Cost breakdown per node/app + right-sizing recommendations",
-            "   (cost spikes correlate with autoscaling issues, memory leaks, retry storms)",
-            "",
-            "METRICS (PromQL via Coroot — all collected by eBPF, no exporters needed):",
-            "coroot_query_metrics(promql='rate(container_resources_cpu_usage_seconds_total[5m])')",
-            "Key queries: CPU, memory RSS, OOM kills, HTTP error rate, TCP connect failures,",
-            "  TCP retransmissions, network RTT, DNS latency, DB query latency, container restarts",
-            "",
-            "Status codes: 0=UNKNOWN, 1=OK, 2=INFO, 3=WARNING, 4=CRITICAL",
-            "Check Coroot FIRST for any infrastructure-layer issue — it sees kernel-level events that",
-            "application logs and cloud provider metrics cannot capture.",
-        ])
-
-    # Jenkins CI/CD (if connected)
-    if integrations.get('jenkins'):
-        parts.extend([
-            "",
-            "JENKINS CI/CD INVESTIGATION:",
-            "Jenkins is connected. Use the `jenkins_rca` tool for CI/CD investigation.",
-            "Actions: recent_deployments, build_detail, pipeline_stages, stage_log,",
-            "  build_logs, test_results, blue_ocean_run, blue_ocean_steps, trace_context",
-            "",
-            "INVESTIGATION FLOW:",
-            "1. jenkins_rca(action='recent_deployments', service='SERVICE') — Check for recent deploys",
-            "2. jenkins_rca(action='build_detail', job_path='JOB', build_number=N) — Build details + commits",
-            "3. jenkins_rca(action='pipeline_stages', job_path='JOB', build_number=N) — Stage breakdown",
-            "4. jenkins_rca(action='build_logs', job_path='JOB', build_number=N) — Console output",
-            "5. jenkins_rca(action='test_results', job_path='JOB', build_number=N) — Test failures",
-            "6. jenkins_rca(action='trace_context', deployment_event_id=ID) — OTel trace correlation",
-            "",
-            "Recent deployments are a leading indicator of root cause.",
-            "Always check if a deployment occurred shortly before the alert fired.",
-        ])
-
-    # CloudBees CI (if connected)
-    if integrations.get('cloudbees'):
-        parts.extend([
-            "",
-            "CLOUDBEES CI/CD INVESTIGATION:",
-            "CloudBees CI is connected. Use the `cloudbees_rca` tool for CI/CD investigation.",
-            "Actions: recent_deployments, build_detail, pipeline_stages, stage_log,",
-            "  build_logs, test_results, blue_ocean_run, blue_ocean_steps, trace_context",
-            "",
-            "INVESTIGATION FLOW:",
-            "1. cloudbees_rca(action='recent_deployments', service='SERVICE') — Check for recent deploys",
-            "2. cloudbees_rca(action='build_detail', job_path='JOB', build_number=N) — Build details + commits",
-            "3. cloudbees_rca(action='pipeline_stages', job_path='JOB', build_number=N) — Stage breakdown",
-            "4. cloudbees_rca(action='build_logs', job_path='JOB', build_number=N) — Console output",
-            "5. cloudbees_rca(action='test_results', job_path='JOB', build_number=N) — Test failures",
-            "6. cloudbees_rca(action='trace_context', deployment_event_id=ID) — OTel trace correlation",
-            "",
-            "Recent deployments are a leading indicator of root cause.",
-            "Always check if a deployment occurred shortly before the alert fired.",
-        ])
+    # Integration-specific guidance (Splunk, Datadog, GitHub, Jira, etc.)
+    # now loaded from skill files above via SkillRegistry.load_skills_for_rca().
 
     # Knowledge Base search (always available for authenticated users)
     parts.extend([
@@ -1934,20 +1233,16 @@ def build_prompt_segments(provider_preference: Optional[Any], mode: Optional[str
     # Build background mode segment if applicable (for RCA background chats)
     background_mode = build_background_mode_segment(state)
 
-    # Build GitHub context for authenticated users with GitHub connected
-    github_context = ""
+    # Build skills-based integration index (agent loads details via load_skill tool)
+    integration_index = ""
     if state and hasattr(state, 'user_id'):
-        github_context = build_github_context_segment(state.user_id)
-
-    # Build Bitbucket context for authenticated users with Bitbucket connected
-    bitbucket_context = ""
-    if state and hasattr(state, 'user_id'):
-        bitbucket_context = build_bitbucket_context_segment(state.user_id)
-
-    # Build kubectl on-prem context for all users
-    kubectl_onprem = ""
-    if state and hasattr(state, 'user_id'):
-        kubectl_onprem = build_kubectl_onprem_segment(state.user_id)
+        try:
+            from chat.backend.agent.skills.registry import SkillRegistry
+            registry = SkillRegistry.get_instance()
+            integration_index = registry.build_index(state.user_id)
+        except Exception as e:
+            import logging
+            logging.warning(f"Failed to build skills index: {e}")
 
     # Build knowledge base memory context for authenticated users
     knowledge_base_memory = ""
@@ -1966,11 +1261,9 @@ def build_prompt_segments(provider_preference: Optional[Any], mode: Optional[str
         model_overlay=model_overlay,
         failure_recovery=failure_recovery,
         background_mode=background_mode,
-        github_context=github_context,
-        bitbucket_context=bitbucket_context,
         manual_vm_access=manual_vm_access,
-        kubectl_onprem=kubectl_onprem,
         knowledge_base_memory=knowledge_base_memory,
+        integration_index=integration_index,
     )
 
 
@@ -1990,12 +1283,9 @@ def assemble_system_prompt(segments: PromptSegments) -> str: #main prompt builde
         parts.append(segments.provider_context)
     if segments.manual_vm_access:
         parts.append(segments.manual_vm_access)
-    if segments.github_context:
-        parts.append(segments.github_context)
-    if segments.bitbucket_context:
-        parts.append(segments.bitbucket_context)
-    if segments.kubectl_onprem:
-        parts.append(segments.kubectl_onprem)
+    # Skills-based: compact index of connected integrations
+    if segments.integration_index:
+        parts.append(segments.integration_index)
     if segments.prerequisite_checks:
         parts.append(segments.prerequisite_checks)
     parts.append(segments.system_invariant)
@@ -2047,18 +1337,10 @@ def register_prompt_cache_breakpoints(
             tenant_id=tenant_id,
             ttl_s=PREFIX_CACHE_EPHEMERAL_TTL,
         )
-    if segments.github_context:
+    if segments.integration_index:
         pcm.register_segment(
-            segment_name="github_context",
-            content=segments.github_context,
-            provider=provider,
-            tenant_id=tenant_id,
-            ttl_s=PREFIX_CACHE_EPHEMERAL_TTL,
-        )
-    if segments.bitbucket_context:
-        pcm.register_segment(
-            segment_name="bitbucket_context",
-            content=segments.bitbucket_context,
+            segment_name="integration_index",
+            content=segments.integration_index,
             provider=provider,
             tenant_id=tenant_id,
             ttl_s=PREFIX_CACHE_EPHEMERAL_TTL,

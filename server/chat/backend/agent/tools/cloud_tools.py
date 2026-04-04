@@ -1341,7 +1341,34 @@ Once you identify which account has the issue, pass account_id (e.g. '1510256343
         ),
         args_schema=RAGIndexZipArgs,
     ))
-    
+
+    # Add load_skill tool for on-demand integration guidance
+    if user_id:
+        try:
+            from chat.backend.agent.skills.load_skill_tool import load_skill as _load_skill, LoadSkillArgs
+
+            context_wrapped_skill = with_user_context(_load_skill)
+            notification_wrapped_skill = with_completion_notification(context_wrapped_skill)
+            if tool_capture:
+                final_skill_func = wrap_func_with_capture(notification_wrapped_skill, "load_skill")
+            else:
+                final_skill_func = notification_wrapped_skill
+
+            tools.append(StructuredTool.from_function(
+                func=final_skill_func,
+                name="load_skill",
+                description=(
+                    "Load detailed guidance for a connected integration. "
+                    "Call this when you need to use an integration's tools and want the full "
+                    "reference (commands, workflows, investigation steps). "
+                    "The CONNECTED INTEGRATIONS index in your context lists available skill IDs. "
+                    "Example: load_skill('github') or load_skill('splunk')."
+                ),
+                args_schema=LoadSkillArgs,
+            ))
+        except Exception as e:
+            logging.warning(f"Failed to register load_skill tool: {e}")
+
     # Add Knowledge Base search tool for authenticated users
     if user_id:
         try:
