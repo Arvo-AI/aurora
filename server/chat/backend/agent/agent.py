@@ -566,7 +566,14 @@ class Agent:
                         if msg.get("role") == "user":
                             chat_history.append(HumanMessage(content=msg.get("content", "")))
                         elif msg.get("role") == "assistant":
-                            chat_history.append(AIMessage(content=msg.get("content", "")))
+                            tool_calls = msg.get("tool_calls")
+                            if tool_calls:
+                                chat_history.append(AIMessage(
+                                    content=msg.get("content", ""),
+                                    tool_calls=tool_calls,
+                                ))
+                            else:
+                                chat_history.append(AIMessage(content=msg.get("content", "")))
                         elif msg.get("role") == "tool":
                             tool_name = msg.get("name", "unknown_tool")
                             tool_result = msg.get("content", "")
@@ -644,10 +651,11 @@ class Agent:
                 if prev_messages:
                     try:
                         from chat.backend.agent.utils.chat_context_manager import ChatContextManager
+                        from langchain_core.messages import SystemMessage as _SystemMessage
                         if ChatContextManager.should_summarize_context(prev_messages, model_name):
                             summary_text = ChatContextManager.create_conversation_summary(prev_messages)
                             chat_history = [
-                                HumanMessage(content=(
+                                _SystemMessage(content=(
                                     "[CONVERSATION SUMMARY - Preflight]\n\n"
                                     f"{summary_text}\n\n"
                                     "[END SUMMARY]"

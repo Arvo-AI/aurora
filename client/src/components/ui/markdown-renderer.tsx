@@ -441,8 +441,8 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
             attributes: {
               ...defaultSchema.attributes,
               code: [...(defaultSchema.attributes?.code || []), 'className'],
-              span: [...(defaultSchema.attributes?.span || []), 'className', 'style'],
-              div: [...(defaultSchema.attributes?.div || []), 'className', 'style'],
+              span: [...(defaultSchema.attributes?.span || []), 'className'],
+              div: [...(defaultSchema.attributes?.div || []), 'className'],
               pre: [...(defaultSchema.attributes?.pre || []), 'className'],
               a: ['href', 'title', 'target', 'rel'],
             },
