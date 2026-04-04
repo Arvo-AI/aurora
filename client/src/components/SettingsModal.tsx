@@ -3,13 +3,14 @@
 import React, { useState } from 'react';
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog";
-import { Settings, User, BookOpen, FileText, Building2 } from "lucide-react";
+import { Settings, User, BookOpen, FileText, Building2, Zap } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { GeneralSettings } from "@/components/GeneralSettings";
 import { ProfileSettings } from "@/components/ProfileSettings";
 import { KnowledgeBaseSettings } from "@/components/KnowledgeBaseSettings";
 import { PostmortemsSettings } from "@/components/PostmortemsSettings";
 import { OrgSettings } from "@/components/OrgSettings";
+import { SkillsSettings } from "@/components/SkillsSettings";
 import { useUser } from "@/hooks/useAuthHooks";
 
 
@@ -18,7 +19,7 @@ interface SettingsModalProps {
   onClose: () => void;
 }
 
-type SettingsTab = 'organization' | 'general' | 'profile' | 'knowledge-base' | 'postmortems';
+type SettingsTab = 'organization' | 'general' | 'profile' | 'knowledge-base' | 'postmortems' | 'skills';
 
 export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
   const [activeTab, setActiveTab] = useState<SettingsTab>('organization');
@@ -54,6 +55,12 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
       label: 'Postmortems',
       icon: FileText,
       description: 'View generated postmortems'
+    },
+    {
+      id: 'skills' as SettingsTab,
+      label: 'Skills',
+      icon: Zap,
+      description: 'Manage agent procedural skills'
     },
   ];
 
@@ -102,6 +109,15 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
         return (
           <div className="h-full overflow-y-auto">
             <PostmortemsSettings />
+          </div>
+        );
+
+      case 'skills':
+        return (
+          <div className="p-6 h-full overflow-y-auto flex flex-col min-h-0">
+            <div className="flex-1 overflow-y-auto min-h-0">
+              <SkillsSettings />
+            </div>
           </div>
         );
 
