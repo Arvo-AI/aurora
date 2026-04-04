@@ -50,6 +50,8 @@ _DEFAULT_POLICIES = [
     ("editor", "*", "vms", "write"),
     ("editor", "*", "rca_emails", "write"),
     ("editor", "*", "graph", "write"),
+    ("viewer", "*", "skills", "read"),
+    ("editor", "*", "skills", "write"),
 
     # --- admin-only permissions ---
     ("admin", "*", "users", "manage"),

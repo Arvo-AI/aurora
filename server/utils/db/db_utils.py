@@ -1034,6 +1034,30 @@ def initialize_tables():
                     CREATE UNIQUE INDEX IF NOT EXISTS postmortems_incident_id_unique ON postmortems(incident_id);
                     CREATE INDEX IF NOT EXISTS idx_postmortems_user_id ON postmortems(user_id);
                 """,
+                "skills": """
+                    CREATE TABLE IF NOT EXISTS skills (
+                        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                        name VARCHAR(255) NOT NULL,
+                        description TEXT NOT NULL,
+                        body TEXT NOT NULL,
+                        tags JSONB DEFAULT '[]'::jsonb,
+                        providers JSONB DEFAULT '[]'::jsonb,
+                        mode_restriction VARCHAR(50),
+                        prompt_behavior VARCHAR(20) NOT NULL DEFAULT 'supplement',
+                        scope VARCHAR(20) NOT NULL DEFAULT 'org',
+                        user_id VARCHAR(1000),
+                        org_id VARCHAR(255),
+                        is_active BOOLEAN DEFAULT true,
+                        version VARCHAR(50) DEFAULT '1.0',
+                        references_data JSONB DEFAULT '{}'::jsonb,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_skills_org_id ON skills(org_id);
+                    CREATE INDEX IF NOT EXISTS idx_skills_scope ON skills(scope);
+                    CREATE INDEX IF NOT EXISTS idx_skills_user_id ON skills(user_id);
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_skills_name_scope ON skills(name, scope, COALESCE(org_id, ''), COALESCE(user_id, ''));
+                """,
             }
 
             # List of tables that should have RLS enabled and a policy applied.
@@ -1079,6 +1103,7 @@ def initialize_tables():
             rls_tables.append("incident_feedback")
             rls_tables.append("postmortems")
             rls_tables.append("github_connected_repos")
+            rls_tables.append("skills")
 
 
             # Migration: Add rca_celery_task_id column to incidents table if it doesn't exist
