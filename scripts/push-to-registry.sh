@@ -120,7 +120,7 @@ declare -a TARBALL_IMAGE_MAP=(
 
 TOTAL=${#IMAGE_MAP[@]}
 
-# ── Detect mode ──────────────────────────────────────────────────────────────
+# ── Determine mode ────────────────────────────────────────────────────────────
 
 MODE=""
 
@@ -131,85 +131,17 @@ if [ "$FORCE_TARBALL" = true ]; then
     exit 1
   fi
 else
-  # Auto-detect what's available
-  HAS_INTERNET=false
-  if curl -fsSL --connect-timeout 5 --max-time 10 "https://ghcr.io/v2/" >/dev/null 2>&1; then
-    HAS_INTERNET=true
-  fi
-
-  # Look for a local tarball
-  for dir in "." ".." "$REPO_ROOT"; do
-    for f in "$dir"/aurora-airtight-*.tar.gz; do
-      [ -f "$f" ] || continue
-      TARBALL="$f"
-      break 2
-    done
-  done
-
-  if [ "$HAS_INTERNET" = true ] && [ -n "$TARBALL" ]; then
-    # Both available — ask the user
-    echo "Detected two options for pushing images to ${REGISTRY}:"
-    echo ""
-    echo "  1) Pull from upstream registries (GHCR, Docker Hub, etc.)"
-    echo "     No extra disk usage — images go directly to your registry."
-    echo ""
-    echo "  2) Load from local tarball: ${TARBALL}"
-    echo "     Uses Docker to load images, then pushes from cache."
-    echo ""
-    if [ -t 0 ]; then
-      printf "Which method? [1]: "
-      read -r METHOD_CHOICE
-      METHOD_CHOICE="${METHOD_CHOICE:-1}"
-    else
-      METHOD_CHOICE="1"
-    fi
-    if [ "$METHOD_CHOICE" = "2" ]; then
-      MODE="tarball"
-    else
-      MODE="registry"
-    fi
-
-  elif [ "$HAS_INTERNET" = true ]; then
-    MODE="registry"
-    echo "Upstream registries are reachable."
-    echo "  Images will be pulled from GHCR/Docker Hub and pushed to ${REGISTRY}."
-    echo ""
-    if [ -t 0 ]; then
-      printf "Proceed? [Y/n]: "
-      read -r CONFIRM
-      CONFIRM="${CONFIRM:-Y}"
-      if [ "$CONFIRM" = "n" ] || [ "$CONFIRM" = "N" ]; then
-        echo "Aborted."
-        exit 0
-      fi
-    fi
-
-  elif [ -n "$TARBALL" ]; then
-    MODE="tarball"
-    echo "No internet access detected. Found local tarball: ${TARBALL}"
-    echo "  Images will be loaded from the tarball and pushed to ${REGISTRY}."
-    echo ""
-    if [ -t 0 ]; then
-      printf "Proceed? [Y/n]: "
-      read -r CONFIRM
-      CONFIRM="${CONFIRM:-Y}"
-      if [ "$CONFIRM" = "n" ] || [ "$CONFIRM" = "N" ]; then
-        echo "Aborted."
-        exit 0
-      fi
-    fi
-
-  else
+  MODE="registry"
+  # Verify upstream registries are reachable
+  if ! curl -sS --connect-timeout 5 --max-time 10 -o /dev/null "https://ghcr.io/v2/" 2>/dev/null; then
     echo "============================================"
-    echo "  Cannot reach upstream registries and no local tarball found."
+    echo "  Cannot reach upstream registries (ghcr.io)."
     echo "============================================"
     echo ""
-    echo "  Place the tarball (aurora-airtight-<version>-<arch>.tar.gz) in the"
-    echo "  current directory and re-run, or follow the manual steps in the docs:"
-    echo "  https://docs.arvo.ai/deployment/kubernetes-airgap"
+    echo "  Registry-to-registry mode requires internet access."
+    echo "  If your environment is air-gapped, re-run with a tarball:"
     echo ""
-    echo "  To download the bundle on a machine with internet:"
-    echo "    curl -fsSL https://raw.githubusercontent.com/arvo-ai/aurora/main/scripts/download-bundle.sh | bash"
+    echo "  See: https://docs.arvo.ai/deployment/kubernetes-airgap"
     exit 1
   fi
 fi

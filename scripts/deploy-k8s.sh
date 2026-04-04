@@ -101,7 +101,7 @@ fi
 # ── Detect environment ────────────────────────────────────────────────────────
 
 HAS_INTERNET=false
-if curl -fsSL --connect-timeout 5 --max-time 10 "https://ghcr.io/v2/" >/dev/null 2>&1; then
+if curl -sS --connect-timeout 5 --max-time 10 -o /dev/null "https://ghcr.io/v2/" 2>/dev/null; then
   HAS_INTERNET=true
 fi
 
