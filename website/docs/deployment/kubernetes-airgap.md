@@ -9,107 +9,94 @@ Deploy Aurora on a Kubernetes cluster with a private container registry. The dep
 **Prerequisites:**
 
 - Kubernetes 1.25+ with a default StorageClass
-- A private container registry accessible from the cluster (Harbor, Docker Distribution, Zot, etc.) — if you don't have one, see [Setting Up a Private Registry](#setting-up-a-private-registry)
+- A private container registry accessible from the cluster (Harbor, Docker Distribution, Zot, etc.)
 - `kubectl`, `helm`, `yq`, and `docker` (or `skopeo`) on a machine that can reach the registry
 - Network access from cluster nodes to the private registry
 
 ## Deployment Pipeline Overview
 
-The diagram below shows the full deployment pipeline. Each numbered step matches the sections in this guide — use it to orient yourself and understand what the scripts are doing under the hood.
-
 ```
-                        ┌─────────────────────────────┐
-                        │   Where are you deploying?   │
-                        └──────────────┬──────────────┘
-                                       │
-                       ┌───────────────┴───────────────┐
-                       ▼                               ▼
-              ┌─────────────────┐             ┌──────────────────┐
-              │     PATH A      │             │      PATH B      │
-              │ Internet access │             │  True air-gap    │
-              └────────┬────────┘             └────────┬─────────┘
-                       │                               │
-  ╔════════════════════╪═══════════════════════════════╪═══════════════════════╗
-  ║  STEP 1            │   Get the source              │                      ║
-  ║  ──────────        ▼                               ▼                      ║
-  ║          git clone / curl              download-bundle.sh                 ║
-  ║          from GitHub                   (images tarball + source archive)  ║
-  ║          (on your workstation)         (on a connected machine)           ║
-  ╚════════════════════╪═══════════════════════════════╪═══════════════════════╝
-                       │                               │
-                       │                       ┌───────┴────────┐
-                       │                       │ Transfer both  │
-                       │                       │ to bastion     │
-                       │                       │ (scp, usb ...) │
-                       │                       └───────┬────────┘
-                       │                               │
-                       │                    ┌──────────┴──────────────┐
-                       │                    │ From here on, everything│
-                       │                    │ runs on the bastion     │
-                       │                    └──────────┬──────────────┘
-                       │                               │
-  ╔════════════════════╪═══════════════════════════════╪═══════════════════════╗
-  ║  STEP 2            │   Push images to registry     │                      ║
-  ║  ──────────        ▼                               ▼                      ║
-  ║         push-to-registry.sh            push-to-registry.sh               ║
-  ║                    │                               │                      ║
-  ║         ┌──────────┴──────────┐         ┌──────────┴──────────┐          ║
-  ║         │ Auto-detect:        │         │ Auto-detect:        │          ║
-  ║         │ GHCR reachable →    │         │ no internet →       │          ║
-  ║         │ skopeo copy or      │         │ finds local tarball │          ║
-  ║         │ docker pull/push    │         │ docker load/tag/    │          ║
-  ║         │ (registry-to-reg)   │         │ push to registry    │          ║
-  ║         └──────────┬──────────┘         └──────────┬──────────┘          ║
-  ║                    │                               │                      ║
-  ║                    └──────────────┬────────────────┘                      ║
-  ║                                   ▼                                       ║
-  ║                        Updates values.generated.yaml                      ║
-  ║                        (registry + image tags)                            ║
-  ╚═══════════════════════════════════╪═══════════════════════════════════════╝
-                                      │
-  ╔═══════════════════════════════════╪═══════════════════════════════════════╗
-  ║  STEP 3            Configure      │                                      ║
-  ║  ──────────                       ▼                                      ║
-  ║                          configure-helm.sh                               ║
-  ║                                   │                                      ║
-  ║                    ┌──────────────┼──────────────┐                       ║
-  ║                    ▼              ▼              ▼                        ║
-  ║              LLM provider    Base domain    TLS / certs                  ║
-  ║              + API key       + ingress      (cert-manager)               ║
-  ║                    │              │              │                        ║
-  ║                    └──────────────┼──────────────┘                       ║
-  ║                                   ▼                                      ║
-  ║                        values.generated.yaml                             ║
-  ║                        (secrets + URLs + config)                         ║
-  ╚═══════════════════════════════════╪═══════════════════════════════════════╝
-                                      │
-  ╔═══════════════════════════════════╪═══════════════════════════════════════╗
-  ║  STEP 4            Deploy         │                                      ║
-  ║  ──────────                       ▼                                      ║
-  ║                    helm upgrade --install aurora-oss                      ║
-  ║                      ./deploy/helm/aurora                                ║
-  ║                      -f values.generated.yaml                            ║
-  ╚═══════════════════════════════════╪═══════════════════════════════════════╝
-                                      │
-  ╔═══════════════════════════════════╪═══════════════════════════════════════╗
-  ║  STEP 5            Post-deploy    │                                      ║
-  ║  ──────────                       ▼                                      ║
-  ║                    ┌──────────────────┐                                  ║
-  ║                    │  Vault init +    │                                  ║
-  ║                    │  unseal          │── Optional: KMS auto-unseal      ║
-  ║                    └────────┬─────────┘                                  ║
-  ║                             ▼                                            ║
-  ║                    kubectl get pods -n aurora                            ║
-  ║                    (verify all running)                                  ║
-  ╚══════════════════════════════════════════════════════════════════════════╝
+                  ┌─────────────────────────────────┐
+                  │   Does your machine have          │
+                  │   internet + cluster access?      │
+                  └───────────────┬─────────────────┘
+                                  │
+                  ┌───────────────┴───────────────┐
+                  ▼                               ▼
+     ┌────────────────────────┐      ┌────────────────────────┐
+     │          YES           │      │           NO           │
+     │   Standard deployment  │      │    Air-gapped / split  │
+     └───────────┬────────────┘      └───────────┬────────────┘
+                 │                                │
+                 ▼                   ┌────────────┴─────────────────────────┐
+  ┌──────────────────────────┐      │                                      │
+  │  Just run:               │      │   STEP 1  Get the source             │
+  │                          │      │                                      │
+  │  ./scripts/deploy-k8s.sh │      │   On a connected machine:            │
+  │    <registry-url>        │      │   download-bundle.sh                 │
+  │                          │      │   → images tarball + source archive  │
+  │  Handles everything:     │      │                                      │
+  │  • Pulls images from     │      ├──────────────────────────────────────┤
+  │    upstream registries   │      │                                      │
+  │  • Pushes to your        │      │   STEP 2  Transfer to bastion        │
+  │    private registry      │      │                                      │
+  │  • Configures Helm       │      │   scp / usb / file transfer          │
+  │    values (interactive)  │      │   Both files → bastion / jump host   │
+  │  • Deploys with Helm     │      │                                      │
+  │  • Inits & unseals Vault │      ├──────────────────────────────────────┤
+  │                          │      │                                      │
+  │  One command, done.      │      │  ── On the bastion ──────────────    │
+  │                          │      │                                      │
+  │  Then (recommended):     │      │   STEP 3  Push images to registry    │
+  │  Set up KMS auto-unseal  │      │                                      │
+  │  for production.         │      │   ./scripts/push-to-registry.sh \    │
+  │  See Vault KMS docs.     │      │     <registry-url>                   │
+  └──────────────────────────┘      │   Auto-detects tarball, loads and    │
+                                    │   pushes all images to registry.     │
+                                    │                                      │
+                                    ├──────────────────────────────────────┤
+                                    │                                      │
+                                    │   STEP 4  Configure                  │
+                                    │                                      │
+                                    │   ./scripts/configure-helm.sh        │
+                                    │   Prompts for LLM key, domain, TLS.  │
+                                    │   Writes values.generated.yaml       │
+                                    │                                      │
+                                    ├──────────────────────────────────────┤
+                                    │                                      │
+                                    │   STEP 5  Deploy                     │
+                                    │                                      │
+                                    │   helm upgrade --install aurora-oss  │
+                                    │     ./deploy/helm/aurora             │
+                                    │     --namespace aurora               │
+                                    │     --create-namespace               │
+                                    │     -f values.generated.yaml         │
+                                    │                                      │
+                                    ├──────────────────────────────────────┤
+                                    │                                      │
+                                    │   STEP 6  Vault setup                │
+                                    │                                      │
+                                    │   Initialize & unseal Vault.         │
+                                    │   See: Vault Setup docs.             │
+                                    │                                      │
+                                    │   Then (recommended):                │
+                                    │   Configure KMS auto-unseal          │
+                                    │   for production.                    │
+                                    │   See: Vault KMS docs.              │
+                                    │                                      │
+                                    ├──────────────────────────────────────┤
+                                    │                                      │
+                                    │   STEP 7  Verify                     │
+                                    │                                      │
+                                    │   kubectl get pods -n aurora         │
+                                    │   (all pods should be Running)       │
+                                    │                                      │
+                                    └──────────────────────────────────────┘
 ```
 
-> **Path A** runs all steps from your workstation (which has internet + cluster access).
-> **Path B** runs Step 1 on a connected machine, then Steps 2–5 on the bastion (which has registry + cluster access).
-
-:::tip Using the guided script
-`deploy-k8s.sh` walks through **all 5 steps** automatically, detecting your environment at each stage. You can also run each step individually using the scripts shown above.
-:::
+> **Left path**: Your machine has internet and can reach the cluster. `deploy-k8s.sh` does everything — one command, fully automated.
+>
+> **Right path**: Air-gapped or split environment. Download the bundle on a connected machine, transfer to bastion, then follow Steps 3–7 on the bastion.
 
 ---
 
@@ -172,7 +159,7 @@ helm upgrade --install aurora-oss ./deploy/helm/aurora \
 
 ### 5. Vault Setup
 
-Follow the same Vault setup as a standard deployment — see [Vault Setup](./kubernetes#vault-setup).
+Follow the same Vault setup as a standard deployment — see [Vault Setup](./kubernetes#step-4-vault-setup).
 
 After deployment, optionally set up KMS auto-unseal so Vault auto-unseals on pod restarts — see [Vault KMS Setup](./vault-kms-setup).
 
@@ -209,10 +196,6 @@ curl -fsSL https://raw.githubusercontent.com/arvo-ai/aurora/main/scripts/downloa
 **Browse all available bundles:**
 - [amd64 bundles](https://storage.googleapis.com/aurora-airtight-bucket/index.html)
 - [arm64 bundles](https://storage.googleapis.com/aurora-airtight-bucket-arm64/index.html)
-
-:::tip Build your own bundle
-If you prefer to build from source instead of downloading, see [Creating the Air-Tight Bundle](#creating-the-air-tight-bundle) below.
-:::
 
 ### 2. Transfer to Air-Gapped Environment
 
@@ -314,7 +297,7 @@ helm upgrade --install aurora-oss ./deploy/helm/aurora \
 
 ### 6. Vault Setup
 
-Follow the same Vault setup as a standard deployment — see [Vault Setup](./kubernetes#vault-setup).
+Follow the same Vault setup as a standard deployment — see [Vault Setup](./kubernetes#step-4-vault-setup).
 
 ### 7. Verify
 
@@ -406,65 +389,7 @@ image:
 
 ### All Configuration Options
 
-For storage, ingress, and other configuration, see the [Kubernetes deployment guide](./kubernetes#step-2-configure-required-values).
-
----
-
-## Reference
-
-### Creating the Air-Tight Bundle
-
-Prebuilt bundles are available for download (see [Path B, step 1](#1-download-the-bundle-on-a-connected-machine) above). Use this section only if you need to build a custom bundle from source.
-
-```bash
-git clone https://github.com/arvo-ai/aurora.git && cd aurora
-make package-airtight
-```
-
-This builds all Aurora images, pulls all third-party images, and saves everything into `aurora-airtight-<version>-<arch>.tar.gz` (~11 GB) with a SHA-256 checksum. The default target architecture is `linux/amd64`.
-
-To target ARM clusters:
-
-```bash
-PLATFORM=linux/arm64 make package-airtight
-```
-
-If building on Apple Silicon for an x86 cluster, the default `linux/amd64` cross-compiles automatically — no extra flags needed.
-
-### Setting Up a Private Registry
-
-If your air-gapped cluster doesn't have a registry yet, here are two options.
-
-#### Option A: Docker Distribution (simplest)
-
-Deploy the official Docker registry as a single pod inside the cluster:
-
-```bash
-# Include the registry:2 image in your airgap bundle, or pre-load it on a node:
-docker pull registry:2
-docker save registry:2 | gzip > registry2.tar.gz
-# Transfer to a cluster node, then:
-# ctr -n k8s.io images import registry2.tar.gz  (containerd)
-# docker load < registry2.tar.gz                 (Docker)
-
-# Deploy as a pod
-kubectl create namespace registry
-kubectl -n registry run registry --image=registry:2 --port=5000
-kubectl -n registry expose pod registry --port=5000 --type=ClusterIP
-```
-
-The registry is then reachable from within the cluster at `registry.registry.svc.cluster.local:5000`.
-
-To push images to it, port-forward:
-
-```bash
-kubectl -n registry port-forward pod/registry 5000:5000 &
-# Then push to localhost:5000, which forwards into the cluster
-```
-
-#### Option B: Harbor (enterprise)
-
-[Harbor](https://goharbor.io/) provides vulnerability scanning, RBAC, replication, and a web UI. It can be installed via its own Helm chart — include the Harbor images in your airgap tarball.
+For storage, ingress, and other configuration, see the [Kubernetes deployment guide](./kubernetes#configuration-reference).
 
 ---
 
