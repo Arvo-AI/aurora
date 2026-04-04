@@ -4,66 +4,97 @@ sidebar_position: 4
 
 # Air-Gapped Kubernetes Deployment
 
-Deploy Aurora on a Kubernetes cluster with no internet access. All container images are pre-built and bundled into a single tarball on a machine with internet access, then pushed to a private registry inside the cluster. Nothing is fetched from the internet during deployment.
+Deploy Aurora on a Kubernetes cluster with a private container registry. The deployment scripts automatically detect your environment and use the most efficient method available.
 
 **Prerequisites:**
 
 - Kubernetes 1.25+ with a default StorageClass
 - A private container registry accessible from the cluster (Harbor, Docker Distribution, Zot, etc.) — if you don't have one, see [Setting Up a Private Registry](#setting-up-a-private-registry)
-- `kubectl`, `helm`, `yq`, and `skopeo` (or `docker`) on a machine that can reach the registry
+- `kubectl`, `helm`, `yq`, and `docker` (or `skopeo`) on a machine that can reach the registry
 - Network access from cluster nodes to the private registry
 
-## Guided Deployment (Single Command)
+## Which Path Is Right for You?
 
-Run this from a machine that can reach **both** the internet (to download) **and** the target cluster's registry. If your registry machine has no internet access, use the [step-by-step manual flow](#step-by-step-manual) instead — download the bundle separately, transfer it, then run locally.
+| Scenario | What You Need | Path |
+|---|---|---|
+| **Standard** — operator has internet + registry access | Internet on your workstation, push to private registry | [Path A](#path-a-standard-internet--private-registry) |
+| **True air-gap** — physically disconnected environment | Tarball transferred via USB/SCP, no internet on target | [Path B](#path-b-true-air-gap-tarball) |
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/arvo-ai/aurora/main/scripts/deploy-k8s.sh | bash -s -- <your-registry>
-```
-
-For example:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/arvo-ai/aurora/main/scripts/deploy-k8s.sh | bash -s -- registry.internal:5000
-```
-
-**Already have the bundle and repo locally?** Run directly — no internet needed:
-
-```bash
-./scripts/deploy-k8s.sh registry.internal:5000
-```
-
-The script will:
-1. Download the latest image bundle and source archive from GitHub/GCS
-2. Extract the source archive (Helm chart + scripts)
-3. Push all images to your registry (uses `skopeo` if available, falls back to `docker`)
-4. Prompt you for LLM provider, API key, URLs, and generate secrets
-5. Deploy with Helm
-6. Initialize and unseal Vault automatically
-
-To pin a specific version:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/arvo-ai/aurora/main/scripts/deploy-k8s.sh | bash -s -- registry.internal:5000 v1.2.3
-```
-
-After deployment, optionally set up KMS auto-unseal so Vault auto-unseals on pod restarts — see [Vault KMS Setup](./vault-kms-setup).
+Most enterprise deployments (even "air-gapped" ones) fall into **Path A** — the operator's workstation has internet, and images are pushed to an internal registry that cluster nodes can pull from. **Path B** is for defense, government, or similarly isolated environments where no machine in the deployment chain has internet.
 
 ---
 
-## Step-by-Step (Manual)
+## Path A: Standard (Internet + Private Registry)
 
-If you prefer to run each step yourself, or if you need to customize the process:
+Your workstation can reach both the public internet and your private registry. No tarball needed — images are pulled from upstream and pushed directly.
 
-### 1. Download the Bundle
+### 1. Get the Source
 
-On a machine with internet access, download the latest airtight bundle:
+```bash
+git clone https://github.com/arvo-ai/aurora.git && cd aurora
+```
+
+Or download a specific release:
+
+```bash
+VERSION="v1.2.3"
+curl -fsSL -o "aurora-${VERSION#v}.tar.gz" "https://github.com/arvo-ai/aurora/archive/refs/tags/${VERSION}.tar.gz"
+tar xzf "aurora-${VERSION#v}.tar.gz" && cd "aurora-${VERSION#v}"
+```
+
+### 2. Push Images to Your Registry
+
+```bash
+./scripts/push-to-registry.sh registry.internal:5000
+```
+
+The script auto-detects that upstream registries (GHCR, Docker Hub, etc.) are reachable and copies images directly — **no tarball, no extra disk usage**. It uses `skopeo` for zero-disk registry-to-registry copies, or falls back to `docker pull/push`.
+
+### 3. Configure
+
+```bash
+./scripts/configure-helm.sh
+```
+
+Prompts for:
+- LLM provider and API key
+- Base domain (derives ingress hosts and public URLs)
+- TLS configuration
+
+### 4. Deploy
+
+```bash
+helm upgrade --install aurora-oss ./deploy/helm/aurora \
+  --namespace aurora --create-namespace \
+  --reset-values \
+  -f deploy/helm/aurora/values.generated.yaml
+```
+
+### 5. Vault Setup
+
+Follow the same Vault setup as a standard deployment — see [Vault Setup](./kubernetes#vault-setup).
+
+After deployment, optionally set up KMS auto-unseal so Vault auto-unseals on pod restarts — see [Vault KMS Setup](./vault-kms-setup).
+
+### 6. Verify
+
+```bash
+kubectl get pods -n aurora
+```
+
+---
+
+## Path B: True Air-Gap (Tarball)
+
+No internet on the target environment. Download the bundle on a connected machine, transfer it, then deploy.
+
+### 1. Download the Bundle (on a connected machine)
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/arvo-ai/aurora/main/scripts/download-bundle.sh | bash
 ```
 
-This auto-resolves the latest release from GitHub and downloads the tarball + source archive from GCS (~11 GB).
+This downloads the image tarball (~11 GB) and source archive from GCS.
 
 To specify a version or architecture:
 
@@ -83,11 +114,19 @@ curl -fsSL https://raw.githubusercontent.com/arvo-ai/aurora/main/scripts/downloa
 If you prefer to build from source instead of downloading, see [Creating the Air-Tight Bundle](#creating-the-air-tight-bundle) below.
 :::
 
-If you downloaded on a separate machine, transfer both files (`aurora-airtight-*.tar.gz` and `aurora-*.tar.gz`) to the machine that can reach the cluster registry (e.g. via `scp`, USB drive, or your org's file transfer tool).
+### 2. Transfer to Air-Gapped Environment
 
-### 2. Extract and Push Images
+Transfer both files to the machine that can reach the cluster's private registry:
 
-Extract the source archive and push all images to your registry:
+```bash
+scp aurora-airtight-v1.2.3-amd64.tar.gz aurora-1.2.3.tar.gz bastion:/tmp/
+```
+
+Use whatever method your org supports — SCP, USB drive, file transfer appliance, etc.
+
+### 3. Extract and Push Images
+
+On the air-gapped machine:
 
 ```bash
 # Extract source archive (Helm chart + scripts)
@@ -95,18 +134,18 @@ VERSION="v1.2.3"   # replace with your downloaded version
 tar xzf "aurora-${VERSION#v}.tar.gz"
 cd "aurora-${VERSION#v}/"
 
-# Push images to your registry
-./scripts/push-to-registry.sh registry.internal:5000
+# Push images from tarball to your registry
+./scripts/push-to-registry.sh registry.internal:5000 --tarball /tmp/aurora-airtight-v1.2.3-amd64.tar.gz
 ```
 
-The script uses `skopeo` if available (streams directly, no extra disk needed) or falls back to `docker load`/`tag`/`push`.
+The script loads images from the tarball into Docker and pushes them to your registry, then cleans up the local images.
 
 <details>
 <summary><strong>Manual alternative (without the script)</strong></summary>
 
 ```bash
 # 1. Load images
-docker load < /tmp/aurora-airtight-*.tar.gz
+docker load < /tmp/aurora-airtight-v1.2.3-amd64.tar.gz
 
 # 2. List what was loaded
 docker images | grep -E 'aurora_|postgres|redis|vault|weaviate|searxng|transformers|minio|memgraph|ingress-nginx'
@@ -152,18 +191,101 @@ cp deploy/helm/aurora/values.yaml deploy/helm/aurora/values.generated.yaml
 
 </details>
 
-### 3. Configure Helm Values
-
-Run the interactive configuration script to set up LLM provider, secrets, and URLs:
+### 4. Configure
 
 ```bash
 ./scripts/configure-helm.sh
 ```
 
-The script generates secure secrets automatically and prompts for:
-- LLM provider and API key
-- Base domain (derives ingress hosts and public URLs)
-- TLS configuration
+Prompts for LLM provider, base domain, and TLS — same as Path A.
+
+:::tip No outbound internet? Use Ollama
+If the cluster cannot reach external LLM APIs, run models locally with [Ollama](https://ollama.com/). The configuration script includes an Ollama option, or see [LLM Providers — Ollama](/docs/integrations/llm-providers#ollama-local-models) for full setup details.
+:::
+
+### 5. Deploy
+
+```bash
+helm upgrade --install aurora-oss ./deploy/helm/aurora \
+  --namespace aurora --create-namespace \
+  --reset-values \
+  -f deploy/helm/aurora/values.generated.yaml
+```
+
+### 6. Vault Setup
+
+Follow the same Vault setup as a standard deployment — see [Vault Setup](./kubernetes#vault-setup).
+
+### 7. Verify
+
+```bash
+kubectl get pods -n aurora
+```
+
+All pods should reach `Running` status within a few minutes. If an image pull fails, check:
+
+```bash
+kubectl describe pod <pod-name> -n aurora
+kubectl get events -n aurora --sort-by='.lastTimestamp'
+```
+
+---
+
+## Guided Deployment (Single Command)
+
+For convenience, the `deploy-k8s.sh` script orchestrates all steps above. It detects your environment and adapts automatically:
+
+- **Internet available?** Pulls images directly from upstream (no tarball needed).
+- **Local tarball found?** Loads and pushes from it.
+- **No cluster access?** Completes what it can (push images, configure) and tells you how to finish on a machine with cluster access.
+
+```bash
+# From the repo — auto-detects best method
+./scripts/deploy-k8s.sh registry.internal:5000
+
+# With an explicit tarball
+./scripts/deploy-k8s.sh registry.internal:5000 --tarball aurora-airtight-v1.2.3-amd64.tar.gz
+
+# Pin a specific version
+./scripts/deploy-k8s.sh registry.internal:5000 v1.2.3
+
+# Skip image push (already done)
+./scripts/deploy-k8s.sh registry.internal:5000 --skip-push
+```
+
+Via curl (requires internet):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/arvo-ai/aurora/main/scripts/deploy-k8s.sh | bash -s -- registry.internal:5000
+```
+
+---
+
+## Deploying Updates
+
+Each new Aurora release requires updated images:
+
+**Path A (internet):**
+
+```bash
+cd aurora && git pull
+./scripts/push-to-registry.sh registry.internal:5000
+helm upgrade aurora-oss ./deploy/helm/aurora -n aurora --reset-values -f deploy/helm/aurora/values.generated.yaml
+```
+
+**Path B (tarball):**
+
+```bash
+# Download new bundle on connected machine, transfer to air-gapped machine, then:
+./scripts/push-to-registry.sh registry.internal:5000 --tarball aurora-airtight-<new-version>-amd64.tar.gz
+helm upgrade aurora-oss ./deploy/helm/aurora -n aurora --reset-values -f deploy/helm/aurora/values.generated.yaml
+```
+
+---
+
+## Configuration Reference
+
+### Registry Authentication
 
 If your registry requires auth, create a pull secret and add it to `values.generated.yaml`:
 
@@ -182,55 +304,9 @@ image:
     - name: regcred
 ```
 
-:::tip No outbound internet? Use Ollama
-If the cluster cannot reach external LLM APIs, run models locally with [Ollama](https://ollama.com/). The configuration script includes an Ollama option, or see [LLM Providers — Ollama](/docs/integrations/llm-providers#ollama-local-models) for full setup details.
-:::
+### All Configuration Options
 
-For all other configuration options (storage, ingress, etc.), see the [Kubernetes deployment guide](./kubernetes#step-2-configure-required-values).
-
-### 4. Deploy with Helm
-
-```bash
-helm upgrade --install aurora-oss ./deploy/helm/aurora \
-  --namespace aurora --create-namespace \
-  --reset-values \
-  -f deploy/helm/aurora/values.generated.yaml
-```
-
-### 5. Get and Set the Vault Token
-
-Follow the same Vault setup as a standard deployment — see [Vault Setup](./kubernetes#vault-setup).
-
-### 6. Verify
-
-```bash
-kubectl get pods -n aurora
-```
-
-All pods should reach `Running` status within a few minutes. If an image pull fails, check:
-
-```bash
-kubectl describe pod <pod-name> -n aurora
-kubectl get events -n aurora --sort-by='.lastTimestamp'
-```
-
-### Deploying Updates
-
-Each new Aurora release requires a fresh bundle:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/arvo-ai/aurora/main/scripts/deploy-k8s.sh | bash -s -- registry.internal:5000
-```
-
-Or manually:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/arvo-ai/aurora/main/scripts/download-bundle.sh | bash
-# Extract — replace VERSION with the downloaded version
-tar xzf aurora-<VERSION>.tar.gz && cd aurora-<VERSION>/
-./scripts/push-to-registry.sh registry.internal:5000
-helm upgrade aurora-oss ./deploy/helm/aurora -n aurora --reset-values -f deploy/helm/aurora/values.generated.yaml
-```
+For storage, ingress, and other configuration, see the [Kubernetes deployment guide](./kubernetes#step-2-configure-required-values).
 
 ---
 
@@ -238,7 +314,7 @@ helm upgrade aurora-oss ./deploy/helm/aurora -n aurora --reset-values -f deploy/
 
 ### Creating the Air-Tight Bundle
 
-Prebuilt bundles are available for download (see [step 1](#1-download-the-bundle) above). Use this section only if you need to build a custom bundle from source.
+Prebuilt bundles are available for download (see [Path B, step 1](#1-download-the-bundle-on-a-connected-machine) above). Use this section only if you need to build a custom bundle from source.
 
 ```bash
 git clone https://github.com/arvo-ai/aurora.git && cd aurora

@@ -1,30 +1,68 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Single-command Aurora deployment to Kubernetes with a private registry.
-# Guides the user through every step: download → extract → push → configure → deploy.
+# Adaptive Aurora Kubernetes deployment.
 #
-# Idempotent: re-run safely after interruptions — completed steps are skipped.
+# Detects what's available (internet, tarball, registry, cluster access) and
+# does what it can. When a step can't be completed, it prints clear next steps
+# and exits cleanly.
 #
 # Usage:
 #   ./scripts/deploy-k8s.sh <registry-url>
 #   ./scripts/deploy-k8s.sh <registry-url> <version>
+#   ./scripts/deploy-k8s.sh <registry-url> --tarball <path>
+#   ./scripts/deploy-k8s.sh <registry-url> --skip-push
 #
 # Example:
 #   ./scripts/deploy-k8s.sh registry.internal:5000
 #   ./scripts/deploy-k8s.sh registry.internal:5000 v1.2.3
+#   ./scripts/deploy-k8s.sh registry.internal:5000 --tarball aurora-airtight-v1.2.3-amd64.tar.gz
 #
 # Can also be run via curl on a fresh machine:
 #   curl -fsSL https://raw.githubusercontent.com/arvo-ai/aurora/main/scripts/deploy-k8s.sh | bash -s -- <registry-url>
 
-REGISTRY="${1:-}"
-VERSION="${2:-latest}"
+REGISTRY=""
+VERSION="latest"
+TARBALL_FLAG=""
+SKIP_PUSH=false
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --tarball)
+      TARBALL_FLAG="${2:-}"
+      [ -z "$TARBALL_FLAG" ] && { echo "Error: --tarball requires a path"; exit 1; }
+      shift 2
+      ;;
+    --skip-push)
+      SKIP_PUSH=true
+      shift
+      ;;
+    -h|--help)
+      echo "Usage: $0 <registry-url> [version] [--tarball <path>] [--skip-push]"
+      echo ""
+      echo "  registry-url    Target registry (e.g. registry.internal:5000)"
+      echo "  version         Aurora version (default: latest release)"
+      echo "  --tarball PATH  Use a specific airgap tarball for image push"
+      echo "  --skip-push     Skip image push (images already in registry)"
+      exit 0
+      ;;
+    *)
+      if [ -z "$REGISTRY" ]; then
+        REGISTRY="$1"
+      elif [ "$VERSION" = "latest" ] && [[ "$1" =~ ^v[0-9] ]]; then
+        VERSION="$1"
+      else
+        echo "Error: unexpected argument '$1'"
+        echo "Usage: $0 <registry-url> [version] [--tarball <path>] [--skip-push]"
+        exit 1
+      fi
+      shift
+      ;;
+  esac
+done
 
 if [ -z "$REGISTRY" ]; then
-  echo "Usage: $0 <registry-url> [version]"
-  echo ""
-  echo "  registry-url  Target registry (e.g. registry.internal:5000)"
-  echo "  version       Aurora version (default: latest release)"
+  echo "Usage: $0 <registry-url> [version] [--tarball <path>] [--skip-push]"
   exit 1
 fi
 
@@ -33,19 +71,30 @@ REGISTRY="${REGISTRY%/}"
 echo "============================================"
 echo "  Aurora Kubernetes Deployment"
 echo "  Registry: $REGISTRY"
-echo "  Version:  $VERSION"
 echo "============================================"
 echo ""
 
-# ---- Pre-flight checks ----
-MISSING=""
-for cmd in kubectl helm yq curl tar openssl python3; do
-  if ! command -v "$cmd" &>/dev/null; then
-    MISSING="$MISSING $cmd"
+# ── Helpers ──────────────────────────────────────────────────────────────────
+
+info() { echo -e "\033[1;34m→\033[0m $1"; }
+ok()   { echo -e "\033[1;32m✓\033[0m $1"; }
+warn() { echo -e "\033[1;33m!\033[0m $1"; }
+
+check_tool() {
+  if ! command -v "$1" &>/dev/null; then
+    return 1
   fi
+  return 0
+}
+
+# ── Pre-flight ───────────────────────────────────────────────────────────────
+
+MISSING=""
+for cmd in helm yq openssl python3; do
+  check_tool "$cmd" || MISSING="$MISSING $cmd"
 done
 
-if ! command -v skopeo &>/dev/null && ! command -v docker &>/dev/null; then
+if ! check_tool skopeo && ! check_tool docker; then
   MISSING="$MISSING skopeo-or-docker"
 fi
 
@@ -54,128 +103,162 @@ if [ -n "$MISSING" ]; then
   exit 1
 fi
 
-# ---- Helpers ----
-info() { echo -e "\033[1;34m→\033[0m $1"; }
-ok()   { echo -e "\033[1;32m✓\033[0m $1"; }
-warn() { echo -e "\033[1;33m!\033[0m $1"; }
-
-# ---- Step 1: Download ----
-# On air-gapped boxes, skip the GitHub API call if we already have a tarball
-TARBALL=""
-for f in aurora-airtight-*.tar.gz; do
-  [ -f "$f" ] || continue
-  TARBALL="$f"
-  break
-done
-
-TARGET_VERSION="$VERSION"
-if [ "$TARGET_VERSION" = "latest" ]; then
-  if [ -n "$TARBALL" ]; then
-    # Extract version from existing tarball filename (e.g. aurora-airtight-v1.2.3-amd64.tar.gz)
-    TARGET_VERSION=$(echo "$TARBALL" | sed 's/aurora-airtight-\(.*\)-[a-z0-9]*\.tar\.gz/\1/')
-    echo "Using local tarball: $TARBALL (version: $TARGET_VERSION)"
-  else
-    echo "Resolving latest version from GitHub..."
-    LATEST_VERSION=$(curl -fsSL --connect-timeout 10 "https://api.github.com/repos/arvo-ai/aurora/releases/latest" 2>/dev/null | grep '"tag_name"' | cut -d'"' -f4 || true)
-    if [ -n "$LATEST_VERSION" ]; then
-      TARGET_VERSION="$LATEST_VERSION"
-    else
-      echo "Error: could not resolve latest version and no local tarball found."
-      echo "Either specify a version or place the tarball in the current directory."
-      echo "  $0 $REGISTRY v1.2.3"
-      exit 1
-    fi
-  fi
-elif [ -n "$TARBALL" ] && ! echo "$TARBALL" | grep -q "$TARGET_VERSION"; then
-  # Pinned version doesn't match local tarball — re-scan for matching one
-  TARBALL=""
-  for f in aurora-airtight-*.tar.gz; do
-    [ -f "$f" ] || continue
-    if echo "$f" | grep -q "$TARGET_VERSION"; then
-      TARBALL="$f"
-      break
-    fi
-  done
+HAS_INTERNET=false
+if curl -fsSL --connect-timeout 5 --max-time 10 "https://ghcr.io/v2/" >/dev/null 2>&1; then
+  HAS_INTERNET=true
 fi
 
-SOURCE_ARCHIVE=""
-if [ -n "$TARBALL" ]; then
-  SOURCE_ARCHIVE=$(ls aurora-*.tar.gz 2>/dev/null | grep -v airtight | head -1 || true)
+HAS_KUBECTL=false
+if check_tool kubectl && kubectl cluster-info &>/dev/null 2>&1; then
+  HAS_KUBECTL=true
 fi
 
-# If running from inside the repo, we don't need the source archive
+# ── Step 1/5: Resolve version & source ───────────────────────────────────────
+
+echo "=== Step 1/5: Resolve version & source ==="
+echo ""
+
 IN_REPO=false
 if [ -d "deploy/helm/aurora" ] && [ -d "scripts" ]; then
   IN_REPO=true
 fi
 
-if [ -n "$TARBALL" ] && { [ -n "$SOURCE_ARCHIVE" ] || [ "$IN_REPO" = true ]; }; then
-  FRESH_DOWNLOAD=false
-  echo "=== Step 1/5: Download bundle — SKIPPED (found $TARBALL, matches $TARGET_VERSION) ==="
-else
-  FRESH_DOWNLOAD=true
-  echo "=== Step 1/5: Download bundle (${TARGET_VERSION}) ==="
-  echo ""
+TARGET_VERSION="$VERSION"
+TARBALL=""
 
-  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd 2>/dev/null || pwd)"
-
-  if [ -f "$SCRIPT_DIR/download-bundle.sh" ]; then
-    bash "$SCRIPT_DIR/download-bundle.sh" "$TARGET_VERSION"
-  else
-    curl -fsSL https://raw.githubusercontent.com/arvo-ai/aurora/main/scripts/download-bundle.sh | bash -s -- "$TARGET_VERSION"
+if [ -n "$TARBALL_FLAG" ]; then
+  if [ ! -f "$TARBALL_FLAG" ]; then
+    echo "Error: tarball not found: $TARBALL_FLAG"
+    exit 1
   fi
+  TARBALL="$TARBALL_FLAG"
+  if [ "$TARGET_VERSION" = "latest" ]; then
+    TARGET_VERSION=$(echo "$TARBALL" | sed 's/.*aurora-airtight-\(.*\)-[a-z0-9]*\.tar\.gz/\1/')
+  fi
+  ok "Using tarball: $TARBALL (version: $TARGET_VERSION)"
+elif [ "$IN_REPO" = true ] && [ "$HAS_INTERNET" = true ]; then
+  ok "Running from repo with internet access — will pull images directly"
+  if [ "$TARGET_VERSION" = "latest" ]; then
+    LATEST=$(curl -fsSL --connect-timeout 10 "https://api.github.com/repos/arvo-ai/aurora/releases/latest" 2>/dev/null | grep '"tag_name"' | cut -d'"' -f4 || true)
+    [ -n "$LATEST" ] && TARGET_VERSION="$LATEST"
+  fi
+else
+  # Look for local tarball
+  for f in aurora-airtight-*.tar.gz; do
+    [ -f "$f" ] || continue
+    TARBALL="$f"
+    break
+  done
 
-  TARBALL=$(ls aurora-airtight-*.tar.gz 2>/dev/null | head -1 || true)
-  SOURCE_ARCHIVE=$(ls aurora-*.tar.gz 2>/dev/null | grep -v airtight | head -1 || true)
+  if [ -n "$TARBALL" ]; then
+    if [ "$TARGET_VERSION" = "latest" ]; then
+      TARGET_VERSION=$(echo "$TARBALL" | sed 's/.*aurora-airtight-\(.*\)-[a-z0-9]*\.tar\.gz/\1/')
+    fi
+    ok "Found local tarball: $TARBALL (version: $TARGET_VERSION)"
+  elif [ "$HAS_INTERNET" = true ]; then
+    info "No local tarball, but internet available — downloading..."
+    if [ "$TARGET_VERSION" = "latest" ]; then
+      LATEST=$(curl -fsSL --connect-timeout 10 "https://api.github.com/repos/arvo-ai/aurora/releases/latest" 2>/dev/null | grep '"tag_name"' | cut -d'"' -f4 || true)
+      [ -n "$LATEST" ] && TARGET_VERSION="$LATEST"
+    fi
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd 2>/dev/null || pwd)"
+    if [ -f "$SCRIPT_DIR/download-bundle.sh" ]; then
+      bash "$SCRIPT_DIR/download-bundle.sh" "$TARGET_VERSION"
+    else
+      curl -fsSL https://raw.githubusercontent.com/arvo-ai/aurora/main/scripts/download-bundle.sh | bash -s -- "$TARGET_VERSION"
+    fi
+    TARBALL=$(ls aurora-airtight-*.tar.gz 2>/dev/null | head -1 || true)
+    ok "Downloaded: $TARBALL"
+  else
+    echo ""
+    warn "No internet access and no local tarball found."
+    echo ""
+    echo "  To proceed, do one of the following:"
+    echo ""
+    echo "  1. Download the bundle on a machine with internet:"
+    echo "     curl -fsSL https://raw.githubusercontent.com/arvo-ai/aurora/main/scripts/download-bundle.sh | bash"
+    echo ""
+    echo "  2. Transfer both files here, then re-run:"
+    echo "     $0 $REGISTRY --tarball aurora-airtight-<version>-<arch>.tar.gz"
+    exit 1
+  fi
 fi
+
+echo "  Version: $TARGET_VERSION"
 echo ""
 
-# ---- Step 2: Extract source archive ----
+# ── Step 2/5: Ensure source (Helm chart + scripts) ──────────────────────────
+
+echo "=== Step 2/5: Ensure source (Helm chart + scripts) ==="
+echo ""
+
+REPO_DIR="."
+
 if [ "$IN_REPO" = true ]; then
-  REPO_DIR="."
-  echo "=== Step 2/5: Extract source archive — SKIPPED (already in repo) ==="
+  ok "Already in repo — Helm chart and scripts available"
 else
   REPO_DIR=$(find . -maxdepth 1 -type d -name "aurora-*" ! -name "aurora-airtight-*" | head -1 || true)
 
-  if [ "$FRESH_DOWNLOAD" = false ] && [ -n "$REPO_DIR" ] && [ -d "$REPO_DIR/deploy/helm" ]; then
-    echo "=== Step 2/5: Extract source archive — SKIPPED (found $REPO_DIR) ==="
+  if [ -n "$REPO_DIR" ] && [ -d "$REPO_DIR/deploy/helm" ]; then
+    ok "Found extracted source: $REPO_DIR"
   else
-    echo "=== Step 2/5: Extract source archive ==="
-    echo ""
-
-    if [ -z "$SOURCE_ARCHIVE" ]; then
-      echo "Error: source archive not found. Expected aurora-<version>.tar.gz"
+    SOURCE_ARCHIVE=$(ls aurora-*.tar.gz 2>/dev/null | grep -v airtight | head -1 || true)
+    if [ -n "$SOURCE_ARCHIVE" ]; then
+      info "Extracting $SOURCE_ARCHIVE..."
+      tar xzf "$SOURCE_ARCHIVE"
+      REPO_DIR=$(tar tzf "$SOURCE_ARCHIVE" | head -1 | cut -d/ -f1)
+      ok "Extracted to $REPO_DIR"
+    elif [ "$HAS_INTERNET" = true ]; then
+      info "Downloading source archive..."
+      VERSION_TAG="${TARGET_VERSION}"
+      VERSION_STRIPPED="${TARGET_VERSION#v}"
+      curl -fsSL -o "aurora-${VERSION_STRIPPED}.tar.gz" "https://github.com/arvo-ai/aurora/archive/refs/tags/${VERSION_TAG}.tar.gz"
+      tar xzf "aurora-${VERSION_STRIPPED}.tar.gz"
+      REPO_DIR="aurora-${VERSION_STRIPPED}"
+      ok "Downloaded and extracted to $REPO_DIR"
+    else
+      warn "Source archive not found and no internet to download it."
+      echo "  Place aurora-<version>.tar.gz in the current directory and re-run."
       exit 1
     fi
+  fi
+  cd "$REPO_DIR"
+fi
+echo ""
 
-    tar xzf "$SOURCE_ARCHIVE"
-    REPO_DIR=$(tar tzf "$SOURCE_ARCHIVE" | head -1 | cut -d/ -f1)
-    echo "Extracted to $REPO_DIR"
+# ── Step 3/5: Push images to registry ────────────────────────────────────────
+
+echo "=== Step 3/5: Push images to registry ==="
+echo ""
+
+VALUES_FILE="deploy/helm/aurora/values.generated.yaml"
+
+if [ "$SKIP_PUSH" = true ]; then
+  ok "Skipping image push (--skip-push)"
+else
+  CURRENT_REGISTRY=""
+  if [ -f "$VALUES_FILE" ]; then
+    CURRENT_REGISTRY=$(yq '.image.registry // ""' "$VALUES_FILE" 2>/dev/null || true)
+  fi
+
+  if [ -n "$CURRENT_REGISTRY" ] && [ "$CURRENT_REGISTRY" = "$REGISTRY" ]; then
+    ok "Images already pushed to $REGISTRY (re-run with a fresh values file to force)"
+  else
+    PUSH_ARGS="$REGISTRY"
+    if [ -n "$TARBALL" ]; then
+      PUSH_ARGS="$REGISTRY --tarball $TARBALL"
+    fi
+    bash ./scripts/push-to-registry.sh $PUSH_ARGS
   fi
 fi
 echo ""
 
-cd "$REPO_DIR"
+# ── Step 4/5: Configure ─────────────────────────────────────────────────────
 
-# ---- Step 3: Push images to registry ----
-VALUES_FILE="deploy/helm/aurora/values.generated.yaml"
-CURRENT_REGISTRY=""
-if [ -f "$VALUES_FILE" ]; then
-  CURRENT_REGISTRY=$(yq '.image.registry // ""' "$VALUES_FILE" 2>/dev/null || true)
-fi
-
-if [ "$FRESH_DOWNLOAD" = false ] && [ "$CURRENT_REGISTRY" = "$REGISTRY" ]; then
-  echo "=== Step 3/5: Push images to registry — SKIPPED (already pushed to $REGISTRY) ==="
-else
-  echo "=== Step 3/5: Push images to registry ==="
-  echo ""
-  bash ./scripts/push-to-registry.sh "$REGISTRY"
-fi
+echo "=== Step 4/5: Configure deployment ==="
 echo ""
 
-# ---- Step 4: Configure ----
 CONFIG_COMPLETE=true
-CONFIG_MISSING=""
 if [ -f "$VALUES_FILE" ]; then
   for path in \
     '.secrets.db.POSTGRES_PASSWORD' \
@@ -186,43 +269,15 @@ if [ -f "$VALUES_FILE" ]; then
     VAL=$(yq "${path} // \"\"" "$VALUES_FILE" 2>/dev/null || true)
     if [ -z "$VAL" ] || [ "$VAL" = "null" ]; then
       CONFIG_COMPLETE=false
-      CONFIG_MISSING="secrets"
       break
     fi
   done
-
-  # Check for at least one LLM key or Ollama config
-  if [ "$CONFIG_COMPLETE" = true ]; then
-    HAS_LLM=false
-    for key in \
-      '.secrets.llm.OPENROUTER_API_KEY' \
-      '.secrets.llm.OPENAI_API_KEY' \
-      '.secrets.llm.ANTHROPIC_API_KEY' \
-      '.secrets.llm.GOOGLE_AI_API_KEY'; do
-      VAL=$(yq "${key} // \"\"" "$VALUES_FILE" 2>/dev/null || true)
-      if [ -n "$VAL" ] && [ "$VAL" != "null" ]; then
-        HAS_LLM=true
-        break
-      fi
-    done
-    # Also check if Ollama is configured
-    OLLAMA_URL=$(yq '.config.OLLAMA_BASE_URL // ""' "$VALUES_FILE" 2>/dev/null || true)
-    if [ -n "$OLLAMA_URL" ] && [ "$OLLAMA_URL" != "null" ]; then
-      HAS_LLM=true
-    fi
-    if [ "$HAS_LLM" = false ]; then
-      CONFIG_COMPLETE=false
-      CONFIG_MISSING="LLM provider"
-    fi
-  fi
 else
   CONFIG_COMPLETE=false
-  CONFIG_MISSING="values file"
 fi
 
 if [ "$CONFIG_COMPLETE" = true ]; then
-  echo "=== Step 4/5: Configure deployment ==="
-  echo "  Secrets and LLM configuration found."
+  ok "Configuration found in $VALUES_FILE"
   if [ -t 0 ]; then
     printf "  Reconfigure? [y/N]: "
     read -r RECONFIG
@@ -231,30 +286,48 @@ if [ "$CONFIG_COMPLETE" = true ]; then
     else
       echo "  Keeping existing configuration."
     fi
-  else
-    echo "  Keeping existing configuration."
   fi
 else
-  echo "=== Step 4/5: Configure deployment (missing: ${CONFIG_MISSING}) ==="
-  echo ""
   if [ -t 0 ]; then
     bash ./scripts/configure-helm.sh
   else
-    warn "Non-interactive mode — generating secrets only. Configure LLM keys and domain later:"
+    warn "Non-interactive mode — generating secrets only."
     bash ./scripts/configure-helm.sh --non-interactive
-    echo "  Edit ${VALUES_FILE} then re-run this script."
+    echo "  Edit ${VALUES_FILE} to configure LLM keys and domain, then re-run."
   fi
 fi
 echo ""
 
-# ---- Step 5: Deploy ----
-echo "=== Step 5/5: Deploy with Helm ==="
+# ── Step 5/5: Deploy to cluster ─────────────────────────────────────────────
+
+echo "=== Step 5/5: Deploy to cluster ==="
 echo ""
+
+if [ "$HAS_KUBECTL" != true ]; then
+  warn "Cannot reach Kubernetes cluster (kubectl not available or cluster unreachable)."
+  echo ""
+  echo "  Steps 1-4 are complete. To finish deployment from a machine with cluster access:"
+  echo ""
+  if [ "$IN_REPO" = true ]; then
+    echo "    # From this directory:"
+    echo "    $0 $REGISTRY --skip-push"
+  else
+    echo "    # Transfer the repo and values file to your bastion/jump host, then:"
+    echo "    cd $(basename "$PWD")"
+    echo "    $0 $REGISTRY --skip-push"
+  fi
+  echo ""
+  echo "  Or deploy manually:"
+  echo "    helm upgrade --install aurora-oss ./deploy/helm/aurora \\"
+  echo "      --namespace aurora --create-namespace --reset-values \\"
+  echo "      -f $VALUES_FILE"
+  exit 0
+fi
 
 NAMESPACE="aurora"
 RELEASE="aurora-oss"
 
-# ── 5a. Ingress controller check ──
+# ── 5a. Ingress controller ──
 info "Checking for ingress controller..."
 INGRESS_CLASSES=$(kubectl get ingressclass -o jsonpath='{.items[*].metadata.name}' 2>/dev/null || true)
 
@@ -295,7 +368,7 @@ else
   if [ "$INSTALL_INGRESS" = "1" ]; then
     MANIFEST="./deploy/manifests/ingress-nginx-v1.8.1.yaml"
     if [ ! -f "$MANIFEST" ]; then
-      echo "Error: ${MANIFEST} not found. Cannot install nginx-ingress without internet."
+      echo "Error: ${MANIFEST} not found."
       echo "Either place the manifest at ${MANIFEST} or install an ingress controller manually."
       exit 1
     fi
@@ -334,15 +407,12 @@ echo ""
 info "Checking for ingress external IP..."
 EXTERNAL_IP=""
 
-# First try: read from the Ingress resource status (works with any controller)
 for i in $(seq 1 24); do
   EXTERNAL_IP=$(kubectl get ingress -n "$NAMESPACE" -o jsonpath='{.items[0].status.loadBalancer.ingress[0].ip}' 2>/dev/null || true)
   if [ -z "$EXTERNAL_IP" ]; then
     EXTERNAL_IP=$(kubectl get ingress -n "$NAMESPACE" -o jsonpath='{.items[0].status.loadBalancer.ingress[0].hostname}' 2>/dev/null || true)
   fi
-  if [ -n "$EXTERNAL_IP" ]; then
-    break
-  fi
+  [ -n "$EXTERNAL_IP" ] && break
   sleep 5
 done
 
@@ -432,7 +502,8 @@ EOF'
   fi
 fi
 
-# ── Summary ──
+# ── Summary ──────────────────────────────────────────────────────────────────
+
 echo ""
 echo "═══════════════════════════════════════════════"
 echo "  Aurora deployment complete!"
