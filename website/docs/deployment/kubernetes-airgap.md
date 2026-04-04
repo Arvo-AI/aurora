@@ -34,26 +34,29 @@ The diagram below shows the full deployment pipeline. Each numbered step matches
   ║  ──────────        │                               │                       ║
   ║                    ▼                               ▼                       ║
   ║          git clone / curl              download-bundle.sh                  ║
-  ║          from GitHub                   (images + source tarball)           ║
-  ║                    │                               │                       ║
-  ║                    │                       ┌───────┴───────┐               ║
-  ║                    │                       │  Transfer to  │               ║
-  ║                    │                       │  air-gapped   │               ║
-  ║                    │                       │  environment  │               ║
-  ║                    │                       └───────┬───────┘               ║
+  ║          from GitHub                   (images tarball + source archive)   ║
   ╚════════════════════╪═══════════════════════════════╪════════════════════════╝
                        │                               │
   ╔════════════════════╪═══════════════════════════════╪════════════════════════╗
   ║  STEP 2            │   Push images to registry     │                       ║
   ║  ──────────        │                               │                       ║
+  ║                    │                       ┌───────┴────────┐              ║
+  ║                    │                       │ Transfer both  │              ║
+  ║                    │                       │ to bastion /   │              ║
+  ║                    │                       │ jump host      │              ║
+  ║                    │                       │ (scp, usb ...) │              ║
+  ║                    │                       └───────┬────────┘              ║
+  ║                    │                               │                       ║
   ║                    ▼                               ▼                       ║
   ║         push-to-registry.sh            push-to-registry.sh                ║
+  ║         (on your workstation)          (on the bastion)                   ║
   ║                    │                               │                       ║
   ║         ┌──────────┴──────────┐         ┌──────────┴──────────┐           ║
-  ║         │ Auto-detect:        │         │ Tarball mode:       │           ║
-  ║         │ skopeo copy or      │         │ docker load →       │           ║
-  ║         │ docker pull/push    │         │ docker tag →        │           ║
-  ║         │ (registry-to-reg)   │         │ docker push         │           ║
+  ║         │ Auto-detect:        │         │ Auto-detect:        │           ║
+  ║         │ GHCR reachable →    │         │ no internet →       │           ║
+  ║         │ skopeo copy or      │         │ finds local tarball │           ║
+  ║         │ docker pull/push    │         │ docker load/tag/    │           ║
+  ║         │ (registry-to-reg)   │         │ push to registry    │           ║
   ║         └──────────┬──────────┘         └──────────┬──────────┘           ║
   ║                    │                               │                       ║
   ║                    └──────────────┬────────────────┘                       ║
@@ -82,16 +85,25 @@ The diagram below shows the full deployment pipeline. Each numbered step matches
   ║  STEP 4            Deploy         │                                       ║
   ║  ──────────                       ▼                                       ║
   ║                    ┌──────────────────────────────┐                       ║
-  ║                    │  kubectl reachable?           │                       ║
+  ║                    │   kubectl reachable?          │                       ║
   ║                    └──────────┬───────────────────┘                       ║
   ║                    ┌──────────┴──────────┐                                ║
   ║                    ▼                     ▼                                ║
   ║                  Yes                    No                                ║
-  ║                    │           ┌─────────────────────┐                    ║
-  ║                    │           │ Script stops here.   │                    ║
-  ║                    │           │ Prints commands to   │                    ║
-  ║                    │           │ finish from bastion. │                    ║
-  ║                    │           └─────────────────────┘                    ║
+  ║                    │           ┌──────────────────────┐                   ║
+  ║                    │           │ Transfer values file  │                   ║
+  ║                    │           │ + Helm chart to a     │                   ║
+  ║                    │           │ machine with cluster  │                   ║
+  ║                    │           │ access, then run:     │                   ║
+  ║                    │           │                       │                   ║
+  ║                    │           │ helm upgrade --install│                   ║
+  ║                    │           │   aurora-oss ...      │                   ║
+  ║                    │           │   -f values.generated │                   ║
+  ║                    │           │       .yaml           │                   ║
+  ║                    │           │                       │                   ║
+  ║                    │           │ See: Step 4 in the    │                   ║
+  ║                    │           │ guide below.          │                   ║
+  ║                    │           └──────────────────────┘                   ║
   ║                    ▼                                                      ║
   ║           helm upgrade --install                                          ║
   ║           aurora-oss ./deploy/helm/aurora                                 ║
