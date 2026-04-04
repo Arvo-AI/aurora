@@ -13,6 +13,110 @@ Deploy Aurora on a Kubernetes cluster with a private container registry. The dep
 - `kubectl`, `helm`, `yq`, and `docker` (or `skopeo`) on a machine that can reach the registry
 - Network access from cluster nodes to the private registry
 
+## Deployment Pipeline Overview
+
+The diagram below shows the full deployment pipeline. Each numbered step matches the sections in this guide — use it to orient yourself and understand what the scripts are doing under the hood.
+
+```
+                        ┌─────────────────────────────┐
+                        │   Where are you deploying?   │
+                        └──────────────┬──────────────┘
+                                       │
+                       ┌───────────────┴───────────────┐
+                       ▼                               ▼
+              ┌─────────────────┐             ┌─────────────────┐
+              │   PATH A          │             │   PATH B          │
+              │ Internet access │             │ True air-gap    │
+              └────────┬────────┘             └────────┬────────┘
+                       │                               │
+  ╔════════════════════╪═══════════════════════════════╪════════════════════════╗
+  ║  STEP 1            │   Get the source              │                       ║
+  ║  ──────────        │                               │                       ║
+  ║                    ▼                               ▼                       ║
+  ║          git clone / curl              download-bundle.sh                  ║
+  ║          from GitHub                   (images + source tarball)           ║
+  ║                    │                               │                       ║
+  ║                    │                       ┌───────┴───────┐               ║
+  ║                    │                       │  Transfer to  │               ║
+  ║                    │                       │  air-gapped   │               ║
+  ║                    │                       │  environment  │               ║
+  ║                    │                       └───────┬───────┘               ║
+  ╚════════════════════╪═══════════════════════════════╪════════════════════════╝
+                       │                               │
+  ╔════════════════════╪═══════════════════════════════╪════════════════════════╗
+  ║  STEP 2            │   Push images to registry     │                       ║
+  ║  ──────────        │                               │                       ║
+  ║                    ▼                               ▼                       ║
+  ║         push-to-registry.sh            push-to-registry.sh                ║
+  ║                    │                               │                       ║
+  ║         ┌──────────┴──────────┐         ┌──────────┴──────────┐           ║
+  ║         │ Auto-detect:        │         │ Tarball mode:       │           ║
+  ║         │ skopeo copy or      │         │ docker load →       │           ║
+  ║         │ docker pull/push    │         │ docker tag →        │           ║
+  ║         │ (registry-to-reg)   │         │ docker push         │           ║
+  ║         └──────────┬──────────┘         └──────────┬──────────┘           ║
+  ║                    │                               │                       ║
+  ║                    └──────────────┬────────────────┘                       ║
+  ║                                   ▼                                        ║
+  ║                        Updates values.generated.yaml                       ║
+  ║                        (registry + image tags)                             ║
+  ╚═══════════════════════════════════╪════════════════════════════════════════╝
+                                      │
+  ╔═══════════════════════════════════╪════════════════════════════════════════╗
+  ║  STEP 3            Configure      │                                       ║
+  ║  ──────────                       ▼                                       ║
+  ║                          configure-helm.sh                                ║
+  ║                                   │                                       ║
+  ║                    ┌──────────────┼──────────────┐                        ║
+  ║                    ▼              ▼              ▼                         ║
+  ║              LLM provider    Base domain    TLS / certs                   ║
+  ║              + API key       + ingress      (cert-manager)                ║
+  ║                    │              │              │                         ║
+  ║                    └──────────────┼──────────────┘                        ║
+  ║                                   ▼                                       ║
+  ║                        values.generated.yaml                              ║
+  ║                        (secrets + URLs + config)                          ║
+  ╚═══════════════════════════════════╪════════════════════════════════════════╝
+                                      │
+  ╔═══════════════════════════════════╪════════════════════════════════════════╗
+  ║  STEP 4            Deploy         │                                       ║
+  ║  ──────────                       ▼                                       ║
+  ║                    ┌──────────────────────────────┐                       ║
+  ║                    │  kubectl reachable?           │                       ║
+  ║                    └──────────┬───────────────────┘                       ║
+  ║                    ┌──────────┴──────────┐                                ║
+  ║                    ▼                     ▼                                ║
+  ║                  Yes                    No                                ║
+  ║                    │           ┌─────────────────────┐                    ║
+  ║                    │           │ Script stops here.   │                    ║
+  ║                    │           │ Prints commands to   │                    ║
+  ║                    │           │ finish from bastion. │                    ║
+  ║                    │           └─────────────────────┘                    ║
+  ║                    ▼                                                      ║
+  ║           helm upgrade --install                                          ║
+  ║           aurora-oss ./deploy/helm/aurora                                 ║
+  ║                    │                                                      ║
+  ╚════════════════════╪══════════════════════════════════════════════════════╝
+                       │
+  ╔════════════════════╪══════════════════════════════════════════════════════╗
+  ║  STEP 5            │   Post-deploy                                       ║
+  ║  ──────────        ▼                                                     ║
+  ║           ┌──────────────────┐                                           ║
+  ║           │  Vault init +    │                                           ║
+  ║           │  unseal          │──── Optional: KMS auto-unseal             ║
+  ║           └────────┬─────────┘                                           ║
+  ║                    ▼                                                     ║
+  ║           kubectl get pods -n aurora                                     ║
+  ║           (verify all running)                                           ║
+  ╚════════════════════════════════════════════════════════════════════════════╝
+```
+
+:::tip Using the guided script
+`deploy-k8s.sh` walks through **all 5 steps** automatically, detecting your environment at each stage. You can also run each step individually using the scripts shown above.
+:::
+
+---
+
 ## Which Path Is Right for You?
 
 | Scenario | What You Need | Path |

@@ -131,36 +131,88 @@ if [ "$FORCE_TARBALL" = true ]; then
     exit 1
   fi
 else
-  # Auto-detect: try reaching GHCR first
+  # Auto-detect what's available
+  HAS_INTERNET=false
   if curl -fsSL --connect-timeout 5 --max-time 10 "https://ghcr.io/v2/" >/dev/null 2>&1; then
-    MODE="registry"
-  else
-    # No internet — look for a local tarball
-    for dir in "." ".." "$REPO_ROOT"; do
-      for f in "$dir"/aurora-airtight-*.tar.gz; do
-        [ -f "$f" ] || continue
-        TARBALL="$f"
-        break 2
-      done
-    done
+    HAS_INTERNET=true
+  fi
 
-    if [ -n "$TARBALL" ]; then
+  # Look for a local tarball
+  for dir in "." ".." "$REPO_ROOT"; do
+    for f in "$dir"/aurora-airtight-*.tar.gz; do
+      [ -f "$f" ] || continue
+      TARBALL="$f"
+      break 2
+    done
+  done
+
+  if [ "$HAS_INTERNET" = true ] && [ -n "$TARBALL" ]; then
+    # Both available — ask the user
+    echo "Detected two options for pushing images to ${REGISTRY}:"
+    echo ""
+    echo "  1) Pull from upstream registries (GHCR, Docker Hub, etc.)"
+    echo "     No extra disk usage — images go directly to your registry."
+    echo ""
+    echo "  2) Load from local tarball: ${TARBALL}"
+    echo "     Uses Docker to load images, then pushes from cache."
+    echo ""
+    if [ -t 0 ]; then
+      printf "Which method? [1]: "
+      read -r METHOD_CHOICE
+      METHOD_CHOICE="${METHOD_CHOICE:-1}"
+    else
+      METHOD_CHOICE="1"
+    fi
+    if [ "$METHOD_CHOICE" = "2" ]; then
       MODE="tarball"
     else
-      echo "============================================"
-      echo "  Cannot reach upstream registries and no local tarball found."
-      echo "============================================"
-      echo ""
-      echo "  Option 1: Run from a machine with internet access."
-      echo ""
-      echo "  Option 2: Download the bundle on a machine with internet, then transfer it here:"
-      echo "    # On a machine with internet:"
-      echo "    curl -fsSL https://raw.githubusercontent.com/arvo-ai/aurora/main/scripts/download-bundle.sh | bash"
-      echo ""
-      echo "    # Transfer to this machine, then:"
-      echo "    $0 $REGISTRY --tarball aurora-airtight-<version>-<arch>.tar.gz"
-      exit 1
+      MODE="registry"
     fi
+
+  elif [ "$HAS_INTERNET" = true ]; then
+    MODE="registry"
+    echo "Upstream registries are reachable."
+    echo "  Images will be pulled from GHCR/Docker Hub and pushed to ${REGISTRY}."
+    echo ""
+    if [ -t 0 ]; then
+      printf "Proceed? [Y/n]: "
+      read -r CONFIRM
+      CONFIRM="${CONFIRM:-Y}"
+      if [ "$CONFIRM" = "n" ] || [ "$CONFIRM" = "N" ]; then
+        echo "Aborted."
+        exit 0
+      fi
+    fi
+
+  elif [ -n "$TARBALL" ]; then
+    MODE="tarball"
+    echo "No internet access detected. Found local tarball: ${TARBALL}"
+    echo "  Images will be loaded from the tarball and pushed to ${REGISTRY}."
+    echo ""
+    if [ -t 0 ]; then
+      printf "Proceed? [Y/n]: "
+      read -r CONFIRM
+      CONFIRM="${CONFIRM:-Y}"
+      if [ "$CONFIRM" = "n" ] || [ "$CONFIRM" = "N" ]; then
+        echo "Aborted."
+        exit 0
+      fi
+    fi
+
+  else
+    echo "============================================"
+    echo "  Cannot reach upstream registries and no local tarball found."
+    echo "============================================"
+    echo ""
+    echo "  Option 1: Run from a machine with internet access."
+    echo ""
+    echo "  Option 2: Download the bundle on a machine with internet, then transfer it here:"
+    echo "    # On a machine with internet:"
+    echo "    curl -fsSL https://raw.githubusercontent.com/arvo-ai/aurora/main/scripts/download-bundle.sh | bash"
+    echo ""
+    echo "    # Transfer to this machine, then:"
+    echo "    $0 $REGISTRY --tarball aurora-airtight-<version>-<arch>.tar.gz"
+    exit 1
   fi
 fi
 
