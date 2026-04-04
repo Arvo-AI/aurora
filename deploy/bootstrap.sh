@@ -16,6 +16,15 @@ set -euo pipefail
 #   curl -fsSL <url> | bash -s -- --profile airtight --bundle ~/bundle.tar.gz
 # ─────────────────────────────────────────────────────────────────────────────
 
+# When piped (curl|bash), stdin is the script itself. Re-run from a temp file
+# so the wizard inherits a clean stdin attached to the terminal.
+if [[ ! -t 0 ]]; then
+  _tmpscript=$(mktemp /tmp/aurora-bootstrap.XXXXXX)
+  trap 'rm -f "$_tmpscript"' EXIT
+  cat > "$_tmpscript"
+  exec bash "$_tmpscript" "$@" < /dev/tty
+fi
+
 REPO_URL="https://github.com/arvo-ai/aurora.git"
 INSTALL_DIR="${AURORA_INSTALL_DIR:-$HOME/aurora}"
 BRANCH="${AURORA_BRANCH:-main}"
@@ -83,9 +92,6 @@ fi
 ok "Repository ready at $INSTALL_DIR"
 
 # ─── Run wizard ──────────────────────────────────────────────────────────────
-
-# Reopen stdin from terminal (curl|bash consumes stdin via the pipe)
-exec < /dev/tty
 
 chmod +x deploy/aurora-deploy.sh
 exec deploy/aurora-deploy.sh "$@"
