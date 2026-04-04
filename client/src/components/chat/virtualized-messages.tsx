@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useRef, useEffect, useState } from "react";
+import React, { useRef, useState } from "react";
 import { Virtuoso, VirtuosoHandle } from "react-virtuoso";
 import { MessageItem } from "./message-item";
 import { Message } from "../../app/chat/types";
@@ -15,40 +15,14 @@ interface VirtualizedMessagesProps {
 
 export const VirtualizedMessages = React.memo(({ messages, sendRaw, onUpdateMessage, sessionId, userId }: VirtualizedMessagesProps) => {
   const virtuosoRef = useRef<VirtuosoHandle>(null);
-  const prevCount = useRef(0);
-  const [atBottom, setAtBottom] = useState(false);
+  const [atBottom, setAtBottom] = useState(true);
+  const firstLoad = useRef(true);
   const isExistingSession = useRef(false);
-  const hasInitialized = useRef(false);
-  const [virtuosoKey, setVirtuosoKey] = useState(0);
 
-  // Detect session type synchronously during render (before Virtuoso mounts)
-  // so initialTopMostItemIndex and followOutput get the correct value on first mount.
-  if (!hasInitialized.current && messages.length > 0) {
-    hasInitialized.current = true;
+  if (firstLoad.current && messages.length > 0) {
+    firstLoad.current = false;
     isExistingSession.current = messages.length > 2;
   }
-
-  useEffect(() => {
-    const prev = prevCount.current;
-    const cur = messages.length;
-
-    if (cur > prev && prev > 0 && (!isExistingSession.current || atBottom)) {
-      virtuosoRef.current?.scrollToIndex({
-        index: cur - 1,
-        align: "end",
-        behavior: "smooth",
-      });
-    }
-
-    prevCount.current = cur;
-  }, [messages.length, atBottom]);
-
-  useEffect(() => {
-    prevCount.current = 0;
-    hasInitialized.current = false;
-    isExistingSession.current = false;
-    setVirtuosoKey(k => k + 1);
-  }, [sessionId]);
 
   if (messages.length === 0) {
     return (
@@ -63,15 +37,11 @@ export const VirtualizedMessages = React.memo(({ messages, sendRaw, onUpdateMess
 
   return (
     <Virtuoso
-      key={virtuosoKey}
       ref={virtuosoRef}
       data={messages}
       totalCount={messages.length}
       initialTopMostItemIndex={isExistingSession.current ? 0 : messages.length - 1}
-      followOutput={(isAtBottom: boolean) => {
-        if (isExistingSession.current) return false;
-        return isAtBottom ? "smooth" : false;
-      }}
+      followOutput={(isAtBottom: boolean) => isAtBottom ? "smooth" : false}
       atBottomStateChange={setAtBottom}
       atBottomThreshold={80}
       overscan={600}
