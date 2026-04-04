@@ -220,7 +220,7 @@ function SummaryCards({ summary }: { summary: MetricsSummary }) {
     },
     {
       label: 'Change Failure Rate',
-      value: `${(summary.changeFailureRate ?? 0).toFixed(1)}%`,
+      value: `${Number(summary.changeFailureRate ?? 0).toFixed(1)}%`,
       sub: `${summary.totalDeployments} deployments`,
       icon: TrendingDown,
       accent: summary.changeFailureRate > 15 ? 'text-red-400' : 'text-zinc-200',
@@ -414,7 +414,7 @@ function ChangeFailureSection({
             {cfr.totalDeployments} deployments, {cfr.failureLinked} failure-linked
           </span>
           <span className="text-zinc-300 font-medium">
-            Overall: {(cfr.changeFailureRate ?? 0).toFixed(1)}%
+            Overall: {Number(cfr.changeFailureRate ?? 0).toFixed(1)}%
           </span>
         </div>
         <table className="w-full text-sm">
@@ -452,7 +452,7 @@ function ChangeFailureSection({
                           : 'text-zinc-300'
                     }
                   >
-                    {(svc.rate ?? 0).toFixed(1)}%
+                    {Number(svc.rate ?? 0).toFixed(1)}%
                   </span>
                 </td>
               </tr>
@@ -483,7 +483,7 @@ function AgentSection({
             <span className="text-sm text-zinc-400">Avg Steps per RCA</span>
           </div>
           <p className="text-2xl font-semibold text-zinc-200">
-            {(agent.avgStepsPerRca ?? 0).toFixed(1)}
+            {Number(agent.avgStepsPerRca ?? 0).toFixed(1)}
           </p>
         </div>
         <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-4">
