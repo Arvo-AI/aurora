@@ -7,6 +7,11 @@ set -euo pipefail
 # Interactive deployment with profile selection, preflight checks, automatic
 # Vault token extraction, and post-deploy health verification.
 #
+# Profiles:
+#   standard  -- Internet-connected VM. Installs prerequisites, Docker, pulls/builds images.
+#   airtight  -- Restricted-egress VM. Requires Docker pre-installed, source + image
+#                bundle transferred manually. No internet calls are made.
+#
 # Usage:
 #   ./deploy/aurora-deploy.sh                            # interactive
 #   ./deploy/aurora-deploy.sh --profile standard         # standard VM deploy
@@ -115,8 +120,10 @@ echo ""
 
 # ─── Prerequisites & Preflight ───────────────────────────────────────────────
 
-ensure_prerequisites
-preflight
+if [[ "$PROFILE" == "standard" ]]; then
+  ensure_prerequisites
+fi
+preflight "$PROFILE"
 
 # ─── Profile: Air-Tight bundle validation ────────────────────────────────────
 
@@ -124,6 +131,11 @@ COMPOSE_FILE="docker-compose.prod-local.yml"
 
 if [[ "$PROFILE" == "airtight" ]]; then
   COMPOSE_FILE="docker-compose.airtight.yml"
+  echo "  Requirements for air-tight mode:"
+  echo "    - Docker + Docker Compose pre-installed"
+  echo "    - Aurora source transferred as tarball"
+  echo "    - Image bundle (.tar.gz) transferred to this VM"
+  echo ""
 
   if [[ -z "$AIRTIGHT_BUNDLE" ]]; then
     prompt AIRTIGHT_BUNDLE "Path to airtight image bundle (.tar.gz)"
@@ -163,7 +175,9 @@ fi
 
 # ─── Firewall ────────────────────────────────────────────────────────────────
 
-if [[ "$SKIP_FIREWALL" == "true" ]]; then
+if [[ "$PROFILE" == "airtight" ]]; then
+  info "Skipping firewall setup (air-tight mode -- manage firewall externally)"
+elif [[ "$SKIP_FIREWALL" == "true" ]]; then
   warn "Skipping firewall setup (--skip-firewall)"
 else
   configure_firewall
@@ -172,14 +186,17 @@ fi
 # ─── Hostname / IP ───────────────────────────────────────────────────────────
 
 echo ""
-info "Detecting public IP address..."
-DETECTED_IP=$(detect_ip)
-[[ -n "$DETECTED_IP" ]] && ok "Detected IP: $DETECTED_IP" || warn "Could not auto-detect public IP."
+DETECTED_IP=""
+if [[ "$PROFILE" == "standard" ]]; then
+  info "Detecting public IP address..."
+  DETECTED_IP=$(detect_ip)
+  [[ -n "$DETECTED_IP" ]] && ok "Detected IP: $DETECTED_IP" || warn "Could not auto-detect public IP."
+fi
 
 if [[ -z "$VM_HOSTNAME" ]]; then
   echo ""
   info "How will users reach this VM?"
-  echo "  Enter a domain name (aurora.example.com) or press Enter for the detected IP."
+  echo "  Enter a domain name, public IP, or internal/VPN IP."
   echo ""
   prompt VM_HOSTNAME "Hostname or IP" "${DETECTED_IP:-}"
 fi

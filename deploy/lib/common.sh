@@ -115,6 +115,7 @@ ensure_prerequisites() {
 }
 
 preflight() {
+  local profile="${1:-standard}"
   local failed=0
   info "Running preflight checks..."
 
@@ -161,13 +162,15 @@ preflight() {
   # Docker
   if command -v docker &>/dev/null && docker compose version &>/dev/null; then
     ok "Docker: $(docker --version 2>/dev/null | head -c 60)"
+  elif [[ "$profile" == "airtight" ]]; then
+    err "Docker not found. Air-tight mode requires Docker pre-installed."
+    err "See: https://arvo-ai.github.io/aurora/docs/deployment/install-docker"
+    failed=1
+  elif [[ "${SKIP_DOCKER:-false}" == "true" ]]; then
+    err "Docker not found and --skip-docker is set"
+    failed=1
   else
-    if [[ "${SKIP_DOCKER:-false}" == "true" ]]; then
-      err "Docker not found and --skip-docker is set"
-      failed=1
-    else
-      info "Docker: not installed (will be installed)"
-    fi
+    info "Docker: not installed (will be installed)"
   fi
 
   if [[ "$failed" -eq 1 ]]; then
