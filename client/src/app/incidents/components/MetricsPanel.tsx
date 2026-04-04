@@ -6,7 +6,7 @@ import {
   ResponsiveContainer, Legend,
 } from 'recharts';
 import {
-  Activity, BarChart3, Clock, Loader2, TrendingDown, Zap,
+  Activity, Clock, Loader2, TrendingDown, Zap,
   AlertTriangle, Server, Wrench,
 } from 'lucide-react';
 import { useQuery, jsonFetcher } from '@/lib/query';
@@ -14,10 +14,6 @@ import type {
   Period, MetricsSummary, MttrResponse, IncidentFrequencyResponse,
   ChangeFailureRateResponse, AgentExecutionResponse,
 } from '@/lib/services/metrics';
-
-// ============================================================================
-// Constants
-// ============================================================================
 
 const PERIODS: { label: string; value: Period }[] = [
   { label: '7 days', value: '7d' },
@@ -34,10 +30,6 @@ const SEVERITY_COLORS: Record<string, string> = {
 };
 
 const SEVERITY_ORDER = ['critical', 'high', 'medium', 'low', 'unknown'];
-
-// ============================================================================
-// Helpers
-// ============================================================================
 
 function formatDuration(seconds: number): string {
   if (seconds < 0) return '0s';
@@ -76,22 +68,13 @@ function severityBgClass(severity: string): string {
   }
 }
 
-// ============================================================================
-// Custom fetchers (useQuery expects (key, signal) => Promise<T>)
-// ============================================================================
-
 function metricsFetcher<T>(key: string, signal: AbortSignal): Promise<T> {
   return jsonFetcher<T>(key, signal);
 }
 
-// ============================================================================
-// Component
-// ============================================================================
-
-export default function MetricsPage() {
+export default function MetricsPanel() {
   const [period, setPeriod] = useState<Period>('30d');
 
-  // Fetch all endpoints in parallel
   const { data: summary, isLoading: summaryLoading, error: summaryError } = useQuery<MetricsSummary>(
     '/api/metrics/summary',
     metricsFetcher,
@@ -124,7 +107,6 @@ export default function MetricsPage() {
 
   const isLoading = summaryLoading && !summary;
 
-  // Build stacked area chart data from frequency response
   const frequencyChartData = useMemo(() => {
     if (!frequency?.data) return [];
     const dateMap = new Map<string, Record<string, number>>();
@@ -154,54 +136,38 @@ export default function MetricsPage() {
 
   if (summaryError && !summary) {
     return (
-      <div className="max-w-6xl mx-auto py-12 px-4">
-        <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-6 text-center">
-          <AlertTriangle className="h-8 w-8 mx-auto text-red-400 mb-3" />
-          <p className="text-zinc-200 font-medium">Failed to load metrics</p>
-          <p className="text-zinc-400 text-sm mt-1">{summaryError.message}</p>
-        </div>
+      <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-6 text-center">
+        <AlertTriangle className="h-8 w-8 mx-auto text-red-400 mb-3" />
+        <p className="text-zinc-200 font-medium">Failed to load metrics</p>
+        <p className="text-zinc-400 text-sm mt-1">{summaryError.message}</p>
       </div>
     );
   }
 
   return (
-    <div className="max-w-6xl mx-auto py-8 px-4">
-      {/* Header */}
-      <div className="flex items-center justify-between mb-8">
-        <h1 className="text-3xl font-bold flex items-center gap-2 text-zinc-200">
-          <BarChart3 className="h-6 w-6" />
-          SRE Metrics
-        </h1>
+    <div>
+      <div className="flex justify-end mb-6">
         <PeriodSelector value={period} onChange={setPeriod} />
       </div>
 
-      {/* Summary Cards */}
       {summary && <SummaryCards summary={summary} />}
 
       <div className="space-y-8 mt-8">
-        {/* MTTR by Severity */}
         {mttr && <MttrSection mttr={mttr} loading={mttrLoading} />}
 
-        {/* Incident Frequency Trend */}
         <FrequencyChart
           data={frequencyChartData}
           severities={frequencySeverities}
           loading={freqLoading}
         />
 
-        {/* Change Failure Rate by Service */}
         {cfr && <ChangeFailureSection cfr={cfr} loading={cfrLoading} />}
 
-        {/* Agent Performance */}
         {agentExec && <AgentSection agent={agentExec} loading={agentLoading} />}
       </div>
     </div>
   );
 }
-
-// ============================================================================
-// Period Selector
-// ============================================================================
 
 function PeriodSelector({
   value,
@@ -229,10 +195,6 @@ function PeriodSelector({
   );
 }
 
-// ============================================================================
-// Summary Cards
-// ============================================================================
-
 function SummaryCards({ summary }: { summary: MetricsSummary }) {
   const cards = [
     {
@@ -258,7 +220,7 @@ function SummaryCards({ summary }: { summary: MetricsSummary }) {
     },
     {
       label: 'Change Failure Rate',
-      value: `${summary.changeFailureRate.toFixed(1)}%`,
+      value: `${(summary.changeFailureRate ?? 0).toFixed(1)}%`,
       sub: `${summary.totalDeployments} deployments`,
       icon: TrendingDown,
       accent: summary.changeFailureRate > 15 ? 'text-red-400' : 'text-zinc-200',
@@ -284,14 +246,9 @@ function SummaryCards({ summary }: { summary: MetricsSummary }) {
   );
 }
 
-// ============================================================================
-// MTTR by Severity
-// ============================================================================
-
 function MttrSection({ mttr, loading }: { mttr: MttrResponse; loading: boolean }) {
   if (mttr.bySeverity.length === 0) return null;
 
-  // Find the maximum total MTTR for bar scaling
   const maxMttr = Math.max(
     ...mttr.bySeverity.map(s => s.avgDetectionToRcaSeconds + s.avgRcaToResolveSeconds),
     1,
@@ -331,7 +288,6 @@ function MttrSection({ mttr, loading }: { mttr: MttrResponse; loading: boolean }
                       </span>
                     </div>
                   </div>
-                  {/* Phase breakdown bar */}
                   <div
                     className="flex h-3 rounded-full overflow-hidden bg-zinc-800"
                     style={{ width: `${Math.max(barWidth, 4)}%` }}
@@ -358,7 +314,6 @@ function MttrSection({ mttr, loading }: { mttr: MttrResponse; loading: boolean }
               );
             })}
         </div>
-        {/* Legend */}
         <div className="flex items-center gap-4 mt-4 text-xs text-zinc-500">
           <span className="flex items-center gap-1.5">
             <span className="w-3 h-3 rounded-sm bg-zinc-500 opacity-60" />
@@ -373,10 +328,6 @@ function MttrSection({ mttr, loading }: { mttr: MttrResponse; loading: boolean }
     </section>
   );
 }
-
-// ============================================================================
-// Incident Frequency Chart
-// ============================================================================
 
 function FrequencyChart({
   data,
@@ -443,10 +394,6 @@ function FrequencyChart({
   );
 }
 
-// ============================================================================
-// Change Failure Rate by Service
-// ============================================================================
-
 function ChangeFailureSection({
   cfr,
   loading,
@@ -467,7 +414,7 @@ function ChangeFailureSection({
             {cfr.totalDeployments} deployments, {cfr.failureLinked} failure-linked
           </span>
           <span className="text-zinc-300 font-medium">
-            Overall: {cfr.changeFailureRate.toFixed(1)}%
+            Overall: {(cfr.changeFailureRate ?? 0).toFixed(1)}%
           </span>
         </div>
         <table className="w-full text-sm">
@@ -505,7 +452,7 @@ function ChangeFailureSection({
                           : 'text-zinc-300'
                     }
                   >
-                    {svc.rate.toFixed(1)}%
+                    {(svc.rate ?? 0).toFixed(1)}%
                   </span>
                 </td>
               </tr>
@@ -516,10 +463,6 @@ function ChangeFailureSection({
     </section>
   );
 }
-
-// ============================================================================
-// Agent Performance
-// ============================================================================
 
 function AgentSection({
   agent,
@@ -534,14 +477,13 @@ function AgentSection({
     <section>
       <SectionHeader icon={Zap} title="Agent Performance" loading={loading} />
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        {/* Stats cards */}
         <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-4">
           <div className="flex items-center gap-2 mb-1">
             <Activity className="h-4 w-4 text-zinc-500" />
             <span className="text-sm text-zinc-400">Avg Steps per RCA</span>
           </div>
           <p className="text-2xl font-semibold text-zinc-200">
-            {agent.avgStepsPerRca.toFixed(1)}
+            {(agent.avgStepsPerRca ?? 0).toFixed(1)}
           </p>
         </div>
         <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-4">
@@ -564,7 +506,6 @@ function AgentSection({
         </div>
       </div>
 
-      {/* Tool stats table */}
       {sorted.length > 0 && (
         <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 overflow-hidden mt-4">
           <table className="w-full text-sm">
@@ -599,10 +540,6 @@ function AgentSection({
     </section>
   );
 }
-
-// ============================================================================
-// Shared
-// ============================================================================
 
 function SectionHeader({
   icon: Icon,
