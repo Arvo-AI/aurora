@@ -19,6 +19,8 @@ export const useStreamingMessages = (): StreamingMessageState => {
   const streamingMessageIdRef = useRef<number | null>(null);
   const streamingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const isThinkingRef = useRef<boolean>(false);
+  const rafRef = useRef<number | null>(null);
+  const pendingFlushRef = useRef(false);
 
   const startStreamingMessage = useCallback((isThinking: boolean = false) => {
     const messageId = Date.now();
@@ -41,10 +43,17 @@ export const useStreamingMessages = (): StreamingMessageState => {
     if (streamingMessageIdRef.current) {
       streamingBufferRef.current += chunk;
       
-      setCurrentStreamingMessage(prev => prev ? {
-        ...prev,
-        text: streamingBufferRef.current
-      } : null);
+      if (!pendingFlushRef.current) {
+        pendingFlushRef.current = true;
+        rafRef.current = requestAnimationFrame(() => {
+          pendingFlushRef.current = false;
+          const text = streamingBufferRef.current;
+          setCurrentStreamingMessage(prev => prev ? {
+            ...prev,
+            text
+          } : null);
+        });
+      }
     }
   }, []);
 
@@ -53,6 +62,11 @@ export const useStreamingMessages = (): StreamingMessageState => {
       if (streamingTimeoutRef.current) {
         clearTimeout(streamingTimeoutRef.current);
         streamingTimeoutRef.current = null;
+      }
+      if (rafRef.current) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+        pendingFlushRef.current = false;
       }
       
       const finalMessage: Message = {
@@ -77,6 +91,9 @@ export const useStreamingMessages = (): StreamingMessageState => {
   const cleanup = useCallback(() => {
     if (streamingTimeoutRef.current) {
       clearTimeout(streamingTimeoutRef.current);
+    }
+    if (rafRef.current) {
+      cancelAnimationFrame(rafRef.current);
     }
   }, []);
 

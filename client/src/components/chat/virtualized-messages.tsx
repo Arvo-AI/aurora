@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useRef, useState } from "react";
+import React, { useRef, useState, useEffect, useCallback, useMemo } from "react";
 import { Virtuoso, VirtuosoHandle } from "react-virtuoso";
 import { MessageItem } from "./message-item";
 import { Message } from "../../app/chat/types";
@@ -15,14 +15,62 @@ interface VirtualizedMessagesProps {
 
 export const VirtualizedMessages = React.memo(({ messages, sendRaw, onUpdateMessage, sessionId, userId }: VirtualizedMessagesProps) => {
   const virtuosoRef = useRef<VirtuosoHandle>(null);
-  const [atBottom, setAtBottom] = useState(true);
   const firstLoad = useRef(true);
   const isExistingSession = useRef(false);
+  const prevMessageCountRef = useRef(messages.length);
+  const [userScrolledUp, setUserScrolledUp] = useState(false);
+  const frozenMessagesRef = useRef<Message[]>(messages);
 
   if (firstLoad.current && messages.length > 0) {
     firstLoad.current = false;
     isExistingSession.current = messages.length > 2;
   }
+
+  if (!userScrolledUp) {
+    frozenMessagesRef.current = messages;
+  } else if (messages.length !== frozenMessagesRef.current.length) {
+    frozenMessagesRef.current = messages;
+  }
+
+  const stableMessages = userScrolledUp ? frozenMessagesRef.current : messages;
+
+  const handleAtBottomChange = useCallback((bottom: boolean) => {
+    if (bottom) {
+      setUserScrolledUp(false);
+    }
+  }, []);
+
+  const handleFollowOutput = useCallback((isAtBottom: boolean) => {
+    if (userScrolledUp) return false;
+    return isAtBottom ? "smooth" : false;
+  }, [userScrolledUp]);
+
+  const handleScroll = useCallback((e: React.UIEvent) => {
+    const el = e.target as HTMLElement;
+    const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    if (distFromBottom > 150) {
+      setUserScrolledUp(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    const prevCount = prevMessageCountRef.current;
+    prevMessageCountRef.current = messages.length;
+
+    if (messages.length > prevCount && messages.length > 0) {
+      const lastMsg = messages[messages.length - 1];
+      if (lastMsg.sender === "user") {
+        setUserScrolledUp(false);
+        requestAnimationFrame(() => {
+          virtuosoRef.current?.scrollToIndex({
+            index: messages.length - 1,
+            behavior: "smooth",
+            align: "end",
+          });
+        });
+      }
+    }
+  }, [messages.length]);
 
   if (messages.length === 0) {
     return (
@@ -38,14 +86,15 @@ export const VirtualizedMessages = React.memo(({ messages, sendRaw, onUpdateMess
   return (
     <Virtuoso
       ref={virtuosoRef}
-      data={messages}
-      totalCount={messages.length}
+      data={stableMessages}
+      totalCount={stableMessages.length}
       initialTopMostItemIndex={isExistingSession.current ? 0 : messages.length - 1}
-      followOutput={(isAtBottom: boolean) => isAtBottom ? "smooth" : false}
-      atBottomStateChange={setAtBottom}
-      atBottomThreshold={80}
-      overscan={600}
-      increaseViewportBy={{ top: 400, bottom: 400 }}
+      followOutput={handleFollowOutput}
+      atBottomStateChange={handleAtBottomChange}
+      atBottomThreshold={40}
+      overscan={200}
+      increaseViewportBy={{ top: 200, bottom: 0 }}
+      onScroll={handleScroll}
       className="h-full scrollbar-thin scrollbar-track-transparent scrollbar-thumb-gray-300 dark:scrollbar-thumb-gray-600"
       components={{
         Footer: () => <div className="h-8" />,
@@ -58,7 +107,7 @@ export const VirtualizedMessages = React.memo(({ messages, sendRaw, onUpdateMess
             onUpdateMessage={onUpdateMessage}
             sessionId={sessionId}
             userId={userId}
-            allMessages={messages}
+            allMessages={stableMessages}
             messageIndex={index}
           />
         </div>
