@@ -28,6 +28,28 @@ health_gate() {
 
   warn "API did not respond within ${timeout}s (it may still be starting)."
   echo ""
+
+  # Diagnose common causes
+  local server_state
+  server_state=$(docker inspect --format '{{.State.Status}}' aurora-server 2>/dev/null || echo "not found")
+  if [[ "$server_state" == "not found" ]]; then
+    err "Container 'aurora-server' does not exist."
+  elif [[ "$server_state" != "running" ]]; then
+    err "Container 'aurora-server' is ${server_state}."
+    echo "  --- Last 15 lines of aurora-server ---"
+    docker logs --tail 15 aurora-server 2>&1 | sed 's/^/  /'
+    echo ""
+  else
+    info "aurora-server is running but not responding on :5080. Possible causes:"
+    echo "  - Application still initializing (database migrations, etc.)"
+    echo "  - Missing or invalid VAULT_TOKEN in .env"
+    echo "  - Database (postgres) not ready -- check: docker logs aurora-postgres"
+    echo ""
+    echo "  --- Last 15 lines of aurora-server ---"
+    docker logs --tail 15 aurora-server 2>&1 | sed 's/^/  /'
+    echo ""
+  fi
+
   _print_service_status "$compose_file"
   return 1
 }

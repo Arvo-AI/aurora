@@ -20,6 +20,7 @@ set -euo pipefail
 #   ./deploy/aurora-deploy.sh --prebuilt                 # pull prebuilt images
 #   ./deploy/aurora-deploy.sh --skip-docker              # skip Docker installation
 #   ./deploy/aurora-deploy.sh --skip-firewall            # skip firewall setup
+#   ./deploy/aurora-deploy.sh --skip-prereqs             # skip prerequisite checks (advanced)
 #   ./deploy/aurora-deploy.sh --hostname <host>          # set hostname/IP
 #   ./deploy/aurora-deploy.sh --bundle <path>            # airtight bundle path
 #   ./deploy/aurora-deploy.sh --non-interactive          # no prompts (requires env vars)
@@ -45,6 +46,7 @@ NON_INTERACTIVE=false
 VM_HOSTNAME=""
 AIRTIGHT_BUNDLE=""
 VERSION="${VERSION:-latest}"
+SKIP_PREREQS=false
 
 # ─── Parse args ──────────────────────────────────────────────────────────────
 
@@ -62,6 +64,7 @@ for arg in "$@"; do
     --build)            BUILD_MODE="build" ;;
     --skip-docker)      SKIP_DOCKER=true ;;
     --skip-firewall)    SKIP_FIREWALL=true ;;
+    --skip-prereqs)     SKIP_PREREQS=true ;;
     --non-interactive)  NON_INTERACTIVE=true ;;
     --hostname=*)       VM_HOSTNAME="${arg#*=}" ;;
     --hostname)         _shift_next=VM_HOSTNAME ;;
@@ -120,8 +123,12 @@ echo ""
 
 # ─── Prerequisites & Preflight ───────────────────────────────────────────────
 
-if [[ "$PROFILE" == "standard" ]]; then
+if [[ "$SKIP_PREREQS" == "true" ]]; then
+  warn "Skipping prerequisite checks (--skip-prereqs)"
+elif [[ "$PROFILE" == "standard" ]]; then
   ensure_prerequisites
+elif [[ "$PROFILE" == "airtight" ]]; then
+  ensure_airtight_prerequisites
 fi
 preflight "$PROFILE"
 
@@ -131,6 +138,12 @@ COMPOSE_FILE="docker-compose.prod-local.yml"
 
 if [[ "$PROFILE" == "airtight" ]]; then
   COMPOSE_FILE="docker-compose.airtight.yml"
+
+  if [[ ! -f "${REPO_ROOT}/${COMPOSE_FILE}" ]]; then
+    err "Compose file not found: ${REPO_ROOT}/${COMPOSE_FILE}"
+    err "Ensure the Aurora source tree is complete (missing docker-compose.airtight.yml)."
+    exit 1
+  fi
   echo "  Requirements for air-tight mode:"
   echo "    - Docker + Docker Compose pre-installed"
   echo "    - Aurora source transferred as tarball"
@@ -284,18 +297,74 @@ generate_env "$REPO_ROOT"
 
 echo ""
 if [[ "$PROFILE" == "airtight" ]]; then
-  info "Loading images from bundle (this may take a few minutes)..."
-  docker load < "$AIRTIGHT_BUNDLE"
+  _bundle_size=$(du -h "$AIRTIGHT_BUNDLE" | cut -f1)
+
+  # Pre-check disk space vs bundle size
+  _bundle_kb=$(du -k "$AIRTIGHT_BUNDLE" | cut -f1)
+  _free_kb=$(df -k "${REPO_ROOT}" 2>/dev/null | awk 'NR==2 {print $4}')
+  _free_kb="${_free_kb:-0}"
+  _need_kb=$(( _bundle_kb * 3 ))
+  if [[ "$_free_kb" -lt "$_need_kb" ]] 2>/dev/null; then
+    _free_h=$(( _free_kb / 1024 / 1024 ))
+    _need_h=$(( _need_kb / 1024 / 1024 ))
+    err "Insufficient disk space for image loading."
+    err "Available: ~${_free_h} GB, estimated need: ~${_need_h} GB (3x bundle size)."
+    err "Free space with: docker system prune -af"
+    exit 1
+  fi
+
+  info "Loading images from bundle ($_bundle_size -- this may take 5-15 min)..."
+  _load_rc=0
+  if command -v pv &>/dev/null; then
+    pv "$AIRTIGHT_BUNDLE" | docker load >/dev/null || _load_rc=$?
+  else
+    _loaded_start=$(date +%s)
+    docker load -i "$AIRTIGHT_BUNDLE" >/dev/null &
+    _load_pid=$!
+    while kill -0 "$_load_pid" 2>/dev/null; do
+      _loaded_imgs=$(docker images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | wc -l | tr -d ' ')
+      _elapsed=$(( $(date +%s) - _loaded_start ))
+      printf "\r  Loading... %dm%02ds elapsed, %s images loaded" \
+        $((_elapsed/60)) $((_elapsed%60)) "$_loaded_imgs"
+      sleep 5
+    done
+    echo ""
+    wait "$_load_pid" || _load_rc=$?
+  fi
+
+  if [[ "$_load_rc" -ne 0 ]]; then
+    err "docker load failed (exit code: $_load_rc)."
+    err "Possible causes:"
+    echo "  - Corrupted or truncated bundle (re-transfer the file)"
+    echo "  - Insufficient disk space (run: df -h / docker system prune -af)"
+    exit 1
+  fi
+
+  # Verify critical images were loaded
+  _missing_imgs=()
+  for img in aurora_server:latest aurora_frontend:latest; do
+    if ! docker image inspect "$img" &>/dev/null; then
+      _missing_imgs+=("$img")
+    fi
+  done
+  if [[ ${#_missing_imgs[@]} -gt 0 ]]; then
+    err "Expected images not found after loading bundle: ${_missing_imgs[*]}"
+    err "The bundle may have been built for a different architecture or is incomplete."
+    info "Loaded images:"
+    docker images --format '  {{.Repository}}:{{.Tag}}' 2>/dev/null | head -20
+    exit 1
+  fi
+
   ok "Images loaded from bundle"
 elif [[ "$BUILD_MODE" == "prebuilt" ]]; then
   info "Pulling prebuilt images from GHCR (tag: $VERSION)..."
-  docker pull ghcr.io/arvo-ai/aurora-server:$VERSION
-  docker pull ghcr.io/arvo-ai/aurora-frontend:$VERSION
-  docker tag ghcr.io/arvo-ai/aurora-server:$VERSION aurora_server:latest
-  docker tag ghcr.io/arvo-ai/aurora-server:$VERSION aurora_celery-worker:latest
-  docker tag ghcr.io/arvo-ai/aurora-server:$VERSION aurora_celery-beat:latest
-  docker tag ghcr.io/arvo-ai/aurora-server:$VERSION aurora_chatbot:latest
-  docker tag ghcr.io/arvo-ai/aurora-frontend:$VERSION aurora_frontend:latest
+  docker pull "ghcr.io/arvo-ai/aurora-server:${VERSION}"
+  docker pull "ghcr.io/arvo-ai/aurora-frontend:${VERSION}"
+  docker tag "ghcr.io/arvo-ai/aurora-server:${VERSION}" aurora_server:latest
+  docker tag "ghcr.io/arvo-ai/aurora-server:${VERSION}" aurora_celery-worker:latest
+  docker tag "ghcr.io/arvo-ai/aurora-server:${VERSION}" aurora_celery-beat:latest
+  docker tag "ghcr.io/arvo-ai/aurora-server:${VERSION}" aurora_chatbot:latest
+  docker tag "ghcr.io/arvo-ai/aurora-frontend:${VERSION}" aurora_frontend:latest
   ok "Prebuilt images ready"
 else
   info "Building images from source (this may take several minutes)..."
@@ -319,11 +388,45 @@ while [[ $_wait_elapsed -lt $_wait_timeout ]]; do
      docker compose -f "$COMPOSE_FILE" ps 2>/dev/null | grep -q "frontend.*running"; then
     break
   fi
+
+  # Detect containers that have crashed or are in a restart loop
+  _exited=$(docker compose -f "$COMPOSE_FILE" ps --format '{{.Name}} {{.State}}' 2>/dev/null | grep -E 'exited|dead' || true)
+  _restarting=$(docker compose -f "$COMPOSE_FILE" ps --format '{{.Name}} {{.State}}' 2>/dev/null | grep 'restarting' || true)
+  if [[ -n "$_exited" || -n "$_restarting" ]]; then
+    _crash_names=""
+    [[ -n "$_exited" ]] && _crash_names="$_exited"
+    [[ -n "$_restarting" ]] && _crash_names="${_crash_names:+${_crash_names}
+}${_restarting}"
+    echo ""
+    err "Containers in unhealthy state:"
+    echo "$_crash_names" | while read -r _cname _cstate; do
+      err "  ${_cname} (${_cstate})"
+      echo "  --- Last 15 lines of ${_cname} ---"
+      docker logs --tail 15 "$_cname" 2>&1 | sed 's/^/  /'
+      echo ""
+    done
+    echo ""
+    err "Troubleshooting:"
+    echo "  - Check full logs: docker compose -f $COMPOSE_FILE logs <service>"
+    echo "  - Verify .env values: grep -E 'POSTGRES|VAULT|FLASK' .env"
+    echo "  - Restart: docker compose -f $COMPOSE_FILE down && docker compose -f $COMPOSE_FILE up -d"
+    exit 1
+  fi
+
   sleep 5
   _wait_elapsed=$((_wait_elapsed + 5))
   printf "\r  Waiting... %ds / %ds" "$_wait_elapsed" "$_wait_timeout"
 done
 echo ""
+
+if [[ $_wait_elapsed -ge $_wait_timeout ]]; then
+  warn "Containers did not reach 'running' within ${_wait_timeout}s."
+  info "Service status:"
+  docker compose -f "$COMPOSE_FILE" ps 2>/dev/null || true
+  echo ""
+  warn "The stack may still be starting. Check logs:"
+  echo "  docker compose -f $COMPOSE_FILE logs --tail 50 -f"
+fi
 
 # ─── Auto Vault ──────────────────────────────────────────────────────────────
 

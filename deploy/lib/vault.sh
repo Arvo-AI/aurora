@@ -31,6 +31,31 @@ auto_vault() {
 
   if [[ -z "$token" ]]; then
     warn "Could not auto-extract Vault token after ${timeout}s."
+    echo ""
+
+    # Diagnose why
+    local vault_state
+    vault_state=$(docker inspect --format '{{.State.Status}}' aurora-vault 2>/dev/null || echo "not found")
+    if [[ "$vault_state" == "not found" ]]; then
+      err "Container 'aurora-vault' does not exist. Check compose file and 'docker compose up' output."
+    elif [[ "$vault_state" != "running" ]]; then
+      err "Container 'aurora-vault' is ${vault_state}."
+      echo "  --- Last 10 lines of aurora-vault ---"
+      docker logs --tail 10 aurora-vault 2>&1 | sed 's/^/  /'
+      echo ""
+    else
+      info "aurora-vault is running but keys.json not found. Checking vault-init..."
+      local init_state
+      init_state=$(docker inspect --format '{{.State.Status}}' aurora-vault-init 2>/dev/null || echo "not found")
+      if [[ "$init_state" == "not found" ]]; then
+        err "Container 'aurora-vault-init' does not exist."
+      else
+        echo "  --- Last 10 lines of aurora-vault-init ---"
+        docker logs --tail 10 aurora-vault-init 2>&1 | sed 's/^/  /'
+        echo ""
+      fi
+    fi
+
     warn "Extract it manually:"
     echo "  VAULT_TOKEN=\$(docker exec aurora-vault cat /vault/init/keys.json | jq -r '.root_token')"
     echo "  sed -i \"s|^VAULT_TOKEN=.*|VAULT_TOKEN=\$VAULT_TOKEN|\" .env"

@@ -63,13 +63,19 @@ detect_os() {
 }
 
 generate_secret() {
+  local secret=""
   if command -v openssl &>/dev/null; then
-    openssl rand -hex 32
+    secret=$(openssl rand -hex 32)
   elif command -v python3 &>/dev/null; then
-    python3 -c "import secrets; print(secrets.token_hex(32))"
+    secret=$(python3 -c "import secrets; print(secrets.token_hex(32))")
   else
-    cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w 64 | head -n 1
+    secret=$(tr -dc 'a-zA-Z0-9' < /dev/urandom | fold -w 64 | head -n 1)
   fi
+  if [[ -z "$secret" ]]; then
+    err "Failed to generate secret. Ensure openssl or python3 is available."
+    exit 1
+  fi
+  echo "$secret"
 }
 
 # Resolve hostname to URLs. Sets FRONTEND_URL, BACKEND_URL_PUBLIC, WEBSOCKET_URL, IS_IP.
@@ -112,6 +118,80 @@ ensure_prerequisites() {
       ;;
   esac
   ok "Prerequisites installed: ${missing[*]}"
+}
+
+DOCKER_INSTALL_DOCS="https://arvo-ai.github.io/aurora/docs/deployment/install-docker"
+
+# Validate all prerequisites for air-tight (offline) deployments.
+# Collects every failure and prints a numbered remediation checklist.
+ensure_airtight_prerequisites() {
+  local issues=()
+  local n=0
+
+  # Docker binary
+  if ! command -v docker &>/dev/null; then
+    n=$((n + 1))
+    issues+=("${n}. Docker is not installed."$'\n'"     See: ${DOCKER_INSTALL_DOCS}")
+  else
+    # Docker daemon running
+    if ! docker info &>/dev/null 2>&1; then
+      n=$((n + 1))
+      issues+=("${n}. Docker daemon is not running."$'\n'"     Run: sudo systemctl start docker"$'\n'"     See: ${DOCKER_INSTALL_DOCS}")
+    fi
+
+    # Docker Compose v2
+    if ! docker compose version &>/dev/null 2>&1; then
+      n=$((n + 1))
+      issues+=("${n}. Docker Compose v2 not found (need 'docker compose', not 'docker-compose')."$'\n'"     See: ${DOCKER_INSTALL_DOCS}")
+    else
+      local compose_ver
+      compose_ver=$(docker compose version --short 2>/dev/null || echo "0")
+      compose_ver="${compose_ver#v}"
+      local compose_major="${compose_ver%%.*}"
+      if [[ "$compose_major" -lt 2 ]] 2>/dev/null; then
+        n=$((n + 1))
+        issues+=("${n}. Docker Compose version too old: v${compose_ver} (need v2+)."$'\n'"     See: ${DOCKER_INSTALL_DOCS}")
+      fi
+    fi
+
+    # Docker group membership (skip if running as root)
+    if [[ "$(id -u)" -ne 0 ]] && ! docker ps &>/dev/null 2>&1; then
+      n=$((n + 1))
+      issues+=("${n}. Current user '${USER}' cannot run Docker without sudo."$'\n'"     Run: sudo usermod -aG docker ${USER} && newgrp docker")
+    fi
+  fi
+
+  # Required CLI tools
+  local -A tool_pkgs=(
+    [jq]="jq"
+    [sed]="sed"
+    [grep]="grep"
+    [tar]="tar"
+  )
+  for cmd in jq sed grep tar; do
+    if ! command -v "$cmd" &>/dev/null; then
+      n=$((n + 1))
+      local pkg="${tool_pkgs[$cmd]}"
+      issues+=("${n}. '${cmd}' is not installed."$'\n'"     Debian/Ubuntu:  sudo apt-get install -y ${pkg}"$'\n'"     RHEL/CentOS:    sudo yum install -y ${pkg}")
+    fi
+  done
+
+  # Checksum tool (sha256sum or shasum)
+  if ! command -v sha256sum &>/dev/null && ! command -v shasum &>/dev/null; then
+    n=$((n + 1))
+    issues+=("${n}. No checksum tool found (sha256sum or shasum)."$'\n'"     Debian/Ubuntu:  sudo apt-get install -y coreutils"$'\n'"     RHEL/CentOS:    sudo yum install -y coreutils")
+  fi
+
+  [[ ${#issues[@]} -eq 0 ]] && { ok "All air-tight prerequisites satisfied"; return 0; }
+
+  echo ""
+  err "Prerequisites check failed. Fix the following before re-running:"
+  echo ""
+  for issue in "${issues[@]}"; do
+    echo "  $issue"
+    echo ""
+  done
+  exit 1
 }
 
 preflight() {
@@ -161,11 +241,36 @@ preflight() {
 
   # Docker
   if command -v docker &>/dev/null && docker compose version &>/dev/null; then
-    ok "Docker: $(docker --version 2>/dev/null | head -c 60)"
+    local docker_ver compose_ver
+    docker_ver=$(docker version --format '{{.Server.Version}}' 2>/dev/null || docker --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+' | head -1 || echo "0")
+    docker_ver="${docker_ver%%+*}"
+    local docker_major="${docker_ver%%.*}"
+    compose_ver=$(docker compose version --short 2>/dev/null || echo "0")
+    compose_ver="${compose_ver#v}"
+    local compose_major="${compose_ver%%.*}"
+
+    local docker_ok=true
+    if [[ "$docker_major" -lt 24 ]] 2>/dev/null; then
+      err "Docker version too old: ${docker_ver} (need 24.0+)"
+      err "See: ${DOCKER_INSTALL_DOCS}"
+      docker_ok=false
+      failed=1
+    fi
+    if [[ "$compose_major" -lt 2 ]] 2>/dev/null; then
+      err "Docker Compose version too old: ${compose_ver} (need v2+)"
+      err "See: ${DOCKER_INSTALL_DOCS}"
+      docker_ok=false
+      failed=1
+    fi
+    if [[ "$docker_ok" == "true" ]]; then
+      ok "Docker: $(docker --version 2>/dev/null | head -c 60), Compose v${compose_ver}"
+    fi
   elif [[ "$profile" == "airtight" ]]; then
     err "Docker not found. Air-tight mode requires Docker pre-installed."
-    err "See: https://arvo-ai.github.io/aurora/docs/deployment/install-docker"
-    failed=1
+    err "See: ${DOCKER_INSTALL_DOCS}"
+    echo ""
+    err "Aborting -- cannot proceed without Docker in air-tight mode."
+    exit 1
   elif [[ "${SKIP_DOCKER:-false}" == "true" ]]; then
     err "Docker not found and --skip-docker is set"
     failed=1
@@ -175,6 +280,10 @@ preflight() {
 
   if [[ "$failed" -eq 1 ]]; then
     echo ""
+    if [[ "$profile" == "airtight" ]]; then
+      err "Preflight failed. Fix the issues above before re-running."
+      exit 1
+    fi
     if ! confirm "Preflight issues detected. Continue anyway?"; then
       err "Aborting."
       exit 1
@@ -284,6 +393,12 @@ generate_env() {
   local repo_root="$1"
   cd "$repo_root"
 
+  if [[ ! -f .env.example ]]; then
+    err ".env.example not found in $repo_root"
+    err "Ensure the Aurora source tree is complete."
+    exit 1
+  fi
+
   if [[ -f .env ]]; then
     cp .env ".env.backup.$(date +%Y%m%d%H%M%S)"
     warn "Existing .env backed up"
@@ -312,5 +427,11 @@ generate_env() {
   esac
 
   rm -f .env.bak
+
+  if ! grep -q "^POSTGRES_PASSWORD=" .env 2>/dev/null; then
+    err ".env generation failed -- critical keys missing."
+    err "Check disk space and file permissions in $repo_root"
+    exit 1
+  fi
   ok "Configuration generated"
 }
