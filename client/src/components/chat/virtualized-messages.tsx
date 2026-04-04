@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useRef, useCallback, useState } from "react";
+import React, { useRef, useEffect, useState } from "react";
 import { Virtuoso, VirtuosoHandle } from "react-virtuoso";
 import { MessageItem } from "./message-item";
 import { Message } from "../../app/chat/types";
@@ -15,12 +15,40 @@ interface VirtualizedMessagesProps {
 
 export const VirtualizedMessages = React.memo(({ messages, sendRaw, onUpdateMessage, sessionId, userId }: VirtualizedMessagesProps) => {
   const virtuosoRef = useRef<VirtuosoHandle>(null);
+  const prevCount = useRef(0);
   const [atBottom, setAtBottom] = useState(false);
+  const isExistingSession = useRef(false);
+  const hasInitialized = useRef(false);
+  const [virtuosoKey, setVirtuosoKey] = useState(0);
 
-  // Only auto-follow new messages when the user is already at the bottom
-  const followOutput = useCallback((isAtBottom: boolean) => {
-    return isAtBottom ? "smooth" : false;
-  }, []);
+  // Detect session type synchronously during render (before Virtuoso mounts)
+  // so initialTopMostItemIndex and followOutput get the correct value on first mount.
+  if (!hasInitialized.current && messages.length > 0) {
+    hasInitialized.current = true;
+    isExistingSession.current = messages.length > 2;
+  }
+
+  useEffect(() => {
+    const prev = prevCount.current;
+    const cur = messages.length;
+
+    if (cur > prev && prev > 0 && (!isExistingSession.current || atBottom)) {
+      virtuosoRef.current?.scrollToIndex({
+        index: cur - 1,
+        align: "end",
+        behavior: "smooth",
+      });
+    }
+
+    prevCount.current = cur;
+  }, [messages.length, atBottom]);
+
+  useEffect(() => {
+    prevCount.current = 0;
+    hasInitialized.current = false;
+    isExistingSession.current = false;
+    setVirtuosoKey(k => k + 1);
+  }, [sessionId]);
 
   if (messages.length === 0) {
     return (
@@ -35,12 +63,17 @@ export const VirtualizedMessages = React.memo(({ messages, sendRaw, onUpdateMess
 
   return (
     <Virtuoso
+      key={virtuosoKey}
       ref={virtuosoRef}
       data={messages}
       totalCount={messages.length}
+      initialTopMostItemIndex={isExistingSession.current ? 0 : messages.length - 1}
+      followOutput={(isAtBottom: boolean) => {
+        if (isExistingSession.current) return false;
+        return isAtBottom ? "smooth" : false;
+      }}
       atBottomStateChange={setAtBottom}
       atBottomThreshold={80}
-      followOutput={followOutput}
       overscan={600}
       increaseViewportBy={{ top: 400, bottom: 400 }}
       className="h-full scrollbar-thin scrollbar-track-transparent scrollbar-thumb-gray-300 dark:scrollbar-thumb-gray-600"

@@ -582,6 +582,49 @@ class Agent:
                     else:
                         chat_history.append(HumanMessage(content=getattr(msg, 'content', "")))
 
+                # Drop orphaned ToolMessages at the start whose AIMessage was
+                # truncated away — Anthropic rejects tool_result without a
+                # preceding tool_use.
+                available_tool_call_ids: set = set()
+                for m in chat_history:
+                    if isinstance(m, AIMessage) and getattr(m, 'tool_calls', None):
+                        for tc in m.tool_calls:
+                            tc_id = tc.get('id') if isinstance(tc, dict) else getattr(tc, 'id', None)
+                            if tc_id:
+                                available_tool_call_ids.add(tc_id)
+
+                answered_tool_call_ids: set = set()
+                for m in chat_history:
+                    if isinstance(m, ToolMessage):
+                        tc_id = getattr(m, 'tool_call_id', None)
+                        if tc_id:
+                            answered_tool_call_ids.add(tc_id)
+
+                cleaned_history = []
+                for m in chat_history:
+                    if isinstance(m, ToolMessage):
+                        tc_id = getattr(m, 'tool_call_id', None)
+                        if tc_id and tc_id not in available_tool_call_ids:
+                            logging.info(f"Dropping orphaned ToolMessage (tool_call_id={tc_id})")
+                            continue
+                    if isinstance(m, AIMessage) and getattr(m, 'tool_calls', None):
+                        # Check that all tool_calls have matching ToolMessage responses
+                        tc_ids = []
+                        for tc in m.tool_calls:
+                            tc_id = tc.get('id') if isinstance(tc, dict) else getattr(tc, 'id', None)
+                            if tc_id:
+                                tc_ids.append(tc_id)
+                        if tc_ids and not any(tid in answered_tool_call_ids for tid in tc_ids):
+                            # No responses exist for any tool calls — strip tool_calls
+                            # and keep only the text content as a regular AI message.
+                            text = m.content or ""
+                            if text:
+                                cleaned_history.append(AIMessage(content=text))
+                            logging.info(f"Stripped orphaned tool_calls from AIMessage ({len(tc_ids)} calls)")
+                            continue
+                    cleaned_history.append(m)
+                chat_history = cleaned_history
+
 
                 # Preflight context compression for LLM prompt only (does not alter stored messages)
                 if prev_messages:
