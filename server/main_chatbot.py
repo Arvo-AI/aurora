@@ -586,8 +586,8 @@ async def process_workflow_async(wf, state, websocket, user_id, incident_id=None
         logger.error(f"Workflow timeout after {workflow_timeout}s for session {session_id}")
         if websocket_connected:
             timeout_msg = {
-                "type": "message",
-                "data": {"text": "\n\n️ Workflow timeout - the operation may have completed but the response took too long. Please check your resources manually."},
+                "type": "error",
+                "data": {"text": "Workflow timeout - the operation may have completed but the response took too long. Please check your resources manually."},
             }
             if hasattr(state, 'session_id') and state.session_id:
                 timeout_msg["session_id"] = state.session_id
@@ -598,8 +598,8 @@ async def process_workflow_async(wf, state, websocket, user_id, incident_id=None
         logger.error(f"Error in workflow processing for session {session_id}: {e}", exc_info=True)
         if websocket_connected:
             error_msg = {
-                "type": "message",
-                "data": {"text": f"\n\nWorkflow error: {str(e)}"},
+                "type": "error",
+                "data": {"text": f"Workflow error: {str(e)}"},
             }
             if hasattr(state, 'session_id') and state.session_id:
                 error_msg["session_id"] = state.session_id

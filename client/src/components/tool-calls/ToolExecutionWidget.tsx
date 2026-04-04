@@ -379,7 +379,7 @@ const ToolExecutionWidget = ({ tool, className, sendMessage, sendRaw, onToolUpda
     <Card className={cn("w-full font-mono text-sm overflow-hidden border border-border", className)} style={{ backgroundColor: theme === 'dark' ? '#000000' : 'white' }}>
       {/* Terminal Header */}
       <div className="border-b border-border overflow-hidden" style={{ backgroundColor: theme === 'dark' ? '#000000' : 'white' }}>
-        <div className="flex justify-between px-4 py-3">
+        <div className="flex justify-between px-4 py-3 cursor-pointer hover:bg-muted/40 transition-colors" onClick={toggleShowOutput}>
           <div className="flex items-center gap-2 text-gray-700 dark:text-gray-300 min-w-0 flex-1 overflow-hidden">
             <CommandLogo command={command} toolName={tool.tool_name} provider={provider} />
             <code className="text-sm whitespace-pre-wrap break-all text-gray-700 dark:text-gray-300 flex-1 overflow-wrap-anywhere">{command}</code>
@@ -397,7 +397,7 @@ const ToolExecutionWidget = ({ tool, className, sendMessage, sendRaw, onToolUpda
               }
             })()}
           </div>
-          <div className="flex items-center gap-2 flex-shrink-0 ml-2">
+          <div className="flex items-center gap-2 flex-shrink-0 ml-2" onClick={(e) => e.stopPropagation()}>
             {allowEditing && userId && sessionId && (
               <Button
                 size="sm"

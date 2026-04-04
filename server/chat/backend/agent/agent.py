@@ -858,6 +858,4 @@ class Agent:
             except:
                 pass  # Ignore cleanup errors in error handler
                 
-            # Fallback response
-            state.messages.append(AIMessage(content=f"I encountered an error while processing your cloud management request: {str(e)}"))
-            return state
+            raise
