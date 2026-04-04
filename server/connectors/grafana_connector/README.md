@@ -1,29 +1,34 @@
 # Grafana Connector
 
-API Token authentication for Grafana Cloud or self-hosted.
+Webhook-based connection for Grafana Cloud or self-hosted instances.
 
-## Setup
+## How It Works
 
-### 1. Create API Token
+Aurora receives alerts from Grafana via webhook. No API key is needed.
 
-**Grafana Cloud:**
-1. Go to [Grafana Cloud](https://grafana.com/) > your stack
-2. **Administration** > **Service accounts** > **Add service account**
-   - Name: `Aurora`, Role: `Viewer`
-3. **Add service account token** > copy the token
+1. Open the Grafana integration page in Aurora
+2. Copy the webhook URL shown on screen
+3. In Grafana: **Alerts & IRM** > **Notification Configuration** > **Contact points** > **New contact point**
+   - Type: `Webhook`, URL: the Aurora webhook URL
+4. Click **Test** to send a test notification
+5. Aurora auto-connects when it receives the first webhook
 
+## Webhook URL Format
 
-> API tokens are entered by users via the UI.
+`https://your-aurora-domain/grafana/alerts/webhook/{user_id}`
 
-## Webhook Configuration
+## Notification Policies
 
-Webhook URL format: `https://your-aurora-domain/grafana/alerts/webhook/{user_id}`
+After creating the contact point, route alerts to it under **Alerting** > **Notification policies**.
 
-In Grafana: **Alerting** > **Contact points** > **+ Add contact point**
-- Type: `Webhook`, URL: Aurora webhook URL
+## Disconnect / Reconnect
 
-Then in **Notification policies**, route alerts to the Aurora contact point.
+Disconnecting in Aurora deactivates the connection. Incoming webhooks are
+rejected until the user clicks **Reconnect**. The Grafana contact point
+does not need to be reconfigured.
 
 ## Troubleshooting
 
-**Grafana connector not working** — Check that the API token is correctly configured in the UI
+**Grafana not connecting** -- Ensure the webhook URL is correct and Aurora is reachable from Grafana. Send a test notification from the contact point.
+
+**Webhooks rejected after disconnect** -- Click Reconnect in Aurora to re-enable the connection.

@@ -17,6 +17,8 @@ auth_bp = Blueprint('auth', __name__, url_prefix='/api/auth')
 FRONTEND_URL = os.getenv("FRONTEND_URL")
 
 SLUG_REGEX = re.compile(r'^[a-z0-9][a-z0-9-]{0,48}[a-z0-9]$')
+ORG_NAME_REGEX = re.compile(r"^[\w\s\-\.,'&()]+$", re.UNICODE)
+ORG_NAME_ERROR = "Organization name can only contain letters, numbers, spaces, hyphens, periods, commas, apostrophes, ampersands, and parentheses"
 
 def _name_to_slug(name: str) -> str:
     slug = re.sub(r'[^a-z0-9]+', '-', name.lower()).strip('-')[:50]
@@ -67,7 +69,10 @@ def register():
 
         if len(org_name) > 100:
             return jsonify({"error": "Organization name must be 100 characters or less"}), 400
-        
+
+        if not ORG_NAME_REGEX.match(org_name):
+            return jsonify({"error": ORG_NAME_ERROR}), 400
+
         password_hash = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt())
         
         conn = connect_to_db_as_user()
@@ -81,6 +86,13 @@ def register():
                     return jsonify({"error": "User with this email already exists"}), 409
 
                 slug = _name_to_slug(org_name)
+                cursor.execute(
+                    "SELECT id FROM organizations WHERE LOWER(name) = LOWER(%s)",
+                    (org_name,)
+                )
+                if cursor.fetchone():
+                    return jsonify({"error": "An organization with this name already exists. Please contact your organization's admin to get an account.", "code": "duplicate_name"}), 409
+
                 cursor.execute(
                     "SELECT id FROM organizations WHERE slug = %s",
                     (slug,)
@@ -165,21 +177,37 @@ def setup_org(user_id):
         if len(org_name) > 100:
             return jsonify({"error": "Organization name must be 100 characters or less"}), 400
 
+        if not ORG_NAME_REGEX.match(org_name):
+            return jsonify({"error": ORG_NAME_ERROR}), 400
+
         conn = connect_to_db_as_user()
         try:
             with conn.cursor() as cursor:
                 cursor.execute(
-                    "SELECT id, org_id FROM users WHERE id = %s",
+                    "SELECT u.id, u.org_id, o.name "
+                    "FROM users u LEFT JOIN organizations o ON u.org_id = o.id "
+                    "WHERE u.id = %s",
                     (user_id,)
                 )
                 user_row = cursor.fetchone()
                 if not user_row:
                     return jsonify({"error": "User not found"}), 404
 
-                if user_row[1]:
-                    return jsonify({"error": "You already belong to an organization"}), 409
+                existing_org_id = user_row[1]
+                existing_org_name = user_row[2]
+                is_default_org = existing_org_name and existing_org_name.lower() == "default organization"
+
+                if existing_org_id and not is_default_org:
+                    return jsonify({"error": "You already belong to an organization", "code": "already_has_org"}), 409
 
                 slug = _name_to_slug(org_name)
+                cursor.execute(
+                    "SELECT id FROM organizations WHERE LOWER(name) = LOWER(%s)",
+                    (org_name,)
+                )
+                if cursor.fetchone():
+                    return jsonify({"error": "An organization with this name already exists. Please contact your organization's admin to get an account.", "code": "duplicate_name"}), 409
+
                 cursor.execute(
                     "SELECT id FROM organizations WHERE slug = %s",
                     (slug,)
@@ -203,6 +231,14 @@ def setup_org(user_id):
                     "UPDATE users SET org_id = %s, role = 'admin' WHERE id = %s",
                     (org_id, user_id)
                 )
+
+                from utils.db.org_backfill import backfill_user_org_data, migrate_user_to_org
+                if existing_org_id:
+                    migrate_user_to_org(cursor, user_id, org_id)
+                    from routes.org_routes import _cleanup_empty_org
+                    _cleanup_empty_org(cursor, existing_org_id)
+                else:
+                    backfill_user_org_data(cursor, user_id, org_id)
 
                 conn.commit()
 

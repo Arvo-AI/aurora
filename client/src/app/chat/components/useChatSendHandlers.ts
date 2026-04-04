@@ -72,7 +72,7 @@ export function useChatSendHandlers({
   const isSyncingRef = useRef(false);
 
   const getConnectedProviders = useCallback(() => {
-    const infra = ['gcp', 'aws', 'azure', 'ovh', 'scaleway', 'tailscale', 'kubectl'];
+    const infra = ['gcp', 'aws', 'azure', 'ovh', 'scaleway', 'tailscale', 'kubectl', 'onprem'];
     return infra.filter(id => isProviderConnected(id));
   }, [providerIds, isProviderConnected]);
 

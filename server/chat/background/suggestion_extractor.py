@@ -87,6 +87,8 @@ class SuggestionExtractor:
         citations: List[Citation],
         service: str,
         alert_title: str,
+        user_id: str = "",
+        session_id: str = "",
     ) -> List[Suggestion]:
         """
         Use LLM to generate structured suggestions with commands.
@@ -97,6 +99,8 @@ class SuggestionExtractor:
             citations: List of Citation objects from the RCA
             service: The affected service name
             alert_title: The alert title
+            user_id: User ID for usage tracking
+            session_id: Session ID for usage tracking
 
         Returns:
             List of Suggestion objects
@@ -113,13 +117,21 @@ class SuggestionExtractor:
         try:
             from chat.backend.agent.providers import create_chat_model
             from chat.backend.agent.llm import ModelConfig
+            from chat.backend.agent.utils.llm_usage_tracker import tracked_invoke
 
             llm = create_chat_model(
                 ModelConfig.SUGGESTION_MODEL,
                 temperature=0.3,
             )
 
-            response = llm.invoke([HumanMessage(content=prompt)])
+            response = tracked_invoke(
+                llm,
+                [HumanMessage(content=prompt)],
+                user_id=user_id,
+                session_id=session_id or None,
+                model_name=ModelConfig.SUGGESTION_MODEL,
+                request_type="suggestion_extraction",
+            )
             suggestions = self._parse_suggestions_response(response.content)
 
             logger.info(

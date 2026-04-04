@@ -133,6 +133,7 @@ def rag_index_zip(attachment_index: int = 0, max_files: int = 200, max_file_byte
                         "archive": filename,
                         "session_id": session_id or getattr(state, 'session_id', None),
                         "user_id": user_id or getattr(state, 'user_id', None),
+                        "org_id": kwargs.get("org_id") or getattr(state, 'org_id', None) or "",
                     }
                     for c in chunks:
                         vectors.append((c, meta))
@@ -162,6 +163,7 @@ def rag_index_zip(attachment_index: int = 0, max_files: int = 200, max_file_byte
                             Property(name="archive", data_type=DataType.TEXT),
                             Property(name="session_id", data_type=DataType.TEXT),
                             Property(name="user_id", data_type=DataType.TEXT),
+                            Property(name="org_id", data_type=DataType.TEXT),
                         ],
                     )
                 coll = client.collections.get("RAGDoc")

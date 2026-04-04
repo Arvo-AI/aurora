@@ -121,10 +121,18 @@ config:
   SEARXNG_URL: ""             # Auto-generated if empty: http://<release>-searxng:8080
   SEARXNG_BASE_URL: ""        #Example: https://aurora.example.com
   
+  # --- Secrets Backend ---
+  # "vault" (default) or "aws_secrets_manager"
+  SECRETS_BACKEND: "vault"
+
   # --- Flask/API Configuration ---
   FLASK_PORT: "5080"
   VAULT_KV_MOUNT: "aurora"
   VAULT_KV_BASE_PATH: "users"
+
+  # --- AWS Secrets Manager (only when SECRETS_BACKEND=aws_secrets_manager) ---
+  AWS_SM_REGION: ""
+  AWS_SM_PREFIX: "aurora/users"
   
   # --- LLM Configuration ---
   LLM_PROVIDER_MODE: "openrouter"  #Provider: openrouter, openai, anthropic, google
@@ -257,9 +265,6 @@ secrets:
     OPENAI_API_KEY: ""           # Get from: https://platform.openai.com/api-keys
     ANTHROPIC_API_KEY: ""        # Get from: https://console.anthropic.com/
     GOOGLE_AI_API_KEY: ""        # Get from: https://makersuite.google.com/app/apikey
-    
-    # --- Optional: Web Search ---
-    TAVILY_API_KEY: ""           # Get from: https://tavily.com/
 
 # ------------------------------------------------------------------------------
 # Resource requests and limits
@@ -374,7 +379,7 @@ persistence:
 #   ws.aurora.example.com  → WebSocket Server
 ingress:
   enabled: true
-  className: "nginx"   # Use your ingress controller class (nginx, traefik, alb, gce, etc.)
+  className: "nginx"   # Your ingress controller class (e.g., nginx, traefik, alb, haproxy)
 
   # Set to true for private/VPN deployments to provision a VPC-internal load balancer.
   # The ingress will have no public IP — only reachable from within your VPC or over VPN.
@@ -398,12 +403,17 @@ ingress:
   #   - proxy-http-version: 1.1 - Required for WebSocket upgrade
   #   - proxy-body-size: 50m - Required for file uploads
   #
-  # WARNING: If using a non-nginx controller (Traefik, HAProxy, AWS ALB, GCE), 
-  # you MUST configure equivalent settings via ingress.annotations or your
-  # controller's configuration. Without these, you'll experience:
-  #   - WebSocket disconnects after 60s (default timeout)
-  #   - Failed WebSocket connections (HTTP/1.0 doesn't support upgrades)
-  #   - 413 errors on large file uploads
+  # WARNING: Regardless of which controller you use, you MUST ensure these
+  # settings are configured (via annotations, IngressClass params, or controller config):
+  #   - Read and send timeout: 3600s - Required for long-running RCA analysis
+  #   - HTTP version: 1.1 - Required for WebSocket upgrade
+  #   - Max body size: 50m - Required for file uploads
+  # Without these, you'll experience WebSocket disconnects, failed upgrades,
+  # and 413 errors on file uploads.
+  #
+  # When className is "nginx", these are auto-applied as annotations.
+  # For other controllers, configure equivalent settings via ingress.annotations
+  # or your controller's configuration.
   #
   nginx:
     # Auto-apply nginx annotations when className is "nginx"

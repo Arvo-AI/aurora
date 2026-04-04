@@ -8,6 +8,8 @@ import logging
 import bcrypt
 import psycopg2.errors
 from flask import Blueprint, request, jsonify
+import uuid as _uuid
+from datetime import datetime, timedelta, timezone
 
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.enforcer import get_enforcer, reload_policies
@@ -51,22 +53,26 @@ def list_users(user_id):
 @admin_bp.route("/users", methods=["POST"])
 @require_permission("users", "manage")
 def create_user(user_id):
-    """Admin-created user with a specified role."""
+    """Add a user to this org.
+
+    If the email doesn't exist yet, creates a new account with the given
+    password.  If the email already exists, creates an invitation that the
+    user must accept themselves (the user's data is never moved without
+    their consent).
+    """
     data = request.get_json(silent=True) or {}
     email = (data.get("email") or "").strip().lower()
     password = data.get("password") or ""
     name = (data.get("name") or "").strip()
     role = (data.get("role") or "viewer").strip().lower()
+    check_only = data.get("check_only", False)
 
-    if not email or not password:
-        return jsonify({"error": "Email and password are required"}), 400
-    if len(password) < 8:
-        return jsonify({"error": "Password must be at least 8 characters"}), 400
+    if not email:
+        return jsonify({"error": "Email is required"}), 400
     if role not in VALID_ROLES:
         return jsonify({"error": f"Invalid role. Must be one of: {', '.join(sorted(VALID_ROLES))}"}), 400
 
     org_id = get_org_id_from_request()
-    password_hash = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
 
     conn = connect_to_db_as_user()
     try:
@@ -76,9 +82,75 @@ def create_user(user_id):
                 cur.execute("SET myapp.current_org_id = %s;", (org_id,))
             conn.commit()
 
-            cur.execute("SELECT id FROM users WHERE email = %s", (email,))
-            if cur.fetchone():
-                return jsonify({"error": "A user with this email already exists"}), 409
+            cur.execute("SELECT id, email, name, org_id FROM users WHERE email = %s", (email,))
+            existing = cur.fetchone()
+
+            # Step 1: Dry-run check used by the 2-step "Add Member" dialog.
+            # The frontend sends check_only=true first to decide whether to
+            # show the "invite existing user" flow or the "create new account" form.
+            if check_only:
+                return jsonify({"exists": existing is not None}), 200
+
+            # --- Branch A: user already has an account ---
+            # Don't migrate them automatically — create an invitation instead.
+            # They must accept it themselves from their org settings.
+            if existing:
+                target_id, target_email, target_name, target_org_id = existing
+
+                if target_org_id == org_id:
+                    return jsonify({"error": "This user is already a member of your organization"}), 409
+
+                # Expire any stale invitations, then check for an active one
+                cur.execute(
+                    """UPDATE org_invitations SET status = 'expired'
+                       WHERE org_id = %s AND email = %s AND status = 'pending'
+                         AND expires_at IS NOT NULL AND expires_at <= NOW()""",
+                    (org_id, target_email),
+                )
+                cur.execute(
+                    "SELECT id FROM org_invitations WHERE org_id = %s AND email = %s AND status = 'pending'",
+                    (org_id, target_email),
+                )
+                if cur.fetchone():
+                    return jsonify({"error": "An invitation for this user is already pending"}), 409
+
+                # Clear old cancelled/declined/expired rows to avoid unique constraint
+                cur.execute(
+                    """DELETE FROM org_invitations
+                       WHERE org_id = %s AND email = %s AND status IN ('cancelled', 'declined', 'expired')""",
+                    (org_id, target_email),
+                )
+
+                invitation_id = str(_uuid.uuid4())
+                expires_at = datetime.now(timezone.utc) + timedelta(days=7)
+
+                cur.execute(
+                    """INSERT INTO org_invitations (id, org_id, email, role, invited_by, status, expires_at)
+                       VALUES (%s, %s, %s, %s, %s, 'pending', %s)
+                       RETURNING id""",
+                    (invitation_id, org_id, target_email, role, user_id, expires_at),
+                )
+                conn.commit()
+
+                logger.info("Admin %s created invitation %s for existing user %s (%s) to join org %s",
+                            user_id, invitation_id, target_id, target_email, org_id)
+                return jsonify({
+                    "invited": True,
+                    "invitation_id": invitation_id,
+                    "email": target_email,
+                    "name": target_name,
+                    "message": f"An invitation has been created for {target_name or target_email}. "
+                               "They will need to accept it to join your organization.",
+                }), 201
+
+            # --- Branch B: no account with this email ---
+            # Create a brand-new user directly in this org.
+            if not password:
+                return jsonify({"error": "Password is required when creating a new account"}), 400
+            if len(password) < 8:
+                return jsonify({"error": "Password must be at least 8 characters"}), 400
+
+            password_hash = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
 
             try:
                 cur.execute(
@@ -93,6 +165,7 @@ def create_user(user_id):
                 return jsonify({"error": "A user with this email already exists"}), 409
         conn.commit()
 
+        # Assign the new user's role in Casbin (RBAC policy engine)
         new_user_id = row[0]
         try:
             from utils.auth.enforcer import assign_role_to_user

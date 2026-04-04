@@ -44,6 +44,41 @@ MODEL_MAPPINGS = {
         "google": "gemini-3.1-pro-preview",
         "provider": "google",
     },
+    "anthropic/claude-sonnet-4.6": {
+        "openrouter": "anthropic/claude-sonnet-4.6",
+        "anthropic": "claude-sonnet-4-6",
+        "provider": "anthropic",
+    },
+    "anthropic/claude-sonnet-4-6": {
+        "openrouter": "anthropic/claude-sonnet-4.6",
+        "anthropic": "claude-sonnet-4-6",
+        "provider": "anthropic",
+    },
+    "anthropic/claude-opus-4.6": {
+        "openrouter": "anthropic/claude-opus-4.6",
+        "anthropic": "claude-opus-4-6",
+        "provider": "anthropic",
+    },
+    "anthropic/claude-opus-4-6": {
+        "openrouter": "anthropic/claude-opus-4.6",
+        "anthropic": "claude-opus-4-6",
+        "provider": "anthropic",
+    },
+    "anthropic/claude-haiku-4.5": {
+        "openrouter": "anthropic/claude-haiku-4.5",
+        "anthropic": "claude-haiku-4-5",
+        "provider": "anthropic",
+    },
+    "anthropic/claude-haiku-4-5": {
+        "openrouter": "anthropic/claude-haiku-4.5",
+        "anthropic": "claude-haiku-4-5",
+        "provider": "anthropic",
+    },
+    "anthropic/claude-3.5-sonnet": {
+        "openrouter": "anthropic/claude-3.5-sonnet",
+        "anthropic": "claude-3-5-sonnet-20241022",
+        "provider": "anthropic",
+    },
     "anthropic/claude-3-haiku": {
         "openrouter": "anthropic/claude-3-haiku",
         "anthropic": "claude-3-haiku-20240307",

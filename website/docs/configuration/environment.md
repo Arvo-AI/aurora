@@ -247,7 +247,6 @@ OLLAMA_BASE_URL=http://host.docker.internal:11434
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `TAVILY_API_KEY` | - | Tavily search API key |
 | `SEARXNG_URL` | `http://searxng:8080` | SearXNG internal URL |
 | `SEARXNG_BASE_URL` | `http://localhost:8082` | SearXNG public URL |
 | `SEARXNG_SECRET` | - | SearXNG secret key |

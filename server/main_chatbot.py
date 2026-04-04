@@ -283,7 +283,8 @@ async def process_workflow_async(wf, state, websocket, user_id, incident_id=None
                             with db_pool.get_admin_connection() as conn:
                                 with conn.cursor() as cursor:
                                     cursor.execute(
-                                        "INSERT INTO incident_thoughts (incident_id, timestamp, content, thought_type) VALUES (%s, %s, %s, %s)",
+                                        "INSERT INTO incident_thoughts (incident_id, timestamp, content, thought_type) "
+                                        "VALUES (%s, %s, %s, %s)",
                                         (incident_id, datetime.now(), cleaned_text, "analysis")
                                     )
                                 conn.commit()
@@ -534,6 +535,32 @@ async def process_workflow_async(wf, state, websocket, user_id, incident_id=None
                                             save_incident_thought("", force=True)
                                             save_incident_thought(message.content, force=False)
                                 sent_message_count = current_message_count
+
+                    elif event_type == "usage_update":
+                        if websocket_connected:
+                            usage_msg = {
+                                "type": "usage_update",
+                                "data": event_data,
+                            }
+                            if hasattr(state, 'session_id') and state.session_id:
+                                usage_msg["session_id"] = state.session_id
+                            await send_via_appropriate_sender(usage_msg)
+
+                    elif event_type == "usage_final":
+                        if websocket_connected:
+                            usage_msg = {
+                                "type": "usage_final",
+                                "data": event_data,
+                            }
+                            if hasattr(state, 'session_id') and state.session_id:
+                                usage_msg["session_id"] = state.session_id
+                            await send_via_appropriate_sender(usage_msg)
+                        logger.info(
+                            f"[USAGE FINAL] {event_data.get('model')}: "
+                            f"{event_data.get('input_tokens', 0)}+{event_data.get('output_tokens', 0)} tokens, "
+                            f"${event_data.get('estimated_cost', 0):.6f}"
+                        )
+
                     else:
                         logger.warning(f"[STREAM DEBUG] Unhandled event type: {event_type}, data type: {type(event_data).__name__}")
                 

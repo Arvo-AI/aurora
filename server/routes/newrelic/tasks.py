@@ -19,25 +19,60 @@ def extract_newrelic_title(payload: Dict[str, Any], default: str = "New Relic Al
     """Extract alert title from a New Relic webhook payload.
 
     New Relic uses different payload shapes depending on webhook type:
-    - Workflow notifications use ``title``
-    - Issue payloads use ``issueTitle``
-    - Older/internal formats use ``issue_title``
-    - Classic alert conditions fall back to ``conditionName``
+    - Workflow notifications use ``title`` or ``issueTitle``
+    - Issue payloads use ``issueTitle`` or ``issue_title``
+    - Nested annotations use ``annotations.title``
+    - Classic/legacy payloads use ``conditionName`` or ``condition_name``
+    - Some payloads only have ``policy_name`` + ``condition_name``
     """
-    return (
+    # Direct top-level title fields
+    title = (
         payload.get("title")
         or payload.get("issueTitle")
         or payload.get("issue_title")
-        or payload.get("conditionName")
-        or default
     )
+    if title:
+        return str(title)
+
+    # annotations.title (New Relic workflow variable)
+    annotations = payload.get("annotations")
+    if isinstance(annotations, dict):
+        ann_title = annotations.get("title")
+        if ann_title:
+            if isinstance(ann_title, list):
+                ann_title = ann_title[0] if ann_title else None
+            if ann_title:
+                return str(ann_title)
+
+    # Condition name (camelCase or snake_case)
+    condition_name = payload.get("conditionName") or payload.get("condition_name")
+    if condition_name:
+        return str(condition_name)
+
+    # Build from policy + entity as last resort
+    targets = payload.get("targets") or []
+    if targets and isinstance(targets, list):
+        target_name = targets[0].get("name") if targets[0] else None
+        if target_name:
+            return str(target_name)
+
+    entity_names = payload.get("entitiesData", {}).get("names")
+    if isinstance(entity_names, list) and entity_names:
+        return str(entity_names[0])
+    entities = payload.get("entitiesData", {}).get("entities", [])
+    if entities and isinstance(entities, list):
+        name = entities[0].get("name")
+        if name:
+            return str(name)
+
+    return default
 
 
 def _summarize_event(payload: Dict[str, Any]) -> str:
     title = extract_newrelic_title(payload)
-    state = payload.get("state") or payload.get("currentState") or payload.get("status")
+    state = payload.get("state") or payload.get("currentState") or payload.get("current_state") or payload.get("status")
     priority = payload.get("priority") or payload.get("severity")
-    issue_id = payload.get("issueId") or payload.get("issue_id") or payload.get("incidentId")
+    issue_id = payload.get("issueId") or payload.get("issue_id") or payload.get("incidentId") or payload.get("incident_id")
     parts = [title]
     if state:
         parts.append(f"[{state}]")
@@ -61,7 +96,7 @@ def _extract_severity(payload: Dict[str, Any]) -> str:
     elif priority in ("MEDIUM", "LOW"):
         return "medium"
 
-    state = (payload.get("state") or payload.get("currentState") or "").upper()
+    state = (payload.get("state") or payload.get("currentState") or payload.get("current_state") or "").upper()
     if state == "CRITICAL":
         return "critical"
     if state in ("WARNING", "ACTIVATED"):
@@ -80,14 +115,24 @@ def _extract_service(payload: Dict[str, Any]) -> str:
         if name:
             return str(name)[:255]
 
-    # Fallback fields
+    # entitiesData.names (flat set from workflow variables)
+    entity_names = payload.get("entitiesData", {}).get("names")
+    if isinstance(entity_names, list) and entity_names:
+        return str(entity_names[0])[:255]
+
+    # Targets (common in legacy/classic payloads)
+    targets = payload.get("targets")
+    if targets and isinstance(targets, list) and targets[0].get("name"):
+        return str(targets[0]["name"])[:255]
+
+    entity_name = payload.get("entityName") or payload.get("entity_name")
+    if entity_name:
+        return str(entity_name)[:255]
+
+    # Condition name as last resort (may indicate the service)
     condition_name = payload.get("conditionName") or payload.get("condition_name")
     if condition_name:
         return str(condition_name)[:255]
-
-    entity_name = payload.get("entityName") or payload.get("targets", [{}])[0].get("name") if payload.get("targets") else None
-    if entity_name:
-        return str(entity_name)[:255]
 
     return "unknown"
 
@@ -102,8 +147,8 @@ def _build_alert_metadata(payload: Dict[str, Any]) -> Dict[str, Any]:
             meta["issueId"] = str(val)
             break
 
-    if payload.get("issueUrl") or payload.get("violationChartUrl"):
-        meta["alertUrl"] = payload.get("issueUrl") or payload.get("violationChartUrl")
+    if payload.get("issueUrl") or payload.get("violationChartUrl") or payload.get("incident_url"):
+        meta["alertUrl"] = payload.get("issueUrl") or payload.get("violationChartUrl") or payload.get("incident_url")
 
     if payload.get("conditionName") or payload.get("condition_name"):
         meta["conditionName"] = payload.get("conditionName") or payload.get("condition_name")

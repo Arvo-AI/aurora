@@ -1130,7 +1130,7 @@ def get_cloud_tools():
         """Execute cloud CLI commands. Provider and command are required. Use output_file to save raw output to a file (useful for kubeconfig).
         
 For AWS with multiple connected accounts: the FIRST investigative call omit account_id to query all accounts.
-Once you identify which account has the issue, pass account_id (e.g. '151025634386') to target that specific account."""
+Once you identify which account has the issue, pass account_id (e.g. 'account') to target that specific account."""
         user_id = kwargs.get('user_id')
         session_id = kwargs.get('session_id')
         provider_preference = kwargs.get('provider_preference')

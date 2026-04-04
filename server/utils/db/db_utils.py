@@ -449,7 +449,7 @@ def initialize_tables():
                         output_tokens INTEGER NOT NULL DEFAULT 0,
                         total_tokens INTEGER GENERATED ALWAYS AS (input_tokens + output_tokens) STORED,
                         estimated_cost DECIMAL(10,6) DEFAULT 0.00,
-                        surcharge_rate DECIMAL(5,4) DEFAULT 0.3000,
+                        surcharge_rate DECIMAL(5,4) DEFAULT 0.0000,
                         surcharge_amount DECIMAL(10,6) GENERATED ALWAYS AS (estimated_cost * surcharge_rate) STORED,
                         total_cost_with_surcharge DECIMAL(10,6) GENERATED ALWAYS AS (estimated_cost * (1 + surcharge_rate)) STORED,
                         response_time_ms INTEGER,
@@ -1308,7 +1308,7 @@ def initialize_tables():
             try:
                 cursor.execute("""
                     ALTER TABLE llm_usage_tracking 
-                    ADD COLUMN IF NOT EXISTS surcharge_rate DECIMAL(5,4) DEFAULT 0.3000;
+                    ADD COLUMN IF NOT EXISTS surcharge_rate DECIMAL(5,4) DEFAULT 0.0000;
                 """)
                 cursor.execute("""
                     ALTER TABLE llm_usage_tracking 
@@ -1326,6 +1326,59 @@ def initialize_tables():
                 logging.warning(
                     f"Error adding surcharge fields to llm_usage_tracking: {e}"
                 )
+                conn.rollback()
+
+            # Migration: Zero out surcharge_rate (markup removed, raw provider costs only)
+            try:
+                cursor.execute("""
+                    ALTER TABLE llm_usage_tracking
+                    ALTER COLUMN surcharge_rate SET DEFAULT 0.0000;
+                """)
+                cursor.execute("""
+                    SELECT EXISTS(
+                        SELECT 1 FROM llm_usage_tracking
+                        WHERE surcharge_rate != 0.0000
+                        LIMIT 1
+                    );
+                """)
+                has_nonzero = cursor.fetchone()[0]
+                if has_nonzero:
+                    cursor.execute("""
+                        UPDATE llm_usage_tracking
+                        SET surcharge_rate = 0.0000
+                        WHERE surcharge_rate != 0.0000;
+                    """)
+                    logging.info(f"Zeroed surcharge_rate on {cursor.rowcount} llm_usage_tracking rows.")
+                conn.commit()
+            except Exception as e:
+                logging.warning(f"Error zeroing surcharge_rate: {e}")
+                conn.rollback()
+
+            # Migration: Backfill org_id on llm_usage_tracking from users table
+            try:
+                cursor.execute("""
+                    SELECT EXISTS(
+                        SELECT 1 FROM llm_usage_tracking
+                        WHERE org_id IS NULL
+                        LIMIT 1
+                    );
+                """)
+                has_null_org = cursor.fetchone()[0]
+                if has_null_org:
+                    cursor.execute("""
+                        UPDATE llm_usage_tracking lut
+                        SET org_id = u.org_id
+                        FROM users u
+                        WHERE lut.user_id = u.id::text
+                          AND lut.org_id IS NULL
+                          AND u.org_id IS NOT NULL;
+                    """)
+                    updated = cursor.rowcount
+                    if updated > 0:
+                        logging.info(f"Backfilled org_id on {updated} llm_usage_tracking rows.")
+                conn.commit()
+            except Exception as e:
+                logging.warning(f"Error backfilling org_id on llm_usage_tracking: {e}")
                 conn.rollback()
 
             # Migration: Add secret_ref column to user_tokens for Vault integration
@@ -1798,6 +1851,65 @@ def initialize_tables():
                     logging.warning(f"Error adding org_id to {tbl}: {e}")
                     cursor.execute(f"ROLLBACK TO SAVEPOINT sp_org_id_{tbl}")
 
+            # Migration: Add org_id to incident child tables (linked via incident_id, not user_id)
+            # Uses the same discovery query defined in org_backfill.py — single source of truth.
+            from utils.db.org_backfill import _INCIDENT_CHILD_TABLES_SQL
+            try:
+                cursor.execute("SAVEPOINT sp_discover_child")
+                cursor.execute(_INCIDENT_CHILD_TABLES_SQL)
+                incident_child_tables = [row[0] for row in cursor.fetchall()]
+                cursor.execute("RELEASE SAVEPOINT sp_discover_child")
+            except Exception as e:
+                logging.warning(f"Error discovering incident child tables: {e}")
+                try:
+                    cursor.execute("ROLLBACK TO SAVEPOINT sp_discover_child")
+                except Exception:
+                    logging.debug("ROLLBACK TO SAVEPOINT also failed for sp_discover_child")
+                incident_child_tables = ["incident_thoughts", "incident_citations", "incident_suggestions"]
+            for tbl in incident_child_tables:
+                try:
+                    cursor.execute(f"SAVEPOINT sp_org_id_{tbl}")
+                    cursor.execute(
+                        f"ALTER TABLE {tbl} ADD COLUMN IF NOT EXISTS org_id VARCHAR(255);"
+                    )
+                    cursor.execute(f"RELEASE SAVEPOINT sp_org_id_{tbl}")
+                except Exception as e:
+                    logging.warning(f"Error adding org_id to {tbl}: {e}")
+                    cursor.execute(f"ROLLBACK TO SAVEPOINT sp_org_id_{tbl}")
+
+            # DB triggers: auto-inherit org_id from parent incident on INSERT.
+            # This means no INSERT statement in the codebase ever needs to set
+            # org_id on these tables — the trigger handles it unconditionally.
+            for tbl in incident_child_tables:
+                fn_name = f"fn_{tbl}_inherit_org_id"
+                trg_name = f"trg_{tbl}_inherit_org_id"
+                try:
+                    cursor.execute(f"SAVEPOINT sp_trg_{tbl}")
+                    cursor.execute(f"""
+                        CREATE OR REPLACE FUNCTION {fn_name}()
+                        RETURNS TRIGGER AS $trg$
+                        BEGIN
+                            NEW.org_id := (
+                                SELECT org_id FROM incidents WHERE id = NEW.incident_id
+                            );
+                            RETURN NEW;
+                        END;
+                        $trg$ LANGUAGE plpgsql;
+
+                        DROP TRIGGER IF EXISTS {trg_name} ON {tbl};
+                        CREATE TRIGGER {trg_name}
+                            BEFORE INSERT ON {tbl}
+                            FOR EACH ROW
+                            EXECUTE FUNCTION {fn_name}();
+                    """)
+                    cursor.execute(f"RELEASE SAVEPOINT sp_trg_{tbl}")
+                except Exception as e:
+                    logging.warning(f"Error creating org_id trigger for {tbl}: {e}")
+                    try:
+                        cursor.execute(f"ROLLBACK TO SAVEPOINT sp_trg_{tbl}")
+                    except Exception:
+                        logging.debug(f"ROLLBACK TO SAVEPOINT also failed for sp_trg_{tbl}")
+
             # Add FK from users.org_id -> organizations.id (if not exists)
             try:
                 cursor.execute("SAVEPOINT sp_org_fk")
@@ -1819,73 +1931,61 @@ def initialize_tables():
                 logging.warning(f"Error adding users.org_id FK: {e}")
                 cursor.execute("ROLLBACK TO SAVEPOINT sp_org_fk")
 
-            # Migration: Create default org for existing users that have no org
+            # Backfill org_id on all data tables — single source of truth
+            # in utils/db/org_backfill.py.  Covers user-scoped tables (dynamic
+            # discovery) AND incident child tables (via incident_id FK).
             try:
-                cursor.execute("SELECT COUNT(*) FROM users WHERE org_id IS NULL;")
-                orphan_count = cursor.fetchone()[0]
-                if orphan_count > 0:
-                    cursor.execute("""
-                        INSERT INTO organizations (id, name, slug, created_by)
-                        SELECT gen_random_uuid()::TEXT, 'Default Organization', 'default',
-                               (SELECT id FROM users ORDER BY created_at ASC LIMIT 1)
-                        WHERE NOT EXISTS (SELECT 1 FROM organizations WHERE slug = 'default');
-                    """)
-                    cursor.execute("""
-                        UPDATE users SET org_id = (
-                            SELECT id FROM organizations WHERE slug = 'default'
-                        ) WHERE org_id IS NULL;
-                    """)
-                    # Backfill org_id on all data tables from the user's org
-                    for tbl in org_id_tables:
-                        if tbl == "users":
-                            continue
-                        try:
-                            cursor.execute(f"""
-                                UPDATE {tbl} t SET org_id = u.org_id
-                                FROM users u WHERE t.user_id = u.id
-                                AND t.org_id IS NULL;
-                            """)
-                            rows_backfilled = cursor.rowcount
-                            cursor.execute(f"""
-                                SELECT COUNT(*) FROM {tbl} WHERE org_id IS NULL;
-                            """)
-                            remaining = cursor.fetchone()[0]
-                            if remaining > 0:
-                                logging.warning(
-                                    "Backfill: %d rows in %s still have NULL org_id "
-                                    "(user_id may not match users.id)", remaining, tbl
-                                )
-                            elif rows_backfilled > 0:
-                                logging.info("Backfilled %d rows in %s with org_id", rows_backfilled, tbl)
-                        except Exception as e:
-                            logging.warning(f"Error backfilling org_id for {tbl}: {e}")
-                    logging.info(
-                        f"Migrated {orphan_count} users into default organization."
-                    )
-                    conn.commit()
+                from utils.db.org_backfill import backfill_all_users_at_boot
+                backfill_all_users_at_boot(cursor)
+                conn.commit()
             except Exception as e:
-                logging.warning(f"Error creating default org migration: {e}")
+                logging.warning(f"Error in org_id boot backfill: {e}")
                 conn.rollback()
 
-            # Repair: ensure every user with an org has a Casbin role assignment.
-            # Covers partial failures from a previous startup crash mid-loop.
+            # Repair: ensure every user with an org has the correct Casbin role.
+            # Self-healing: org creators are promoted to admin even if role was viewer.
             try:
                 from utils.auth.enforcer import assign_role_to_user, get_user_roles_in_org
-                cursor.execute(
-                    "SELECT id, role, org_id FROM users WHERE org_id IS NOT NULL"
-                )
-                for uid, urole, uorg in cursor.fetchall():
-                    if not get_user_roles_in_org(uid, uorg):
+                cursor.execute("""
+                    SELECT u.id, u.role, u.org_id,
+                           CASE WHEN o.created_by = u.id THEN TRUE ELSE FALSE END AS is_creator
+                    FROM users u
+                    LEFT JOIN organizations o ON u.org_id = o.id
+                    WHERE u.org_id IS NOT NULL
+                """)
+                for uid, urole, uorg, is_creator in cursor.fetchall():
+                    expected_role = "admin" if is_creator else (urole or "viewer")
+                    current_casbin = get_user_roles_in_org(uid, uorg)
+                    if not current_casbin or current_casbin != [expected_role]:
                         try:
-                            assign_role_to_user(uid, urole or "viewer", uorg)
-                            logging.info("Repaired missing Casbin role for user %s", uid)
+                            if is_creator and urole != "admin":
+                                cursor.execute("SAVEPOINT sp_role_repair")
+                                cursor.execute(
+                                    "UPDATE users SET role = 'admin' WHERE id = %s",
+                                    (uid,),
+                                )
+                                cursor.execute("RELEASE SAVEPOINT sp_role_repair")
+                            assign_role_to_user(uid, expected_role, uorg)
+                            logging.info(
+                                "Repaired Casbin role for user %s: %s -> %s (creator=%s)",
+                                uid, current_casbin, expected_role, is_creator,
+                            )
                         except Exception as casbin_err:
+                            try:
+                                cursor.execute("ROLLBACK TO SAVEPOINT sp_role_repair")
+                            except Exception as rollback_err:
+                                logging.warning(
+                                    "Failed to roll back savepoint for user %s during role repair: %s",
+                                    uid, rollback_err,
+                                )
                             logging.warning(
                                 "Failed to repair Casbin role for user %s: %s",
                                 uid, casbin_err,
                             )
+                conn.commit()
             except Exception as e:
                 logging.warning(f"Error in Casbin role repair: {e}")
+                conn.rollback()
 
             # Create org_id indexes for performance
             for tbl in org_id_tables:
@@ -1996,6 +2096,25 @@ def initialize_tables():
                 logging.info("View 'k8s_clusters' created successfully.")
             except Exception as e:
                 logging.warning(f"Error creating k8s_clusters view: {e}")
+                conn.rollback()
+
+            # Migration: De-duplicate organization names from before uniqueness was enforced.
+            # Appends a short ID suffix to the newer duplicate(s) so names are unique going forward.
+            try:
+                cursor.execute("""
+                    UPDATE organizations SET name = name || ' (' || LEFT(id, 8) || ')'
+                    WHERE id IN (
+                        SELECT id FROM (
+                            SELECT id,
+                                   ROW_NUMBER() OVER (PARTITION BY LOWER(name) ORDER BY created_at ASC) AS rn
+                            FROM organizations
+                        ) dupes WHERE rn > 1
+                    );
+                """)
+                if cursor.rowcount > 0:
+                    logging.info(f"De-duplicated {cursor.rowcount} organization name(s).")
+            except Exception as e:
+                logging.warning(f"Error de-duplicating organization names: {e}")
                 conn.rollback()
 
             conn.commit()

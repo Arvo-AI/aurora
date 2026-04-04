@@ -1,4 +1,5 @@
 import logging
+import os
 import time
 from typing import Dict, Optional, Any
 from dataclasses import dataclass
@@ -7,6 +8,7 @@ import tiktoken
 import json
 from utils.db.connection_pool import db_pool
 from .openrouter_pricing_service import get_pricing_service
+from .provider_pricing_service import get_provider_pricing_service
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +26,7 @@ class LLMUsage:
     output_tokens: int
     estimated_cost: float
     response_time_ms: int
+    org_id: Optional[str] = None
     error_message: Optional[str] = None
     request_metadata: Optional[Dict[str, Any]] = None
 
@@ -33,35 +36,44 @@ class LLMUsageTracker:
 
     MODEL_PRICING = {
         # OpenAI (direct API pricing per 1K tokens)
-        "openai/gpt-5.4": {"input": 0.0025, "output": 0.015},
-        "openai/gpt-5.2": {"input": 0.00175, "output": 0.014},
-        "openai/o3": {"input": 0.002, "output": 0.008},
-        "openai/o3-mini": {"input": 0.0011, "output": 0.0044},
-        "openai/o4-mini": {"input": 0.0011, "output": 0.0044},
-        "openai/gpt-4.1": {"input": 0.002, "output": 0.008},
-        "openai/gpt-4.1-mini": {"input": 0.0004, "output": 0.0016},
-        "openai/gpt-4o": {"input": 0.0025, "output": 0.01},
-        "openai/gpt-4o-mini": {"input": 0.00015, "output": 0.0006},
-        # Anthropic
-        "anthropic/claude-opus-4-6": {"input": 0.005, "output": 0.025},
-        "anthropic/claude-sonnet-4-6": {"input": 0.003, "output": 0.015},
-        "anthropic/claude-opus-4-5": {"input": 0.005, "output": 0.025},
-        "anthropic/claude-sonnet-4-5": {"input": 0.003, "output": 0.015},
-        "anthropic/claude-haiku-4-5": {"input": 0.001, "output": 0.005},
-        "anthropic/claude-3.5-sonnet": {"input": 0.003, "output": 0.015},
-        "anthropic/claude-3-haiku": {"input": 0.00025, "output": 0.00125},
-        # Google AI / Vertex AI
-        "google/gemini-3.1-pro-preview": {"input": 0.00125, "output": 0.01},
-        "google/gemini-3-flash": {"input": 0.0005, "output": 0.003},
-        "google/gemini-3-pro-preview": {"input": 0.00125, "output": 0.01},
-        "google/gemini-2.5-pro": {"input": 0.00125, "output": 0.01},
-        "google/gemini-2.5-flash": {"input": 0.0003, "output": 0.0025},
-        "google/gemini-2.5-flash-lite": {"input": 0.0001, "output": 0.0004},
-        "vertex/gemini-3.1-pro-preview": {"input": 0.00125, "output": 0.01},
-        "vertex/gemini-3-flash": {"input": 0.0005, "output": 0.003},
-        "vertex/gemini-2.5-pro": {"input": 0.00125, "output": 0.01},
-        "vertex/gemini-2.5-flash": {"input": 0.0003, "output": 0.0025},
-        "vertex/gemini-2.5-flash-lite": {"input": 0.0001, "output": 0.0004},
+        # cached_input = automatic prompt caching discount
+        "openai/gpt-5.4": {"input": 0.0025, "output": 0.015, "cached_input": 0.000625},
+        "openai/gpt-5.2": {"input": 0.00175, "output": 0.014, "cached_input": 0.0004375},
+        "openai/o3": {"input": 0.002, "output": 0.008, "cached_input": 0.0005},
+        "openai/o3-mini": {"input": 0.0011, "output": 0.0044, "cached_input": 0.000275},
+        "openai/o4-mini": {"input": 0.0011, "output": 0.0044, "cached_input": 0.000275},
+        "openai/gpt-4.1": {"input": 0.002, "output": 0.008, "cached_input": 0.0005},
+        "openai/gpt-4.1-mini": {"input": 0.0004, "output": 0.0016, "cached_input": 0.0001},
+        "openai/gpt-4o": {"input": 0.0025, "output": 0.01, "cached_input": 0.00125},
+        "openai/gpt-4o-mini": {"input": 0.00015, "output": 0.0006, "cached_input": 0.000075},
+        # Anthropic (cached input = 90% discount)
+        "anthropic/claude-opus-4.6": {"input": 0.005, "output": 0.025, "cached_input": 0.0005},
+        "anthropic/claude-opus-4-6": {"input": 0.005, "output": 0.025, "cached_input": 0.0005},
+        "anthropic/claude-sonnet-4.6": {"input": 0.003, "output": 0.015, "cached_input": 0.0003},
+        "anthropic/claude-sonnet-4-6": {"input": 0.003, "output": 0.015, "cached_input": 0.0003},
+        "anthropic/claude-opus-4.5": {"input": 0.005, "output": 0.025, "cached_input": 0.0005},
+        "anthropic/claude-opus-4-5": {"input": 0.005, "output": 0.025, "cached_input": 0.0005},
+        "anthropic/claude-sonnet-4.5": {"input": 0.003, "output": 0.015, "cached_input": 0.0003},
+        "anthropic/claude-sonnet-4-5": {"input": 0.003, "output": 0.015, "cached_input": 0.0003},
+        "anthropic/claude-haiku-4.5": {"input": 0.001, "output": 0.005, "cached_input": 0.0001},
+        "anthropic/claude-haiku-4-5": {"input": 0.001, "output": 0.005, "cached_input": 0.0001},
+        "anthropic/claude-3.5-sonnet": {"input": 0.003, "output": 0.015, "cached_input": 0.0003},
+        "anthropic/claude-3-haiku": {"input": 0.00025, "output": 0.00125, "cached_input": 0.000025},
+        # Google AI / Vertex AI (cached input = 75% discount)
+        "google/gemini-3.1-pro-preview": {"input": 0.002, "output": 0.012, "cached_input": 0.0005},
+        "google/gemini-3.1-flash-lite-preview": {"input": 0.00025, "output": 0.0015, "cached_input": 0.0000625},
+        "google/gemini-3-pro-preview": {"input": 0.002, "output": 0.012, "cached_input": 0.0005},
+        "google/gemini-3-flash": {"input": 0.0005, "output": 0.003, "cached_input": 0.000125},
+        "google/gemini-2.5-pro": {"input": 0.00125, "output": 0.01, "cached_input": 0.0003125},
+        "google/gemini-2.5-flash": {"input": 0.0003, "output": 0.0025, "cached_input": 0.000075},
+        "google/gemini-2.5-flash-lite": {"input": 0.0001, "output": 0.0004, "cached_input": 0.000025},
+        "vertex/gemini-3.1-pro-preview": {"input": 0.002, "output": 0.012, "cached_input": 0.0005},
+        "vertex/gemini-3.1-flash-lite-preview": {"input": 0.00025, "output": 0.0015, "cached_input": 0.0000625},
+        "vertex/gemini-3-pro-preview": {"input": 0.002, "output": 0.012, "cached_input": 0.0005},
+        "vertex/gemini-3-flash": {"input": 0.0005, "output": 0.003, "cached_input": 0.000125},
+        "vertex/gemini-2.5-pro": {"input": 0.00125, "output": 0.01, "cached_input": 0.0003125},
+        "vertex/gemini-2.5-flash": {"input": 0.0003, "output": 0.0025, "cached_input": 0.000075},
+        "vertex/gemini-2.5-flash-lite": {"input": 0.0001, "output": 0.0004, "cached_input": 0.000025},
         # Ollama (local, free)
         "ollama/llama3.1": {"input": 0.0, "output": 0.0},
         "ollama/qwen2.5": {"input": 0.0, "output": 0.0},
@@ -73,24 +85,12 @@ class LLMUsageTracker:
     def count_tokens(cls, text: str, model_name: str = "gpt-4") -> int:
         """Count tokens in text using tiktoken"""
         try:
-            # Map model names to tiktoken encodings
-            encoding_map = {
-                "gpt-4": "cl100k_base",
-                "gpt-4o": "o200k_base",
-                "gpt-3.5-turbo": "cl100k_base",
-                "claude": "cl100k_base",  # Use GPT-4 encoding as approximation
-                "default": "cl100k_base",
-            }
-
-            # Determine encoding based on model
             if "gpt-4o" in model_name:
                 encoding_name = "o200k_base"
             elif "gpt-4" in model_name or "gpt-3.5" in model_name:
                 encoding_name = "cl100k_base"
-            elif "claude" in model_name.lower():
-                encoding_name = "cl100k_base"  # Approximation
             else:
-                encoding_name = "cl100k_base"  # Default
+                encoding_name = "cl100k_base"
 
             encoding = tiktoken.get_encoding(encoding_name)
             return len(encoding.encode(str(text)))
@@ -152,34 +152,55 @@ class LLMUsageTracker:
         output_tokens: int,
         model_name: str,
         use_dynamic_pricing: bool = True,
+        provider_mode: Optional[str] = None,
+        cached_input_tokens: int = 0,
     ) -> float:
-        """Calculate estimated cost based on token usage and model pricing"""
+        """Calculate estimated cost based on token usage and model pricing.
+
+        Pricing resolution order:
+        1. OpenRouter mode -> OpenRouter dynamic pricing API
+        2. Direct mode, Google/Vertex models -> Google Cloud Billing Catalog API
+        3. Static MODEL_PRICING table (all providers, always available)
+        4. Default fallback
+
+        When cached_input_tokens > 0, those tokens are charged at the
+        discounted cached_input rate instead of the full input rate.
+        """
+        if provider_mode is None:
+            provider_mode = os.getenv("LLM_PROVIDER_MODE")
+
         try:
             pricing = None
 
-            # Try to get dynamic pricing from OpenRouter first
             if use_dynamic_pricing:
-                try:
-                    pricing_service = get_pricing_service()
-                    pricing = pricing_service.get_model_pricing(model_name)
-                    logger.debug(f"Using dynamic pricing for {model_name}: {pricing}")
-                except Exception as e:
-                    logger.warning(
-                        f"Failed to get dynamic pricing for {model_name}: {e}"
-                    )
+                if provider_mode == "openrouter":
+                    try:
+                        pricing_service = get_pricing_service()
+                        pricing = pricing_service.get_model_pricing(model_name)
+                        logger.debug(f"Using OpenRouter dynamic pricing for {model_name}: {pricing}")
+                    except Exception as e:
+                        logger.warning(
+                            f"Failed to get OpenRouter dynamic pricing for {model_name}: {e}"
+                        )
+                else:
+                    # Direct mode: try provider-specific billing API
+                    try:
+                        provider_svc = get_provider_pricing_service()
+                        pricing = provider_svc.get_model_pricing(model_name)
+                        if pricing:
+                            logger.debug(f"Using provider billing API pricing for {model_name}: {pricing}")
+                    except Exception as e:
+                        logger.debug(
+                            f"Provider billing API unavailable for {model_name}: {e}"
+                        )
 
-            # Fallback to static pricing if dynamic pricing fails or is disabled
             if not pricing:
-                # Get pricing for the model (with fallback for version suffixes)
                 pricing = cls.MODEL_PRICING.get(model_name)
 
-                # If exact match not found, try without version suffix
                 if not pricing:
-                    # Remove version suffixes like .1, -v1, etc.
                     base_model = model_name.split(".")[0].split("-v")[0]
                     pricing = cls.MODEL_PRICING.get(base_model)
 
-                # Final fallback to default pricing
                 if not pricing:
                     pricing = cls.MODEL_PRICING["default"]
                     logger.info(
@@ -188,8 +209,12 @@ class LLMUsageTracker:
                 else:
                     logger.debug(f"Using static pricing for {model_name}: {pricing}")
 
-            # Calculate cost (pricing is per 1K tokens)
-            input_cost = (input_tokens / 1000) * pricing["input"]
+            non_cached_input = max(input_tokens - cached_input_tokens, 0)
+            input_cost = (non_cached_input / 1000) * pricing["input"]
+            if cached_input_tokens > 0 and "cached_input" in pricing:
+                input_cost += (cached_input_tokens / 1000) * pricing["cached_input"]
+            elif cached_input_tokens > 0:
+                input_cost += (cached_input_tokens / 1000) * pricing["input"]
             output_cost = (output_tokens / 1000) * pricing["output"]
 
             return round(input_cost + output_cost, 6)
@@ -202,7 +227,7 @@ class LLMUsageTracker:
     def extract_usage_from_response(cls, response: Any) -> Dict[str, int]:
         """Extract token usage from API response when available"""
         try:
-            usage = {"input_tokens": 0, "output_tokens": 0}
+            usage = {"input_tokens": 0, "output_tokens": 0, "cached_input_tokens": 0}
 
             # Try to extract from various response formats
             # 1 Newer OpenRouter / OpenAI style: usage_metadata dict
@@ -214,6 +239,9 @@ class LLMUsageTracker:
                 usage["output_tokens"] = usage_data.get(
                     "completion_tokens", usage_data.get("output_tokens", 0)
                 )
+                input_details = usage_data.get("input_token_details", {})
+                if isinstance(input_details, dict):
+                    usage["cached_input_tokens"] = input_details.get("cache_read", 0)
 
             # 2 Traditional attribute-based usage object
             elif hasattr(response, "usage"):
@@ -221,6 +249,10 @@ class LLMUsageTracker:
                     usage["input_tokens"] = response.usage.prompt_tokens
                 if hasattr(response.usage, "completion_tokens"):
                     usage["output_tokens"] = response.usage.completion_tokens
+                if hasattr(response.usage, "prompt_tokens_details"):
+                    details = response.usage.prompt_tokens_details
+                    if hasattr(details, "cached_tokens"):
+                        usage["cached_input_tokens"] = details.cached_tokens
 
             # 3 Dict-based responses (e.g. OpenAI v1 chat API style)
             elif isinstance(response, dict):
@@ -233,6 +265,9 @@ class LLMUsageTracker:
                     usage["output_tokens"] = usage_data.get(
                         "completion_tokens", usage_data.get("output_tokens", 0)
                     )
+                    input_details = usage_data.get("input_token_details", {})
+                    if isinstance(input_details, dict):
+                        usage["cached_input_tokens"] = input_details.get("cache_read", 0)
                 elif "usage" in response:
                     usage_data = response["usage"]
                     usage["input_tokens"] = usage_data.get("prompt_tokens", 0)
@@ -242,12 +277,20 @@ class LLMUsageTracker:
 
         except Exception as e:
             logger.warning(f"Error extracting usage from response: {e}")
-            return {"input_tokens": 0, "output_tokens": 0}
+            return {"input_tokens": 0, "output_tokens": 0, "cached_input_tokens": 0}
 
     @classmethod
     def store_usage(cls, usage: LLMUsage) -> bool:
         """Store LLM usage data in the database"""
         try:
+            # Resolve org_id from user if not provided
+            if not usage.org_id and usage.user_id:
+                try:
+                    from utils.auth.stateless_auth import get_org_id_for_user
+                    usage.org_id = get_org_id_for_user(usage.user_id)
+                except Exception as e:
+                    logger.debug("Could not resolve org_id for user %s: %s", usage.user_id, e)
+
             with db_pool.get_user_connection() as conn:
                 cursor = conn.cursor()
 
@@ -258,13 +301,14 @@ class LLMUsageTracker:
                 cursor.execute(
                     """
                     INSERT INTO llm_usage_tracking (
-                        user_id, session_id, model_name, api_provider, request_type,
+                        user_id, org_id, session_id, model_name, api_provider, request_type,
                         input_tokens, output_tokens, estimated_cost, response_time_ms,
                         error_message, request_metadata
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                     (
                         usage.user_id,
+                        usage.org_id,
                         usage.session_id,
                         usage.model_name,
                         usage.api_provider,
@@ -310,6 +354,8 @@ class LLMUsageTracker:
         start_time: Optional[float] = None,
         error_message: Optional[str] = None,
         api_provider: str = "openrouter",
+        provider_mode: Optional[str] = None,
+        org_id: Optional[str] = None,
     ) -> bool:
         """
         Track a complete LLM API call with token counting and cost calculation
@@ -331,11 +377,13 @@ class LLMUsageTracker:
 
             # Count output tokens
             output_tokens = 0
+            cached_input_tokens = 0
             if response:
                 # Try to extract from API response first
                 usage_data = cls.extract_usage_from_response(response)
                 if usage_data["input_tokens"] > 0:
                     input_tokens = usage_data["input_tokens"]
+                cached_input_tokens = usage_data.get("cached_input_tokens", 0)
                 if usage_data["output_tokens"] > 0:
                     output_tokens = usage_data["output_tokens"]
                 else:
@@ -352,7 +400,11 @@ class LLMUsageTracker:
                         output_tokens = cls.count_tokens(str(response), model_name)
 
             # Calculate cost
-            estimated_cost = cls.calculate_cost(input_tokens, output_tokens, model_name)
+            estimated_cost = cls.calculate_cost(
+                input_tokens, output_tokens, model_name,
+                cached_input_tokens=cached_input_tokens,
+                provider_mode=provider_mode,
+            )
 
             # Calculate response time
             response_time_ms = (
@@ -370,6 +422,7 @@ class LLMUsageTracker:
                 output_tokens=output_tokens,
                 estimated_cost=estimated_cost,
                 response_time_ms=response_time_ms,
+                org_id=org_id,
                 error_message=error_message,
                 request_metadata={
                     "has_images": cls._has_image_content(prompt),
@@ -491,6 +544,24 @@ class LLMUsageTracker:
     @classmethod
     def get_pricing_info(cls) -> Dict[str, Any]:
         """Get information about current pricing sources and cache status"""
+        provider_mode = os.getenv("LLM_PROVIDER_MODE")
+
+        if provider_mode != "openrouter":
+            provider_cache = {}
+            try:
+                provider_svc = get_provider_pricing_service()
+                provider_cache = provider_svc.get_cache_info()
+            except Exception as e:
+                logger.debug("Could not fetch provider pricing cache info: %s", e)
+
+            return {
+                "dynamic_pricing_enabled": True,
+                "pricing_source": "provider_billing_api",
+                "fallback_models_count": len(cls.MODEL_PRICING),
+                "provider_mode": provider_mode,
+                "provider_cache": provider_cache,
+            }
+
         try:
             pricing_service = get_pricing_service()
             cache_info = pricing_service.get_cache_info()
@@ -504,10 +575,12 @@ class LLMUsageTracker:
                 else "static_fallback",
             }
         except Exception as e:
-            logger.warning(f"Error getting pricing info: {e}")
+            # Log full exception details on the server, but do not expose them to clients
+            logger.warning("Error getting pricing info", exc_info=True)
             return {
                 "dynamic_pricing_enabled": False,
-                "error": str(e),
+                # Return a generic error message that does not reveal internal details
+                "error": "Failed to load dynamic pricing data",
                 "fallback_models_count": len(cls.MODEL_PRICING),
                 "pricing_source": "static_fallback",
             }
@@ -521,3 +594,50 @@ class LLMUsageTracker:
         except Exception as e:
             logger.error(f"Error refreshing pricing: {e}")
             return False
+
+
+def tracked_invoke(
+    llm,
+    messages,
+    *,
+    user_id: str,
+    session_id: Optional[str] = None,
+    model_name: str,
+    request_type: str,
+    api_provider: Optional[str] = None,
+    provider_mode: Optional[str] = None,
+    org_id: Optional[str] = None,
+):
+    """Invoke an LLM and automatically track the usage.
+
+    Drop-in replacement for ``llm.invoke(messages)`` that records tokens
+    and cost into ``llm_usage_tracking`` via ``LLMUsageTracker.track_llm_call``.
+    Returns the raw LLM response so callers work exactly as before.
+    """
+    start_time = time.time()
+    error_message = None
+    response = None
+    resolved_provider = api_provider or os.getenv("LLM_PROVIDER_MODE", "direct")
+    try:
+        response = llm.invoke(messages)
+        return response
+    except Exception as e:
+        error_message = str(e)
+        raise
+    finally:
+        try:
+            LLMUsageTracker.track_llm_call(
+                user_id=user_id,
+                session_id=session_id,
+                model_name=model_name,
+                request_type=request_type,
+                prompt=messages,
+                response=response,
+                start_time=start_time,
+                error_message=error_message,
+                api_provider=resolved_provider,
+                provider_mode=provider_mode,
+                org_id=org_id,
+            )
+        except Exception as track_err:
+            logger.warning(f"Failed to track LLM usage for {request_type}: {track_err}")

@@ -4,6 +4,7 @@ Tracks LLM API usage costs for users.
 """
 
 import logging
+import traceback
 
 from utils.db.connection_pool import db_pool
 
@@ -19,7 +20,7 @@ def get_api_cost(user_id: str) -> float:
         user_id: The user ID to get costs for
 
     Returns:
-        float: Total API cost with surcharge
+        float: Total estimated API cost (raw provider cost)
     """
     try:
         with db_pool.get_user_connection() as conn:
@@ -28,7 +29,7 @@ def get_api_cost(user_id: str) -> float:
 
             cursor.execute(
                 """
-                SELECT COALESCE(SUM(total_cost_with_surcharge), 0) as total_cost
+                SELECT COALESCE(SUM(estimated_cost), 0) as total_cost
                 FROM llm_usage_tracking
                 WHERE user_id = %s
             """, (user_id,))

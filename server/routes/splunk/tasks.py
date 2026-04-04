@@ -131,13 +131,14 @@ def process_splunk_alert(
                         cursor.execute(
                             """
                             INSERT INTO splunk_alerts
-                            (user_id, alert_id, alert_title, alert_state, search_name,
+                            (user_id, org_id, alert_id, alert_title, alert_state, search_name,
                              search_query, result_count, severity, payload, received_at)
-                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                             RETURNING id
                             """,
                             (
                                 user_id,
+                                org_id,
                                 alert_id,
                                 alert_title,
                                 alert_state,

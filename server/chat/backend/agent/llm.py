@@ -218,12 +218,18 @@ class LLMManager:
         llm_response = None  # Store the raw LLM response for usage extraction
 
         try:
-            # Pydantic provides type validation, but not output streaming support
             if output_struct:
-                llm_response = model.with_structured_output(
-                    schema=output_struct
+                raw_result = model.with_structured_output(
+                    schema=output_struct, include_raw=True
                 ).invoke(prompt)
-                result = dict(llm_response)
+                llm_response = raw_result.get("raw")
+                parsed = raw_result.get("parsed")
+                if parsed is None:
+                    parsing_error = raw_result.get("parsing_error")
+                    logger.warning(f"Structured output parsing failed: {parsing_error}")
+                    result = {}
+                else:
+                    result = dict(parsed)
                 logger.info(f"Structured output result: {str(result)[:200]}...")
             else:
                 llm_response = model.invoke(prompt)
@@ -241,45 +247,47 @@ class LLMManager:
             raise
 
         finally:
-            # Track token usage
+            # Track token usage from provider-reported usage_metadata
             if user_id:
                 try:
                     actual_request_type = f"structured_{request_type}" if output_struct else request_type
 
                     input_tokens = 0
                     output_tokens = 0
+                    cached_input_tokens = 0
 
-                    # Extract usage from LLM response metadata (works for OpenRouter, OpenAI, etc.)
-                    if llm_response and hasattr(llm_response, "response_metadata"):
-                        usage = llm_response.response_metadata.get("token_usage", {})
-                        if not usage:
-                            usage = llm_response.response_metadata.get("usage", {})
-                        if usage:
-                            input_tokens = usage.get("prompt_tokens", 0)
-                            output_tokens = usage.get("completion_tokens", 0)
-                            logger.info(
-                                f"Provider usage: {input_tokens} + {output_tokens} tokens"
-                            )
-
-                    # Fallback to manual counting if no usage data from provider
-                    if input_tokens == 0 and output_tokens == 0:
-                        logger.info("No usage data from provider, using manual counting")
-                        input_tokens = LLMUsageTracker.count_tokens_from_messages(
-                            prompt, model.model_name
+                    # Prefer usage_metadata (standardized across all LangChain providers)
+                    if llm_response and getattr(llm_response, "usage_metadata", None):
+                        um = llm_response.usage_metadata
+                        input_tokens = um.get("input_tokens", 0)
+                        output_tokens = um.get("output_tokens", 0)
+                        input_details = um.get("input_token_details", {})
+                        cached_input_tokens = input_details.get("cache_read", 0) if isinstance(input_details, dict) else 0
+                        logger.info(
+                            f"Provider usage_metadata: {input_tokens} + {output_tokens} tokens"
+                            + (f" ({cached_input_tokens} cached)" if cached_input_tokens else "")
                         )
-                        if llm_response:
-                            output_tokens = LLMUsageTracker.count_tokens(
-                                str(
-                                    llm_response.content
-                                    if hasattr(llm_response, "content")
-                                    else llm_response
-                                ),
-                                model.model_name,
-                            )
 
-                    # Calculate cost and response time
+                    # Fallback: response_metadata.token_usage (OpenAI-style)
+                    if input_tokens == 0 and output_tokens == 0:
+                        if llm_response and hasattr(llm_response, "response_metadata"):
+                            usage = llm_response.response_metadata.get("token_usage", {})
+                            if not usage:
+                                usage = llm_response.response_metadata.get("usage", {})
+                            if usage:
+                                input_tokens = usage.get("prompt_tokens", 0)
+                                output_tokens = usage.get("completion_tokens", 0)
+                                logger.info(
+                                    f"Provider response_metadata: {input_tokens} + {output_tokens} tokens"
+                                )
+
+                    if input_tokens == 0 and output_tokens == 0:
+                        logger.warning(f"No provider usage data for {model.model_name} - tokens will be 0")
+
                     estimated_cost = LLMUsageTracker.calculate_cost(
-                        input_tokens, output_tokens, model.model_name
+                        input_tokens, output_tokens, model.model_name,
+                        provider_mode=self.provider_mode,
+                        cached_input_tokens=cached_input_tokens,
                     )
                     response_time_ms = int((time.time() - start_time) * 1000)
 
@@ -304,7 +312,6 @@ class LLMManager:
                         request_metadata={
                             "has_images": has_images,
                             "provider_mode": self.provider_mode,
-                            "has_usage_data": input_tokens > 0 and output_tokens > 0,
                         },
                     )
 
@@ -325,7 +332,8 @@ class LLMManager:
             result if result is not None else {"messages": [], "error": error_message}
         )
 
-    def summarize(self, content: str, model: Optional[str] = None) -> str:
+    def summarize(self, content: str, model: Optional[str] = None,
+                  user_id: Optional[str] = None, session_id: Optional[str] = None) -> str:
         """
         Summarize long content to reduce token usage in LLM context.
 
@@ -374,7 +382,18 @@ Summary:"""
                 provider_mode=self.provider_mode,
             )
 
-            response = isolated_summarizer.invoke(summarization_prompt)
+            if user_id:
+                from chat.backend.agent.utils.llm_usage_tracker import tracked_invoke
+                response = tracked_invoke(
+                    isolated_summarizer,
+                    summarization_prompt,
+                    user_id=user_id,
+                    session_id=session_id,
+                    model_name=summarization_model,
+                    request_type="tool_output_summarization",
+                )
+            else:
+                response = isolated_summarizer.invoke(summarization_prompt)
 
             if hasattr(response, "content"):
                 response_content = response.content

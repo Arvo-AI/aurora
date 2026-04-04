@@ -17,6 +17,8 @@ interface UseMessageHandlerProps {
   hasCreatedSession?: boolean;
   justCreatedSessionRef?: React.MutableRefObject<string | null>;
   currentSessionId: string | null;
+  onUsageUpdate?: (data: Record<string, unknown>) => void;
+  onUsageFinal?: (data: Record<string, unknown>) => void;
 }
 
 export const useMessageHandler = ({
@@ -28,7 +30,9 @@ export const useMessageHandler = ({
   onUpdateAllMessages,
   hasCreatedSession = false,
   justCreatedSessionRef,
-  currentSessionId
+  currentSessionId,
+  onUsageUpdate,
+  onUsageFinal,
 }: UseMessageHandlerProps) => {
   // Store tool call message IDs for updates
   const toolCallMessageIds = useRef<Map<string, number>>(new Map());
@@ -332,6 +336,15 @@ export const useMessageHandler = ({
       }
     }
     
+    // Handle usage streaming updates
+    if ((message.type as string) === 'usage_update' && message.data && onUsageUpdate) {
+      onUsageUpdate(message.data);
+    }
+
+    if ((message.type as string) === 'usage_final' && message.data && onUsageFinal) {
+      onUsageFinal(message.data);
+    }
+
     // Handle special completion signal
     // Note: 'status' messages can be START or END, so we check for isComplete or END status
     const isCompletionSignal = 
@@ -351,7 +364,7 @@ export const useMessageHandler = ({
       // Always clear the sending state when we receive any completion signal
       onSendingStateChange(false);
     }
-  }, [streaming, onNewMessage, onUpdateMessage, onSendingStateChange, isSending, refreshChatHistory, justCreatedSessionRef, currentSessionId]);
+  }, [streaming, onNewMessage, onUpdateMessage, onSendingStateChange, isSending, refreshChatHistory, justCreatedSessionRef, currentSessionId, onUsageUpdate, onUsageFinal]);
 
   // Clear tool call message IDs when switching sessions to prevent cross-session contamination
   useEffect(() => {

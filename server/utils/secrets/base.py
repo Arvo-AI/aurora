@@ -16,8 +16,9 @@ class SecretsBackend(ABC):
     secrets. Each backend returns references in its own format which can be
     used to retrieve the secret later.
 
-    Reference format:
+    Reference formats:
     - Vault: vault:kv/data/{mount}/users/{secret_name}
+    - AWS Secrets Manager: awssm:{region}:{prefix}/{secret_name}
     """
 
     @abstractmethod

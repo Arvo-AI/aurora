@@ -162,13 +162,18 @@ def reload_policies() -> None:
 
 
 def assign_role_to_user(user_id: str, role: str, org_id: str) -> None:
-    """Assign a role to a user within an org (domain)."""
+    """Replace all roles for a user in an org with a single new role."""
     with _lock:
         enforcer = get_enforcer()
-        enforcer.add_grouping_policy(user_id, role, org_id)
+        current_roles = enforcer.get_roles_for_user_in_domain(user_id, org_id)
+        for old_role in current_roles:
+            if old_role != role:
+                enforcer.remove_grouping_policy(user_id, old_role, org_id)
+        if role not in current_roles:
+            enforcer.add_grouping_policy(user_id, role, org_id)
         enforcer.save_policy()
         enforcer.load_policy()
-    logger.info("Assigned role %s to user %s in org %s", role, user_id, org_id)
+    logger.info("Assigned role %s to user %s in org %s (replaced: %s)", role, user_id, org_id, current_roles)
 
 
 def remove_role_from_user(user_id: str, role: str, org_id: str) -> None:

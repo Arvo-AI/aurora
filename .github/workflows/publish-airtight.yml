@@ -1,0 +1,196 @@
+name: Publish Airtight Bundles
+
+# Same triggers as publish-images.yml:
+#   - Git tag v*.*.* → tags as :1.2.3, :1.2, and :latest
+#   - Push to main  → tags as :edge and :sha-<short>
+#   - Manual trigger (workflow_dispatch) for hotfixes
+on:
+  push:
+    branches: [main]
+    tags: ['v*.*.*']
+  workflow_dispatch:
+
+concurrency:
+  group: publish-airtight-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  id-token: write
+  attestations: write
+  artifact-metadata: write
+
+jobs:
+  airtight:
+    name: Airtight ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    if: github.repository == 'Arvo-AI/aurora'
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-24.04
+            bucket: gs://aurora-airtight-bucket
+            bucket_url: https://storage.googleapis.com/aurora-airtight-bucket
+          - arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+            bucket: gs://aurora-airtight-bucket-arm64
+            bucket_url: https://storage.googleapis.com/aurora-airtight-bucket-arm64
+
+    env:
+      AURORA_IMAGES: "aurora_server:latest aurora_celery-worker:latest aurora_celery-beat:latest aurora_chatbot:latest aurora_frontend:latest"
+      THIRD_PARTY_IMAGES: >-
+        postgres:15-alpine
+        redis:7-alpine
+        hashicorp/vault:1.15
+        busybox:1.37.0
+        searxng/searxng:2025.5.8-7ca24eee4
+        chrislusf/seaweedfs:4.07
+        amazon/aws-cli:2.34.6
+        memgraph/memgraph-mage:3.8.1
+        memgraph/lab:3.8.0
+        cr.weaviate.io/semitechnologies/weaviate:1.27.6
+        cr.weaviate.io/semitechnologies/transformers-inference:sentence-transformers-all-MiniLM-L6-v2
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Compute version tag
+        id: version
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            echo "tag=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build Aurora images
+        run: |
+          docker buildx build --platform ${{ matrix.platform }} \
+            -f server/Dockerfile --target prod \
+            -t aurora_server:latest --load \
+            --cache-from type=gha,scope=airtight-server-${{ matrix.arch }} \
+            --cache-to type=gha,mode=max,scope=airtight-server-${{ matrix.arch }} \
+            ./server
+
+          docker tag aurora_server:latest aurora_celery-worker:latest
+          docker tag aurora_server:latest aurora_celery-beat:latest
+          docker tag aurora_server:latest aurora_chatbot:latest
+
+          docker buildx build --platform ${{ matrix.platform }} \
+            -f client/Dockerfile --target prod \
+            -t aurora_frontend:latest --load \
+            --cache-from type=gha,scope=airtight-frontend-${{ matrix.arch }} \
+            --cache-to type=gha,mode=max,scope=airtight-frontend-${{ matrix.arch }} \
+            ./client
+
+      - name: Pull third-party images
+        run: |
+          for img in $THIRD_PARTY_IMAGES; do
+            echo "Pulling $img..."
+            docker pull --platform ${{ matrix.platform }} "$img"
+          done
+
+      - name: Create tarball and checksum
+        id: tarball
+        run: |
+          set -o pipefail
+          FILENAME="aurora-airtight-${{ steps.version.outputs.tag }}-${{ matrix.arch }}.tar.gz"
+          docker save $AURORA_IMAGES $THIRD_PARTY_IMAGES | gzip > "$FILENAME"
+          sha256sum "$FILENAME" > "${FILENAME}.sha256"
+          echo "filename=$FILENAME" >> "$GITHUB_OUTPUT"
+          echo "Bundle: $FILENAME ($(du -h "$FILENAME" | cut -f1))"
+
+      - name: Upload to GCS
+        run: |
+          FILENAME="${{ steps.tarball.outputs.filename }}"
+          gcloud storage cp "$FILENAME" "${{ matrix.bucket }}/"
+          gcloud storage cp "${FILENAME}.sha256" "${{ matrix.bucket }}/"
+          echo "Uploaded to ${{ matrix.bucket }}/$FILENAME"
+
+      - name: Regenerate bucket index
+        env:
+          BUCKET_NAME: ${{ matrix.bucket }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          BNAME="${BUCKET_NAME#gs://}"
+          export BNAME ARCH
+          python3 -c '
+          import json, urllib.request, os
+          b, arch = os.environ["BNAME"], os.environ["ARCH"]
+          url = f"https://storage.googleapis.com/{b}"
+          data = json.load(urllib.request.urlopen(f"https://storage.googleapis.com/storage/v1/b/{b}/o?fields=items(name,size,updated)"))
+          rows = []
+          for i in sorted(data.get("items",[]), key=lambda x: x["updated"], reverse=True):
+              n = i["name"]
+              if n == "index.html" or (not n.endswith(".tar.gz") and not n.endswith(".tar.gz.sha256")): continue
+              sz = int(i["size"])
+              s = f"{sz/1073741824:.1f} GB" if sz > 1e9 else f"{sz/1048576:.0f} MB" if sz > 1e6 else f"{sz} B"
+              d = i["updated"][:10]
+              rows.append(f"<tr><td><a href={url}/{n}>{n}</a></td><td class=m>{s}</td><td class=m>{d}</td></tr>")
+          css="body{font-family:-apple-system,system-ui,sans-serif;max-width:900px;margin:40px auto;padding:0 20px;color:#e6e6e6;background:#0d1117}h1{font-size:1.4em;border-bottom:1px solid #30363d;padding-bottom:12px}table{width:100%;border-collapse:collapse}th{text-align:left;padding:8px 12px;border-bottom:2px solid #30363d;font-size:.85em;color:#8b949e}td{padding:8px 12px;border-bottom:1px solid #21262d;font-size:.9em}a{color:#58a6ff;text-decoration:none}a:hover{text-decoration:underline}.m{color:#8b949e}"
+          link="https://arvo-ai.github.io/aurora/docs/deployment/vm-deployment#secure-deployment-air-tight"
+          r = "".join(rows)
+          print(f"<!DOCTYPE html><html lang=en><head><meta charset=utf-8><title>Aurora Airtight Bundles ({arch})</title><style>{css}</style></head><body><h1>Aurora Airtight Bundles ({arch})</h1><p>Each bundle contains all Docker images needed to run Aurora without internet access.</p><table><tr><th>File</th><th>Size</th><th>Date</th></tr>{r}</table><p style=margin-top:24px;font-size:.8em;color:#8b949e>See the <a href={link}>deployment guide</a> for full instructions.</p></body></html>")
+          ' > /tmp/index.html
+          gcloud storage cp /tmp/index.html "${BUCKET_NAME}/index.html" --content-type="text/html"
+
+      - name: Attest build provenance
+        id: attest
+        uses: actions/attest@v4
+        with:
+          subject-path: ${{ steps.tarball.outputs.filename }}
+
+      - name: Register linked artifact
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          FILENAME="${{ steps.tarball.outputs.filename }}"
+          DIGEST="sha256:$(cut -d' ' -f1 "${FILENAME}.sha256")"
+          VERSION="${{ steps.version.outputs.tag }}"
+          ARTIFACT_URL="${{ matrix.bucket_url }}/${FILENAME}"
+
+          if ! gh api -X POST /orgs/Arvo-AI/artifacts/metadata/storage-record \
+            -f name="aurora-airtight-${{ matrix.arch }}" \
+            -f digest="$DIGEST" \
+            -f version="$VERSION" \
+            -f artifact_url="$ARTIFACT_URL" \
+            -f registry_url="${{ matrix.bucket_url }}/" \
+            -f status="active" \
+            -f github_repository="aurora"; then
+            echo "::warning::Failed to register linked artifact -- GCS upload succeeded, but the artifact won't appear on the GitHub linked artifacts page"
+          fi
+
+  publish-summary:
+    name: Airtight Summary
+    runs-on: ubuntu-24.04
+    needs: [airtight]
+    if: always()
+    steps:
+      - name: Summary
+        run: |
+          echo "================================================"
+          echo "Airtight Bundle Publish Summary"
+          echo "================================================"
+          echo "Result: ${{ needs.airtight.result }}"
+          if [ "${{ needs.airtight.result }}" != "success" ]; then
+            echo "One or more airtight builds failed!"
+            exit 1
+          fi
+          echo "All airtight bundles published successfully"
