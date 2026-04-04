@@ -204,14 +204,12 @@ else
     echo "  Cannot reach upstream registries and no local tarball found."
     echo "============================================"
     echo ""
-    echo "  Option 1: Run from a machine with internet access."
+    echo "  Place the tarball (aurora-airtight-<version>-<arch>.tar.gz) in the"
+    echo "  current directory and re-run, or follow the manual steps in the docs:"
+    echo "  https://docs.arvo.ai/deployment/kubernetes-airgap"
     echo ""
-    echo "  Option 2: Download the bundle on a machine with internet, then transfer it here:"
-    echo "    # On a machine with internet:"
+    echo "  To download the bundle on a machine with internet:"
     echo "    curl -fsSL https://raw.githubusercontent.com/arvo-ai/aurora/main/scripts/download-bundle.sh | bash"
-    echo ""
-    echo "    # Transfer to this machine, then:"
-    echo "    $0 $REGISTRY --tarball aurora-airtight-<version>-<arch>.tar.gz"
     exit 1
   fi
 fi

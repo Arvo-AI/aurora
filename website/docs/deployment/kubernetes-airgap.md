@@ -17,86 +17,104 @@ Deploy Aurora on a Kubernetes cluster with a private container registry. The dep
 
 ```
                   ┌─────────────────────────────────┐
-                  │   Does your machine have          │
-                  │   internet + cluster access?      │
+                  │       ./scripts/deploy.sh        │
+                  │   "What environment are you      │
+                  │    deploying Aurora on?"          │
                   └───────────────┬─────────────────┘
                                   │
-                  ┌───────────────┴───────────────┐
-                  ▼                               ▼
-     ┌────────────────────────┐      ┌────────────────────────┐
-     │          YES           │      │           NO           │
-     │   Standard deployment  │      │    Air-gapped / split  │
-     └───────────┬────────────┘      └───────────┬────────────┘
-                 │                                │
-                 ▼                   ┌────────────┴─────────────────────────┐
-  ┌──────────────────────────┐      │                                      │
-  │  Just run:               │      │   STEP 1  Get the source             │
-  │                          │      │                                      │
-  │  ./scripts/deploy-k8s.sh │      │   On a connected machine:            │
-  │    <registry-url>        │      │   download-bundle.sh                 │
-  │                          │      │   → images tarball + source archive  │
-  │  Handles everything:     │      │                                      │
-  │  • Pulls images from     │      ├──────────────────────────────────────┤
-  │    upstream registries   │      │                                      │
-  │  • Pushes to your        │      │   STEP 2  Transfer to bastion        │
-  │    private registry      │      │                                      │
-  │  • Configures Helm       │      │   scp / usb / file transfer          │
-  │    values (interactive)  │      │   Both files → bastion / jump host   │
-  │  • Deploys with Helm     │      │                                      │
-  │  • Inits & unseals Vault │      ├──────────────────────────────────────┤
-  │                          │      │                                      │
-  │  One command, done.      │      │  ── On the bastion ──────────────    │
-  │                          │      │                                      │
-  │  Then (recommended):     │      │   STEP 3  Push images to registry    │
-  │  Set up KMS auto-unseal  │      │                                      │
-  │  for production.         │      │   ./scripts/push-to-registry.sh \    │
-  │  See Vault KMS docs.     │      │     <registry-url>                   │
-  └──────────────────────────┘      │   Auto-detects tarball, loads and    │
-                                    │   pushes all images to registry.     │
-                                    │                                      │
-                                    ├──────────────────────────────────────┤
-                                    │                                      │
-                                    │   STEP 4  Configure                  │
-                                    │                                      │
-                                    │   ./scripts/configure-helm.sh        │
-                                    │   Prompts for LLM key, domain, TLS.  │
-                                    │   Writes values.generated.yaml       │
-                                    │                                      │
-                                    ├──────────────────────────────────────┤
-                                    │                                      │
-                                    │   STEP 5  Deploy                     │
-                                    │                                      │
-                                    │   helm upgrade --install aurora-oss  │
-                                    │     ./deploy/helm/aurora             │
-                                    │     --namespace aurora               │
-                                    │     --create-namespace               │
-                                    │     -f values.generated.yaml         │
-                                    │                                      │
-                                    ├──────────────────────────────────────┤
-                                    │                                      │
-                                    │   STEP 6  Vault setup                │
-                                    │                                      │
-                                    │   Initialize & unseal Vault.         │
-                                    │   See: Vault Setup docs.             │
-                                    │                                      │
-                                    │   Then (recommended):                │
-                                    │   Configure KMS auto-unseal          │
-                                    │   for production.                    │
-                                    │   See: Vault KMS docs.              │
-                                    │                                      │
-                                    ├──────────────────────────────────────┤
-                                    │                                      │
-                                    │   STEP 7  Verify                     │
-                                    │                                      │
-                                    │   kubectl get pods -n aurora         │
-                                    │   (all pods should be Running)       │
-                                    │                                      │
-                                    └──────────────────────────────────────┘
+            ┌─────────────────────┼─────────────────────┐
+            ▼                     ▼                     ▼
+   ┌──────────────┐     ┌──────────────┐     ┌──────────────┐
+   │   Personal   │     │ VM or server │     │  Kubernetes  │
+   │   computer   │     │              │     │   cluster    │
+   └──────┬───────┘     └──────┬───────┘     └──────┬───────┘
+          │                    │                     │
+          ▼                    ▼                     │
+   make init && make dev   vm-deploy.sh             │
+   (or prod-prebuilt)      (installs Docker,        │
+                           configures, starts)      │
+                                                    ▼
+                              ┌─────────────────────────────────┐
+                              │   Does your machine have          │
+                              │   internet + cluster access?      │
+                              └───────────────┬─────────────────┘
+                                              │
+                            ┌───────────────┴───────────────┐
+                            ▼                               ▼
+               ┌────────────────────────┐      ┌────────────────────────┐
+               │          YES           │      │           NO           │
+               │   Standard deployment  │      │    Air-gapped / split  │
+               └───────────┬────────────┘      └───────────┬────────────┘
+                           │                                │
+                           ▼                   ┌────────────┴─────────────────────────┐
+        ┌──────────────────────────┐      │                                      │
+        │  Just run:               │      │   STEP 1  Get the source             │
+        │                          │      │                                      │
+        │  ./scripts/deploy-k8s.sh │      │   On a connected machine:            │
+        │    <registry-url>        │      │   download-bundle.sh                 │
+        │                          │      │   → images tarball + source archive  │
+        │  Handles everything:     │      │                                      │
+        │  • Pulls images from     │      ├──────────────────────────────────────┤
+        │    upstream registries   │      │                                      │
+        │  • Pushes to your        │      │   STEP 2  Transfer to bastion        │
+        │    private registry      │      │                                      │
+        │  • Configures Helm       │      │   scp / usb / file transfer          │
+        │    values (interactive)  │      │   Both files → bastion / jump host   │
+        │  • Deploys with Helm     │      │                                      │
+        │  • Inits & unseals Vault │      ├──────────────────────────────────────┤
+        │                          │      │                                      │
+        │  One command, done.      │      │  ── On the bastion ──────────────    │
+        │                          │      │                                      │
+        │  Then (recommended):     │      │   STEP 3  Push images to registry    │
+        │  Set up KMS auto-unseal  │      │                                      │
+        │  for production.         │      │   ./scripts/push-to-registry.sh \    │
+        │  See Vault KMS docs.     │      │     <registry-url>                   │
+        └──────────────────────────┘      │   Auto-detects tarball, loads and    │
+                                          │   pushes all images to registry.     │
+                                          │                                      │
+                                          ├──────────────────────────────────────┤
+                                          │                                      │
+                                          │   STEP 4  Configure                  │
+                                          │                                      │
+                                          │   ./scripts/configure-helm.sh        │
+                                          │   Prompts for LLM key, domain, TLS.  │
+                                          │   Writes values.generated.yaml       │
+                                          │                                      │
+                                          ├──────────────────────────────────────┤
+                                          │                                      │
+                                          │   STEP 5  Deploy                     │
+                                          │                                      │
+                                          │   helm upgrade --install aurora-oss  │
+                                          │     ./deploy/helm/aurora             │
+                                          │     --namespace aurora               │
+                                          │     --create-namespace               │
+                                          │     -f values.generated.yaml         │
+                                          │                                      │
+                                          ├──────────────────────────────────────┤
+                                          │                                      │
+                                          │   STEP 6  Vault setup                │
+                                          │                                      │
+                                          │   Initialize & unseal Vault.         │
+                                          │   See: Vault Setup docs.             │
+                                          │                                      │
+                                          │   Then (recommended):                │
+                                          │   Configure KMS auto-unseal          │
+                                          │   for production.                    │
+                                          │   See: Vault KMS docs.              │
+                                          │                                      │
+                                          ├──────────────────────────────────────┤
+                                          │                                      │
+                                          │   STEP 7  Verify                     │
+                                          │                                      │
+                                          │   kubectl get pods -n aurora         │
+                                          │   (all pods should be Running)       │
+                                          │                                      │
+                                          └──────────────────────────────────────┘
 ```
 
-> **Left path**: Your machine has internet and can reach the cluster. `deploy-k8s.sh` does everything — one command, fully automated.
+> **`deploy.sh`** is the universal entrypoint. It asks where you're deploying and routes to the right tool.
 >
-> **Right path**: Air-gapped or split environment. Download the bundle on a connected machine, transfer to bastion, then follow Steps 3–7 on the bastion.
+> For Kubernetes: **Left path** — your machine has internet and cluster access; `deploy-k8s.sh` does everything. **Right path** — air-gapped or split environment; download the bundle, transfer to bastion, follow Steps 3–7.
 
 ---
 
@@ -316,14 +334,17 @@ kubectl get events -n aurora --sort-by='.lastTimestamp'
 
 ## Guided Deployment (Single Command)
 
-For convenience, the `deploy-k8s.sh` script orchestrates all steps above. It detects your environment and adapts automatically:
+For convenience, the `deploy.sh` script is the single entrypoint for all Aurora deployments. It asks where you're deploying (local, VM, or Kubernetes) and hands off to the right workflow. For Kubernetes, it orchestrates all steps above — detecting your environment and adapting automatically:
 
 - **Internet available?** Pulls images directly from upstream (no tarball needed).
 - **Local tarball found?** Loads and pushes from it.
 - **No cluster access?** Completes what it can (push images, configure) and tells you how to finish on a machine with cluster access.
 
 ```bash
-# From the repo — auto-detects best method
+# Start the deployment wizard — it will ask where you're deploying
+./scripts/deploy.sh
+
+# Or go directly to the K8s script with a registry
 ./scripts/deploy-k8s.sh registry.internal:5000
 
 # With an explicit tarball
