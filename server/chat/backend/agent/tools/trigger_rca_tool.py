@@ -96,7 +96,7 @@ def trigger_rca(
     timestamp_str = now.isoformat()
     source_alert_id = zlib.crc32(
         f"{timestamp_str}:{user_id}:{issue_description}".encode()
-    ) & 0xFFFFFFFF
+    ) & 0x7FFFFFFF
 
     alert_metadata = {
         "user_description": issue_description,
