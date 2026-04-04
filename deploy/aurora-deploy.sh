@@ -96,17 +96,16 @@ if [[ -z "$PROFILE" ]]; then
   else
     info "Select deployment profile:"
     echo ""
-    echo "  [1] Standard Production"
-    echo "      Internet-connected VM. Build from source or pull prebuilt images."
+    SELECT_DESCRIPTIONS=(
+      "Internet-connected VM. Build from source or pull prebuilt images."
+      "Restricted-egress VM. Load images from a pre-transferred bundle."
+    )
+    select_option PROFILE_CHOICE "Standard Production" "Air-Tight Enterprise"
+    unset SELECT_DESCRIPTIONS
     echo ""
-    echo "  [2] Air-Tight Enterprise"
-    echo "      Restricted-egress VM. Load images from a pre-transferred bundle."
-    echo ""
-    prompt PROFILE_CHOICE "Enter 1 or 2" "1"
     case "$PROFILE_CHOICE" in
-      1|standard)  PROFILE="standard" ;;
-      2|airtight)  PROFILE="airtight" ;;
-      *) err "Invalid selection."; exit 1 ;;
+      0) PROFILE="standard" ;;
+      1) PROFILE="airtight" ;;
     esac
   fi
 fi
@@ -186,6 +185,8 @@ if [[ "$PROFILE" == "standard" ]]; then
   fi
 fi
 
+ensure_docker_access
+
 # ─── Firewall ────────────────────────────────────────────────────────────────
 
 if [[ "$PROFILE" == "airtight" ]]; then
@@ -231,7 +232,11 @@ if [[ -n "${LLM_API_KEY:-}" ]]; then
   LLM_PROVIDER_INPUT="${LLM_PROVIDER:-openrouter}"
   ok "Using LLM config from environment"
 else
-  prompt LLM_PROVIDER_INPUT "Provider (openrouter, openai, anthropic, google)" "openrouter"
+  _llm_providers=("openrouter" "openai" "anthropic" "google")
+  info "LLM provider:"
+  select_option _llm_idx "OpenRouter" "OpenAI" "Anthropic" "Google"
+  LLM_PROVIDER_INPUT="${_llm_providers[$_llm_idx]}"
+  echo ""
   prompt LLM_KEY "API key for $LLM_PROVIDER_INPUT"
 fi
 
@@ -245,12 +250,13 @@ fi
 if [[ "$PROFILE" == "standard" && "$NON_INTERACTIVE" != "true" ]]; then
   echo ""
   info "Image source:"
-  echo "  [1] Build from source (recommended, latest code)"
-  echo "  [2] Pull prebuilt images from GHCR (faster)"
-  prompt BUILD_CHOICE "Enter 1 or 2" "$([[ "$BUILD_MODE" == "prebuilt" ]] && echo 2 || echo 1)"
+  SELECT_DEFAULT="$([[ "$BUILD_MODE" == "prebuilt" ]] && echo 1 || echo 0)"
+  select_option BUILD_CHOICE "Build from source (recommended, latest code)" "Pull prebuilt images from GHCR (faster)"
+  unset SELECT_DEFAULT
+  echo ""
   case "$BUILD_CHOICE" in
-    2|prebuilt) BUILD_MODE="prebuilt" ;;
-    *)          BUILD_MODE="build" ;;
+    1) BUILD_MODE="prebuilt" ;;
+    *) BUILD_MODE="build" ;;
   esac
 fi
 
@@ -376,9 +382,16 @@ fi
 
 echo ""
 info "Starting Aurora..."
+
+# Memgraph and Weaviate need elevated vm.max_map_count
+_cur_map_count=$(sysctl -n vm.max_map_count 2>/dev/null || echo 0)
+if [[ "$_cur_map_count" -lt 262144 ]]; then
+  sudo sysctl -w vm.max_map_count=262144 >/dev/null 2>&1 || true
+fi
+
 docker compose -f "$COMPOSE_FILE" down --remove-orphans 2>/dev/null || true
 docker network rm aurora_default 2>/dev/null || true
-docker compose -f "$COMPOSE_FILE" up -d
+docker compose -f "$COMPOSE_FILE" up -d || warn "Some containers reported errors during startup (will check below)"
 
 info "Waiting for containers to start (~60-90s on first run)..."
 _wait_timeout=180

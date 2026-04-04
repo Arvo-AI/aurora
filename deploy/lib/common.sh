@@ -14,6 +14,66 @@ err()   { echo -e "\033[1;31m[x]\033[0m $1"; }
 
 # ─── Prompts ─────────────────────────────────────────────────────────────────
 
+# Arrow-key menu selector.
+# Usage: select_option RESULT_VAR "Option A" "Option B" ...
+# Optional: set SELECT_DEFAULT=N (0-based) before calling to pre-select an option.
+# Optional: set SELECT_DESCRIPTIONS=("desc A" "desc B") for subtitle text.
+select_option() {
+  local result_var="$1"; shift
+  local options=("$@")
+  local count=${#options[@]}
+  local selected="${SELECT_DEFAULT:-0}"
+  local descriptions=()
+  [[ -n "${SELECT_DESCRIPTIONS+x}" ]] && descriptions=("${SELECT_DESCRIPTIONS[@]}")
+
+  if [[ "${NON_INTERACTIVE:-false}" == "true" ]]; then
+    printf -v "$result_var" '%s' "$selected"
+    return
+  fi
+
+  local _total_lines=0
+
+  _draw_menu() {
+    local i
+    _total_lines=0
+    for ((i = 0; i < count; i++)); do
+      if [[ $i -eq $selected ]]; then
+        echo -e "  \033[1;36m> ${options[$i]}\033[0m" >&2
+      else
+        echo -e "    ${options[$i]}" >&2
+      fi
+      _total_lines=$((_total_lines + 1))
+      if [[ ${#descriptions[@]} -gt 0 && -n "${descriptions[$i]:-}" ]]; then
+        if [[ $i -eq $selected ]]; then
+          echo -e "      \033[0;36m${descriptions[$i]}\033[0m" >&2
+        else
+          echo -e "      \033[2m${descriptions[$i]}\033[0m" >&2
+        fi
+        _total_lines=$((_total_lines + 1))
+      fi
+    done
+  }
+
+  _draw_menu
+  while true; do
+    IFS= read -rsn1 key < /dev/tty
+    if [[ "$key" == $'\x1b' ]]; then
+      read -rsn2 -t 0.1 key2 < /dev/tty
+      key+="$key2"
+    fi
+    case "$key" in
+      $'\x1b[A'|k) selected=$(( (selected - 1 + count) % count )) ;;
+      $'\x1b[B'|j) selected=$(( (selected + 1) % count )) ;;
+      "")          break ;;
+      *)           continue ;;
+    esac
+    printf '\033[%dA' "$_total_lines" >&2
+    _draw_menu
+  done
+
+  printf -v "$result_var" '%s' "$selected"
+}
+
 prompt() {
   local var="$1" msg="$2" default="${3:-}"
   if [[ "${NON_INTERACTIVE:-false}" == "true" ]]; then
@@ -349,10 +409,25 @@ install_docker() {
 
   if ! groups | grep -q docker; then
     sudo usermod -aG docker "$USER" 2>/dev/null || true
-    warn "Added $USER to docker group. You may need to log out/in, or run: newgrp docker"
   fi
 
   ok "Docker installed"
+}
+
+# After Docker install, the current session may not have the docker group yet.
+# Define a wrapper so all docker calls in this script transparently use sudo.
+ensure_docker_access() {
+  if docker ps &>/dev/null 2>&1; then
+    return 0
+  fi
+  if sudo docker ps &>/dev/null 2>&1; then
+    info "Using sudo for Docker (group membership takes effect on next login)"
+    docker() { command sudo docker "$@"; }
+    return 0
+  fi
+  err "Cannot connect to Docker daemon (even with sudo)."
+  err "Check that Docker installed correctly: sudo systemctl status docker"
+  exit 1
 }
 
 # ─── Firewall ────────────────────────────────────────────────────────────────
@@ -399,20 +474,27 @@ generate_env() {
     exit 1
   fi
 
+  # Preserve secrets from existing .env so re-runs don't break stateful services
+  local _prev_postgres="" _prev_flask="" _prev_auth="" _prev_searxng="" _prev_memgraph=""
   if [[ -f .env ]]; then
+    _prev_postgres=$(sed -n 's/^POSTGRES_PASSWORD=//p' .env 2>/dev/null || true)
+    _prev_flask=$(sed -n 's/^FLASK_SECRET_KEY=//p' .env 2>/dev/null || true)
+    _prev_auth=$(sed -n 's/^AUTH_SECRET=//p' .env 2>/dev/null || true)
+    _prev_searxng=$(sed -n 's/^SEARXNG_SECRET=//p' .env 2>/dev/null || true)
+    _prev_memgraph=$(sed -n 's/^MEMGRAPH_PASSWORD=//p' .env 2>/dev/null || true)
     cp .env ".env.backup.$(date +%Y%m%d%H%M%S)"
-    warn "Existing .env backed up"
+    warn "Existing .env backed up (secrets preserved)"
   fi
 
   cp .env.example .env
   ok "Created .env from template"
 
   env_set AURORA_ENV production
-  env_set POSTGRES_PASSWORD "$(generate_secret)"
-  env_set FLASK_SECRET_KEY "$(generate_secret)"
-  env_set AUTH_SECRET "$(generate_secret)"
-  env_set SEARXNG_SECRET "$(generate_secret)"
-  env_set MEMGRAPH_PASSWORD "$(generate_secret | head -c 32)"
+  env_set POSTGRES_PASSWORD "${_prev_postgres:-$(generate_secret)}"
+  env_set FLASK_SECRET_KEY "${_prev_flask:-$(generate_secret)}"
+  env_set AUTH_SECRET "${_prev_auth:-$(generate_secret)}"
+  env_set SEARXNG_SECRET "${_prev_searxng:-$(generate_secret)}"
+  env_set MEMGRAPH_PASSWORD "${_prev_memgraph:-$(generate_secret | head -c 32)}"
   env_set FRONTEND_URL "$FRONTEND_URL"
   env_set NEXT_PUBLIC_BACKEND_URL "$BACKEND_URL_PUBLIC"
   env_set NEXT_PUBLIC_WEBSOCKET_URL "$WEBSOCKET_URL"
