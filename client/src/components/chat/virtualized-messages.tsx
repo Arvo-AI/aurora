@@ -51,15 +51,17 @@ export const VirtualizedMessages = React.memo(({ messages, sendRaw, onUpdateMess
         Footer: () => <div className="h-8" />,
       }}
       itemContent={(index: number, message: Message) => (
-        <MessageItem
-          message={message}
-          sendRaw={sendRaw}
-          onUpdateMessage={onUpdateMessage}
-          sessionId={sessionId}
-          userId={userId}
-          allMessages={messages}
-          messageIndex={index}
-        />
+        <div className="max-w-4xl mx-auto px-4">
+          <MessageItem
+            message={message}
+            sendRaw={sendRaw}
+            onUpdateMessage={onUpdateMessage}
+            sessionId={sessionId}
+            userId={userId}
+            allMessages={messages}
+            messageIndex={index}
+          />
+        </div>
       )}
     />
   );

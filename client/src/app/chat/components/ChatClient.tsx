@@ -400,11 +400,10 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
   if (hasMessages) {
     // Standard chat interface with messages
     return (
-      <div className="flex flex-col h-full w-full">
+      <div className="flex flex-col h-full w-full overflow-hidden">
 
-        {/* Messages */}
-        <div className="flex-1 min-h-0 flex justify-center pt-6">
-          <div className="w-full max-w-4xl h-full">
+        {/* Messages — full-width so scrollbar sits at page edge */}
+        <div className="flex-1 min-h-0">
             <VirtualizedMessages
               key={currentSessionId || "new"}
               messages={memoizedMessages} 
@@ -413,15 +412,12 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
               sessionId={currentSessionId || undefined}
               userId={userId || undefined}
             />
-          </div>
         </div>
 
         {/* Enhanced Input */}
         <div className="p-4 relative z-10 bg-background flex-shrink-0">
           <div className="max-w-4xl mx-auto space-y-2">
             <SessionUsagePanel sessionUsage={sessionUsage} isSending={isSending} />
-          </div>
-          <div className="flex justify-center">
             {isReadOnly ? (
               <p className="text-sm text-muted-foreground py-2">Read-only access. Editors and admins can interact with infrastructure.</p>
             ) : (
