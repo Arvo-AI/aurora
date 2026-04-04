@@ -370,6 +370,15 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
     
     let filtered = content.replace(toolCallDelimiterRegex, '');
     filtered = filtered.replace(standaloneDelimiterRegex, '');
+
+    // Strip LLM internal metadata blocks entirely (tags + content).
+    filtered = filtered.replace(/<(result_quality_reflection|result_quality_score|search_quality_reflection|search_quality_score|antthinking)\b[^>]*>[\s\S]*?<\/\1>/gi, '');
+
+    // Remove non-HTML tags but keep their inner text to avoid React DOM warnings.
+    const htmlTagPattern = /^(?:h[1-6]|p|div|span|a|ul|ol|li|table|thead|tbody|tfoot|tr|th|td|pre|code|blockquote|em|strong|b|i|u|s|del|ins|sub|sup|br|hr|img|details|summary|figure|figcaption|mark|small|dl|dt|dd|abbr|cite|kbd|samp|var|q|ruby|rt|rp|wbr|caption|col|colgroup|article|aside|footer|header|main|nav|section|audio|video|source|picture|canvas|iframe|form|input|textarea|select|option|button|label)$/i;
+    filtered = filtered.replace(/<\/?([a-zA-Z][a-zA-Z0-9_-]*)\b[^>]*>/g, (match, tag) => {
+      return htmlTagPattern.test(tag) ? match : '';
+    });
     
     // Clean up any extra whitespace left behind
     filtered = filtered.replace(/\n\s*\n\s*\n/g, '\n\n').trim();
@@ -381,11 +390,36 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
   const normalizedContent = useMemo(() => normalizeCodeBlocks(filteredContent), [filteredContent]);
 
   const baseClasses = cn(
-    "prose prose-base max-w-none break-words font-sans",
+    "prose prose-base max-w-none break-words font-sans leading-relaxed",
     severity === "error"
       ? "text-red-600 dark:text-red-400 [&_p]:text-red-600 dark:[&_p]:text-red-400 [&_ul]:text-red-600 dark:[&_ul]:text-red-400 [&_ol]:text-red-600 dark:[&_ol]:text-red-400 [&_li]:text-red-600 dark:[&_li]:text-red-400 [&_h1]:text-red-600 dark:[&_h1]:text-red-400 [&_h2]:text-red-600 dark:[&_h2]:text-red-400 [&_h3]:text-red-600 dark:[&_h3]:text-red-400 [&_h4]:text-red-600 dark:[&_h4]:text-red-400 [&_h5]:text-red-600 dark:[&_h5]:text-red-400 [&_h6]:text-red-600 dark:[&_h6]:text-red-400 [&_strong]:text-red-600 dark:[&_strong]:text-red-400 [&_code]:text-red-600 dark:[&_code]:text-red-400 [&_blockquote]:text-red-600 dark:[&_blockquote]:text-red-400 [&_td]:text-red-600 dark:[&_td]:text-red-400 [&_th]:text-red-600 dark:[&_th]:text-red-400 [&_a]:text-red-600 dark:[&_a]:text-red-400 [&_a]:underline"
-      : "text-foreground [&_p]:text-foreground [&_ul]:text-foreground [&_ol]:text-foreground [&_li]:text-foreground [&_h1]:text-foreground [&_h2]:text-foreground [&_h3]:text-foreground [&_h4]:text-foreground [&_h5]:text-foreground [&_h6]:text-foreground [&_strong]:text-foreground [&_code:not([class*='language-'])]:text-foreground [&_blockquote]:text-foreground [&_td]:text-foreground [&_th]:text-foreground [&_a]:text-green-400 dark:[&_a]:text-green-400 [&_a]:underline [&_a:hover]:text-green-300 dark:[&_a:hover]:text-green-300",
-    "[&_ol]:list-decimal [&_ol]:ml-6 [&_ol]:pl-0 [&_ol>li]:pl-0 [&_ol>li]:ml-0 [&_ul]:list-disc [&_ul]:ml-6 [&_ul]:pl-0 [&_ul>li]:pl-0 [&_ul>li]:ml-0 [&_pre:not([class*='language-'])]:bg-gray-100 [&_pre:not([class*='language-'])]:text-gray-800 dark:[&_pre:not([class*='language-'])]:bg-zinc-900 dark:[&_pre:not([class*='language-'])]:text-gray-100",
+      : [
+        // Body text
+        "text-zinc-300 [&_p]:text-zinc-300 [&_li]:text-zinc-300",
+        // Headings — brighter white, heavier weight
+        "[&_h1]:text-zinc-100 [&_h1]:font-semibold [&_h1]:text-xl [&_h1]:mt-6 [&_h1]:mb-3",
+        "[&_h2]:text-zinc-100 [&_h2]:font-semibold [&_h2]:text-lg [&_h2]:mt-5 [&_h2]:mb-2",
+        "[&_h3]:text-zinc-100 [&_h3]:font-semibold [&_h3]:text-base [&_h3]:mt-4 [&_h3]:mb-2",
+        "[&_h4]:text-zinc-200 [&_h4]:font-medium [&_h4]:mt-3 [&_h4]:mb-1",
+        "[&_h5]:text-zinc-200 [&_h5]:font-medium [&_h6]:text-zinc-200 [&_h6]:font-medium",
+        // Bold — pop brighter
+        "[&_strong]:text-zinc-100 [&_strong]:font-semibold",
+        // Inline code
+        "[&_code:not([class*='language-'])]:text-zinc-200 [&_code:not([class*='language-'])]:bg-zinc-800/60 [&_code:not([class*='language-'])]:px-1.5 [&_code:not([class*='language-'])]:py-0.5 [&_code:not([class*='language-'])]:rounded [&_code:not([class*='language-'])]:text-[0.9em]",
+        // Lists — slightly muted markers
+        "[&_ul]:text-zinc-300 [&_ol]:text-zinc-300 [&_li::marker]:text-zinc-500",
+        // Spacing between list items
+        "[&_li]:mb-1.5 [&_ol>li]:mb-2",
+        // Blockquotes
+        "[&_blockquote]:text-zinc-400 [&_blockquote]:border-l-2 [&_blockquote]:border-zinc-600 [&_blockquote]:pl-4 [&_blockquote]:italic",
+        // Tables
+        "[&_td]:text-zinc-300 [&_th]:text-zinc-100 [&_th]:font-medium [&_th]:border-b [&_th]:border-zinc-700 [&_td]:border-b [&_td]:border-zinc-800/50",
+        // Links
+        "[&_a]:text-blue-400 [&_a]:underline [&_a:hover]:text-blue-300",
+        // Horizontal rules
+        "[&_hr]:border-zinc-700",
+      ].join(" "),
+    "[&_ol]:list-decimal [&_ol]:ml-6 [&_ol]:pl-0 [&_ol>li]:pl-1 [&_ol>li]:ml-0 [&_ul]:list-disc [&_ul]:ml-6 [&_ul]:pl-0 [&_ul>li]:pl-0 [&_ul>li]:ml-0 [&_pre:not([class*='language-'])]:bg-gray-100 [&_pre:not([class*='language-'])]:text-gray-800 dark:[&_pre:not([class*='language-'])]:bg-zinc-900 dark:[&_pre:not([class*='language-'])]:text-gray-100",
     className
   );
 
