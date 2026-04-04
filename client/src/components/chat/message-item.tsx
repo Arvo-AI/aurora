@@ -158,7 +158,7 @@ export const MessageItem = React.memo(({ message, sendRaw, onUpdateMessage, sess
 
       {/* Copy button - only on the last bot message in a group */}
       {message.sender === "bot" && !message.isStreaming && isLastBotMessage && (
-        <div className="flex justify-end mt-2">
+        <div className="flex justify-end mt-2 mb-1">
           <Button
             variant="ghost"
             size="sm"
