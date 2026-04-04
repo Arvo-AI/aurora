@@ -263,6 +263,24 @@ const logos = {
       <path strokeLinecap="round" strokeLinejoin="round" d="M3 6v6h6M21 18v-6h-6" />
     </svg>
   ),
+  triggerRca: (
+    <svg
+      className="w-4 h-4 min-w-4 min-h-4 text-orange-500"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      viewBox="0 0 24 24"
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <circle cx="12" cy="12" r="10" />
+      <circle cx="12" cy="12" r="6" />
+      <circle cx="12" cy="12" r="2" />
+      <line x1="12" y1="2" x2="12" y2="6" />
+      <line x1="12" y1="18" x2="12" y2="22" />
+      <line x1="2" y1="12" x2="6" y2="12" />
+      <line x1="18" y1="12" x2="22" y2="12" />
+    </svg>
+  ),
   github: <GitHubLogo />,
   default: (
     <span className="text-green-600 dark:text-green-400 select-none font-bold">$</span>
@@ -457,6 +475,10 @@ const getLogoForCommand = (command: string | any, toolName: string, provider?: s
   
   if (isGithubMcpTool) {
     return 'github'
+  }
+
+  if (tool === 'trigger_rca') {
+    return 'triggerRca'
   }
 
   return 'default'
