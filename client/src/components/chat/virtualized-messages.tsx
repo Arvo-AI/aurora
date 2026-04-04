@@ -49,9 +49,11 @@ export const VirtualizedMessages = React.memo(({ messages, sendRaw, onUpdateMess
     const el = e.target as HTMLElement;
     const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
     if (distFromBottom > 150) {
-      setUserScrolledUp(true);
+      if (!userScrolledUp) setUserScrolledUp(true);
+    } else if (distFromBottom < 80) {
+      if (userScrolledUp) setUserScrolledUp(false);
     }
-  }, []);
+  }, [userScrolledUp]);
 
   useEffect(() => {
     const prevCount = prevMessageCountRef.current;
