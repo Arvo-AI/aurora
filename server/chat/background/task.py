@@ -483,7 +483,7 @@ def run_background_chat(
             
             # Determine severity from RCA if currently unknown
             try:
-                _determine_severity_from_rca(incident_id, session_id)
+                _determine_severity_from_rca(incident_id, session_id, user_id)
             except (ImportError, ModuleNotFoundError) as e:
                 error_msg = str(e)
                 if 'langchain.schema' in error_msg or 'langchain_schema' in error_msg.lower():
@@ -1077,11 +1077,11 @@ def _update_incident_aurora_status(incident_id: str, aurora_status: str) -> None
         logger.error(f"[BackgroundChat] Failed to update aurora_status: {e}")
 
 
-def _determine_severity_from_rca(incident_id: str, session_id: str) -> None:
+def _determine_severity_from_rca(incident_id: str, session_id: str, user_id: str) -> None:
     """Determine severity from RCA chat if currently unknown."""
     try:
-        # Use LLMManager which already successfully uses ChatOpenAI elsewhere in the codebase
         from chat.backend.agent.llm import LLMManager
+        from chat.backend.agent.utils.llm_usage_tracker import tracked_invoke
     except ImportError as ie:
         logger.error(f"[BackgroundChat] Failed to import LLMManager: {ie}")
         return
@@ -1105,10 +1105,11 @@ def _determine_severity_from_rca(incident_id: str, session_id: str) -> None:
                 try:
                     # Use LLMManager which creates ChatOpenAI instances successfully
                     # This avoids the langchain.schema import issue by using the same code path as the rest of the app
+                    from chat.backend.agent.llm import ModelConfig
+                    severity_model = ModelConfig.INCIDENT_REPORT_SUMMARIZATION_MODEL
                     llm_manager = LLMManager()
-                    model = llm_manager._get_or_create_model("anthropic/claude-sonnet-4.5")
+                    model = llm_manager._get_or_create_model(severity_model)
                     
-                    # Set temperature to 0 for deterministic severity assessment
                     original_temp = model.temperature
                     model.temperature = 0
                     
@@ -1127,7 +1128,14 @@ Investigation transcript:
 {transcript}
 
 Respond with ONLY ONE WORD: critical, high, medium, or low"""
-                        response = model.invoke([HumanMessage(content=prompt)])
+                        response = tracked_invoke(
+                            model,
+                            [HumanMessage(content=prompt)],
+                            user_id=user_id,
+                            session_id=session_id,
+                            model_name=severity_model,
+                            request_type="severity_determination",
+                        )
                     finally:
                         # Restore original temperature
                         model.temperature = original_temp

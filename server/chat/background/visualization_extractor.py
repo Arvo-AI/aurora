@@ -52,7 +52,9 @@ class VisualizationExtractor:
         self, 
         recent_messages: List[Dict[str, Any]],
         existing_viz: Optional[VisualizationData] = None,
-        is_final: bool = False
+        is_final: bool = False,
+        user_id: str = "",
+        session_id: str = "",
     ) -> VisualizationData:
         """Extract entities from recent tool calls and merge with existing state."""
         if not recent_messages:
@@ -61,9 +63,23 @@ class VisualizationExtractor:
         
         prompt = self._build_prompt(recent_messages, existing_viz, is_final=is_final)
         
+        import time as _time
+        start_time = _time.time()
         try:
-            extractor = self.llm.with_structured_output(VisualizationData)
-            new_viz = extractor.invoke(prompt)
+            extractor = self.llm.with_structured_output(VisualizationData, include_raw=True)
+            result = extractor.invoke(prompt)
+            new_viz = result["parsed"]
+            raw_response = result.get("raw")
+            
+            if new_viz is None:
+                parsing_error = result.get("parsing_error")
+                logger.warning(f"[VizExtractor] Parsing failed: {parsing_error}")
+                if user_id and raw_response:
+                    self._track_usage(prompt, user_id, session_id, start_time, raw_response)
+                return existing_viz or VisualizationData()
+            
+            if user_id:
+                self._track_usage(prompt, user_id, session_id, start_time, raw_response)
             
             if existing_viz:
                 merged = self._merge(existing_viz, new_viz)
@@ -76,6 +92,25 @@ class VisualizationExtractor:
         except Exception as e:
             logger.error(f"[VizExtractor] Extraction failed: {e}")
             return existing_viz or VisualizationData()
+    
+    def _track_usage(self, prompt: str, user_id: str, session_id: str, start_time: float, response=None):
+        """Track visualization extraction LLM usage."""
+        try:
+            from chat.backend.agent.llm import ModelConfig
+            from chat.backend.agent.utils.llm_usage_tracker import LLMUsageTracker
+            import os
+            LLMUsageTracker.track_llm_call(
+                user_id=user_id,
+                session_id=session_id or None,
+                model_name=ModelConfig.VISUALIZATION_MODEL,
+                request_type="visualization_extraction",
+                prompt=prompt,
+                response=response,
+                start_time=start_time,
+                api_provider=os.getenv("LLM_PROVIDER_MODE", "direct"),
+            )
+        except Exception as e:
+            logger.warning(f"[VizExtractor] Failed to track usage: {e}")
     
     def _build_prompt(self, messages: List[Dict[str, Any]], existing: Optional[VisualizationData], is_final: bool = False) -> str:
         """Build extraction prompt with context."""

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState, useRef, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { incidentsService, Incident, StreamingThought } from '@/lib/services/incidents';
@@ -25,102 +25,56 @@ export default function IncidentDetailPage() {
   const seenThoughtIdsRef = useRef<Set<string>>(new Set());
   const userClosedThoughtsRef = useRef<boolean>(false);
 
+  const applyIncidentData = useCallback((data: Incident) => {
+    const newThoughts = data.streamingThoughts || [];
+    const unseenThoughts = newThoughts.filter(t => {
+      if (seenThoughtIdsRef.current.has(t.id)) return false;
+      seenThoughtIdsRef.current.add(t.id);
+      return true;
+    });
+    if (unseenThoughts.length > 0) {
+      setThoughts(prev => [...prev, ...unseenThoughts]);
+    }
+    setIncident(data);
+    if (data.status === 'investigating' && !userClosedThoughtsRef.current) {
+      setShowThoughts(true);
+    }
+  }, []);
+
+  // Single fetch + poll loop — one effect, no duplicates
   useEffect(() => {
+    let active = true;
+    let timer: ReturnType<typeof setTimeout>;
 
-    let isMounted = true;
-
-    const loadIncident = async () => {
+    const fetchAndSchedule = async (isInitial: boolean) => {
+      if (!active || !params.id) return;
       try {
-        const id = params.id as string;
-        const data = await incidentsService.getIncident(id);
-        if (isMounted) {
-          if (!data) {
-            setError('Incident not found');
-          } else {
-            setIncident(data);
-            // Initialize seen IDs from initial load
-            const initialThoughts = data.streamingThoughts || [];
-            initialThoughts.forEach((thought: StreamingThought) => {
-              seenThoughtIdsRef.current.add(thought.id);
-            });
-            setThoughts(initialThoughts);
-            if (data.status === 'investigating' && !userClosedThoughtsRef.current) {
-              setShowThoughts(true);
-            }
-          }
+        const data = await incidentsService.getIncident(params.id as string);
+        if (!active) return;
+        if (!data) {
+          if (isInitial) setError('Incident not found');
+          return;
+        }
+        applyIncidentData(data);
+
+        const needsPoll = data.status === 'investigating' || data.auroraStatus === 'summarizing';
+        if (needsPoll && active) {
+          timer = setTimeout(() => fetchAndSchedule(false), 1000);
         }
       } catch (e) {
-        if (isMounted) {
+        if (!active) return;
+        if (isInitial) {
           setError('Failed to load incident');
           console.error('Failed to load incident:', e instanceof Error ? e.message : 'Unknown error');
         }
       } finally {
-        if (isMounted) {
-          setLoading(false);
-        }
+        if (isInitial && active) setLoading(false);
       }
     };
 
-    loadIncident();
-
-    return () => {
-      isMounted = false;
-    };
-  }, [params.id]);
-
-  // Poll for incident updates (while investigating or generating final summary)
-  useEffect(() => {
-    const shouldPoll = !incident || incident.status === 'investigating' || incident.auroraStatus === 'summarizing';
-    if (!shouldPoll) return;
-
-    let isMounted = true;
-
-    const pollIncident = async () => {
-      if (!isMounted || !params.id) return;
-
-      try {
-        const data = await incidentsService.getIncident(params.id as string);
-        if (data && isMounted) {
-          // Append only new thoughts that we haven't seen yet
-          setThoughts(prevThoughts => {
-            const newThoughts = data.streamingThoughts || [];
-            // Filter to only thoughts we haven't seen
-            const unseenThoughts = newThoughts.filter((thought: StreamingThought) => {
-              if (seenThoughtIdsRef.current.has(thought.id)) {
-                return false;
-              }
-              seenThoughtIdsRef.current.add(thought.id);
-              return true;
-            });
-
-            // If we've seen all thoughts before, just return previous state
-            if (unseenThoughts.length === 0) {
-              return prevThoughts;
-            }
-
-            // Append new thoughts progressively
-            return [...prevThoughts, ...unseenThoughts];
-          });
-          setIncident(data);
-
-          // Only auto-open if status is investigating and user hasn't manually closed it
-          if (data.status === 'investigating' && !userClosedThoughtsRef.current) {
-            setShowThoughts(true);
-          }
-        }
-      } catch (e) {
-        console.error('Failed to poll incident:', e);
-      }
-    };
-
-    pollIncident();
-    const interval = setInterval(pollIncident, 1000); // Poll every 1 second for smoother streaming
-
-    return () => {
-      isMounted = false;
-      clearInterval(interval);
-    };
-  }, [params.id, incident?.status, incident?.auroraStatus]);
+    fetchAndSchedule(true);
+    return () => { active = false; clearTimeout(timer); };
+  }, [params.id, applyIncidentData]);
 
   if (loading) {
     return (

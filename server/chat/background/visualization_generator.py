@@ -68,7 +68,10 @@ def update_visualization(
         existing_viz = _fetch_existing_visualization(incident_id)
         
         extractor = _get_extractor()
-        updated_viz = extractor.extract_incremental(tool_calls, existing_viz, is_final=force_full)
+        updated_viz = extractor.extract_incremental(
+            tool_calls, existing_viz, is_final=force_full,
+            user_id=user_id, session_id=session_id,
+        )
         
         if not updated_viz.nodes:
             logger.warning(f"[Visualization] No entities extracted for incident {incident_id}")

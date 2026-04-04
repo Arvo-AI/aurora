@@ -1,0 +1,147 @@
+"use client";
+
+import { useState, useCallback, useRef, useEffect, useMemo } from "react";
+
+export interface RequestUsage {
+  model: string;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  estimated_cost: number;
+  response_time_ms: number;
+  timestamp: string;
+  output_token_details?: Record<string, number>;
+}
+
+export interface SessionUsage {
+  total_input_tokens: number;
+  total_output_tokens: number;
+  total_cost: number;
+  request_count: number;
+}
+
+export interface CurrentStreamingUsage {
+  model: string;
+  output_tokens: number;
+  is_streaming: boolean;
+}
+
+export interface SessionUsageState {
+  currentStreaming: CurrentStreamingUsage | null;
+  sessionUsage: SessionUsage;
+  requestHistory: RequestUsage[];
+  wasCanceled: boolean;
+  handleUsageUpdate: (data: Record<string, unknown>) => void;
+  handleUsageFinal: (data: Record<string, unknown>) => void;
+  handleCancel: () => void;
+  reset: () => void;
+}
+
+export function useSessionUsage(sessionId: string | null): SessionUsageState {
+  const [currentStreaming, setCurrentStreaming] = useState<CurrentStreamingUsage | null>(null);
+  const [requestHistory, setRequestHistory] = useState<RequestUsage[]>([]);
+  const [wasCanceled, setWasCanceled] = useState(false);
+  const prevSessionRef = useRef<string | null>(null);
+  const liveCountRef = useRef(0);
+  const cancelTimerRef = useRef<ReturnType<typeof setTimeout>>();
+
+  const sessionUsage = useMemo<SessionUsage>(() => {
+    let input = 0, output = 0, cost = 0;
+    for (const r of requestHistory) {
+      input += r.input_tokens;
+      output += r.output_tokens;
+      cost += r.estimated_cost;
+    }
+    return {
+      total_input_tokens: input,
+      total_output_tokens: output,
+      total_cost: cost,
+      request_count: requestHistory.length,
+    };
+  }, [requestHistory]);
+
+  useEffect(() => {
+    if (sessionId === prevSessionRef.current) return;
+    prevSessionRef.current = sessionId;
+    setCurrentStreaming(null);
+    setRequestHistory([]);
+    liveCountRef.current = 0;
+
+    if (!sessionId) return;
+
+    let cancelled = false;
+    fetch(`/api/llm-usage/session/${sessionId}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (cancelled || !data) return;
+        const reqs: RequestUsage[] = (data.requests || []).map(
+          (r: Record<string, unknown>) => ({
+            model: (r.model as string) || "",
+            input_tokens: (r.input_tokens as number) || 0,
+            output_tokens: (r.output_tokens as number) || 0,
+            total_tokens: (r.total_tokens as number) || 0,
+            estimated_cost: (r.estimated_cost as number) || 0,
+            response_time_ms: (r.response_time_ms as number) || 0,
+            timestamp: (r.timestamp as string) || "",
+          })
+        );
+        setRequestHistory((prev) => {
+          const liveSlice = prev.slice(prev.length - liveCountRef.current);
+          return [...reqs, ...liveSlice];
+        });
+      })
+      .catch(() => {});
+
+    return () => { cancelled = true; };
+  }, [sessionId]);
+
+  const handleUsageUpdate = useCallback((data: Record<string, unknown>) => {
+    setCurrentStreaming((prev) => ({
+      model: (data.model as string) || prev?.model || "",
+      output_tokens: (data.output_chunks as number) ?? (data.output_tokens as number) ?? prev?.output_tokens ?? 0,
+      is_streaming: true,
+    }));
+  }, []);
+
+  const handleUsageFinal = useCallback((data: Record<string, unknown>) => {
+    setCurrentStreaming(null);
+
+    const request: RequestUsage = {
+      model: (data.model as string) || "",
+      input_tokens: (data.input_tokens as number) || 0,
+      output_tokens: (data.output_tokens as number) || 0,
+      total_tokens: (data.total_tokens as number) || 0,
+      estimated_cost: (data.estimated_cost as number) || 0,
+      response_time_ms: (data.response_time_ms as number) || 0,
+      timestamp: (data.timestamp as string) || new Date().toISOString(),
+      output_token_details: data.output_token_details as Record<string, number> | undefined,
+    };
+    liveCountRef.current += 1;
+    setRequestHistory(prev => [...prev, request]);
+  }, []);
+
+  const handleCancel = useCallback(() => {
+    setCurrentStreaming(null);
+    setWasCanceled(true);
+    if (cancelTimerRef.current) clearTimeout(cancelTimerRef.current);
+    cancelTimerRef.current = setTimeout(() => setWasCanceled(false), 2500);
+  }, []);
+
+  const reset = useCallback(() => {
+    setCurrentStreaming(null);
+    setRequestHistory([]);
+    setWasCanceled(false);
+    liveCountRef.current = 0;
+  }, []);
+
+  return {
+    currentStreaming,
+    sessionUsage,
+    requestHistory,
+    wasCanceled,
+    handleUsageUpdate,
+    handleUsageFinal,
+    handleCancel,
+    reset,
+  };
+}

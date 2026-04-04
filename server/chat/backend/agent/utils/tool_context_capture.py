@@ -29,10 +29,10 @@ Usage:
 import json
 import logging
 import threading
-import tiktoken
 from datetime import datetime
 from typing import Dict, Any, List, Optional
 from ..llm import LLMManager
+from .llm_usage_tracker import LLMUsageTracker
 # Import langchain components - direct imports for LangChain 1.2.6+
 from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
 from langchain_core.callbacks import BaseCallbackHandler
@@ -50,17 +50,11 @@ class InternalToolMessage(ToolMessage):
 logger = logging.getLogger(__name__)
 
 # --------------------------------------------------------------------------------------
-# Token counting utility
+# Token counting utility (delegates to LLMUsageTracker for context management only)
 # --------------------------------------------------------------------------------------
 def count_tokens(text: str, model: str = "gpt-4o") -> int:
-    """Count tokens in text using tiktoken for the specified model."""
-    try:
-        encoding = tiktoken.encoding_for_model(model)
-        return len(encoding.encode(text))
-    except KeyError:
-        # Fallback to cl100k_base encoding if model not found
-        encoding = tiktoken.get_encoding("cl100k_base")
-        return len(encoding.encode(text))
+    """Count tokens in text using LLMUsageTracker (for context management, not billing)."""
+    return LLMUsageTracker.count_tokens(text, model)
 
 class ToolContextCapture:
     """Captures complete tool interactions for LLM context history."""
@@ -174,7 +168,10 @@ class ToolContextCapture:
                     logger.warning(f"Truncating tool output from {len(content_to_summarize)} to {MAX_SUMMARIZATION_INPUT_CHARS} chars before summarization")
                     content_to_summarize = content_to_summarize[:MAX_SUMMARIZATION_INPUT_CHARS] + "\n\n[Truncated before summarization]"
                 llm = LLMManager()
-                summary = llm.summarize(content_to_summarize, model=ModelConfig.TOOL_OUTPUT_SUMMARIZATION_MODEL)
+                summary = llm.summarize(
+                    content_to_summarize, model=ModelConfig.TOOL_OUTPUT_SUMMARIZATION_MODEL,
+                    user_id=self.user_id, session_id=self.session_id,
+                )
                 summarized_content = summary + '\n\n[Summarized from longer output]'
                 summary_tokens = count_tokens(summarized_content)
                 logger.debug(f" SUMMARIZATION CREATED: {content_tokens} -> {summary_tokens} tokens")

@@ -59,6 +59,7 @@ class OpenRouterProvider(BaseLLMProvider):
             "openai_api_key": self.api_key,
             "request_timeout": 120.0,
             "max_retries": 3,
+            "stream_usage": True,
         }
         config.update(kwargs)
 

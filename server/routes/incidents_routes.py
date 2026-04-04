@@ -692,10 +692,116 @@ def get_incident(user_id, incident_id: str):
                 incident["citations"] = citations
                 incident["chatSessions"] = chat_sessions
 
+                # Fetch token usage for ALL sessions linked to this incident
+                rca_session_id = incident.get("chatSessionId")
+                usage_totals = None
+
+                all_session_ids = [cs["id"] for cs in chat_sessions]
+                if rca_session_id and rca_session_id not in all_session_ids:
+                    all_session_ids.insert(0, rca_session_id)
+
+                try:
+                    urow = None
+                    usage_where = None
+                    usage_params = None
+
+                    if all_session_ids:
+                        placeholders = ",".join(["%s"] * len(all_session_ids))
+                        session_where = f"session_id IN ({placeholders})"
+                        session_params = tuple(all_session_ids)
+
+                        cursor.execute(
+                            f"""
+                            SELECT
+                                COUNT(*) as request_count,
+                                COALESCE(SUM(input_tokens), 0) as total_input_tokens,
+                                COALESCE(SUM(output_tokens), 0) as total_output_tokens,
+                                COALESCE(SUM(total_tokens), 0) as total_tokens,
+                                COALESCE(SUM(estimated_cost), 0) as total_cost
+                            FROM llm_usage_tracking
+                            WHERE {session_where}
+                            """,
+                            session_params,
+                        )
+                        urow = cursor.fetchone()
+                        if urow and urow[0] > 0:
+                            usage_where = session_where
+                            usage_params = session_params
+
+                    if not urow or urow[0] == 0:
+                        fallback_where = """
+                            session_id IS NULL
+                            AND user_id = (SELECT user_id FROM incidents WHERE id = %s)
+                            AND request_type = 'incident_initial_summary'
+                            AND timestamp BETWEEN
+                                (SELECT created_at - INTERVAL '2 minutes' FROM incidents WHERE id = %s)
+                                AND
+                                (SELECT created_at + INTERVAL '2 minutes' FROM incidents WHERE id = %s)
+                        """
+                        fallback_params = (incident_id, incident_id, incident_id)
+                        cursor.execute(
+                            f"""
+                            SELECT
+                                COUNT(*) as request_count,
+                                COALESCE(SUM(input_tokens), 0) as total_input_tokens,
+                                COALESCE(SUM(output_tokens), 0) as total_output_tokens,
+                                COALESCE(SUM(total_tokens), 0) as total_tokens,
+                                COALESCE(SUM(estimated_cost), 0) as total_cost
+                            FROM llm_usage_tracking
+                            WHERE {fallback_where}
+                            """,
+                            fallback_params,
+                        )
+                        urow = cursor.fetchone()
+                        usage_where = fallback_where
+                        usage_params = fallback_params
+
+                    if urow and urow[0] > 0:
+                        cursor.execute(
+                            f"""
+                            SELECT
+                                model_name,
+                                COUNT(*) as request_count,
+                                COALESCE(SUM(input_tokens), 0),
+                                COALESCE(SUM(output_tokens), 0),
+                                COALESCE(SUM(estimated_cost), 0)
+                            FROM llm_usage_tracking
+                            WHERE {usage_where}
+                            GROUP BY model_name
+                            ORDER BY SUM(estimated_cost) DESC
+                            """,
+                            usage_params,
+                        )
+                        model_rows = cursor.fetchall()
+                        models = [
+                            {
+                                "model": mrow[0] or "unknown",
+                                "requestCount": mrow[1],
+                                "inputTokens": mrow[2] or 0,
+                                "outputTokens": mrow[3] or 0,
+                                "cost": float(mrow[4]) if mrow[4] else 0.0,
+                            }
+                            for mrow in model_rows
+                        ]
+
+                        usage_totals = {
+                            "requestCount": urow[0],
+                            "totalInputTokens": urow[1] or 0,
+                            "totalOutputTokens": urow[2] or 0,
+                            "totalTokens": urow[3] or 0,
+                            "totalCost": float(urow[4]) if urow[4] else 0.0,
+                            "models": models,
+                        }
+                except Exception as usage_err:
+                        logger.warning(
+                            "[INCIDENTS] Failed to fetch usage for session %s: %s",
+                            rca_session_id,
+                            usage_err,
+                        )
+                incident["tokenUsage"] = usage_totals
+
                 logger.info(
-                    "[INCIDENTS] Retrieved incident %s for user %s with %d suggestions, %d thoughts, %d citations, %d chat sessions",
-                    incident_id,
-                    user_id,
+                    "[INCIDENTS] Retrieved incident with %d suggestions, %d thoughts, %d citations, %d chat sessions",
                     len(suggestions),
                     len(thoughts),
                     len(citations),

@@ -7,7 +7,7 @@ import subprocess
 from utils.terminal.terminal_run import terminal_run
 import time
 import requests
-import tiktoken
+from chat.backend.agent.utils.llm_usage_tracker import LLMUsageTracker
 from typing import Dict, Any, Optional, Tuple
 from langchain_core.tools import StructuredTool
 from pathlib import Path
@@ -37,17 +37,12 @@ def _normalize_cloud_exec_provider(raw: Optional[str]) -> str:
 
 
 # --------------------------------------------------------------------------------------
-# Token counting utility
+# --------------------------------------------------------------------------------------
+# Token counting utility (delegates to LLMUsageTracker for context management only)
 # --------------------------------------------------------------------------------------
 def count_tokens(text: str, model: str = "gpt-4o") -> int:
-    """Count tokens in text using tiktoken for the specified model."""
-    try:
-        encoding = tiktoken.encoding_for_model(model)
-        return len(encoding.encode(text))
-    except KeyError:
-        # Fallback to cl100k_base encoding if model not found
-        encoding = tiktoken.get_encoding("cl100k_base")
-        return len(encoding.encode(text))
+    """Count tokens in text using LLMUsageTracker (for context management, not billing)."""
+    return LLMUsageTracker.count_tokens(text, model)
 
 # --------------------------------------------------------------------------------------
 # Common verb sets used across providers

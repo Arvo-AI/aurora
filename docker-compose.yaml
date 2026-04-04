@@ -102,10 +102,14 @@ x-common-env: &common-env
   NEXT_PUBLIC_BACKEND_URL: ${NEXT_PUBLIC_BACKEND_URL}
   BACKEND_URL: ${BACKEND_URL}
 
-  # Secrets Backend (HashiCorp Vault)
+  # Secrets Backend
+  SECRETS_BACKEND: ${SECRETS_BACKEND:-vault}
   VAULT_ADDR: ${VAULT_ADDR}
   VAULT_TOKEN: ${VAULT_TOKEN}
   VAULT_KV_MOUNT: ${VAULT_KV_MOUNT}
+  VAULT_KV_BASE_PATH: ${VAULT_KV_BASE_PATH}
+  AWS_SM_REGION: ${AWS_SM_REGION:-}
+  AWS_SM_PREFIX: ${AWS_SM_PREFIX:-aurora/users}
 
   # Memgraph (Graph Database)
   MEMGRAPH_HOST: ${MEMGRAPH_HOST}

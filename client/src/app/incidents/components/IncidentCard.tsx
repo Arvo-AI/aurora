@@ -14,6 +14,7 @@ import {
   Play,
   GitBranch,
   FileText,
+  Coins,
 } from 'lucide-react';
 import React, { useState, useMemo, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
@@ -103,6 +104,7 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
   const [selectedFixSuggestion, setSelectedFixSuggestion] = useState<Suggestion | null>(null);
   const [showVisualization, setShowVisualization] = useState(false);
   const [showPostmortem, setShowPostmortem] = useState(false);
+  const [showTokenUsage, setShowTokenUsage] = useState(false);
   const [resolvingIncident, setResolvingIncident] = useState(false);
   const alert = incident.alert;
   const router = useRouter();
@@ -593,6 +595,22 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
               Postmortem
             </button>
           )}
+
+          {/* Token Usage button */}
+          {incident.tokenUsage && (
+            <button
+              onClick={() => setShowTokenUsage(!showTokenUsage)}
+              className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-md text-xs transition-colors ${
+                showTokenUsage
+                  ? 'text-orange-300 bg-orange-500/10'
+                  : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800'
+              }`}
+            >
+              <Coins className="w-3 h-3" />
+              Token Usage
+              <ChevronRight className={`w-3 h-3 transition-transform ${showTokenUsage ? 'rotate-90' : ''}`} />
+            </button>
+          )}
         </div>
       )}
 
@@ -600,6 +618,76 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
       {incident.auroraStatus === 'complete' && (
         <div className="mt-6 pt-6 border-t border-zinc-800/50">
           <IncidentFeedback incidentId={incident.id} readOnly={!canWrite} />
+        </div>
+      )}
+
+      {/* Token Usage Panel (collapsible) */}
+      {incident.tokenUsage && (
+        <div className="collapsible-panel" data-open={showTokenUsage}>
+          <div>
+            <div className="border-t border-zinc-800 mt-4" />
+            <div className="rounded-lg bg-zinc-900/50 border border-zinc-800 p-4 mt-4">
+              <h3 className="text-sm font-medium text-zinc-300 mb-3">Investigation Token Usage</h3>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                <div>
+                  <p className="text-[11px] text-zinc-500 uppercase tracking-wider">Input Tokens</p>
+                  <p className="text-sm font-mono text-zinc-200 mt-0.5">
+                    {(incident.tokenUsage.totalInputTokens ?? 0).toLocaleString()}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-[11px] text-zinc-500 uppercase tracking-wider">Output Tokens</p>
+                  <p className="text-sm font-mono text-zinc-200 mt-0.5">
+                    {(incident.tokenUsage.totalOutputTokens ?? 0).toLocaleString()}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-[11px] text-zinc-500 uppercase tracking-wider">Total Tokens</p>
+                  <p className="text-sm font-mono text-zinc-200 mt-0.5">
+                    {(incident.tokenUsage.totalTokens ?? 0).toLocaleString()}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-[11px] text-zinc-500 uppercase tracking-wider">Estimated Cost</p>
+                  <p className="text-sm font-mono text-green-400 mt-0.5">
+                    ${(incident.tokenUsage.totalCost ?? 0).toFixed(4)}
+                  </p>
+                </div>
+              </div>
+
+              {/* Per-model breakdown */}
+              {incident.tokenUsage.models && incident.tokenUsage.models.length > 0 && (
+                <div className="mt-3 pt-3 border-t border-zinc-800/50">
+                  <p className="text-[11px] text-zinc-500 uppercase tracking-wider mb-2">By Model</p>
+                  <div className="space-y-1.5">
+                    {incident.tokenUsage.models.map((m) => {
+                      const shortName = m.model.includes('/') ? m.model.split('/').pop() : m.model;
+                      return (
+                        <div key={m.model} className="flex items-center justify-between text-xs">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <span className="text-zinc-300 truncate" title={m.model}>{shortName}</span>
+                            <span className="text-zinc-600">x{m.requestCount ?? 0}</span>
+                          </div>
+                          <div className="flex items-center gap-3 shrink-0 ml-2">
+                            <span className="font-mono tabular-nums text-zinc-500">
+                              {(m.inputTokens ?? 0).toLocaleString()} in / {(m.outputTokens ?? 0).toLocaleString()} out
+                            </span>
+                            <span className="font-mono tabular-nums text-green-400/80 w-16 text-right">
+                              ${(m.cost ?? 0).toFixed(4)}
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              <p className="text-[11px] text-zinc-600 mt-3">
+                {incident.tokenUsage.requestCount ?? 0} LLM request{(incident.tokenUsage.requestCount ?? 0) !== 1 ? 's' : ''} during investigation
+              </p>
+            </div>
+          </div>
         </div>
       )}
 

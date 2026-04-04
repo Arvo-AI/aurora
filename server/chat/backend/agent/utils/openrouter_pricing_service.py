@@ -53,14 +53,17 @@ class OpenRouterPricingService:
             "anthropic/claude-haiku-4-5": {"input": 0.001, "output": 0.005},
             "anthropic/claude-3.5-sonnet": {"input": 0.003, "output": 0.015},
             "anthropic/claude-3-haiku": {"input": 0.00025, "output": 0.00125},
-            # Google AI / Vertex AI
+            # Google AI / Vertex AI — verified against Google Cloud Billing Catalog API
             "google/gemini-3.1-pro-preview": {"input": 0.002, "output": 0.012},
+            "google/gemini-3.1-flash-lite-preview": {"input": 0.00025, "output": 0.0015},
+            "google/gemini-3-pro-preview": {"input": 0.002, "output": 0.012},
             "google/gemini-3-flash": {"input": 0.0005, "output": 0.003},
-            "google/gemini-3-pro-preview": {"input": 0.00125, "output": 0.01},
             "google/gemini-2.5-pro": {"input": 0.00125, "output": 0.01},
             "google/gemini-2.5-flash": {"input": 0.0003, "output": 0.0025},
             "google/gemini-2.5-flash-lite": {"input": 0.0001, "output": 0.0004},
             "vertex/gemini-3.1-pro-preview": {"input": 0.002, "output": 0.012},
+            "vertex/gemini-3.1-flash-lite-preview": {"input": 0.00025, "output": 0.0015},
+            "vertex/gemini-3-pro-preview": {"input": 0.002, "output": 0.012},
             "vertex/gemini-3-flash": {"input": 0.0005, "output": 0.003},
             "vertex/gemini-2.5-pro": {"input": 0.00125, "output": 0.01},
             "vertex/gemini-2.5-flash": {"input": 0.0003, "output": 0.0025},
@@ -157,35 +160,46 @@ class OpenRouterPricingService:
 
     def get_model_pricing(self, model_name: str) -> Dict[str, float]:
         """
-        Get pricing for a specific model with Aurora markup
+        Get raw pricing for a specific model.
 
         Args:
             model_name: The model identifier (e.g., "anthropic/claude-opus-4")
 
         Returns:
-            Dictionary with 'input' and 'output' pricing per 1K tokens (includes 1.4x markup)
+            Dictionary with 'input' and 'output' pricing per 1K tokens
         """
         pricing_data = self.get_pricing()
 
         # Try exact match first
         if model_name in pricing_data:
             base_pricing = pricing_data[model_name]
-        # Try without version suffix
-        elif model_name.split(".")[0].split("-v")[0] in pricing_data:
-            base_model = model_name.split(".")[0].split("-v")[0]
-            base_pricing = pricing_data[base_model]
         else:
-            # Return default pricing
-            logger.warning(f"No pricing found for model {model_name}, using default")
-            base_pricing = pricing_data.get(
-                "default", {"input": 0.001, "output": 0.002}
-            )
+            # Try prefix matching: find the longest key that is a prefix of model_name
+            best_match = None
+            best_len = 0
+            for key in pricing_data:
+                if key == "default":
+                    continue
+                if model_name.startswith(key) and len(key) > best_len:
+                    best_match = key
+                    best_len = len(key)
+            if best_match:
+                base_pricing = pricing_data[best_match]
+            else:
+                logger.warning(f"No pricing found for model {model_name}, using default")
+                base_pricing = pricing_data.get(
+                    "default", {"input": 0.001, "output": 0.002}
+                )
 
-        # Apply Aurora's 1.4x markup for profit
-        return {
-            "input": base_pricing["input"] * 1.4,
-            "output": base_pricing["output"] * 1.4,
-        }
+        result = base_pricing.copy()
+
+        if "cached_input" not in result:
+            from chat.backend.agent.utils.llm_usage_tracker import LLMUsageTracker
+            static = LLMUsageTracker.MODEL_PRICING.get(model_name, {})
+            if "cached_input" in static:
+                result["cached_input"] = static["cached_input"]
+
+        return result
 
     def refresh_pricing(self) -> bool:
         """

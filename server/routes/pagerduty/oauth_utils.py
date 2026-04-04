@@ -12,7 +12,8 @@ logger = logging.getLogger(__name__)
 
 PAGERDUTY_AUTH_URL = "https://app.pagerduty.com/oauth/authorize"
 PAGERDUTY_TOKEN_URL = "https://app.pagerduty.com/oauth/token"
-DEFAULT_SCOPES = "openid users.read incidents.read incidents.write services.read"
+# Aurora reads incidents and services; it does not create, acknowledge, or resolve incidents.
+DEFAULT_SCOPES = "openid users.read incidents.read services.read"
 
 # Only load OAuth credentials if feature flag is enabled
 if is_pagerduty_oauth_enabled():

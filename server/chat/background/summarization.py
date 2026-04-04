@@ -12,6 +12,7 @@ from langchain_core.messages import HumanMessage
 
 from chat.backend.agent.providers import create_chat_model
 from chat.backend.agent.llm import ModelConfig
+from chat.backend.agent.utils.llm_usage_tracker import tracked_invoke
 
 
 def _extract_text_from_response(content: Union[str, List[Any]]) -> str:
@@ -479,7 +480,14 @@ def generate_incident_summary(
         )
 
         message = HumanMessage(content=prompt)
-        response = llm.invoke([message])
+        response = tracked_invoke(
+            llm,
+            [message],
+            user_id=user_id,
+            session_id=None,
+            model_name=ModelConfig.INCIDENT_REPORT_SUMMARIZATION_MODEL,
+            request_type="incident_initial_summary",
+        )
 
         summary = (
             _extract_text_from_response(response.content)
@@ -603,7 +611,14 @@ def generate_incident_summary_from_chat(
         )
 
         message = HumanMessage(content=prompt)
-        response = llm.invoke([message])
+        response = tracked_invoke(
+            llm,
+            [message],
+            user_id=user_id,
+            session_id=session_id,
+            model_name=ModelConfig.EMAIL_REPORT_MODEL,
+            request_type="incident_rca_summary",
+        )
         summary = (
             _extract_text_from_response(response.content)
             if response.content
@@ -642,6 +657,8 @@ def generate_incident_summary_from_chat(
                 citations=used_citations if used_citations else all_citations,
                 service=basics["service"],
                 alert_title=basics["alert_title"],
+                user_id=user_id,
+                session_id=session_id,
             )
             if suggestions:
                 save_incident_suggestions(incident_id, suggestions)

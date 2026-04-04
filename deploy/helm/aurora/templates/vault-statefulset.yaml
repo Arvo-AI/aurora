@@ -65,6 +65,11 @@ spec:
               mountPath: /vault/gcp
               readOnly: true
             {{- end }}
+            {{- if and .Values.vault.seal (eq .Values.vault.seal.type "awskms") .Values.vault.seal.awskms.credentials }}
+            - name: aws-kms-credentials
+              mountPath: /vault/aws
+              readOnly: true
+            {{- end }}
           readinessProbe:
             httpGet:
               path: /v1/sys/health?standbyok=true
@@ -92,6 +97,11 @@ spec:
         - name: gcp-kms-credentials
           secret:
             secretName: vault-gcp-kms
+        {{- end }}
+        {{- if and .Values.vault.seal (eq .Values.vault.seal.type "awskms") .Values.vault.seal.awskms.credentials }}
+        - name: aws-kms-credentials
+          secret:
+            secretName: vault-aws-kms
         {{- end }}
   volumeClaimTemplates:
     - metadata:
