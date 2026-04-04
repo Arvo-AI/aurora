@@ -14,8 +14,8 @@ interface ChatControlsProps {
   selectedProviders?: string[]; // Kept for compatibility but not used
   disabled?: boolean;
   className?: string;
-  onTriggerRCA?: () => void;
-  rcaDisabled?: boolean;
+  rcaActive?: boolean;
+  onToggleRCA?: () => void;
 }
 
 export default function ChatControls({
@@ -25,8 +25,8 @@ export default function ChatControls({
   onModeChange,
   disabled = false,
   className = "",
-  onTriggerRCA,
-  rcaDisabled = false,
+  rcaActive = false,
+  onToggleRCA,
 }: ChatControlsProps) {
   // Get all connected providers from database
   const { infraProviders } = useConnectedAccounts();
@@ -41,13 +41,16 @@ export default function ChatControls({
           disabled={disabled}
           className="h-7 text-sm"
         />
-        {onTriggerRCA && (
+        {onToggleRCA && (
           <Button
             variant="ghost"
-            onClick={onTriggerRCA}
-            disabled={rcaDisabled}
-            className="h-6 px-2 text-xs font-medium text-muted-foreground hover:text-orange-500 hover:bg-orange-500/10 transition-colors gap-1"
-            title="Trigger RCA Investigation"
+            onClick={onToggleRCA}
+            className={`h-6 px-2 text-xs font-medium transition-colors gap-1 ${
+              rcaActive
+                ? "text-orange-500 bg-orange-500/15 hover:bg-orange-500/20"
+                : "text-muted-foreground hover:text-orange-500 hover:bg-orange-500/10"
+            }`}
+            title={rcaActive ? "RCA mode active — click Send to investigate" : "Enable RCA mode"}
           >
             <Radar className="h-3 w-3" />
             <span>RCA</span>

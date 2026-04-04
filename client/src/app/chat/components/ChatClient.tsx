@@ -200,6 +200,8 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
     }
   });
 
+  const [rcaActive, setRcaActive] = useState(false);
+
   const handleSendWithInput = useCallback(async () => {
     let finalMessage = input.trim();
     
@@ -216,22 +218,13 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
       }
     }
     
-    const sent = await handleSend(finalMessage || input, chatWebSocket);
+    const sent = await handleSend(finalMessage || input, chatWebSocket, undefined, rcaActive ? { triggerRca: true } : undefined);
     if (sent) {
       setInput("");
       setImages([]);
+      setRcaActive(false);
     }
-  }, [chatWebSocket, handleSend, input, activeIncidentContext]);
-
-  const handleTriggerRCA = useCallback(async () => {
-    const finalMessage = input.trim();
-    if (!finalMessage) return;
-    const sent = await handleSend(finalMessage, chatWebSocket, undefined, { triggerRca: true });
-    if (sent) {
-      setInput("");
-      setImages([]);
-    }
-  }, [chatWebSocket, handleSend, input]);
+  }, [chatWebSocket, handleSend, input, activeIncidentContext, rcaActive]);
 
   const handlePromptClickWithSocket = useCallback((prompt: string) => {
     setInput(prompt);
@@ -438,7 +431,8 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
               input={input}
               setInput={setInput}
               onSend={handleSendWithInput}
-              onTriggerRCA={handleTriggerRCA}
+              rcaActive={rcaActive}
+              onToggleRCA={() => setRcaActive(prev => !prev)}
               isSending={isSending}
               selectedModel={selectedModel}
               onModelChange={setSelectedModel}
@@ -477,7 +471,8 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
             input={input}
             setInput={setInput}
             onSend={handleSendWithInput}
-            onTriggerRCA={handleTriggerRCA}
+            rcaActive={rcaActive}
+            onToggleRCA={() => setRcaActive(prev => !prev)}
             isSending={isSending}
             selectedModel={selectedModel}
             onModelChange={setSelectedModel}

@@ -15,7 +15,8 @@ interface EnhancedChatInputProps {
   input: string;
   setInput: (value: string) => void;
   onSend: () => void;
-  onTriggerRCA?: () => void;
+  rcaActive?: boolean;
+  onToggleRCA?: () => void;
   isSending: boolean;
   selectedModel: string;
   onModelChange: (model: string) => void;
@@ -36,7 +37,8 @@ export default function EnhancedChatInput({
   input,
   setInput,
   onSend,
-  onTriggerRCA,
+  rcaActive = false,
+  onToggleRCA,
   isSending,
   selectedModel,
   onModelChange,
@@ -217,8 +219,8 @@ export default function EnhancedChatInput({
           selectedMode={selectedMode}
           onModeChange={onModeChange}
           selectedProviders={selectedProviders}
-          onTriggerRCA={onTriggerRCA}
-          rcaDisabled={!input.trim() || isSending || disabled}
+          rcaActive={rcaActive}
+          onToggleRCA={onToggleRCA}
         />
       </div>
     </div>
