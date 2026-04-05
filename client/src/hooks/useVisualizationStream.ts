@@ -26,7 +26,7 @@ export function useVisualizationStream(incidentId: string) {
     const fetchInitialData = async () => {
       try {
         const response = await fetch(`/api/incidents/${incidentId}/visualization`);
-        
+
         if (!response.ok) {
           if (response.status === 404) {
             setState(prev => ({ ...prev, isLoading: false, data: null }));
@@ -57,6 +57,9 @@ export function useVisualizationStream(incidentId: string) {
     };
 
     const connectSSE = () => {
+      if (eventSourceRef.current) {
+        eventSourceRef.current.close();
+      }
       const eventSource = new EventSource(`/api/incidents/${incidentId}/visualization/stream`);
       eventSourceRef.current = eventSource;
 
@@ -69,11 +72,11 @@ export function useVisualizationStream(incidentId: string) {
       eventSource.onmessage = async (event) => {
         try {
           const message = JSON.parse(event.data);
-          
+
           if (message.type === 'connected') {
             return;
           }
-          
+
           if (message.type === 'update' && message.version > currentVersionRef.current && !fetchingUpdateRef.current) {
             fetchingUpdateRef.current = true;
             try {
@@ -103,12 +106,20 @@ export function useVisualizationStream(incidentId: string) {
       };
     };
 
+    const onStale = () => {
+      connectSSE();
+      fetchInitialData();
+    };
+
     fetchInitialData().then(() => {
       connectSSE();
     });
 
+    window.addEventListener('aurora:connection-stale', onStale);
+
     return () => {
       mounted = false;
+      window.removeEventListener('aurora:connection-stale', onStale);
       if (eventSourceRef.current) {
         eventSourceRef.current.close();
       }

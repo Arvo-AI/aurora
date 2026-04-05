@@ -36,22 +36,34 @@ export async function getAuthenticatedUser(): Promise<AuthResult | NextResponse>
  * Make authenticated request with Auth.js user ID header
  */
 export async function makeAuthenticatedRequest(
-  url: string, 
+  url: string,
   options: RequestInit = {},
   additionalHeaders: Record<string, string> = {}
 ): Promise<Response> {
   const authResult = await getAuthenticatedUser()
-  
+
   if (authResult instanceof NextResponse) {
     throw new Error('User not authenticated')
   }
 
-  return fetch(url, {
-    ...options,
-    headers: {
-      ...options.headers,
-      ...authResult.headers,
-      ...additionalHeaders,
-    }
-  })
+  // Default 10s timeout unless caller provides their own signal
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 10_000)
+  if (options.signal) {
+    options.signal.addEventListener('abort', () => controller.abort())
+  }
+
+  try {
+    return await fetch(url, {
+      ...options,
+      signal: controller.signal,
+      headers: {
+        ...options.headers,
+        ...authResult.headers,
+        ...additionalHeaders,
+      }
+    })
+  } finally {
+    clearTimeout(timeout)
+  }
 }
