@@ -177,8 +177,8 @@ export default function Navigation({
               href="/connectors"
               className={cn(
                 "w-full flex items-center justify-between px-2.5 py-1.5 rounded-md hover:bg-primary/10 transition-colors text-sm border border-transparent hover:border-border/50",
-                pathname === "/connectors" 
-                  ? "bg-card rounded-lg border border-border shadow-sm" 
+                pathname === "/connectors"
+                  ? "bg-card rounded-lg border border-border shadow-sm"
                   : "text-muted-foreground"
               )}
             >

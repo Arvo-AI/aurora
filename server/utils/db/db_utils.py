@@ -1034,6 +1034,22 @@ def initialize_tables():
                     CREATE UNIQUE INDEX IF NOT EXISTS postmortems_incident_id_unique ON postmortems(incident_id);
                     CREATE INDEX IF NOT EXISTS idx_postmortems_user_id ON postmortems(user_id);
                 """,
+                "incident_lifecycle_events": """
+                    CREATE TABLE IF NOT EXISTS incident_lifecycle_events (
+                        id SERIAL PRIMARY KEY,
+                        incident_id UUID NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
+                        user_id VARCHAR(255) NOT NULL,
+                        org_id VARCHAR(255),
+                        event_type VARCHAR(50) NOT NULL,
+                        previous_value VARCHAR(50),
+                        new_value VARCHAR(50),
+                        metadata JSONB DEFAULT '{}'::jsonb,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+
+                    CREATE INDEX IF NOT EXISTS idx_lifecycle_incident ON incident_lifecycle_events(incident_id, created_at);
+                    CREATE INDEX IF NOT EXISTS idx_lifecycle_user ON incident_lifecycle_events(user_id, created_at DESC);
+                """,
             }
 
             # List of tables that should have RLS enabled and a policy applied.
@@ -1078,6 +1094,7 @@ def initialize_tables():
             rls_tables.append("incident_alerts")
             rls_tables.append("incident_feedback")
             rls_tables.append("postmortems")
+            rls_tables.append("incident_lifecycle_events")
             rls_tables.append("github_connected_repos")
 
 
@@ -1664,6 +1681,48 @@ def initialize_tables():
                 conn.commit()
             except Exception as e:
                 logging.warning(f"Error adding Jira columns to postmortems: {e}")
+                conn.rollback()
+
+            # Migration: Add resolved_at and alert_fired_at columns to incidents table
+            try:
+                cursor.execute("""
+                    ALTER TABLE incidents
+                    ADD COLUMN IF NOT EXISTS resolved_at TIMESTAMP,
+                    ADD COLUMN IF NOT EXISTS alert_fired_at TIMESTAMP;
+                """)
+                logging.info("Added resolved_at and alert_fired_at columns to incidents table (if not exist).")
+                conn.commit()
+            except Exception as e:
+                logging.warning(f"Error adding resolved_at/alert_fired_at to incidents: {e}")
+                conn.rollback()
+
+            # Backfill resolved_at for existing resolved incidents
+            try:
+                cursor.execute("""
+                    UPDATE incidents SET resolved_at = updated_at
+                    WHERE status = 'resolved' AND resolved_at IS NULL;
+                """)
+                backfilled = cursor.rowcount
+                if backfilled > 0:
+                    logging.info(f"Backfilled resolved_at on {backfilled} resolved incidents.")
+                conn.commit()
+            except Exception as e:
+                logging.warning(f"Error backfilling resolved_at: {e}")
+                conn.rollback()
+
+            # Indexes for SRE metrics queries
+            try:
+                cursor.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_incidents_resolved_at
+                    ON incidents(user_id, resolved_at DESC) WHERE resolved_at IS NOT NULL;
+
+                    CREATE INDEX IF NOT EXISTS idx_incidents_service_started
+                    ON incidents(user_id, alert_service, started_at DESC);
+                """)
+                logging.info("Created SRE metrics indexes on incidents table.")
+                conn.commit()
+            except Exception as e:
+                logging.warning(f"Error creating SRE metrics indexes: {e}")
                 conn.rollback()
 
             # View creation moved to after org_id migration (see below)

@@ -82,6 +82,20 @@ def _build_source_url(source_type: str, user_id: str) -> str:
     return ""
 
 
+def _record_lifecycle_event(cursor, incident_id, user_id, event_type, previous_value=None, new_value=None, metadata=None, org_id=None):
+    """Insert an incident lifecycle event."""
+    try:
+        cursor.execute(
+            """INSERT INTO incident_lifecycle_events
+               (incident_id, user_id, org_id, event_type, previous_value, new_value, metadata)
+               VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+            (incident_id, user_id, org_id, event_type, previous_value, new_value,
+             json.dumps(metadata or {}))
+        )
+    except Exception as e:
+        logger.warning("[INCIDENTS] Failed to record lifecycle event %s for %s: %s", event_type, incident_id, e)
+
+
 def _format_incident_response(
     row: tuple, include_metadata: bool = False, include_correlation: bool = False, include_merge_target: bool = False
 ) -> Dict[str, Any]:
@@ -105,6 +119,8 @@ def _format_incident_response(
             active_tab,
             created_at,
             updated_at,
+            resolved_at,
+            alert_fired_at,
             alert_metadata,
             correlated_alert_count,
             affected_services,
@@ -130,6 +146,8 @@ def _format_incident_response(
             active_tab,
             created_at,
             updated_at,
+            resolved_at,
+            alert_fired_at,
             alert_metadata,
             correlated_alert_count,
             affected_services,
@@ -155,6 +173,8 @@ def _format_incident_response(
             active_tab,
             created_at,
             updated_at,
+            resolved_at,
+            alert_fired_at,
             alert_metadata,
         ) = row
         correlated_alert_count = None
@@ -180,6 +200,8 @@ def _format_incident_response(
             active_tab,
             created_at,
             updated_at,
+            resolved_at,
+            alert_fired_at,
         ) = row
         alert_metadata = None
         correlated_alert_count = None
@@ -207,6 +229,8 @@ def _format_incident_response(
         "activeTab": active_tab or "thoughts",
         "startedAt": _format_timestamp(started_at),
         "analyzedAt": _format_timestamp(analyzed_at),
+        "resolvedAt": _format_timestamp(resolved_at),
+        "alertFiredAt": _format_timestamp(alert_fired_at),
         "createdAt": _format_timestamp(created_at),
         "updatedAt": _format_timestamp(updated_at),
     }
@@ -251,6 +275,7 @@ def get_incidents(user_id):
                         i.id, i.user_id, i.source_type, i.source_alert_id, i.status, i.severity,
                         i.alert_title, i.alert_service, i.alert_environment, i.aurora_status, i.aurora_summary,
                         i.aurora_chat_session_id, i.started_at, i.analyzed_at, i.active_tab, i.created_at, i.updated_at,
+                        i.resolved_at, i.alert_fired_at,
                         i.alert_metadata, i.correlated_alert_count, i.affected_services,
                         i.merged_into_incident_id, target.alert_title as merged_into_title
                     FROM incidents i
@@ -309,6 +334,7 @@ def get_incident(user_id, incident_id: str):
                         i.id, i.user_id, i.source_type, i.source_alert_id, i.status, i.severity,
                         i.alert_title, i.alert_service, i.alert_environment, i.aurora_status, i.aurora_summary,
                         i.aurora_chat_session_id, i.started_at, i.analyzed_at, i.active_tab, i.created_at, i.updated_at,
+                        i.resolved_at, i.alert_fired_at,
                         i.alert_metadata, i.correlated_alert_count, i.affected_services,
                         i.merged_into_incident_id, target.alert_title as merged_into_title
                     FROM incidents i
@@ -940,6 +966,8 @@ def update_incident(user_id, incident_id: str):
                     # Auto-set timestamps based on status
                     if data["status"] == "analyzed" and "analyzed_at" not in data:
                         update_fields.append("analyzed_at = CURRENT_TIMESTAMP")
+                    if data["status"] == "resolved":
+                        update_fields.append("resolved_at = CURRENT_TIMESTAMP")
 
                 if "auroraStatus" in data:
                     update_fields.append("aurora_status = %s")
@@ -958,7 +986,7 @@ def update_incident(user_id, incident_id: str):
 
                 # Check previous status before updating (for transition detection)
                 previous_status = None
-                if data.get("status") == "resolved":
+                if "status" in data:
                     cursor.execute(
                         "SELECT status FROM incidents WHERE id = %s AND org_id = %s",
                         (incident_id, org_id),
@@ -986,6 +1014,16 @@ def update_incident(user_id, incident_id: str):
                     return jsonify({"error": "Incident not found"}), 404
 
                 conn.commit()
+
+                # Record lifecycle event on status transition
+                if "status" in data and previous_status and previous_status != data["status"]:
+                    event_type = "resolved" if data["status"] == "resolved" else "status_changed"
+                    _record_lifecycle_event(
+                        cursor, incident_id, user_id, event_type,
+                        previous_value=previous_status, new_value=data["status"],
+                        org_id=org_id,
+                    )
+                    conn.commit()
 
                 # Trigger postmortem generation only on transition to resolved
                 if data.get("status") == "resolved" and previous_status != "resolved":
