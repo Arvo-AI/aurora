@@ -862,6 +862,7 @@ async def handle_connection(websocket) -> None:
             org_id = get_org_id_for_user(user_id) if user_id else None
 
             # RBAC: block viewers from sending messages in incident-linked sessions
+            _rbac_incident_id = None
             if session_id and user_id and org_id:
                 try:
                     from utils.db.connection_pool import db_pool
@@ -873,6 +874,7 @@ async def handle_connection(websocket) -> None:
                             )
                             row = cur.fetchone()
                     if row and row[0]:
+                        _rbac_incident_id = str(row[0])
                         from utils.auth.enforcer import get_enforcer
                         enforcer = get_enforcer()
                         if not enforcer.enforce(user_id, org_id, "incidents", "write"):
@@ -1201,9 +1203,14 @@ async def handle_connection(websocket) -> None:
             # Prepare messages list 
             messages_list = [human_message]
 
+            # Resolve incident_id — reuse result from RBAC check to avoid duplicate query
+            _incident_id = _rbac_incident_id
+
             state = State(
                 user_id=user_id,
                 session_id=session_id,
+                incident_id=_incident_id,
+                org_id=org_id,
                 provider_preference=provider_preference,
                 selected_project_id=selected_project_id,
                 messages=messages_list,
