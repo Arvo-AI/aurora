@@ -250,13 +250,13 @@ fi
 if [[ "$PROFILE" == "standard" && "$NON_INTERACTIVE" != "true" ]]; then
   echo ""
   info "Image source:"
-  SELECT_DEFAULT="$([[ "$BUILD_MODE" == "prebuilt" ]] && echo 1 || echo 0)"
-  select_option BUILD_CHOICE "Build from source (recommended, latest code)" "Pull prebuilt images from GHCR (faster)"
+  SELECT_DEFAULT="$([[ "$BUILD_MODE" == "build" ]] && echo 1 || echo 0)"
+  select_option BUILD_CHOICE "Pull prebuilt images (recommended, faster)" "Build from source"
   unset SELECT_DEFAULT
   echo ""
   case "$BUILD_CHOICE" in
-    1) BUILD_MODE="prebuilt" ;;
-    *) BUILD_MODE="build" ;;
+    1) BUILD_MODE="build" ;;
+    *) BUILD_MODE="prebuilt" ;;
   esac
 fi
 
@@ -303,27 +303,52 @@ generate_env "$REPO_ROOT"
 
 echo ""
 if [[ "$PROFILE" == "airtight" ]]; then
-  _bundle_size=$(du -h "$AIRTIGHT_BUNDLE" | cut -f1)
 
-  # Pre-check disk space vs bundle size
-  _bundle_kb=$(du -k "$AIRTIGHT_BUNDLE" | cut -f1)
-  _free_kb=$(df -k "${REPO_ROOT}" 2>/dev/null | awk 'NR==2 {print $4}')
-  _free_kb="${_free_kb:-0}"
-  _need_kb=$(( _bundle_kb * 3 ))
-  if [[ "$_free_kb" -lt "$_need_kb" ]] 2>/dev/null; then
-    _free_h=$(( _free_kb / 1024 / 1024 ))
-    _need_h=$(( _need_kb / 1024 / 1024 ))
-    err "Insufficient disk space for image loading."
-    err "Available: ~${_free_h} GB, estimated need: ~${_need_h} GB (3x bundle size)."
-    err "Free space with: docker system prune -af"
-    exit 1
-  fi
+  # Skip load if critical images already exist
+  if docker image inspect aurora_server:latest &>/dev/null && \
+     docker image inspect aurora_frontend:latest &>/dev/null; then
+    ok "Images already loaded (skipping bundle)"
+  else
+    _bundle_size=$(du -h "$AIRTIGHT_BUNDLE" | cut -f1)
+
+    # Pre-check disk space vs bundle size
+    _bundle_kb=$(du -k "$AIRTIGHT_BUNDLE" | cut -f1)
+    _free_kb=$(df -k "${REPO_ROOT}" 2>/dev/null | awk 'NR==2 {print $4}')
+    _free_kb="${_free_kb:-0}"
+    _need_kb=$(( _bundle_kb * 3 ))
+    if [[ "$_free_kb" -lt "$_need_kb" ]] 2>/dev/null; then
+      _free_h=$(( _free_kb / 1024 / 1024 ))
+      _need_h=$(( _need_kb / 1024 / 1024 ))
+      err "Insufficient disk space for image loading."
+      err "Available: ~${_free_h} GB, estimated need: ~${_need_h} GB (3x bundle size)."
+      err "Free space with: docker system prune -af"
+      exit 1
+    fi
 
   info "Loading images from bundle ($_bundle_size -- this may take 5-15 min)..."
   _load_rc=0
-  if command -v pv &>/dev/null; then
+  if command -v pigz &>/dev/null; then
+    info "Using pigz for parallel decompression"
+    if command -v pv &>/dev/null; then
+      pv "$AIRTIGHT_BUNDLE" | pigz -dc | docker load >/dev/null || _load_rc=$?
+    else
+      _loaded_start=$(date +%s)
+      pigz -dc "$AIRTIGHT_BUNDLE" | docker load >/dev/null &
+      _load_pid=$!
+      while kill -0 "$_load_pid" 2>/dev/null; do
+        _loaded_imgs=$(docker images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | wc -l | tr -d ' ')
+        _elapsed=$(( $(date +%s) - _loaded_start ))
+        printf "\r  Loading... %dm%02ds elapsed, %s images loaded" \
+          $((_elapsed/60)) $((_elapsed%60)) "$_loaded_imgs"
+        sleep 5
+      done
+      echo ""
+      wait "$_load_pid" || _load_rc=$?
+    fi
+  elif command -v pv &>/dev/null; then
     pv "$AIRTIGHT_BUNDLE" | docker load >/dev/null || _load_rc=$?
   else
+    info "Tip: install pigz for ~2x faster image loading"
     _loaded_start=$(date +%s)
     docker load -i "$AIRTIGHT_BUNDLE" >/dev/null &
     _load_pid=$!
@@ -362,6 +387,13 @@ if [[ "$PROFILE" == "airtight" ]]; then
   fi
 
   ok "Images loaded from bundle"
+  fi
+
+  # docker load may not preserve all tags — ensure service aliases exist
+  docker tag aurora_server:latest aurora_celery-worker:latest 2>/dev/null || true
+  docker tag aurora_server:latest aurora_celery-beat:latest 2>/dev/null || true
+  docker tag aurora_server:latest aurora_chatbot:latest 2>/dev/null || true
+
 elif [[ "$BUILD_MODE" == "prebuilt" ]]; then
   info "Pulling prebuilt images from GHCR (tag: $VERSION)..."
   docker pull "ghcr.io/arvo-ai/aurora-server:${VERSION}"

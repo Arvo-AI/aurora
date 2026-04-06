@@ -93,8 +93,10 @@ prompt() {
 confirm() {
   local msg="${1:-Continue?}"
   if [[ "${NON_INTERACTIVE:-false}" == "true" ]]; then return 0; fi
-  read -rp "$msg [Y/n]: " yn < /dev/tty
-  [[ -z "$yn" || "$yn" =~ ^[Yy] ]]
+  echo "$msg"
+  select_option _confirm_choice "Yes" "No"
+  echo ""
+  [[ "$_confirm_choice" -eq 0 ]]
 }
 
 # ─── Detection ───────────────────────────────────────────────────────────────
@@ -182,6 +184,14 @@ ensure_prerequisites() {
 
 DOCKER_INSTALL_DOCS="https://arvo-ai.github.io/aurora/docs/deployment/install-docker"
 
+_pigz_hint() {
+  if ! command -v pigz &>/dev/null; then
+    info "Optional: install pigz for ~2x faster image loading"
+    info "  Debian/Ubuntu: sudo apt-get install -y pigz"
+    info "  RHEL/CentOS:   sudo yum install -y pigz"
+  fi
+}
+
 # Validate all prerequisites for air-tight (offline) deployments.
 # Collects every failure and prints a numbered remediation checklist.
 ensure_airtight_prerequisites() {
@@ -242,7 +252,7 @@ ensure_airtight_prerequisites() {
     issues+=("${n}. No checksum tool found (sha256sum or shasum)."$'\n'"     Debian/Ubuntu:  sudo apt-get install -y coreutils"$'\n'"     RHEL/CentOS:    sudo yum install -y coreutils")
   fi
 
-  [[ ${#issues[@]} -eq 0 ]] && { ok "All air-tight prerequisites satisfied"; return 0; }
+  [[ ${#issues[@]} -eq 0 ]] && { ok "All air-tight prerequisites satisfied"; _pigz_hint; return 0; }
 
   echo ""
   err "Prerequisites check failed. Fix the following before re-running:"
@@ -283,19 +293,20 @@ preflight() {
     failed=1
   fi
 
-  # Disk
-  local free_gb
+  # Disk — airtight needs more headroom for the image bundle
+  local free_gb disk_rec
+  if [[ "$profile" == "airtight" ]]; then disk_rec=80; else disk_rec=40; fi
   free_gb=$(df -BG "${REPO_ROOT:-.}" 2>/dev/null | awk 'NR==2 {gsub(/G/,"",$4); print $4}')
   if [[ -z "$free_gb" ]]; then
     free_gb=$(df -g "${REPO_ROOT:-.}" 2>/dev/null | awk 'NR==2 {print $4}')
   fi
   free_gb="${free_gb:-0}"
-  if [[ "$free_gb" -ge 40 ]]; then
+  if [[ "$free_gb" -ge "$disk_rec" ]]; then
     ok "Disk: ${free_gb} GB free"
-  elif [[ "$free_gb" -ge 20 ]]; then
-    warn "Disk: ${free_gb} GB free (40 GB+ recommended)"
+  elif [[ "$free_gb" -ge $(( disk_rec / 2 )) ]]; then
+    warn "Disk: ${free_gb} GB free (${disk_rec} GB+ recommended)"
   else
-    err "Disk: ${free_gb} GB free (40 GB+ recommended, builds may fail)"
+    err "Disk: ${free_gb} GB free (${disk_rec} GB+ recommended, builds may fail)"
     failed=1
   fi
 

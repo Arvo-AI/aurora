@@ -304,12 +304,13 @@ Use this path when the target VM has restricted or no outbound internet access (
 
 **Prerequisites:**
 
-- The target VM meets the [hardware requirements](#1-provision-a-vm) (4+ CPU, 8+ GB RAM, 60 GB SSD)
+- The target VM meets the [hardware requirements](#1-provision-a-vm) (4+ CPU, 8+ GB RAM, 80 GB SSD)
 - **Docker Engine 24.0+** with **Docker Compose v2** plugin installed on the VM (see [Installing Docker](./install-docker) for all OS/architecture combinations, including environments where `curl` and `wget` are blocked)
 - Required tools installed: `jq`, `sed`, `grep`, `tar`, `sha256sum` (or `shasum`)
+- **Optional but recommended:** `pigz` (parallel gzip — speeds up image loading ~2x). Install with `apt-get install pigz` or `yum install pigz`
 - Current user is in the `docker` group (verify with `groups` — run `sudo usermod -aG docker $USER && newgrp docker` if not)
 - Docker daemon is running (`sudo systemctl start docker`)
-- At least **40 GB free disk space** (3x the bundle size is needed during image loading)
+- At least **80 GB free disk space** (3x the bundle size is needed during image loading; standard deployments can work with 40 GB)
 - You can SSH into the VM
 
 :::tip
