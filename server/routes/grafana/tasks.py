@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
-import zlib
+
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
@@ -230,9 +230,9 @@ def process_grafana_alert(
                         for single_alert in individual_alerts:
                             alert_payload = _merge_alert_into_payload(payload, single_alert)
                             fingerprint = single_alert.get("fingerprint")
-                            # source_alert_id is INTEGER; CRC32 the hex fingerprint to a signed 32-bit int
-                            crc = zlib.crc32(fingerprint.encode())
-                            per_alert_source_id = crc - (1 << 32) if crc >= (1 << 31) else crc
+                            # Use the auto-increment grafana_alerts.id as source_alert_id
+                            # (consistent with how other connectors use their DB row id)
+                            per_alert_source_id = alert_id
 
                             per_alert_title = (
                                 alert_payload.get("commonLabels", {}).get("alertname")
