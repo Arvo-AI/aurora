@@ -59,7 +59,7 @@ auto_vault() {
     warn "Extract it manually:"
     echo "  VAULT_TOKEN=\$(docker exec aurora-vault cat /vault/init/keys.json | jq -r '.root_token')"
     echo "  sed -i \"s|^VAULT_TOKEN=.*|VAULT_TOKEN=\$VAULT_TOKEN|\" .env"
-    echo "  docker compose -f $compose_file restart aurora-server celery_worker celery_beat chatbot"
+    echo "  docker compose -f $compose_file up -d aurora-server celery_worker celery_beat chatbot"
     return 1
   fi
 
@@ -73,8 +73,8 @@ auto_vault() {
   fi
   rm -f .env.bak
 
-  info "Restarting services with Vault token..."
-  docker compose -f "$compose_file" restart aurora-server celery_worker celery_beat chatbot 2>/dev/null || \
-    docker compose -f "$compose_file" restart 2>/dev/null || true
-  ok "Services restarted with Vault token"
+  info "Recreating services with Vault token..."
+  docker compose -f "$compose_file" up -d aurora-server celery_worker celery_beat chatbot 2>/dev/null || \
+    docker compose -f "$compose_file" up -d 2>/dev/null || true
+  ok "Services recreated with Vault token"
 }

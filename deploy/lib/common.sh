@@ -487,8 +487,10 @@ configure_firewall() {
 # Writes a key=value into .env, replacing existing line or appending.
 env_set() {
   local key="$1" value="$2" file="${3:-.env}"
+  local escaped_value
+  escaped_value=$(printf '%s' "$value" | sed 's/[&/|\\]/\\&/g')
   if grep -q "^${key}=" "$file" 2>/dev/null; then
-    sed -i.bak "s|^${key}=.*|${key}=${value}|" "$file"
+    sed -i.bak "s|^${key}=.*|${key}=${escaped_value}|" "$file"
   else
     echo "${key}=${value}" >> "$file"
   fi

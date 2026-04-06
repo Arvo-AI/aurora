@@ -106,6 +106,27 @@ if [[ ${#optional_missing[@]} -gt 0 ]]; then
   fi
 fi
 
+# Docker is needed by every deployment path
+if ! command -v docker &>/dev/null; then
+  echo ""
+  warn "Docker is not installed. It's required to run Aurora."
+  printf "  Install Docker now? [Y/n]: "
+  read -r _ans
+  if [[ "${_ans:-Y}" =~ ^[Nn] ]]; then
+    warn "Skipping Docker install. The deployment wizard will attempt to install it later."
+  else
+    info "Installing Docker via get.docker.com..."
+    curl -fsSL https://get.docker.com | sh
+    sudo systemctl start docker 2>/dev/null || true
+    sudo systemctl enable docker 2>/dev/null || true
+    if ! groups | grep -q docker; then
+      sudo usermod -aG docker "$USER" 2>/dev/null || true
+    fi
+    ok "Docker installed"
+    info "Note: you may need to log out and back in for Docker group to take effect."
+  fi
+fi
+
 # ─── Clone repo ──────────────────────────────────────────────────────────────
 
 if [[ -d "$INSTALL_DIR/.git" ]]; then
