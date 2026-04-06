@@ -151,7 +151,7 @@ generate_secret() {
   elif command -v python3 &>/dev/null; then
     secret=$(python3 -c "import secrets; print(secrets.token_hex(32))")
   else
-    secret=$(tr -dc 'a-zA-Z0-9' < /dev/urandom | fold -w 64 | head -n 1)
+    secret=$(cat /dev/urandom | LC_ALL=C tr -dc 'a-zA-Z0-9' | head -c 64 || true)
   fi
   if [[ -z "$secret" ]]; then
     err "Failed to generate secret. Ensure openssl or python3 is available."

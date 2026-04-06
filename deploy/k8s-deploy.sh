@@ -464,7 +464,7 @@ if $PRIVATE_MODE; then
     echo "    ${PRIVATE_INGRESS_IP}  ${PRIVATE_HOSTNAME} api.${PRIVATE_HOSTNAME} ws.${PRIVATE_HOSTNAME}"
     echo ""
     read -rp "Add this entry to your local /etc/hosts now? [y/N] " ADD_HOSTS
-    if [[ "${ADD_HOSTS,,}" == "y" ]]; then
+    if [[ "$ADD_HOSTS" == "y" || "$ADD_HOSTS" == "Y" ]]; then
       echo "${PRIVATE_INGRESS_IP}  ${PRIVATE_HOSTNAME} api.${PRIVATE_HOSTNAME} ws.${PRIVATE_HOSTNAME}" | sudo tee -a /etc/hosts >/dev/null
       ok "Added to /etc/hosts"
     fi
