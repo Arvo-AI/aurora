@@ -58,7 +58,7 @@ select_option() {
   while true; do
     IFS= read -rsn1 key < /dev/tty
     if [[ "$key" == $'\x1b' ]]; then
-      read -rsn2 -t 0.1 key2 < /dev/tty
+      read -rsn2 -t 1 key2 < /dev/tty 2>/dev/null || read -rsn2 key2 < /dev/tty
       key+="$key2"
     fi
     case "$key" in

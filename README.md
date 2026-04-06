@@ -210,50 +210,25 @@ To stop: `make down` | Logs: `make logs`
 
 If you want cloud connectors, add provider credentials referenced in `.env.example`.
 
-### Deploy on a VM
+### Deploy Anywhere
 
-Deploy Aurora on any cloud VM (AWS, GCP, Azure, etc.) with a single command. The deployment wizard handles Docker installation, configuration, Vault setup, and health checks automatically.
-
-**Standard (internet-connected):**
+Aurora has a single deployment wizard that handles every environment — personal computer, VM, or Kubernetes cluster. On any machine with internet:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/arvo-ai/aurora/main/deploy/bootstrap.sh | bash
 ```
 
-**Air-gapped:** See [Air-gapped / restricted network](#air-gapped--restricted-network) below.
+The wizard installs prerequisites, clones the repo, and walks you through setup — Docker installation, LLM configuration, Vault, health checks, and more.
 
-See the [VM deployment guide](https://arvo-ai.github.io/aurora/docs/deployment/vm-deployment) for full details.
-
-### Pin a specific version
+If you already have the repo cloned, run the wizard directly:
 
 ```bash
-make prod-prebuilt VERSION=v1.2.3
+./deploy/deploy.sh
 ```
 
-### Build from source
+**Air-gapped / restricted network?** Download the [airtight bundle](https://storage.googleapis.com/aurora-airtight-bucket/index.html) on a connected machine, transfer it to the target, extract the source, and run `./deploy/deploy.sh` — the wizard detects the environment and adapts.
 
-```bash
-make prod-local
-```
-
-### Deploy on Kubernetes
-
-```bash
-helm install aurora ./helm/aurora
-```
-
-### Air-gapped / restricted network
-
-Prebuilt airtight bundles (all images in one tarball) are published on every release and push to `main`. Browse available bundles: [amd64](https://storage.googleapis.com/aurora-airtight-bucket/index.html) | [arm64](https://storage.googleapis.com/aurora-airtight-bucket-arm64/index.html)
-
-```bash
-# Replace <version> with a release tag (e.g. v1.2.3) or commit SHA
-curl -LO https://storage.googleapis.com/aurora-airtight-bucket/aurora-airtight-<version>-amd64.tar.gz
-# For ARM servers:
-# curl -LO https://storage.googleapis.com/aurora-airtight-bucket-arm64/aurora-airtight-<version>-arm64.tar.gz
-```
-
-Transfer the tarball and [source archive](https://github.com/arvo-ai/aurora/releases) to the target VM, then run the deployment wizard (`deploy/aurora-deploy.sh`) — it handles image loading, `.env` configuration, Vault setup, and health checks. See the [air-tight deployment guide](https://arvo-ai.github.io/aurora/docs/deployment/vm-deployment#secure-deployment-air-tight) for full instructions.
+See the [deployment overview](https://arvo-ai.github.io/aurora/docs/deployment/overview) for the full pipeline diagram and links to detailed guides.
 
 For detailed deployment guides, see the **[Documentation](https://arvo-ai.github.io/aurora/)**.
 

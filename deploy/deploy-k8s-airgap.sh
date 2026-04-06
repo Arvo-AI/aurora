@@ -317,14 +317,10 @@ fi
 
 if [ "$CONFIG_COMPLETE" = true ]; then
   ok "Configuration found in $VALUES_FILE"
-  if [ -t 0 ]; then
-    printf "  Reconfigure? [y/N]: "
-    read -r RECONFIG
-    if [ "$RECONFIG" = "y" ] || [ "$RECONFIG" = "Y" ]; then
-      bash ./deploy/configure-helm.sh
-    else
-      echo "  Keeping existing configuration."
-    fi
+  if [ -t 0 ] && confirm "Reconfigure?"; then
+    bash ./deploy/configure-helm.sh
+  else
+    echo "  Keeping existing configuration."
   fi
 else
   if [ -t 0 ]; then
@@ -398,34 +394,21 @@ if [ -n "$INGRESS_CLASSES" ]; then
   if ! echo "$INGRESS_CLASSES" | grep -qw "$CONFIGURED_CLASS"; then
     warn "Configured ingress class '${CONFIGURED_CLASS}' not found in cluster."
     warn "Available classes: ${INGRESS_CLASSES}"
-    if [ -t 0 ]; then
-      FIRST_CLASS=$(echo "$INGRESS_CLASSES" | awk '{print $1}')
-      printf "  Use '${FIRST_CLASS}' instead? [Y/n]: "
-      read -r USE_DETECTED
-      USE_DETECTED="${USE_DETECTED:-Y}"
-      if [ "$USE_DETECTED" != "n" ] && [ "$USE_DETECTED" != "N" ]; then
-        yq -i ".ingress.className = \"${FIRST_CLASS}\"" "$VALUES_FILE"
-        ok "Set ingress.className = ${FIRST_CLASS}"
-      fi
+    FIRST_CLASS=$(echo "$INGRESS_CLASSES" | awk '{print $1}')
+    if [ -t 0 ] && confirm "Use '${FIRST_CLASS}' instead?"; then
+      yq -i ".ingress.className = \"${FIRST_CLASS}\"" "$VALUES_FILE"
+      ok "Set ingress.className = ${FIRST_CLASS}"
     fi
   fi
 else
   warn "No ingress controller found in the cluster."
   echo ""
-  echo "  Aurora needs an ingress controller to route traffic."
-  echo "  Options:"
-  echo "    1) Install nginx-ingress from the bundle (we'll do it now)"
-  echo "    2) Skip — I'll set up an ingress controller myself"
-  echo ""
 
-  INSTALL_INGRESS="1"
-  if [ -t 0 ]; then
-    printf "  Choose [1]: "
-    read -r INSTALL_INGRESS
-    INSTALL_INGRESS="${INSTALL_INGRESS:-1}"
-  fi
+  select_menu "Aurora needs an ingress controller to route traffic." \
+    "Install nginx-ingress from the bundle" \
+    "Skip — I'll set up an ingress controller myself"
 
-  if [ "$INSTALL_INGRESS" = "1" ]; then
+  if [ "$MENU_RESULT" = "0" ]; then
     MANIFEST="./deploy/manifests/ingress-nginx-v1.8.1.yaml"
     if [ ! -f "$MANIFEST" ]; then
       echo "Error: ${MANIFEST} not found."
@@ -490,8 +473,7 @@ else
   echo "  Your platform team may need to provision a load balancer or assign a static IP."
   echo "  Check with:  kubectl get ingress -n $NAMESPACE"
   if [ -t 0 ]; then
-    printf "  Enter IP/hostname manually (or press Enter to skip): "
-    read -r EXTERNAL_IP
+    prompt EXTERNAL_IP "Enter IP/hostname manually (or press Enter to skip)" ""
   fi
 fi
 echo ""

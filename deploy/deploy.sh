@@ -121,6 +121,31 @@ case "$TARGET" in
   echo "  Setting up Aurora on a Kubernetes cluster."
   echo ""
 
+  if ! check_tool kubectl; then
+    warn "kubectl is not installed. It's required for Kubernetes deployments."
+    echo ""
+    echo "  Install: https://kubernetes.io/docs/tasks/tools/"
+    exit 1
+  fi
+
+  if ! kubectl cluster-info &>/dev/null 2>&1; then
+    warn "kubectl is installed but cannot reach a cluster."
+    echo ""
+    echo "  Make sure your kubeconfig is set up and pointing at a running cluster."
+    echo "  Verify with: kubectl cluster-info"
+    echo ""
+    echo "  Don't have a cluster yet? See:"
+    echo "    AWS EKS:  https://arvo-ai.github.io/aurora/docs/deployment/eks-setup"
+    echo "    GCP GKE:  Create a cluster with default settings in the GCP console"
+    echo "    Azure AKS: Create a cluster with default settings in the Azure portal"
+    echo ""
+    echo "  Once your cluster is ready and kubectl can connect, re-run this wizard."
+    exit 1
+  fi
+
+  ok "kubectl connected to cluster"
+  echo ""
+
   select_menu "Does the cluster environment have internet access?" \
     "Yes — I can reach the internet from where I'll run the deployment" \
     "No  — the cluster is isolated / air-gapped"
