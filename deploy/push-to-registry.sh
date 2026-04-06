@@ -186,6 +186,24 @@ push_registry_mode() {
     done
   elif command -v docker &>/dev/null && docker info &>/dev/null; then
     echo "Using docker (pull → tag → push)"
+    echo "  Note: each image is pulled temporarily. ~3 GB free disk recommended."
+    echo "  (skopeo avoids this — install it for zero-disk registry-to-registry copies)"
+
+    DOCKER_FREE_KB=$(docker system df --format '{{.Reclaimable}}' 2>/dev/null | head -1 || true)
+    DISK_FREE_KB=$(df -k "$(docker info --format '{{.DockerRootDir}}' 2>/dev/null || echo /var/lib/docker)" 2>/dev/null | awk 'NR==2{print $4}' || true)
+    if [ -n "$DISK_FREE_KB" ] && [ "$DISK_FREE_KB" -lt 3145728 ] 2>/dev/null; then
+      echo ""
+      echo "  WARNING: Less than 3 GB free on Docker's disk."
+      echo "  Free space: $(( DISK_FREE_KB / 1024 )) MB"
+      echo "  Run 'docker system prune -a' to reclaim space, or install skopeo."
+      echo ""
+      printf "  Continue anyway? [y/N]: "
+      read -r CONTINUE_LOW_DISK
+      if [ "$CONTINUE_LOW_DISK" != "y" ] && [ "$CONTINUE_LOW_DISK" != "Y" ]; then
+        exit 1
+      fi
+    fi
+
     echo ""
     local COUNT=0
     for mapping in "${IMAGE_MAP[@]}"; do
@@ -241,9 +259,29 @@ push_tarball_mode() {
 
   local TARBALL_SIZE
   TARBALL_SIZE=$(du -h "$TARBALL" | cut -f1)
+  local TARBALL_SIZE_KB
+  TARBALL_SIZE_KB=$(du -k "$TARBALL" | cut -f1)
+  local NEEDED_KB=$(( TARBALL_SIZE_KB * 2 ))
+
+  local DISK_FREE_KB
+  DISK_FREE_KB=$(df -k "$(docker info --format '{{.DockerRootDir}}' 2>/dev/null || echo /var/lib/docker)" 2>/dev/null | awk 'NR==2{print $4}' || true)
+
   echo "Loading images from tarball (${TARBALL_SIZE})..."
-  echo "  Images are stored in Docker's VM, not your host filesystem."
-  echo "  Run 'docker system prune -a' first if Docker disk is low."
+  echo "  Estimated space needed: ~$(( NEEDED_KB / 1048576 )) GB (tarball + Docker image cache)"
+
+  if [ -n "$DISK_FREE_KB" ] && [ "$DISK_FREE_KB" -lt "$NEEDED_KB" ] 2>/dev/null; then
+    echo ""
+    echo "  WARNING: Not enough free disk space."
+    echo "  Available: $(( DISK_FREE_KB / 1024 )) MB  |  Needed: ~$(( NEEDED_KB / 1024 )) MB"
+    echo "  Run 'docker system prune -a' to reclaim space."
+    echo ""
+    printf "  Continue anyway? [y/N]: "
+    read -r CONTINUE_LOW_DISK
+    if [ "$CONTINUE_LOW_DISK" != "y" ] && [ "$CONTINUE_LOW_DISK" != "Y" ]; then
+      exit 1
+    fi
+  fi
+
   echo ""
   if command -v pv &>/dev/null; then
     pv "$TARBALL" | docker load
