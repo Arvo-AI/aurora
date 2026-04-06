@@ -130,8 +130,8 @@ case "$TARGET" in
       # Connected — choose deployment style
       echo ""
       select_menu "How would you like to deploy?" \
-        "Quick deploy — build/push images directly, auto-configure (local, cloud, or VPN)" \
-        "Registry deploy — push to a private registry, configure Helm interactively"
+        "Direct to cluster — you have kubectl access and can push images directly" \
+        "Private registry  — your cluster pulls from an internal registry (e.g. Harbor, Nexus, ECR)"
 
       case "$MENU_RESULT" in
         0)
@@ -162,7 +162,7 @@ case "$TARGET" in
           fi
 
           echo ""
-          bash "$SCRIPT_DIR/deploy-k8s-airgap.sh" "$REGISTRY" --mode standard $EXTRA_ARGS
+          bash "$SCRIPT_DIR/deploy-k8s-airgap.sh" "$REGISTRY" $EXTRA_ARGS
           ;;
       esac
       ;;
@@ -241,7 +241,7 @@ case "$TARGET" in
           fi
 
           echo ""
-          bash "$SCRIPT_DIR/deploy-k8s-airgap.sh" "$REGISTRY" --mode bastion $EXTRA_ARGS
+          bash "$SCRIPT_DIR/deploy-k8s-airgap.sh" "$REGISTRY" $EXTRA_ARGS
           ;;
       esac
       ;;

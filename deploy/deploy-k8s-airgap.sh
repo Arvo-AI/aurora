@@ -1,16 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Aurora Kubernetes deployment.
+# Aurora Kubernetes — registry-based deployment.
 #
-# Interactively guides the user through the right deployment path based on
-# their environment (standard vs air-gapped, workstation vs bastion).
+# Pushes images to a private registry, configures Helm, and deploys.
+# Assumes the deployment path (connected vs air-gapped bastion) was already
+# determined by the caller (deploy.sh wizard or the operator directly).
 #
 # Usage:
-#   ./deploy/deploy-k8s-airgap.sh <registry-url>
-#   ./deploy/deploy-k8s-airgap.sh <registry-url> <version>
-#   ./deploy/deploy-k8s-airgap.sh <registry-url> --tarball <path>
-#   ./deploy/deploy-k8s-airgap.sh <registry-url> --skip-push
+#   ./deploy/deploy-k8s-airgap.sh <registry-url> [version] [--tarball <path>] [--skip-push]
 #
 # Example:
 #   ./deploy/deploy-k8s-airgap.sh registry.internal:5000
@@ -21,7 +19,6 @@ REGISTRY=""
 VERSION="latest"
 TARBALL_FLAG=""
 SKIP_PUSH=false
-DEPLOY_MODE_FLAG=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -34,19 +31,13 @@ while [ $# -gt 0 ]; do
       SKIP_PUSH=true
       shift
       ;;
-    --mode)
-      DEPLOY_MODE_FLAG="${2:-}"
-      [ -z "$DEPLOY_MODE_FLAG" ] && { echo "Error: --mode requires a value (standard|bastion|prepare)"; exit 1; }
-      shift 2
-      ;;
     -h|--help)
-      echo "Usage: $0 <registry-url> [version] [--tarball <path>] [--skip-push] [--mode standard|bastion|prepare]"
+      echo "Usage: $0 <registry-url> [version] [--tarball <path>] [--skip-push]"
       echo ""
       echo "  registry-url    Target registry (e.g. registry.internal:5000)"
       echo "  version         Aurora version (default: latest release)"
       echo "  --tarball PATH  Use a specific airgap tarball for image push"
       echo "  --skip-push     Skip image push (images already in registry)"
-      echo "  --mode MODE     Skip the interactive menu (standard, bastion, or prepare)"
       exit 0
       ;;
     *)
@@ -85,7 +76,6 @@ source "$SCRIPT_DIR/lib/common.sh"
 _build_resume_cmd() {
   local cmd="./deploy/deploy-k8s-airgap.sh ${REGISTRY}"
   [ "${VERSION}" != "latest" ] && cmd="$cmd ${VERSION}"
-  [ -n "${DEPLOY_MODE:-}" ] && cmd="$cmd --mode ${DEPLOY_MODE}"
   [ -n "${TARBALL_FLAG:-}" ] && cmd="$cmd --tarball ${TARBALL_FLAG}"
   [ "${SKIP_PUSH:-false}" = true ] && cmd="$cmd --skip-push"
   echo "$cmd"
@@ -144,90 +134,7 @@ if [ -d "deploy/helm/aurora" ] && [ -d "scripts" ]; then
   IN_REPO=true
 fi
 
-# ── Choose deployment path ────────────────────────────────────────────────────
-
-DEPLOY_MODE=""
-
-if [ -n "$DEPLOY_MODE_FLAG" ]; then
-  DEPLOY_MODE="$DEPLOY_MODE_FLAG"
-elif [ -n "$TARBALL_FLAG" ]; then
-  DEPLOY_MODE="bastion"
-elif [ "$SKIP_PUSH" = true ]; then
-  DEPLOY_MODE="bastion"
-elif [ -t 0 ]; then
-  select_menu "How would you like to deploy Aurora?" \
-    "Standard — this machine has internet and can reach the cluster" \
-    "Air-gapped — I'm on the bastion / jump host with cluster access" \
-    "Prepare bundle — download files to transfer to an air-gapped environment"
-
-  case "$MENU_RESULT" in
-    0) DEPLOY_MODE="standard" ;;
-    1) DEPLOY_MODE="bastion" ;;
-    2) DEPLOY_MODE="prepare" ;;
-  esac
-else
-  if [ "$HAS_INTERNET" = true ] && [ "$HAS_KUBECTL" = true ]; then
-    DEPLOY_MODE="standard"
-  else
-    DEPLOY_MODE="bastion"
-  fi
-fi
-
 echo ""
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# MODE: prepare — Download bundle for transfer to air-gapped environment
-# ═══════════════════════════════════════════════════════════════════════════════
-
-if [ "$DEPLOY_MODE" = "prepare" ]; then
-  if [ "$HAS_INTERNET" != true ]; then
-    warn "This machine doesn't appear to have internet access."
-    echo "  Option 3 is for downloading files on a connected machine."
-    echo "  If you're on the bastion, choose option 2 instead."
-    exit 1
-  fi
-
-  info "Downloading Aurora bundle for air-gapped transfer..."
-  echo ""
-
-  TARGET_VERSION="$VERSION"
-  if [ "$TARGET_VERSION" = "latest" ]; then
-    LATEST=$(curl -fsSL --connect-timeout 10 "https://api.github.com/repos/arvo-ai/aurora/releases/latest" 2>/dev/null | grep '"tag_name"' | cut -d'"' -f4 || true)
-    [ -n "$LATEST" ] && TARGET_VERSION="$LATEST"
-  fi
-
-  if [ -f "$SCRIPT_DIR/download-bundle.sh" ]; then
-    bash "$SCRIPT_DIR/download-bundle.sh" "$TARGET_VERSION"
-  else
-    curl -fsSL https://raw.githubusercontent.com/arvo-ai/aurora/main/deploy/download-bundle.sh | bash -s -- "$TARGET_VERSION"
-  fi
-
-  echo ""
-  echo "═══════════════════════════════════════════════"
-  echo "  Bundle downloaded. Next steps:"
-  echo "═══════════════════════════════════════════════"
-  echo ""
-  echo "  1. Transfer the following files to your bastion / jump host:"
-  echo ""
-  ls -1 aurora-airtight-*.tar.gz aurora-*.tar.gz 2>/dev/null | grep -v "\.sha256" | sed 's/^/     /'
-  echo ""
-  echo "     Example:  scp aurora-*.tar.gz bastion:/tmp/"
-  echo ""
-  echo "  2. On the bastion, extract the source and run:"
-  echo ""
-  echo "     tar xzf aurora-*.tar.gz  # (the smaller one — source archive)"
-  echo "     cd aurora-*/"
-  echo "     ./deploy/deploy-k8s-airgap.sh ${REGISTRY}"
-  echo "     # Choose option 2 (air-gapped bastion)"
-  echo ""
-  exit 0
-fi
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# MODE: standard / bastion — Full deployment
-# ═══════════════════════════════════════════════════════════════════════════════
-
-# ── Step 1: Resolve version & source ──────────────────────────────────────────
 
 echo "=== Step 1: Resolve version & source ==="
 echo ""
@@ -246,7 +153,7 @@ if [ -n "$TARBALL_FLAG" ]; then
   fi
   ok "Using tarball: $TARBALL (version: $TARGET_VERSION)"
 
-elif [ "$DEPLOY_MODE" = "standard" ]; then
+elif [ "$HAS_INTERNET" = true ]; then
   if [ "$IN_REPO" = true ]; then
     ok "Running from repo with internet access — will pull images directly"
   fi
@@ -255,8 +162,8 @@ elif [ "$DEPLOY_MODE" = "standard" ]; then
     [ -n "$LATEST" ] && TARGET_VERSION="$LATEST"
   fi
 
-elif [ "$DEPLOY_MODE" = "bastion" ]; then
-  # Look for local tarball
+else
+  # No internet, no tarball — look for a local tarball
   for f in aurora-airtight-*.tar.gz; do
     [ -f "$f" ] || continue
     TARBALL="$f"
@@ -407,8 +314,8 @@ if [ "$HAS_KUBECTL" != true ]; then
   echo ""
   warn "Cannot reach Kubernetes cluster from this machine."
   echo ""
-  if [ "$DEPLOY_MODE" = "bastion" ]; then
-    echo "  You selected the bastion/air-gap option, but kubectl can't reach the cluster."
+  if [ "$HAS_INTERNET" != true ]; then
+    echo "  You're in an air-gapped environment, but kubectl can't reach the cluster."
     echo "  Make sure kubectl is configured and the cluster is reachable, then re-run."
     _print_resume_hint
   else
