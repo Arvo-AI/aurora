@@ -79,6 +79,19 @@ class ConnectorRegistry {
     });
 
     this.register({
+      id: "loki",
+      name: "Grafana Loki",
+      description: "Connect Grafana Loki for log aggregation. Receive alert webhooks from Loki Ruler, and enable AI-powered root cause analysis on log data.",
+      iconPath: "/loki.svg",
+      iconBgColor: "bg-white dark:bg-white",
+      category: "Monitoring",
+      path: "/loki/auth",
+      storageKey: "isLokiConnected",
+      alertsPath: "/loki/alerts",
+      alertsLabel: "View Alerts",
+    });
+
+    this.register({
         id: "dynatrace",
         name: "Dynatrace",
         description: "Connect to Dynatrace for full-stack observability. Receive problem notifications and query metrics, logs, and entities for root cause analysis.",

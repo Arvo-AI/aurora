@@ -514,6 +514,28 @@ def initialize_tables():
                     CREATE INDEX IF NOT EXISTS idx_grafana_alerts_state ON grafana_alerts(alert_state);
                     CREATE INDEX IF NOT EXISTS idx_grafana_alerts_received_at ON grafana_alerts(received_at DESC);
                 """,
+                "loki_alerts": """
+                    CREATE TABLE IF NOT EXISTS loki_alerts (
+                        id SERIAL PRIMARY KEY,
+                        user_id VARCHAR(255) NOT NULL,
+                        org_id VARCHAR(255),
+                        alert_uid VARCHAR(255),
+                        alert_title TEXT,
+                        alert_state VARCHAR(50),
+                        rule_group TEXT,
+                        rule_name TEXT,
+                        labels JSONB,
+                        annotations JSONB,
+                        payload JSONB NOT NULL,
+                        received_at TIMESTAMP NOT NULL,
+                        alert_hash VARCHAR(64) UNIQUE,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+
+                    CREATE INDEX IF NOT EXISTS idx_loki_alerts_user_id ON loki_alerts(user_id, received_at DESC);
+                    CREATE INDEX IF NOT EXISTS idx_loki_alerts_state ON loki_alerts(alert_state);
+                    CREATE INDEX IF NOT EXISTS idx_loki_alerts_received_at ON loki_alerts(received_at DESC);
+                """,
                 "datadog_events": """
                     CREATE TABLE IF NOT EXISTS datadog_events (
                         id SERIAL PRIMARY KEY,
@@ -1064,6 +1086,7 @@ def initialize_tables():
             rls_tables.append("grafana_alerts")
             rls_tables.append("datadog_events")
             rls_tables.append("netdata_alerts")
+            rls_tables.append("loki_alerts")
             rls_tables.append("netdata_verification_tokens")
             rls_tables.append("splunk_alerts")
             rls_tables.append("bigpanda_events")
@@ -1827,7 +1850,7 @@ def initialize_tables():
                 "user_preferences", "workspaces", "aurora_deployments",
                 "deployment_tasks", "deployments", "chat_sessions",
                 "llm_usage_tracking", "cloud_feed_metadata", "cloud_ingestion_state",
-                "grafana_alerts", "datadog_events", "netdata_alerts",
+                "grafana_alerts", "datadog_events", "netdata_alerts", "loki_alerts",
                 "pagerduty_events", "incidents", "incident_alerts",
                 "rca_notification_emails", "splunk_alerts",
                 "jenkins_deployment_events", "dynatrace_problems",
