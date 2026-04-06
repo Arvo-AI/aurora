@@ -130,8 +130,8 @@ case "$TARGET" in
       # Connected — choose deployment style
       echo ""
       select_menu "How would you like to deploy?" \
-        "Direct to cluster — you have kubectl access and can push images directly" \
-        "Private registry  — your cluster pulls from an internal registry (e.g. Harbor, Nexus, ECR)"
+        "Build & push   — build images from source, push to your registry (dev/cloud)" \
+        "Prebuilt images — push prebuilt images to an internal registry (enterprise/restricted)"
 
       case "$MENU_RESULT" in
         0)
