@@ -43,46 +43,30 @@ generate_secret() {
     fi
 }
 
-# Generate secrets
-POSTGRES_PASSWORD=$(generate_secret)
-FLASK_SECRET_KEY=$(generate_secret)
-AUTH_SECRET=$(generate_secret)
+# Helper: set a secret only if it's empty or missing
+set_secret_if_empty() {
+    local key="$1"
+    local val
+    val=$(grep "^${key}=" "$ENV_FILE" 2>/dev/null | cut -d= -f2-)
+    if [ -n "$val" ]; then
+        echo -e "  ${key} already set, skipping"
+        return
+    fi
+    local secret
+    secret=$(generate_secret)
+    if grep -q "^${key}=" "$ENV_FILE"; then
+        sed -i.bak "s|^${key}=.*|${key}=$secret|" "$ENV_FILE"
+    else
+        echo "${key}=$secret" >> "$ENV_FILE"
+    fi
+    echo -e "  ${KEY:-$key} generated"
+}
 
-# Update .env file
-# Use sed to update or add each variable
-if grep -q "^POSTGRES_PASSWORD=" "$ENV_FILE"; then
-    sed -i.bak "s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=$POSTGRES_PASSWORD|" "$ENV_FILE"
-else
-    echo "POSTGRES_PASSWORD=$POSTGRES_PASSWORD" >> "$ENV_FILE"
-fi
-
-if grep -q "^FLASK_SECRET_KEY=" "$ENV_FILE"; then
-    sed -i.bak "s|^FLASK_SECRET_KEY=.*|FLASK_SECRET_KEY=$FLASK_SECRET_KEY|" "$ENV_FILE"
-else
-    echo "FLASK_SECRET_KEY=$FLASK_SECRET_KEY" >> "$ENV_FILE"
-fi
-
-if grep -q "^AUTH_SECRET=" "$ENV_FILE"; then
-    sed -i.bak "s|^AUTH_SECRET=.*|AUTH_SECRET=$AUTH_SECRET|" "$ENV_FILE"
-else
-    echo "AUTH_SECRET=$AUTH_SECRET" >> "$ENV_FILE"
-fi
-
-# Generate SEARXNG_SECRET
-SEARXNG_SECRET=$(generate_secret)
-if grep -q "^SEARXNG_SECRET=" "$ENV_FILE"; then
-    sed -i.bak "s|^SEARXNG_SECRET=.*|SEARXNG_SECRET=$SEARXNG_SECRET|" "$ENV_FILE"
-else
-    echo "SEARXNG_SECRET=$SEARXNG_SECRET" >> "$ENV_FILE"
-fi
-
-# Generate MEMGRAPH_PASSWORD
-MEMGRAPH_PASSWORD=$(generate_secret)
-if grep -q "^MEMGRAPH_PASSWORD=" "$ENV_FILE"; then
-    sed -i.bak "s|^MEMGRAPH_PASSWORD=.*|MEMGRAPH_PASSWORD=$MEMGRAPH_PASSWORD|" "$ENV_FILE"
-else
-    echo "MEMGRAPH_PASSWORD=$MEMGRAPH_PASSWORD" >> "$ENV_FILE"
-fi
+set_secret_if_empty POSTGRES_PASSWORD
+set_secret_if_empty FLASK_SECRET_KEY
+set_secret_if_empty AUTH_SECRET
+set_secret_if_empty SEARXNG_SECRET
+set_secret_if_empty MEMGRAPH_PASSWORD
 
 # Add AGENT_RECURSION_LIMIT if not present (required for agent)
 if ! grep -q "^AGENT_RECURSION_LIMIT=" "$ENV_FILE"; then
