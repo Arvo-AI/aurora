@@ -228,7 +228,7 @@ case "$TARGET" in
           echo ""
           echo "  1. Transfer these files to your bastion / jump host:"
           echo ""
-          ls -1 aurora-airtight-*.tar.gz aurora-*.tar.gz 2>/dev/null | grep -v "\.sha256" | sed 's/^/     /' || echo "     (check current directory for aurora-*.tar.gz files)"
+          ls -1 aurora-airtight-*.tar.gz aurora-airtight-*.tar.gz.sha256 aurora-*.tar.gz 2>/dev/null | sort -u | sed 's/^/     /' || echo "     (check current directory for aurora-*.tar.gz files)"
           echo ""
           echo "     Example:  scp aurora-*.tar.gz bastion:/tmp/"
           echo ""
