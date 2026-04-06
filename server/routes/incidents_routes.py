@@ -359,10 +359,11 @@ def get_incident(user_id, incident_id: str):
                             source_alert_id,
                         )
                 elif source_type == "grafana":
-                    # source_alert_id is the grafana_alerts auto-increment id.
+                    # source_alert_id is grafana_alerts.id * 100 + alert_index.
+                    # Recover the row id by integer-dividing by 100.
                     # Direct lookup first, fingerprint fallback for legacy CRC32 records.
                     try:
-                        alert_id_int = int(source_alert_id)
+                        alert_id_int = int(source_alert_id) // 100
                         cursor.execute(
                             "SELECT payload FROM grafana_alerts WHERE id = %s AND user_id = %s",
                             (alert_id_int, user_id),

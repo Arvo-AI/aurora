@@ -227,12 +227,12 @@ def process_grafana_alert(
                         if not individual_alerts:
                             logger.info("[GRAFANA][ALERT] No alerts array in payload for user %s, skipping incident creation", user_id)
                             return
-                        for single_alert in individual_alerts:
+                        for alert_idx, single_alert in enumerate(individual_alerts):
                             alert_payload = _merge_alert_into_payload(payload, single_alert)
                             fingerprint = single_alert.get("fingerprint")
-                            # Use the auto-increment grafana_alerts.id as source_alert_id
-                            # (consistent with how other connectors use their DB row id)
-                            per_alert_source_id = alert_id
+                            # Unique per-alert ID: base webhook row id + index offset
+                            # so multiple alerts in one webhook get distinct source_alert_ids
+                            per_alert_source_id = alert_id * 100 + alert_idx
 
                             per_alert_title = (
                                 alert_payload.get("commonLabels", {}).get("alertname")
