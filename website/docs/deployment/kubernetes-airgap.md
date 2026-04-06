@@ -6,65 +6,16 @@ sidebar_position: 4
 
 Deploy Aurora on a Kubernetes cluster with a private container registry. The deployment wizard automatically detects your environment and adapts.
 
+:::tip
+See the [Deployment Overview](./overview) for the full deployment pipeline diagram covering all targets (personal computer, VM, Kubernetes).
+:::
+
 **Prerequisites:**
 
 - Kubernetes 1.25+ with a default StorageClass
 - A private container registry accessible from the cluster (Harbor, Docker Distribution, Zot, etc.)
 - `kubectl`, `helm`, `yq`, and `docker` (or `skopeo`) on a machine that can reach the registry
 - Network access from cluster nodes to the private registry
-
-## Deployment Pipeline Overview
-
-```
-                  ┌─────────────────────────────────┐
-                  │       ./deploy/deploy.sh         │
-                  │   "What environment are you      │
-                  │    deploying Aurora on?"          │
-                  └───────────────┬─────────────────┘
-                                  │
-            ┌─────────────────────┼─────────────────────┐
-            ▼                     ▼                     ▼
-   ┌──────────────┐     ┌──────────────┐     ┌──────────────┐
-   │   Personal   │     │ VM or server │     │  Kubernetes  │
-   │   computer   │     │              │     │   cluster    │
-   └──────┬───────┘     └──────┬───────┘     └──────┬───────┘
-          │                    │                     │
-          ▼                    ▼                     │
-   make init && make dev   aurora-deploy.sh          │
-   (or prod-prebuilt)      (installs Docker,         │
-                           configures, starts)       │
-                                                     ▼
-                              ┌─────────────────────────────────┐
-                              │  Does the cluster environment   │
-                              │  have internet access?          │
-                              └───────────────┬─────────────────┘
-                                              │
-                            ┌─────────────────┴─────────────────┐
-                            ▼                                   ▼
-               ┌────────────────────────┐          ┌────────────────────────┐
-               │          YES           │          │           NO           │
-               └───────────┬────────────┘          └───────────┬────────────┘
-                           │                                   │
-                ┌──────────┴──────────┐           ┌────────────┴────────────┐
-                ▼                     ▼           ▼                         ▼
-        ┌──────────────┐  ┌────────────────┐ ┌──────────────┐  ┌──────────────────┐
-        │ Build & push │  │  Prebuilt      │ │ Download     │  │ On the bastion   │
-        │ (k8s-deploy) │  │  images        │ │ bundle first │  │ deploy-k8s-      │
-        │              │  │  (deploy-k8s-  │ │ (wizard      │  │ airgap.sh        │
-        │ Builds from  │  │  airgap.sh     │ │ handles it)  │  │ --airgap         │
-        │ source, push │  │  --connected)  │ │              │  │                  │
-        │ directly     │  │              │ │ Transfer →   │  │ Loads tarball,   │
-        │              │  │ Pulls from   │ │ bastion, re- │  │ pushes to        │
-        │              │  │ GHCR, pushes │ │ run wizard   │  │ registry, helm   │
-        │              │  │ to registry  │ │              │  │ deploy, vault    │
-        └──────────────┘  └────────────────┘ └──────────────┘  └──────────────────┘
-```
-
-> **`./deploy/deploy.sh`** is the universal entrypoint. It asks where you're deploying and routes to the right tool.
->
-> For Kubernetes with internet: choose between **Build & push** (builds from source via `k8s-deploy.sh`) or **Prebuilt images** (pulls from GHCR, pushes to your private registry via `deploy-k8s-airgap.sh`). Without internet: download the bundle on a connected machine, transfer to bastion, and re-run the wizard.
-
----
 
 ## Which Path Is Right for You?
 
