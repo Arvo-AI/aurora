@@ -31,6 +31,7 @@ BRANCH="${AURORA_BRANCH:-main}"
 
 info()  { echo -e "\033[1;34m->\033[0m $1"; }
 ok()    { echo -e "\033[1;32m[ok]\033[0m $1"; }
+warn()  { echo -e "\033[1;33m[!]\033[0m $1"; }
 err()   { echo -e "\033[1;31m[x]\033[0m $1"; }
 
 detect_os() {
@@ -82,7 +83,10 @@ if [[ -d "$INSTALL_DIR/.git" ]]; then
   cd "$INSTALL_DIR"
   git fetch origin "$BRANCH"
   git checkout "$BRANCH"
-  git pull --ff-only origin "$BRANCH" 2>/dev/null || git reset --hard "origin/$BRANCH"
+  git pull --ff-only origin "$BRANCH" 2>/dev/null || {
+    warn "Local changes detected -- resetting to origin/$BRANCH"
+    git reset --hard "origin/$BRANCH"
+  }
 else
   info "Cloning Aurora to $INSTALL_DIR"
   git clone --depth 1 --branch "$BRANCH" "$REPO_URL" "$INSTALL_DIR"

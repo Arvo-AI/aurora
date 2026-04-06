@@ -377,9 +377,8 @@ while [[ $ELAPSED -lt $TIMEOUT ]]; do
   TOTAL=$(docker compose -f docker-compose.prod-local.yml ps --format json 2>/dev/null \
     | wc -l 2>/dev/null | tr -d ' ' || echo "0")
 
-  # Check if the key services are up
-  if docker compose -f docker-compose.prod-local.yml ps 2>/dev/null | grep -q "aurora-server.*running" && \
-     docker compose -f docker-compose.prod-local.yml ps 2>/dev/null | grep -q "frontend.*running"; then
+  if docker compose -f docker-compose.prod-local.yml ps --format '{{.Name}} {{.State}}' 2>/dev/null | grep -q "aurora-server running" && \
+     docker compose -f docker-compose.prod-local.yml ps --format '{{.Name}} {{.State}}' 2>/dev/null | grep -q "aurora-frontend running"; then
     break
   fi
 

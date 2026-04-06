@@ -430,7 +430,7 @@ _wait_timeout=180
 _wait_elapsed=0
 while [[ $_wait_elapsed -lt $_wait_timeout ]]; do
   if docker compose -f "$COMPOSE_FILE" ps --format '{{.Name}} {{.State}}' 2>/dev/null | grep -q "aurora-server running" && \
-     docker compose -f "$COMPOSE_FILE" ps --format '{{.Name}} {{.State}}' 2>/dev/null | grep -q "frontend.* running"; then
+     docker compose -f "$COMPOSE_FILE" ps --format '{{.Name}} {{.State}}' 2>/dev/null | grep -q "aurora-frontend running"; then
     break
   fi
 
