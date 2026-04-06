@@ -8,9 +8,9 @@ Aurora supports three deployment targets. The deployment wizard (`./deploy/deplo
 
 ```
                   ┌─────────────────────────────────┐
-                  │       ./deploy/deploy.sh         │
-                  │   "What environment are you      │
-                  │    deploying Aurora on?"          │
+                  │       ./deploy/deploy.sh        │
+                  │   "What environment are you     │
+                  │    deploying Aurora on?"        │
                   └───────────────┬─────────────────┘
                                   │
             ┌─────────────────────┼─────────────────────┐
@@ -38,17 +38,18 @@ Aurora supports three deployment targets. The deployment wizard (`./deploy/deplo
                            │                                   │
                 ┌──────────┴──────────┐           ┌────────────┴────────────┐
                 ▼                     ▼           ▼                         ▼
-        ┌──────────────┐  ┌────────────────┐ ┌──────────────┐  ┌──────────────────┐
-        │ Build & push │  │  Prebuilt      │ │ Download     │  │ On the bastion   │
-        │ (k8s-deploy) │  │  images        │ │ bundle first │  │ deploy-k8s-      │
-        │              │  │  (deploy-k8s-  │ │ (wizard      │  │ airgap.sh        │
-        │ Builds from  │  │  airgap.sh     │ │ handles it)  │  │ --airgap         │
-        │ source, push │  │  --connected)  │ │              │  │                  │
-        │ directly     │  │              │ │ Transfer →   │  │ Loads tarball,   │
-        │              │  │ Pulls from   │ │ bastion, re- │  │ pushes to        │
-        │              │  │ GHCR, pushes │ │ run wizard   │  │ registry, helm   │
-        │              │  │ to registry  │ │              │  │ deploy, vault    │
-        └──────────────┘  └────────────────┘ └──────────────┘  └──────────────────┘
+     ┌──────────────────┐ ┌──────────────────┐ ┌──────────────────┐ ┌──────────────────┐
+     │ Build & push     │ │ Prebuilt images  │ │ Download bundle  │ │ On the bastion   │
+     │                  │ │                  │ │                  │ │                  │
+     │ k8s-deploy.sh    │ │ deploy-k8s-      │ │ Wizard downloads │ │ deploy-k8s-      │
+     │                  │ │ airgap.sh        │ │ bundle, then     │ │ airgap.sh        │
+     │ Builds from      │ │ --connected      │ │ transfer to      │ │ --airgap         │
+     │ source, pushes   │ │                  │ │ bastion and      │ │                  │
+     │ directly to      │ │ Pulls from GHCR, │ │ re-run wizard    │ │ Loads tarball,   │
+     │ your registry    │ │ pushes to your   │ │                  │ │ pushes to reg,   │
+     │                  │ │ private registry │ │                  │ │ helm deploy,     │
+     │                  │ │                  │ │                  │ │ vault setup      │
+     └──────────────────┘ └──────────────────┘ └──────────────────┘ └──────────────────┘
 ```
 
 ## Quick Start
