@@ -15,7 +15,25 @@ Deploy Aurora on a single VM using Docker Compose.
 
 ## Standard Deployment
 
-This path covers every step from provisioning the VM to accessing Aurora in your browser, on any cloud provider with unrestricted internet.
+This path covers deploying Aurora on any cloud VM with unrestricted internet access.
+
+### Quick Deploy (Recommended)
+
+SSH into your VM and run the deployment wizard. It handles Docker installation, configuration, Vault setup, and health checks automatically:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/arvo-ai/aurora/main/deploy/bootstrap.sh | bash
+```
+
+The wizard will walk you through LLM provider selection, image source (prebuilt or build-from-source), and `.env` configuration interactively.
+
+:::tip
+This is the fastest way to deploy Aurora on a fresh VM. It works on Ubuntu, Debian, CentOS, RHEL, Rocky Linux, and Amazon Linux on both amd64 and arm64.
+:::
+
+### Manual Deploy
+
+If you prefer to run each step yourself, follow the instructions below.
 
 ### 1. Provision a VM
 
@@ -316,6 +334,20 @@ Use this path when the target VM has restricted or no outbound internet access (
 :::tip
 The deployment wizard (`aurora-deploy.sh`) validates all of the above at startup and prints a numbered remediation checklist if anything is missing. If you need to skip checks (e.g. CI), pass `--skip-prereqs`.
 :::
+
+### Quick Deploy with the Wizard (Recommended)
+
+If you have Docker installed and the image bundle transferred to the VM, the deployment wizard handles the rest:
+
+```bash
+cd aurora && bash deploy/aurora-deploy.sh --profile airtight --bundle ~/aurora-airtight-*.tar.gz
+```
+
+The wizard walks you through `.env` configuration, loads images (with `pigz` acceleration if available), sets up Vault, and runs health checks. Skip to [Open Firewall Ports](#9-open-firewall-ports) once it completes.
+
+### Manual Deploy
+
+If you prefer to run each step yourself, follow the instructions below.
 
 ### 1. Download the Bundle
 

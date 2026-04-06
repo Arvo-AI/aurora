@@ -210,6 +210,26 @@ To stop: `make down` | Logs: `make logs`
 
 If you want cloud connectors, add provider credentials referenced in `.env.example`.
 
+### Deploy on a VM
+
+Deploy Aurora on any cloud VM (AWS, GCP, Azure, etc.) with a single command. The deployment wizard handles Docker installation, configuration, Vault setup, and health checks automatically.
+
+**Standard (internet-connected):**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/arvo-ai/aurora/main/deploy/bootstrap.sh | bash
+```
+
+**Air-gapped / restricted network:**
+
+Download the [prebuilt image bundle](https://storage.googleapis.com/aurora-airtight-bucket/index.html), transfer it to the VM along with the [source archive](https://github.com/arvo-ai/aurora/releases), then run:
+
+```bash
+cd aurora && bash deploy/aurora-deploy.sh --profile airtight --bundle ~/aurora-airtight-*.tar.gz
+```
+
+See the [VM deployment guide](https://arvo-ai.github.io/aurora/docs/deployment/vm-deployment) for full details.
+
 ### Pin a specific version
 
 ```bash
@@ -237,7 +257,7 @@ Prebuilt airtight bundles (all images in one tarball) are published on every rel
 curl -LO https://storage.googleapis.com/aurora-airtight-bucket/aurora-airtight-<version>-amd64.tar.gz
 ```
 
-Transfer the tarball to the target VM and run `make prod-airtight AIRTIGHT_BUNDLE=<file>`. See the [air-tight deployment guide](https://arvo-ai.github.io/aurora/docs/deployment/vm-deployment#secure-deployment-air-tight) for full instructions.
+Transfer the tarball and [source archive](https://github.com/arvo-ai/aurora/releases) to the target VM, then run the deployment wizard (`deploy/aurora-deploy.sh`) — it handles image loading, `.env` configuration, Vault setup, and health checks. See the [air-tight deployment guide](https://arvo-ai.github.io/aurora/docs/deployment/vm-deployment#secure-deployment-air-tight) for full instructions.
 
 For detailed deployment guides, see the **[Documentation](https://arvo-ai.github.io/aurora/)**.
 
