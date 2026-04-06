@@ -1,6 +1,6 @@
 ---
-sidebar_position: 4
----
+
+## sidebar_position: 4
 
 # Air-Gapped Kubernetes Deployment
 
@@ -19,12 +19,12 @@ See the [Deployment Overview](./overview) for the full deployment pipeline diagr
 
 ## Which Path Is Right for You?
 
-| Scenario | What You Need | Path |
-|---|---|---|
-| **Standard** — operator has internet + registry access | Internet on your workstation, push to private registry | [Path A](#path-a-standard-internet--private-registry) |
-| **True air-gap** — physically disconnected environment | Tarball transferred via USB/SCP, no internet on target | [Path B](#path-b-true-air-gap-tarball) |
 
-Most enterprise deployments (even "air-gapped" ones) fall into **Path A** — the operator's workstation has internet, and images are pushed to an internal registry that cluster nodes can pull from. **Path B** is for defense, government, or similarly isolated environments where no machine in the deployment chain has internet.
+| Scenario                                               | What You Need                                          | Path                                                  |
+| ------------------------------------------------------ | ------------------------------------------------------ | ----------------------------------------------------- |
+| **Standard** — operator has internet + registry access | Internet on your workstation, push to private registry | [Path A](#path-a-standard-internet--private-registry) |
+| **True air-gap** — physically disconnected environment | Tarball transferred via USB/SCP, no internet on target | [Path B](#path-b-true-air-gap-tarball)                |
+
 
 ---
 
@@ -75,6 +75,7 @@ The script auto-detects that upstream registries (GHCR, Docker Hub, etc.) are re
 ```
 
 Prompts for:
+
 - LLM provider and API key
 - Base domain (derives ingress hosts and public URLs)
 - TLS configuration
@@ -149,6 +150,7 @@ To specify a version or architecture:
 ```
 
 **Browse all available bundles:**
+
 - [amd64 bundles](https://storage.googleapis.com/aurora-airtight-bucket/index.html)
 - [arm64 bundles](https://storage.googleapis.com/aurora-airtight-bucket-arm64/index.html)
 
@@ -178,8 +180,7 @@ cd "aurora-${VERSION#v}/"
 
 The script loads images from the tarball into Docker and pushes them to your registry, then cleans up the local images.
 
-<details>
-<summary><strong>Manual alternative (without the script)</strong></summary>
+**Manual alternative (without the script)**
 
 ```bash
 # 1. Load images
@@ -227,7 +228,7 @@ cp deploy/helm/aurora/values.yaml deploy/helm/aurora/values.generated.yaml
 # Set image.registry, image.tag, and thirdPartyImages.registry to your registry URL
 ```
 
-</details>
+
 
 #### 4. Configure
 
