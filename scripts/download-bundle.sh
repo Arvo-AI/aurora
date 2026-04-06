@@ -41,10 +41,25 @@ fi
 FILENAME="aurora-airtight-${VERSION}-${ARCH}.tar.gz"
 BASE_URL="https://storage.googleapis.com/${BUCKET}"
 
+BUNDLE_URL="${BASE_URL}/${FILENAME}"
+SHA_URL="${BASE_URL}/${FILENAME}.sha256"
+
+# Pre-flight check: if the bundle doesn't exist yet the CI pipeline is
+# probably still building it (typically 20-40 min after a tag push).
+http_code=$(curl -s -o /dev/null -w "%{http_code}" --head "${BUNDLE_URL}" 2>/dev/null || true)
+if [ "$http_code" != "200" ]; then
+  echo ""
+  echo "ERROR: ${FILENAME} is not available yet (HTTP $http_code)."
+  echo "If this version was just tagged, the CI pipeline is likely still building the bundle."
+  echo "Check progress at: https://github.com/arvo-ai/aurora/actions/workflows/publish-airtight.yml"
+  echo "Retry this script once the build is complete."
+  exit 1
+fi
+
 echo ""
 echo "Downloading ${FILENAME}..."
-curl -LO "${BASE_URL}/${FILENAME}"
-curl -LO "${BASE_URL}/${FILENAME}.sha256"
+curl -fSL -o "${FILENAME}" "${BUNDLE_URL}"
+curl -fSL -o "${FILENAME}.sha256" "${SHA_URL}"
 
 echo ""
 echo "Verifying checksum..."
@@ -60,10 +75,14 @@ fi
 
 if [ "$CHECKSUM_OK" != true ]; then
   echo ""
-  echo "ERROR: checksum verification failed. The file may be corrupted or the version may not exist."
+  echo "ERROR: checksum verification failed."
+  echo "  - The download may have been corrupted — try running this script again."
+  echo "  - If the problem persists, the bundle file in GCS may be stale/incomplete."
+  echo ""
   echo "Browse available bundles:"
   echo "  amd64: https://storage.googleapis.com/aurora-airtight-bucket/index.html"
   echo "  arm64: https://storage.googleapis.com/aurora-airtight-bucket-arm64/index.html"
+  echo "Build status: https://github.com/arvo-ai/aurora/actions/workflows/publish-airtight.yml"
   exit 1
 fi
 
