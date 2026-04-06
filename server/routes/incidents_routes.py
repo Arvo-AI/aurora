@@ -388,8 +388,8 @@ def get_incident(user_id, incident_id: str):
                             if alert_row and alert_row[0] is not None:
                                 raw_payload = alert_row[0]
                     logger.debug(
-                        "[INCIDENTS] Grafana payload lookup: source_alert_id=%s, found=%s",
-                        source_alert_id, bool(raw_payload),
+                        "[INCIDENTS] Grafana payload lookup: has_source_alert_id=%s, found=%s",
+                        bool(source_alert_id), bool(raw_payload),
                     )
                 elif source_type == "datadog":
                     # For datadog, try integer lookup for old records
