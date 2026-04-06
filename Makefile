@@ -1,4 +1,4 @@
-.PHONY: help dev down logs rebuild-server restart prod prod-build prod-logs prod-down clean nuke build-no-cache dev-fresh prod-clean prod-nuke prod-build-no-cache prod-fresh prod-prebuilt prod-local init prod-local-logs prod-local-down prod-local-clean prod-local-nuke deploy-build deploy package-airtight prod-airtight vm-deploy setup
+.PHONY: help dev down logs rebuild-server restart prod prod-build prod-logs prod-down clean nuke build-no-cache dev-fresh prod-clean prod-nuke prod-build-no-cache prod-fresh prod-prebuilt prod-local init prod-local-logs prod-local-down prod-local-clean prod-local-nuke deploy-build deploy package-airtight prod-airtight vm-deploy
 
 help:
 	@echo "Available commands:"
@@ -43,9 +43,6 @@ help:
 	@echo "VM Deployment (single server / cloud VM):"
 	@echo "  make vm-deploy          - Interactive setup: installs Docker, configures .env, and starts Aurora"
 	@echo "                            Supports --prebuilt (default), --build, --skip-docker, --hostname=<host>"
-	@echo "  make setup              - Deployment wizard with profile selection (standard / airtight),"
-	@echo "                            preflight checks, auto Vault setup, and health verification"
-	@echo "                            Supports --profile=standard|airtight, --build, --prebuilt, --bundle=<path>"
 	@echo ""
 	@echo "Kubernetes Deployment:"
 	@echo "  make deploy-build      - Build and push images for K8s deployment (reads values.generated.yaml)"
@@ -326,10 +323,6 @@ deploy: deploy-build
 vm-deploy:
 	@chmod +x deploy/vm-deploy.sh
 	@deploy/vm-deploy.sh $(filter-out $@,$(MAKECMDGOALS))
-
-setup:
-	@chmod +x deploy/aurora-deploy.sh
-	@deploy/aurora-deploy.sh $(filter-out $@,$(MAKECMDGOALS))
 
 %:
 	@:
