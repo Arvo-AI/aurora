@@ -32,6 +32,7 @@ from .github_repos_tool import get_connected_repos, GetConnectedReposArgs
 from .jenkins_rca_tool import jenkins_rca, JenkinsRCAArgs
 from .cloudbees_rca_tool import cloudbees_rca, CloudBeesRCAArgs
 from .spinnaker_rca_tool import spinnaker_rca, SpinnakerRCAArgs
+from .trigger_rca_tool import trigger_rca, TriggerRCAArgs
 
 # Visualization trigger caching
 from cachetools import TTLCache
@@ -867,10 +868,11 @@ def get_cloud_tools():
     # - When no tool_capture is active we can safely cache per-user
     # - When a tool_capture **is** active we additionally key on the `id()` of the object so each
     #   session gets its own wrapped functions that close over the *right* capture instance.
+    rca_flag = getattr(state_context, 'trigger_rca_requested', False) if state_context else False
     if tool_capture is None:
-        cache_key = f"{user_id}:nocapture:{mode_suffix}"
+        cache_key = f"{user_id}:nocapture:{mode_suffix}:rca={rca_flag}"
     else:
-        cache_key = f"{user_id}:capture:{id(tool_capture)}:{mode_suffix}"
+        cache_key = f"{user_id}:capture:{id(tool_capture)}:{mode_suffix}:rca={rca_flag}"
     
     if user_id:
         current_time = time.time()
@@ -1165,6 +1167,10 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
         (analyze_zip_file, "analyze_zip_file"),
         # (web_search, "web_search"),  # Moved to dedicated registration below with explicit args_schema
     ]
+
+    # Only include trigger_rca when the user explicitly requested it via the UI button
+    if state_context and getattr(state_context, 'trigger_rca_requested', False):
+        tool_functions.append((trigger_rca, "trigger_rca"))
     
     # Process Aurora native tools
     for func, name in tool_functions:
@@ -1318,6 +1324,20 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                 name=name,
                 description="Fetch and parse a Confluence runbook into markdown and steps for LLM use. Parameter: page_url (string, required).",
                 args_schema=ConfluenceRunbookArgs,
+            )
+        elif name == 'trigger_rca':
+            tool = StructuredTool.from_function(
+                func=final_func,
+                name=name,
+                description=(
+                    "Trigger a full automated Root Cause Analysis investigation. "
+                    "Use this when the user reports an operational incident or describes symptoms "
+                    "that warrant investigation (e.g. high CPU, errors, latency spikes, outages). "
+                    "Creates an incident and dispatches a background RCA using all connected integrations. "
+                    "Parameters: issue_description (required), title (optional), service (optional), "
+                    "severity (optional: critical/high/medium/low)."
+                ),
+                args_schema=TriggerRCAArgs,
             )
         else:
             tool = StructuredTool.from_function(final_func)

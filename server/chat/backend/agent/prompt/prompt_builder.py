@@ -1462,7 +1462,7 @@ def build_background_mode_segment(state: Optional[Any]) -> str:
         "BACKGROUND RCA MODE",
         "=" * 40,
         "",
-        f"Source: {source.upper()} alert | Providers: {', '.join(providers) if providers else 'None'}",
+        f"Source: {'USER-REPORTED INCIDENT' if source == 'chat' else f'{source.upper()} alert'} | Providers: {', '.join(providers) if providers else 'None'}",
         "",
     ]
 
