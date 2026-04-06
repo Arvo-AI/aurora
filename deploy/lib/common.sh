@@ -5,6 +5,7 @@
 [[ -n "${_AURORA_COMMON_LOADED:-}" ]] && return 0
 _AURORA_COMMON_LOADED=1
 
+
 # ─── Output ──────────────────────────────────────────────────────────────────
 
 info()  { echo -e "\033[1;34m->\033[0m $1"; }
@@ -315,9 +316,9 @@ preflight() {
   # Disk — airtight needs more headroom for the image bundle
   local free_gb disk_rec
   if [[ "$profile" == "airtight" ]]; then disk_rec=80; else disk_rec=40; fi
-  free_gb=$(df -BG "${REPO_ROOT:-.}" 2>/dev/null | awk 'NR==2 {gsub(/G/,"",$4); print $4}')
+  free_gb=$(df -BG "${REPO_ROOT:-.}" 2>/dev/null | awk 'NR==2 {gsub(/G/,"",$4); print $4}' || true)
   if [[ -z "$free_gb" ]]; then
-    free_gb=$(df -g "${REPO_ROOT:-.}" 2>/dev/null | awk 'NR==2 {print $4}')
+    free_gb=$(df -g "${REPO_ROOT:-.}" 2>/dev/null | awk 'NR==2 {print $4}' || true)
   fi
   free_gb="${free_gb:-0}"
   if [[ "$free_gb" -ge "$disk_rec" ]]; then
