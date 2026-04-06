@@ -162,7 +162,7 @@ case "$TARGET" in
           fi
 
           echo ""
-          bash "$SCRIPT_DIR/deploy-k8s-airgap.sh" "$REGISTRY" $EXTRA_ARGS
+          bash "$SCRIPT_DIR/deploy-k8s-airgap.sh" "$REGISTRY" --connected $EXTRA_ARGS
           ;;
       esac
       ;;
@@ -241,7 +241,7 @@ case "$TARGET" in
           fi
 
           echo ""
-          bash "$SCRIPT_DIR/deploy-k8s-airgap.sh" "$REGISTRY" $EXTRA_ARGS
+          bash "$SCRIPT_DIR/deploy-k8s-airgap.sh" "$REGISTRY" --airgap $EXTRA_ARGS
           ;;
       esac
       ;;

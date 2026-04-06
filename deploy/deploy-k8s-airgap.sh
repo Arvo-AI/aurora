@@ -8,7 +8,7 @@ set -euo pipefail
 # determined by the caller (deploy.sh wizard or the operator directly).
 #
 # Usage:
-#   ./deploy/deploy-k8s-airgap.sh <registry-url> [version] [--tarball <path>] [--skip-push]
+#   ./deploy/deploy-k8s-airgap.sh <registry-url> [version] [--tarball <path>] [--skip-push] [--connected|--airgap]
 #
 # Example:
 #   ./deploy/deploy-k8s-airgap.sh registry.internal:5000
@@ -19,6 +19,7 @@ REGISTRY=""
 VERSION="latest"
 TARBALL_FLAG=""
 SKIP_PUSH=false
+NETWORK_FLAG=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -31,13 +32,23 @@ while [ $# -gt 0 ]; do
       SKIP_PUSH=true
       shift
       ;;
+    --connected)
+      NETWORK_FLAG="connected"
+      shift
+      ;;
+    --airgap)
+      NETWORK_FLAG="airgap"
+      shift
+      ;;
     -h|--help)
-      echo "Usage: $0 <registry-url> [version] [--tarball <path>] [--skip-push]"
+      echo "Usage: $0 <registry-url> [version] [--tarball <path>] [--skip-push] [--connected|--airgap]"
       echo ""
       echo "  registry-url    Target registry (e.g. registry.internal:5000)"
       echo "  version         Aurora version (default: latest release)"
       echo "  --tarball PATH  Use a specific airgap tarball for image push"
       echo "  --skip-push     Skip image push (images already in registry)"
+      echo "  --connected     Has internet — pull images from GHCR"
+      echo "  --airgap        No internet — load images from tarball"
       exit 0
       ;;
     *)
@@ -78,6 +89,8 @@ _build_resume_cmd() {
   [ "${VERSION}" != "latest" ] && cmd="$cmd ${VERSION}"
   [ -n "${TARBALL_FLAG:-}" ] && cmd="$cmd --tarball ${TARBALL_FLAG}"
   [ "${SKIP_PUSH:-false}" = true ] && cmd="$cmd --skip-push"
+  [ "${NETWORK_FLAG:-}" = "connected" ] && cmd="$cmd --connected"
+  [ "${NETWORK_FLAG:-}" = "airgap" ] && cmd="$cmd --airgap"
   echo "$cmd"
 }
 
@@ -113,15 +126,34 @@ if ! check_tool skopeo && ! check_tool docker; then
 fi
 
 if [ -n "$MISSING" ]; then
-  echo "Missing required tools:$MISSING"
+  warn "Missing required tools:$MISSING"
+  echo ""
+  echo "  Install guides:"
+  echo "$MISSING" | tr ' ' '\n' | while read -r tool; do
+    [ -z "$tool" ] && continue
+    case "$tool" in
+      helm)             echo "    helm:    https://helm.sh/docs/intro/install/" ;;
+      yq)               echo "    yq:      https://github.com/mikefarah/yq#install" ;;
+      openssl)          echo "    openssl: sudo apt-get install -y openssl  (or brew install openssl)" ;;
+      python3)          echo "    python3: sudo apt-get install -y python3  (or brew install python3)" ;;
+      skopeo-or-docker) echo "    skopeo:  https://github.com/containers/skopeo/blob/main/install.md"
+                        echo "    docker:  https://docs.docker.com/get-docker/" ;;
+    esac
+  done
   exit 1
 fi
 
 # ── Detect environment ────────────────────────────────────────────────────────
 
-HAS_INTERNET=false
-if curl -sS --connect-timeout 5 --max-time 10 -o /dev/null "https://ghcr.io/v2/" 2>/dev/null; then
+if [ "$NETWORK_FLAG" = "connected" ]; then
   HAS_INTERNET=true
+elif [ "$NETWORK_FLAG" = "airgap" ]; then
+  HAS_INTERNET=false
+else
+  HAS_INTERNET=false
+  if curl -sS --connect-timeout 5 --max-time 10 -o /dev/null "https://ghcr.io/v2/" 2>/dev/null; then
+    HAS_INTERNET=true
+  fi
 fi
 
 HAS_KUBECTL=false
