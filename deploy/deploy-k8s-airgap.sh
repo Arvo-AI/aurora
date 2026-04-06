@@ -80,7 +80,7 @@ echo ""
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
-source "$SCRIPT_DIR/lib/helpers.sh"
+source "$SCRIPT_DIR/lib/common.sh"
 
 _build_resume_cmd() {
   local cmd="./deploy/deploy-k8s-airgap.sh ${REGISTRY}"

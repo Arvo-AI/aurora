@@ -27,6 +27,8 @@ THIRD_PARTY_IMAGES=(
   "searxng/searxng:2025.5.8-7ca24eee4"
   "chrislusf/seaweedfs:4.07"
   "amazon/aws-cli:2.34.6"
+  "minio/minio:RELEASE.2025-04-22T22-12-26Z"
+  "minio/mc:RELEASE.2025-04-16T18-13-26Z"
   "memgraph/memgraph-mage:3.8.1"
   "memgraph/lab:3.8.0"
   "cr.weaviate.io/semitechnologies/weaviate:1.27.6"

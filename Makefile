@@ -41,7 +41,7 @@ help:
 	@echo "                             Use AIRTIGHT_BUNDLE=<file> to specify the tarball"
 	@echo ""
 	@echo "VM Deployment (single server / cloud VM):"
-	@echo "  make vm-deploy          - Interactive setup: installs Docker, configures .env, and starts Aurora"
+	@echo "  make vm-deploy          - Interactive setup: installs Docker, configures .env, and starts Aurora (via aurora-deploy.sh)"
 	@echo "                            Supports --prebuilt (default), --build, --skip-docker, --hostname=<host>"
 	@echo ""
 	@echo "Kubernetes Deployment:"
@@ -318,8 +318,8 @@ deploy: deploy-build
 	@echo "  kubectl get pods -n aurora"
 
 vm-deploy:
-	@chmod +x deploy/vm-deploy.sh
-	@deploy/vm-deploy.sh $(filter-out $@,$(MAKECMDGOALS))
+	@chmod +x deploy/aurora-deploy.sh
+	@deploy/aurora-deploy.sh $(filter-out $@,$(MAKECMDGOALS))
 
 %:
 	@:

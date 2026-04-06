@@ -5,15 +5,14 @@ set -euo pipefail
 # Aurora Bootstrap
 # ─────────────────────────────────────────────────────────────────────────────
 # Zero-dependency entry point. Installs prerequisites, clones the repo, and
-# launches the deployment wizard. Works on a completely fresh VM.
+# launches the deployment wizard. Works on a completely fresh machine.
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/arvo-ai/aurora/main/deploy/bootstrap.sh | bash
 #   wget -qO- https://raw.githubusercontent.com/arvo-ai/aurora/main/deploy/bootstrap.sh | bash
 #
-# All arguments are forwarded to the deployment wizard:
-#   curl -fsSL <url> | bash -s -- --profile standard --prebuilt
-#   curl -fsSL <url> | bash -s -- --profile airtight --bundle ~/bundle.tar.gz
+# The wizard will ask where you're deploying (laptop, VM, or Kubernetes)
+# and guide you through the rest.
 # ─────────────────────────────────────────────────────────────────────────────
 
 # When piped (curl|bash), stdin is the script itself. Re-run from a temp file
@@ -65,15 +64,46 @@ install_pkg() {
 
 # ─── Install prerequisites ───────────────────────────────────────────────────
 
-missing=()
-for cmd in git make jq curl; do
-  command -v "$cmd" &>/dev/null || missing+=("$cmd")
+# git is required to clone the repo — can't continue without it
+if ! command -v git &>/dev/null; then
+  echo ""
+  warn "git is not installed. It's required to download the Aurora source code."
+  printf "  Install git? [Y/n]: "
+  read -r _ans
+  if [[ "${_ans:-Y}" =~ ^[Nn] ]]; then
+    err "Cannot continue without git."
+    echo "  Install it manually and re-run this script."
+    exit 1
+  fi
+  install_pkg git
+  ok "git installed"
+fi
+
+# These are used by various deploy paths but not all are needed immediately
+optional_missing=()
+for cmd in make jq; do
+  command -v "$cmd" &>/dev/null || optional_missing+=("$cmd")
 done
 
-if [[ ${#missing[@]} -gt 0 ]]; then
-  info "Installing prerequisites: ${missing[*]}"
-  install_pkg "${missing[@]}"
-  ok "Prerequisites installed"
+if [[ ${#optional_missing[@]} -gt 0 ]]; then
+  echo ""
+  info "The following tools are recommended but not installed: ${optional_missing[*]}"
+  echo ""
+  for cmd in "${optional_missing[@]}"; do
+    case "$cmd" in
+      make) echo "  - make    — needed for the local development path (make dev, make init)" ;;
+      jq)   echo "  - jq      — needed for Vault auto-setup and some Kubernetes deploy paths" ;;
+    esac
+  done
+  echo ""
+  printf "  Install them now? [Y/n]: "
+  read -r _ans
+  if [[ "${_ans:-Y}" =~ ^[Nn] ]]; then
+    warn "Skipping. Some deploy paths may prompt you to install these later."
+  else
+    install_pkg "${optional_missing[@]}"
+    ok "Installed: ${optional_missing[*]}"
+  fi
 fi
 
 # ─── Clone repo ──────────────────────────────────────────────────────────────
@@ -97,5 +127,5 @@ ok "Repository ready at $INSTALL_DIR"
 
 # ─── Run wizard ──────────────────────────────────────────────────────────────
 
-chmod +x deploy/aurora-deploy.sh
-exec deploy/aurora-deploy.sh "$@"
+chmod +x deploy/deploy.sh
+exec deploy/deploy.sh "$@"

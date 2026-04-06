@@ -30,7 +30,7 @@ Deploy Aurora on a Kubernetes cluster with a private container registry. The dep
    └──────┬───────┘     └──────┬───────┘     └──────┬───────┘
           │                    │                     │
           ▼                    ▼                     │
-   make init && make dev   vm-deploy.sh             │
+   make init && make dev   aurora-deploy.sh          │
    (or prod-prebuilt)      (installs Docker,        │
                            configures, starts)      │
                                                     ▼

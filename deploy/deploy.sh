@@ -15,7 +15,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-source "$SCRIPT_DIR/lib/helpers.sh"
+source "$SCRIPT_DIR/lib/common.sh"
 
 echo ""
 echo "  ╔═══════════════════════════════════════════╗"
@@ -46,6 +46,16 @@ case "$TARGET" in
     echo ""
     echo "  Install Docker Desktop: https://docs.docker.com/get-docker/"
     echo "  Then re-run this script."
+    exit 1
+  fi
+
+  if ! check_tool make; then
+    warn "make is not installed. It's required for this deployment path."
+    echo ""
+    echo "  Install it:"
+    echo "    macOS:         xcode-select --install"
+    echo "    Ubuntu/Debian: sudo apt-get install -y make"
+    echo "    RHEL/Fedora:   sudo yum install -y make"
     exit 1
   fi
 
@@ -89,16 +99,16 @@ case "$TARGET" in
   ;;
 
 # ═════════════════════════════════════════════════════════════════════════════
-# 1 — VM or server (TODO: handled by separate workflow)
+# 1 — VM or server
 # ═════════════════════════════════════════════════════════════════════════════
 1)
   echo ""
   echo "  Launching Aurora VM deployment..."
   echo ""
-  if [ -f "$SCRIPT_DIR/vm-deploy.sh" ]; then
-    bash "$SCRIPT_DIR/vm-deploy.sh"
+  if [ -f "$SCRIPT_DIR/aurora-deploy.sh" ]; then
+    bash "$SCRIPT_DIR/aurora-deploy.sh"
   else
-    warn "deploy/vm-deploy.sh not found."
+    warn "deploy/aurora-deploy.sh not found."
     echo "  Download it from the Aurora repo or see the docs:"
     echo "  https://docs.arvo.ai/deployment/vm-deployment"
   fi
@@ -117,31 +127,44 @@ case "$TARGET" in
 
   case "$MENU_RESULT" in
     0)
-      # Connected — deploy directly, need registry
-      REGISTRY=""
-      if [ -t 0 ]; then
-        printf "  Enter your container registry URL (e.g. registry.internal:5000): "
-        read -r REGISTRY
-        REGISTRY="${REGISTRY%/}"
-      fi
-
-      if [ -z "$REGISTRY" ]; then
-        warn "A private container registry URL is required for Kubernetes deployments."
-        echo "  Re-run and provide your registry, or run directly:"
-        echo ""
-        echo "    ./deploy/deploy-k8s-airgap.sh <registry-url>"
-        exit 1
-      fi
-
-      EXTRA_ARGS=""
-      printf "  Aurora version (leave blank for latest): "
-      read -r VERSION_INPUT
-      if [ -n "$VERSION_INPUT" ]; then
-        EXTRA_ARGS="$VERSION_INPUT"
-      fi
-
+      # Connected — choose deployment style
       echo ""
-      bash "$SCRIPT_DIR/deploy-k8s-airgap.sh" "$REGISTRY" --mode standard $EXTRA_ARGS
+      select_menu "How would you like to deploy?" \
+        "Quick deploy — build/push images directly, auto-configure (local, cloud, or VPN)" \
+        "Registry deploy — push to a private registry, configure Helm interactively"
+
+      case "$MENU_RESULT" in
+        0)
+          echo ""
+          bash "$SCRIPT_DIR/k8s-deploy.sh"
+          ;;
+        1)
+          REGISTRY=""
+          if [ -t 0 ]; then
+            printf "  Enter your container registry URL (e.g. registry.internal:5000): "
+            read -r REGISTRY
+            REGISTRY="${REGISTRY%/}"
+          fi
+
+          if [ -z "$REGISTRY" ]; then
+            warn "A private container registry URL is required for registry deployments."
+            echo "  Re-run and provide your registry, or run directly:"
+            echo ""
+            echo "    ./deploy/deploy-k8s-airgap.sh <registry-url>"
+            exit 1
+          fi
+
+          EXTRA_ARGS=""
+          printf "  Aurora version (leave blank for latest): "
+          read -r VERSION_INPUT
+          if [ -n "$VERSION_INPUT" ]; then
+            EXTRA_ARGS="$VERSION_INPUT"
+          fi
+
+          echo ""
+          bash "$SCRIPT_DIR/deploy-k8s-airgap.sh" "$REGISTRY" --mode standard $EXTRA_ARGS
+          ;;
+      esac
       ;;
 
     1)

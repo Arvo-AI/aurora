@@ -99,6 +99,25 @@ confirm() {
   [[ "$_confirm_choice" -eq 0 ]]
 }
 
+# ─── Compatibility shims (for scripts that used the old helpers.sh API) ──────
+
+check_tool() { command -v "$1" &>/dev/null; }
+
+# select_menu "Prompt" "Opt A" "Opt B" ... → sets MENU_RESULT (0-based index)
+select_menu() {
+  local _prompt="$1"; shift
+  local _opts=("$@")
+  echo "$_prompt"
+  echo ""
+  select_option MENU_RESULT "${_opts[@]}"
+  echo ""
+}
+
+# prompt_default "Question" "default" → sets PROMPT_RESULT
+prompt_default() {
+  prompt PROMPT_RESULT "$1" "$2"
+}
+
 # ─── Detection ───────────────────────────────────────────────────────────────
 
 detect_ip() {
