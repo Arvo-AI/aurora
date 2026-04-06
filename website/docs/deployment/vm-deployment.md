@@ -15,7 +15,25 @@ Deploy Aurora on a single VM using Docker Compose.
 
 ## Standard Deployment
 
-This path covers every step from provisioning the VM to accessing Aurora in your browser, on any cloud provider with unrestricted internet.
+This path covers deploying Aurora on any cloud VM with unrestricted internet access.
+
+### Quick Deploy (Recommended)
+
+SSH into your VM and run the deployment wizard. It handles Docker installation, configuration, Vault setup, and health checks automatically:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/arvo-ai/aurora/main/deploy/bootstrap.sh | bash
+```
+
+The wizard will walk you through LLM provider selection, image source (prebuilt or build-from-source), and `.env` configuration interactively.
+
+:::tip
+This is the fastest way to deploy Aurora on a fresh VM. It works on Ubuntu, Debian, CentOS, RHEL, Rocky Linux, and Amazon Linux on both amd64 and arm64.
+:::
+
+### Manual Deploy
+
+If you prefer to run each step yourself, follow the instructions below.
 
 ### 1. Provision a VM
 
@@ -304,10 +322,32 @@ Use this path when the target VM has restricted or no outbound internet access (
 
 **Prerequisites:**
 
-- The target VM meets the [hardware requirements](#1-provision-a-vm) (4+ CPU, 8+ GB RAM, 60 GB SSD)
-- Docker and Docker Compose are installed on the VM (see [Installing Docker](./install-docker) for all OS/architecture combinations, including environments where `curl` and `wget` are blocked)
-- **Optional:** `make` and `jq` installed on the VM — the `Makefile` targets (`make init`, `make prod-airtight`) are convenience wrappers. If you can't install these, see the tip in step 4
+- The target VM meets the [hardware requirements](#1-provision-a-vm) (4+ CPU, 8+ GB RAM, 80 GB SSD)
+- **Docker Engine 24.0+** with **Docker Compose v2** plugin installed on the VM (see [Installing Docker](./install-docker) for all OS/architecture combinations, including environments where `curl` and `wget` are blocked)
+- Required tools installed: `jq`, `sed`, `grep`, `tar`, `sha256sum` (or `shasum`)
+- **Optional but recommended:** `pigz` (parallel gzip — speeds up image loading ~2x). Install with `apt-get install pigz` or `yum install pigz`
+- Current user is in the `docker` group (verify with `groups` — run `sudo usermod -aG docker $USER && newgrp docker` if not)
+- Docker daemon is running (`sudo systemctl start docker`)
+- At least **80 GB free disk space** (3x the bundle size is needed during image loading; standard deployments can work with 40 GB)
 - You can SSH into the VM
+
+:::tip
+The deployment wizard (`aurora-deploy.sh`) validates all of the above at startup and prints a numbered remediation checklist if anything is missing. If you need to skip checks (e.g. CI), pass `--skip-prereqs`.
+:::
+
+### Quick Deploy with the Wizard (Recommended)
+
+If you have Docker installed and the image bundle transferred to the VM, the deployment wizard handles the rest:
+
+```bash
+cd aurora && bash deploy/aurora-deploy.sh --profile airtight --bundle ~/aurora-airtight-*.tar.gz
+```
+
+The wizard walks you through `.env` configuration, loads images (with `pigz` acceleration if available), sets up Vault, and runs health checks. Skip to [Open Firewall Ports](#9-open-firewall-ports) once it completes.
+
+### Manual Deploy
+
+If you prefer to run each step yourself, follow the instructions below.
 
 ### 1. Download the Bundle
 

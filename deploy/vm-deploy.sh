@@ -25,6 +25,51 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
+# Source shared helpers (fall back to inline if lib not found)
+if [[ -f "$SCRIPT_DIR/lib/common.sh" ]]; then
+  source "$SCRIPT_DIR/lib/common.sh"
+else
+  # Inline fallback for standalone usage
+  prompt() {
+    local var="$1" msg="$2" default="${3:-}"
+    if $NON_INTERACTIVE; then
+      printf -v "$var" '%s' "$default"
+      return
+    fi
+    if [[ -n "$default" ]]; then
+      read -rp "$msg [$default]: " val
+      printf -v "$var" '%s' "${val:-$default}"
+    else
+      read -rp "$msg: " val
+      while [[ -z "$val" ]]; do read -rp "$msg (required): " val; done
+      printf -v "$var" '%s' "$val"
+    fi
+  }
+  info()  { echo -e "\033[1;34m->\033[0m $1"; }
+  ok()    { echo -e "\033[1;32m[ok]\033[0m $1"; }
+  warn()  { echo -e "\033[1;33m[!]\033[0m $1"; }
+  err()   { echo -e "\033[1;31m[x]\033[0m $1"; }
+  detect_ip() {
+    local ip=""
+    ip=$(curl -sf --connect-timeout 2 http://169.254.169.254/latest/meta-data/public-ipv4 2>/dev/null || true)
+    [[ -z "$ip" ]] && ip=$(curl -sf --connect-timeout 2 -H "Metadata-Flavor: Google" http://metadata.google.internal/computeMetadata/v1/instance/network-interfaces/0/access-configs/0/external-ip 2>/dev/null || true)
+    [[ -z "$ip" ]] && ip=$(curl -sf --connect-timeout 2 -H "Metadata: true" "http://169.254.169.254/metadata/instance/network/interface/0/ipv4/ipAddress/0/publicIpAddress?api-version=2021-02-01&format=text" 2>/dev/null || true)
+    [[ -z "$ip" ]] && ip=$(curl -sf --connect-timeout 3 https://ifconfig.me 2>/dev/null || true)
+    [[ -z "$ip" ]] && ip=$(curl -sf --connect-timeout 3 https://api.ipify.org 2>/dev/null || true)
+    echo "$ip"
+  }
+  detect_os() {
+    if [[ -f /etc/os-release ]]; then . /etc/os-release; echo "$ID"
+    elif command -v lsb_release &>/dev/null; then lsb_release -si | tr '[:upper:]' '[:lower:]'
+    else echo "unknown"; fi
+  }
+  generate_secret() {
+    if command -v openssl &>/dev/null; then openssl rand -hex 32
+    elif command -v python3 &>/dev/null; then python3 -c "import secrets; print(secrets.token_hex(32))"
+    else cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w 64 | head -n 1; fi
+  }
+fi
+
 BUILD_MODE="prebuilt"
 SKIP_DOCKER=false
 SKIP_FIREWALL=false
@@ -52,61 +97,7 @@ for arg in "$@"; do
   esac
 done
 
-# ─── Helpers ─────────────────────────────────────────────────────────────────
-
-prompt() {
-  local var="$1" msg="$2" default="${3:-}"
-  if $NON_INTERACTIVE; then
-    printf -v "$var" '%s' "$default"
-    return
-  fi
-  if [[ -n "$default" ]]; then
-    read -rp "$msg [$default]: " val
-    printf -v "$var" '%s' "${val:-$default}"
-  else
-    read -rp "$msg: " val
-    while [[ -z "$val" ]]; do read -rp "$msg (required): " val; done
-    printf -v "$var" '%s' "$val"
-  fi
-}
-
-info()  { echo -e "\033[1;34m→\033[0m $1"; }
-ok()    { echo -e "\033[1;32m✓\033[0m $1"; }
-warn()  { echo -e "\033[1;33m!\033[0m $1"; }
-err()   { echo -e "\033[1;31m✗\033[0m $1"; }
-
-detect_ip() {
-  local ip=""
-  # Try cloud metadata services first
-  ip=$(curl -sf --connect-timeout 2 http://169.254.169.254/latest/meta-data/public-ipv4 2>/dev/null || true)
-  [[ -z "$ip" ]] && ip=$(curl -sf --connect-timeout 2 -H "Metadata-Flavor: Google" http://metadata.google.internal/computeMetadata/v1/instance/network-interfaces/0/access-configs/0/external-ip 2>/dev/null || true)
-  [[ -z "$ip" ]] && ip=$(curl -sf --connect-timeout 2 -H "Metadata: true" "http://169.254.169.254/metadata/instance/network/interface/0/ipv4/ipAddress/0/publicIpAddress?api-version=2021-02-01&format=text" 2>/dev/null || true)
-  # Fallback to external service
-  [[ -z "$ip" ]] && ip=$(curl -sf --connect-timeout 3 https://ifconfig.me 2>/dev/null || true)
-  [[ -z "$ip" ]] && ip=$(curl -sf --connect-timeout 3 https://api.ipify.org 2>/dev/null || true)
-  echo "$ip"
-}
-
-detect_os() {
-  if [[ -f /etc/os-release ]]; then
-    . /etc/os-release
-    echo "$ID"
-  elif command -v lsb_release &>/dev/null; then
-    lsb_release -si | tr '[:upper:]' '[:lower:]'
-  else
-    echo "unknown"
-  fi
-}
-
-generate_secret() {
-  if command -v openssl &>/dev/null; then
-    openssl rand -hex 32
-  elif command -v python3 &>/dev/null; then
-    python3 -c "import secrets; print(secrets.token_hex(32))"
-  else
-    cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w 64 | head -n 1
-  fi
-}
+# ─── Helpers (loaded from lib/common.sh above, or inline fallback) ────────
 
 # ─── Banner ──────────────────────────────────────────────────────────────────
 
@@ -386,9 +377,8 @@ while [[ $ELAPSED -lt $TIMEOUT ]]; do
   TOTAL=$(docker compose -f docker-compose.prod-local.yml ps --format json 2>/dev/null \
     | wc -l 2>/dev/null | tr -d ' ' || echo "0")
 
-  # Check if the key services are up
-  if docker compose -f docker-compose.prod-local.yml ps 2>/dev/null | grep -q "aurora-server.*running" && \
-     docker compose -f docker-compose.prod-local.yml ps 2>/dev/null | grep -q "frontend.*running"; then
+  if docker compose -f docker-compose.prod-local.yml ps --format '{{.Name}} {{.State}}' 2>/dev/null | grep -q "aurora-server running" && \
+     docker compose -f docker-compose.prod-local.yml ps --format '{{.Name}} {{.State}}' 2>/dev/null | grep -q "aurora-frontend running"; then
     break
   fi
 
