@@ -68,6 +68,22 @@ else
     echo "AUTH_SECRET=$AUTH_SECRET" >> "$ENV_FILE"
 fi
 
+# Generate SEARXNG_SECRET
+SEARXNG_SECRET=$(generate_secret)
+if grep -q "^SEARXNG_SECRET=" "$ENV_FILE"; then
+    sed -i.bak "s|^SEARXNG_SECRET=.*|SEARXNG_SECRET=$SEARXNG_SECRET|" "$ENV_FILE"
+else
+    echo "SEARXNG_SECRET=$SEARXNG_SECRET" >> "$ENV_FILE"
+fi
+
+# Generate MEMGRAPH_PASSWORD
+MEMGRAPH_PASSWORD=$(generate_secret)
+if grep -q "^MEMGRAPH_PASSWORD=" "$ENV_FILE"; then
+    sed -i.bak "s|^MEMGRAPH_PASSWORD=.*|MEMGRAPH_PASSWORD=$MEMGRAPH_PASSWORD|" "$ENV_FILE"
+else
+    echo "MEMGRAPH_PASSWORD=$MEMGRAPH_PASSWORD" >> "$ENV_FILE"
+fi
+
 # Add AGENT_RECURSION_LIMIT if not present (required for agent)
 if ! grep -q "^AGENT_RECURSION_LIMIT=" "$ENV_FILE"; then
     echo "AGENT_RECURSION_LIMIT=240" >> "$ENV_FILE"
@@ -77,8 +93,72 @@ fi
 rm -f "$ENV_FILE.bak"
 
 echo -e "${GREEN}✓ Secrets generated and saved to .env${NC}"
-echo ""
-echo "Next steps:"
-echo "  1. Edit .env and add your LLM API key (OPENROUTER_API_KEY, OPENAI_API_KEY, or ANTHROPIC_API_KEY)"
-echo "  2. Run: make prod-prebuilt (or make prod-local to build from source)"
+
+# ── LLM provider prompt (interactive only) ────────────────────────────────
+
+_existing_llm_key=""
+for _k in OPENROUTER_API_KEY OPENAI_API_KEY ANTHROPIC_API_KEY GOOGLE_AI_API_KEY; do
+  _v=$(grep "^${_k}=" "$ENV_FILE" 2>/dev/null | cut -d= -f2-)
+  [ -n "$_v" ] && { _existing_llm_key="$_v"; break; }
+done
+
+if [ -n "${LLM_API_KEY:-}" ]; then
+  _provider="${LLM_PROVIDER:-openrouter}"
+  _key="$LLM_API_KEY"
+elif [ -n "$_existing_llm_key" ]; then
+  echo -e "${GREEN}✓ LLM key already configured${NC}"
+  _provider=""
+  _key=""
+elif [ -t 0 ]; then
+  echo ""
+  echo "  LLM Provider Configuration"
+  echo "  1) OpenRouter  — one key, many models (recommended)"
+  echo "  2) OpenAI"
+  echo "  3) Anthropic"
+  echo "  4) Google AI"
+  echo "  5) Skip — I'll configure it later in .env"
+  echo ""
+  printf "  Choice [1]: "
+  read -r _choice
+  _choice="${_choice:-1}"
+
+  _provider=""
+  case "$_choice" in
+    1) _provider="openrouter" ;;
+    2) _provider="openai" ;;
+    3) _provider="anthropic" ;;
+    4) _provider="google" ;;
+    5|*) _provider="" ;;
+  esac
+
+  _key=""
+  if [ -n "$_provider" ]; then
+    printf "  API key: "
+    read -r _key
+  fi
+else
+  echo -e "${YELLOW}! No LLM key configured. Set it in .env before starting Aurora.${NC}"
+  _provider=""
+  _key=""
+fi
+
+if [ -n "$_provider" ] && [ -n "$_key" ]; then
+  case "$_provider" in
+    openrouter) _env_key="OPENROUTER_API_KEY"; _mode="openrouter" ;;
+    openai)     _env_key="OPENAI_API_KEY";     _mode="direct" ;;
+    anthropic)  _env_key="ANTHROPIC_API_KEY";   _mode="direct" ;;
+    google)     _env_key="GOOGLE_AI_API_KEY";   _mode="direct" ;;
+  esac
+  sed -i.bak "s|^LLM_PROVIDER_MODE=.*|LLM_PROVIDER_MODE=${_mode}|" "$ENV_FILE"
+  if grep -q "^${_env_key}=" "$ENV_FILE"; then
+    sed -i.bak "s|^${_env_key}=.*|${_env_key}=${_key}|" "$ENV_FILE"
+  else
+    echo "${_env_key}=${_key}" >> "$ENV_FILE"
+  fi
+  rm -f "$ENV_FILE.bak"
+  echo -e "${GREEN}✓ LLM key saved (${_provider})${NC}"
+elif [ -n "$_provider" ] && [ -z "$_key" ]; then
+  echo -e "${YELLOW}! No key entered. Add it to .env later.${NC}"
+fi
+
 echo ""

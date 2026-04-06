@@ -5,8 +5,8 @@ set -euo pipefail
 # Prompts for required values, generates secrets, and writes values.generated.yaml.
 #
 # Usage:
-#   ./scripts/configure-helm.sh                    # interactive prompts
-#   ./scripts/configure-helm.sh --non-interactive   # skip prompts, generate secrets only
+#   ./deploy/configure-helm.sh                    # interactive prompts
+#   ./deploy/configure-helm.sh --non-interactive   # skip prompts, generate secrets only
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"

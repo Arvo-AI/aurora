@@ -8,7 +8,7 @@ set -euo pipefail
 # Asks where you're deploying and hands off to the right script.
 #
 # Usage:
-#   ./scripts/deploy.sh
+#   ./deploy/deploy.sh
 #
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -64,19 +64,13 @@ case "$TARGET" in
     info "First-time setup — generating .env and secrets..."
     make init
     echo ""
-    warn "Edit .env and add your LLM API key before continuing."
-    echo "  Supported providers: OpenRouter, OpenAI, Anthropic, Google"
-    echo ""
-    if [ -t 0 ]; then
-      printf "  Press Enter when ready (or Ctrl-C to stop)... "
-      read -r
-    fi
   fi
 
+  # ── Start ──
   select_menu "How would you like to run Aurora?" \
-    "Development     — hot-reload, build from source (make dev)" \
-    "Production test — pull prebuilt images from GHCR (make prod-prebuilt)" \
-    "Production build — build production images from source (make prod-local)"
+    "Development      — hot-reload, build from source" \
+    "Production test  — pull prebuilt images from GHCR" \
+    "Production build — build production images from source"
 
   case "$MENU_RESULT" in
     0)
@@ -99,10 +93,15 @@ case "$TARGET" in
 # ═════════════════════════════════════════════════════════════════════════════
 1)
   echo ""
-  echo "  VM / server deployment is not yet available through this wizard."
-  echo "  See the docs: https://docs.arvo.ai/deployment/vm-deployment"
+  echo "  Launching Aurora VM deployment..."
   echo ""
-  exit 0
+  if [ -f "$SCRIPT_DIR/vm-deploy.sh" ]; then
+    bash "$SCRIPT_DIR/vm-deploy.sh"
+  else
+    warn "deploy/vm-deploy.sh not found."
+    echo "  Download it from the Aurora repo or see the docs:"
+    echo "  https://docs.arvo.ai/deployment/vm-deployment"
+  fi
   ;;
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -130,7 +129,7 @@ case "$TARGET" in
         warn "A private container registry URL is required for Kubernetes deployments."
         echo "  Re-run and provide your registry, or run directly:"
         echo ""
-        echo "    ./scripts/deploy-k8s.sh <registry-url>"
+        echo "    ./deploy/deploy-k8s-airgap.sh <registry-url>"
         exit 1
       fi
 
@@ -142,7 +141,7 @@ case "$TARGET" in
       fi
 
       echo ""
-      bash "$SCRIPT_DIR/deploy-k8s.sh" "$REGISTRY" --mode standard $EXTRA_ARGS
+      bash "$SCRIPT_DIR/deploy-k8s-airgap.sh" "$REGISTRY" --mode standard $EXTRA_ARGS
       ;;
 
     1)
@@ -171,7 +170,7 @@ case "$TARGET" in
           if [ -f "$SCRIPT_DIR/download-bundle.sh" ]; then
             bash "$SCRIPT_DIR/download-bundle.sh" "$TARGET_VERSION"
           else
-            curl -fsSL https://raw.githubusercontent.com/arvo-ai/aurora/main/scripts/download-bundle.sh | bash -s -- "$TARGET_VERSION"
+            curl -fsSL https://raw.githubusercontent.com/arvo-ai/aurora/main/deploy/download-bundle.sh | bash -s -- "$TARGET_VERSION"
           fi
 
           echo ""
@@ -189,7 +188,7 @@ case "$TARGET" in
           echo ""
           echo "     tar xzf aurora-*.tar.gz   # the smaller one — source archive"
           echo "     cd aurora-*/"
-          echo "     ./scripts/deploy.sh"
+          echo "     ./deploy/deploy.sh"
           echo "     # Choose 'Kubernetes cluster' → 'No' → 'On the bastion'"
           echo ""
           ;;
@@ -207,7 +206,7 @@ case "$TARGET" in
             warn "A private container registry URL is required for Kubernetes deployments."
             echo "  Re-run and provide your registry, or run directly:"
             echo ""
-            echo "    ./scripts/deploy-k8s.sh <registry-url>"
+            echo "    ./deploy/deploy-k8s-airgap.sh <registry-url>"
             exit 1
           fi
 
@@ -219,7 +218,7 @@ case "$TARGET" in
           fi
 
           echo ""
-          bash "$SCRIPT_DIR/deploy-k8s.sh" "$REGISTRY" --mode bastion $EXTRA_ARGS
+          bash "$SCRIPT_DIR/deploy-k8s-airgap.sh" "$REGISTRY" --mode bastion $EXTRA_ARGS
           ;;
       esac
       ;;

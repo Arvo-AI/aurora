@@ -5,10 +5,10 @@ set -euo pipefail
 # Automatically resolves the latest release version if none is specified.
 #
 # Usage:
-#   ./scripts/download-bundle.sh                    # latest release, auto-detect arch
-#   ./scripts/download-bundle.sh v1.2.3             # specific version
-#   ./scripts/download-bundle.sh v1.2.3 arm64       # specific version and arch
-#   ./scripts/download-bundle.sh latest arm64        # latest release, specific arch
+#   ./deploy/download-bundle.sh                    # latest release, auto-detect arch
+#   ./deploy/download-bundle.sh v1.2.3             # specific version
+#   ./deploy/download-bundle.sh v1.2.3 arm64       # specific version and arch
+#   ./deploy/download-bundle.sh latest arm64        # latest release, specific arch
 
 VERSION="${1:-latest}"
 
@@ -101,4 +101,4 @@ echo ""
 echo "Next steps:"
 echo "  tar xzf ${SOURCE_ARCHIVE}"
 echo "  cd aurora-${VERSION_STRIPPED}"
-echo "  ./scripts/push-to-registry.sh <your-registry>"
+echo "  ./deploy/push-to-registry.sh <your-registry>"

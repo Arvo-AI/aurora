@@ -7,15 +7,15 @@ set -euo pipefail
 # their environment (standard vs air-gapped, workstation vs bastion).
 #
 # Usage:
-#   ./scripts/deploy-k8s.sh <registry-url>
-#   ./scripts/deploy-k8s.sh <registry-url> <version>
-#   ./scripts/deploy-k8s.sh <registry-url> --tarball <path>
-#   ./scripts/deploy-k8s.sh <registry-url> --skip-push
+#   ./deploy/deploy-k8s-airgap.sh <registry-url>
+#   ./deploy/deploy-k8s-airgap.sh <registry-url> <version>
+#   ./deploy/deploy-k8s-airgap.sh <registry-url> --tarball <path>
+#   ./deploy/deploy-k8s-airgap.sh <registry-url> --skip-push
 #
 # Example:
-#   ./scripts/deploy-k8s.sh registry.internal:5000
-#   ./scripts/deploy-k8s.sh registry.internal:5000 v1.2.3
-#   ./scripts/deploy-k8s.sh registry.internal:5000 --tarball aurora-airtight-v1.2.3-amd64.tar.gz
+#   ./deploy/deploy-k8s-airgap.sh registry.internal:5000
+#   ./deploy/deploy-k8s-airgap.sh registry.internal:5000 v1.2.3
+#   ./deploy/deploy-k8s-airgap.sh registry.internal:5000 --tarball aurora-airtight-v1.2.3-amd64.tar.gz
 
 REGISTRY=""
 VERSION="latest"
@@ -81,6 +81,35 @@ echo ""
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 source "$SCRIPT_DIR/lib/helpers.sh"
+
+_build_resume_cmd() {
+  local cmd="./deploy/deploy-k8s-airgap.sh ${REGISTRY}"
+  [ "${VERSION}" != "latest" ] && cmd="$cmd ${VERSION}"
+  [ -n "${DEPLOY_MODE:-}" ] && cmd="$cmd --mode ${DEPLOY_MODE}"
+  [ -n "${TARBALL_FLAG:-}" ] && cmd="$cmd --tarball ${TARBALL_FLAG}"
+  [ "${SKIP_PUSH:-false}" = true ] && cmd="$cmd --skip-push"
+  echo "$cmd"
+}
+
+_print_resume_hint() {
+  echo ""
+  echo "───────────────────────────────────────────"
+  echo "  It's safe to re-run — completed steps will be detected and skipped."
+  echo "  Resume with the same settings:"
+  echo ""
+  echo "    $(_build_resume_cmd)"
+  echo ""
+  echo "───────────────────────────────────────────"
+}
+
+_on_error() {
+  local exit_code=$?
+  echo ""
+  echo "  The script hit an unexpected error (exit code ${exit_code})."
+  _print_resume_hint
+}
+
+trap '_on_error' ERR
 
 # ── Pre-flight ───────────────────────────────────────────────────────────────
 
@@ -170,7 +199,7 @@ if [ "$DEPLOY_MODE" = "prepare" ]; then
   if [ -f "$SCRIPT_DIR/download-bundle.sh" ]; then
     bash "$SCRIPT_DIR/download-bundle.sh" "$TARGET_VERSION"
   else
-    curl -fsSL https://raw.githubusercontent.com/arvo-ai/aurora/main/scripts/download-bundle.sh | bash -s -- "$TARGET_VERSION"
+    curl -fsSL https://raw.githubusercontent.com/arvo-ai/aurora/main/deploy/download-bundle.sh | bash -s -- "$TARGET_VERSION"
   fi
 
   echo ""
@@ -188,7 +217,7 @@ if [ "$DEPLOY_MODE" = "prepare" ]; then
   echo ""
   echo "     tar xzf aurora-*.tar.gz  # (the smaller one — source archive)"
   echo "     cd aurora-*/"
-  echo "     ./scripts/deploy-k8s.sh ${REGISTRY}"
+  echo "     ./deploy/deploy-k8s-airgap.sh ${REGISTRY}"
   echo "     # Choose option 2 (air-gapped bastion)"
   echo ""
   exit 0
@@ -249,6 +278,7 @@ elif [ "$DEPLOY_MODE" = "bastion" ]; then
     echo "  Place the tarball in the current directory and re-run,"
     echo "  or follow the manual steps in the docs:"
     echo "  https://docs.arvo.ai/deployment/kubernetes-airgap"
+    _print_resume_hint
     exit 1
   fi
 fi
@@ -288,6 +318,7 @@ else
     else
       warn "Source archive not found and no internet to download it."
       echo "  Place aurora-<version>.tar.gz in the current directory and re-run."
+      _print_resume_hint
       exit 1
     fi
   fi
@@ -317,7 +348,7 @@ else
     if [ -n "$TARBALL" ]; then
       PUSH_ARGS="$REGISTRY --tarball $TARBALL"
     fi
-    bash ./scripts/push-to-registry.sh $PUSH_ARGS
+    bash ./deploy/push-to-registry.sh $PUSH_ARGS
   fi
 fi
 echo ""
@@ -351,17 +382,17 @@ if [ "$CONFIG_COMPLETE" = true ]; then
     printf "  Reconfigure? [y/N]: "
     read -r RECONFIG
     if [ "$RECONFIG" = "y" ] || [ "$RECONFIG" = "Y" ]; then
-      bash ./scripts/configure-helm.sh
+      bash ./deploy/configure-helm.sh
     else
       echo "  Keeping existing configuration."
     fi
   fi
 else
   if [ -t 0 ]; then
-    bash ./scripts/configure-helm.sh
+    bash ./deploy/configure-helm.sh
   else
     warn "Non-interactive mode — generating secrets only."
-    bash ./scripts/configure-helm.sh --non-interactive
+    bash ./deploy/configure-helm.sh --non-interactive
     echo "  Edit ${VALUES_FILE} to configure LLM keys and domain, then re-run."
   fi
 fi
@@ -379,6 +410,7 @@ if [ "$HAS_KUBECTL" != true ]; then
   if [ "$DEPLOY_MODE" = "bastion" ]; then
     echo "  You selected the bastion/air-gap option, but kubectl can't reach the cluster."
     echo "  Make sure kubectl is configured and the cluster is reachable, then re-run."
+    _print_resume_hint
   else
     echo "  Steps 1–4 are complete. To finish, run the Helm install on a machine"
     echo "  with cluster access (e.g., your bastion or jump host):"
@@ -389,6 +421,9 @@ if [ "$HAS_KUBECTL" != true ]; then
     echo ""
     echo "  Transfer the source directory and $VALUES_FILE to that machine."
     echo "  Then continue with Vault setup — see the deployment docs."
+    echo ""
+    echo "  Or, if the issue is just kubectl connectivity, fix it and re-run:"
+    _print_resume_hint
   fi
   exit 1
 fi
@@ -399,9 +434,26 @@ RELEASE="aurora-oss"
 # ── 5a. Ingress controller ──
 info "Checking for ingress controller..."
 INGRESS_CLASSES=$(kubectl get ingressclass -o jsonpath='{.items[*].metadata.name}' 2>/dev/null || true)
+INGRESS_NGINX_EXISTS=$(kubectl get deployment ingress-nginx-controller -n ingress-nginx -o name 2>/dev/null || true)
 
 if [ -n "$INGRESS_CLASSES" ]; then
   ok "Ingress controller detected (classes: ${INGRESS_CLASSES})"
+
+  if [ -n "$INGRESS_NGINX_EXISTS" ]; then
+    READY=$(kubectl get deployment ingress-nginx-controller -n ingress-nginx -o jsonpath='{.status.readyReplicas}' 2>/dev/null || echo "0")
+    if [ "${READY:-0}" = "0" ]; then
+      info "nginx-ingress deployment exists but not yet ready — waiting (up to 180s)..."
+      if kubectl rollout status deployment/ingress-nginx-controller -n ingress-nginx --timeout=180s 2>/dev/null; then
+        ok "Nginx Ingress Controller ready"
+      else
+        warn "Ingress controller still not ready after 180s."
+        echo "  The admission webhook may block Helm installs until the controller is up."
+        echo "  Deleting the webhook so the deployment can proceed..."
+        kubectl delete validatingwebhookconfiguration ingress-nginx-admission 2>/dev/null || true
+        echo "  (The controller will recreate it once it's running.)"
+      fi
+    fi
+  fi
 
   CONFIGURED_CLASS=$(yq '.ingress.className // "nginx"' "$VALUES_FILE" 2>/dev/null || echo "nginx")
   if ! echo "$INGRESS_CLASSES" | grep -qw "$CONFIGURED_CLASS"; then
@@ -439,14 +491,21 @@ else
     if [ ! -f "$MANIFEST" ]; then
       echo "Error: ${MANIFEST} not found."
       echo "Either place the manifest at ${MANIFEST} or install an ingress controller manually."
+      _print_resume_hint
       exit 1
     fi
 
     info "Installing nginx-ingress from local manifest (images from ${REGISTRY})..."
     sed "s|__REGISTRY__|${REGISTRY}|g" "$MANIFEST" | kubectl apply -f -
-    info "Waiting for ingress controller to become ready..."
-    kubectl rollout status deployment/ingress-nginx-controller -n ingress-nginx --timeout=120s
-    ok "Nginx Ingress Controller ready"
+    info "Waiting for ingress controller to become ready (up to 120s)..."
+    if kubectl rollout status deployment/ingress-nginx-controller -n ingress-nginx --timeout=120s 2>/dev/null; then
+      ok "Nginx Ingress Controller ready"
+    else
+      warn "Ingress controller not ready within 120s."
+      echo "  Deleting the admission webhook so Helm can proceed..."
+      kubectl delete validatingwebhookconfiguration ingress-nginx-admission 2>/dev/null || true
+      echo "  (The controller will recreate it once it's running.)"
+    fi
 
     yq -i '.ingress.className = "nginx"' "$VALUES_FILE"
   else

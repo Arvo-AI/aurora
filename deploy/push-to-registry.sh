@@ -11,12 +11,12 @@ set -euo pipefail
 #      For physically air-gapped environments with no internet.
 #
 # Usage:
-#   ./scripts/push-to-registry.sh <registry>                           # auto-detect mode
-#   ./scripts/push-to-registry.sh <registry> --tarball <path>          # force tarball mode
+#   ./deploy/push-to-registry.sh <registry>                           # auto-detect mode
+#   ./deploy/push-to-registry.sh <registry> --tarball <path>          # force tarball mode
 #
 # Examples:
-#   ./scripts/push-to-registry.sh registry.internal:5000
-#   ./scripts/push-to-registry.sh harbor.corp/aurora --tarball ./aurora-airtight-v1.2.3-amd64.tar.gz
+#   ./deploy/push-to-registry.sh registry.internal:5000
+#   ./deploy/push-to-registry.sh harbor.corp/aurora --tarball ./aurora-airtight-v1.2.3-amd64.tar.gz
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -229,7 +229,7 @@ push_tarball_mode() {
     echo "  Size on disk: $(du -h "$TARBALL" | cut -f1)"
     echo "  A valid bundle is typically 8-12 GB."
     echo ""
-    echo "  Re-download: ./scripts/download-bundle.sh"
+    echo "  Re-download: ./deploy/download-bundle.sh"
     exit 1
   fi
 

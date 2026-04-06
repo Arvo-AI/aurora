@@ -151,12 +151,9 @@ init:
 		cp .env.example .env; \
 	fi
 	@chmod +x scripts/generate-local-secrets.sh scripts/init-prod-vault.sh
-	@echo "Generating secure secrets..."
 	@./scripts/generate-local-secrets.sh
-	@echo ""
-	@echo "✓ Setup complete! Next steps:"
-	@echo "  1. Edit .env and add your LLM API key (OPENROUTER_API_KEY, OPENAI_API_KEY, or ANTHROPIC_API_KEY)"
-	@echo "  2. Run: make dev (for development), make prod-prebuilt (pull images), or make prod-local (build from source)"
+	@echo "✓ Setup complete!"
+	@echo "  Run: make dev (for development), make prod-prebuilt (pull images), or make prod-local (build from source)"
 
 prod-prebuilt:
 	@if [ ! -f .env ]; then \
@@ -231,8 +228,8 @@ prod-local-nuke:
 
 # Airtight deployment commands (restricted-egress / enterprise VMs)
 package-airtight:
-	@chmod +x scripts/package-airtight.sh
-	@./scripts/package-airtight.sh
+	@chmod +x deploy/package-airtight.sh
+	@./deploy/package-airtight.sh
 
 prod-airtight:
 	@if [ ! -f .env ]; then \

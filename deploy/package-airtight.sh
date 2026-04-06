@@ -5,8 +5,8 @@ set -euo pipefail
 # for deployment on airtight / restricted-egress VMs.
 #
 # Run this on a machine with internet access:
-#   ./scripts/package-airtight.sh                          # default: linux/amd64
-#   PLATFORM=linux/arm64 ./scripts/package-airtight.sh     # for ARM servers
+#   ./deploy/package-airtight.sh                          # default: linux/amd64
+#   PLATFORM=linux/arm64 ./deploy/package-airtight.sh     # for ARM servers
 #
 # Transfer the resulting .tar.gz to the target VM, then:
 #   make prod-airtight AIRTIGHT_BUNDLE=aurora-airtight-<version>.tar.gz
