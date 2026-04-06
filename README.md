@@ -220,13 +220,7 @@ Deploy Aurora on any cloud VM (AWS, GCP, Azure, etc.) with a single command. The
 curl -fsSL https://raw.githubusercontent.com/arvo-ai/aurora/main/deploy/bootstrap.sh | bash
 ```
 
-**Air-gapped / restricted network:**
-
-Download the [prebuilt image bundle](https://storage.googleapis.com/aurora-airtight-bucket/index.html), transfer it to the VM along with the [source archive](https://github.com/arvo-ai/aurora/releases), then run:
-
-```bash
-cd aurora && bash deploy/aurora-deploy.sh --profile airtight --bundle ~/aurora-airtight-*.tar.gz
-```
+**Air-gapped:** See [Air-gapped / restricted network](#air-gapped--restricted-network) below.
 
 See the [VM deployment guide](https://arvo-ai.github.io/aurora/docs/deployment/vm-deployment) for full details.
 
@@ -250,11 +244,13 @@ helm install aurora ./helm/aurora
 
 ### Air-gapped / restricted network
 
-Prebuilt airtight bundles (all images in one tarball) are published on every release and push to `main`. [Browse available bundles](https://storage.googleapis.com/aurora-airtight-bucket/index.html) and download with `curl`:
+Prebuilt airtight bundles (all images in one tarball) are published on every release and push to `main`. Browse available bundles: [amd64](https://storage.googleapis.com/aurora-airtight-bucket/index.html) | [arm64](https://storage.googleapis.com/aurora-airtight-bucket-arm64/index.html)
 
 ```bash
 # Replace <version> with a release tag (e.g. v1.2.3) or commit SHA
 curl -LO https://storage.googleapis.com/aurora-airtight-bucket/aurora-airtight-<version>-amd64.tar.gz
+# For ARM servers:
+# curl -LO https://storage.googleapis.com/aurora-airtight-bucket-arm64/aurora-airtight-<version>-arm64.tar.gz
 ```
 
 Transfer the tarball and [source archive](https://github.com/arvo-ai/aurora/releases) to the target VM, then run the deployment wizard (`deploy/aurora-deploy.sh`) — it handles image loading, `.env` configuration, Vault setup, and health checks. See the [air-tight deployment guide](https://arvo-ai.github.io/aurora/docs/deployment/vm-deployment#secure-deployment-air-tight) for full instructions.
