@@ -33,8 +33,23 @@ HTTP_TIMEOUT = (3.5, 5)
 # ── Providers with live API validation ──────────────────────────────
 
 
-def _check_grafana(creds: Dict[str, Any]) -> Dict[str, Any]:
-    return {"connected": True}
+def _check_grafana(user_id: str, org_id: str) -> Dict[str, Any]:
+    """Grafana is webhook-based — check is_active directly (no secret_ref needed)."""
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """SELECT 1 FROM user_tokens
+                       WHERE (user_id = %s OR org_id = %s)
+                         AND provider = 'grafana'
+                         AND is_active = TRUE
+                       LIMIT 1""",
+                    (user_id, org_id),
+                )
+                return {"connected": cursor.fetchone() is not None}
+    except Exception as exc:
+        logger.warning("[STATUS] grafana check failed: %s", exc)
+        return {"connected": False}
 
 
 def _check_datadog(creds: Dict[str, Any]) -> Dict[str, Any]:
@@ -639,6 +654,8 @@ def _check_all_connectors(user_id: str, org_id: str) -> Dict[str, Dict[str, Any]
             return provider, _check_onprem(user_id, org_id)
         if provider == "kubectl":
             return provider, _check_kubectl(user_id, org_id)
+        if provider == "grafana":
+            return provider, _check_grafana(user_id, org_id)
         creds = get_token_data(token_owner_id, provider)
         if not creds:
             with db_pool.get_admin_connection() as fallback_conn:
@@ -660,6 +677,7 @@ def _check_all_connectors(user_id: str, org_id: str) -> Dict[str, Dict[str, Any]
 
     providers.setdefault("onprem", user_id)
     providers.setdefault("kubectl", user_id)
+    providers.setdefault("grafana", user_id)
 
     with ThreadPoolExecutor(max_workers=12) as pool:
         futures = {
