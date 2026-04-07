@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useRef, useState, useEffect, useCallback, useMemo } from "react";
+import React, { useRef, useState, useEffect, useCallback } from "react";
 import { Virtuoso, VirtuosoHandle } from "react-virtuoso";
 import { MessageItem } from "./message-item";
 import { Message } from "../../app/chat/types";
@@ -13,47 +13,26 @@ interface VirtualizedMessagesProps {
   userId?: string;
 }
 
-export const VirtualizedMessages = React.memo(({ messages, sendRaw, onUpdateMessage, sessionId, userId }: VirtualizedMessagesProps) => {
+export function VirtualizedMessages({ messages, sendRaw, onUpdateMessage, sessionId, userId }: VirtualizedMessagesProps) {
   const virtuosoRef = useRef<VirtuosoHandle>(null);
-  const firstLoad = useRef(true);
   const isExistingSession = useRef(false);
+  const firstLoad = useRef(true);
   const prevMessageCountRef = useRef(messages.length);
-  const [userScrolledUp, setUserScrolledUp] = useState(false);
-  const frozenMessagesRef = useRef<Message[]>(messages);
+  const [isAtBottom, setIsAtBottom] = useState(true);
 
   if (firstLoad.current && messages.length > 0) {
     firstLoad.current = false;
     isExistingSession.current = messages.length > 2;
   }
 
-  if (!userScrolledUp) {
-    frozenMessagesRef.current = messages;
-  } else if (messages.length !== frozenMessagesRef.current.length) {
-    frozenMessagesRef.current = messages;
-  }
-
-  const stableMessages = userScrolledUp ? frozenMessagesRef.current : messages;
-
   const handleAtBottomChange = useCallback((bottom: boolean) => {
-    if (bottom) {
-      setUserScrolledUp(false);
-    }
+    setIsAtBottom(bottom);
   }, []);
 
-  const handleFollowOutput = useCallback((isAtBottom: boolean) => {
-    if (userScrolledUp) return false;
-    return isAtBottom ? "smooth" : false;
-  }, [userScrolledUp]);
-
-  const handleScroll = useCallback((e: React.UIEvent) => {
-    const el = e.target as HTMLElement;
-    const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-    if (distFromBottom > 150) {
-      if (!userScrolledUp) setUserScrolledUp(true);
-    } else if (distFromBottom < 80) {
-      if (userScrolledUp) setUserScrolledUp(false);
-    }
-  }, [userScrolledUp]);
+  const handleFollowOutput = useCallback(
+    (atBottom: boolean) => (atBottom ? "auto" : false),
+    []
+  );
 
   useEffect(() => {
     const prevCount = prevMessageCountRef.current;
@@ -62,7 +41,6 @@ export const VirtualizedMessages = React.memo(({ messages, sendRaw, onUpdateMess
     if (messages.length > prevCount && messages.length > 0) {
       const lastMsg = messages[messages.length - 1];
       if (lastMsg.sender === "user") {
-        setUserScrolledUp(false);
         requestAnimationFrame(() => {
           virtuosoRef.current?.scrollToIndex({
             index: messages.length - 1,
@@ -88,17 +66,17 @@ export const VirtualizedMessages = React.memo(({ messages, sendRaw, onUpdateMess
   return (
     <Virtuoso
       ref={virtuosoRef}
-      data={stableMessages}
-      totalCount={stableMessages.length}
+      data={messages}
+      totalCount={messages.length}
       initialTopMostItemIndex={isExistingSession.current ? 0 : messages.length - 1}
       followOutput={handleFollowOutput}
       atBottomStateChange={handleAtBottomChange}
-      atBottomThreshold={40}
-      overscan={200}
-      increaseViewportBy={{ top: 200, bottom: 0 }}
-      onScroll={handleScroll}
+      atBottomThreshold={60}
+      overscan={400}
+      increaseViewportBy={{ top: 400, bottom: 200 }}
       className="h-full scrollbar-thin scrollbar-track-transparent scrollbar-thumb-gray-300 dark:scrollbar-thumb-gray-600"
       components={{
+        Header: () => <div className="h-6" />,
         Footer: () => <div className="h-8" />,
       }}
       itemContent={(index: number, message: Message) => (
@@ -109,13 +87,11 @@ export const VirtualizedMessages = React.memo(({ messages, sendRaw, onUpdateMess
             onUpdateMessage={onUpdateMessage}
             sessionId={sessionId}
             userId={userId}
-            allMessages={stableMessages}
+            allMessages={messages}
             messageIndex={index}
           />
         </div>
       )}
     />
   );
-});
-
-VirtualizedMessages.displayName = "VirtualizedMessages";
+}

@@ -101,7 +101,7 @@ export const MessageItem = React.memo(({ message, sendRaw, onUpdateMessage, sess
   };
 
   return (
-  <div className={`flex ${message.sender === "user" ? "justify-end" : "justify-start"} px-4 py-1`}>
+  <div className={`flex ${message.sender === "user" ? "justify-end" : "justify-start"} px-2 py-1`}>
     <div
       className={
         message.sender === "user"
