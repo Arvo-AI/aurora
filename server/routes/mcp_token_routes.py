@@ -35,7 +35,13 @@ def create_mcp_token(user_id):
         name = data.get('name', 'Unnamed Token')[:100]
         expires_days = data.get('expires_days')
         token = _generate_token()
-        expires_at = datetime.now(timezone.utc) + timedelta(days=expires_days) if expires_days else None
+        if expires_days is not None:
+            expires_days = int(expires_days)
+            if expires_days < 1:
+                return jsonify({'error': 'expires_days must be a positive integer'}), 400
+            expires_at = datetime.now(timezone.utc) + timedelta(days=expires_days)
+        else:
+            expires_at = None
         org_id = get_org_id_from_request()
         if not org_id:
             return jsonify({'error': 'Organization context required'}), 400

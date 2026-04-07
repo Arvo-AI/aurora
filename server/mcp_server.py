@@ -5,12 +5,9 @@ Exposes Aurora's full API surface to MCP-compatible clients (Claude Desktop,
 Cursor, Windsurf, etc.) via 5 curated tools for the core investigation workflow
 and a generic proxy tool that covers all ~340 API endpoints.
 
-Usage:
-  python mcp_server.py                               # stdio (default)
-  python mcp_server.py --transport streamable-http    # HTTP on port 8811
+Runs as a streamable-http server on port 8811 (default).
 """
 
-import argparse
 import asyncio
 import atexit
 import contextvars
@@ -29,7 +26,7 @@ from mcp.server.fastmcp import FastMCP
 logger = logging.getLogger("aurora.mcp")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 
-API_BASE = os.environ.get("MCP_API_BASE", "http://aurora-server:5080")
+API_BASE = os.environ.get("BACKEND_URL", "http://aurora-server:5080")
 
 _current_bearer_token: contextvars.ContextVar[str] = contextvars.ContextVar("_current_bearer_token")
 
@@ -113,15 +110,11 @@ def _resolve_token(token: str) -> tuple[str, str]:
 
 
 def _get_token() -> str:
-    """Extract token from context var (HTTP) or AURORA_MCP_TOKEN env var (stdio)."""
+    """Extract token from the Bearer header (via ContextVar set by middleware)."""
     try:
         return _current_bearer_token.get()
     except LookupError:
-        pass
-    token = os.environ.get("AURORA_MCP_TOKEN", "")
-    if not token:
-        raise ValueError("No MCP token provided. Set AURORA_MCP_TOKEN or send Bearer header.")
-    return token
+        raise ValueError("No MCP token provided. Send a Bearer token in the Authorization header.")
 
 
 async def _api(method: str, path: str, *, params: dict | None = None,
@@ -282,25 +275,17 @@ def blast_radius_analysis(service_name: str) -> str:
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Aurora MCP Server")
-    parser.add_argument("--transport", choices=["stdio", "streamable-http"], default="stdio")
-    parser.add_argument("--port", type=int, default=8811)
-    args = parser.parse_args()
+    port = int(os.environ.get("MCP_PORT", "8811"))
+    mcp.settings.host = "0.0.0.0"
+    mcp.settings.port = port
 
-    if args.transport == "streamable-http":
-        mcp.settings.host = "0.0.0.0"
-        mcp.settings.port = args.port
+    _original_app_factory = mcp.streamable_http_app
 
-        _original_app_factory = mcp.streamable_http_app
+    def _patched_app_factory():
+        app = _original_app_factory()
+        app.add_middleware(BearerTokenMiddleware)
+        return app
 
-        def _patched_app_factory():
-            app = _original_app_factory()
-            app.add_middleware(BearerTokenMiddleware)
-            return app
-
-        mcp.streamable_http_app = _patched_app_factory
-        logger.info(f"Starting Aurora MCP server on port {args.port} (streamable-http)")
-    else:
-        logger.info("Starting Aurora MCP server (stdio)")
-
-    mcp.run(transport=args.transport)
+    mcp.streamable_http_app = _patched_app_factory
+    logger.info(f"Starting Aurora MCP server on port {port}")
+    mcp.run(transport="streamable-http")

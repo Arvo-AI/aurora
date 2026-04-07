@@ -433,10 +433,9 @@ services:
       - "${MCP_PORT:-8811}:8811"
     volumes:
       - ./server:/app
-    command: ["python", "mcp_server.py", "--transport", "streamable-http"]
+    command: ["python", "mcp_server.py"]
     environment:
       <<: *common-env
-      MCP_API_BASE: http://aurora-server:5080
     depends_on:
       - aurora-server
       - postgres
