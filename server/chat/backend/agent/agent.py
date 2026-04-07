@@ -528,77 +528,139 @@ class Agent:
                 if len(prev_messages) > self.ctx_len:
                     prev_messages = prev_messages[-self.ctx_len:]
 
-                for msg in prev_messages:  # Exclude the current user message
+                # Build chat_history by preserving original LangChain message objects
+                # so that AIMessage(tool_calls) → ToolMessage pairs stay intact
+                # (required by the Anthropic API).
+                for msg in prev_messages:
                     if isinstance(msg, HumanMessage):
-                        # For multimodal messages, we need to pass the full content structure
-                        chat_history.append(("human", msg.content))
+                        chat_history.append(msg)
                     elif isinstance(msg, AIMessage):
-                        # Handle AIMessage with tool calls
                         if hasattr(msg, 'tool_calls') and msg.tool_calls:
-                            ai_content = msg.content
-                            if not ai_content:
-                                # Build a compact description of the tool calls for context without noisy placeholders
-                                tool_summaries = []
-                                for call in msg.tool_calls:
-                                    name = call.get('name') if isinstance(call, dict) else getattr(call, 'name', 'tool')
-                                    args = call.get('args') if isinstance(call, dict) else getattr(call, 'args', {})
-                                    tool_summaries.append(f"[{name}] {args}")
-                                ai_content = " \n".join(tool_summaries)
-                            if ai_content:
-                                chat_history.append(("ai", ai_content))
+                            # Preserve the full AIMessage so tool_call ids are kept
+                            chat_history.append(msg)
                         else:
                             if msg.content:
-                                chat_history.append(("ai", msg.content))
+                                chat_history.append(msg)
                     elif isinstance(msg, ToolMessage):
-                        # Handle ToolMessage objects - use summarized content if available to reduce tokens
                         tool_name = getattr(msg, 'name', 'unknown_tool')
                         tool_result = msg.content
-                        
-                        # Check if we have a summarized version for this tool message
+
                         if (tool_capture and 
                             hasattr(tool_capture, 'summarized_tool_results') and 
                             hasattr(msg, 'tool_call_id') and 
                             msg.tool_call_id in tool_capture.summarized_tool_results):
-                            # Use summarized content for chat history to reduce tokens
                             summarized_data = tool_capture.summarized_tool_results[msg.tool_call_id]
                             tool_result = summarized_data['summarized_output']
                             logging.info(f"Using summarized tool result for {tool_name} in chat history")
                         else:
-                            # Truncate very large tool outputs to avoid token bloat
                             if isinstance(tool_result, str) and len(tool_result) > 4000:
                                 tool_result = tool_result[:4000] + "\n...[truncated for context reduction]"
-                        
-                        tool_context = f"[Tool: {tool_name}] {tool_result}"
-                        chat_history.append(("system", tool_context))
+
+                        # Preserve as ToolMessage so the AIMessage→ToolMessage pair stays valid
+                        chat_history.append(ToolMessage(
+                            content=tool_result,
+                            tool_call_id=getattr(msg, 'tool_call_id', ''),
+                            name=tool_name,
+                        ))
                     elif isinstance(msg, dict):
-                        # Fallback for dict-style messages
                         if msg.get("role") == "user":
-                            chat_history.append(("human", msg.get("content", "")))
+                            chat_history.append(HumanMessage(content=msg.get("content", "")))
                         elif msg.get("role") == "assistant":
-                            chat_history.append(("ai", msg.get("content", "")))
+                            tool_calls = msg.get("tool_calls")
+                            if tool_calls:
+                                chat_history.append(AIMessage(
+                                    content=msg.get("content", ""),
+                                    tool_calls=tool_calls,
+                                ))
+                            else:
+                                chat_history.append(AIMessage(content=msg.get("content", "")))
                         elif msg.get("role") == "tool":
-                            # Handle tool result dict messages
                             tool_name = msg.get("name", "unknown_tool")
                             tool_result = msg.get("content", "")
-                            tool_context = f"[Tool: {tool_name}] {tool_result}"
-                            chat_history.append(("system", tool_context))
+                            tool_call_id = msg.get("tool_call_id", "")
+                            if tool_call_id:
+                                chat_history.append(ToolMessage(
+                                    content=tool_result,
+                                    tool_call_id=tool_call_id,
+                                    name=tool_name,
+                                ))
+                            else:
+                                chat_history.append(HumanMessage(content=f"[Tool Result: {tool_name}] {tool_result}"))
                     else:
-                        # Unknown type fallback
-                        chat_history.append(("system", getattr(msg, 'content', "")))
+                        chat_history.append(HumanMessage(content=getattr(msg, 'content', "")))
+
+                # Drop orphaned ToolMessages at the start whose AIMessage was
+                # truncated away — Anthropic rejects tool_result without a
+                # preceding tool_use.
+                available_tool_call_ids: set = set()
+                for m in chat_history:
+                    if isinstance(m, AIMessage) and getattr(m, 'tool_calls', None):
+                        for tc in m.tool_calls:
+                            tc_id = tc.get('id') if isinstance(tc, dict) else getattr(tc, 'id', None)
+                            if tc_id:
+                                available_tool_call_ids.add(tc_id)
+
+                answered_tool_call_ids: set = set()
+                for m in chat_history:
+                    if isinstance(m, ToolMessage):
+                        tc_id = getattr(m, 'tool_call_id', None)
+                        if tc_id:
+                            answered_tool_call_ids.add(tc_id)
+
+                cleaned_history = []
+                for m in chat_history:
+                    if isinstance(m, ToolMessage):
+                        tc_id = getattr(m, 'tool_call_id', None)
+                        if tc_id and tc_id not in available_tool_call_ids:
+                            logging.info(f"Dropping orphaned ToolMessage (tool_call_id={tc_id})")
+                            continue
+                    if isinstance(m, AIMessage) and getattr(m, 'tool_calls', None):
+                        tc_ids = []
+                        for tc in m.tool_calls:
+                            tc_id = tc.get('id') if isinstance(tc, dict) else getattr(tc, 'id', None)
+                            if tc_id:
+                                tc_ids.append(tc_id)
+                        answered = [tid for tid in tc_ids if tid in answered_tool_call_ids]
+                        unanswered = [tid for tid in tc_ids if tid not in answered_tool_call_ids]
+
+                        if tc_ids and not answered:
+                            text = m.content or ""
+                            if text:
+                                cleaned_history.append(AIMessage(content=text))
+                            logging.info(f"Stripped orphaned tool_calls from AIMessage ({len(tc_ids)} calls)")
+                            continue
+                        elif unanswered:
+                            kept_calls = [
+                                tc for tc in m.tool_calls
+                                if (tc.get('id') if isinstance(tc, dict) else getattr(tc, 'id', None)) in answered_tool_call_ids
+                            ]
+                            patched = AIMessage(content=m.content or "", tool_calls=kept_calls)
+                            cleaned_history.append(patched)
+                            for uid in unanswered:
+                                available_tool_call_ids.discard(uid)
+                            logging.info(
+                                f"Removed {len(unanswered)} unanswered tool_calls from AIMessage "
+                                f"(kept {len(kept_calls)})"
+                            )
+                            continue
+                    cleaned_history.append(m)
+                chat_history = cleaned_history
 
 
                 # Preflight context compression for LLM prompt only (does not alter stored messages)
                 if prev_messages:
                     try:
                         from chat.backend.agent.utils.chat_context_manager import ChatContextManager
+                        from langchain_core.messages import SystemMessage as _SystemMessage
                         if ChatContextManager.should_summarize_context(prev_messages, model_name):
                             summary_text = ChatContextManager.create_conversation_summary(prev_messages)
-                            chat_history = [(
-                                "system",
-                                "[CONVERSATION SUMMARY - Preflight]\n\n"
-                                f"{summary_text}\n\n"
-                                "[END SUMMARY]"
-                            )]
+                            chat_history = [
+                                _SystemMessage(content=(
+                                    "[CONVERSATION SUMMARY - Preflight]\n\n"
+                                    f"{summary_text}\n\n"
+                                    "[END SUMMARY]"
+                                ))
+                            ]
                             logging.info(f"Preflight context compression applied for session {state.session_id}")
                     except Exception as e:
                         logging.warning(f"Preflight context compression failed: {e}")
@@ -629,8 +691,17 @@ class Agent:
                 if len(chat_history) > 0:
                     # Find the original request (first human message)
                     original_request = None
-                    for role, content in chat_history:
-                        if role == "human":
+                    for msg in chat_history:
+                        if isinstance(msg, HumanMessage):
+                            content = msg.content
+                            if isinstance(content, list):
+                                text_parts = [p.get('text', '') if isinstance(p, dict) else str(p) for p in content]
+                                content = ' '.join(text_parts)
+                            if isinstance(content, str) and (
+                                content.startswith("[Tool Result:") or
+                                content.startswith("[CONVERSATION SUMMARY")
+                            ):
+                                continue
                             original_request = content
                             break
                     
@@ -641,22 +712,17 @@ class Agent:
                         current_query += context_injection
                 
                 # Build messages list for new create_agent API
-                # The new API expects a list of messages, not a dict
+                # chat_history already contains proper LangChain message objects
+                # with AIMessage→ToolMessage pairs preserved for Anthropic compatibility.
                 from langchain_core.messages import SystemMessage
                 agent_messages = []
                 
-                # Add chat history messages
                 for msg in chat_history:
-                    if isinstance(msg, tuple):
-                        role, content = msg
-                        if role == "human":
-                            agent_messages.append(HumanMessage(content=content))
-                        elif role == "ai":
-                            agent_messages.append(AIMessage(content=content))
-                        elif role == "system":
-                            agent_messages.append(SystemMessage(content=content))
+                    # Convert any stray SystemMessage to HumanMessage to avoid
+                    # non-consecutive system messages (Anthropic rejects those).
+                    if isinstance(msg, SystemMessage):
+                        agent_messages.append(HumanMessage(content=f"[System Context] {msg.content}"))
                     else:
-                        # Already a message object
                         agent_messages.append(msg)
                 
                 # Add current query as HumanMessage
@@ -800,6 +866,4 @@ class Agent:
             except:
                 pass  # Ignore cleanup errors in error handler
                 
-            # Fallback response
-            state.messages.append(AIMessage(content=f"I encountered an error while processing your cloud management request: {str(e)}"))
-            return state
+            raise
