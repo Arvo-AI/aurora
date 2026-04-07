@@ -50,7 +50,7 @@ export function VirtualizedMessages({ messages, sendRaw, onUpdateMessage, sessio
         });
       }
     }
-  }, [messages.length]);
+  }, [messages]);
 
   if (messages.length === 0) {
     return (
