@@ -225,6 +225,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.transport == "streamable-http":
+        mcp.settings.host = "0.0.0.0"
         mcp.settings.port = args.port
         logger.info(f"Starting Aurora MCP server on port {args.port} (streamable-http)")
     else:
