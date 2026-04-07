@@ -12,14 +12,15 @@ Usage:
 
 import argparse
 import asyncio
+import atexit
 import contextvars
 import logging
 import os
+import time
 
 import httpx
 import psycopg2
 import psycopg2.pool
-from starlette.middleware import Middleware
 from starlette.requests import Request
 from starlette.types import ASGIApp, Receive, Scope, Send
 
@@ -58,6 +59,7 @@ class BearerTokenMiddleware:
 # ---------------------------------------------------------------------------
 
 _pool: psycopg2.pool.ThreadedConnectionPool | None = None
+_last_used_cache: dict[str, float] = {}
 
 
 def _get_pool() -> psycopg2.pool.ThreadedConnectionPool:
@@ -75,10 +77,19 @@ def _get_pool() -> psycopg2.pool.ThreadedConnectionPool:
     return _pool
 
 
+def _shutdown_pool():
+    if _pool is not None and not _pool.closed:
+        _pool.closeall()
+
+
+atexit.register(_shutdown_pool)
+
+
 def _resolve_token(token: str) -> tuple[str, str]:
     """Look up an MCP API token and return (user_id, org_id)."""
     pool = _get_pool()
     conn = pool.getconn()
+    ok = False
     try:
         with conn.cursor() as cur:
             cur.execute(
@@ -90,11 +101,15 @@ def _resolve_token(token: str) -> tuple[str, str]:
             row = cur.fetchone()
             if not row:
                 raise ValueError("Invalid, expired, or revoked MCP token")
-            cur.execute("UPDATE mcp_tokens SET last_used_at = NOW() WHERE token = %s", (token,))
+            now = time.monotonic()
+            if now - _last_used_cache.get(token, 0) > 60:
+                cur.execute("UPDATE mcp_tokens SET last_used_at = NOW() WHERE token = %s", (token,))
+                _last_used_cache[token] = now
             conn.commit()
+            ok = True
             return row[0], row[1]
     finally:
-        pool.putconn(conn)
+        pool.putconn(conn, close=not ok)
 
 
 def _get_token() -> str:
@@ -112,12 +127,22 @@ def _get_token() -> str:
 async def _api(method: str, path: str, *, params: dict | None = None,
                body: dict | None = None, timeout: float = 30) -> dict:
     """Proxy a request to the Aurora Flask API with identity from the MCP token."""
+    if not path.startswith("/"):
+        raise ValueError(f"Path must be a relative path starting with /: {path}")
     token = _get_token()
     user_id, org_id = _resolve_token(token)
     headers = {"X-User-ID": user_id, "X-Org-ID": org_id}
     async with httpx.AsyncClient(base_url=API_BASE, timeout=timeout) as client:
         resp = await client.request(method, path, params=params, json=body, headers=headers)
-        resp.raise_for_status()
+        try:
+            resp.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            code = exc.response.status_code
+            try:
+                detail = exc.response.json()
+            except Exception:
+                detail = {"error": exc.response.text[:500]}
+            raise ValueError(f"Aurora API returned {code}: {detail}")
         return resp.json()
 
 
@@ -165,13 +190,13 @@ async def ask_incident(incident_id: str, question: str) -> dict:
     if not session_id:
         return result
 
-    for _ in range(30):
+    for _ in range(10):
         await asyncio.sleep(2)
         session = await _api("GET", f"/chat_api/sessions/{session_id}", timeout=15)
         if session.get("status") not in ("processing", "pending"):
             return session
     return {"status": "still_processing", "session_id": session_id,
-            "message": "Response not ready yet. Poll aurora_api GET /chat_api/sessions/{session_id}"}
+            "message": "Response not ready after 20s. Poll: aurora_api GET /chat_api/sessions/{session_id}"}
 
 
 @mcp.tool()
@@ -195,6 +220,8 @@ async def aurora_api(method: str, path: str, params: dict | None = None,
                      body: dict | None = None) -> dict:
     """Call any Aurora API endpoint. Read the aurora://api-catalog resource first to discover
     available endpoints. method: GET/POST/PATCH/PUT/DELETE. path: e.g. /api/connectors/status"""
+    if not path.startswith("/"):
+        return {"error": "path must start with / (e.g. /api/incidents)"}
     timeout = 120.0 if "discover" in path else 30.0
     return await _api(method, path, params=params, body=body, timeout=timeout)
 

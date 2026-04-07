@@ -440,6 +440,12 @@ services:
     depends_on:
       - aurora-server
       - postgres
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import socket; s=socket.socket(); s.settimeout(2); s.connect(('localhost',8811)); s.close()"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
   t2v-transformers:
     image: cr.weaviate.io/semitechnologies/transformers-inference:sentence-transformers-all-MiniLM-L6-v2

@@ -13,6 +13,8 @@ mcp_token_bp = Blueprint('mcp_token', __name__)
 
 
 def _generate_token():
+    # Tokens are stored in plaintext (consistent with kubectl_agent_tokens).
+    # Future hardening: store SHA-256 hash, compare hashes on lookup.
     return f"aurora_mcp_{secrets.token_urlsafe(48)}"
 
 
@@ -30,10 +32,10 @@ def _to_iso(dt):
 def create_mcp_token(user_id):
     try:
         data = request.get_json() or {}
-        name = data.get('name', 'Unnamed Token')
+        name = data.get('name', 'Unnamed Token')[:100]
         expires_days = data.get('expires_days')
         token = _generate_token()
-        expires_at = datetime.now() + timedelta(days=expires_days) if expires_days else None
+        expires_at = datetime.now(timezone.utc) + timedelta(days=expires_days) if expires_days else None
         org_id = get_org_id_from_request()
         if not org_id:
             return jsonify({'error': 'Organization context required'}), 400
