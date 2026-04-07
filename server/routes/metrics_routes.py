@@ -51,23 +51,35 @@ def get_metrics_summary(user_id):
             active_incidents = counts[1] or 0
             resolved_incidents = counts[2] or 0
 
-            # Avg MTTR (seconds) — windowed by resolved_at so long-running incidents
-            # resolved inside the window are included even if they opened earlier.
+            # Avg Investigation Time (seconds) — exposed as `avgMttrSeconds` for
+            # frontend compatibility but semantically broader: prefer the actual
+            # human-resolution timestamp, fall back to Aurora's RCA completion
+            # (`analyzed_at`) so dashboards aren't empty just because nobody
+            # clicked Resolve. Errored RCAs are excluded unless a human still
+            # marked them resolved.
             cursor.execute("""
-                SELECT AVG(EXTRACT(EPOCH FROM (resolved_at - started_at)))
+                SELECT AVG(EXTRACT(EPOCH FROM (
+                    COALESCE(resolved_at, analyzed_at) - started_at
+                )))
                 FROM incidents
-                WHERE resolved_at IS NOT NULL
-                  AND resolved_at >= NOW() - %s::interval
+                WHERE COALESCE(resolved_at, analyzed_at) >= NOW() - %s::interval
+                  AND (
+                    resolved_at IS NOT NULL
+                    OR aurora_status = 'complete'
+                  )
             """, (period,))
             avg_mttr = cursor.fetchone()[0]
 
-            # Avg MTTD (seconds)
+            # Avg MTTD (seconds) — pickup latency: how long the RCA worker took
+            # to actually start running after the webhook arrived. Measures
+            # queue + cold-start lag in Aurora's pipeline, not upstream
+            # detection lag.
             cursor.execute("""
-                SELECT AVG(EXTRACT(EPOCH FROM (started_at - alert_fired_at)))
+                SELECT AVG(EXTRACT(EPOCH FROM (investigation_started_at - started_at)))
                 FROM incidents
-                WHERE alert_fired_at IS NOT NULL
+                WHERE investigation_started_at IS NOT NULL
                   AND started_at >= NOW() - %s::interval
-                  AND started_at > alert_fired_at
+                  AND investigation_started_at >= started_at
             """, (period,))
             avg_mttd = cursor.fetchone()[0]
 
@@ -142,7 +154,13 @@ def get_mttr(user_id):
             if org_id:
                 cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
 
-            where_clauses = ["resolved_at IS NOT NULL", "resolved_at >= NOW() - %s::interval"]
+            # Same fallback semantics as the summary endpoint: prefer
+            # resolved_at, fall back to analyzed_at, exclude errored RCAs unless
+            # a human still resolved them.
+            where_clauses = [
+                "COALESCE(resolved_at, analyzed_at) >= NOW() - %s::interval",
+                "(resolved_at IS NOT NULL OR aurora_status = 'complete')",
+            ]
             params = [period]
 
             if severity_filter:
@@ -154,16 +172,26 @@ def get_mttr(user_id):
 
             where_sql = " AND ".join(where_clauses)
 
-            # By severity
+            # By severity. The "investigation end" used everywhere here is
+            # COALESCE(resolved_at, analyzed_at) so the math is consistent
+            # whether the incident was human-resolved or just RCA-completed.
             cursor.execute(f"""
                 SELECT
                     COALESCE(severity, 'unknown') as severity,
                     COUNT(*) as count,
-                    AVG(EXTRACT(EPOCH FROM (resolved_at - started_at))) as avg_mttr,
-                    PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (resolved_at - started_at))) as p50_mttr,
-                    PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (resolved_at - started_at))) as p95_mttr,
-                    AVG(EXTRACT(EPOCH FROM (COALESCE(analyzed_at, resolved_at) - started_at))) as avg_detection_to_rca,
-                    AVG(EXTRACT(EPOCH FROM (resolved_at - COALESCE(analyzed_at, started_at)))) as avg_rca_to_resolve
+                    AVG(EXTRACT(EPOCH FROM (COALESCE(resolved_at, analyzed_at) - started_at))) as avg_mttr,
+                    PERCENTILE_CONT(0.5) WITHIN GROUP (
+                        ORDER BY EXTRACT(EPOCH FROM (COALESCE(resolved_at, analyzed_at) - started_at))
+                    ) as p50_mttr,
+                    PERCENTILE_CONT(0.95) WITHIN GROUP (
+                        ORDER BY EXTRACT(EPOCH FROM (COALESCE(resolved_at, analyzed_at) - started_at))
+                    ) as p95_mttr,
+                    AVG(EXTRACT(EPOCH FROM (
+                        COALESCE(analyzed_at, resolved_at) - started_at
+                    ))) as avg_detection_to_rca,
+                    AVG(EXTRACT(EPOCH FROM (
+                        COALESCE(resolved_at, analyzed_at) - COALESCE(analyzed_at, started_at)
+                    ))) as avg_rca_to_resolve
                 FROM incidents
                 WHERE {where_sql}
                 GROUP BY severity
@@ -182,11 +210,11 @@ def get_mttr(user_id):
                     "avgRcaToResolveSeconds": round(row[6], 1) if row[6] else None,
                 })
 
-            # Time series (daily)
+            # Time series (daily) — bucket by the same effective end timestamp.
             cursor.execute(f"""
                 SELECT
-                    date_trunc('day', resolved_at)::date as day,
-                    AVG(EXTRACT(EPOCH FROM (resolved_at - started_at))) as avg_mttr,
+                    date_trunc('day', COALESCE(resolved_at, analyzed_at))::date as day,
+                    AVG(EXTRACT(EPOCH FROM (COALESCE(resolved_at, analyzed_at) - started_at))) as avg_mttr,
                     COUNT(*) as count
                 FROM incidents
                 WHERE {where_sql}
@@ -209,7 +237,9 @@ def get_mttr(user_id):
 @metrics_bp.route("/api/metrics/mttd", methods=["GET"])
 @require_permission("incidents", "read")
 def get_mttd(user_id):
-    """Mean Time to Detect — time from alert firing to Aurora receiving it."""
+    """MTTD = pickup latency — time from webhook arrival (started_at) to the
+    moment the RCA worker actually began running (investigation_started_at).
+    """
     org_id = get_org_id_from_request()
     period = _get_period_interval(request.args.get("period", "30d"))
 
@@ -224,13 +254,17 @@ def get_mttd(user_id):
                 SELECT
                     source_type,
                     COUNT(*) as count,
-                    AVG(EXTRACT(EPOCH FROM (started_at - alert_fired_at))) as avg_mttd,
-                    PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (started_at - alert_fired_at))) as p50_mttd,
-                    PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (started_at - alert_fired_at))) as p95_mttd
+                    AVG(EXTRACT(EPOCH FROM (investigation_started_at - started_at))) as avg_mttd,
+                    PERCENTILE_CONT(0.5) WITHIN GROUP (
+                        ORDER BY EXTRACT(EPOCH FROM (investigation_started_at - started_at))
+                    ) as p50_mttd,
+                    PERCENTILE_CONT(0.95) WITHIN GROUP (
+                        ORDER BY EXTRACT(EPOCH FROM (investigation_started_at - started_at))
+                    ) as p95_mttd
                 FROM incidents
-                WHERE alert_fired_at IS NOT NULL
+                WHERE investigation_started_at IS NOT NULL
                   AND started_at >= NOW() - %s::interval
-                  AND started_at > alert_fired_at
+                  AND investigation_started_at >= started_at
                 GROUP BY source_type
                 ORDER BY count DESC
             """, (period,))

@@ -415,11 +415,20 @@ def run_background_chat(
                                 f"[BackgroundChat] Linked session {session_id} and task {self.request.id} to incident {incident_id}"
                             )
                     
-                    # Set incident aurora_status to running
+                    # Set incident aurora_status to running and stamp the moment
+                    # the worker actually picked up the task. Used by the SRE
+                    # metrics dashboard to compute pickup latency (MTTD as
+                    # "time from webhook arrival to investigation start"). We
+                    # COALESCE so a retry doesn't overwrite the original pickup.
+                    pickup_at = datetime.now()
                     with conn.cursor() as cursor:
                         cursor.execute(
-                            "UPDATE incidents SET aurora_status = %s, updated_at = %s WHERE id = %s",
-                            ("running", datetime.now(), incident_id)
+                            """UPDATE incidents
+                               SET aurora_status = %s,
+                                   investigation_started_at = COALESCE(investigation_started_at, %s),
+                                   updated_at = %s
+                               WHERE id = %s""",
+                            ("running", pickup_at, pickup_at, incident_id),
                         )
                         conn.commit()
                         logger.info(f"[BackgroundChat] Set incident {incident_id} aurora_status to 'running' at start of RCA")

@@ -1710,17 +1710,23 @@ def initialize_tables():
                 logging.warning(f"Error adding Jira columns to postmortems: {e}")
                 conn.rollback()
 
-            # Migration: Add resolved_at and alert_fired_at columns to incidents table
+            # Migration: Add resolved_at, alert_fired_at, and investigation_started_at
+            # columns to incidents table.
+            #   - resolved_at:             when the incident was actually resolved
+            #   - alert_fired_at:          when the upstream system raised the alert
+            #   - investigation_started_at: when Aurora's RCA worker actually began work
+            #                              (used to compute pickup latency / MTTD)
             try:
                 cursor.execute("""
                     ALTER TABLE incidents
                     ADD COLUMN IF NOT EXISTS resolved_at TIMESTAMP,
-                    ADD COLUMN IF NOT EXISTS alert_fired_at TIMESTAMP;
+                    ADD COLUMN IF NOT EXISTS alert_fired_at TIMESTAMP,
+                    ADD COLUMN IF NOT EXISTS investigation_started_at TIMESTAMP;
                 """)
-                logging.info("Added resolved_at and alert_fired_at columns to incidents table (if not exist).")
+                logging.info("Added resolved_at, alert_fired_at, and investigation_started_at columns to incidents table (if not exist).")
                 conn.commit()
             except Exception as e:
-                logging.warning(f"Error adding resolved_at/alert_fired_at to incidents: {e}")
+                logging.warning(f"Error adding resolved_at/alert_fired_at/investigation_started_at to incidents: {e}")
                 conn.rollback()
 
             # NOTE: We intentionally do NOT backfill resolved_at from updated_at:
