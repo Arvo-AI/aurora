@@ -126,7 +126,7 @@ _RATE_LIMIT_WINDOW_SECONDS = 300  # 5 minute window
 _RATE_LIMIT_MAX_REQUESTS = 5  # Max 5 background chats per window
 
 # RCA sources that use rca_context in system prompt
-_RCA_SOURCES = {'grafana', 'datadog', 'netdata', 'splunk', 'slack', 'pagerduty', 'dynatrace', 'jenkins', 'cloudbees', 'spinnaker', 'newrelic'}
+_RCA_SOURCES = {'grafana', 'datadog', 'netdata', 'splunk', 'slack', 'pagerduty', 'dynatrace', 'jenkins', 'cloudbees', 'spinnaker', 'newrelic', 'opsgenie'}
 
 # Initialize Redis client at module load time - fails if Redis is unavailable
 _redis_client = get_redis_client()
@@ -180,6 +180,7 @@ def _get_connected_integrations(user_id: str) -> Dict[str, bool]:
         'cloudbees': False,
         'spinnaker': False,
         'newrelic': False,
+        'opsgenie': False,
     }
 
     try:
@@ -276,6 +277,13 @@ def _get_connected_integrations(user_id: str) -> Dict[str, bool]:
         integrations['newrelic'] = is_newrelic_connected(user_id)
     except Exception as e:
         logger.debug(f"[BackgroundChat] Error checking New Relic: {e}")
+
+    # OpsGenie
+    try:
+        from chat.backend.agent.tools.opsgenie_tool import is_opsgenie_connected
+        integrations['opsgenie'] = is_opsgenie_connected(user_id)
+    except Exception:
+        logger.debug("OpsGenie connection check failed for user %s", user_id)
 
     return integrations
 

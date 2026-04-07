@@ -479,6 +479,32 @@ def _check_pagerduty(creds: Dict[str, Any]) -> Dict[str, Any]:
             return {"connected": False}
 
 
+def _check_opsgenie(creds: Dict[str, Any]) -> Dict[str, Any]:
+    """Validate OpsGenie credentials by calling the account API."""
+    api_key = creds.get("api_key")
+    if not api_key:
+        return {"connected": False}
+    region = creds.get("region", "us")
+    base_url = "https://api.eu.opsgenie.com" if region == "eu" else "https://api.opsgenie.com"
+    try:
+        r = requests.get(
+            f"{base_url}/v2/account",
+            headers={"Authorization": f"GenieKey {api_key}"},
+            timeout=HTTP_TIMEOUT,
+        )
+        if r.ok:
+            data = r.json().get("data", {})
+            return {
+                "connected": True,
+                "region": region,
+                "accountName": data.get("name"),
+                "plan": data.get("plan", {}).get("name") if isinstance(data.get("plan"), dict) else None,
+            }
+        return {"connected": False}
+    except Exception:
+        return {"connected": False}
+
+
 def _check_dynatrace(creds: Dict[str, Any]) -> Dict[str, Any]:
     """Mirrors /dynatrace/connect validation — live API call via token lookup."""
     api_token = creds.get("api_token")
@@ -587,6 +613,7 @@ PROVIDER_CHECKERS = {
     "sharepoint": _check_sharepoint,
     "spinnaker": _check_spinnaker,
     "pagerduty": _check_pagerduty,
+    "opsgenie":      _check_opsgenie,
     "dynatrace": _check_dynatrace,
     "bigpanda": _check_bigpanda,
     "tailscale": _check_tailscale,
