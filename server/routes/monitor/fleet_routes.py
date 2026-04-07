@@ -23,7 +23,9 @@ def fleet_list(user_id):
     time_range = request.args.get("time_range", "7d")
 
     interval_map = {"1d": "1 day", "7d": "7 days", "30d": "30 days", "90d": "90 days"}
-    pg_interval = interval_map.get(time_range, "7 days")
+    if time_range not in interval_map:
+        return jsonify({"error": f"Unsupported time_range '{time_range}'. Must be one of: {', '.join(sorted(interval_map))}"}), 400
+    pg_interval = interval_map[time_range]
 
     conditions = ["i.org_id = %s", "i.created_at >= NOW() - %s::interval"]
     params: list = [org_id, pg_interval]
@@ -137,7 +139,7 @@ def fleet_activity(user_id, incident_id):
                        es.status,
                        es.started_at AS event_time,
                        es.duration_ms,
-                       es.tool_input::text AS detail,
+                       LEFT(es.tool_input::text, 500) AS detail,
                        es.error_message
                 FROM execution_steps es
                 WHERE es.incident_id = %s AND es.org_id = %s
