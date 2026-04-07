@@ -137,6 +137,17 @@ class ConnectorRegistry {
     });
 
     this.register({
+      id: "opsgenie",
+      name: "OpsGenie",
+      description: "Connect OpsGenie for incident management, alert tracking, and on-call schedules",
+      iconPath: "/opsgenie.svg",
+      iconBgColor: "bg-white dark:bg-white",
+      category: "Incident Management",
+      path: "/opsgenie/auth",
+      storageKey: "isOpsGenieConnected",
+    });
+
+    this.register({
         id: "bigpanda",
         name: "BigPanda",
         description: "Connect BigPanda for AIOps incident correlation. Receive pre-correlated incident clusters with enriched metadata for improved root cause analysis.",
