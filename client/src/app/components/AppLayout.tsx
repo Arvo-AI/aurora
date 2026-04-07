@@ -308,7 +308,7 @@ function AppLayout({
       <div className={`flex-1 ${pathname === "/chat" ? "flex overflow-hidden" : "overflow-auto"}`}>
         {pathname === "/chat" ? (
           <>
-            <div className="flex-1 overflow-auto">
+            <div className="flex-1 overflow-hidden">
               {children}
             </div>
             {workspaceConfig?.type === "iac" && (
