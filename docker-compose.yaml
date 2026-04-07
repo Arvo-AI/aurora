@@ -423,6 +423,24 @@ services:
       timeout: 5s
       retries: 3
 
+  aurora-mcp:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+      target: dev
+    container_name: aurora-mcp
+    ports:
+      - "${MCP_PORT:-8811}:8811"
+    volumes:
+      - ./server:/app
+    command: ["python", "mcp_server.py", "--transport", "streamable-http"]
+    environment:
+      <<: *common-env
+      MCP_API_BASE: http://aurora-server:5080
+    depends_on:
+      - aurora-server
+      - postgres
+
   t2v-transformers:
     image: cr.weaviate.io/semitechnologies/transformers-inference:sentence-transformers-all-MiniLM-L6-v2
     environment:

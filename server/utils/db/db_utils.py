@@ -908,6 +908,22 @@ def initialize_tables():
                     CREATE INDEX IF NOT EXISTS idx_kubectl_tokens_token ON kubectl_agent_tokens(token);
                     CREATE INDEX IF NOT EXISTS idx_kubectl_tokens_status ON kubectl_agent_tokens(status);
                 """,
+                "mcp_tokens": """
+                    CREATE TABLE IF NOT EXISTS mcp_tokens (
+                        id SERIAL PRIMARY KEY,
+                        token VARCHAR(128) UNIQUE NOT NULL,
+                        user_id TEXT NOT NULL,
+                        org_id VARCHAR(255),
+                        name TEXT,
+                        created_at TIMESTAMP DEFAULT NOW(),
+                        last_used_at TIMESTAMP,
+                        expires_at TIMESTAMP,
+                        status TEXT DEFAULT 'active' CHECK (status IN ('active', 'revoked', 'expired'))
+                    );
+
+                    CREATE INDEX IF NOT EXISTS idx_mcp_tokens_token ON mcp_tokens(token);
+                    CREATE INDEX IF NOT EXISTS idx_mcp_tokens_user ON mcp_tokens(user_id);
+                """,
                 "active_kubectl_connections": """
                     CREATE TABLE IF NOT EXISTS active_kubectl_connections (
                         id SERIAL PRIMARY KEY,
@@ -1057,6 +1073,7 @@ def initialize_tables():
                 "llm_usage_tracking",
                 "rca_notification_emails",
                 "kubectl_agent_tokens",
+                "mcp_tokens",
                 "user_manual_vms",
             ]
 
@@ -1741,6 +1758,7 @@ def initialize_tables():
                     "user_tokens",
                     "llm_usage_tracking",
                     "kubectl_agent_tokens",
+                    "mcp_tokens",
                     "user_manual_vms",
                     "incident_alerts",
                     "incident_feedback",
@@ -1832,6 +1850,7 @@ def initialize_tables():
                 "rca_notification_emails", "splunk_alerts",
                 "jenkins_deployment_events", "dynatrace_problems",
                 "bigpanda_events", "kubectl_agent_tokens",
+                "mcp_tokens",
                 "k8s_pods", "k8s_nodes", "k8s_node_conditions",
                 "k8s_services", "k8s_deployments", "k8s_ingresses",
                 "k8s_pod_metrics", "k8s_node_metrics",

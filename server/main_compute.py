@@ -269,6 +269,10 @@ app.register_blueprint(github_repo_selection_bp, url_prefix="/github")
 from routes.kubectl_token_routes import kubectl_token_bp
 app.register_blueprint(kubectl_token_bp)
 
+# --- MCP API Token Routes ---
+from routes.mcp_token_routes import mcp_token_bp
+app.register_blueprint(mcp_token_bp)
+
 # --- Slack Integration Routes ---
 from routes.slack.slack_routes import slack_bp
 from routes.slack.slack_events import slack_events_bp
@@ -492,6 +496,18 @@ def handle_not_found(error):
 def handle_internal_error(error):
     logger.error(f"Unhandled server error: {error}", exc_info=True)
     return jsonify({"error": "Internal server error"}), 500
+
+
+@app.route('/api/routes', methods=['GET'])
+def list_api_routes():
+    """Auto-generated catalog of all API endpoints (used by MCP server)."""
+    routes = []
+    for rule in app.url_map.iter_rules():
+        methods = sorted(rule.methods - {'HEAD', 'OPTIONS'})
+        if methods:
+            routes.append({'path': rule.rule, 'methods': methods})
+    routes.sort(key=lambda r: r['path'])
+    return jsonify(routes)
 
 # ============================================================================
 # Main Application Runner

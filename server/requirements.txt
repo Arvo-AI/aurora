@@ -101,3 +101,6 @@ openpyxl>=3.1.0
 
 # Testing
 pytest>=7.0
+
+# MCP Server (Model Context Protocol)
+mcp[cli]>=1.27.0
