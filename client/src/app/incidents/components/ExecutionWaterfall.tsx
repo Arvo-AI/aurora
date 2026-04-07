@@ -68,7 +68,7 @@ function LifecycleTimeline({ events }: { events: LifecycleEvent[] }) {
                 {LIFECYCLE_LABELS[event.eventType] || event.eventType}
               </p>
               <p className="text-[10px] text-zinc-600 mt-0.5 font-mono whitespace-nowrap">
-                {event.timestamp ? new Date(event.timestamp).toLocaleTimeString() : '—'}
+                {event.timestamp ? new Date(event.timestamp).toLocaleTimeString() : 'N/A'}
               </p>
             </div>
             {i < events.length - 1 && (
@@ -103,7 +103,7 @@ function StepRow({ step, baseTime }: { step: ExecutionStep; baseTime: Date }) {
       <div className="pb-4 min-w-0 flex-1">
         <div className="flex items-center gap-2 mb-1">
           <span className="text-[11px] font-mono text-zinc-600 shrink-0">
-            {stepTime ? formatRelativeTime(baseTime, stepTime) : '—'}
+            {stepTime ? formatRelativeTime(baseTime, stepTime) : 'N/A'}
           </span>
           <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-medium ${
             isThought

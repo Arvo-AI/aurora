@@ -32,7 +32,7 @@ const SEVERITY_COLORS: Record<string, string> = {
 const SEVERITY_ORDER = ['critical', 'high', 'medium', 'low', 'unknown'];
 
 function formatDuration(seconds: number | null | undefined): string {
-  if (seconds == null || Number.isNaN(seconds)) return '—';
+  if (seconds == null || Number.isNaN(seconds)) return 'N/A';
   if (seconds < 0) return '0s';
   if (seconds < 60) return `${Math.round(seconds)}s`;
   const mins = Math.floor(seconds / 60);
