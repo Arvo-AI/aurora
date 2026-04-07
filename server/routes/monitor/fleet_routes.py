@@ -1,5 +1,6 @@
 """Fleet routes -- agent-run list, summary counts, per-incident activity drill-down."""
 import logging
+import uuid
 from flask import Blueprint, request, jsonify
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context
@@ -87,7 +88,7 @@ def fleet_summary(user_id):
     query = """
         SELECT
             COUNT(*) AS total_agent_runs,
-            COUNT(*) FILTER (WHERE i.aurora_status IN ('running', 'analyzing', 'pending')) AS active_count,
+            COUNT(*) FILTER (WHERE i.aurora_status IN ('running', 'analyzing', 'summarizing', 'pending')) AS active_count,
             COUNT(*) FILTER (WHERE i.aurora_status IN ('complete', 'completed', 'resolved', 'analyzed')) AS completed_count,
             COUNT(*) FILTER (WHERE i.aurora_status = 'error') AS error_count,
             AVG(EXTRACT(EPOCH FROM (i.analyzed_at - i.created_at)))
@@ -109,7 +110,7 @@ def fleet_summary(user_id):
             "active_count": row[1] or 0,
             "completed_count": row[2] or 0,
             "error_count": row[3] or 0,
-            "avg_rca_duration_seconds": round(float(row[4]), 2) if row[4] else None,
+            "avg_rca_duration_seconds": round(float(row[4]), 2) if row[4] is not None else None,
         }
         return jsonify(result), 200
     except Exception:
@@ -121,48 +122,56 @@ def fleet_summary(user_id):
 @require_permission("incidents", "read")
 def fleet_activity(user_id, incident_id):
     """Chronological union of execution_steps + incident_thoughts + incident_citations for one incident."""
+    try:
+        uuid.UUID(incident_id)
+    except (ValueError, AttributeError):
+        return jsonify({"error": "Invalid incident_id format"}), 400
+
     org_id = get_org_id_from_request()
 
     query = """
-        (
-            SELECT 'execution_step' AS event_type,
-                   es.tool_name AS label,
-                   es.status,
-                   es.started_at AS event_time,
-                   es.duration_ms,
-                   es.tool_input::text AS detail,
-                   es.error_message
-            FROM execution_steps es
-            WHERE es.incident_id = %s AND es.org_id = %s
-        )
-        UNION ALL
-        (
-            SELECT 'thought' AS event_type,
-                   it.thought_type AS label,
-                   'complete' AS status,
-                   it.created_at AS event_time,
-                   NULL AS duration_ms,
-                   LEFT(it.content, 500) AS detail,
-                   NULL AS error_message
-            FROM incident_thoughts it
-            JOIN incidents i ON i.id = it.incident_id
-            WHERE it.incident_id = %s AND i.org_id = %s
-        )
-        UNION ALL
-        (
-            SELECT 'citation' AS event_type,
-                   ic.tool_name AS label,
-                   COALESCE(ic.status, 'success') AS status,
-                   ic.executed_at AS event_time,
-                   ic.duration_ms,
-                   ic.citation_key AS detail,
-                   ic.error_message
-            FROM incident_citations ic
-            JOIN incidents i ON i.id = ic.incident_id
-            WHERE ic.incident_id = %s AND i.org_id = %s
-        )
+        SELECT * FROM (
+            (
+                SELECT 'execution_step' AS event_type,
+                       es.tool_name AS label,
+                       es.status,
+                       es.started_at AS event_time,
+                       es.duration_ms,
+                       es.tool_input::text AS detail,
+                       es.error_message
+                FROM execution_steps es
+                WHERE es.incident_id = %s AND es.org_id = %s
+            )
+            UNION ALL
+            (
+                SELECT 'thought' AS event_type,
+                       it.thought_type AS label,
+                       'complete' AS status,
+                       it.created_at AS event_time,
+                       NULL AS duration_ms,
+                       LEFT(it.content, 500) AS detail,
+                       NULL AS error_message
+                FROM incident_thoughts it
+                JOIN incidents i ON i.id = it.incident_id
+                WHERE it.incident_id = %s AND i.org_id = %s
+            )
+            UNION ALL
+            (
+                SELECT 'citation' AS event_type,
+                       ic.tool_name AS label,
+                       COALESCE(ic.status, 'success') AS status,
+                       ic.executed_at AS event_time,
+                       ic.duration_ms,
+                       ic.citation_key AS detail,
+                       ic.error_message
+                FROM incident_citations ic
+                JOIN incidents i ON i.id = ic.incident_id
+                WHERE ic.incident_id = %s AND i.org_id = %s
+            )
+            ORDER BY event_time DESC NULLS LAST
+            LIMIT 500
+        ) recent
         ORDER BY event_time ASC NULLS LAST
-        LIMIT 500
     """
 
     try:
