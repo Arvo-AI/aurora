@@ -1076,6 +1076,23 @@ def initialize_tables():
                     CREATE INDEX IF NOT EXISTS idx_lifecycle_incident ON incident_lifecycle_events(incident_id, created_at);
                     CREATE INDEX IF NOT EXISTS idx_lifecycle_user ON incident_lifecycle_events(user_id, created_at DESC);
                 """,
+                "audit_log": """
+                    CREATE TABLE IF NOT EXISTS audit_log (
+                        id SERIAL PRIMARY KEY,
+                        org_id VARCHAR(255) NOT NULL,
+                        user_id VARCHAR(255) NOT NULL,
+                        action VARCHAR(100) NOT NULL,
+                        resource_type VARCHAR(100) NOT NULL,
+                        resource_id VARCHAR(255),
+                        detail JSONB DEFAULT '{}'::jsonb,
+                        ip_address VARCHAR(45),
+                        user_agent TEXT,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+
+                    CREATE INDEX IF NOT EXISTS idx_audit_log_org_created ON audit_log(org_id, created_at DESC);
+                    CREATE INDEX IF NOT EXISTS idx_audit_log_action ON audit_log(org_id, action);
+                """,
             }
 
             # List of tables that should have RLS enabled and a policy applied.

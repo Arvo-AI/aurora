@@ -1098,10 +1098,20 @@ def _update_incident_aurora_status(incident_id: str, aurora_status: str, user_id
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
-                cursor.execute(
-                    "UPDATE incidents SET aurora_status = %s, updated_at = %s WHERE id = %s",
-                    (aurora_status, datetime.now(), incident_id)
-                )
+                now = datetime.now()
+                if aurora_status == 'complete':
+                    cursor.execute(
+                        """UPDATE incidents
+                           SET aurora_status = %s, updated_at = %s,
+                               analyzed_at = COALESCE(analyzed_at, %s)
+                           WHERE id = %s""",
+                        (aurora_status, now, now, incident_id)
+                    )
+                else:
+                    cursor.execute(
+                        "UPDATE incidents SET aurora_status = %s, updated_at = %s WHERE id = %s",
+                        (aurora_status, now, incident_id)
+                    )
             conn.commit()
             logger.info(f"[BackgroundChat] Set incident {incident_id} aurora_status to '{aurora_status}'")
 

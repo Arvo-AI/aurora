@@ -16,7 +16,6 @@ import {
   FileText,
   Coins,
   Activity,
-  BarChart3,
 } from 'lucide-react';
 import React, { useState, useMemo, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
@@ -37,7 +36,6 @@ import PostmortemPanel from './PostmortemPanel';
 import { Suggestion } from '@/lib/services/incidents';
 import InfrastructureVisualization from '@/components/incidents/InfrastructureVisualization';
 import ExecutionWaterfall from './ExecutionWaterfall';
-import MetricsPanel from './MetricsPanel';
 import { ReactFlowProvider } from '@xyflow/react';
 
 interface IncidentCardProps {
@@ -110,7 +108,6 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
   const [showPostmortem, setShowPostmortem] = useState(false);
   const [showTokenUsage, setShowTokenUsage] = useState(false);
   const [showWaterfall, setShowWaterfall] = useState(false);
-  const [showMetrics, setShowMetrics] = useState(false);
   const [resolvingIncident, setResolvingIncident] = useState(false);
   const alert = incident.alert;
   const router = useRouter();
@@ -636,19 +633,6 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
             </button>
           )}
 
-          {/* SRE Metrics button */}
-          <button
-            onClick={() => setShowMetrics(!showMetrics)}
-            className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-md text-xs transition-colors ${
-              showMetrics
-                ? 'text-orange-300 bg-orange-500/10'
-                : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800'
-            }`}
-          >
-            <BarChart3 className="w-3 h-3" />
-            SRE Metrics
-            <ChevronRight className={`w-3 h-3 transition-transform ${showMetrics ? 'rotate-90' : ''}`} />
-          </button>
       </div>
 
       {/* Feedback Section - only show when analysis is complete */}
@@ -735,16 +719,6 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
           <div className="border-t border-zinc-800 mt-4" />
           <div className="mt-4">
             {showWaterfall && <ExecutionWaterfall incidentId={incident.id} />}
-          </div>
-        </div>
-      </div>
-
-      {/* SRE Metrics Panel (collapsible) — same lazy-mount treatment. */}
-      <div className="collapsible-panel" data-open={showMetrics}>
-        <div>
-          <div className="border-t border-zinc-800 mt-4" />
-          <div className="mt-4">
-            {showMetrics && <MetricsPanel />}
           </div>
         </div>
       </div>

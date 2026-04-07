@@ -399,6 +399,10 @@ from routes.monitor.waterfall_routes import waterfall_bp
 app.register_blueprint(fleet_bp)
 app.register_blueprint(waterfall_bp)
 
+# --- Audit Log Routes ---
+from routes.audit_routes import audit_bp
+app.register_blueprint(audit_bp)
+
 # --- User & Auth Routes ---
 from routes.user_preferences import user_preferences_bp
 from routes.user_connections import user_connections_bp

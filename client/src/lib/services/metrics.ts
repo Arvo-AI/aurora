@@ -8,8 +8,9 @@ export interface MetricsSummary {
   totalIncidents: number;
   activeIncidents: number;
   resolvedIncidents: number;
-  // Backend returns null when there are no resolved incidents in the window.
+  analyzedIncidents: number;
   avgMttrSeconds: number | null;
+  avgMttsSeconds: number | null;
   avgMttdSeconds: number | null;
   changeFailureRate: number;
   totalDeployments: number;
@@ -36,6 +37,25 @@ export interface MttrTrendPoint {
 export interface MttrResponse {
   bySeverity: MttrBySeverity[];
   trend: MttrTrendPoint[];
+}
+
+export interface MttsBySeverity {
+  severity: string;
+  count: number;
+  avgMttsSeconds: number | null;
+  p50MttsSeconds: number | null;
+  p95MttsSeconds: number | null;
+}
+
+export interface MttsTrendPoint {
+  date: string;
+  avgMttsSeconds: number | null;
+  count: number;
+}
+
+export interface MttsResponse {
+  bySeverity: MttsBySeverity[];
+  trend: MttsTrendPoint[];
 }
 
 export interface IncidentFrequencyPoint {
@@ -90,6 +110,10 @@ export const metricsService = {
 
   async getMttr(period: Period): Promise<MttrResponse> {
     return apiGet<MttrResponse>(`/api/metrics/mttr?period=${period}`);
+  },
+
+  async getMtts(period: Period): Promise<MttsResponse> {
+    return apiGet<MttsResponse>(`/api/metrics/mtts?period=${period}`);
   },
 
   async getIncidentFrequency(

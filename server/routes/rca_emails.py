@@ -11,6 +11,7 @@ from utils.auth.stateless_auth import (
 from utils.auth.rbac_decorators import require_permission
 from utils.db.connection_pool import db_pool
 from utils.notifications.email_service import get_email_service
+from routes.audit_routes import record_audit_event
 
 logger = logging.getLogger(__name__)
 
@@ -192,6 +193,7 @@ def add_rca_email(user_id):
             return jsonify({"error": "Email service not configured"}), 500
         
         logger.info(f"[RCAEmails] Verification code sent to {email} for user {user_id}")
+        record_audit_event("", user_id, "add_notification_email", "rca_email", email, {"email": email}, request)
         return jsonify({
             "status": "success",
             "message": "Verification code sent to email"
@@ -262,6 +264,7 @@ def verify_rca_email(user_id):
                 conn.commit()
         
         logger.info(f"[RCAEmails] Email {email} verified for user {user_id}")
+        record_audit_event("", user_id, "verify_notification_email", "rca_email", email, {"email": email}, request)
         return jsonify({
             "status": "success",
             "message": "Email verified successfully"
@@ -377,6 +380,8 @@ def toggle_rca_email(user_id, email_id: int):
                     return jsonify({"error": "Email not found or not verified"}), 404
         
         logger.info(f"[RCAEmails] Email ID {email_id} toggled to {is_enabled} for user {user_id}")
+        record_audit_event("", user_id, "toggle_notification_email", "rca_email", str(email_id),
+                           {"is_enabled": is_enabled}, request)
         return jsonify({
             "status": "success",
             "message": f"Email {'enabled' if is_enabled else 'disabled'} successfully"
@@ -409,6 +414,7 @@ def remove_rca_email(user_id, email_id: int):
                     return jsonify({"error": "Email not found"}), 404
         
         logger.info(f"[RCAEmails] Email ID {email_id} removed for user {user_id}")
+        record_audit_event("", user_id, "remove_notification_email", "rca_email", str(email_id), {}, request)
         return jsonify({
             "status": "success",
             "message": "Email removed successfully"

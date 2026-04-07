@@ -14,11 +14,10 @@ fleet_bp = Blueprint("monitor_fleet", __name__)
 @fleet_bp.route("/api/monitor/fleet", methods=["GET"])
 @require_permission("incidents", "read")
 def fleet_list(user_id):
-    """List agent runs (incidents that have an associated chat session)."""
+    """List agent runs with rich incident context."""
     org_id = get_org_id_from_request()
 
     status_filter = request.args.get("status")
-    environment_filter = request.args.get("environment")
     service_filter = request.args.get("service")
     time_range = request.args.get("time_range", "7d")
 
@@ -33,9 +32,6 @@ def fleet_list(user_id):
     if status_filter:
         conditions.append("i.aurora_status = %s")
         params.append(status_filter)
-    if environment_filter:
-        conditions.append("i.alert_environment = %s")
-        params.append(environment_filter)
     if service_filter:
         conditions.append("i.alert_service = %s")
         params.append(service_filter)
@@ -44,15 +40,23 @@ def fleet_list(user_id):
 
     query = f"""
         SELECT i.id AS incident_id,
+               i.alert_title,
                i.alert_service,
-               i.alert_environment,
                i.aurora_status,
                i.severity,
                i.source_type,
                i.created_at AS started_at,
                i.analyzed_at,
                i.updated_at,
-               cs.id AS session_id
+               i.status AS incident_status,
+               LEFT(i.aurora_summary, 300) AS aurora_summary,
+               EXTRACT(EPOCH FROM (
+                   COALESCE(i.analyzed_at, i.updated_at) - i.created_at
+               )) AS duration_seconds,
+               cs.id AS session_id,
+               (SELECT COUNT(*) FROM incident_suggestions s WHERE s.incident_id = i.id) AS suggestion_count,
+               (SELECT string_agg(s.title, ' | ' ORDER BY s.id) FROM incident_suggestions s WHERE s.incident_id = i.id LIMIT 3) AS suggestion_titles,
+               i.correlated_alert_count
         FROM incidents i
         JOIN chat_sessions cs ON cs.id = i.aurora_chat_session_id::text
         WHERE {where}
@@ -74,6 +78,8 @@ def fleet_list(user_id):
                     row[k] = v.isoformat()
                 elif isinstance(v, bytes):
                     row[k] = v.hex()
+            if row.get("duration_seconds") is not None:
+                row["duration_seconds"] = round(float(row["duration_seconds"]), 1)
 
         return jsonify(rows), 200
     except Exception:
@@ -87,6 +93,10 @@ def fleet_summary(user_id):
     """Aggregated fleet summary: counts by status, avg RCA duration, active count."""
     org_id = get_org_id_from_request()
 
+    time_range = request.args.get("time_range", "30d")
+    interval_map = {"1d": "1 day", "7d": "7 days", "30d": "30 days", "90d": "90 days"}
+    pg_interval = interval_map.get(time_range, "30 days")
+
     query = """
         SELECT
             COUNT(*) AS total_agent_runs,
@@ -94,17 +104,19 @@ def fleet_summary(user_id):
             COUNT(*) FILTER (WHERE i.aurora_status IN ('complete', 'completed', 'resolved', 'analyzed')) AS completed_count,
             COUNT(*) FILTER (WHERE i.aurora_status = 'error') AS error_count,
             AVG(EXTRACT(EPOCH FROM (i.analyzed_at - i.created_at)))
-                FILTER (WHERE i.analyzed_at IS NOT NULL) AS avg_rca_duration_seconds
+                FILTER (WHERE i.analyzed_at IS NOT NULL) AS avg_rca_duration_seconds,
+            COUNT(*) FILTER (WHERE i.severity = 'critical') AS critical_count,
+            COUNT(*) FILTER (WHERE i.severity = 'high') AS high_count
         FROM incidents i
         JOIN chat_sessions cs ON cs.id = i.aurora_chat_session_id::text
-        WHERE i.org_id = %s
+        WHERE i.org_id = %s AND i.created_at >= NOW() - %s::interval
     """
 
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
                 set_rls_context(cur, conn, user_id, log_prefix="[FLEET_SUMMARY]")
-                cur.execute(query, (org_id,))
+                cur.execute(query, (org_id, pg_interval))
                 row = cur.fetchone()
 
         result = {
@@ -113,6 +125,8 @@ def fleet_summary(user_id):
             "completed_count": row[2] or 0,
             "error_count": row[3] or 0,
             "avg_rca_duration_seconds": round(float(row[4]), 2) if row[4] is not None else None,
+            "critical_count": row[5] or 0,
+            "high_count": row[6] or 0,
         }
         return jsonify(result), 200
     except Exception:

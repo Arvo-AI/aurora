@@ -3,6 +3,7 @@
 import json
 import logging
 from datetime import timezone
+from routes.audit_routes import record_audit_event as _record_audit_event
 from flask import Blueprint, jsonify, request
 from utils.db.connection_pool import db_pool
 from utils.auth.token_management import get_token_data
@@ -1035,6 +1036,7 @@ def update_incident(user_id, incident_id: str):
                         org_id=org_id,
                     )
                     conn.commit()
+                    _record_audit_event(org_id or "", user_id, f"incident_{event_type}", "incident", incident_id, {"from": previous_status, "to": data["status"]}, request)
 
                 # Trigger postmortem generation only on transition to resolved
                 if data.get("status") == "resolved" and previous_status != "resolved":
@@ -1397,6 +1399,8 @@ def apply_fix_suggestion(user_id, suggestion_id: str):
                 suggestion_id,
                 result.get("pr_url"),
             )
+            _record_audit_event(org_id or "", user_id, "apply_fix", "suggestion", suggestion_id,
+                                {"pr_url": result.get("pr_url")}, request)
             return jsonify(result), 200
 
         logger.warning(
@@ -1664,6 +1668,9 @@ def merge_alert_to_incident(user_id, target_incident_id: str):
                     target_incident_id,
                     user_id,
                 )
+
+                _record_audit_event(org_id or "", user_id, "merge_incident", "incident", target_incident_id,
+                                    {"source_incident_id": source_incident_id}, request)
 
                 return jsonify({
                     "success": True,

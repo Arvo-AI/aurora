@@ -42,38 +42,47 @@ def get_metrics_summary(user_id):
             cursor.execute("""
                 SELECT
                     COUNT(*) FILTER (WHERE started_at >= NOW() - %s::interval) as total,
-                    COUNT(*) FILTER (WHERE status = 'investigating' OR status = 'analyzed') as active,
-                    COUNT(*) FILTER (WHERE status = 'resolved' AND resolved_at >= NOW() - %s::interval) as resolved
+                    COUNT(*) FILTER (WHERE status IN ('investigating', 'analyzed') AND aurora_status NOT IN ('complete', 'resolved')) as active,
+                    COUNT(*) FILTER (WHERE
+                        status = 'resolved'
+                        AND resolved_at >= NOW() - %s::interval
+                    ) as resolved,
+                    COUNT(*) FILTER (WHERE
+                        analyzed_at IS NOT NULL
+                        AND analyzed_at >= NOW() - %s::interval
+                    ) as analyzed
                 FROM incidents
-            """, (period, period))
+            """, (period, period, period))
             counts = cursor.fetchone()
             total_incidents = counts[0] or 0
             active_incidents = counts[1] or 0
             resolved_incidents = counts[2] or 0
+            analyzed_incidents = counts[3] or 0
 
-            # Avg Investigation Time (seconds) — exposed as `avgMttrSeconds` for
-            # frontend compatibility but semantically broader: prefer the actual
-            # human-resolution timestamp, fall back to Aurora's RCA completion
-            # (`analyzed_at`) so dashboards aren't empty just because nobody
-            # clicked Resolve. Errored RCAs are excluded unless a human still
-            # marked them resolved.
+            # Avg MTTR (seconds) — only incidents explicitly resolved by a human.
             cursor.execute("""
                 SELECT AVG(EXTRACT(EPOCH FROM (
                     COALESCE(resolved_at, analyzed_at) - started_at
                 )))
                 FROM incidents
-                WHERE COALESCE(resolved_at, analyzed_at) >= NOW() - %s::interval
-                  AND (
-                    resolved_at IS NOT NULL
-                    OR aurora_status = 'complete'
-                  )
+                WHERE resolved_at IS NOT NULL
+                  AND status = 'resolved'
+                  AND resolved_at >= NOW() - %s::interval
             """, (period,))
             avg_mttr = cursor.fetchone()[0]
 
-            # Avg MTTD (seconds) — pickup latency: how long the RCA worker took
-            # to actually start running after the webhook arrived. Measures
-            # queue + cold-start lag in Aurora's pipeline, not upstream
-            # detection lag.
+            # Avg MTTS (seconds) — Mean Time to Solution: how fast Aurora
+            # produces an RCA (analyzed_at - started_at).
+            cursor.execute("""
+                SELECT AVG(EXTRACT(EPOCH FROM (analyzed_at - started_at)))
+                FROM incidents
+                WHERE analyzed_at IS NOT NULL
+                  AND analyzed_at >= NOW() - %s::interval
+            """, (period,))
+            avg_mtts = cursor.fetchone()[0]
+
+            # Avg MTTD (seconds) — fall back to created_at vs started_at for
+            # webhook-ingested alerts where alert_fired_at isn't populated.
             cursor.execute("""
                 SELECT AVG(EXTRACT(EPOCH FROM (investigation_started_at - started_at)))
                 FROM incidents
@@ -126,7 +135,9 @@ def get_metrics_summary(user_id):
             "totalIncidents": total_incidents,
             "activeIncidents": active_incidents,
             "resolvedIncidents": resolved_incidents,
+            "analyzedIncidents": analyzed_incidents,
             "avgMttrSeconds": round(avg_mttr, 1) if avg_mttr else None,
+            "avgMttsSeconds": round(avg_mtts, 1) if avg_mtts else None,
             "avgMttdSeconds": round(avg_mttd, 1) if avg_mttd else None,
             "changeFailureRate": round(cfr, 2),
             "totalDeployments": total_deploys,
@@ -141,7 +152,7 @@ def get_metrics_summary(user_id):
 @metrics_bp.route("/api/metrics/mttr", methods=["GET"])
 @require_permission("incidents", "read")
 def get_mttr(user_id):
-    """Mean Time to Resolve — broken down by severity and phase."""
+    """Mean Time to Resolve — only incidents explicitly marked resolved by a human."""
     org_id = get_org_id_from_request()
     period = _get_period_interval(request.args.get("period", "30d"))
     severity_filter = request.args.get("severity")
@@ -154,12 +165,10 @@ def get_mttr(user_id):
             if org_id:
                 cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
 
-            # Same fallback semantics as the summary endpoint: prefer
-            # resolved_at, fall back to analyzed_at, exclude errored RCAs unless
-            # a human still resolved them.
             where_clauses = [
-                "COALESCE(resolved_at, analyzed_at) >= NOW() - %s::interval",
-                "(resolved_at IS NOT NULL OR aurora_status = 'complete')",
+                "resolved_at IS NOT NULL",
+                "status = 'resolved'",
+                "resolved_at >= NOW() - %s::interval",
             ]
             params = [period]
 
@@ -232,6 +241,85 @@ def get_mttr(user_id):
     except Exception as e:
         logger.exception("[METRICS] Error computing MTTR: %s", e)
         return jsonify({"error": "Failed to compute MTTR"}), 500
+
+
+@metrics_bp.route("/api/metrics/mtts", methods=["GET"])
+@require_permission("incidents", "read")
+def get_mtts(user_id):
+    """Mean Time to Solution — how fast Aurora produces an RCA (analyzed_at - started_at)."""
+    org_id = get_org_id_from_request()
+    period = _get_period_interval(request.args.get("period", "30d"))
+    severity_filter = request.args.get("severity")
+    service_filter = request.args.get("service")
+
+    try:
+        with db_pool.get_user_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
+            if org_id:
+                cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
+
+            where_clauses = [
+                "analyzed_at IS NOT NULL",
+                "analyzed_at >= NOW() - %s::interval",
+            ]
+            params = [period]
+
+            if severity_filter:
+                where_clauses.append("severity = %s")
+                params.append(severity_filter)
+            if service_filter:
+                where_clauses.append("alert_service = %s")
+                params.append(service_filter)
+
+            where_sql = " AND ".join(where_clauses)
+
+            # By severity
+            cursor.execute(f"""
+                SELECT
+                    COALESCE(severity, 'unknown') as severity,
+                    COUNT(*) as count,
+                    AVG(EXTRACT(EPOCH FROM (analyzed_at - started_at))) as avg_mtts,
+                    PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (analyzed_at - started_at))) as p50_mtts,
+                    PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (analyzed_at - started_at))) as p95_mtts
+                FROM incidents
+                WHERE {where_sql}
+                GROUP BY severity
+                ORDER BY count DESC
+            """, params)
+
+            by_severity = []
+            for row in cursor.fetchall():
+                by_severity.append({
+                    "severity": row[0],
+                    "count": row[1],
+                    "avgMttsSeconds": round(row[2], 1) if row[2] else None,
+                    "p50MttsSeconds": round(row[3], 1) if row[3] else None,
+                    "p95MttsSeconds": round(row[4], 1) if row[4] else None,
+                })
+
+            # Time series (daily)
+            cursor.execute(f"""
+                SELECT
+                    date_trunc('day', analyzed_at)::date as day,
+                    AVG(EXTRACT(EPOCH FROM (analyzed_at - started_at))) as avg_mtts,
+                    COUNT(*) as count
+                FROM incidents
+                WHERE {where_sql}
+                GROUP BY day
+                ORDER BY day ASC
+            """, params)
+
+            trend = [
+                {"date": str(row[0]), "avgMttsSeconds": round(row[1], 1) if row[1] else None, "count": row[2]}
+                for row in cursor.fetchall()
+            ]
+
+        return jsonify({"bySeverity": by_severity, "trend": trend})
+
+    except Exception as e:
+        logger.exception("[METRICS] Error computing MTTS: %s", e)
+        return jsonify({"error": "Failed to compute MTTS"}), 500
 
 
 @metrics_bp.route("/api/metrics/mttd", methods=["GET"])
