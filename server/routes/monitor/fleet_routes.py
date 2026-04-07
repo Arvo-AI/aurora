@@ -152,11 +152,11 @@ def fleet_activity(user_id, incident_id):
         (
             SELECT 'citation' AS event_type,
                    ic.tool_name AS label,
-                   'complete' AS status,
+                   COALESCE(ic.status, 'success') AS status,
                    ic.executed_at AS event_time,
-                   NULL AS duration_ms,
+                   ic.duration_ms,
                    ic.citation_key AS detail,
-                   NULL AS error_message
+                   ic.error_message
             FROM incident_citations ic
             JOIN incidents i ON i.id = ic.incident_id
             WHERE ic.incident_id = %s AND i.org_id = %s

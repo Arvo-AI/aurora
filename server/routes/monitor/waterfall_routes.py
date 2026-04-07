@@ -308,9 +308,11 @@ def incident_stream(user_id, incident_id):
                                        started_at, completed_at
                                 FROM execution_steps
                                 WHERE incident_id = %s
-                                  AND (started_at >= %s OR status = 'running')
+                                  AND (started_at >= %s
+                                       OR completed_at >= %s
+                                       OR status = 'running')
                                 ORDER BY started_at ASC
-                            """, (incident_id, last_step_ts))
+                            """, (incident_id, last_step_ts, last_step_ts))
                         else:
                             cur.execute("""
                                 SELECT id, incident_id, tool_name, tool_input, tool_output,
