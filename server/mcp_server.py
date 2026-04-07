@@ -18,6 +18,7 @@ import os
 
 import httpx
 import psycopg2
+import psycopg2.pool
 from starlette.middleware import Middleware
 from starlette.requests import Request
 from starlette.types import ASGIApp, Receive, Scope, Send
@@ -56,15 +57,28 @@ class BearerTokenMiddleware:
 # Token resolution (only direct DB access in this server)
 # ---------------------------------------------------------------------------
 
+_pool: psycopg2.pool.ThreadedConnectionPool | None = None
+
+
+def _get_pool() -> psycopg2.pool.ThreadedConnectionPool:
+    global _pool
+    if _pool is None or _pool.closed:
+        _pool = psycopg2.pool.ThreadedConnectionPool(
+            minconn=1,
+            maxconn=10,
+            host=os.environ["POSTGRES_HOST"],
+            port=os.environ.get("POSTGRES_PORT", "5432"),
+            dbname=os.environ["POSTGRES_DB"],
+            user=os.environ["POSTGRES_USER"],
+            password=os.environ["POSTGRES_PASSWORD"],
+        )
+    return _pool
+
+
 def _resolve_token(token: str) -> tuple[str, str]:
     """Look up an MCP API token and return (user_id, org_id)."""
-    conn = psycopg2.connect(
-        host=os.environ["POSTGRES_HOST"],
-        port=os.environ.get("POSTGRES_PORT", "5432"),
-        dbname=os.environ["POSTGRES_DB"],
-        user=os.environ["POSTGRES_USER"],
-        password=os.environ["POSTGRES_PASSWORD"],
-    )
+    pool = _get_pool()
+    conn = pool.getconn()
     try:
         with conn.cursor() as cur:
             cur.execute(
@@ -80,7 +94,7 @@ def _resolve_token(token: str) -> tuple[str, str]:
             conn.commit()
             return row[0], row[1]
     finally:
-        conn.close()
+        pool.putconn(conn)
 
 
 def _get_token() -> str:
@@ -137,13 +151,13 @@ async def list_incidents(status: str | None = None, limit: int = 20) -> dict:
 
 
 @mcp.tool()
-async def get_incident(incident_id: int) -> dict:
+async def get_incident(incident_id: str) -> dict:
     """Get full incident details including summary, suggestions, citations, and alerts."""
     return await _api("GET", f"/api/incidents/{incident_id}")
 
 
 @mcp.tool()
-async def ask_incident(incident_id: int, question: str) -> dict:
+async def ask_incident(incident_id: str, question: str) -> dict:
     """Ask Aurora AI a question about an incident. Posts the question and polls for the response."""
     result = await _api("POST", f"/api/incidents/{incident_id}/chat",
                         body={"message": question}, timeout=30)

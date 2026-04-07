@@ -501,6 +501,8 @@ def handle_internal_error(error):
 @app.route('/api/routes', methods=['GET'])
 def list_api_routes():
     """Auto-generated catalog of all API endpoints (used by MCP server)."""
+    if not request.headers.get("X-User-ID"):
+        return jsonify({"error": "Unauthorized"}), 401
     routes = []
     for rule in app.url_map.iter_rules():
         methods = sorted(rule.methods - {'HEAD', 'OPTIONS'})
