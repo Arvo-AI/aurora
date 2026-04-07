@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useRef, useState, useEffect, useCallback } from "react";
+import React, { useRef, useEffect, useCallback } from "react";
 import { Virtuoso, VirtuosoHandle } from "react-virtuoso";
 import { MessageItem } from "./message-item";
 import { Message } from "../../app/chat/types";
@@ -18,16 +18,13 @@ export function VirtualizedMessages({ messages, sendRaw, onUpdateMessage, sessio
   const isExistingSession = useRef(false);
   const firstLoad = useRef(true);
   const prevMessageCountRef = useRef(messages.length);
-  const [isAtBottom, setIsAtBottom] = useState(true);
 
   if (firstLoad.current && messages.length > 0) {
     firstLoad.current = false;
     isExistingSession.current = messages.length > 2;
   }
 
-  const handleAtBottomChange = useCallback((bottom: boolean) => {
-    setIsAtBottom(bottom);
-  }, []);
+  const handleAtBottomChange = useCallback((_bottom: boolean) => {}, []);
 
   const handleFollowOutput = useCallback(
     (atBottom: boolean) => (atBottom ? "auto" : false),
