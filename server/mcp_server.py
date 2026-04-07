@@ -12,11 +12,15 @@ Usage:
 
 import argparse
 import asyncio
+import contextvars
 import logging
 import os
 
 import httpx
 import psycopg2
+from starlette.middleware import Middleware
+from starlette.requests import Request
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from mcp.server.fastmcp import FastMCP
 
@@ -24,6 +28,28 @@ logger = logging.getLogger("aurora.mcp")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 
 API_BASE = os.environ.get("MCP_API_BASE", "http://aurora-server:5080")
+
+_current_bearer_token: contextvars.ContextVar[str] = contextvars.ContextVar("_current_bearer_token")
+
+
+class BearerTokenMiddleware:
+    """ASGI middleware that extracts Bearer token and stores it in a ContextVar."""
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] == "http":
+            request = Request(scope)
+            auth = request.headers.get("authorization", "")
+            if auth.lower().startswith("bearer "):
+                token = _current_bearer_token.set(auth[7:])
+                try:
+                    await self.app(scope, receive, send)
+                finally:
+                    _current_bearer_token.reset(token)
+                return
+        await self.app(scope, receive, send)
 
 
 # ---------------------------------------------------------------------------
@@ -58,14 +84,10 @@ def _resolve_token(token: str) -> tuple[str, str]:
 
 
 def _get_token() -> str:
-    """Extract token from HTTP Authorization header or AURORA_MCP_TOKEN env var."""
+    """Extract token from context var (HTTP) or AURORA_MCP_TOKEN env var (stdio)."""
     try:
-        from mcp.server.dependencies import get_http_request
-        request = get_http_request()
-        auth = request.headers.get("authorization", "")
-        if auth.lower().startswith("bearer "):
-            return auth[7:]
-    except Exception:
+        return _current_bearer_token.get()
+    except LookupError:
         pass
     token = os.environ.get("AURORA_MCP_TOKEN", "")
     if not token:
@@ -147,7 +169,7 @@ async def get_graph_stats() -> dict:
 @mcp.tool()
 async def search_knowledge_base(query: str, limit: int = 5) -> dict:
     """Semantic search across Aurora's knowledge base documents."""
-    return await _api("GET", "/api/knowledge-base/search", params={"query": query, "limit": limit})
+    return await _api("POST", "/api/knowledge-base/search", body={"query": query, "limit": limit})
 
 
 # ---------------------------------------------------------------------------
@@ -227,6 +249,15 @@ if __name__ == "__main__":
     if args.transport == "streamable-http":
         mcp.settings.host = "0.0.0.0"
         mcp.settings.port = args.port
+
+        _original_app_factory = mcp.streamable_http_app
+
+        def _patched_app_factory():
+            app = _original_app_factory()
+            app.add_middleware(BearerTokenMiddleware)
+            return app
+
+        mcp.streamable_http_app = _patched_app_factory
         logger.info(f"Starting Aurora MCP server on port {args.port} (streamable-http)")
     else:
         logger.info("Starting Aurora MCP server (stdio)")

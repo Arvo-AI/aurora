@@ -1,11 +1,12 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { Plus, Trash2, Copy, Loader2, Key } from "lucide-react";
+import { Plus, Trash2, Copy, Loader2, Key, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { toast } from "@/hooks/use-toast";
+import { getEnv } from "@/lib/env";
 
 interface McpToken {
   id: number;
@@ -25,6 +26,8 @@ export default function McpTokens() {
   const [createdToken, setCreatedToken] = useState<string | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [revoking, setRevoking] = useState<number | null>(null);
+  const [copiedToken, setCopiedToken] = useState(false);
+  const [copiedConfig, setCopiedConfig] = useState(false);
 
   const fetchTokens = useCallback(async () => {
     try {
@@ -85,8 +88,30 @@ export default function McpTokens() {
   function copyToken() {
     if (createdToken) {
       navigator.clipboard.writeText(createdToken);
-      toast({ title: "Token copied to clipboard" });
+      setCopiedToken(true);
+      setTimeout(() => setCopiedToken(false), 2000);
     }
+  }
+
+  function mcpConfigJson(token: string) {
+    const backendUrl = getEnv('NEXT_PUBLIC_BACKEND_URL') || 'http://localhost:5080';
+    const u = new URL(backendUrl);
+    u.port = '8811';
+    u.pathname = '/mcp';
+    return JSON.stringify({
+      mcpServers: {
+        aurora: {
+          url: u.toString().replace(/\/$/, ''),
+          headers: { Authorization: `Bearer ${token}` },
+        },
+      },
+    }, null, 2);
+  }
+
+  function copyConfig(token: string) {
+    navigator.clipboard.writeText(mcpConfigJson(token));
+    setCopiedConfig(true);
+    setTimeout(() => setCopiedConfig(false), 2000);
   }
 
   function handleDialogClose(open: boolean) {
@@ -94,6 +119,8 @@ export default function McpTokens() {
     if (!open) {
       setNewTokenName("");
       setCreatedToken(null);
+      setCopiedToken(false);
+      setCopiedConfig(false);
     }
   }
 
@@ -112,7 +139,7 @@ export default function McpTokens() {
   }
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-4 mr-4">
       <div className="flex items-center justify-between">
         <div>
           <h3 className="text-sm font-medium">MCP API Tokens</h3>
@@ -127,24 +154,40 @@ export default function McpTokens() {
               Generate Token
             </Button>
           </DialogTrigger>
-          <DialogContent>
+          <DialogContent className="sm:max-w-2xl overflow-hidden">
             {createdToken ? (
               <>
                 <DialogHeader>
                   <DialogTitle>Token Created</DialogTitle>
                   <DialogDescription>
-                    Copy this token now. It will not be shown again.
+                    Copy the configuration below into your MCP client. The token will not be shown again.
                   </DialogDescription>
                 </DialogHeader>
-                <div className="flex gap-2">
-                  <Input
-                    readOnly
-                    value={createdToken}
-                    className="font-mono text-xs"
-                  />
-                  <Button size="icon" variant="outline" onClick={copyToken}>
-                    <Copy className="h-4 w-4" />
-                  </Button>
+                <div className="space-y-3">
+                  <div className="flex gap-2 min-w-0">
+                    <Input
+                      readOnly
+                      value={createdToken}
+                      className="font-mono !text-[11px] min-w-0"
+                    />
+                    <Button size="icon" variant="outline" onClick={copyToken} title="Copy token">
+                      {copiedToken ? <Check className="h-4 w-4 text-emerald-500" /> : <Copy className="h-4 w-4" />}
+                    </Button>
+                  </div>
+                  <div className="relative">
+                    <pre className="bg-muted rounded-md p-3 pr-10 text-xs font-mono overflow-x-auto whitespace-pre-wrap break-all max-h-48">{mcpConfigJson(createdToken)}</pre>
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      className="absolute top-1.5 right-1.5 h-7 w-7"
+                      onClick={() => copyConfig(createdToken)}
+                    >
+                      {copiedConfig ? <Check className="h-3.5 w-3.5 text-emerald-500" /> : <Copy className="h-3.5 w-3.5" />}
+                    </Button>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Paste into <code className="text-[11px] bg-muted px-1 py-0.5 rounded">.cursor/mcp.json</code> (Cursor) or <code className="text-[11px] bg-muted px-1 py-0.5 rounded">claude_desktop_config.json</code> (Claude Desktop). Works with any MCP client.
+                  </p>
                 </div>
                 <DialogFooter>
                   <Button onClick={() => handleDialogClose(false)}>Done</Button>
