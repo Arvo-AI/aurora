@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useToast } from "@/hooks/use-toast";
 import { grafanaService, GrafanaStatus } from "@/lib/services/grafana";
 import { GrafanaConnectionStep } from "@/components/grafana/GrafanaConnectionStep";
@@ -8,209 +8,105 @@ import { GrafanaWebhookStep } from "@/components/grafana/GrafanaWebhookStep";
 import { getUserFriendlyError, copyToClipboard } from "@/lib/utils";
 import ConnectorAuthGuard from "@/components/connectors/ConnectorAuthGuard";
 
-// Cache keys for localStorage
-const CACHE_KEYS = {
-  STATUS: 'grafana_connection_status',
-  WEBHOOK: 'grafana_webhook_url',
-};
+const STATUS_CACHE_KEY = 'grafana_connected';
+
+function setConnectedState(connected: boolean) {
+  if (typeof window === "undefined") return;
+  if (connected) {
+    localStorage.setItem("isGrafanaConnected", "true");
+  } else {
+    localStorage.removeItem("isGrafanaConnected");
+  }
+  window.dispatchEvent(new CustomEvent("providerStateChanged"));
+  window.dispatchEvent(new CustomEvent("providerPreferenceChanged", { detail: { providers: connected ? ["grafana"] : [] } }));
+}
 
 export default function GrafanaAuthPage() {
   const { toast } = useToast();
-  const [baseUrl, setBaseUrl] = useState("");
-  const [apiToken, setApiToken] = useState("");
-  const [stackSlug, setStackSlug] = useState("");
   const [status, setStatus] = useState<GrafanaStatus | null>(null);
   const [loading, setLoading] = useState(false);
   const [webhookUrl, setWebhookUrl] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
-  const [isInitialLoad, setIsInitialLoad] = useState(true);
 
-  // Load from cache first, then optionally refresh in background
-  const loadStatus = async (skipCache = false) => {
-    try {
-      // Check cache first for immediate display
-      if (!skipCache && typeof window !== "undefined") {
-        const cachedStatus = localStorage.getItem(CACHE_KEYS.STATUS);
-        const cachedWebhook = localStorage.getItem(CACHE_KEYS.WEBHOOK);
-        
-        if (cachedStatus) {
-          const parsedStatus = JSON.parse(cachedStatus);
-          setStatus(parsedStatus);
-          if (parsedStatus?.connected) {
-            setBaseUrl(parsedStatus.baseUrl ?? "");
-            if (cachedWebhook) {
-              setWebhookUrl(cachedWebhook);
-            }
-          }
-          
-          // On initial load, refresh in background to ensure data is current
-          if (isInitialLoad) {
-            setIsInitialLoad(false);
-            // Fetch silently in background to verify connection is still valid
-            fetchAndUpdateStatus();
-            return;
-          }
-          
-          // Cache exists and not initial load, just use it
-          return;
-        }
-      }
-      
-      // No cache or skipCache=true, fetch fresh data
-      await fetchAndUpdateStatus();
-    } catch (err) {
-      console.error("Failed to load Grafana status", err);
-      toast({
-        title: "Error",
-        description: "Unable to load Grafana status",
-        variant: "destructive",
-      });
-    }
-  };
-  
-  // Fetch and update both state and cache
-  const fetchAndUpdateStatus = async () => {
-    const result = await grafanaService.getStatus();
-    setStatus(result);
-    
-    // Update cache
-    if (typeof window !== "undefined") {
-      localStorage.setItem(CACHE_KEYS.STATUS, JSON.stringify(result));
-    }
-    
-    if (result?.connected) {
-      setBaseUrl(result.baseUrl ?? "");
-      await loadWebhookUrl();
-    } else {
-      // Clear webhook cache if disconnected
-      if (typeof window !== "undefined") {
-        localStorage.removeItem(CACHE_KEYS.WEBHOOK);
-      }
-    }
-  };
-
-  const loadWebhookUrl = async () => {
+  const loadWebhookUrl = useCallback(async () => {
     try {
       const response = await grafanaService.getWebhookUrl();
       setWebhookUrl(response.webhookUrl);
-      
-      // Update cache
-      if (typeof window !== "undefined") {
-        localStorage.setItem(CACHE_KEYS.WEBHOOK, response.webhookUrl);
-      }
     } catch (err) {
       console.error("Failed to load webhook URL", err);
     }
-  };
-
-  useEffect(() => {
-    loadStatus();
   }, []);
 
-  const handleConnect = async (event: React.FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    setLoading(true);
-
+  const refreshStatus = useCallback(async () => {
     try {
-      const payload = { baseUrl, apiToken, stackSlug: stackSlug || undefined };
-      const result = await grafanaService.connect(payload);
+      const result = await grafanaService.getStatus();
       setStatus(result);
-      
-      // Update cache immediately
       if (typeof window !== "undefined") {
-        localStorage.setItem(CACHE_KEYS.STATUS, JSON.stringify(result));
+        localStorage.setItem(STATUS_CACHE_KEY, result?.connected ? "1" : "0");
       }
-      
-      toast({
-        title: "Success",
-        description: "Grafana connected successfully! Now configure the webhook below to receive alerts.",
-      });
-      loadWebhookUrl();
-
-      try {
-        await fetch("/api/provider-preferences", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ action: "add", provider: "grafana" }),
-        });
-      } catch (prefErr) {
-        console.warn("Failed to update provider preferences", prefErr);
+      if (result?.connected) {
+        setConnectedState(true);
+        await loadWebhookUrl();
+      } else {
+        setConnectedState(false);
       }
-
-      if (typeof window !== "undefined") {
-        localStorage.setItem("isGrafanaConnected", "true");
-        window.dispatchEvent(new CustomEvent("providerStateChanged"));
-        window.dispatchEvent(new CustomEvent("providerPreferenceChanged", { detail: { providers: ["grafana"] } }));
-      }
-    } catch (err: any) {
-      console.error("Grafana connection failed", err);
-      const errorMessage = getUserFriendlyError(err);
-      toast({
-        title: "Failed to connect to Grafana",
-        description: errorMessage,
-        variant: "destructive",
-      });
-    } finally {
-      setLoading(false);
-      setApiToken("");
+    } catch (err) {
+      console.error("Failed to load Grafana status", err);
     }
-  };
+  }, [loadWebhookUrl]);
+
+  useEffect(() => {
+    const cached = typeof window !== "undefined" ? localStorage.getItem(STATUS_CACHE_KEY) : null;
+    if (cached === "1") {
+      setStatus({ connected: true });
+    }
+    refreshStatus();
+  }, [refreshStatus]);
+
+  const handleConnected = useCallback(async () => {
+    await refreshStatus();
+    try {
+      await fetch("/api/provider-preferences", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "add", provider: "grafana" }),
+      });
+    } catch {}
+    toast({ title: "Connected", description: "Grafana connected via webhook." });
+  }, [refreshStatus, toast]);
 
   const handleDisconnect = async () => {
     setLoading(true);
-
     try {
       const response = await fetch("/api/connected-accounts/grafana", {
         method: "DELETE",
         credentials: "include",
       });
 
-      // Accept both 200 and 204 as success
       if (response.ok || response.status === 204) {
-        // Clear state
         setStatus({ connected: false });
         setWebhookUrl(null);
-        setBaseUrl("");
-        setStackSlug("");
-        
-        // Clear cache
         if (typeof window !== "undefined") {
-          localStorage.removeItem(CACHE_KEYS.STATUS);
-          localStorage.removeItem(CACHE_KEYS.WEBHOOK);
+          localStorage.removeItem(STATUS_CACHE_KEY);
         }
-        
-        toast({
-          title: "Success",
-          description: "Grafana disconnected successfully",
-        });
-
-        // Update localStorage and dispatch events
-        if (typeof window !== "undefined") {
-          localStorage.removeItem("isGrafanaConnected");
-          window.dispatchEvent(new CustomEvent("providerStateChanged"));
-          window.dispatchEvent(new CustomEvent("providerPreferenceChanged", { detail: { providers: [] } }));
-        }
-
-        // Update provider preferences
+        setConnectedState(false);
         try {
           await fetch("/api/provider-preferences", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ action: "remove", provider: "grafana" }),
           });
-        } catch (prefErr) {
-          console.warn("Failed to update provider preferences", prefErr);
-        }
+        } catch {}
+        toast({ title: "Disconnected", description: "Grafana disconnected successfully" });
       } else {
         const text = await response.text();
         throw new Error(text || "Failed to disconnect Grafana");
       }
     } catch (err: any) {
       console.error("Grafana disconnect failed", err);
-      const errorMessage = getUserFriendlyError(err);
       toast({
         title: "Failed to disconnect Grafana",
-        description: errorMessage,
+        description: getUserFriendlyError(err),
         variant: "destructive",
       });
     } finally {
@@ -222,10 +118,7 @@ export default function GrafanaAuthPage() {
     if (webhookUrl) {
       copyToClipboard(webhookUrl);
       setCopied(true);
-      toast({
-        title: "Success",
-        description: "Webhook URL copied to clipboard",
-      });
+      toast({ title: "Copied", description: "Webhook URL copied to clipboard" });
       setTimeout(() => setCopied(false), 2000);
     }
   };
@@ -236,24 +129,15 @@ export default function GrafanaAuthPage() {
         <div className="mb-6 flex items-center gap-3">
           <img src="/grafana.svg" alt="Grafana" className="h-9 w-9" />
           <div>
-          <h1 className="text-3xl font-bold">Grafana Integration</h1>
-          <p className="text-muted-foreground mt-1">
-            Connect your Grafana instance and configure alert webhooks
-          </p>
+            <h1 className="text-3xl font-bold">Grafana Integration</h1>
+            <p className="text-muted-foreground mt-1">
+              Connect your Grafana instance and configure alert webhooks
+            </p>
           </div>
         </div>
 
         {!status?.connected ? (
-          <GrafanaConnectionStep
-            baseUrl={baseUrl}
-            setBaseUrl={setBaseUrl}
-            apiToken={apiToken}
-            setApiToken={setApiToken}
-            stackSlug={stackSlug}
-            setStackSlug={setStackSlug}
-            loading={loading}
-            onConnect={handleConnect}
-          />
+          <GrafanaConnectionStep onConnected={handleConnected} />
         ) : status && webhookUrl ? (
           <GrafanaWebhookStep
             status={status}

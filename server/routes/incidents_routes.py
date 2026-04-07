@@ -385,28 +385,39 @@ def get_incident(user_id, incident_id: str):
                             source_alert_id,
                         )
                 elif source_type == "grafana":
-                    # For grafana, try integer lookup for old records
+                    # source_alert_id is grafana_alerts.id * 100 + alert_index.
+                    # Recover the row id by integer-dividing by 100.
+                    # Direct lookup first, fingerprint fallback for legacy CRC32 records.
                     try:
-                        alert_id_int = int(source_alert_id)
+                        alert_id_int = int(source_alert_id) // 100
                         cursor.execute(
                             "SELECT payload FROM grafana_alerts WHERE id = %s AND user_id = %s",
                             (alert_id_int, user_id),
                         )
                         alert_row = cursor.fetchone()
-                        if alert_row:
-                            raw_payload = (
-                                alert_row[0] if alert_row[0] is not None else None
-                            )
-                            logger.debug(
-                                "[INCIDENTS] Found Grafana payload: type=%s, has_data=%s",
-                                type(raw_payload).__name__ if raw_payload else None,
-                                bool(raw_payload),
-                            )
+                        if alert_row and alert_row[0] is not None:
+                            raw_payload = alert_row[0]
                     except (ValueError, TypeError):
-                        logger.debug(
-                            "[INCIDENTS] Skipping payload fetch for grafana fingerprint: %s",
-                            source_alert_id,
+                        pass
+                    if not raw_payload:
+                        fingerprint = (
+                            incident.get("alert", {}).get("metadata", {}).get("fingerprint")
                         )
+                        if fingerprint:
+                            cursor.execute(
+                                """SELECT payload FROM grafana_alerts
+                                   WHERE user_id = %s
+                                     AND payload -> 'alerts' @> %s::jsonb
+                                   ORDER BY received_at DESC LIMIT 1""",
+                                (user_id, json.dumps([{"fingerprint": fingerprint}])),
+                            )
+                            alert_row = cursor.fetchone()
+                            if alert_row and alert_row[0] is not None:
+                                raw_payload = alert_row[0]
+                    logger.debug(
+                        "[INCIDENTS] Grafana payload lookup: has_source_alert_id=%s, found=%s",
+                        bool(source_alert_id), bool(raw_payload),
+                    )
                 elif source_type == "datadog":
                     # For datadog, try integer lookup for old records
                     try:

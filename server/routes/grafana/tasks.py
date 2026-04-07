@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import zlib
+
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
@@ -134,6 +135,7 @@ def process_grafana_alert(
     payload: Dict[str, Any],
     metadata: Optional[Dict[str, Any]] = None,
     user_id: Optional[str] = None,
+    skip_rca: bool = False,
 ) -> None:
     """Background processor for Grafana alert webhooks.
 
@@ -141,6 +143,7 @@ def process_grafana_alert(
         payload: Raw webhook JSON payload received from Grafana.
         metadata: Auxiliary information captured at the HTTP layer (headers, user context, etc.).
         user_id: Aurora user ID this alert belongs to.
+        skip_rca: If True, store the alert but do not trigger RCA investigation.
     """
     try:
         summary = _format_alert_summary(payload)
@@ -225,7 +228,7 @@ def process_grafana_alert(
                         if not individual_alerts:
                             logger.info("[GRAFANA][ALERT] No alerts array in payload for user %s, skipping incident creation", user_id)
                             return
-                        for single_alert in individual_alerts:
+                        for alert_idx, single_alert in enumerate(individual_alerts):
                             alert_payload = _merge_alert_into_payload(payload, single_alert)
                             fingerprint = single_alert.get("fingerprint")
 
@@ -483,7 +486,7 @@ def process_grafana_alert(
                                 logger.warning("[GRAFANA][ALERT] Failed to enqueue summary for incident %s (%s): %s", incident_id, per_alert_title, summary_exc)
 
                             # Trigger full RCA background chat
-                            if _should_trigger_background_chat(user_id, alert_payload):
+                            if not skip_rca and _should_trigger_background_chat(user_id, alert_payload):
                                 try:
                                     from chat.background.task import (
                                         run_background_chat, create_background_chat_session, is_background_chat_allowed,
