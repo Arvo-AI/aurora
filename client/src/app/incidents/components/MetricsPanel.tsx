@@ -34,6 +34,9 @@ const SEVERITY_ORDER = ['critical', 'high', 'medium', 'low', 'unknown'];
 function formatDuration(seconds: number | null | undefined): string {
   if (seconds == null || Number.isNaN(seconds)) return 'N/A';
   if (seconds < 0) return '0s';
+  // Sub-second values get a distinct label so a real <1s MTTD doesn't get
+  // rounded to "0s" and look indistinguishable from missing data.
+  if (seconds > 0 && seconds < 1) return '<1s';
   if (seconds < 60) return `${Math.round(seconds)}s`;
   const mins = Math.floor(seconds / 60);
   const secs = Math.round(seconds % 60);
