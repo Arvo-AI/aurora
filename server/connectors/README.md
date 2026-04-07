@@ -24,10 +24,11 @@ Backend configuration guides for Aurora connectors.
 | Connector | Auth Type | Guide |
 |-----------|-----------|-------|
 | **PagerDuty** | OAuth / API Token | [Setup](./pagerduty_connector/README.md) |
-| **Grafana** | API Token | [Setup](./grafana_connector/README.md) |
+| **Grafana** | Webhook (no key needed) | [Setup](./grafana_connector/README.md) |
 | **Datadog** | API Key + App Key | [Setup](./datadog_connector/README.md) |
 | **New Relic** | User API Key (NerdGraph) | [Setup](./newrelic_connector/README.md) |
 | **Netdata** | API Token | [Setup](./netdata_connector/README.md) |
+| **Splunk** | API Token (`search` capability) | [Setup](./splunk_connector/README.md) |
 
 ## CI/CD
 

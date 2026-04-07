@@ -76,18 +76,11 @@ class PagerDutyClient:
                     return parsed.hostname.replace(".pagerduty.com", "")
         except Exception:
             return None
-    
-    def can_write(self) -> bool:
-        try:
-            r = requests.post(f"{self.base_url}/incidents", headers=self.headers, json={"incident": {"type": "incident"}}, timeout=20)
-            return r.status_code != 403
-        except Exception:
-            return False
 
 
 def validate_token(client: PagerDutyClient) -> Dict[str, Any]:
     """Validate token and extract info."""
-    result = {"validated_at": datetime.now(timezone.utc).isoformat(), "capabilities": {"can_read_incidents": True, "can_write_incidents": client.can_write()}}
+    result = {"validated_at": datetime.now(timezone.utc).isoformat(), "capabilities": {"can_read_incidents": True}}
     
     try:
         user = client.get_current_user().get("user", {})
