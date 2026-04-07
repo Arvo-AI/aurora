@@ -8,8 +8,9 @@ export interface MetricsSummary {
   totalIncidents: number;
   activeIncidents: number;
   resolvedIncidents: number;
-  avgMttrSeconds: number;
-  avgMttdSeconds: number;
+  // Backend returns null when there are no resolved incidents in the window.
+  avgMttrSeconds: number | null;
+  avgMttdSeconds: number | null;
   changeFailureRate: number;
   totalDeployments: number;
   topServices: { service: string; count: number }[];
@@ -18,16 +19,17 @@ export interface MetricsSummary {
 export interface MttrBySeverity {
   severity: string;
   count: number;
-  avgMttrSeconds: number;
-  p50MttrSeconds: number;
-  p95MttrSeconds: number;
-  avgDetectionToRcaSeconds: number;
-  avgRcaToResolveSeconds: number;
+  // Aggregates are null when no incidents in the bucket have a measurable value.
+  avgMttrSeconds: number | null;
+  p50MttrSeconds: number | null;
+  p95MttrSeconds: number | null;
+  avgDetectionToRcaSeconds: number | null;
+  avgRcaToResolveSeconds: number | null;
 }
 
 export interface MttrTrendPoint {
   date: string;
-  avgMttrSeconds: number;
+  avgMttrSeconds: number | null;
   count: number;
 }
 
@@ -70,7 +72,8 @@ export interface ToolStat {
 
 export interface AgentExecutionResponse {
   toolStats: ToolStat[];
-  avgStepsPerRca: number;
+  // Null when no completed RCAs in the window.
+  avgStepsPerRca: number | null;
   totalRcasCompleted: number;
 }
 

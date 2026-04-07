@@ -11,17 +11,19 @@ import {
 
 interface ExecutionStep {
   type: 'thought' | 'tool_call';
-  timestamp: string;
-  toolName: string;
+  // Backend returns null for any of these when the underlying row is sparse;
+  // the component must guard before reading length / constructing Date.
+  timestamp: string | null;
+  toolName: string | null;
   command: string | null;
-  content: string;
+  content: string | null;
 }
 
 interface LifecycleEvent {
   eventType: string;
   previousValue: string | null;
   newValue: string | null;
-  timestamp: string;
+  timestamp: string | null;
 }
 
 interface AgentExecutionData {
@@ -66,7 +68,7 @@ function LifecycleTimeline({ events }: { events: LifecycleEvent[] }) {
                 {LIFECYCLE_LABELS[event.eventType] || event.eventType}
               </p>
               <p className="text-[10px] text-zinc-600 mt-0.5 font-mono whitespace-nowrap">
-                {new Date(event.timestamp).toLocaleTimeString()}
+                {event.timestamp ? new Date(event.timestamp).toLocaleTimeString() : '—'}
               </p>
             </div>
             {i < events.length - 1 && (
@@ -81,12 +83,13 @@ function LifecycleTimeline({ events }: { events: LifecycleEvent[] }) {
 
 function StepRow({ step, baseTime }: { step: ExecutionStep; baseTime: Date }) {
   const [expanded, setExpanded] = useState(false);
-  const stepTime = new Date(step.timestamp);
+  const stepTime = step.timestamp ? new Date(step.timestamp) : null;
   const isThought = step.type === 'thought';
-  const truncatedContent = step.content.length > 120
-    ? step.content.slice(0, 120) + '...'
-    : step.content;
-  const needsExpand = step.content.length > 120;
+  const content = step.content ?? '';
+  const truncatedContent = content.length > 120
+    ? content.slice(0, 120) + '...'
+    : content;
+  const needsExpand = content.length > 120;
 
   return (
     <div className="flex gap-3 group">
@@ -100,7 +103,7 @@ function StepRow({ step, baseTime }: { step: ExecutionStep; baseTime: Date }) {
       <div className="pb-4 min-w-0 flex-1">
         <div className="flex items-center gap-2 mb-1">
           <span className="text-[11px] font-mono text-zinc-600 shrink-0">
-            {formatRelativeTime(baseTime, stepTime)}
+            {stepTime ? formatRelativeTime(baseTime, stepTime) : '—'}
           </span>
           <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-medium ${
             isThought
@@ -110,7 +113,7 @@ function StepRow({ step, baseTime }: { step: ExecutionStep; baseTime: Date }) {
             {isThought ? <Brain className="w-3 h-3" /> : <Terminal className="w-3 h-3" />}
             {isThought ? 'thought' : 'tool_call'}
           </span>
-          <span className="text-xs text-zinc-300 truncate">{step.toolName}</span>
+          <span className="text-xs text-zinc-300 truncate">{step.toolName ?? '(unknown)'}</span>
         </div>
 
         {/* Command line for tool_calls */}
@@ -121,7 +124,7 @@ function StepRow({ step, baseTime }: { step: ExecutionStep; baseTime: Date }) {
         )}
 
         {/* Content (collapsible) */}
-        {step.content && (
+        {content && (
           <div className="mt-1.5">
             {needsExpand ? (
               <button
@@ -135,12 +138,12 @@ function StepRow({ step, baseTime }: { step: ExecutionStep; baseTime: Date }) {
                     <ChevronRight className="w-3 h-3 text-zinc-600 mt-0.5 shrink-0" />
                   )}
                   <p className="text-xs text-zinc-500 break-words">
-                    {expanded ? step.content : truncatedContent}
+                    {expanded ? content : truncatedContent}
                   </p>
                 </div>
               </button>
             ) : (
-              <p className="text-xs text-zinc-500 break-words pl-4">{step.content}</p>
+              <p className="text-xs text-zinc-500 break-words pl-4">{content}</p>
             )}
           </div>
         )}
@@ -209,11 +212,12 @@ export default function ExecutionWaterfall({ incidentId }: { incidentId: string 
     );
   }
 
-  const baseTime = data.lifecycle.length
-    ? new Date(data.lifecycle[0].timestamp)
-    : data.steps.length
-      ? new Date(data.steps[0].timestamp)
-      : new Date();
+  // Use the first non-null timestamp from either lifecycle or steps so sparse
+  // rows don't anchor the waterfall to epoch zero.
+  const baseTimestamp =
+    data.lifecycle.find(e => e.timestamp)?.timestamp ??
+    data.steps.find(s => s.timestamp)?.timestamp;
+  const baseTime = baseTimestamp ? new Date(baseTimestamp) : new Date();
 
   return (
     <div className="rounded-lg bg-zinc-900/50 border border-zinc-800 p-4">

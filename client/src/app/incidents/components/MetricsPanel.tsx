@@ -31,7 +31,8 @@ const SEVERITY_COLORS: Record<string, string> = {
 
 const SEVERITY_ORDER = ['critical', 'high', 'medium', 'low', 'unknown'];
 
-function formatDuration(seconds: number): string {
+function formatDuration(seconds: number | null | undefined): string {
+  if (seconds == null || Number.isNaN(seconds)) return '—';
   if (seconds < 0) return '0s';
   if (seconds < 60) return `${Math.round(seconds)}s`;
   const mins = Math.floor(seconds / 60);
@@ -49,8 +50,13 @@ function formatDuration(seconds: number): string {
   return remainHours > 0 ? `${days}d ${remainHours}h` : `${days}d`;
 }
 
+// API returns YYYY-MM-DD; build a local-time Date so users in negative UTC
+// offsets don't see the previous day.
 function formatDate(dateStr: string): string {
-  const d = new Date(dateStr);
+  const parts = dateStr.split('-').map(Number);
+  const d = parts.length === 3 && parts.every(n => Number.isFinite(n))
+    ? new Date(parts[0], parts[1] - 1, parts[2])
+    : new Date(dateStr);
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
@@ -76,7 +82,7 @@ export default function MetricsPanel() {
   const [period, setPeriod] = useState<Period>('30d');
 
   const { data: summary, isLoading: summaryLoading, error: summaryError } = useQuery<MetricsSummary>(
-    '/api/metrics/summary',
+    `/api/metrics/summary?period=${period}`,
     metricsFetcher,
     { staleTime: 30_000 },
   );
@@ -107,24 +113,28 @@ export default function MetricsPanel() {
 
   const isLoading = summaryLoading && !summary;
 
+  const frequencySeverities = useMemo(() => {
+    if (!frequency?.data) return [];
+    const seen = new Set(frequency.data.map(d => d.group));
+    return SEVERITY_ORDER.filter(s => seen.has(s));
+  }, [frequency]);
+
   const frequencyChartData = useMemo(() => {
     if (!frequency?.data) return [];
     const dateMap = new Map<string, Record<string, number>>();
+    // Seed every date entry with all severity buckets at 0 so Recharts treats
+    // missing groups as zeros instead of "no data" gaps in the stacked area.
+    const seedZeros = (): Record<string, number> =>
+      Object.fromEntries(frequencySeverities.map(s => [s, 0]));
     for (const pt of frequency.data) {
-      if (!dateMap.has(pt.date)) dateMap.set(pt.date, {});
+      if (!dateMap.has(pt.date)) dateMap.set(pt.date, seedZeros());
       const entry = dateMap.get(pt.date)!;
       entry[pt.group] = (entry[pt.group] || 0) + pt.count;
     }
     return Array.from(dateMap.entries())
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([date, counts]) => ({ date, ...counts }));
-  }, [frequency]);
-
-  const frequencySeverities = useMemo(() => {
-    if (!frequency?.data) return [];
-    const seen = new Set(frequency.data.map(d => d.group));
-    return SEVERITY_ORDER.filter(s => seen.has(s));
-  }, [frequency]);
+  }, [frequency, frequencySeverities]);
 
   if (isLoading) {
     return (
@@ -250,7 +260,7 @@ function MttrSection({ mttr, loading }: { mttr: MttrResponse; loading: boolean }
   if (mttr.bySeverity.length === 0) return null;
 
   const maxMttr = Math.max(
-    ...mttr.bySeverity.map(s => s.avgDetectionToRcaSeconds + s.avgRcaToResolveSeconds),
+    ...mttr.bySeverity.map(s => (s.avgDetectionToRcaSeconds ?? 0) + (s.avgRcaToResolveSeconds ?? 0)),
     1,
   );
 
@@ -262,9 +272,11 @@ function MttrSection({ mttr, loading }: { mttr: MttrResponse; loading: boolean }
           {mttr.bySeverity
             .sort((a, b) => SEVERITY_ORDER.indexOf(a.severity) - SEVERITY_ORDER.indexOf(b.severity))
             .map(sev => {
-              const total = sev.avgDetectionToRcaSeconds + sev.avgRcaToResolveSeconds;
-              const detectionPct = total > 0 ? (sev.avgDetectionToRcaSeconds / total) * 100 : 0;
-              const rcaPct = total > 0 ? (sev.avgRcaToResolveSeconds / total) * 100 : 0;
+              const detection = sev.avgDetectionToRcaSeconds ?? 0;
+              const resolve = sev.avgRcaToResolveSeconds ?? 0;
+              const total = detection + resolve;
+              const detectionPct = total > 0 ? (detection / total) * 100 : 0;
+              const rcaPct = total > 0 ? (resolve / total) * 100 : 0;
               const barWidth = total > 0 ? (total / maxMttr) * 100 : 0;
 
               return (

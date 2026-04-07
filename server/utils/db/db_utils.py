@@ -1696,19 +1696,11 @@ def initialize_tables():
                 logging.warning(f"Error adding resolved_at/alert_fired_at to incidents: {e}")
                 conn.rollback()
 
-            # Backfill resolved_at for existing resolved incidents
-            try:
-                cursor.execute("""
-                    UPDATE incidents SET resolved_at = updated_at
-                    WHERE status = 'resolved' AND resolved_at IS NULL;
-                """)
-                backfilled = cursor.rowcount
-                if backfilled > 0:
-                    logging.info(f"Backfilled resolved_at on {backfilled} resolved incidents.")
-                conn.commit()
-            except Exception as e:
-                logging.warning(f"Error backfilling resolved_at: {e}")
-                conn.rollback()
+            # NOTE: We intentionally do NOT backfill resolved_at from updated_at:
+            # updated_at is bumped on every PATCH (summary, aurora status, active-tab,
+            # etc.), so it would stamp the last metadata change rather than the true
+            # resolution time and skew MTTR for legacy incidents. Leave legacy
+            # resolved_at as NULL — those rows will simply not contribute to MTTR.
 
             # Indexes for SRE metrics queries
             try:
@@ -1804,6 +1796,7 @@ def initialize_tables():
                     "incident_alerts",
                     "incident_feedback",
                     "postmortems",
+                    "incident_lifecycle_events",
                 ]:
                     insert_policy_sql = f"""
                         DO $$
@@ -1897,6 +1890,7 @@ def initialize_tables():
                 "cloud_billing_usage", "provider_metrics",
                 "knowledge_base_memory", "knowledge_base_documents",
                 "incident_feedback", "postmortems",
+                "incident_lifecycle_events",
                 "github_connected_repos",
             ]
             for tbl in org_id_tables:

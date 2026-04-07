@@ -536,10 +536,11 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
         </div>
       )}
 
-      {/* View RCA and Visualization Buttons */}
-      {incident.chatSessionId && (
-        <div className="mt-6 pt-6 border-t border-zinc-800/50 flex items-center gap-3">
-          {incident.auroraStatus === 'complete' && incident.status !== 'merged' ? (
+      {/* Action bar — Waterfall and SRE Metrics live here independently of
+          chatSessionId so legacy incidents (no RCA session) still get them. */}
+      <div className="mt-6 pt-6 border-t border-zinc-800/50 flex items-center gap-3">
+        {incident.chatSessionId && (
+          incident.auroraStatus === 'complete' && incident.status !== 'merged' ? (
             <Link
               href={`/chat?sessionId=${incident.chatSessionId}`}
               className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md text-xs transition-colors text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800"
@@ -551,7 +552,7 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
             <button
               disabled
               title={
-                incident.status === 'merged' 
+                incident.status === 'merged'
                   ? "This incident was merged into another investigation"
                   : "RCA report will be available only when RCA is complete"
               }
@@ -559,7 +560,8 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
             >
               <span>Root Cause Analysis</span>
             </button>
-          )}
+          )
+        )}
           
           {(incident.auroraStatus === 'complete' || incident.auroraStatus === 'running' || incident.auroraStatus === 'summarizing') && (
             <button
@@ -647,8 +649,7 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
             SRE Metrics
             <ChevronRight className={`w-3 h-3 transition-transform ${showMetrics ? 'rotate-90' : ''}`} />
           </button>
-        </div>
-      )}
+      </div>
 
       {/* Feedback Section - only show when analysis is complete */}
       {incident.auroraStatus === 'complete' && (
@@ -727,22 +728,23 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
         </div>
       )}
 
-      {/* Waterfall Panel (collapsible) */}
+      {/* Waterfall Panel (collapsible) — only mount when expanded so the
+          incident page doesn't pay the fetch cost upfront. */}
       <div className="collapsible-panel" data-open={showWaterfall}>
         <div>
           <div className="border-t border-zinc-800 mt-4" />
           <div className="mt-4">
-            <ExecutionWaterfall incidentId={incident.id} />
+            {showWaterfall && <ExecutionWaterfall incidentId={incident.id} />}
           </div>
         </div>
       </div>
 
-      {/* SRE Metrics Panel (collapsible) */}
+      {/* SRE Metrics Panel (collapsible) — same lazy-mount treatment. */}
       <div className="collapsible-panel" data-open={showMetrics}>
         <div>
           <div className="border-t border-zinc-800 mt-4" />
           <div className="mt-4">
-            <MetricsPanel />
+            {showMetrics && <MetricsPanel />}
           </div>
         </div>
       </div>

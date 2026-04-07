@@ -157,14 +157,6 @@ def process_grafana_alert(
                     with conn.cursor() as cursor:
                         received_at = datetime.now(timezone.utc)
 
-                        alert_fired_at = None
-                        starts_at = payload.get("startsAt") or (payload.get("alerts", [{}])[0].get("startsAt") if payload.get("alerts") else None)
-                        if starts_at:
-                            try:
-                                alert_fired_at = datetime.fromisoformat(starts_at.replace("Z", "+00:00"))
-                            except (ValueError, TypeError):
-                                pass
-
                         from utils.auth.stateless_auth import set_rls_context
                         org_id = set_rls_context(cursor, conn, user_id, log_prefix="[GRAFANA][ALERT]")
                         if not org_id:
@@ -236,6 +228,21 @@ def process_grafana_alert(
                         for single_alert in individual_alerts:
                             alert_payload = _merge_alert_into_payload(payload, single_alert)
                             fingerprint = single_alert.get("fingerprint")
+
+                            # Parse this alert's fire time so each incident gets its own
+                            # MTTD measurement (multi-alert webhooks must not share one).
+                            alert_fired_at = None
+                            starts_at = single_alert.get("startsAt") or payload.get("startsAt")
+                            if starts_at:
+                                try:
+                                    alert_fired_at = datetime.fromisoformat(
+                                        str(starts_at).replace("Z", "+00:00")
+                                    )
+                                except (ValueError, TypeError):
+                                    logger.debug(
+                                        "[GRAFANA][ALERT] Could not parse startsAt=%r for fp=%s; leaving alert_fired_at=None",
+                                        starts_at, fingerprint,
+                                    )
                             # source_alert_id is INTEGER; CRC32 the hex fingerprint to a signed 32-bit int
                             crc = zlib.crc32(fingerprint.encode())
                             per_alert_source_id = crc - (1 << 32) if crc >= (1 << 31) else crc
@@ -389,7 +396,9 @@ def process_grafana_alert(
                                     cursor.execute("ROLLBACK TO SAVEPOINT sp_handle_correlated")
                                     logger.warning("[GRAFANA] handle_correlated_alert failed: %s", exc)
 
-                            # No correlation found — create a new incident
+                            # No correlation found — create a new incident.
+                            # `xmax = 0` is true only for freshly inserted rows (not ON CONFLICT
+                            # updates), so we use it to gate the lifecycle 'created' write.
                             cursor.execute(
                                 """INSERT INTO incidents
                                    (user_id, org_id, source_type, source_alert_id, alert_title, alert_service,
@@ -401,17 +410,18 @@ def process_grafana_alert(
                                            THEN EXCLUDED.started_at ELSE incidents.started_at END,
                                        alert_metadata = EXCLUDED.alert_metadata,
                                        alert_fired_at = COALESCE(EXCLUDED.alert_fired_at, incidents.alert_fired_at)
-                                   RETURNING id""",
+                                   RETURNING id, (xmax = 0) AS inserted""",
                                 (user_id, org_id, "grafana", per_alert_source_id, per_alert_title, service,
                                  severity, "investigating", received_at, json.dumps(alert_metadata), alert_fired_at),
                             )
                             incident_row = cursor.fetchone()
                             incident_id = incident_row[0] if incident_row else None
-                            correlation_result_used = False
+                            incident_was_inserted = bool(incident_row[1]) if incident_row else False
                             conn.commit()
 
-                            # Record lifecycle event for new incidents
-                            if incident_id and not correlation_result_used:
+                            # Record lifecycle event only on actual inserts so re-deliveries
+                            # don't append duplicate 'created' rows.
+                            if incident_id and incident_was_inserted:
                                 try:
                                     cursor.execute(
                                         """INSERT INTO incident_lifecycle_events
@@ -420,8 +430,11 @@ def process_grafana_alert(
                                         (incident_id, user_id, org_id, 'created', 'investigating'),
                                     )
                                     conn.commit()
-                                except Exception:
-                                    pass
+                                except Exception as exc:
+                                    logger.warning(
+                                        "[GRAFANA][ALERT] Failed to record lifecycle 'created' event for incident %s: %s",
+                                        incident_id, exc,
+                                    )
 
                             # Record as the primary alert for this incident
                             try:

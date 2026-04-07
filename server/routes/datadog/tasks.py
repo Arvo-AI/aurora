@@ -323,8 +323,11 @@ def process_datadog_event(
                             (incident_id, user_id, org_id, 'created', 'investigating'),
                         )
                         conn.commit()
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning(
+                            "[DATADOG] Failed to record lifecycle 'created' event for incident %s: %s",
+                            incident_id, e,
+                        )
 
                 if incident_id:
                     logger.info(

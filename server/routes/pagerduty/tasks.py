@@ -532,7 +532,12 @@ def process_pagerduty_event(
                     try:
                         alert_fired_at = datetime.fromisoformat(pd_created_at.replace("Z", "+00:00"))
                     except (ValueError, TypeError):
-                        pass
+                        # Non-fatal: alert_fired_at stays None and MTTD just becomes
+                        # unavailable for this incident.
+                        logger.debug(
+                            "[PAGERDUTY] Could not parse created_at=%r; leaving alert_fired_at=None",
+                            pd_created_at,
+                        )
 
                 severity = _extract_severity(incident)
                 aurora_status = _normalize_incident_status(incident_status)
@@ -616,9 +621,17 @@ def process_pagerduty_event(
                             corr_exc,
                         )
 
-                # Insert or update incident
+                # Insert or update incident.
+                # `xmax = 0` is true only for freshly inserted rows; combined with the
+                # previous-status returned via OLD-style trick below it lets us decide
+                # whether the lifecycle timeline should grow.
                 cursor.execute(
                     """
+                    WITH prev AS (
+                        SELECT status FROM incidents
+                        WHERE org_id = %s AND source_type = 'pagerduty'
+                          AND source_alert_id = %s AND user_id = %s
+                    )
                     INSERT INTO incidents
                     (user_id, org_id, source_type, source_alert_id, alert_title, alert_service,
                      severity, status, started_at, alert_metadata, alert_fired_at)
@@ -634,9 +647,12 @@ def process_pagerduty_event(
                         END,
                         alert_metadata = EXCLUDED.alert_metadata,
                         alert_fired_at = COALESCE(EXCLUDED.alert_fired_at, incidents.alert_fired_at)
-                    RETURNING id
+                    RETURNING id, (xmax = 0) AS inserted, (SELECT status FROM prev) AS previous_status
                     """,
                     (
+                        org_id,
+                        incident_number,
+                        user_id,
                         user_id,
                         org_id,
                         "pagerduty",
@@ -652,6 +668,8 @@ def process_pagerduty_event(
                 )
                 incident_row = cursor.fetchone()
                 incident_db_id = incident_row[0] if incident_row else None
+                incident_was_inserted = bool(incident_row[1]) if incident_row else False
+                previous_status = incident_row[2] if incident_row else None
                 conn.commit()
 
                 if event_type == "incident.triggered":
@@ -685,18 +703,33 @@ def process_pagerduty_event(
                             "[PAGERDUTY] Failed to record primary alert: %s", e
                         )
 
-                # Record lifecycle event for new incidents
-                if incident_db_id and event_type == "incident.triggered":
-                    try:
-                        cursor.execute(
-                            """INSERT INTO incident_lifecycle_events
-                               (incident_id, user_id, org_id, event_type, new_value)
-                               VALUES (%s, %s, %s, %s, %s)""",
-                            (incident_db_id, user_id, org_id, 'created', 'investigating'),
+                # Record a lifecycle row only on a real state change so retried webhooks
+                # don't bloat the timeline:
+                #   - 'created' on the first INSERT
+                #   - status transition rows when PD-driven status actually changes
+                if incident_db_id:
+                    lifecycle_writes = []
+                    if incident_was_inserted and event_type == "incident.triggered":
+                        lifecycle_writes.append(("created", None, "investigating"))
+                    elif previous_status is not None and previous_status != aurora_status:
+                        lifecycle_writes.append(
+                            (f"status_{aurora_status}", previous_status, aurora_status)
                         )
-                        conn.commit()
-                    except Exception:
-                        pass
+
+                    for ev_type, prev_val, new_val in lifecycle_writes:
+                        try:
+                            cursor.execute(
+                                """INSERT INTO incident_lifecycle_events
+                                   (incident_id, user_id, org_id, event_type, previous_value, new_value)
+                                   VALUES (%s, %s, %s, %s, %s, %s)""",
+                                (incident_db_id, user_id, org_id, ev_type, prev_val, new_val),
+                            )
+                            conn.commit()
+                        except Exception as e:
+                            logger.warning(
+                                "[PAGERDUTY] Failed to record lifecycle %s event for incident %s: %s",
+                                ev_type, incident_db_id, e,
+                            )
 
                 if incident_db_id:
                     if event_type == "incident.triggered":

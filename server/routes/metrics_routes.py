@@ -1,6 +1,5 @@
 """SRE metrics API routes — MTTR, MTTD, Change Failure Rate, Incident Frequency, Agent Execution."""
 
-import json
 import logging
 from flask import Blueprint, jsonify, request
 from utils.db.connection_pool import db_pool
@@ -52,12 +51,13 @@ def get_metrics_summary(user_id):
             active_incidents = counts[1] or 0
             resolved_incidents = counts[2] or 0
 
-            # Avg MTTR (seconds)
+            # Avg MTTR (seconds) — windowed by resolved_at so long-running incidents
+            # resolved inside the window are included even if they opened earlier.
             cursor.execute("""
                 SELECT AVG(EXTRACT(EPOCH FROM (resolved_at - started_at)))
                 FROM incidents
                 WHERE resolved_at IS NOT NULL
-                  AND started_at >= NOW() - %s::interval
+                  AND resolved_at >= NOW() - %s::interval
             """, (period,))
             avg_mttr = cursor.fetchone()[0]
 
@@ -142,7 +142,7 @@ def get_mttr(user_id):
             if org_id:
                 cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
 
-            where_clauses = ["resolved_at IS NOT NULL", "started_at >= NOW() - %s::interval"]
+            where_clauses = ["resolved_at IS NOT NULL", "resolved_at >= NOW() - %s::interval"]
             params = [period]
 
             if severity_filter:
