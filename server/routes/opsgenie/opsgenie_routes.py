@@ -6,6 +6,8 @@ from typing import Any, Dict, Optional
 import requests
 from flask import Blueprint, jsonify, request
 
+import base64
+
 from routes.opsgenie.config import OPSGENIE_TIMEOUT, REGION_URLS
 from routes.opsgenie.tasks import process_opsgenie_event
 from utils.db.connection_pool import db_pool
@@ -149,6 +151,153 @@ class OpsGenieClient:
         return self._request("GET", "/v2/teams").json()
 
 
+class JSMOperationsClient:
+    """JSM Operations Management API client.
+
+    Uses Basic auth (email:api_token) against the JSM Ops REST API.
+    All management endpoints use /v1/ paths per Atlassian docs.
+    """
+
+    def __init__(self, email: str, api_token: str, cloud_id: str):
+        self.email = email
+        self.api_token = api_token
+        self.cloud_id = cloud_id
+        self.base_url = f"https://api.atlassian.com/jsm/ops/api/{cloud_id}"
+
+    @property
+    def headers(self) -> Dict[str, str]:
+        cred_str = f"{self.email}:{self.api_token}"
+        encoded = base64.b64encode(cred_str.encode()).decode()
+        return {
+            "Authorization": f"Basic {encoded}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        }
+
+    def _request(self, method: str, path: str, **kwargs) -> requests.Response:
+        url = f"{self.base_url}{path}"
+        try:
+            response = requests.request(
+                method, url, headers=self.headers, timeout=OPSGENIE_TIMEOUT, **kwargs
+            )
+        except requests.RequestException as exc:
+            logger.error("[JSM_OPS] %s %s network error: %s", method, url, exc, exc_info=True)
+            raise OpsGenieAPIError("Unable to reach JSM Operations API") from exc
+
+        if response.status_code == 429:
+            logger.warning("[JSM_OPS] Rate limited on %s %s", method, path)
+            raise OpsGenieAPIError("JSM Operations API rate limit reached. Please retry later.", status_code=429)
+
+        try:
+            response.raise_for_status()
+        except requests.HTTPError as exc:
+            logger.error(
+                "[JSM_OPS] %s %s failed (%s): %s",
+                method, url, response.status_code, response.text,
+            )
+            raise OpsGenieAPIError(response.text or str(exc), status_code=response.status_code) from exc
+
+        return response
+
+    def _normalize(self, resp: Any) -> Dict[str, Any]:
+        """Normalize JSM responses to OpsGenie's {"data": ...} format."""
+        if isinstance(resp, list):
+            return {"data": resp}
+        if isinstance(resp, dict):
+            if "values" in resp:
+                return {"data": resp["values"]}
+            if "data" not in resp and "id" in resp:
+                return {"data": resp}
+        return resp
+
+    # ── Validation ────────────────────────────────────────────────────
+    def validate_connection(self) -> Dict[str, Any]:
+        """Validate via alerts query — JSM has no /account endpoint."""
+        self._request("GET", "/v1/alerts", params={"limit": 1})
+        return {"data": {"name": "JSM Operations", "plan": {"name": "JSM"}}}
+
+    # ── Alerts ────────────────────────────────────────────────────────
+    def list_alerts(
+        self,
+        query: Optional[str] = None,
+        offset: int = 0,
+        limit: int = 50,
+        sort: str = "createdAt",
+        order: str = "desc",
+    ) -> Dict[str, Any]:
+        params: Dict[str, Any] = {
+            "offset": offset,
+            "limit": max(1, min(limit, 100)),
+            "sort": sort,
+            "order": order,
+        }
+        if query:
+            params["query"] = query
+        return self._normalize(self._request("GET", "/v1/alerts", params=params).json())
+
+    def get_alert(self, alert_id: str) -> Dict[str, Any]:
+        return self._normalize(self._request("GET", f"/v1/alerts/{alert_id}").json())
+
+    def get_alert_logs(self, alert_id: str) -> Dict[str, Any]:
+        return self._normalize(self._request("GET", f"/v1/alerts/{alert_id}/logs").json())
+
+    def get_alert_notes(self, alert_id: str) -> Dict[str, Any]:
+        return self._normalize(self._request("GET", f"/v1/alerts/{alert_id}/notes").json())
+
+    # ── Incidents (stubs — JSM incidents are Jira issues) ────────────
+    def list_incidents(self, **kwargs) -> Dict[str, Any]:
+        return {"data": [], "note": "JSM incidents are Jira issues. Use the Jira connector."}
+
+    def get_incident(self, incident_id: str) -> Dict[str, Any]:
+        return {"data": {}, "note": "JSM incidents are Jira issues. Use the Jira connector."}
+
+    def get_incident_timeline(self, incident_id: str) -> Dict[str, Any]:
+        return {"data": [], "note": "JSM incidents are Jira issues. Use the Jira connector."}
+
+    # ── Services ──────────────────────────────────────────────────────
+    def list_services(self, offset: int = 0, limit: int = 50) -> Dict[str, Any]:
+        url = f"https://api.atlassian.com/jsm/api/{self.cloud_id}/v1/services/"
+        params: Dict[str, Any] = {"offset": offset, "size": max(1, min(limit, 100))}
+        try:
+            response = requests.get(url, headers=self.headers, params=params, timeout=OPSGENIE_TIMEOUT)
+            response.raise_for_status()
+            return self._normalize(response.json())
+        except requests.RequestException as exc:
+            raise OpsGenieAPIError(f"Failed to list services: {exc}") from exc
+
+    # ── Schedules / On-Calls (team-scoped in JSM) ────────────────────
+    def get_on_calls(self, schedule_id: str) -> Dict[str, Any]:
+        if schedule_id:
+            try:
+                resp = self._request("GET", f"/v1/schedules/{schedule_id}/on-calls").json()
+                return self._normalize(resp)
+            except OpsGenieAPIError:
+                pass
+        # Fallback: get on-calls for all schedules
+        schedules = self._normalize(self._request("GET", "/v1/schedules").json()).get("data", [])
+        all_on_calls = []
+        for sched in schedules:
+            sched_id = sched.get("id")
+            if not sched_id:
+                continue
+            try:
+                oc = self._request("GET", f"/v1/schedules/{sched_id}/on-calls").json()
+                oc_data = self._normalize(oc).get("data", {})
+                if isinstance(oc_data, dict):
+                    oc_data["schedule_name"] = sched.get("name", "")
+                    all_on_calls.append(oc_data)
+            except OpsGenieAPIError:
+                continue
+        return {"data": all_on_calls}
+
+    def list_schedules(self) -> Dict[str, Any]:
+        return self._normalize(self._request("GET", "/v1/schedules").json())
+
+    # ── Teams ─────────────────────────────────────────────────────────
+    def list_teams(self) -> Dict[str, Any]:
+        return self._normalize(self._request("GET", "/v1/teams").json())
+
+
 # ── Credential helpers ────────────────────────────────────────────────
 
 
@@ -180,12 +329,21 @@ def _get_stored_opsgenie_credentials(user_id: str) -> Optional[Dict[str, Any]]:
         return None
 
 
-def _build_client_from_creds(creds: Dict[str, Any]) -> Optional[OpsGenieClient]:
+def _build_client_from_creds(creds: Dict[str, Any]) -> Optional["OpsGenieClient | JSMOperationsClient"]:
+    """Build the appropriate client based on auth_type in stored credentials."""
+    auth_type = creds.get("auth_type", "opsgenie")
+    if auth_type == "jsm_basic":
+        email = creds.get("email")
+        api_token = creds.get("api_token")
+        cloud_id = creds.get("cloud_id")
+        if not email or not api_token or not cloud_id:
+            return None
+        return JSMOperationsClient(email=email, api_token=api_token, cloud_id=cloud_id)
+    # Default: OpsGenie GenieKey
     api_key = creds.get("api_key")
     region = creds.get("region", "us")
     if not api_key:
         return None
-    # JSM-ready: later can check creds.get("auth_type") to return a JSMOperationsClient instead
     return OpsGenieClient(api_key=api_key, region=region)
 
 
@@ -201,6 +359,62 @@ def connect(user_id):
         logger.debug("Failed to parse JSON payload for OpsGenie connect")
         payload = {}
 
+    auth_type = (payload.get("authType") or "opsgenie").lower()
+
+    # ── JSM Operations: Basic auth (email + API token + site URL) ────
+    if auth_type == "jsm":
+        email = payload.get("email")
+        api_token = payload.get("apiToken")
+        site_url = (payload.get("siteUrl") or "").strip().rstrip("/")
+
+        if not email or not api_token or not site_url:
+            return jsonify({"error": "Email, API token, and site URL are required for JSM Operations"}), 400
+
+        # Resolve cloud ID from site URL
+        cloud_id = None
+        try:
+            tenant_url = f"{site_url}/_edge/tenant_info"
+            r = requests.get(tenant_url, timeout=10)
+            r.raise_for_status()
+            cloud_id = r.json().get("cloudId")
+        except Exception as exc:
+            logger.error("[OPSGENIE] Failed to resolve cloud ID from %s: %s", site_url, exc)
+            return jsonify({"error": f"Could not resolve cloud ID from {site_url}. Verify the site URL."}), 400
+
+        if not cloud_id:
+            return jsonify({"error": "Could not resolve cloud ID from site URL"}), 400
+
+        client = JSMOperationsClient(email=email, api_token=api_token, cloud_id=cloud_id)
+        try:
+            client.validate_connection()
+        except OpsGenieAPIError as exc:
+            logger.error("[OPSGENIE] JSM credential validation failed for user %s: %s", user_id, exc)
+            return jsonify({"error": "Failed to validate JSM Operations credentials. Check email, API token, and that JSM Operations is enabled on your site."}), 502
+
+        token_payload = {
+            "auth_type": "jsm_basic",
+            "email": email,
+            "api_token": api_token,
+            "cloud_id": cloud_id,
+            "site_url": site_url,
+            "validated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        try:
+            store_tokens_in_db(user_id, token_payload, "opsgenie")
+            logger.info("[OPSGENIE] Stored JSM credentials for user %s (site=%s)", user_id, site_url)
+        except Exception as exc:
+            logger.exception("[OPSGENIE] Failed to store JSM credentials: %s", exc)
+            return jsonify({"error": "Failed to store JSM Operations credentials"}), 500
+
+        return jsonify({
+            "success": True,
+            "authType": "jsm_basic",
+            "siteUrl": site_url,
+            "accountName": "JSM Operations",
+            "validated": True,
+        })
+
+    # ── OpsGenie GenieKey flow ───────────────────────────────────────
     api_key = payload.get("apiKey")
     region = payload.get("region", "us")
 
@@ -254,6 +468,8 @@ def status(user_id):
     if not creds:
         return jsonify({"connected": False})
 
+    auth_type = creds.get("auth_type", "opsgenie")
+
     client = _build_client_from_creds(creds)
     if not client:
         logger.warning("[OPSGENIE] Incomplete credentials for user %s", user_id)
@@ -264,14 +480,18 @@ def status(user_id):
         account_data = account_info.get("data", {})
     except OpsGenieAPIError as exc:
         logger.warning("[OPSGENIE] Status validation failed for user %s: %s", user_id, exc)
-        return jsonify({"connected": False, "error": "Failed to validate stored OpsGenie credentials"})
+        return jsonify({"connected": False, "error": "Failed to validate stored credentials"})
 
-    return jsonify({
+    result: Dict[str, Any] = {
         "connected": True,
         "region": creds.get("region"),
         "accountName": account_data.get("name"),
         "plan": account_data.get("plan"),
-    })
+        "authType": auth_type,
+    }
+    if auth_type == "jsm_basic":
+        result["siteUrl"] = creds.get("site_url")
+    return jsonify(result)
 
 
 @opsgenie_bp.route("/disconnect", methods=["DELETE", "POST", "OPTIONS"])
@@ -340,17 +560,31 @@ def webhook_url(user_id):
 
     url = f"{base_url}/opsgenie/webhook/{user_id}"
 
-    instructions = [
-        "1. Navigate to Settings → Integrations in OpsGenie.",
-        "2. Add a new Webhook (Outgoing) integration.",
-        "3. Paste the URL above into the webhook URL field.",
-        "4. Select the alert actions you want to receive (e.g. Create, Acknowledge, Close).",
-        "5. Save the integration and test the webhook to verify connectivity.",
-    ]
+    # Determine auth type for instructions
+    creds = _get_stored_opsgenie_credentials(user_id)
+    auth_type = creds.get("auth_type", "opsgenie") if creds else "opsgenie"
+
+    if auth_type == "jsm_basic":
+        instructions = [
+            "1. Navigate to Settings → Integrations in JSM Operations.",
+            "2. Add a new Outgoing Webhook integration.",
+            "3. Paste the URL above into the webhook URL field.",
+            "4. Select the alert actions you want to receive (e.g. Create, Acknowledge, Close).",
+            "5. Save the integration and test the webhook to verify connectivity.",
+        ]
+    else:
+        instructions = [
+            "1. Navigate to Settings → Integrations in OpsGenie.",
+            "2. Add a new Webhook (Outgoing) integration.",
+            "3. Paste the URL above into the webhook URL field.",
+            "4. Select the alert actions you want to receive (e.g. Create, Acknowledge, Close).",
+            "5. Save the integration and test the webhook to verify connectivity.",
+        ]
 
     return jsonify({
         "webhookUrl": url,
         "instructions": instructions,
+        "authType": auth_type,
     })
 
 

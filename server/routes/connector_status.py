@@ -9,6 +9,7 @@ here.  This is the single source of truth for "is this provider actually
 connected right now?"
 """
 
+import base64
 import logging
 import time as _time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -480,7 +481,35 @@ def _check_pagerduty(creds: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _check_opsgenie(creds: Dict[str, Any]) -> Dict[str, Any]:
-    """Validate OpsGenie credentials by calling the account API."""
+    """Validate OpsGenie / JSM Operations credentials."""
+    auth_type = creds.get("auth_type", "opsgenie")
+
+    # ── JSM Operations (Basic auth: email + api_token) ──────────────
+    if auth_type == "jsm_basic":
+        cloud_id = creds.get("cloud_id")
+        email = creds.get("email")
+        api_token = creds.get("api_token")
+        if not cloud_id or not email or not api_token:
+            return {"connected": False}
+
+        url = f"https://api.atlassian.com/jsm/ops/api/{cloud_id}/v1/alerts"
+        cred_str = f"{email}:{api_token}"
+        encoded = base64.b64encode(cred_str.encode()).decode()
+        headers = {"Authorization": f"Basic {encoded}", "Accept": "application/json"}
+
+        try:
+            r = requests.get(url, headers=headers, params={"limit": 1}, timeout=HTTP_TIMEOUT)
+            if r.ok:
+                return {
+                    "connected": True,
+                    "authType": auth_type,
+                    "siteUrl": creds.get("site_url"),
+                }
+            return {"connected": False}
+        except Exception:
+            return {"connected": False}
+
+    # ── OpsGenie GenieKey (unchanged) ────────────────────────────────
     api_key = creds.get("api_key")
     if not api_key:
         return {"connected": False}

@@ -121,7 +121,12 @@ def process_opsgenie_event(
                     )
                     return
 
-                logger.info("[OPSGENIE][WEBHOOK] Stored event for user %s", user_id)
+                logger.info("[OPSGENIE][WEBHOOK] Stored event %s (action=%s) for user %s", event_id, action, user_id)
+
+                # Only create incident + trigger RCA on alert creation
+                if action.lower() not in ("create", "create alert"):
+                    logger.info("[OPSGENIE][WEBHOOK] Action '%s' is not a create — skipping incident creation", action)
+                    return
 
                 # Create incident record
                 severity = _extract_severity(payload)
