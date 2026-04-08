@@ -83,7 +83,11 @@ atexit.register(_shutdown_pool)
 
 
 def _resolve_token(token: str) -> tuple[str, str]:
-    """Look up an MCP API token and return (user_id, org_id)."""
+    """Look up an MCP API token and return (user_id, org_id).
+
+    Uses a direct superuser pool intentionally -- token resolution is a
+    bootstrap step that precedes org context, so RLS does not apply.
+    """
     pool = _get_pool()
     conn = pool.getconn()
     ok = False
@@ -178,7 +182,7 @@ async def get_incident(incident_id: str) -> dict:
 async def ask_incident(incident_id: str, question: str) -> dict:
     """Ask Aurora AI a question about an incident. Posts the question and polls for the response."""
     result = await _api("POST", f"/api/incidents/{incident_id}/chat",
-                        body={"message": question}, timeout=30)
+                        body={"question": question, "mode": "ask"}, timeout=30)
     session_id = result.get("session_id")
     if not session_id:
         return result

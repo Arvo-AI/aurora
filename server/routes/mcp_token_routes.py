@@ -36,7 +36,10 @@ def create_mcp_token(user_id):
         expires_days = data.get('expires_days')
         token = _generate_token()
         if expires_days is not None:
-            expires_days = int(expires_days)
+            try:
+                expires_days = int(expires_days)
+            except (ValueError, TypeError):
+                return jsonify({'error': 'expires_days must be a positive integer'}), 400
             if expires_days < 1:
                 return jsonify({'error': 'expires_days must be a positive integer'}), 400
             expires_at = datetime.now(timezone.utc) + timedelta(days=expires_days)
@@ -49,6 +52,8 @@ def create_mcp_token(user_id):
         conn = connect_to_db_as_user()
         try:
             cursor = conn.cursor(cursor_factory=RealDictCursor)
+            cursor.execute("SET myapp.current_user_id = %s", (user_id,))
+            cursor.execute("SET myapp.current_org_id = %s", (org_id,))
             cursor.execute("""
                 INSERT INTO mcp_tokens (token, user_id, org_id, name, expires_at, status)
                 VALUES (%s, %s, %s, %s, %s, 'active')
@@ -80,14 +85,20 @@ def create_mcp_token(user_id):
 @limiter.limit("30 per minute")
 def list_mcp_tokens(user_id):
     try:
+        org_id = get_org_id_from_request()
+        if not org_id:
+            return jsonify({'error': 'Organization context required'}), 400
+
         conn = connect_to_db_as_user()
         try:
             cursor = conn.cursor(cursor_factory=RealDictCursor)
+            cursor.execute("SET myapp.current_user_id = %s", (user_id,))
+            cursor.execute("SET myapp.current_org_id = %s", (org_id,))
             cursor.execute("""
                 SELECT id, name, created_at, last_used_at, expires_at, status,
                        CONCAT(SUBSTRING(token, 1, 20), '...') as token_preview
-                FROM mcp_tokens WHERE user_id = %s ORDER BY created_at DESC
-            """, (user_id,))
+                FROM mcp_tokens WHERE user_id = %s AND org_id = %s ORDER BY created_at DESC
+            """, (user_id, org_id))
             tokens = cursor.fetchall()
             cursor.close()
         finally:
@@ -109,12 +120,18 @@ def list_mcp_tokens(user_id):
 @limiter.limit("10 per minute;30 per hour")
 def revoke_mcp_token(user_id, token_id):
     try:
+        org_id = get_org_id_from_request()
+        if not org_id:
+            return jsonify({'error': 'Organization context required'}), 400
+
         conn = connect_to_db_as_user()
         try:
             cursor = conn.cursor(cursor_factory=RealDictCursor)
+            cursor.execute("SET myapp.current_user_id = %s", (user_id,))
+            cursor.execute("SET myapp.current_org_id = %s", (org_id,))
             cursor.execute(
-                "UPDATE mcp_tokens SET status = 'revoked' WHERE id = %s AND user_id = %s RETURNING id",
-                (token_id, user_id)
+                "UPDATE mcp_tokens SET status = 'revoked' WHERE id = %s AND user_id = %s AND org_id = %s RETURNING id",
+                (token_id, user_id, org_id)
             )
             result = cursor.fetchone()
             conn.commit()
