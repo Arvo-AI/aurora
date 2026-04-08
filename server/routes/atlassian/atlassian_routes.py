@@ -141,7 +141,6 @@ def connect(user_id):
             if product == "confluence":
                 user_payload = _validate_confluence(pat_token, base_url, "pat", None)
             elif product == "jsm_ops":
-                # JSM PAT uses Basic auth (email:api_token) against the cloud API
                 cloud_id = data.get("cloudId")
                 if not cloud_id:
                     results[product] = {"connected": False, "error": "cloudId required for JSM Operations PAT"}
@@ -299,13 +298,18 @@ def status(user_id):
         auth_type = (creds.get("auth_type") or "oauth").lower()
 
         # For jsm_ops, only report connected if creds are actually JSM
-        if product == "jsm_ops" and auth_type != "jsm_basic":
+        if product == "jsm_ops" and auth_type not in ("jsm_basic", "jsm_pat", "jsm_oauth"):
             result[product] = {"connected": False}
             continue
 
         base_url = creds.get("base_url") or creds.get("site_url") or ""
         cloud_id = creds.get("cloud_id") if auth_type in ("oauth", "jsm_oauth") else None
-        token = creds.get("pat_token") if auth_type == "pat" else creds.get("access_token")
+        if auth_type == "pat":
+            token = creds.get("pat_token")
+        elif auth_type == "jsm_pat":
+            token = creds.get("api_token")
+        else:
+            token = creds.get("access_token")
 
         if not token:
             result[product] = {"connected": False}

@@ -528,6 +528,7 @@ def _check_opsgenie(creds: Dict[str, Any]) -> Dict[str, Any]:
                 "region": region,
                 "accountName": data.get("name"),
                 "plan": data.get("plan", {}).get("name") if isinstance(data.get("plan"), dict) else None,
+                "authType": auth_type,
             }
         return {"connected": False}
     except Exception:

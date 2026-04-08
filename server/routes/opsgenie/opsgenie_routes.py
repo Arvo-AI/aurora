@@ -257,7 +257,8 @@ class JSMOperationsClient:
             return {"data": [], "note": "Site URL not configured. Cannot query JSM incidents."}
         jql = 'issuetype = "[System] Incident" ORDER BY created DESC'
         if query:
-            jql = f'issuetype = "[System] Incident" AND (summary ~ "{query}" OR description ~ "{query}") ORDER BY created DESC'
+            sanitized = query.replace("\\", "\\\\").replace('"', '\\"')
+            jql = f'issuetype = "[System] Incident" AND (summary ~ "{sanitized}" OR description ~ "{sanitized}") ORDER BY created DESC'
         payload = {
             "jql": jql,
             "maxResults": max(1, min(limit, 100)),
@@ -323,8 +324,8 @@ class JSMOperationsClient:
             try:
                 resp = self._request("GET", f"/v1/schedules/{schedule_id}/on-calls").json()
                 return self._normalize(resp)
-            except OpsGenieAPIError:
-                pass
+            except OpsGenieAPIError as exc:
+                logger.warning("[JSM_OPS] Failed to fetch on-calls for schedule %s: %s", schedule_id, exc)
         # Fallback: get on-calls for all schedules
         schedules = self._normalize(self._request("GET", "/v1/schedules").json()).get("data", [])
         all_on_calls = []
@@ -423,7 +424,14 @@ def connect(user_id):
         if not email or not api_token or not site_url:
             return jsonify({"error": "Email, API token, and site URL are required for JSM Operations"}), 400
 
-        # Resolve cloud ID from site URL
+        # Validate and resolve cloud ID from site URL
+        from urllib.parse import urlparse
+        parsed = urlparse(site_url)
+        if parsed.scheme != "https" or not parsed.hostname:
+            return jsonify({"error": "Site URL must use HTTPS (e.g., https://yourteam.atlassian.net)"}), 400
+        if not parsed.hostname.endswith((".atlassian.net", ".atlassian.com")):
+            return jsonify({"error": "Site URL must be an Atlassian domain (*.atlassian.net)"}), 400
+
         cloud_id = None
         try:
             tenant_url = f"{site_url}/_edge/tenant_info"
@@ -619,11 +627,13 @@ def webhook_url(user_id):
 
     if auth_type == "jsm_basic":
         instructions = [
-            "1. Navigate to Settings → Integrations in JSM Operations.",
-            "2. Add a new Outgoing Webhook integration.",
-            "3. Paste the URL above into the webhook URL field.",
-            "4. Select the alert actions you want to receive (e.g. Create, Acknowledge, Close).",
-            "5. Save the integration and test the webhook to verify connectivity.",
+            "1. In Jira, click the Settings gear (top right) → under Jira admin settings, click Operations.",
+            "2. In the left sidebar, click Integrations.",
+            "3. Click Add integration, search for Webhook, and add it.",
+            "4. Click Edit settings, select 'Authenticate with a Webhook account', and paste the URL above.",
+            "5. Check 'Add alert description to payload' and 'Add alert details to payload', then Save.",
+            "6. Under Alert actions, select Create, Acknowledge, Close, and any others you want.",
+            "7. Click Turn on integration.",
         ]
     else:
         instructions = [
@@ -684,7 +694,8 @@ def list_ingested_events(user_id):
                 count_params.append(type_filter)
 
             cursor.execute(count_query, count_params)
-            total = cursor.fetchone()[0]
+            count_row = cursor.fetchone()
+            total = count_row[0] if count_row else 0
 
         events = []
         for row in rows:
