@@ -16,6 +16,7 @@ const publicRoutes = [
   "/api/auth/csrf",       // NextAuth CSRF
   "/api/auth/change-password", // Password change API
   "/api/auth/setup-org",  // Org setup for org-less users
+  "/api/ping",            // Connection health check
 ]
 
 // Routes that should redirect authenticated users away

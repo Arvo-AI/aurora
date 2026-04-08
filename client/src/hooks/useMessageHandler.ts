@@ -144,6 +144,24 @@ export const useMessageHandler = ({
       return;
     }
 
+    if (message.type === 'error' && message.data) {
+      if (streaming.checkIsStreaming()) {
+        const finalMessage = streaming.finishStreamingMessage();
+        if (finalMessage) {
+          onNewMessage(finalMessage);
+        }
+      }
+      const errorText = message.data.text || message.data.message || 'An unexpected error occurred.';
+      onNewMessage({
+        id: generateNumericId(),
+        sender: 'bot',
+        text: `⚠️ ${errorText}`,
+        severity: 'error',
+      });
+      onSendingStateChange(false);
+      return;
+    }
+
     // Handle tool calls - create a separate message immediately
     if (message.type === 'tool_call' && message.data) {
       //console.log('Tool call received:', message.data);
