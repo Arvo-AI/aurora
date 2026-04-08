@@ -5,8 +5,8 @@ set -euo pipefail
 # for deployment on airtight / restricted-egress VMs.
 #
 # Run this on a machine with internet access:
-#   ./scripts/package-airtight.sh                          # default: linux/amd64
-#   PLATFORM=linux/arm64 ./scripts/package-airtight.sh     # for ARM servers
+#   ./deploy/package-airtight.sh                          # default: linux/amd64
+#   PLATFORM=linux/arm64 ./deploy/package-airtight.sh     # for ARM servers
 #
 # Transfer the resulting .tar.gz to the target VM, then:
 #   make prod-airtight AIRTIGHT_BUNDLE=aurora-airtight-<version>.tar.gz
@@ -27,10 +27,14 @@ THIRD_PARTY_IMAGES=(
   "searxng/searxng:2025.5.8-7ca24eee4"
   "chrislusf/seaweedfs:4.07"
   "amazon/aws-cli:2.34.6"
+  "minio/minio:RELEASE.2025-04-22T22-12-26Z"
+  "minio/mc:RELEASE.2025-04-16T18-13-26Z"
   "memgraph/memgraph-mage:3.8.1"
   "memgraph/lab:3.8.0"
   "cr.weaviate.io/semitechnologies/weaviate:1.27.6"
   "cr.weaviate.io/semitechnologies/transformers-inference:sentence-transformers-all-MiniLM-L6-v2"
+  "registry.k8s.io/ingress-nginx/controller:v1.8.1"
+  "registry.k8s.io/ingress-nginx/kube-webhook-certgen:v20230407"
 )
 
 AURORA_IMAGES=(

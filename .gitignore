@@ -91,6 +91,7 @@ config/searxng/
 # Airtight deployment bundles
 aurora-airtight-*.tar.gz
 aurora-airtight-*.tar.gz.sha256
+aurora-*.tar.gz
 
 # Vault init credentials (written by k8s-deploy.sh)
 vault-init-*.txt

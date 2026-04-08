@@ -41,7 +41,7 @@ help:
 	@echo "                             Use AIRTIGHT_BUNDLE=<file> to specify the tarball"
 	@echo ""
 	@echo "VM Deployment (single server / cloud VM):"
-	@echo "  make vm-deploy          - Interactive setup: installs Docker, configures .env, and starts Aurora"
+	@echo "  make vm-deploy          - Interactive setup: installs Docker, configures .env, and starts Aurora (via aurora-deploy.sh)"
 	@echo "                            Supports --prebuilt (default), --build, --skip-docker, --hostname=<host>"
 	@echo ""
 	@echo "Kubernetes Deployment:"
@@ -151,12 +151,9 @@ init:
 		cp .env.example .env; \
 	fi
 	@chmod +x scripts/generate-local-secrets.sh scripts/init-prod-vault.sh
-	@echo "Generating secure secrets..."
 	@./scripts/generate-local-secrets.sh
-	@echo ""
-	@echo "✓ Setup complete! Next steps:"
-	@echo "  1. Edit .env and add your LLM API key (OPENROUTER_API_KEY, OPENAI_API_KEY, or ANTHROPIC_API_KEY)"
-	@echo "  2. Run: make dev (for development), make prod-prebuilt (pull images), or make prod-local (build from source)"
+	@echo "✓ Setup complete!"
+	@echo "  Run: make dev (for development), make prod-prebuilt (pull images), or make prod-local (build from source)"
 
 prod-prebuilt:
 	@if [ ! -f .env ]; then \
@@ -231,8 +228,8 @@ prod-local-nuke:
 
 # Airtight deployment commands (restricted-egress / enterprise VMs)
 package-airtight:
-	@chmod +x scripts/package-airtight.sh
-	@./scripts/package-airtight.sh
+	@chmod +x deploy/package-airtight.sh
+	@./deploy/package-airtight.sh
 
 prod-airtight:
 	@if [ ! -f .env ]; then \
@@ -321,8 +318,8 @@ deploy: deploy-build
 	@echo "  kubectl get pods -n aurora"
 
 vm-deploy:
-	@chmod +x deploy/vm-deploy.sh
-	@deploy/vm-deploy.sh $(filter-out $@,$(MAKECMDGOALS))
+	@chmod +x deploy/aurora-deploy.sh
+	@deploy/aurora-deploy.sh $(filter-out $@,$(MAKECMDGOALS))
 
 %:
 	@:

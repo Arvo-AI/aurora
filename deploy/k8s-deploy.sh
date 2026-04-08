@@ -43,21 +43,7 @@ done
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
 
-prompt() {
-  local var="$1" msg="$2" default="${3:-}"
-  if [[ -n "$default" ]]; then
-    read -rp "$msg [$default]: " val
-    printf -v "$var" '%s' "${val:-$default}"
-  else
-    read -rp "$msg: " val
-    while [[ -z "$val" ]]; do read -rp "$msg (required): " val; done
-    printf -v "$var" '%s' "$val"
-  fi
-}
-
-info() { echo -e "\033[1;34m→\033[0m $1"; }
-ok()   { echo -e "\033[1;32m✓\033[0m $1"; }
-warn() { echo -e "\033[1;33m!\033[0m $1"; }
+source "$SCRIPT_DIR/lib/common.sh"
 
 ensure_nginx_ingress() {
   if kubectl get ns ingress-nginx &>/dev/null && \
@@ -478,7 +464,7 @@ if $PRIVATE_MODE; then
     echo "    ${PRIVATE_INGRESS_IP}  ${PRIVATE_HOSTNAME} api.${PRIVATE_HOSTNAME} ws.${PRIVATE_HOSTNAME}"
     echo ""
     read -rp "Add this entry to your local /etc/hosts now? [y/N] " ADD_HOSTS
-    if [[ "${ADD_HOSTS,,}" == "y" ]]; then
+    if [[ "$ADD_HOSTS" == "y" || "$ADD_HOSTS" == "Y" ]]; then
       echo "${PRIVATE_INGRESS_IP}  ${PRIVATE_HOSTNAME} api.${PRIVATE_HOSTNAME} ws.${PRIVATE_HOSTNAME}" | sudo tee -a /etc/hosts >/dev/null
       ok "Added to /etc/hosts"
     fi

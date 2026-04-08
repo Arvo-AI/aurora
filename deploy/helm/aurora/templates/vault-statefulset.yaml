@@ -30,7 +30,7 @@ spec:
         fsGroup: 1000
       containers:
         - name: vault
-          image: hashicorp/vault:1.15
+          image: {{ include "aurora.thirdPartyImage" (dict "root" $ "image" "vault:1.15" "default" "hashicorp/vault:1.15") }}
           imagePullPolicy: IfNotPresent
           command: ["/bin/sh", "-c"]
           args: 

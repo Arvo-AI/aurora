@@ -210,34 +210,25 @@ To stop: `make down` | Logs: `make logs`
 
 If you want cloud connectors, add provider credentials referenced in `.env.example`.
 
-### Pin a specific version
+### Deploy Anywhere
+
+Aurora has a single deployment wizard that handles every environment — personal computer, VM, or Kubernetes cluster. On any machine with internet:
 
 ```bash
-make prod-prebuilt VERSION=v1.2.3
+curl -fsSL https://raw.githubusercontent.com/arvo-ai/aurora/main/deploy/bootstrap.sh | bash
 ```
 
-### Build from source
+The wizard installs prerequisites, clones the repo, and walks you through setup — Docker installation, LLM configuration, Vault, health checks, and more.
+
+If you already have the repo cloned, run the wizard directly:
 
 ```bash
-make prod-local
+./deploy/deploy.sh
 ```
 
-### Deploy on Kubernetes
+**Air-gapped / restricted network?** Download the [airtight bundle](https://storage.googleapis.com/aurora-airtight-bucket/index.html) on a connected machine, transfer it to the target, extract the source, and run `./deploy/deploy.sh` — the wizard detects the environment and adapts.
 
-```bash
-helm install aurora ./helm/aurora
-```
-
-### Air-gapped / restricted network
-
-Prebuilt airtight bundles (all images in one tarball) are published on every release and push to `main`. [Browse available bundles](https://storage.googleapis.com/aurora-airtight-bucket/index.html) and download with `curl`:
-
-```bash
-# Replace <version> with a release tag (e.g. v1.2.3) or commit SHA
-curl -LO https://storage.googleapis.com/aurora-airtight-bucket/aurora-airtight-<version>-amd64.tar.gz
-```
-
-Transfer the tarball to the target VM and run `make prod-airtight AIRTIGHT_BUNDLE=<file>`. See the [air-tight deployment guide](https://arvo-ai.github.io/aurora/docs/deployment/vm-deployment#secure-deployment-air-tight) for full instructions.
+See the [deployment overview](https://arvo-ai.github.io/aurora/docs/deployment/overview) for the full pipeline diagram and links to detailed guides.
 
 For detailed deployment guides, see the **[Documentation](https://arvo-ai.github.io/aurora/)**.
 

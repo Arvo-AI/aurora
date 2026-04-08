@@ -30,7 +30,7 @@ spec:
         fsGroup: 70
       containers:
         - name: postgres
-          image: postgres:15-alpine
+          image: {{ include "aurora.thirdPartyImage" (dict "root" $ "image" "postgres:15-alpine" "default" "postgres:15-alpine") }}
           imagePullPolicy: IfNotPresent
           securityContext:
             allowPrivilegeEscalation: false

@@ -20,7 +20,7 @@ spec:
       automountServiceAccountToken: false
       containers:
         - name: transformers
-          image: cr.weaviate.io/semitechnologies/transformers-inference:sentence-transformers-all-MiniLM-L6-v2
+          image: {{ include "aurora.thirdPartyImage" (dict "root" $ "image" "transformers-inference:sentence-transformers-all-MiniLM-L6-v2" "default" "cr.weaviate.io/semitechnologies/transformers-inference:sentence-transformers-all-MiniLM-L6-v2") }}
           imagePullPolicy: IfNotPresent
           securityContext:
             allowPrivilegeEscalation: false
