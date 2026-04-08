@@ -606,6 +606,27 @@ def initialize_tables():
                     CREATE INDEX IF NOT EXISTS idx_pagerduty_events_status ON pagerduty_events(incident_status);
                     CREATE INDEX IF NOT EXISTS idx_pagerduty_events_received_at ON pagerduty_events(received_at DESC);
                 """,
+                "opsgenie_events": """
+                    CREATE TABLE IF NOT EXISTS opsgenie_events (
+                        id SERIAL PRIMARY KEY,
+                        user_id VARCHAR(255) NOT NULL,
+                        org_id VARCHAR(255),
+                        action VARCHAR(100),
+                        alert_id VARCHAR(255),
+                        alert_message TEXT,
+                        priority VARCHAR(10),
+                        status VARCHAR(50),
+                        source VARCHAR(255),
+                        payload JSONB NOT NULL,
+                        received_at TIMESTAMP NOT NULL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+
+                    CREATE INDEX IF NOT EXISTS idx_opsgenie_events_user_id ON opsgenie_events(user_id, received_at DESC);
+                    CREATE INDEX IF NOT EXISTS idx_opsgenie_events_alert_id ON opsgenie_events(alert_id);
+                    CREATE INDEX IF NOT EXISTS idx_opsgenie_events_received_at ON opsgenie_events(received_at DESC);
+                    CREATE INDEX IF NOT EXISTS idx_opsgenie_events_status ON opsgenie_events(status);
+                """,
                 "incidents": """
                      CREATE TABLE IF NOT EXISTS incidents (
                          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -1113,6 +1134,7 @@ def initialize_tables():
             rls_tables.append("jenkins_deployment_events")
             rls_tables.append("spinnaker_deployment_events")
             rls_tables.append("dynatrace_problems")
+            rls_tables.append("opsgenie_events")
 
             # Add incidents table
             # Note: incident_suggestions and incident_thoughts are child tables with CASCADE DELETE
@@ -1717,7 +1739,7 @@ def initialize_tables():
             _org_id_tables = list(set(rls_tables + [
                 "users", "workspaces", "aurora_deployments",
                 "cloud_feed_metadata", "cloud_ingestion_state",
-                "pagerduty_events", "knowledge_base_memory",
+                "pagerduty_events", "opsgenie_events", "knowledge_base_memory",
                 "knowledge_base_documents",
             ]))
             for tbl in _org_id_tables:
@@ -1873,7 +1895,7 @@ def initialize_tables():
                 "deployment_tasks", "deployments", "chat_sessions",
                 "llm_usage_tracking", "cloud_feed_metadata", "cloud_ingestion_state",
                 "grafana_alerts", "datadog_events", "netdata_alerts",
-                "pagerduty_events", "incidents", "incident_alerts",
+                "pagerduty_events", "opsgenie_events", "incidents", "incident_alerts",
                 "rca_notification_emails", "splunk_alerts",
                 "jenkins_deployment_events", "dynatrace_problems",
                 "bigpanda_events", "kubectl_agent_tokens",

@@ -157,6 +157,10 @@ CORS(app, origins=FRONTEND_URL, supports_credentials=True,
                          "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
                                            "Authorization", "X-Provider-Preference"],
                          "methods": ["GET", "POST", "DELETE", "OPTIONS", "PATCH"]},
+        r"/opsgenie/*": {"origins": FRONTEND_URL, "supports_credentials": True,
+                         "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With",
+                                           "X-User-ID", "Authorization", "X-Provider-Preference"],
+                         "methods": ["GET", "POST", "DELETE", "OPTIONS"]},
         r"/jenkins/*": {"origins": FRONTEND_URL, "supports_credentials": True,
                         "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
                                           "Authorization", "X-Provider-Preference"],
@@ -343,6 +347,11 @@ import routes.newrelic.tasks  # noqa: F401
 # --- PagerDuty Integration Routes ---
 from routes.pagerduty.pagerduty_routes import pagerduty_bp  # noqa: F401
 app.register_blueprint(pagerduty_bp, url_prefix="/pagerduty")
+
+# --- OpsGenie Integration Routes ---
+from routes.opsgenie import bp as opsgenie_bp  # noqa: F401
+import routes.opsgenie.tasks  # noqa: F401
+app.register_blueprint(opsgenie_bp, url_prefix="/opsgenie")
 
 # --- Knowledge Base Routes ---
 from routes.knowledge_base import bp as knowledge_base_bp  # noqa: F401

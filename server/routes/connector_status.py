@@ -9,6 +9,7 @@ here.  This is the single source of truth for "is this provider actually
 connected right now?"
 """
 
+import base64
 import logging
 import time as _time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -479,6 +480,61 @@ def _check_pagerduty(creds: Dict[str, Any]) -> Dict[str, Any]:
             return {"connected": False}
 
 
+def _check_opsgenie(creds: Dict[str, Any]) -> Dict[str, Any]:
+    """Validate OpsGenie / JSM Operations credentials."""
+    auth_type = creds.get("auth_type", "opsgenie")
+
+    # ── JSM Operations (Basic auth: email + api_token) ──────────────
+    if auth_type == "jsm_basic":
+        cloud_id = creds.get("cloud_id")
+        email = creds.get("email")
+        api_token = creds.get("api_token")
+        if not cloud_id or not email or not api_token:
+            return {"connected": False}
+
+        url = f"https://api.atlassian.com/jsm/ops/api/{cloud_id}/v1/alerts"
+        cred_str = f"{email}:{api_token}"
+        encoded = base64.b64encode(cred_str.encode()).decode()
+        headers = {"Authorization": f"Basic {encoded}", "Accept": "application/json"}
+
+        try:
+            r = requests.get(url, headers=headers, params={"limit": 1}, timeout=HTTP_TIMEOUT)
+            if r.ok:
+                return {
+                    "connected": True,
+                    "authType": auth_type,
+                    "siteUrl": creds.get("site_url"),
+                }
+            return {"connected": False}
+        except Exception:
+            return {"connected": False}
+
+    # ── OpsGenie GenieKey (unchanged) ────────────────────────────────
+    api_key = creds.get("api_key")
+    if not api_key:
+        return {"connected": False}
+    region = creds.get("region", "us")
+    base_url = "https://api.eu.opsgenie.com" if region == "eu" else "https://api.opsgenie.com"
+    try:
+        r = requests.get(
+            f"{base_url}/v2/account",
+            headers={"Authorization": f"GenieKey {api_key}"},
+            timeout=HTTP_TIMEOUT,
+        )
+        if r.ok:
+            data = r.json().get("data", {})
+            return {
+                "connected": True,
+                "region": region,
+                "accountName": data.get("name"),
+                "plan": data.get("plan", {}).get("name") if isinstance(data.get("plan"), dict) else None,
+                "authType": auth_type,
+            }
+        return {"connected": False}
+    except Exception:
+        return {"connected": False}
+
+
 def _check_dynatrace(creds: Dict[str, Any]) -> Dict[str, Any]:
     """Mirrors /dynatrace/connect validation — live API call via token lookup."""
     api_token = creds.get("api_token")
@@ -587,6 +643,7 @@ PROVIDER_CHECKERS = {
     "sharepoint": _check_sharepoint,
     "spinnaker": _check_spinnaker,
     "pagerduty": _check_pagerduty,
+    "opsgenie":      _check_opsgenie,
     "dynatrace": _check_dynatrace,
     "bigpanda": _check_bigpanda,
     "tailscale": _check_tailscale,

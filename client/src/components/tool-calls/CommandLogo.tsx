@@ -228,6 +228,14 @@ const logos = {
       onError={(e) => console.error('Failed to load Confluence logo:', e)}
     />
   ),
+  opsgenie: (
+    <img
+      src="/opsgenie.svg"
+      className="w-4 h-4 min-w-4 min-h-4 object-contain"
+      alt="OpsGenie / JSM"
+      onError={(e) => console.error('Failed to load OpsGenie logo:', e)}
+    />
+  ),
   web: (
     <svg
       className="w-4 h-4 min-w-4 min-h-4 text-blue-600 dark:text-blue-400"
@@ -361,6 +369,11 @@ const getLogoForCommand = (command: string | any, toolName: string, provider?: s
   // Confluence tools
   if (tool.startsWith('confluence_') || tool === 'confluence') {
     return 'confluence'
+  }
+
+  // OpsGenie / JSM Operations tools
+  if (tool === 'query_opsgenie' || tool.includes('opsgenie')) {
+    return 'opsgenie'
   }
 
   // IAC tools

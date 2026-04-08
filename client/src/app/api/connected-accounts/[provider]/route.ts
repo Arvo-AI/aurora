@@ -24,7 +24,7 @@ export async function DELETE(
     const { provider } = await context.params
 
     // Validate provider
-    if (!['gcp', 'azure', 'aws', 'github', 'grafana', 'datadog', 'netdata', 'ovh', 'scaleway', 'tailscale', 'slack', 'splunk', 'dynatrace', 'confluence', 'jira', 'sharepoint', 'coroot', 'thousandeyes', 'jenkins', 'cloudbees', 'bigpanda', 'spinnaker', 'newrelic'].includes(provider)) {
+    if (!['gcp', 'azure', 'aws', 'github', 'grafana', 'datadog', 'netdata', 'ovh', 'scaleway', 'tailscale', 'slack', 'splunk', 'dynatrace', 'confluence', 'jira', 'sharepoint', 'coroot', 'thousandeyes', 'jenkins', 'cloudbees', 'bigpanda', 'spinnaker', 'newrelic', 'opsgenie'].includes(provider)) {
       return NextResponse.json(
         { error: 'Invalid provider' },
         { status: 400 }
@@ -401,6 +401,25 @@ export async function DELETE(
 
       const data = await response.json()
       return NextResponse.json(data)
+    }
+
+    // Special handling for OpsGenie
+    if (provider === 'opsgenie') {
+      const backendResponse = await fetch(`${API_BASE_URL}/opsgenie/disconnect`, {
+        method: 'DELETE',
+        headers: authHeaders,
+        credentials: 'include',
+      })
+
+      if (!backendResponse.ok) {
+        const text = await backendResponse.text()
+        return NextResponse.json(
+          { error: text || 'Failed to disconnect OpsGenie' },
+          { status: backendResponse.status }
+        )
+      }
+
+      return NextResponse.json({ success: true })
     }
 
     // Special handling for BigPanda

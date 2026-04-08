@@ -41,6 +41,7 @@ SUPPORTED_SECRET_PROVIDERS: Set[str] = {
     "datadog",  # Datadog connector tokens
     "netdata",  # Netdata connector tokens
     "pagerduty", # PagerDuty connector tokens
+    "opsgenie",  # OpsGenie connector tokens
     "splunk",    # Splunk connector tokens
     "ovh",      # OVH Cloud
     "scaleway", # Scaleway Cloud
