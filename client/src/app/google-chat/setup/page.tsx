@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import {
@@ -123,20 +123,20 @@ export default function GoogleChatSetupPage() {
     }
   }, [searchParams, toast, router]);
 
-  // Auto-trigger OAuth when env is configured (skip if returning from an error)
-  useEffect(() => {
-    const hasError = searchParams.get("error");
-    const hasSuccess = searchParams.get("success");
-    if (!isLoading && envCheck?.configured && !hasError && !hasSuccess) {
-      handleConnect();
-    }
-  }, [isLoading, envCheck]);
-
-  const handleConnect = async () => {
+  const handleConnect = useCallback(async () => {
     setIsConnecting(true);
     try {
       const response = await googleChatService.connect();
       if (response.oauth_url) {
+        if (!response.oauth_url.startsWith("https://accounts.google.com")) {
+          toast({
+            title: "Connection Failed",
+            description: "Received an unexpected OAuth URL. Please contact your administrator.",
+            variant: "destructive",
+          });
+          setIsConnecting(false);
+          return;
+        }
         window.location.href = response.oauth_url;
       } else if (response.error) {
         toast({
@@ -155,7 +155,16 @@ export default function GoogleChatSetupPage() {
       });
       setIsConnecting(false);
     }
-  };
+  }, [toast]);
+
+  // Auto-trigger OAuth when env is configured (skip if returning from an error)
+  useEffect(() => {
+    const hasError = searchParams.get("error");
+    const hasSuccess = searchParams.get("success");
+    if (!isLoading && envCheck?.configured && !hasError && !hasSuccess) {
+      handleConnect();
+    }
+  }, [isLoading, envCheck, handleConnect, searchParams]);
 
   if (isLoading || isConnecting) {
     return (

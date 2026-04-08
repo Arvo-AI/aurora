@@ -56,7 +56,7 @@ def verify_google_chat_request(request_data: dict) -> bool:
             audience=events_url,
         )
         if token.get("email") != "chat@system.gserviceaccount.com":
-            logger.warning(f"Google Chat JWT email mismatch: {token.get('email')}")
+            logger.warning("Google Chat JWT email mismatch: %s", _mask_email(token.get("email", "")))
             return False
         return True
     except Exception as e:
