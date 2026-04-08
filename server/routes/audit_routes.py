@@ -1,4 +1,5 @@
 """Audit log routes -- compliance-grade event tracking for user actions."""
+import json
 import logging
 from flask import Blueprint, request, jsonify
 from utils.auth.rbac_decorators import require_permission
@@ -28,7 +29,7 @@ def record_audit_event(org_id, user_id, action, resource_type,
                 """, (
                     org_id, user_id, action, resource_type,
                     resource_id,
-                    __import__("json").dumps(detail or {}),
+                    json.dumps(detail or {}),
                     ip_address, user_agent,
                 ))
                 conn.commit()
@@ -36,14 +37,91 @@ def record_audit_event(org_id, user_id, action, resource_type,
         logger.exception("[AUDIT] Failed to record audit event: %s/%s", action, resource_type)
 
 
+def _iso(val):
+    return val.isoformat() if hasattr(val, "isoformat") else val
+
+
+def _synthetic_events(cur, org_id, pg_interval):
+    """Pull activity from core tables to fill gaps in the audit_log."""
+    events = []
+
+    cur.execute("""
+        SELECT id, email, name, role, created_at
+        FROM users WHERE org_id = %s AND created_at >= NOW() - %s::interval
+        ORDER BY created_at DESC LIMIT 200
+    """, (org_id, pg_interval))
+    for row in cur.fetchall():
+        events.append({
+            "id": None, "org_id": org_id, "user_id": row[0],
+            "action": "member_joined", "resource_type": "user",
+            "resource_id": row[0],
+            "detail": {"email": row[1], "name": row[2], "role": row[3] or "viewer"},
+            "ip_address": None, "created_at": _iso(row[4]),
+        })
+
+    cur.execute("""
+        SELECT id, source_type, alert_title, severity, status, created_at, user_id
+        FROM incidents
+        WHERE org_id = %s AND created_at >= NOW() - %s::interval
+        ORDER BY created_at DESC LIMIT 200
+    """, (org_id, pg_interval))
+    for row in cur.fetchall():
+        events.append({
+            "id": None, "org_id": org_id, "user_id": row[6] or "",
+            "action": "incident_created", "resource_type": "incident",
+            "resource_id": str(row[0]),
+            "detail": {"source": row[1], "title": row[2], "severity": row[3], "status": row[4]},
+            "ip_address": None, "created_at": _iso(row[5]),
+        })
+
+    cur.execute("""
+        SELECT ut.provider, ut.timestamp, u.id, u.name, u.email
+        FROM user_tokens ut
+        JOIN users u ON ut.user_id = u.id
+        WHERE (ut.org_id = %s OR u.org_id = %s)
+          AND ut.secret_ref IS NOT NULL AND ut.is_active = TRUE
+          AND ut.timestamp >= NOW() - %s::interval
+        ORDER BY ut.timestamp DESC LIMIT 100
+    """, (org_id, org_id, pg_interval))
+    for row in cur.fetchall():
+        events.append({
+            "id": None, "org_id": org_id, "user_id": row[2],
+            "action": "connector_added", "resource_type": "connector",
+            "resource_id": row[0],
+            "detail": {"provider": row[0], "user_name": row[3] or row[4]},
+            "ip_address": None, "created_at": _iso(row[1]),
+        })
+
+    cur.execute("""
+        SELECT uc.provider, uc.last_verified_at, u.id, u.name, u.email
+        FROM user_connections uc
+        JOIN users u ON uc.user_id = u.id
+        WHERE (uc.org_id = %s OR u.org_id = %s)
+          AND uc.status = 'active'
+          AND uc.last_verified_at >= NOW() - %s::interval
+        ORDER BY uc.last_verified_at DESC LIMIT 100
+    """, (org_id, org_id, pg_interval))
+    seen_providers = {e["resource_id"] for e in events if e["action"] == "connector_added"}
+    for row in cur.fetchall():
+        if row[0] not in seen_providers:
+            events.append({
+                "id": None, "org_id": org_id, "user_id": row[2],
+                "action": "connector_added", "resource_type": "connector",
+                "resource_id": row[0],
+                "detail": {"provider": row[0], "user_name": row[3] or row[4]},
+                "ip_address": None, "created_at": _iso(row[1]),
+            })
+
+    return events
+
+
 @audit_bp.route("/api/audit-log", methods=["GET"])
-@require_permission("admin", "read")
+@require_permission("incidents", "read")
 def get_audit_log(user_id):
-    """Paginated, filterable audit log."""
+    """Paginated, filterable audit log — merges audit_log table with synthetic activity events."""
     org_id = get_org_id_from_request()
     page = max(int(request.args.get("page", 1)), 1)
     per_page = min(int(request.args.get("per_page", 50)), 200)
-    offset = (page - 1) * per_page
 
     action_filter = request.args.get("action")
     resource_filter = request.args.get("resource_type")
@@ -57,11 +135,11 @@ def get_audit_log(user_id):
     params: list = [org_id, pg_interval]
 
     if action_filter:
-        conditions.append("action = %s")
-        params.append(action_filter)
+        conditions.append("action ILIKE %s")
+        params.append(f"%{action_filter}%")
     if resource_filter:
-        conditions.append("resource_type = %s")
-        params.append(resource_filter)
+        conditions.append("resource_type ILIKE %s")
+        params.append(f"%{resource_filter}%")
     if user_filter:
         conditions.append("user_id = %s")
         params.append(user_filter)
@@ -71,26 +149,39 @@ def get_audit_log(user_id):
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
-                cur.execute(f"SELECT COUNT(*) FROM audit_log WHERE {where}", params)
-                total = cur.fetchone()[0]
-
                 cur.execute(f"""
                     SELECT id, org_id, user_id, action, resource_type, resource_id, detail, ip_address, created_at
                     FROM audit_log
                     WHERE {where}
                     ORDER BY created_at DESC
-                    LIMIT %s OFFSET %s
-                """, params + [per_page, offset])
+                """, params)
                 cols = [d[0] for d in cur.description]
-                rows = [dict(zip(cols, row)) for row in cur.fetchall()]
+                audit_rows = [dict(zip(cols, row)) for row in cur.fetchall()]
 
-        for row in rows:
+                synthetic = _synthetic_events(cur, org_id, pg_interval)
+
+        for row in audit_rows:
             for k, v in row.items():
                 if hasattr(v, "isoformat"):
                     row[k] = v.isoformat()
 
+        all_events = audit_rows + synthetic
+
+        if action_filter:
+            filt = action_filter.lower()
+            all_events = [e for e in all_events if filt in (e.get("action") or "").lower()]
+        if resource_filter:
+            filt = resource_filter.lower()
+            all_events = [e for e in all_events if filt in (e.get("resource_type") or "").lower()]
+
+        all_events.sort(key=lambda e: e.get("created_at") or "", reverse=True)
+
+        total = len(all_events)
+        offset = (page - 1) * per_page
+        page_events = all_events[offset:offset + per_page]
+
         return jsonify({
-            "events": rows,
+            "events": page_events,
             "total": total,
             "page": page,
             "per_page": per_page,

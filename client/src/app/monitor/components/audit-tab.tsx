@@ -26,22 +26,51 @@ interface AuditResponse {
 }
 
 const ACTION_COLORS: Record<string, string> = {
-  login: 'bg-blue-500/10 text-blue-400',
-  logout: 'bg-zinc-500/10 text-zinc-400',
-  create: 'bg-emerald-500/10 text-emerald-400',
-  update: 'bg-amber-500/10 text-amber-400',
-  delete: 'bg-red-500/10 text-red-400',
-  connect: 'bg-cyan-500/10 text-cyan-400',
-  disconnect: 'bg-orange-500/10 text-orange-400',
-  invoke: 'bg-violet-500/10 text-violet-400',
+  login:             'bg-blue-500/10 text-blue-400',
+  logout:            'bg-zinc-500/10 text-zinc-400',
+  member_joined:     'bg-emerald-500/10 text-emerald-400',
+  incident_created:  'bg-red-500/10 text-red-400',
+  connector_added:   'bg-cyan-500/10 text-cyan-400',
+  create_user:       'bg-emerald-500/10 text-emerald-400',
+  register:          'bg-emerald-500/10 text-emerald-400',
+  setup_org:         'bg-violet-500/10 text-violet-400',
+  update_org:        'bg-amber-500/10 text-amber-400',
+  add_member:        'bg-teal-500/10 text-teal-400',
+  remove_member:     'bg-orange-500/10 text-orange-400',
+  change_password:   'bg-yellow-500/10 text-yellow-400',
+  update_postmortem: 'bg-indigo-500/10 text-indigo-400',
+  apply_fix:         'bg-lime-500/10 text-lime-400',
+  merge_alert:       'bg-purple-500/10 text-purple-400',
+  export:            'bg-sky-500/10 text-sky-400',
+  delete_account:    'bg-red-500/10 text-red-400',
+};
+
+const ACTION_LABELS: Record<string, string> = {
+  login:             'Login',
+  logout:            'Logout',
+  member_joined:     'Member Joined',
+  incident_created:  'Incident Created',
+  connector_added:   'Connector Added',
+  create_user:       'User Created',
+  register:          'Registered',
+  setup_org:         'Org Created',
+  update_org:        'Org Updated',
+  add_member:        'Member Added',
+  remove_member:     'Member Removed',
+  change_password:   'Password Changed',
+  update_postmortem: 'Postmortem Updated',
+  apply_fix:         'Fix Applied',
+  merge_alert:       'Alert Merged',
+  export:            'Export',
+  delete_account:    'Account Deleted',
 };
 
 function actionBadge(action: string) {
-  const base = action.split('_')[0] || action;
-  const cls = ACTION_COLORS[base] || 'bg-zinc-500/10 text-zinc-400';
+  const cls = ACTION_COLORS[action] || 'bg-zinc-500/10 text-zinc-400';
+  const label = ACTION_LABELS[action] || action.replace(/_/g, ' ');
   return (
     <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${cls}`}>
-      {action}
+      {label}
     </span>
   );
 }
@@ -125,8 +154,8 @@ export default function AuditTab({ period }: { period: Period }) {
                   </tr>
                 </thead>
                 <tbody>
-                  {data.events.map(evt => (
-                    <tr key={evt.id} className="border-b border-zinc-800/40 hover:bg-zinc-800/20 transition-colors duration-150">
+                  {data.events.map((evt, i) => (
+                    <tr key={evt.id ?? `${evt.action}-${evt.created_at}-${i}`} className="border-b border-zinc-800/40 hover:bg-zinc-800/20 transition-colors duration-150">
                       <td className="px-4 py-2.5 text-zinc-500 text-xs whitespace-nowrap" style={{ fontVariantNumeric: 'tabular-nums' }}>
                         <div className="flex items-center gap-1.5">
                           <Clock className="h-3 w-3" />
