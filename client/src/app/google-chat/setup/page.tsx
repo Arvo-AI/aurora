@@ -60,9 +60,20 @@ export default function GoogleChatSetupPage() {
       if (res.ok) {
         const data: EnvCheckResult = await res.json();
         setEnvCheck(data);
+      } else {
+        toast({
+          title: "Status Check Failed",
+          description: "Could not verify environment configuration. The setup guide may be incomplete.",
+          variant: "destructive",
+        });
       }
     } catch (err) {
       console.error("Failed to check Google Chat env:", err);
+      toast({
+        title: "Connection Error",
+        description: "Could not reach the server to check configuration status.",
+        variant: "destructive",
+      });
     } finally {
       setIsLoading(false);
     }

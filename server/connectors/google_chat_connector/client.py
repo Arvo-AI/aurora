@@ -27,7 +27,7 @@ CHAT_BOT_SCOPES = [
     "https://www.googleapis.com/auth/chat.app.messages.readonly",
 ]
 
-_sa_credentials: Optional[google_service_account.Credentials] = None
+_sa_credentials: Optional[google_service_account.Credentials] = None  # noqa: used via global in _load_service_account_credentials
 _sa_lock = threading.Lock()
 
 
@@ -62,19 +62,10 @@ class GoogleChatClient:
             return response.json()
 
         except requests.HTTPError as e:
-            error_body = {}
-            try:
-                error_body = e.response.json() if e.response is not None else {}
-            except (ValueError, AttributeError):
-                pass
-            error_msg = (
-                error_body.get("error", {}).get("message")
-                or str(e)
-            )
             logger.error("Google Chat API error on %s: HTTP %s", path, e.response.status_code if e.response is not None else "unknown")
             raise
         except requests.RequestException as e:
-            logger.error(f"Request to Google Chat API failed: {e}")
+            logger.error("Request to Google Chat API failed", exc_info=True)
             raise ValueError(f"Failed to communicate with Google Chat: {str(e)}")
 
     # ── Messages ────────────────────────────────────────────────────
@@ -98,7 +89,7 @@ class GoogleChatClient:
             body["cardsV2"] = cards_v2
 
         result = self._request("POST", f"{space_name}/messages", body, params=params)
-        logger.info(f"Message sent to {space_name}: {result.get('name')}")
+        logger.info("Message sent to %s", space_name)
         return result
 
     def send_private_message(
@@ -160,7 +151,7 @@ class GoogleChatClient:
             "displayName": display_name,
         }
         result = self._request("POST", "spaces", body)
-        logger.info(f"Created space: {display_name} ({result.get('name')})")
+        logger.info("Created space: %s", display_name)
         return result
 
     def get_space(self, space_name: str) -> Dict[str, Any]:
@@ -192,10 +183,10 @@ class GoogleChatClient:
                 },
             }
             result = self._request("POST", f"{space_name}/members", body)
-            logger.info(f"Added {user_email} to {space_name}")
+            logger.info("Added member to %s", space_name)
             return result
         except Exception as e:
-            logger.warning(f"Could not add {user_email} to {space_name}: {e}")
+            logger.warning("Could not add member to %s: %s", space_name, e)
             return None
 
     def add_app(self, space_name: str) -> Optional[Dict[str, Any]]:
@@ -208,10 +199,10 @@ class GoogleChatClient:
                 },
             }
             result = self._request("POST", f"{space_name}/members", body)
-            logger.info(f"Added Chat app to {space_name}")
+            logger.info("Added Chat app to %s", space_name)
             return result
         except Exception as e:
-            logger.warning(f"Could not add Chat app to {space_name}: {e}")
+            logger.warning("Could not add Chat app to %s: %s", space_name, e)
             return None
 
     # ── History ─────────────────────────────────────────────────────
@@ -262,7 +253,7 @@ def _load_service_account_credentials() -> Optional[google_service_account.Crede
             _sa_credentials = creds
             return creds
         except Exception as e:
-            logger.error(f"Failed to load Google Chat service account: {e}", exc_info=True)
+            logger.error("Failed to load Google Chat service account", exc_info=True)
             return None
 
 
@@ -279,7 +270,7 @@ def get_chat_app_client() -> Optional["GoogleChatClient"]:
         try:
             creds.refresh(GoogleAuthRequest())
         except Exception as e:
-            logger.error(f"Failed to refresh service account token: {e}", exc_info=True)
+            logger.error("Failed to refresh service account token", exc_info=True)
             return None
 
     return GoogleChatClient(creds.token)
@@ -319,18 +310,18 @@ def create_incidents_space(access_token: str) -> Dict[str, Any]:
                 except requests.HTTPError as e:
                     status = e.response.status_code if e.response is not None else 0
                     if status in (403, 401):
-                        logger.error(f"Permission denied creating space: {e}")
+                        logger.error("Permission denied creating space")
                         return {"ok": False, "error": "insufficient_permissions"}
-                    logger.error(f"Failed to create space: {e}")
+                    logger.error("Failed to create space: HTTP %s", status)
                     return {"ok": False, "error": "space_creation_failed"}
                 except Exception as e:
-                    logger.error(f"Failed to create space: {e}")
+                    logger.error("Failed to create space", exc_info=True)
                     return {"ok": False, "error": "space_creation_failed"}
 
         if space_name:
             app_result = user_client.add_app(space_name)
             if not app_result:
-                logger.error(f"Failed to add Chat app to space {space_name}")
+                logger.error("Failed to add Chat app to space")
                 return {"ok": False, "error": "app_install_failed"}
 
             try:
@@ -353,7 +344,7 @@ def create_incidents_space(access_token: str) -> Dict[str, Any]:
                         ),
                     )
             except Exception as setup_e:
-                logger.warning(f"Error during space setup: {setup_e}")
+                logger.warning("Error during space setup", exc_info=True)
 
             return {
                 "ok": True,
@@ -366,5 +357,5 @@ def create_incidents_space(access_token: str) -> Dict[str, Any]:
         return {"ok": False, "error": "space_not_resolved"}
 
     except Exception as e:
-        logger.error(f"Failed to create incidents space: {e}", exc_info=True)
+        logger.error("Failed to create incidents space", exc_info=True)
         return {"ok": False, "error": "setup_failed"}

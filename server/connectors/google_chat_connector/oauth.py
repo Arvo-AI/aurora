@@ -72,9 +72,9 @@ def exchange_code_for_token(code: str) -> Dict[str, Any]:
     token_data = response.json()
 
     if "error" in token_data:
-        error = token_data.get("error_description", token_data["error"])
-        logger.error(f"Google Chat OAuth token exchange failed: {error}")
-        raise ValueError(f"Google Chat OAuth failed: {error}")
+        error_type = token_data["error"]
+        logger.error("Google Chat OAuth token exchange failed: %s", error_type)
+        raise ValueError(f"Google Chat OAuth failed: {error_type}")
 
     logger.info("Successfully exchanged Google Chat OAuth code for token")
     return token_data

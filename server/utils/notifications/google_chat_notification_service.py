@@ -267,7 +267,8 @@ def send_google_chat_investigation_completed_notification(
             result = client.send_message(
                 space_name=space_name, text=fallback_text, cards_v2=cards_v2,
             )
-        except Exception:
+        except Exception as card_err:
+            logger.warning("[GChatNotification] Card send failed, falling back to plain text: %s", card_err)
             result = client.send_message(space_name=space_name, text=fallback_text)
 
         return result is not None

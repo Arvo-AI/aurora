@@ -114,7 +114,7 @@ def _handle_message(data: dict):
                 if app_client:
                     app_client.send_message(
                         space_name=space_name,
-                        text=f"I don't recognize your account ({sender_email}). You need to be a registered Aurora user with an admin or editor role to interact with me.",
+                        text=f"I don't recognize your account. You need to be a registered Aurora user with an admin or editor role to interact with me.",
                         thread_key=thread_key,
                     )
                 return jsonify({})
@@ -228,7 +228,25 @@ def _handle_card_clicked(data: dict):
         space_name = space.get("name", "")
 
         org_creds = get_org_google_chat_credentials(sender_email)
+
+        if function_name == "suggestion_details":
+            return _handle_suggestion_details(
+                data=data,
+                parameters=parameters,
+                sender_email=sender_email,
+                connector_owner_id=org_creds[0] if org_creds else None,
+                space_name=space_name,
+            )
+
         if not org_creds:
+            user_name = user.get("name", "")
+            app_client = get_chat_app_client()
+            if app_client and user_name:
+                app_client.send_private_message(
+                    space_name=space_name,
+                    text="You need to be a registered Aurora user to perform this action.",
+                    user_name=user_name,
+                )
             return jsonify({}), 200
 
         connector_owner_id, org_id, sender_user_id = org_creds
@@ -239,15 +257,6 @@ def _handle_card_clicked(data: dict):
                 parameters=parameters,
                 sender_email=sender_email,
                 sender_user_id=sender_user_id,
-                connector_owner_id=connector_owner_id,
-                space_name=space_name,
-            )
-
-        if function_name == "suggestion_details":
-            return _handle_suggestion_details(
-                data=data,
-                parameters=parameters,
-                sender_email=sender_email,
                 connector_owner_id=connector_owner_id,
                 space_name=space_name,
             )
@@ -275,7 +284,15 @@ def _handle_run_suggestion(
 
         if not _user_can_execute(clicker_user_id):
             logger.warning(f"User {clicker_user_id} ({_mask_email(sender_email)}) lacks permission to run suggestions")
-            return jsonify({"text": "You don't have permission to run commands. Ask an admin or editor in your organization."}), 200
+            user_name = data.get("user", {}).get("name", "")
+            client = get_chat_app_client()
+            if client and user_name:
+                client.send_private_message(
+                    space_name=space_name,
+                    text="You don't have permission to run commands. Ask an admin or editor in your organization.",
+                    user_name=user_name,
+                )
+            return jsonify({}), 200
 
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:

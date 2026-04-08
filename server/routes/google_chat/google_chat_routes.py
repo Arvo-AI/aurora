@@ -64,9 +64,10 @@ def google_chat_status(user_id):
         if not space_config or not space_config.get("incidents_space_name"):
             return jsonify({"connected": False})
 
+        has_sa = get_chat_app_client() is not None
         return jsonify({
-            "connected": True,
-            "has_service_account": get_chat_app_client() is not None,
+            "connected": has_sa,
+            "has_service_account": has_sa,
             "connected_by": space_config.get("connected_by"),
             "connected_at": space_config.get("connected_at"),
             "incidents_space_display_name": space_config.get("incidents_space_display_name"),
@@ -129,7 +130,7 @@ def google_chat_callback():
 
     if error:
         safe_error = error if error in ALLOWED_ERRORS else "oauth_error"
-        logger.warning(f"Google Chat OAuth error: {error}")
+        logger.warning("Google Chat OAuth error: %s", safe_error)
         return redirect(f"{setup_page}?error={quote(safe_error)}")
 
     if not code or not state:
@@ -169,10 +170,7 @@ def google_chat_callback():
         }
         store_tokens_in_db(user_id, google_chat_config, "google_chat")
 
-        logger.info(
-            f"Google Chat connected for org (by user {user_id}), "
-            f"space: {space_result.get('space_display_name')}"
-        )
+        logger.info("Google Chat connected for org (by user %s)", user_id)
 
         return redirect(f"{setup_page}?success=true")
 
@@ -186,9 +184,9 @@ def google_chat_callback():
 def google_chat_disconnect(user_id):
     """DELETE /google-chat - Disconnect Google Chat."""
     try:
-        delete_success = delete_user_secret(user_id, "google_chat")
+        delete_success, deleted_rows = delete_user_secret(user_id, "google_chat")
         if delete_success:
-            logger.info(f"Disconnected Google Chat for user {user_id}")
+            logger.info("Disconnected Google Chat for user %s (%s rows removed)", user_id, deleted_rows)
             return jsonify({"success": True, "message": "Google Chat disconnected"})
         else:
             return jsonify({"error": "Failed to disconnect Google Chat"}), 500
