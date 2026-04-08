@@ -49,6 +49,7 @@ export default function OpsGenieAuthPage() {
       }
     } catch (error: unknown) {
       console.error('[opsgenie] Failed to load webhook URL', error);
+      toast({ title: 'Warning', description: 'Failed to load webhook URL. Check server configuration.', variant: 'destructive' });
     }
   };
 

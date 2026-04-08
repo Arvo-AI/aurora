@@ -52,7 +52,7 @@ def _safe_json_dump(data: Dict[str, Any]) -> str:
     try:
         return json.dumps(data, ensure_ascii=False)
     except Exception:
-        logger.debug("JSON serialization failed, falling back to str(): %s", type(data))
+        logger.warning("JSON serialization failed, falling back to str(): %s", type(data))
         return str(data)
 
 
@@ -397,4 +397,3 @@ def post_jsm_comment(self, user_id: str, alert_message: str, comment: str) -> No
             logger.debug("[OPSGENIE] No JSM incident found matching alert")
     except Exception as exc:
         logger.warning("[OPSGENIE] Failed to post JSM comment: %s", exc)
-        raise self.retry(exc=exc)

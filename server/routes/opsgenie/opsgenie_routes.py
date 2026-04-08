@@ -1,12 +1,11 @@
+import base64
 import logging
 import os
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Union
 
 import requests
 from flask import Blueprint, jsonify, request
-
-import base64
 
 from routes.opsgenie.config import OPSGENIE_TIMEOUT, REGION_URLS
 from routes.opsgenie.tasks import process_opsgenie_event
@@ -431,7 +430,7 @@ def _get_stored_opsgenie_credentials(user_id: str) -> Optional[Dict[str, Any]]:
         return None
 
 
-def _build_client_from_creds(creds: Dict[str, Any]) -> Optional["OpsGenieClient | JSMOperationsClient"]:
+def _build_client_from_creds(creds: Dict[str, Any]) -> Optional[Union[OpsGenieClient, JSMOperationsClient]]:
     """Build the appropriate client based on auth_type in stored credentials."""
     auth_type = creds.get("auth_type", "opsgenie")
     if auth_type == "jsm_basic":
@@ -667,6 +666,9 @@ def webhook_url(user_id):
         base_url = ngrok_url
     else:
         base_url = backend_url
+
+    if not base_url:
+        return jsonify({"error": "NEXT_PUBLIC_BACKEND_URL is not configured. Cannot generate webhook URL."}), 500
 
     url = f"{base_url}/opsgenie/webhook/{user_id}"
 
