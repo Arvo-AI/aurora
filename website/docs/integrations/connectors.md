@@ -354,8 +354,8 @@ In your project, go to **APIs & Services → Library**, search for "Google Chat 
 
 1. Go to **APIs & Services → Credentials → Create Credentials → OAuth client ID**
 2. Select **Web application** as the type
-3. Add an **Authorized redirect URI**: `https://your-domain.com/google-chat/callback` (or `http://localhost:5080/google-chat/callback` for local dev)
-4. Copy the **Client ID** and **Client Secret**
+3. Add an **Authorized redirect URI**: `https://your-domain.com/google-chat/callback` (or `http://localhost:5080/google-chat/callback` for local dev). The exact URL for your deployment is shown on the Google Chat setup page in Aurora — navigate to **Connectors → Google Chat** to copy it.
+4. Copy the **Client ID** and **Client Secret** — these are your `GOOGLE_CHAT_CLIENT_ID` and `GOOGLE_CHAT_CLIENT_SECRET` environment variables
 
 [Create OAuth Client →](https://console.cloud.google.com/apis/credentials/oauthclient)
 
@@ -363,7 +363,7 @@ In your project, go to **APIs & Services → Library**, search for "Google Chat 
 
 1. Go to **IAM & Admin → Service Accounts → Create Service Account**
 2. Name it something like `aurora-chat-bot`
-3. Click **Create and Continue** (no extra roles needed)
+3. Click **Create and Continue** — no IAM roles are needed. The service account authenticates as the Chat app via the `chat.bot` scope, which is granted automatically when you link it in step 5.
 4. On the service account page, go to **Keys → Add Key → Create new key → JSON**
 5. The downloaded JSON content is your `GOOGLE_CHAT_SERVICE_ACCOUNT_KEY`
 
@@ -389,7 +389,8 @@ Go to the [Google Chat API Configuration page](https://console.cloud.google.com/
 - Paste your publicly accessible HTTPS endpoint in the field:
   - Local (with tunnel): `https://your-ngrok-url.ngrok-free.app/google-chat/events`
   - Production: `https://your-domain.com/google-chat/events`
-- Set **Authentication Audience** to **Project Number**
+  - The exact URL for your deployment is also shown on the Google Chat setup page in Aurora.
+- Set **Authentication Audience** to **HTTP endpoint URL**
 
 **Visibility:**
 - Check **Make this Chat app available to specific people and groups** and add your email address (or a Google Group to let multiple people find and add the bot)
@@ -403,11 +404,18 @@ GOOGLE_CHAT_CLIENT_SECRET=your-client-secret
 GOOGLE_CHAT_SERVICE_ACCOUNT_KEY='{"type":"service_account",...}'
 ```
 
+> **Important:** The service account JSON must be on a **single line** in your `.env` file. Convert the downloaded key file with:
+> ```bash
+> cat your-key-file.json | jq -c .
+> ```
+> Then paste the output after `GOOGLE_CHAT_SERVICE_ACCOUNT_KEY=`.
+
 Then rebuild and restart Aurora:
 
 ```bash
-make down
-make dev
+make down && make dev          # development
+make down && make prod-local   # production (build from source)
+make down && make prod-prebuilt # production (prebuilt images)
 ```
 
 #### Troubleshooting

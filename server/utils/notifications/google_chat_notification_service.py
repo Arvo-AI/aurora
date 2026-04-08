@@ -271,6 +271,20 @@ def send_google_chat_investigation_completed_notification(
             logger.warning("[GChatNotification] Card send failed, falling back to plain text: %s", card_err)
             result = client.send_message(space_name=space_name, text=fallback_text)
 
+        if result:
+            new_message_name = result.get("name")
+            if new_message_name:
+                try:
+                    with db_pool.get_admin_connection() as conn:
+                        with conn.cursor() as cursor:
+                            cursor.execute(
+                                "UPDATE incidents SET google_chat_message_name = %s WHERE id = %s",
+                                (new_message_name, incident_id),
+                            )
+                            conn.commit()
+                except Exception as e:
+                    logger.warning(f"[GChatNotification] Failed to store message name: {e}")
+
         return result is not None
 
     except Exception as e:
