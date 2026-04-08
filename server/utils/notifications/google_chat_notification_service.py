@@ -6,7 +6,6 @@ Uses the Chat app service account so messages appear as "Aurora".
 import logging
 import os
 from typing import Dict, Any, Optional
-from datetime import datetime
 from connectors.google_chat_connector.client import get_chat_app_client
 from utils.db.connection_pool import db_pool
 from routes.google_chat.google_chat_events_helpers import (

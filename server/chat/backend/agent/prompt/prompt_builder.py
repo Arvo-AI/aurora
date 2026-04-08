@@ -1870,16 +1870,6 @@ def build_background_mode_segment(state: Optional[Any]) -> str:
             "READ-ONLY mode - investigate only, no changes unless explicitly requested.",
             "=" * 40,
         ])
-    elif source == 'google_chat':
-        parts.extend([
-            "RESPONSE FORMAT:",
-            "1. *Direct answer* - respond to the question immediately (1-2 sentences)",
-            "2. *Evidence* - show findings from investigation or supporting data",
-            "3. *Next steps* - actionable recommendations if needed (numbered list)",
-            "",
-            "READ-ONLY mode - investigate only, no changes unless explicitly requested.",
-            "=" * 40,
-        ])
     else:
         parts.extend([
             "",

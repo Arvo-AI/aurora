@@ -285,27 +285,27 @@ export default function PagerDutyAuthPage() {
         <div className={isConnecting && !isConnected ? 'pointer-events-none opacity-50' : ''}>
           {!isConnected ? (
             <PagerDutyConnectionStep
-            displayName={displayName}
-            setDisplayName={setDisplayName}
-            token={token}
-            setToken={setToken}
-            loading={loading}
-            error={null}
-            onConnect={handleConnect}
-            onOAuthConnect={isPagerDutyOAuthEnabled() ? handleOAuthConnect : undefined}
-          />
-        ) : status ? (
-          <div className="space-y-4">
-            <PagerDutyConnectedView
-              status={status}
-              onChangeToken={() => setShowRotateModal(true)}
-              onDisconnect={() => setShowDisconnectDialog(true)}
+              displayName={displayName}
+              setDisplayName={setDisplayName}
+              token={token}
+              setToken={setToken}
               loading={loading}
+              error={null}
+              onConnect={handleConnect}
+              onOAuthConnect={isPagerDutyOAuthEnabled() ? handleOAuthConnect : undefined}
             />
-            <PagerDutyWebhookStep />
-          </div>
-        ) : null}
-      </div>
+          ) : status ? (
+            <div className="space-y-4">
+              <PagerDutyConnectedView
+                status={status}
+                onChangeToken={() => setShowRotateModal(true)}
+                onDisconnect={() => setShowDisconnectDialog(true)}
+                loading={loading}
+              />
+              <PagerDutyWebhookStep />
+            </div>
+          ) : null}
+        </div>
 
       {/* Loading Progress Indicator - Overlay (only during connection) */}
       <ConnectionLoadingOverlay
@@ -334,7 +334,7 @@ export default function PagerDutyAuthPage() {
         connectorName="PagerDuty"
         onConfirm={handleDisconnectConfirm}
       />
-    </div>
+      </div>
     </ConnectorAuthGuard>
   );
 }

@@ -99,6 +99,9 @@ export default function GoogleChatSetupPage() {
         insufficient_permissions: "You don't have permission to create Google Chat spaces. Ask your Workspace admin to allow space creation or to connect Aurora.",
         callback_failed: "OAuth callback failed unexpectedly.",
         access_denied: "You denied access. Please try again.",
+        invalid_state: "OAuth session expired or was tampered with. Please try again.",
+        oauth_error: "Google returned an error during authorization. Please try again.",
+        app_install_failed: "Failed to add the Aurora bot to the space. Check that the Chat app is properly configured in your Google Cloud project.",
       };
       toast({
         title: "Connection Failed",
@@ -108,9 +111,11 @@ export default function GoogleChatSetupPage() {
     }
   }, [searchParams, toast, router]);
 
-  // Auto-trigger OAuth when env is configured
+  // Auto-trigger OAuth when env is configured (skip if returning from an error)
   useEffect(() => {
-    if (!isLoading && envCheck?.configured) {
+    const hasError = searchParams.get("error");
+    const hasSuccess = searchParams.get("success");
+    if (!isLoading && envCheck?.configured && !hasError && !hasSuccess) {
       handleConnect();
     }
   }, [isLoading, envCheck]);
@@ -275,14 +280,14 @@ GOOGLE_CHAT_SERVICE_ACCOUNT_KEY='{"type":"service_account",...}'`;
                     </p>
                     <div className="relative mt-1 mb-2">
                       <pre className="bg-black/50 p-2.5 pr-10 rounded border border-white/10 text-xs overflow-x-auto whitespace-pre text-white/80 font-mono">
-                        {`${envCheck?.baseUrl ?? BACKEND_URL}/google-chat/callback`}
+                        {`${BACKEND_URL}/google-chat/callback`}
                       </pre>
                       <Button
                         variant="outline"
                         size="icon"
                         onClick={() =>
                           handleCopy(
-                            `${envCheck?.baseUrl ?? BACKEND_URL}/google-chat/callback`,
+                            `${BACKEND_URL}/google-chat/callback`,
                             "redirectUri"
                           )
                         }
@@ -485,16 +490,6 @@ GOOGLE_CHAT_SERVICE_ACCOUNT_KEY='{"type":"service_account",...}'`;
                               HTTP endpoint URL
                             </strong>
                           </p>
-                          <p className="text-white/50">
-                            Under{" "}
-                            <strong className="text-white/70">
-                              Service account
-                            </strong>
-                            , select the service account you created in step 4
-                            (e.g. <em>aurora-chat-bot@your-project.iam.gserviceaccount.com</em>).
-                            This links the service account to the Chat app so
-                            it can send messages as &quot;Aurora&quot;.
-                          </p>
                         </div>
                       </div>
 
@@ -559,15 +554,37 @@ GOOGLE_CHAT_SERVICE_ACCOUNT_KEY='{"type":"service_account",...}'`;
                         )}
                       </Button>
                     </div>
+                    <div className="bg-amber-500/10 border border-amber-500/20 rounded-md p-2.5 mt-3">
+                      <p className="text-amber-300/90 text-xs">
+                        <strong>Important:</strong> The service account JSON
+                        must be on a <strong>single line</strong> in your{" "}
+                        <code className="bg-black/30 px-1 py-0.5 rounded">.env</code>{" "}
+                        file. Multi-line values will break. Convert the
+                        downloaded key file to a single line:
+                      </p>
+                      <pre className="bg-black/50 p-2 rounded border border-white/10 text-xs overflow-x-auto whitespace-pre text-white/80 font-mono mt-2">
+                        {`cat your-key-file.json | jq -c .`}
+                      </pre>
+                      <p className="text-amber-300/70 text-xs mt-1.5">
+                        Then paste the output after{" "}
+                        <code className="bg-black/30 px-1 py-0.5 rounded">
+                          GOOGLE_CHAT_SERVICE_ACCOUNT_KEY=
+                        </code>
+                      </p>
+                    </div>
                   </div>
 
                   {/* Step 7 */}
                   <div className="break-words border-t border-white/5 pt-4">
                     <p className="text-white/90 font-medium mb-1">
-                      7. Rebuild and restart Aurora
+                      7. Restart Aurora
+                    </p>
+                    <p className="text-white/60 text-xs mb-2">
+                      Restart Aurora so it picks up the new environment
+                      variables. Use whichever command you used to start it:
                     </p>
                     <pre className="bg-black/50 p-3 rounded border border-white/10 text-xs overflow-x-auto whitespace-pre text-white/80 font-mono mt-2">
-                      {`make down\nmake dev`}
+                      {`make down && make dev          # development\nmake down && make prod-local    # production (build from source)\nmake down && make prod-prebuilt # production (prebuilt images)`}
                     </pre>
                   </div>
                 </div>

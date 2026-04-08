@@ -10,7 +10,9 @@ Hybrid auth model:
 
 import logging
 import os
+import secrets
 import time
+from urllib.parse import quote
 from flask import Blueprint, request, jsonify, redirect
 from connectors.google_chat_connector.client import (
     create_incidents_space,
@@ -22,6 +24,7 @@ from connectors.google_chat_connector.oauth import (
 )
 from utils.auth.token_management import store_tokens_in_db
 from utils.auth.rbac_decorators import require_permission
+from utils.auth.oauth2_state_cache import store_oauth2_state, retrieve_oauth2_state
 from utils.secrets.secret_ref_utils import delete_user_secret
 
 google_chat_bp = Blueprint("google_chat", __name__)
@@ -92,7 +95,8 @@ def google_chat_connect(user_id):
                 "error_code": "GOOGLE_CHAT_NOT_CONFIGURED",
             }), 400
 
-        state = user_id
+        state = secrets.token_urlsafe(32)
+        store_oauth2_state(state, user_id, "google_chat")
         auth_url = get_auth_url(state)
 
         logger.info(f"Generated Google Chat OAuth URL for user {user_id}")
@@ -113,17 +117,31 @@ def google_chat_callback():
     4. Redirect to the frontend setup page.
     """
     code = request.args.get("code")
-    user_id = request.args.get("state")
+    state = request.args.get("state")
     error = request.args.get("error")
 
     setup_page = f"{FRONTEND_URL.rstrip('/')}/google-chat/setup"
 
-    if error:
-        logger.warning(f"Google Chat OAuth error: {error}")
-        return redirect(f"{setup_page}?error={error}")
+    ALLOWED_ERRORS = {
+        "access_denied", "invalid_scope", "server_error",
+        "temporarily_unavailable", "invalid_request",
+    }
 
-    if not code or not user_id:
+    if error:
+        safe_error = error if error in ALLOWED_ERRORS else "oauth_error"
+        logger.warning(f"Google Chat OAuth error: {error}")
+        return redirect(f"{setup_page}?error={quote(safe_error)}")
+
+    if not code or not state:
         return redirect(f"{setup_page}?error=missing_params")
+
+    state_data = retrieve_oauth2_state(state)
+    if not state_data:
+        return redirect(f"{setup_page}?error=invalid_state")
+
+    user_id = state_data.get("user_id")
+    if not user_id:
+        return redirect(f"{setup_page}?error=invalid_state")
 
     try:
         token_data = exchange_code_for_token(code)
@@ -135,8 +153,13 @@ def google_chat_callback():
         space_result = create_incidents_space(access_token)
         if not space_result.get("ok"):
             error_code = space_result.get("error", "space_creation_failed")
+            ALLOWED_SETUP_ERRORS = {
+                "space_creation_failed", "space_not_resolved",
+                "insufficient_permissions", "setup_failed", "app_install_failed",
+            }
+            safe_code = error_code if error_code in ALLOWED_SETUP_ERRORS else "setup_failed"
             logger.error(f"Failed to create incidents space: {error_code}")
-            return redirect(f"{setup_page}?error={error_code}")
+            return redirect(f"{setup_page}?error={quote(safe_code)}")
 
         google_chat_config = {
             "connected_by": user_id,
@@ -179,5 +202,6 @@ def _get_org_space_config(user_id: str):
     try:
         from utils.auth.stateless_auth import get_credentials_from_db
         return get_credentials_from_db(user_id, "google_chat")
-    except Exception:
+    except Exception as e:
+        logger.debug(f"Failed to retrieve Google Chat space config for user {user_id}: {e}")
         return None

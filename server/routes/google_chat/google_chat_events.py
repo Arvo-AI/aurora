@@ -7,7 +7,6 @@ Event types: MESSAGE, CARD_CLICKED, ADDED_TO_SPACE, REMOVED_FROM_SPACE.
 """
 
 import logging
-import re
 from flask import Blueprint, request, jsonify
 from connectors.google_chat_connector.client import get_chat_app_client
 from utils.db.connection_pool import db_pool
@@ -19,6 +18,7 @@ from routes.google_chat.google_chat_events_helpers import (
     get_space_context_with_threads,
     get_session_from_thread,
     send_message_to_aurora,
+    _mask_email,
 )
 from chat.background.task import run_background_chat
 
@@ -98,7 +98,7 @@ def _handle_message(data: dict):
         space_name = space.get("name", "")
         text = message.get("argumentText", message.get("text", "")).strip()
         thread_name = message.get("thread", {}).get("name", "")
-        thread_key = thread_name.split("/")[-1] if thread_name else message.get("name", "")
+        thread_key = thread_name or message.get("name", "")
         sender_email = user.get("email", "")
 
         client = None
@@ -109,7 +109,14 @@ def _handle_message(data: dict):
         try:
             org_creds = get_org_google_chat_credentials(sender_email)
             if not org_creds:
-                logger.warning(f"No org Google Chat credentials for {sender_email}")
+                logger.warning(f"No org Google Chat credentials for {_mask_email(sender_email)}")
+                app_client = get_chat_app_client()
+                if app_client:
+                    app_client.send_message(
+                        space_name=space_name,
+                        text=f"I don't recognize your account ({sender_email}). You need to be a registered Aurora user with an admin or editor role to interact with me.",
+                        thread_key=thread_key,
+                    )
                 return jsonify({})
 
             connector_owner_id, org_id, user_id = org_creds
@@ -119,7 +126,7 @@ def _handle_message(data: dict):
                 return jsonify({})
 
             if not _user_can_execute(user_id):
-                logger.warning(f"User {user_id} ({sender_email}) lacks permission to interact with Aurora")
+                logger.warning(f"User {user_id} ({_mask_email(sender_email)}) lacks permission to interact with Aurora")
                 client.send_message(
                     space_name=space_name,
                     text="You don't have permission to use Aurora. Ask an admin or editor in your organization to upgrade your role.",
@@ -127,9 +134,7 @@ def _handle_message(data: dict):
                 )
                 return jsonify({})
 
-            clean_msg = re.sub(r"@\S+", "", text).strip()
-
-            if not clean_msg:
+            if not text:
                 response_text = (
                     "Hi! I'm Aurora, your AI SRE assistant.\n\n"
                     "You can ask me questions about your infrastructure, "
@@ -140,7 +145,6 @@ def _handle_message(data: dict):
             else:
                 response_text = "Thinking..."
                 trigger_background = True
-                text = clean_msg
 
             if response_text:
                 try:
@@ -198,8 +202,8 @@ def _handle_message(data: dict):
                             text="Sorry, something went wrong while processing your request.",
                             thread_key=thread_key,
                         )
-                    except Exception:
-                        pass
+                    except Exception as fallback_e:
+                        logger.warning(f"Failed to send fallback error message to Google Chat: {fallback_e}")
 
         except Exception as e:
             logger.error(f"Error processing MESSAGE event: {e}", exc_info=True)
@@ -270,7 +274,7 @@ def _handle_run_suggestion(
             return jsonify({"text": "Invalid action format"}), 200
 
         if not _user_can_execute(clicker_user_id):
-            logger.warning(f"User {clicker_user_id} ({sender_email}) lacks permission to run suggestions")
+            logger.warning(f"User {clicker_user_id} ({_mask_email(sender_email)}) lacks permission to run suggestions")
             return jsonify({"text": "You don't have permission to run commands. Ask an admin or editor in your organization."}), 200
 
         with db_pool.get_admin_connection() as conn:
@@ -295,7 +299,7 @@ def _handle_run_suggestion(
 
         client = get_chat_app_client()
         message = data.get("message", {})
-        thread_key = message.get("thread", {}).get("name", "").split("/")[-1]
+        thread_key = message.get("thread", {}).get("name", "")
 
         clicker_name = data.get("user", {}).get("displayName") or sender_email
 

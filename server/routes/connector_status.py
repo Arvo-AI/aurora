@@ -245,7 +245,8 @@ def _check_google_chat(creds: Dict[str, Any]) -> Dict[str, Any]:
         return {"connected": False}
     try:
         return {"connected": get_chat_app_client() is not None}
-    except Exception:
+    except Exception as e:
+        logger.debug("Google Chat status check failed: %s", e)
         return {"connected": False}
 
 

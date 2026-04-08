@@ -22,7 +22,10 @@ from google.auth.transport.requests import Request as GoogleAuthRequest
 logger = logging.getLogger(__name__)
 
 GOOGLE_CHAT_API_BASE = "https://chat.googleapis.com/v1"
-CHAT_BOT_SCOPE = "https://www.googleapis.com/auth/chat.bot"
+CHAT_BOT_SCOPES = [
+    "https://www.googleapis.com/auth/chat.bot",
+    "https://www.googleapis.com/auth/chat.app.messages.readonly",
+]
 
 _sa_credentials: Optional[google_service_account.Credentials] = None
 _sa_lock = threading.Lock()
@@ -62,13 +65,13 @@ class GoogleChatClient:
             error_body = {}
             try:
                 error_body = e.response.json() if e.response is not None else {}
-            except Exception:
+            except (ValueError, AttributeError):
                 pass
             error_msg = (
                 error_body.get("error", {}).get("message")
                 or str(e)
             )
-            logger.error(f"Google Chat API error on {path}: {error_msg}")
+            logger.error("Google Chat API error on %s: HTTP %s", path, e.response.status_code if e.response is not None else "unknown")
             raise
         except requests.RequestException as e:
             logger.error(f"Request to Google Chat API failed: {e}")
@@ -85,7 +88,10 @@ class GoogleChatClient:
         params: Dict[str, str] = {}
 
         if thread_key:
-            body["thread"] = {"threadKey": thread_key}
+            if thread_key.startswith("spaces/"):
+                body["thread"] = {"name": thread_key}
+            else:
+                body["thread"] = {"threadKey": thread_key}
             params["messageReplyOption"] = "REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD"
 
         if cards_v2:
@@ -246,7 +252,7 @@ def _load_service_account_credentials() -> Optional[google_service_account.Crede
             if key_json:
                 info = json.loads(key_json)
                 creds = google_service_account.Credentials.from_service_account_info(
-                    info, scopes=[CHAT_BOT_SCOPE],
+                    info, scopes=CHAT_BOT_SCOPES,
                 )
             else:
                 logger.debug("No Google Chat service account configured")
@@ -322,9 +328,12 @@ def create_incidents_space(access_token: str) -> Dict[str, Any]:
                     return {"ok": False, "error": "space_creation_failed"}
 
         if space_name:
-            try:
-                user_client.add_app(space_name)
+            app_result = user_client.add_app(space_name)
+            if not app_result:
+                logger.error(f"Failed to add Chat app to space {space_name}")
+                return {"ok": False, "error": "app_install_failed"}
 
+            try:
                 if created:
                     user_client.update_space(
                         space_name, "Aurora incident alerts and notifications"

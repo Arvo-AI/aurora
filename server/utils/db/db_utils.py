@@ -1513,8 +1513,8 @@ def initialize_tables():
                 )
                 conn.commit()
             except Exception as e:
-                logging.warning(
-                    f"Error adding google_chat_message_name column to incidents: {e}"
+                logging.error(
+                    f"Failed to add google_chat_message_name column to incidents: {e}"
                 )
                 conn.rollback()
 

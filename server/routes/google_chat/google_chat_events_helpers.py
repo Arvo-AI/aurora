@@ -3,9 +3,11 @@ Helper functions for Google Chat Events handling.
 Mirrors the Slack events helpers for feature parity.
 """
 
+import html
 import logging
 import os
 import re
+import requests
 from typing import Optional, Tuple
 from utils.db.connection_pool import db_pool
 from datetime import datetime
@@ -62,6 +64,14 @@ def verify_google_chat_request(request_data: dict) -> bool:
         return False
 
 
+def _mask_email(email: str) -> str:
+    """Mask an email for logging: 'foo@bar.com' → 'f***@bar.com'."""
+    if not email or "@" not in email:
+        return "***"
+    local, domain = email.split("@", 1)
+    return f"{local[0]}***@{domain}" if local else f"***@{domain}"
+
+
 def get_org_google_chat_credentials(sender_email: str) -> Optional[Tuple[str, str, str]]:
     """
     Find the org's Google Chat credentials by looking up the sender's Aurora account.
@@ -72,7 +82,7 @@ def get_org_google_chat_credentials(sender_email: str) -> Optional[Tuple[str, st
     Returns (connector_owner_user_id, org_id, sender_user_id) or None.
     """
     if not sender_email or "@" not in sender_email:
-        logger.warning(f"Invalid sender email: {sender_email!r}")
+        logger.warning(f"Invalid sender email: {_mask_email(sender_email)!r}")
         return None
 
     try:
@@ -84,7 +94,7 @@ def get_org_google_chat_credentials(sender_email: str) -> Optional[Tuple[str, st
                 )
                 user_row = cursor.fetchone()
                 if not user_row or not user_row[1]:
-                    logger.warning(f"No Aurora user or org found for {sender_email}")
+                    logger.warning(f"No Aurora user or org found for {_mask_email(sender_email)}")
                     return None
 
                 sender_user_id, org_id = user_row
@@ -106,7 +116,7 @@ def get_org_google_chat_credentials(sender_email: str) -> Optional[Tuple[str, st
                     return None
                 return token_row[0], org_id, sender_user_id
     except Exception as e:
-        logger.error(f"Error looking up org Google Chat credentials for {sender_email}: {e}", exc_info=True)
+        logger.error(f"Error looking up org Google Chat credentials for {_mask_email(sender_email)}: {e}", exc_info=True)
         return None
 
 
@@ -126,6 +136,12 @@ def get_thread_messages(
     """
     Fetch messages from a Google Chat thread for context.
     Returns list of messages in chronological order.
+
+    Note: The chat.bot scope cannot read message history. This function
+    will return an empty list when using the service account client unless
+    a Google Workspace admin has approved the chat.app.messages.readonly
+    scope via the Google Workspace Marketplace SDK. Until then, Aurora
+    replies without previous messages context.
     """
     try:
         messages = client.list_messages(space_name, page_size=limit)
@@ -166,6 +182,13 @@ def get_thread_messages(
             total_length += len(text)
 
         return list(reversed(formatted))
+    except requests.HTTPError as e:
+        status = e.response.status_code if e.response is not None else 0
+        if status == 403:
+            logger.debug(f"Cannot read thread messages (chat.bot scope lacks read access): {e}")
+        else:
+            logger.error(f"Error fetching thread messages: {e}", exc_info=True)
+        return []
     except Exception as e:
         logger.error(f"Error fetching thread messages: {e}", exc_info=True)
         return []
@@ -228,8 +251,8 @@ def format_response_for_google_chat(text: str, max_length: int = GCHAT_SAFE_MESS
     formatted = text.replace("\\n", "\n")
     formatted = formatted.replace("\x00", "")
 
-    # Remove in-text citations
-    formatted = re.sub(r"\[(\d+(?:,\s*\d+)*)\]", "", formatted)
+    # Remove in-text citations like [1] or [1, 2] but not array indices like arr[0]
+    formatted = re.sub(r"(?<![a-zA-Z_\]])\[(\d+(?:,\s*\d+)*)\]", "", formatted)
     formatted = re.sub(r"\s+([.,;:!?])", r"\1", formatted)
     formatted = re.sub(r"  +", " ", formatted)
 
@@ -237,8 +260,14 @@ def format_response_for_google_chat(text: str, max_length: int = GCHAT_SAFE_MESS
     formatted = re.sub(r"\*\*([^\*]+)\*\*", r"*\1*", formatted)
     # Convert markdown links [text](url) → <url|text>
     formatted = re.sub(r"\[([^\]]+)\]\(([^\)]+)\)", r"<\2|\1>", formatted)
-    # Remove HTML tags
-    formatted = re.sub(r"<(?!http|@|#)([^>]+)>", "", formatted)
+    # Remove HTML tags but preserve URLs (<http...>), mentions (<@...>), and code blocks
+    def _strip_html_outside_code(text: str) -> str:
+        parts = re.split(r"(```[\s\S]*?```|`[^`]+`)", text)
+        for i, part in enumerate(parts):
+            if not part.startswith("`"):
+                parts[i] = re.sub(r"<(?!http|@|#)([^>]+)>", "", part)
+        return "".join(parts)
+    formatted = _strip_html_outside_code(formatted)
 
     if len(formatted) > max_length:
         formatted = formatted[:max_length] + "\n\n...(message truncated)"
@@ -295,7 +324,7 @@ def get_session_from_thread(
                     """
                     SELECT cs.id, i.id
                     FROM chat_sessions cs
-                    LEFT JOIN incidents i ON i.aurora_chat_session_id = cs.id
+                    LEFT JOIN incidents i ON i.aurora_chat_session_id = cs.id::uuid
                     WHERE (cs.ui_state->'triggerMetadata'->>'source') = 'google_chat'
                     AND (cs.ui_state->'triggerMetadata'->>'space_name') = %s
                     AND (cs.ui_state->'triggerMetadata'->>'thread_key') = %s
@@ -397,6 +426,7 @@ def get_incident_suggestions(incident_id: str):
                     SELECT id, title, description, type, risk, command
                     FROM incident_suggestions
                     WHERE incident_id = %s
+                    AND NULLIF(BTRIM(command), '') IS NOT NULL
                     ORDER BY
                         CASE type
                             WHEN 'diagnostic' THEN 1
@@ -441,13 +471,14 @@ def build_suggestion_cards(incident_id: str, suggestions: list, max_suggestions:
             if len(command) > COMMAND_FULL_DISPLAY_LENGTH
             else command
         )
+        safe_command_display = html.escape(command_display)
 
         sections.append({
             "header": title,
             "widgets": [
                 {
                     "decoratedText": {
-                        "text": f"<font color=\"#666666\"><code>{command_display}</code></font>",
+                        "text": f"<font color=\"#666666\"><code>{safe_command_display}</code></font>",
                         "wrapText": True,
                     },
                 },
