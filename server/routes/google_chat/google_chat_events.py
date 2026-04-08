@@ -9,7 +9,7 @@ Event types: MESSAGE, CARD_CLICKED, ADDED_TO_SPACE, REMOVED_FROM_SPACE.
 import logging
 import re
 from flask import Blueprint, request, jsonify
-from connectors.google_chat_connector.client import get_google_chat_client_for_user
+from connectors.google_chat_connector.client import get_chat_app_client
 from utils.db.connection_pool import db_pool
 from utils.auth.enforcer import get_user_roles_in_org
 from routes.google_chat.google_chat_events_helpers import (
@@ -113,9 +113,9 @@ def _handle_message(data: dict):
                 return jsonify({})
 
             connector_owner_id, org_id, user_id = org_creds
-            client = get_google_chat_client_for_user(connector_owner_id)
+            client = get_chat_app_client()
             if not client:
-                logger.error(f"Failed to create client for connector owner {connector_owner_id}")
+                logger.error("Failed to create Chat client (no service account or user token)")
                 return jsonify({})
 
             if not _user_can_execute(user_id):
@@ -293,7 +293,7 @@ def _handle_run_suggestion(
 
         logger.info(f"User {clicker_user_id} executing suggestion: {title} ({risk} risk)")
 
-        client = get_google_chat_client_for_user(connector_owner_id)
+        client = get_chat_app_client()
         message = data.get("message", {})
         thread_key = message.get("thread", {}).get("name", "").split("/")[-1]
 
@@ -373,7 +373,7 @@ def _handle_suggestion_details(
                     return jsonify({}), 200
                 title, description, command, stype, risk = row
 
-        client = get_google_chat_client_for_user(connector_owner_id)
+        client = get_chat_app_client()
         if client:
             try:
                 max_cmd_len = 10000

@@ -2,6 +2,7 @@ import { apiRequest } from '@/lib/services/api-client';
 
 export interface GoogleChatStatus {
   connected: boolean;
+  has_service_account?: boolean;
   connected_by?: string;
   incidents_space_display_name?: string;
   error?: string;
@@ -9,7 +10,8 @@ export interface GoogleChatStatus {
 
 export interface GoogleChatConnectResponse {
   oauth_url: string;
-  message: string;
+  error?: string;
+  error_code?: string;
 }
 
 const API_BASE = '/api/google-chat';
@@ -22,6 +24,7 @@ export const googleChatService = {
       });
       return {
         connected: Boolean(data?.connected),
+        has_service_account: data?.has_service_account,
         connected_by: data?.connected_by,
         incidents_space_display_name: data?.incidents_space_display_name,
         error: data?.error,

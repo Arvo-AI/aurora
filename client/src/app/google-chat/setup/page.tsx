@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -21,13 +21,13 @@ import ConnectorAuthGuard from "@/components/connectors/ConnectorAuthGuard";
 import { googleChatService } from "@/lib/services/google-chat";
 import { copyToClipboard } from "@/lib/utils";
 import { getEnv } from "@/lib/env";
+import { useToast } from "@/hooks/use-toast";
 
 interface EnvCheckResult {
   configured: boolean;
   hasClientId: boolean;
   hasClientSecret: boolean;
-  hasProjectNumber: boolean;
-  hasVerificationToken: boolean;
+  hasServiceAccount: boolean;
   baseUrl: string;
 }
 
@@ -35,10 +35,12 @@ const BACKEND_URL = getEnv('NEXT_PUBLIC_BACKEND_URL');
 
 export default function GoogleChatSetupPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const { toast } = useToast();
   const [envCheck, setEnvCheck] = useState<EnvCheckResult | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [isConnecting, setIsConnecting] = useState(false);
   const [copySuccess, setCopySuccess] = useState<Record<string, boolean>>({});
-  const [userId, setUserId] = useState<string | null>(null);
 
   const handleCopy = (text: string, key: string) => {
     copyToClipboard(text);
@@ -48,19 +50,6 @@ export default function GoogleChatSetupPage() {
       2000
     );
   };
-
-  useEffect(() => {
-    const fetchUserId = async () => {
-      try {
-        const response = await fetch("/api/getUserId");
-        const data = await response.json();
-        if (data.userId) setUserId(data.userId);
-      } catch (err) {
-        console.error("Failed to get userId:", err);
-      }
-    };
-    fetchUserId();
-  }, []);
 
   const checkEnv = async () => {
     setIsLoading(true);
@@ -83,31 +72,82 @@ export default function GoogleChatSetupPage() {
     checkEnv();
   }, []);
 
+  // Handle OAuth callback results (success/error query params)
   useEffect(() => {
-    if (!isLoading && envCheck?.configured && userId) {
-      const autoConnect = async () => {
-        try {
-          const response = await googleChatService.connect();
-          if (response.oauth_url) {
-            window.location.href = response.oauth_url;
-          }
-        } catch (error: any) {
-          console.error("Auto-connect error:", error);
-          setIsLoading(false);
-        }
-      };
-      autoConnect();
-    }
-  }, [isLoading, envCheck, userId]);
+    const success = searchParams.get("success");
+    const error = searchParams.get("error");
 
-  if (isLoading || (envCheck?.configured && userId)) {
+    if (success === "true") {
+      toast({
+        title: "Google Chat Connected",
+        description: "Incidents space is ready. Notifications will appear as Aurora.",
+      });
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new CustomEvent("providerStateChanged"));
+      }
+      router.push("/connectors");
+      return;
+    }
+
+    if (error) {
+      const errorMessages: Record<string, string> = {
+        missing_params: "OAuth callback is missing required parameters.",
+        no_access_token: "Failed to get access token from Google.",
+        space_creation_failed: "Failed to create the incidents space.",
+        space_not_resolved: "Could not find or create the incidents space.",
+        setup_failed: "Google Chat setup failed unexpectedly.",
+        insufficient_permissions: "You don't have permission to create Google Chat spaces. Ask your Workspace admin to allow space creation or to connect Aurora.",
+        callback_failed: "OAuth callback failed unexpectedly.",
+        access_denied: "You denied access. Please try again.",
+      };
+      toast({
+        title: "Connection Failed",
+        description: errorMessages[error] || `Google Chat setup error: ${error}`,
+        variant: "destructive",
+      });
+    }
+  }, [searchParams, toast, router]);
+
+  // Auto-trigger OAuth when env is configured
+  useEffect(() => {
+    if (!isLoading && envCheck?.configured) {
+      handleConnect();
+    }
+  }, [isLoading, envCheck]);
+
+  const handleConnect = async () => {
+    setIsConnecting(true);
+    try {
+      const response = await googleChatService.connect();
+      if (response.oauth_url) {
+        window.location.href = response.oauth_url;
+      } else if (response.error) {
+        toast({
+          title: "Connection Failed",
+          description: response.error,
+          variant: "destructive",
+        });
+        setIsConnecting(false);
+      }
+    } catch (error: any) {
+      console.error("Connect error:", error);
+      toast({
+        title: "Connection Failed",
+        description: error.message || "Failed to connect Google Chat",
+        variant: "destructive",
+      });
+      setIsConnecting(false);
+    }
+  };
+
+  if (isLoading || isConnecting) {
     return (
       <ConnectorAuthGuard connectorName="Google Chat">
         <div className="min-h-screen bg-black flex items-center justify-center">
           <div className="text-center">
             <Loader2 className="w-12 h-12 animate-spin mx-auto mb-6 text-gray-600" />
             <p className="text-slate-300 text-lg">
-              Checking Google Chat configuration...
+              {isConnecting ? "Redirecting to Google..." : "Checking Google Chat configuration..."}
             </p>
           </div>
         </div>
@@ -117,8 +157,7 @@ export default function GoogleChatSetupPage() {
 
   const envVarSnippet = `GOOGLE_CHAT_CLIENT_ID=your-client-id
 GOOGLE_CHAT_CLIENT_SECRET=your-client-secret
-GOOGLE_CHAT_PROJECT_NUMBER=your-project-number
-GOOGLE_CHAT_VERIFICATION_TOKEN=your-verification-token`;
+GOOGLE_CHAT_SERVICE_ACCOUNT_KEY='{"type":"service_account",...}'`;
 
   return (
     <ConnectorAuthGuard connectorName="Google Chat">
@@ -151,16 +190,9 @@ GOOGLE_CHAT_VERIFICATION_TOKEN=your-verification-token`;
                 {/* Status indicators for what's missing */}
                 <div className="grid grid-cols-2 gap-2">
                   {[
-                    { label: "Client ID", ok: envCheck?.hasClientId },
-                    { label: "Client Secret", ok: envCheck?.hasClientSecret },
-                    {
-                      label: "Project Number",
-                      ok: envCheck?.hasProjectNumber,
-                    },
-                    {
-                      label: "Verification Token",
-                      ok: envCheck?.hasVerificationToken,
-                    },
+                    { label: "OAuth Client ID", ok: envCheck?.hasClientId },
+                    { label: "OAuth Client Secret", ok: envCheck?.hasClientSecret },
+                    { label: "Service Account", ok: envCheck?.hasServiceAccount },
                   ].map((item) => (
                     <div
                       key={item.label}
@@ -234,51 +266,42 @@ GOOGLE_CHAT_VERIFICATION_TOKEN=your-verification-token`;
                     <p className="text-white/60 text-xs mb-2">
                       Go to{" "}
                       <strong>
-                        APIs &amp; Services → Credentials → Create Credentials
-                        → OAuth client ID
+                        APIs &amp; Services → Credentials → Create Credentials → OAuth client ID
                       </strong>
                       . Select <strong>Web application</strong> as the type.
                     </p>
-                    <div className="space-y-2">
-                      <div>
-                        <p className="text-white/50 text-xs mb-1">
-                          Add this as an Authorized redirect URI:
-                        </p>
-                        <div className="relative">
-                          <pre className="bg-black/50 p-2.5 pr-10 rounded border border-white/10 text-xs overflow-x-auto whitespace-pre text-white/80 font-mono">
-                            {`${envCheck?.baseUrl ?? BACKEND_URL}/google-chat/callback`}
-                          </pre>
-                          <Button
-                            variant="outline"
-                            size="icon"
-                            onClick={() =>
-                              handleCopy(
-                                `${envCheck?.baseUrl ?? BACKEND_URL}/google-chat/callback`,
-                                "redirectUri"
-                              )
-                            }
-                            className="absolute top-1.5 right-1.5 h-6 w-6 border-white/10 hover:bg-white/5 text-white/70"
-                          >
-                            {copySuccess["redirectUri"] ? (
-                              <CheckCircle className="w-3 h-3" />
-                            ) : (
-                              <Copy className="w-3 h-3" />
-                            )}
-                          </Button>
-                        </div>
-                      </div>
-                      <p className="text-white/40 text-xs">
-                        This gives you{" "}
-                        <code className="bg-black/50 px-1 py-0.5 rounded">
-                          GOOGLE_CHAT_CLIENT_ID
-                        </code>{" "}
-                        and{" "}
-                        <code className="bg-black/50 px-1 py-0.5 rounded">
-                          GOOGLE_CHAT_CLIENT_SECRET
-                        </code>
-                        .
-                      </p>
+                    <p className="text-white/40 text-xs mb-2">
+                      Add this as an <strong>Authorized redirect URI</strong>:
+                    </p>
+                    <div className="relative mt-1 mb-2">
+                      <pre className="bg-black/50 p-2.5 pr-10 rounded border border-white/10 text-xs overflow-x-auto whitespace-pre text-white/80 font-mono">
+                        {`${envCheck?.baseUrl ?? BACKEND_URL}/google-chat/callback`}
+                      </pre>
+                      <Button
+                        variant="outline"
+                        size="icon"
+                        onClick={() =>
+                          handleCopy(
+                            `${envCheck?.baseUrl ?? BACKEND_URL}/google-chat/callback`,
+                            "redirectUri"
+                          )
+                        }
+                        className="absolute top-1.5 right-1.5 h-6 w-6 border-white/10 hover:bg-white/5 text-white/70"
+                      >
+                        {copySuccess["redirectUri"] ? (
+                          <CheckCircle className="w-3 h-3" />
+                        ) : (
+                          <Copy className="w-3 h-3" />
+                        )}
+                      </Button>
                     </div>
+                    <p className="text-white/40 text-xs">
+                      The Client ID and Secret are your{" "}
+                      <code className="bg-black/50 px-1 py-0.5 rounded">GOOGLE_CHAT_CLIENT_ID</code>{" "}
+                      and{" "}
+                      <code className="bg-black/50 px-1 py-0.5 rounded">GOOGLE_CHAT_CLIENT_SECRET</code>
+                      .
+                    </p>
                     <a
                       href="https://console.cloud.google.com/apis/credentials/oauthclient"
                       target="_blank"
@@ -293,7 +316,39 @@ GOOGLE_CHAT_VERIFICATION_TOKEN=your-verification-token`;
                   {/* Step 4 */}
                   <div className="break-words border-t border-white/5 pt-4">
                     <p className="text-white/90 font-medium mb-1">
-                      4. Configure the Chat app
+                      4. Create a service account (recommended)
+                    </p>
+                    <p className="text-white/60 text-xs mb-2">
+                      Go to{" "}
+                      <strong>
+                        IAM &amp; Admin → Service Accounts → Create Service Account
+                      </strong>
+                      . Name it something like <strong>aurora-chat-bot</strong>,
+                      then create a JSON key for it.
+                    </p>
+                    <p className="text-white/40 text-xs">
+                      The JSON key content is your{" "}
+                      <code className="bg-black/50 px-1 py-0.5 rounded">
+                        GOOGLE_CHAT_SERVICE_ACCOUNT_KEY
+                      </code>
+                      . With a service account, notifications appear as
+                      &quot;Aurora&quot; instead of your name.
+                    </p>
+                    <a
+                      href="https://console.cloud.google.com/iam-admin/serviceaccounts/create"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1.5 text-xs text-blue-400 hover:text-blue-300 hover:underline mt-2"
+                    >
+                      <ExternalLink className="w-3 h-3" />
+                      Create Service Account
+                    </a>
+                  </div>
+
+                  {/* Step 5 */}
+                  <div className="break-words border-t border-white/5 pt-4">
+                    <p className="text-white/90 font-medium mb-1">
+                      5. Configure the Chat app
                     </p>
                     <p className="text-white/60 text-xs mb-2">
                       In the Google Chat API settings page, configure the
@@ -420,7 +475,7 @@ GOOGLE_CHAT_VERIFICATION_TOKEN=your-verification-token`;
                             </strong>{" "}
                             to{" "}
                             <strong className="text-white/90">
-                              Project Number
+                              HTTP endpoint URL
                             </strong>
                           </p>
                         </div>
@@ -451,15 +506,6 @@ GOOGLE_CHAT_VERIFICATION_TOKEN=your-verification-token`;
                       </div>
                     </div>
 
-                    <p className="text-white/40 text-xs mt-3">
-                      The <strong>Project number</strong> at the top of this
-                      page is your{" "}
-                      <code className="bg-black/50 px-1 py-0.5 rounded">
-                        GOOGLE_CHAT_VERIFICATION_TOKEN
-                      </code>{" "}
-                      — you&apos;ll need it in step 6. Leave all other settings
-                      as default.
-                    </p>
                     <a
                       href="https://console.cloud.google.com/apis/api/chat.googleapis.com/hangouts-chat"
                       target="_blank"
@@ -468,31 +514,6 @@ GOOGLE_CHAT_VERIFICATION_TOKEN=your-verification-token`;
                     >
                       <ExternalLink className="w-3 h-3" />
                       Open Chat API Configuration
-                    </a>
-                  </div>
-
-                  {/* Step 5 */}
-                  <div className="break-words border-t border-white/5 pt-4">
-                    <p className="text-white/90 font-medium mb-1">
-                      5. Find your project number
-                    </p>
-                    <p className="text-white/60 text-xs mb-2">
-                      Go to your project&apos;s <strong>Dashboard</strong> in the
-                      Cloud Console. The <strong>Project number</strong>{" "}
-                      is displayed in the Project info card. This is{" "}
-                      <code className="bg-black/50 px-1 py-0.5 rounded">
-                        GOOGLE_CHAT_PROJECT_NUMBER
-                      </code>
-                      .
-                    </p>
-                    <a
-                      href="https://console.cloud.google.com/home/dashboard"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="inline-flex items-center gap-1.5 text-xs text-blue-400 hover:text-blue-300 hover:underline"
-                    >
-                      <ExternalLink className="w-3 h-3" />
-                      Open Project Dashboard
                     </a>
                   </div>
 

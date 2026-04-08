@@ -1,13 +1,13 @@
 """
 Google Chat notification service for sending incident alerts and updates.
-Sends messages to the incidents space in the user's connected Google Chat workspace.
+Uses the Chat app service account so messages appear as "Aurora".
 """
 
 import logging
 import os
 from typing import Dict, Any, Optional
 from datetime import datetime
-from connectors.google_chat_connector.client import get_google_chat_client_for_user
+from connectors.google_chat_connector.client import get_chat_app_client
 from utils.db.connection_pool import db_pool
 from routes.google_chat.google_chat_events_helpers import (
     format_response_for_google_chat,
@@ -22,17 +22,22 @@ FRONTEND_URL = os.getenv("FRONTEND_URL")
 
 
 def _get_incidents_space_name(user_id: str) -> Optional[str]:
-    """Get the incidents space name from stored credentials."""
+    """Get the incidents space name for the user's org."""
     try:
         from utils.auth.stateless_auth import get_credentials_from_db
-        creds = get_credentials_from_db(user_id, "google_chat")
-        if not creds:
-            logger.error(f"[GChatNotification] No credentials found for user {user_id}")
+        config = get_credentials_from_db(user_id, "google_chat")
+        if not config:
+            logger.error(f"[GChatNotification] No Google Chat config found for user {user_id}")
             return None
-        return creds.get("incidents_space_name")
+        return config.get("incidents_space_name")
     except Exception as e:
         logger.error(f"[GChatNotification] Error getting incidents space: {e}", exc_info=True)
         return None
+
+
+def _get_chat_client(user_id: str):
+    """Get the Chat app service account client."""
+    return get_chat_app_client()
 
 
 def _get_incident_url(incident_id: str) -> str:
@@ -42,7 +47,7 @@ def _get_incident_url(incident_id: str) -> str:
 def send_google_chat_investigation_started_notification(user_id: str, incident_data: Dict[str, Any]) -> bool:
     """Send Google Chat notification when RCA investigation starts."""
     try:
-        client = get_google_chat_client_for_user(user_id)
+        client = _get_chat_client(user_id)
         if not client:
             return False
 
@@ -156,7 +161,7 @@ def send_google_chat_investigation_completed_notification(
 ) -> bool:
     """Send Google Chat notification when RCA investigation completes."""
     try:
-        client = get_google_chat_client_for_user(user_id)
+        client = _get_chat_client(user_id)
         if not client:
             return False
 

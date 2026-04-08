@@ -238,17 +238,13 @@ def _check_slack(creds: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _check_google_chat(creds: Dict[str, Any]) -> Dict[str, Any]:
-    """Validates Google Chat connection via get_google_chat_client_for_user (handles token refresh)."""
-    from connectors.google_chat_connector.client import get_google_chat_client_for_user
+    """Validates Google Chat connection via service account."""
+    from connectors.google_chat_connector.client import get_chat_app_client
 
-    uid = creds.get("_user_id")
-    if not uid:
+    if not creds.get("incidents_space_name"):
         return {"connected": False}
     try:
-        client = get_google_chat_client_for_user(uid)
-        if not client:
-            return {"connected": False}
-        return {"connected": True}
+        return {"connected": get_chat_app_client() is not None}
     except Exception:
         return {"connected": False}
 

@@ -17,7 +17,7 @@ from celery_config import celery_app
 from langchain_core.messages import HumanMessage
 from utils.cache.redis_client import get_redis_client
 from utils.notifications.email_service import get_email_service
-from utils.auth.stateless_auth import get_user_email
+from utils.auth.stateless_auth import get_user_email, get_credentials_from_db
 from utils.notifications.slack_notification_service import (
     send_slack_investigation_started_notification,
     send_slack_investigation_completed_notification,
@@ -26,8 +26,8 @@ from utils.notifications.google_chat_notification_service import (
     send_google_chat_investigation_started_notification,
     send_google_chat_investigation_completed_notification,
 )
+from connectors.google_chat_connector.client import get_chat_app_client
 from utils.db.connection_pool import db_pool
-from langchain_core.messages import ToolMessage
 from chat.background.visualization_generator import update_visualization
 from chat.backend.constants import MAX_TOOL_OUTPUT_CHARS, INFRASTRUCTURE_TOOLS
 
@@ -207,7 +207,6 @@ def _get_connected_integrations(user_id: str) -> Dict[str, bool]:
 
     try:
         # Check GitHub
-        from utils.auth.stateless_auth import get_credentials_from_db
         github_creds = get_credentials_from_db(user_id, "github")
         integrations['github'] = bool(github_creds and github_creds.get("access_token"))
     except Exception as e:
@@ -1290,11 +1289,12 @@ def _has_slack_connected(user_id: str) -> bool:
 
 
 def _has_google_chat_connected(user_id: str) -> bool:
-    """Check if user has Google Chat connected."""
+    """Check if user's org has Google Chat connected with a service account."""
     try:
-        from connectors.google_chat_connector.client import get_google_chat_client_for_user
-        client = get_google_chat_client_for_user(user_id)
-        return client is not None
+        config = get_credentials_from_db(user_id, "google_chat")
+        if not config or not config.get("incidents_space_name"):
+            return False
+        return get_chat_app_client() is not None
     except Exception as e:
         logger.error(f"[GChatNotification] Error checking Google Chat connection: {e}")
         return False
@@ -1645,7 +1645,6 @@ def _send_response_to_slack(user_id: str, session_id: str, trigger_metadata: Dic
 def _send_response_to_google_chat(user_id: str, session_id: str, trigger_metadata: Dict[str, Any]) -> None:
     """Send Aurora's response back to Google Chat after background chat completes."""
     try:
-        from connectors.google_chat_connector.client import get_google_chat_client_for_user
         from routes.google_chat.google_chat_events_helpers import format_response_for_google_chat
 
         space_name = trigger_metadata.get('space_name')
@@ -1704,7 +1703,7 @@ def _send_response_to_google_chat(user_id: str, session_id: str, trigger_metadat
             attribution = "\n".join(header_lines)
             formatted_message = f"{attribution}\n{formatted_message}"
 
-        client = get_google_chat_client_for_user(user_id)
+        client = get_chat_app_client()
         if not client:
             logger.error(f"[BackgroundChat] Could not get Google Chat client for user {user_id}")
             return

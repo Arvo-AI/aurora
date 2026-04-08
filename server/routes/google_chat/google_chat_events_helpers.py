@@ -3,7 +3,6 @@ Helper functions for Google Chat Events handling.
 Mirrors the Slack events helpers for feature parity.
 """
 
-import hmac
 import logging
 import os
 import re
@@ -29,42 +28,38 @@ def verify_google_chat_request(request_data: dict) -> bool:
     """
     Verify that the request came from Google Chat.
 
-    Two-layer verification:
-    1. JWT Bearer token in the Authorization header, verified against
-       Google's public keys with aud == GOOGLE_CHAT_PROJECT_NUMBER.
-    2. Verification token in the event payload (shared secret).
-
-    Both layers are attempted. If JWT verification succeeds, the request
-    is trusted. Otherwise, falls back to the verification token check.
-    Rejects the request if neither method can confirm authenticity.
+    Uses OIDC ID token verification with the HTTP endpoint URL as the
+    audience (Google's recommended approach for custom HTTP endpoints).
+    The audience is derived from NEXT_PUBLIC_BACKEND_URL.
     """
-    project_number = os.getenv("GOOGLE_CHAT_PROJECT_NUMBER")
     auth_header = flask_request.headers.get("Authorization", "")
-
-    if project_number and auth_header.startswith("Bearer "):
-        bearer_token = auth_header[7:]
-        try:
-            id_token.verify_token(
-                bearer_token,
-                google_requests.Request(),
-                audience=project_number,
-                certs_url="https://www.googleapis.com/service_accounts/v1/metadata/x509/chat@system.gserviceaccount.com",
-            )
-            return True
-        except Exception as e:
-            logger.warning(f"Google Chat JWT verification failed: {e}")
-
-    verification_token = os.getenv("GOOGLE_CHAT_VERIFICATION_TOKEN")
-    if not verification_token:
-        logger.error("GOOGLE_CHAT_VERIFICATION_TOKEN not configured and JWT verification unavailable — rejecting request")
+    if not auth_header.startswith("Bearer "):
+        logger.warning("Google Chat request missing Bearer token")
         return False
 
-    event_token = request_data.get("token", "")
-    if not event_token:
-        logger.warning("No token in Google Chat event payload")
+    backend_url = os.getenv("NEXT_PUBLIC_BACKEND_URL", "").rstrip("/")
+    ngrok_url = os.getenv("NGROK_URL", "").rstrip("/")
+    audience = ngrok_url if ngrok_url and backend_url.startswith("http://localhost") else backend_url
+    events_url = f"{audience}/google-chat/events"
+
+    if not events_url or events_url == "/google-chat/events":
+        logger.error("NEXT_PUBLIC_BACKEND_URL not set — cannot verify Google Chat requests")
         return False
 
-    return hmac.compare_digest(event_token, verification_token)
+    bearer_token = auth_header[7:]
+    try:
+        token = id_token.verify_oauth2_token(
+            bearer_token,
+            google_requests.Request(),
+            audience=events_url,
+        )
+        if token.get("email") != "chat@system.gserviceaccount.com":
+            logger.warning(f"Google Chat JWT email mismatch: {token.get('email')}")
+            return False
+        return True
+    except Exception as e:
+        logger.warning(f"Google Chat OIDC verification failed: {e}")
+        return False
 
 
 def get_org_google_chat_credentials(sender_email: str) -> Optional[Tuple[str, str, str]]:

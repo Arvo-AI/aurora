@@ -2,17 +2,30 @@
 Google Chat API client for Aurora integration.
 Handles message sending, space management, and message reading.
 
-Uses the Google Chat REST API (v1) with service account or user OAuth credentials.
+Hybrid auth model:
+  - User OAuth is used during *setup* to create/find the incidents space
+    inside the customer's Google Workspace. Tokens are used once and discarded.
+  - The Chat app service account is required for all ongoing messaging so that
+    messages appear as "Aurora", not as the connecting user.
 """
 
 import logging
-import requests
+import os
 import json
+import threading
+import requests
 from typing import Dict, Any, List, Optional
+
+from google.oauth2 import service_account as google_service_account
+from google.auth.transport.requests import Request as GoogleAuthRequest
 
 logger = logging.getLogger(__name__)
 
 GOOGLE_CHAT_API_BASE = "https://chat.googleapis.com/v1"
+CHAT_BOT_SCOPE = "https://www.googleapis.com/auth/chat.bot"
+
+_sa_credentials: Optional[google_service_account.Credentials] = None
+_sa_lock = threading.Lock()
 
 
 class GoogleChatClient:
@@ -179,6 +192,22 @@ class GoogleChatClient:
             logger.warning(f"Could not add {user_email} to {space_name}: {e}")
             return None
 
+    def add_app(self, space_name: str) -> Optional[Dict[str, Any]]:
+        """Add the Chat app to a space (requires user auth with chat.memberships.app scope)."""
+        try:
+            body = {
+                "member": {
+                    "name": "users/app",
+                    "type": "BOT",
+                },
+            }
+            result = self._request("POST", f"{space_name}/members", body)
+            logger.info(f"Added Chat app to {space_name}")
+            return result
+        except Exception as e:
+            logger.warning(f"Could not add Chat app to {space_name}: {e}")
+            return None
+
     # ── History ─────────────────────────────────────────────────────
 
     def list_messages(
@@ -201,57 +230,113 @@ class GoogleChatClient:
         return self._request("GET", "spaces", params=params)
 
 
-def create_incidents_space(
-    access_token: str, org_display_name: str, installer_email: str,
-) -> Dict[str, Any]:
+def _load_service_account_credentials() -> Optional[google_service_account.Credentials]:
+    """Load and cache Google Chat service account credentials.
+
+    Reads from GOOGLE_CHAT_SERVICE_ACCOUNT_KEY (inline JSON).
+    """
+    global _sa_credentials
+    with _sa_lock:
+        if _sa_credentials is not None and _sa_credentials.valid:
+            return _sa_credentials
+
+        key_json = os.getenv("GOOGLE_CHAT_SERVICE_ACCOUNT_KEY")
+
+        try:
+            if key_json:
+                info = json.loads(key_json)
+                creds = google_service_account.Credentials.from_service_account_info(
+                    info, scopes=[CHAT_BOT_SCOPE],
+                )
+            else:
+                logger.debug("No Google Chat service account configured")
+                return None
+
+            creds.refresh(GoogleAuthRequest())
+            _sa_credentials = creds
+            return creds
+        except Exception as e:
+            logger.error(f"Failed to load Google Chat service account: {e}", exc_info=True)
+            return None
+
+
+def get_chat_app_client() -> Optional["GoogleChatClient"]:
+    """Get a GoogleChatClient authenticated as the Chat app (service account).
+
+    Messages sent via this client appear as "Aurora" in Google Chat.
+    """
+    creds = _load_service_account_credentials()
+    if not creds:
+        return None
+
+    if not creds.valid:
+        try:
+            creds.refresh(GoogleAuthRequest())
+        except Exception as e:
+            logger.error(f"Failed to refresh service account token: {e}", exc_info=True)
+            return None
+
+    return GoogleChatClient(creds.token)
+
+
+def create_incidents_space(access_token: str) -> Dict[str, Any]:
     """
     Find or create the incidents space for Aurora notifications.
 
-    Logic mirrors the Slack connector:
-    1. Try to find existing 'Incidents' space the bot is in
-    2. If found, use it
-    3. If not found, create 'Aurora Incidents' space
+    Uses the *user's* OAuth token so the space is created inside the
+    customer's Google Workspace.  Also adds the Chat app to the space
+    so the service account can send messages as "Aurora" going forward.
     """
     try:
-        client = GoogleChatClient(access_token)
+        user_client = GoogleChatClient(access_token)
         space_display_name = "Incidents"
         space_name = None
         created = False
         message = ""
 
-        existing = client.find_space_by_name(space_display_name)
+        existing = user_client.find_space_by_name(space_display_name)
         if existing:
             space_name = existing["name"]
             message = f"Using existing space: {space_display_name}"
         else:
             space_display_name = "Aurora Incidents"
-            existing_aurora = client.find_space_by_name(space_display_name)
+            existing_aurora = user_client.find_space_by_name(space_display_name)
             if existing_aurora:
                 space_name = existing_aurora["name"]
                 message = f"Using existing space: {space_display_name}"
             else:
                 try:
-                    new_space = client.create_space(space_display_name)
+                    new_space = user_client.create_space(space_display_name)
                     space_name = new_space["name"]
                     created = True
                     message = f"Created space: {space_display_name}"
+                except requests.HTTPError as e:
+                    status = e.response.status_code if e.response is not None else 0
+                    if status in (403, 401):
+                        logger.error(f"Permission denied creating space: {e}")
+                        return {"ok": False, "error": "insufficient_permissions"}
+                    logger.error(f"Failed to create space: {e}")
+                    return {"ok": False, "error": "space_creation_failed"}
                 except Exception as e:
                     logger.error(f"Failed to create space: {e}")
-                    return {"ok": False, "error": "Failed to create Google Chat space"}
+                    return {"ok": False, "error": "space_creation_failed"}
 
         if space_name:
             try:
-                if installer_email:
-                    client.add_member(space_name, installer_email)
+                user_client.add_app(space_name)
+
                 if created:
-                    client.update_space(
+                    user_client.update_space(
                         space_name, "Aurora incident alerts and notifications"
                     )
-                    client.send_message(
+
+                app_client = get_chat_app_client()
+                if app_client:
+                    app_client.send_message(
                         space_name,
                         (
                             f"Welcome to {space_display_name}!\n\n"
-                            f"Aurora is now connected to {org_display_name}. "
+                            "Aurora is now connected. "
                             "This space will be used for:\n\n"
                             "• Real-time incident alerts and notifications\n"
                             "• Automated root cause analysis updates\n\n"
@@ -269,65 +354,8 @@ def create_incidents_space(
                 "message": message,
             }
 
-        return {"ok": False, "error": "Failed to resolve incidents space"}
+        return {"ok": False, "error": "space_not_resolved"}
 
     except Exception as e:
         logger.error(f"Failed to create incidents space: {e}", exc_info=True)
-        return {"ok": False, "error": "Failed to set up incidents space"}
-
-
-def get_google_chat_client_for_user(user_id: str) -> Optional[GoogleChatClient]:
-    """
-    Get authenticated Google Chat client for a user (org-scoped via get_credentials_from_db).
-
-    Attempts to use the stored access token. If it fails with a 401,
-    refreshes the token using the stored refresh_token, persists the
-    new credentials, and returns a client with the fresh token.
-    """
-    try:
-        from utils.auth.stateless_auth import get_credentials_from_db
-        from utils.auth.token_management import store_tokens_in_db
-
-        creds = get_credentials_from_db(user_id, "google_chat")
-        if not creds or not creds.get("access_token"):
-            logger.debug(f"No Google Chat credentials for user {user_id}")
-            return None
-
-        client = GoogleChatClient(creds["access_token"])
-
-        try:
-            client.test_auth()
-            return client
-        except Exception:
-            pass
-
-        refresh_token = creds.get("refresh_token")
-        if not refresh_token:
-            logger.warning(f"Google Chat token expired and no refresh_token for user {user_id}")
-            return None
-
-        try:
-            from connectors.google_chat_connector.oauth import refresh_access_token
-
-            token_data = refresh_access_token(refresh_token)
-            new_access = token_data.get("access_token")
-            if not new_access:
-                logger.error("Google Chat token refresh returned no access_token")
-                return None
-
-            updated = dict(creds)
-            updated["access_token"] = new_access
-            if token_data.get("refresh_token"):
-                updated["refresh_token"] = token_data["refresh_token"]
-
-            store_tokens_in_db(user_id, updated, "google_chat")
-            logger.info(f"Refreshed Google Chat token for user {user_id}")
-
-            return GoogleChatClient(new_access)
-        except Exception as e:
-            logger.error(f"Failed to refresh Google Chat token for user {user_id}: {e}", exc_info=True)
-            return None
-
-    except Exception as e:
-        logger.error(f"Failed to get Google Chat client for user {user_id}: {e}", exc_info=True)
-        return None
+        return {"ok": False, "error": "setup_failed"}

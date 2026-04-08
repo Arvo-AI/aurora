@@ -1,9 +1,9 @@
 """
-Google Chat OAuth 2.0 configuration for Aurora integration.
+Google Chat OAuth 2.0 for the one-time setup flow.
 
-Uses Google's OAuth2 flow to authenticate users and obtain credentials
-for the Google Chat API. The Chat app itself uses a GCP service account,
-but we use OAuth to link a Google Workspace user to their Aurora account.
+User OAuth is used ONLY to create/find the incidents space inside the
+customer's Google Workspace.  All ongoing messaging goes through the Chat
+app's service account (see client.py).
 """
 
 import os
@@ -26,15 +26,11 @@ if not backend_url:
 
 REDIRECT_URI = f"{backend_url}/google-chat/callback"
 
-GOOGLE_CHAT_SCOPES = [
+GOOGLE_CHAT_SETUP_SCOPES = [
     "https://www.googleapis.com/auth/chat.spaces",
     "https://www.googleapis.com/auth/chat.spaces.create",
     "https://www.googleapis.com/auth/chat.memberships",
-    "https://www.googleapis.com/auth/chat.messages",
-    "https://www.googleapis.com/auth/chat.messages.create",
-    "openid",
-    "https://www.googleapis.com/auth/userinfo.email",
-    "https://www.googleapis.com/auth/userinfo.profile",
+    "https://www.googleapis.com/auth/chat.memberships.app",
 ]
 
 
@@ -53,7 +49,7 @@ def get_auth_url(state: str) -> str:
         "client_id": CLIENT_ID,
         "redirect_uri": REDIRECT_URI,
         "response_type": "code",
-        "scope": " ".join(GOOGLE_CHAT_SCOPES),
+        "scope": " ".join(GOOGLE_CHAT_SETUP_SCOPES),
         "access_type": "offline",
         "prompt": "consent",
         "state": state,
@@ -82,34 +78,3 @@ def exchange_code_for_token(code: str) -> Dict[str, Any]:
 
     logger.info("Successfully exchanged Google Chat OAuth code for token")
     return token_data
-
-
-def refresh_access_token(refresh_token: str) -> Dict[str, Any]:
-    """Refresh an expired access token."""
-    data = {
-        "client_id": CLIENT_ID,
-        "client_secret": CLIENT_SECRET,
-        "refresh_token": refresh_token,
-        "grant_type": "refresh_token",
-    }
-    response = requests.post("https://oauth2.googleapis.com/token", data=data, timeout=30)
-    response.raise_for_status()
-    token_data = response.json()
-
-    if "error" in token_data:
-        error = token_data.get("error_description", token_data["error"])
-        logger.error(f"Google Chat token refresh failed: {error}")
-        raise ValueError(f"Google Chat token refresh failed: {error}")
-
-    return token_data
-
-
-def get_user_info(access_token: str) -> Dict[str, Any]:
-    """Fetch Google user profile info using the access token."""
-    response = requests.get(
-        "https://www.googleapis.com/oauth2/v2/userinfo",
-        headers={"Authorization": f"Bearer {access_token}"},
-        timeout=15,
-    )
-    response.raise_for_status()
-    return response.json()

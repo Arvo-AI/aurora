@@ -335,7 +335,10 @@ SLACK_SIGNING_SECRET=your-signing-secret
 
 ### Google Chat
 
-OAuth 2.0 authentication for Google Chat spaces.
+Hybrid authentication for Google Chat spaces. User OAuth is used during setup
+to create the incidents space in the customer's Google Workspace. A service
+account handles all ongoing messaging so notifications and @Aurora replies
+appear as the Chat app ("Aurora"), not as a human user.
 
 #### 1. Create a Google Cloud Project
 
@@ -351,14 +354,22 @@ In your project, go to **APIs & Services → Library**, search for "Google Chat 
 
 1. Go to **APIs & Services → Credentials → Create Credentials → OAuth client ID**
 2. Select **Web application** as the type
-3. Add an Authorized redirect URI:
-   - Local (with tunnel): `https://your-ngrok-url.ngrok-free.app/google-chat/callback`
-   - Production: `https://your-domain.com/google-chat/callback`
-4. Save the **Client ID** and **Client Secret** — these are `GOOGLE_CHAT_CLIENT_ID` and `GOOGLE_CHAT_CLIENT_SECRET`
+3. Add an **Authorized redirect URI**: `https://your-domain.com/google-chat/callback` (or `http://localhost:5080/google-chat/callback` for local dev)
+4. Copy the **Client ID** and **Client Secret**
 
 [Create OAuth Client →](https://console.cloud.google.com/apis/credentials/oauthclient)
 
-#### 4. Configure the Chat App
+#### 4. Create a Service Account
+
+1. Go to **IAM & Admin → Service Accounts → Create Service Account**
+2. Name it something like `aurora-chat-bot`
+3. Click **Create and Continue** (no extra roles needed)
+4. On the service account page, go to **Keys → Add Key → Create new key → JSON**
+5. The downloaded JSON content is your `GOOGLE_CHAT_SERVICE_ACCOUNT_KEY`
+
+[Create Service Account →](https://console.cloud.google.com/iam-admin/serviceaccounts/create)
+
+#### 5. Configure the Chat App
 
 Go to the [Google Chat API Configuration page](https://console.cloud.google.com/apis/api/chat.googleapis.com/hangouts-chat) and set the following. Leave everything else as default.
 
@@ -384,19 +395,12 @@ Go to the [Google Chat API Configuration page](https://console.cloud.google.com/
 - Check **Make this Chat app available to specific people and groups** and add your email address (or a Google Group to let multiple people find and add the bot)
 - This controls who can *find and add* the bot — once added to a space, all members of that space can interact with it. You don't need to add every user here.
 
-The **Verification token** shown on this page is your `GOOGLE_CHAT_VERIFICATION_TOKEN`.
-
-#### 5. Find Your Project Number
-
-Go to your project's [Dashboard](https://console.cloud.google.com/home/dashboard) in the Cloud Console. The **Project number** is displayed in the Project info card. This is `GOOGLE_CHAT_PROJECT_NUMBER`.
-
 #### 6. Configure Environment
 
 ```bash
 GOOGLE_CHAT_CLIENT_ID=your-client-id
 GOOGLE_CHAT_CLIENT_SECRET=your-client-secret
-GOOGLE_CHAT_PROJECT_NUMBER=your-project-number
-GOOGLE_CHAT_VERIFICATION_TOKEN=your-verification-token
+GOOGLE_CHAT_SERVICE_ACCOUNT_KEY='{"type":"service_account",...}'
 ```
 
 Then rebuild and restart Aurora:
@@ -410,11 +414,11 @@ make dev
 
 | Error | Solution |
 |-------|----------|
-| `invalid_scope` | Ensure you haven't added service-account-only scopes (e.g. `chat.bot`) to the OAuth request |
-| `bad_redirect_uri` | Redirect URI must match exactly in Google Cloud Console |
-| "Google Chat OAuth credentials not configured" | Set all four `GOOGLE_CHAT_*` variables in `.env` |
-| Event verification failing | Ensure `GOOGLE_CHAT_PROJECT_NUMBER` matches the project hosting the Chat app |
-| Connector shows "not connected" after OAuth | Verify `GOOGLE_CHAT_VERIFICATION_TOKEN` is set and restart the server |
+| `invalid_scope` | Ensure the service account has the `chat.bot` scope |
+| "Google Chat OAuth credentials not configured" | Set `GOOGLE_CHAT_CLIENT_ID` and `GOOGLE_CHAT_CLIENT_SECRET` in `.env` |
+| "bad_redirect_uri" | Redirect URI must match exactly in Google Cloud Console OAuth settings |
+| Event verification failing | Ensure the Chat app's Authentication Audience is set to **HTTP endpoint URL** and the URL matches `NEXT_PUBLIC_BACKEND_URL` |
+| Messages appear as your name | Set `GOOGLE_CHAT_SERVICE_ACCOUNT_KEY` to enable the Chat app identity |
 
 ---
 
