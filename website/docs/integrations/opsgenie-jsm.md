@@ -110,11 +110,11 @@ After connecting, Aurora displays a **webhook URL** on the setup page. Configure
 Outgoing webhooks require **JSM Premium** or **Enterprise**. On JSM Standard, you can use the API connection to query alerts on-demand from the chatbot, but real-time webhook ingestion is not available.
 :::
 
-1. In your Atlassian site, go to the **Operations** section in the left sidebar
-2. Click the **three dots** (⋯) next to Operations, or navigate to your team's page
-3. Go to the **Integrations** tab
-4. Click **Add integration** and search for **Webhook**
-5. Name it (e.g., "Aurora")
+1. In Jira, click the **Settings gear** (top right)
+2. Under **Jira admin settings**, click **Operations**
+3. In the left sidebar, click **Integrations**
+4. Click **Add integration**, search for **Webhook**, and add it
+5. Name it (e.g., "Aurora") and assign a team
 6. Click **Edit settings** on the integration
 7. Select **Authenticate with a Webhook account** (this reveals the URL field)
 8. Paste the Aurora webhook URL
