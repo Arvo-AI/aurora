@@ -354,7 +354,10 @@ In your project, go to **APIs & Services → Library**, search for "Google Chat 
 
 1. Go to **APIs & Services → Credentials → Create Credentials → OAuth client ID**
 2. Select **Web application** as the type
-3. Add an **Authorized redirect URI**: `https://your-domain.com/google-chat/callback` (or `http://localhost:5080/google-chat/callback` for local dev). The exact URL for your deployment is shown on the Google Chat setup page in Aurora — navigate to **Connectors → Google Chat** to copy it.
+3. Add an **Authorized redirect URI**:
+   - Local dev: `http://localhost:5080/google-chat/callback`
+   - Production: `https://your-domain.com/google-chat/callback`
+   - The exact URL for your deployment is shown on the Google Chat setup page in Aurora — navigate to **Connectors → Google Chat** to copy it.
 4. Copy the **Client ID** and **Client Secret** — these are your `GOOGLE_CHAT_CLIENT_ID` and `GOOGLE_CHAT_CLIENT_SECRET` environment variables
 
 [Create OAuth Client →](https://console.cloud.google.com/apis/credentials/oauthclient)
@@ -392,6 +395,8 @@ Go to the [Google Chat API Configuration page](https://console.cloud.google.com/
   - The exact URL for your deployment is also shown on the Google Chat setup page in Aurora.
 - Set **Authentication Audience** to **HTTP endpoint URL**
 
+> **Local development with ngrok:** Run `ngrok http 3000` (pointing to the frontend, not the backend). Aurora's Next.js server rewrites `/google-chat/events` to the backend automatically. Set `FRONTEND_URL` in `.env` to your ngrok HTTPS URL so that Google Chat card buttons (e.g. "View Investigation") link to a reachable address. The OAuth redirect URI (`http://localhost:5080/google-chat/callback`) does not need ngrok because it's a browser redirect that your local machine can reach directly.
+
 **Visibility:**
 - Check **Make this Chat app available to specific people and groups** and add your email address (or a Google Group to let multiple people find and add the bot)
 - This controls who can *find and add* the bot — once added to a space, all members of that space can interact with it. You don't need to add every user here.
@@ -425,8 +430,9 @@ make down && make prod-prebuilt # production (prebuilt images)
 | `invalid_scope` | Ensure the service account has the `chat.bot` scope |
 | "Google Chat OAuth credentials not configured" | Set `GOOGLE_CHAT_CLIENT_ID` and `GOOGLE_CHAT_CLIENT_SECRET` in `.env` |
 | "bad_redirect_uri" | Redirect URI must match exactly in Google Cloud Console OAuth settings |
-| Event verification failing | Ensure the Chat app's Authentication Audience is set to **HTTP endpoint URL** and the URL matches `NEXT_PUBLIC_BACKEND_URL` |
+| Event verification failing | Ensure the Chat app's Authentication Audience is set to **HTTP endpoint URL** and the URL matches your events endpoint |
 | Messages appear as your name | Set `GOOGLE_CHAT_SERVICE_ACCOUNT_KEY` to enable the Chat app identity |
+| Card buttons do nothing on click | Use **Chrome** — Safari does not reliably handle `openLink` button clicks in Google Chat cards |
 
 ---
 

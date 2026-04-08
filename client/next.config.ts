@@ -11,8 +11,8 @@ try {
   withBundleAnalyzer = (config: NextConfig) => config;
 }
 
-// Use server-side backend URL for rewrites and redirects (Docker service name)
-const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL;
+// Server-side backend URL for rewrites (Docker service name, not localhost)
+const backendUrl = process.env.BACKEND_URL || process.env.NEXT_PUBLIC_BACKEND_URL;
 
 const nextConfig: NextConfig = {
   typescript: {
@@ -89,6 +89,10 @@ const nextConfig: NextConfig = {
       {
         source: "/azure/:path*",
         destination: `${backendUrl}/azure/:path*`,
+      },
+      {
+        source: "/google-chat/events",
+        destination: `${backendUrl}/google-chat/events`,
       },
     ];
   },
