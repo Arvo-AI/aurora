@@ -546,6 +546,7 @@ def connect(user_id):
         return jsonify({"error": "Failed to validate OpsGenie credentials"}), 502
 
     token_payload = {
+        "auth_type": "opsgenie",
         "api_key": api_key,
         "region": region,
         "account_name": account_data.get("name"),

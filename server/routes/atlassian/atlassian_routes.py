@@ -122,7 +122,7 @@ def connect(user_id):
     products: List[str] = data.get("products") or ["confluence"]
     products = [p.lower() for p in products if p.lower() in VALID_PRODUCTS]
     if not products:
-        return jsonify({"error": "At least one product required (confluence, jira)"}), 400
+        return jsonify({"error": f"At least one product required ({', '.join(sorted(VALID_PRODUCTS))})"}), 400
 
     auth_type = (data.get("authType") or "oauth").lower()
 
@@ -303,7 +303,7 @@ def status(user_id):
             continue
 
         base_url = creds.get("base_url") or creds.get("site_url") or ""
-        cloud_id = creds.get("cloud_id") if auth_type in ("oauth", "jsm_oauth") else None
+        cloud_id = creds.get("cloud_id") if auth_type in ("oauth", "jsm_oauth", "jsm_pat") else None
         if auth_type == "pat":
             token = creds.get("pat_token")
         elif auth_type == "jsm_pat":
@@ -365,16 +365,17 @@ def disconnect(user_id):
     targets = list(VALID_PRODUCTS) if product == "all" else [product]
 
     if not all(t in VALID_PRODUCTS for t in targets):
-        return jsonify({"error": "product must be 'confluence', 'jira', or 'all'"}), 400
+        return jsonify({"error": f"product must be one of {', '.join(sorted(VALID_PRODUCTS))} or 'all'"}), 400
 
     deleted = 0
     try:
         with db_pool.get_admin_connection() as conn:
             cursor = conn.cursor()
             for target in targets:
+                provider = "opsgenie" if target == "jsm_ops" else target
                 cursor.execute(
                     "DELETE FROM user_tokens WHERE user_id = %s AND provider = %s",
-                    (user_id, target),
+                    (user_id, provider),
                 )
                 deleted += cursor.rowcount
             conn.commit()

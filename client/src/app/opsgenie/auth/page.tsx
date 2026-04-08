@@ -80,7 +80,13 @@ export default function OpsGenieAuthPage() {
         const cachedWebhook = localStorage.getItem(CACHE_KEYS.WEBHOOK);
 
         if (cachedStatus) {
-          const parsedStatus = JSON.parse(cachedStatus) as OpsGenieStatus;
+          let parsedStatus: OpsGenieStatus;
+          try {
+            parsedStatus = JSON.parse(cachedStatus) as OpsGenieStatus;
+          } catch {
+            localStorage.removeItem(CACHE_KEYS.STATUS);
+            return;
+          }
           setStatus(parsedStatus);
           updateLocalStorageConnection(parsedStatus?.connected ?? false);
           if (parsedStatus?.connected) {

@@ -1514,8 +1514,8 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
 
     # --- OpsGenie / JSM Operations tool ---
     if user_id and is_opsgenie_connected(user_id):
-        from utils.auth.token_management import get_token_data as _get_td
-        _og_creds = _get_td(user_id, "opsgenie")
+        from routes.opsgenie.opsgenie_routes import _get_stored_opsgenie_credentials
+        _og_creds = _get_stored_opsgenie_credentials(user_id)
         _og_is_jsm = _og_creds.get("auth_type") == "jsm_basic" if _og_creds else False
         _og_label = "JSM Operations" if _og_is_jsm else "OpsGenie"
         context_wrapped_og = with_user_context(query_opsgenie)
