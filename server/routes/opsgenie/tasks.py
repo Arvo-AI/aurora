@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
@@ -126,6 +127,11 @@ def process_opsgenie_event(
                 # Only create incident + trigger RCA on alert creation
                 if action.lower() not in ("create", "create alert"):
                     logger.info("[OPSGENIE][WEBHOOK] Action '%s' is not a create — skipping incident creation", action)
+                    return
+
+                # Skip auto-generated "Incident raised" alerts from JSM automation
+                if alert_message.startswith("[") and "Incident raised" in alert_message:
+                    logger.info("[OPSGENIE][WEBHOOK] Skipping JSM auto-generated incident alert: %s", alert_message)
                     return
 
                 # Create incident record
@@ -291,6 +297,24 @@ def process_opsgenie_event(
                     except Exception as e:
                         logger.error("[OPSGENIE][WEBHOOK] Failed to trigger summary: %s", e)
 
+                    # Post "RCA in progress" comment to linked JSM incident (delayed to allow automation to create it)
+                    try:
+                        frontend_url = os.getenv("FRONTEND_URL", "").rstrip("/")
+                        aurora_link = f"{frontend_url}/incidents/{incident_id}" if frontend_url else ""
+                        rca_comment = f"Aurora is investigating this alert. RCA in progress.\n\nAlert: {alert_message}"
+                        if aurora_link:
+                            rca_comment += f"\n\nView in Aurora: {aurora_link}"
+                        post_jsm_comment.apply_async(
+                            kwargs={
+                                "user_id": user_id,
+                                "alert_message": alert_message,
+                                "comment": rca_comment,
+                            },
+                            countdown=10,
+                        )
+                    except Exception as e:
+                        logger.debug("[OPSGENIE][WEBHOOK] Could not enqueue JSM comment: %s", e)
+
                     # Trigger background chat for RCA
                     try:
                         from chat.background.task import (
@@ -327,6 +351,7 @@ def process_opsgenie_event(
                                 trigger_metadata={
                                     "source": "opsgenie",
                                     "alert_id": alert_id,
+                                    "alert_title": alert_message,
                                     "action": action,
                                 },
                                 incident_id=str(incident_id),
@@ -350,4 +375,26 @@ def process_opsgenie_event(
 
     except Exception as exc:
         logger.exception("[OPSGENIE][WEBHOOK] Failed to process webhook payload")
+        raise self.retry(exc=exc)
+
+
+@celery_app.task(bind=True, max_retries=2, default_retry_delay=10, name="opsgenie.post_jsm_comment")
+def post_jsm_comment(self, user_id: str, alert_message: str, comment: str) -> None:
+    """Post a comment to the JSM incident linked to an alert. Runs with a delay to allow JSM automation to create the incident first."""
+    try:
+        from routes.opsgenie.opsgenie_routes import _build_client_from_creds, _get_stored_opsgenie_credentials
+        creds = _get_stored_opsgenie_credentials(user_id)
+        if not creds or creds.get("auth_type") != "jsm_basic":
+            return
+        client = _build_client_from_creds(creds)
+        if not client or not hasattr(client, "find_incident_for_alert"):
+            return
+        issue_key = client.find_incident_for_alert(alert_message)
+        if issue_key:
+            client.add_comment_to_issue(issue_key, comment)
+            logger.info("[OPSGENIE] Posted comment to JSM incident %s", issue_key)
+        else:
+            logger.debug("[OPSGENIE] No JSM incident found for alert: %s", alert_message[:80])
+    except Exception as exc:
+        logger.warning("[OPSGENIE] Failed to post JSM comment: %s", exc)
         raise self.retry(exc=exc)

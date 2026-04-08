@@ -304,8 +304,58 @@ class JSMOperationsClient:
             raise OpsGenieAPIError(f"Failed to get JSM incident: {exc}") from exc
 
     def get_incident_timeline(self, incident_id: str) -> Dict[str, Any]:
-        # JSM doesn't have a dedicated timeline API — return empty
         return {"data": []}
+
+    # ── Write-back methods ────────────────────────────────────────────
+    def add_comment_to_issue(self, issue_key: str, text: str) -> Optional[Dict[str, Any]]:
+        """Post a comment to a Jira issue (JSM incident)."""
+        if not self.site_url:
+            return None
+        body = {
+            "body": {
+                "type": "doc",
+                "version": 1,
+                "content": [{"type": "paragraph", "content": [{"type": "text", "text": text}]}],
+            }
+        }
+        try:
+            r = requests.post(
+                f"{self.site_url}/rest/api/3/issue/{issue_key}/comment",
+                json=body,
+                headers=self.headers,
+                timeout=OPSGENIE_TIMEOUT,
+            )
+            r.raise_for_status()
+            return r.json()
+        except requests.RequestException as exc:
+            logger.error("[JSM_OPS] Failed to post comment to %s: %s", issue_key, exc)
+            return None
+
+    def find_incident_for_alert(self, alert_message: str) -> Optional[str]:
+        """Find a JSM incident (Jira issue key) matching an alert message."""
+        if not self.site_url:
+            return None
+        import re
+        # Strip JQL reserved chars and keep only alphanumeric words for fuzzy match
+        words = re.findall(r'[A-Za-z0-9]+', alert_message)
+        search_terms = " ".join(words[:8])
+        if not search_terms:
+            return None
+        sanitized = search_terms.replace("\\", "\\\\").replace('"', '\\"')
+        jql = f'issuetype = "[System] Incident" AND summary ~ "{sanitized}" ORDER BY created DESC'
+        try:
+            r = requests.post(
+                f"{self.site_url}/rest/api/3/search/jql",
+                json={"jql": jql, "maxResults": 1, "fields": ["key"]},
+                headers=self.headers,
+                timeout=OPSGENIE_TIMEOUT,
+            )
+            r.raise_for_status()
+            issues = r.json().get("issues", [])
+            return issues[0]["key"] if issues else None
+        except Exception as exc:
+            logger.debug("[JSM_OPS] Failed to find incident for alert: %s", exc)
+            return None
 
     # ── Services ──────────────────────────────────────────────────────
     def list_services(self, offset: int = 0, limit: int = 50) -> Dict[str, Any]:

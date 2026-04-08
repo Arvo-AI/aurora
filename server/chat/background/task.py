@@ -488,7 +488,28 @@ def run_background_chat(
             
             _update_incident_status(incident_id, "analyzed")
             _update_incident_aurora_status(incident_id, "summarizing")
-            
+
+            # Post RCA-complete comment to linked JSM incident
+            if (trigger_metadata or {}).get("source") == "opsgenie":
+                try:
+                    from routes.opsgenie.opsgenie_routes import _build_client_from_creds, _get_stored_opsgenie_credentials
+                    jsm_creds = _get_stored_opsgenie_credentials(user_id)
+                    if jsm_creds and jsm_creds.get("auth_type") == "jsm_basic":
+                        jsm_client = _build_client_from_creds(jsm_creds)
+                        if jsm_client and hasattr(jsm_client, "find_incident_for_alert"):
+                            alert_title = (trigger_metadata or {}).get("alert_title", "")
+                            issue_key = jsm_client.find_incident_for_alert(alert_title)
+                            if issue_key:
+                                summary = result.get("summary", "RCA complete. See Aurora for details.")
+                                comment = f"Aurora RCA complete.\n\n{summary[:500]}" if len(str(summary)) > 10 else "Aurora RCA analysis complete."
+                                frontend_url = os.getenv("FRONTEND_URL", "").rstrip("/")
+                                if frontend_url and incident_id:
+                                    comment += f"\n\nView in Aurora: {frontend_url}/incidents/{incident_id}"
+                                jsm_client.add_comment_to_issue(issue_key, comment)
+                                logger.info(f"[BackgroundChat] Posted RCA-complete comment to {issue_key}")
+                except Exception as e:
+                    logger.debug(f"[BackgroundChat] Could not post JSM RCA-complete comment: {e}")
+
             # Determine severity from RCA if currently unknown
             try:
                 _determine_severity_from_rca(incident_id, session_id, user_id)
