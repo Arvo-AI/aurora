@@ -371,7 +371,7 @@ function AppLayout({
               currentChatSessionId={currentChatSessionId}
               onSettingsClick={() => setIsSettingsModalOpen(true)}
             />
-            <main className={`flex-1 flex flex-col ${pathname === "/chat" ? "overflow-hidden" : "overflow-auto"}`} style={!isNavExpanded ? { marginLeft: '64px', width: 'calc(100% - 64px)' } : {}}>
+            <main className={`flex-1 flex flex-col ${pathname === "/chat" ? "overflow-hidden" : "overflow-auto"}`} style={isNavExpanded ? { width: 'calc(100% - 224px)' } : { marginLeft: '64px', width: 'calc(100% - 64px)' }}>
               {renderMainContent}
             </main>
             
