@@ -67,14 +67,25 @@ export function OpsGenieWebhookStep({ status, webhookUrl, copied, onCopy, onDisc
         <div className="space-y-3">
           <p className="text-sm font-medium">Configure {providerLabel} Webhook:</p>
           {isJSM ? (
-            <ol className="list-decimal list-inside space-y-2 text-sm text-muted-foreground">
-              <li>Go to <strong>JSM Operations &rarr; Settings &rarr; Integrations</strong></li>
-              <li>Search for <strong>Webhook</strong> and select it</li>
-              <li>Click <strong>Add</strong> to create a new outgoing webhook</li>
-              <li>Paste the webhook URL above</li>
-              <li>Select alert actions: <strong>Create</strong>, <strong>Acknowledge</strong>, <strong>Close</strong>, and any others you want to track</li>
-              <li><strong>Save</strong> the integration</li>
-            </ol>
+            <>
+              {status.siteUrl && (
+                <a
+                  href={`${status.siteUrl}/jira/settings/products/ops/integrations`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1.5 text-sm text-purple-600 hover:text-purple-500 hover:underline font-medium"
+                >
+                  Open Integrations in JSM Operations &rarr;
+                </a>
+              )}
+              <ol className="list-decimal list-inside space-y-2 text-sm text-muted-foreground">
+                <li>Click <strong>Add integration</strong>, search for <strong>Webhook</strong>, and add it</li>
+                <li>Click <strong>Edit settings</strong>, select <strong>Authenticate with a Webhook account</strong>, and paste the webhook URL above</li>
+                <li>Check <strong>Add alert description to payload</strong> and <strong>Add alert details to payload</strong>, then <strong>Save</strong></li>
+                <li>Under Alert actions, select: <strong>Create</strong>, <strong>Acknowledge</strong>, <strong>Close</strong>, and any others you want</li>
+                <li>Click <strong>Turn on integration</strong></li>
+              </ol>
+            </>
           ) : (
             <ol className="list-decimal list-inside space-y-2 text-sm text-muted-foreground">
               <li>Go to <strong>OpsGenie &rarr; Settings &rarr; Integrations</strong></li>

@@ -182,6 +182,7 @@ export default function OpsGenieAuthPage() {
     } finally {
       setLoading(false);
       setApiKey('');
+      setJsmApiToken('');
     }
   };
 

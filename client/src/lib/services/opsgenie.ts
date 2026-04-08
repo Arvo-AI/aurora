@@ -63,6 +63,8 @@ export const opsgenieService = {
       accountName: ((data?.accountName ?? data?.account_name) as string | null) ?? null,
       plan: (data?.plan as string | null) ?? null,
       authType: (data?.authType as string) || undefined,
+      error: (data?.error as string) || undefined,
+      siteUrl: ((data?.siteUrl ?? data?.site_url) as string) || undefined,
     };
   },
 
