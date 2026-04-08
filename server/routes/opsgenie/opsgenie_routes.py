@@ -535,8 +535,7 @@ def connect(user_id):
     if region not in REGION_URLS:
         return jsonify({"error": f"Invalid region '{region}'. Must be one of: {', '.join(REGION_URLS)}"}), 400
 
-    masked_key = mask_credential_value(api_key)
-    logger.info("[OPSGENIE] Connecting user %s to region=%s key=%s", user_id, region, masked_key)
+    logger.info("[OPSGENIE] Connecting user %s to region=%s", user_id, region)
 
     client = OpsGenieClient(api_key=api_key, region=region)
 
