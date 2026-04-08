@@ -74,7 +74,7 @@ def google_chat_status(user_id):
         })
 
     except Exception as e:
-        logger.error(f"Error checking Google Chat status: {e}", exc_info=True)
+        logger.error("Error checking Google Chat status", exc_info=True)
         return jsonify({"connected": False, "error": "Failed to check status"}), 500
 
 
@@ -88,11 +88,13 @@ def google_chat_connect(user_id):
     try:
         has_client_id = bool(os.getenv("GOOGLE_CHAT_CLIENT_ID"))
         has_client_secret = bool(os.getenv("GOOGLE_CHAT_CLIENT_SECRET"))
-        if not has_client_id or not has_client_secret:
+        has_service_account = bool(os.getenv("GOOGLE_CHAT_SERVICE_ACCOUNT_KEY"))
+        if not has_client_id or not has_client_secret or not has_service_account:
             return jsonify({
-                "error": "Google Chat OAuth credentials not configured. "
-                         "Set GOOGLE_CHAT_CLIENT_ID and GOOGLE_CHAT_CLIENT_SECRET "
-                         "in your .env file, then restart Aurora.",
+                "error": "Google Chat is not fully configured. "
+                         "Set GOOGLE_CHAT_CLIENT_ID, GOOGLE_CHAT_CLIENT_SECRET, "
+                         "and GOOGLE_CHAT_SERVICE_ACCOUNT_KEY in your .env file, "
+                         "then restart Aurora.",
                 "error_code": "GOOGLE_CHAT_NOT_CONFIGURED",
             }), 400
 
@@ -100,11 +102,11 @@ def google_chat_connect(user_id):
         store_oauth2_state(state, user_id, "google_chat")
         auth_url = get_auth_url(state)
 
-        logger.info(f"Generated Google Chat OAuth URL for user {user_id}")
+        logger.info("Generated Google Chat OAuth URL for user %s", user_id)
         return jsonify({"oauth_url": auth_url})
 
     except Exception as e:
-        logger.error(f"Error starting Google Chat OAuth: {e}", exc_info=True)
+        logger.error("Error starting Google Chat OAuth", exc_info=True)
         return jsonify({"error": "Failed to start Google Chat setup"}), 500
 
 
@@ -121,15 +123,22 @@ def google_chat_callback():
     state = request.args.get("state")
     error = request.args.get("error")
 
+    if not FRONTEND_URL:
+        logger.error("FRONTEND_URL is not set — cannot complete OAuth callback")
+        return jsonify({"error": "Server misconfigured"}), 500
+
     setup_page = f"{FRONTEND_URL.rstrip('/')}/google-chat/setup"
 
-    ALLOWED_ERRORS = {
-        "access_denied", "invalid_scope", "server_error",
-        "temporarily_unavailable", "invalid_request",
+    ERROR_MAP = {
+        "access_denied": "access_denied",
+        "invalid_scope": "invalid_scope",
+        "server_error": "server_error",
+        "temporarily_unavailable": "temporarily_unavailable",
+        "invalid_request": "invalid_request",
     }
 
     if error:
-        safe_error = error if error in ALLOWED_ERRORS else "oauth_error"
+        safe_error = ERROR_MAP.get(error, "oauth_error")
         logger.warning("Google Chat OAuth error: %s", safe_error)
         return redirect(f"{setup_page}?error={quote(safe_error)}")
 
@@ -154,12 +163,15 @@ def google_chat_callback():
         space_result = create_incidents_space(access_token)
         if not space_result.get("ok"):
             error_code = space_result.get("error", "space_creation_failed")
-            ALLOWED_SETUP_ERRORS = {
-                "space_creation_failed", "space_not_resolved",
-                "insufficient_permissions", "setup_failed", "app_install_failed",
+            SETUP_ERROR_MAP = {
+                "space_creation_failed": "space_creation_failed",
+                "space_not_resolved": "space_not_resolved",
+                "insufficient_permissions": "insufficient_permissions",
+                "setup_failed": "setup_failed",
+                "app_install_failed": "app_install_failed",
             }
-            safe_code = error_code if error_code in ALLOWED_SETUP_ERRORS else "setup_failed"
-            logger.error(f"Failed to create incidents space: {error_code}")
+            safe_code = SETUP_ERROR_MAP.get(error_code, "setup_failed")
+            logger.error("Failed to create incidents space: %s", safe_code)
             return redirect(f"{setup_page}?error={quote(safe_code)}")
 
         google_chat_config = {
@@ -170,12 +182,12 @@ def google_chat_callback():
         }
         store_tokens_in_db(user_id, google_chat_config, "google_chat")
 
-        logger.info("Google Chat connected for org (by user %s)", user_id)
+        logger.info("Google Chat connected for user %s", user_id)
 
         return redirect(f"{setup_page}?success=true")
 
     except Exception as e:
-        logger.error(f"Google Chat callback error: {e}", exc_info=True)
+        logger.error("Google Chat callback error", exc_info=True)
         return redirect(f"{setup_page}?error=callback_failed")
 
 
@@ -191,7 +203,7 @@ def google_chat_disconnect(user_id):
         else:
             return jsonify({"error": "Failed to disconnect Google Chat"}), 500
     except Exception as e:
-        logger.error(f"Error disconnecting Google Chat: {e}", exc_info=True)
+        logger.error("Error disconnecting Google Chat", exc_info=True)
         return jsonify({"error": "Failed to disconnect Google Chat"}), 500
 
 
@@ -201,5 +213,5 @@ def _get_org_space_config(user_id: str):
         from utils.auth.stateless_auth import get_credentials_from_db
         return get_credentials_from_db(user_id, "google_chat")
     except Exception as e:
-        logger.debug(f"Failed to retrieve Google Chat space config for user {user_id}: {e}")
+        logger.debug("Failed to retrieve Google Chat space config for user %s: %s", user_id, e)
         return None

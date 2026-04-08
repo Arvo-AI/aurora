@@ -62,11 +62,11 @@ class GoogleChatClient:
             return response.json()
 
         except requests.HTTPError as e:
-            logger.error("Google Chat API error on %s: HTTP %s", path, e.response.status_code if e.response is not None else "unknown")
+            logger.error("Google Chat API HTTP error on %s: HTTP %s", path, e.response.status_code if e.response is not None else "unknown")
             raise
-        except requests.RequestException as e:
+        except requests.RequestException:
             logger.error("Request to Google Chat API failed", exc_info=True)
-            raise ValueError(f"Failed to communicate with Google Chat: {str(e)}")
+            raise ValueError("Failed to communicate with Google Chat")
 
     # ── Messages ────────────────────────────────────────────────────
 
@@ -252,7 +252,7 @@ def _load_service_account_credentials() -> Optional[google_service_account.Crede
             creds.refresh(GoogleAuthRequest())
             _sa_credentials = creds
             return creds
-        except Exception as e:
+        except Exception:
             logger.error("Failed to load Google Chat service account", exc_info=True)
             return None
 
