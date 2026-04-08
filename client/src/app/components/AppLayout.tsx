@@ -308,7 +308,7 @@ function AppLayout({
       <div className={`flex-1 ${pathname === "/chat" ? "flex overflow-hidden" : "overflow-auto"}`}>
         {pathname === "/chat" ? (
           <>
-            <div className="flex-1 overflow-auto">
+            <div className="flex-1 overflow-hidden">
               {children}
             </div>
             {workspaceConfig?.type === "iac" && (
@@ -371,7 +371,7 @@ function AppLayout({
               currentChatSessionId={currentChatSessionId}
               onSettingsClick={() => setIsSettingsModalOpen(true)}
             />
-            <main className={`flex-1 flex flex-col ${pathname === "/chat" ? "overflow-hidden" : "overflow-auto"}`} style={!isNavExpanded ? { marginLeft: '64px', width: 'calc(100% - 64px)' } : {}}>
+            <main className={`flex-1 flex flex-col ${pathname === "/chat" ? "overflow-hidden" : "overflow-auto"}`} style={isNavExpanded ? { width: 'calc(100% - 224px)' } : { marginLeft: '64px', width: 'calc(100% - 64px)' }}>
               {renderMainContent}
             </main>
             

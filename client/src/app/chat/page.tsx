@@ -29,7 +29,7 @@ export default async function ChatPage({
   }
 
   return (
-    <div className="flex flex-col h-screen bg-background">
+    <div className="flex flex-col h-full bg-background overflow-hidden">
       <Suspense 
         fallback={
           <div className="flex h-screen items-center justify-center">

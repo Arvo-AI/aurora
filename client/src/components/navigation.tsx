@@ -108,7 +108,7 @@ export default function Navigation({
     <div className="h-full flex-shrink-0 relative">
       {/* Navigation sidebar */}
       <nav className={cn(
-        "bg-muted dark:bg-[#111111] h-full border-r border-border transition-all duration-300 overflow-hidden flex flex-col",
+        "bg-muted dark:bg-[#111111] h-full border-r border-border transition-[width] duration-300 overflow-hidden flex flex-col",
         isExpanded ? "w-56" : "w-0"
       )}>
         <div className="p-3 flex items-center justify-between border-b border-border/30">

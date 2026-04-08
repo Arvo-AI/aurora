@@ -245,8 +245,7 @@ def get_incidents(user_id):
                 cursor.execute("SET myapp.current_org_id = %s", (org_id,))
                 conn.commit()
 
-                cursor.execute(
-                    """
+                query = """
                     SELECT 
                         i.id, i.user_id, i.source_type, i.source_alert_id, i.status, i.severity,
                         i.alert_title, i.alert_service, i.alert_environment, i.aurora_status, i.aurora_summary,
@@ -257,11 +256,22 @@ def get_incidents(user_id):
                     LEFT JOIN incidents target ON i.merged_into_incident_id = target.id
                     WHERE i.org_id = %s
                       AND i.status != 'merged'
-                    ORDER BY i.started_at DESC
-                    LIMIT 100
-                    """,
-                    (org_id,),
-                )
+                """
+                params = [org_id]
+
+                status_filter = request.args.get("status")
+                if status_filter:
+                    query += " AND i.status = %s"
+                    params.append(status_filter)
+
+                query += " ORDER BY i.started_at DESC"
+
+                limit = request.args.get("limit", 100, type=int)
+                limit = max(1, min(limit, 100))
+                query += " LIMIT %s"
+                params.append(limit)
+
+                cursor.execute(query, tuple(params))
                 rows = cursor.fetchall()
 
                 incidents = [
@@ -359,28 +369,39 @@ def get_incident(user_id, incident_id: str):
                             source_alert_id,
                         )
                 elif source_type == "grafana":
-                    # For grafana, try integer lookup for old records
+                    # source_alert_id is grafana_alerts.id * 100 + alert_index.
+                    # Recover the row id by integer-dividing by 100.
+                    # Direct lookup first, fingerprint fallback for legacy CRC32 records.
                     try:
-                        alert_id_int = int(source_alert_id)
+                        alert_id_int = int(source_alert_id) // 100
                         cursor.execute(
                             "SELECT payload FROM grafana_alerts WHERE id = %s AND user_id = %s",
                             (alert_id_int, user_id),
                         )
                         alert_row = cursor.fetchone()
-                        if alert_row:
-                            raw_payload = (
-                                alert_row[0] if alert_row[0] is not None else None
-                            )
-                            logger.debug(
-                                "[INCIDENTS] Found Grafana payload: type=%s, has_data=%s",
-                                type(raw_payload).__name__ if raw_payload else None,
-                                bool(raw_payload),
-                            )
+                        if alert_row and alert_row[0] is not None:
+                            raw_payload = alert_row[0]
                     except (ValueError, TypeError):
-                        logger.debug(
-                            "[INCIDENTS] Skipping payload fetch for grafana fingerprint: %s",
-                            source_alert_id,
+                        pass
+                    if not raw_payload:
+                        fingerprint = (
+                            incident.get("alert", {}).get("metadata", {}).get("fingerprint")
                         )
+                        if fingerprint:
+                            cursor.execute(
+                                """SELECT payload FROM grafana_alerts
+                                   WHERE user_id = %s
+                                     AND payload -> 'alerts' @> %s::jsonb
+                                   ORDER BY received_at DESC LIMIT 1""",
+                                (user_id, json.dumps([{"fingerprint": fingerprint}])),
+                            )
+                            alert_row = cursor.fetchone()
+                            if alert_row and alert_row[0] is not None:
+                                raw_payload = alert_row[0]
+                    logger.debug(
+                        "[INCIDENTS] Grafana payload lookup: has_source_alert_id=%s, found=%s",
+                        bool(source_alert_id), bool(raw_payload),
+                    )
                 elif source_type == "datadog":
                     # For datadog, try integer lookup for old records
                     try:
@@ -490,6 +511,19 @@ def get_incident(user_id, incident_id: str):
                             logger.debug("[INCIDENTS] Found New Relic payload for alert")
                     except (ValueError, TypeError):
                         logger.debug("[INCIDENTS] Skipping payload fetch for newrelic alert (non-integer id)")
+                elif source_type == "opsgenie":
+                    try:
+                        alert_id_int = int(source_alert_id)
+                        cursor.execute(
+                            "SELECT payload FROM opsgenie_events WHERE id = %s AND user_id = %s",
+                            (alert_id_int, user_id),
+                        )
+                        alert_row = cursor.fetchone()
+                        if alert_row and alert_row[0] is not None:
+                            raw_payload = alert_row[0]
+                            logger.debug("[INCIDENTS] Found OpsGenie/JSM payload for alert")
+                    except (ValueError, TypeError):
+                        logger.debug("[INCIDENTS] Skipping payload fetch for opsgenie alert (non-integer id)")
 
                 # Log warning if no payload found for any source type
                 if not raw_payload:

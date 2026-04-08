@@ -87,9 +87,13 @@ def _extract_price_per_1k(sku: dict) -> float:
 class ProviderPricingService:
     """Fetches and caches pricing from provider billing APIs.
 
-    Cache strategy: fetch once on first access, then refresh every 24h.
-    On fetch failure, returns stale cache (if available) or None.
+    Pricing is fetched once in a background thread on first instantiation,
+    then refreshed every 24h.  The hot path (get_model_pricing /
+    get_pricing) never blocks on a network call — it always reads from
+    the in-memory cache.
     """
+
+    _RETRY_INTERVAL = timedelta(minutes=5)
 
     def __init__(self, cache_ttl_hours: int = 24):
         self._cache: Dict[str, Dict[str, float]] = {}
@@ -97,11 +101,72 @@ class ProviderPricingService:
         self._cache_ttl = timedelta(hours=cache_ttl_hours)
         self._lock = Lock()
         self._fetch_in_progress = False
+        self._started = False
 
     def _needs_refresh(self) -> bool:
         if not self._last_fetch:
             return True
         return datetime.now() - self._last_fetch > self._cache_ttl
+
+    def _start_background_refresh(self) -> None:
+        """Kick off an initial fetch + periodic refresh in a daemon thread."""
+        if self._started:
+            return
+        self._started = True
+        import threading
+        t = threading.Thread(target=self._refresh_loop, daemon=True)
+        t.start()
+
+    def _refresh_loop(self) -> None:
+        """Runs in a background daemon thread.  Fetches immediately, then
+        sleeps for the TTL interval before refreshing again.
+
+        If the fetch fails and the cache is empty, retries on a short
+        interval (_RETRY_INTERVAL) instead of the full TTL so transient
+        startup failures don't leave pricing unavailable for hours.
+        """
+        import time as _time
+        while True:
+            success = self._do_fetch()
+            with self._lock:
+                cache_populated = bool(self._cache)
+            if success and cache_populated:
+                _time.sleep(self._cache_ttl.total_seconds())
+            else:
+                _time.sleep(self._RETRY_INTERVAL.total_seconds())
+
+    def _do_fetch(self) -> bool:
+        """Attempt to fetch pricing.  Returns True if new data was loaded."""
+        with self._lock:
+            if self._fetch_in_progress:
+                return False
+            self._fetch_in_progress = True
+
+        try:
+            new_pricing = self._fetch_gemini_pricing()
+
+            with self._lock:
+                if new_pricing:
+                    self._cache = new_pricing
+                    self._last_fetch = datetime.now()
+                    logger.info(
+                        f"Provider pricing cache updated: {len(new_pricing)} models"
+                    )
+                    return True
+                elif self._cache:
+                    self._last_fetch = datetime.now()
+                    logger.info(
+                        "Provider pricing refresh failed; retaining stale cache for another TTL window"
+                    )
+                    return True
+                else:
+                    logger.warning(
+                        "No provider pricing fetched and no cached data; will retry shortly"
+                    )
+                    return False
+        finally:
+            with self._lock:
+                self._fetch_in_progress = False
 
     def _get_gcp_access_token(self) -> Optional[str]:
         """Get a GCP access token from available credentials."""
@@ -221,45 +286,15 @@ class ProviderPricingService:
         )
         return complete
 
-    def get_pricing(self, force_refresh: bool = False) -> Dict[str, Dict[str, float]]:
-        """Get cached provider pricing, refreshing if stale.
+    def get_pricing(self) -> Dict[str, Dict[str, float]]:
+        """Return cached provider pricing.  Never blocks on a network call.
 
-        Returns a dict of model_name -> {"input": float, "output": float}
-        where prices are per 1K tokens (matching MODEL_PRICING format).
+        The background thread handles refreshing.  If the cache is empty
+        (e.g. first call before the background fetch completes), this
+        returns an empty dict and the caller falls back to static pricing.
         """
         with self._lock:
-            if not force_refresh and not self._needs_refresh():
-                return self._cache.copy()
-
-            if self._fetch_in_progress:
-                return self._cache.copy()
-
-            self._fetch_in_progress = True
-
-        try:
-            new_pricing = self._fetch_gemini_pricing()
-
-            with self._lock:
-                if new_pricing:
-                    self._cache = new_pricing
-                    self._last_fetch = datetime.now()
-                    logger.info(
-                        f"Provider pricing cache updated: {len(new_pricing)} models"
-                    )
-                elif self._cache:
-                    self._last_fetch = datetime.now()
-                    logger.info(
-                        "Provider pricing refresh failed; retaining stale cache for another TTL window"
-                    )
-                else:
-                    logger.warning(
-                        "No provider pricing fetched and no cached data; will retry on next call"
-                    )
-        finally:
-            with self._lock:
-                self._fetch_in_progress = False
-
-        return self._cache.copy()
+            return self._cache.copy()
 
     def get_model_pricing(self, model_name: str) -> Optional[Dict[str, float]]:
         """Get pricing for a specific model, or None if unavailable."""
@@ -289,4 +324,5 @@ def get_provider_pricing_service() -> ProviderPricingService:
     with _instance_lock:
         if _instance is None:
             _instance = ProviderPricingService()
+            _instance._start_background_refresh()
         return _instance

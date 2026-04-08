@@ -15,6 +15,38 @@ function formatTokens(n: number): string {
   return n.toString();
 }
 
+const THINKING_MESSAGES = [
+  "Thinking...",
+  "Deep thinking...",
+  "Pondering...",
+  "Connecting the dots...",
+  "Analyzing...",
+  "Crunching data...",
+  "Doodling ideas...",
+  "Brewing insights...",
+  "Working on it...",
+  "Almost there...",
+];
+
+function useThinkingMessage() {
+  const [index, setIndex] = useState(() => Math.floor(Math.random() * THINKING_MESSAGES.length));
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setIndex((prev) => {
+        let next: number;
+        do {
+          next = Math.floor(Math.random() * THINKING_MESSAGES.length);
+        } while (next === prev && THINKING_MESSAGES.length > 1);
+        return next;
+      });
+    }, 3000);
+    return () => clearInterval(interval);
+  }, []);
+
+  return THINKING_MESSAGES[index];
+}
+
 function formatTime(iso: string): string {
   const d = new Date(iso);
   return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
@@ -84,11 +116,13 @@ function RequestRow({ request }: { request: RequestUsage }) {
 
 interface SessionUsagePanelProps {
   sessionUsage: SessionUsageState;
+  isSending?: boolean;
 }
 
-export default function SessionUsagePanel({ sessionUsage }: SessionUsagePanelProps) {
+export default function SessionUsagePanel({ sessionUsage, isSending }: SessionUsagePanelProps) {
   const [isExpanded, setIsExpanded] = useState(false);
   const { currentStreaming, sessionUsage: totals, requestHistory, wasCanceled } = sessionUsage;
+  const thinkingMessage = useThinkingMessage();
 
   const { tokPerSec, trend } = useTokenRate(
     currentStreaming?.output_tokens ?? 0,
@@ -105,7 +139,7 @@ export default function SessionUsagePanel({ sessionUsage }: SessionUsagePanelPro
     return (
       <div className="flex items-center gap-2 px-2 py-2 text-sm text-zinc-500">
         <Activity className="h-3.5 w-3.5 text-zinc-600" />
-        <span>Waiting for LLM activity...</span>
+        <span className="transition-opacity duration-500">{thinkingMessage}</span>
       </div>
     );
   }
@@ -132,6 +166,11 @@ export default function SessionUsagePanel({ sessionUsage }: SessionUsagePanelPro
                   {Math.round(tokPerSec)}c/s
                 </span>
               )}
+            </>
+          ) : isSending ? (
+            <>
+              <Activity className="h-3.5 w-3.5 text-zinc-400 animate-pulse" />
+              <span className="text-zinc-400 text-xs transition-opacity duration-500">{thinkingMessage}</span>
             </>
           ) : (
             <>

@@ -115,6 +115,7 @@ from .datadog_tool import (
     is_datadog_connected,
     QueryDatadogArgs,
 )
+from .opsgenie_tool import query_opsgenie, is_opsgenie_connected, QueryOpsGenieArgs
 from .newrelic_tool import (
     query_newrelic,
     is_newrelic_connected,
@@ -1510,6 +1511,28 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
             args_schema=QueryNewRelicArgs,
         ))
         logging.info(f"Added New Relic tool for user {user_id}")
+
+    # --- OpsGenie / JSM Operations tool ---
+    if user_id and is_opsgenie_connected(user_id):
+        from routes.opsgenie.opsgenie_routes import _get_stored_opsgenie_credentials
+        _og_creds = _get_stored_opsgenie_credentials(user_id)
+        _og_is_jsm = _og_creds.get("auth_type") == "jsm_basic" if _og_creds else False
+        _og_label = "JSM Operations" if _og_is_jsm else "OpsGenie"
+        context_wrapped_og = with_user_context(query_opsgenie)
+        notification_wrapped_og = with_completion_notification(context_wrapped_og)
+        final_og_func = wrap_func_with_capture(notification_wrapped_og, "query_opsgenie") if tool_capture else notification_wrapped_og
+        tools.append(StructuredTool.from_function(
+            func=final_og_func,
+            name="query_opsgenie",
+            description=(
+                f"Query {_og_label} for alerts, incidents, services, on-call schedules, and teams. "
+                "Use resource_type to specify what to query: 'alerts', 'alert_details', "
+                "'incidents', 'incident_details', 'services', 'on_call', 'schedules', 'teams'. "
+                "For detail queries, provide the identifier parameter with the alert or incident ID."
+            ),
+            args_schema=QueryOpsGenieArgs,
+        ))
+        logging.info(f"Added {_og_label} tool for user {user_id}")
 
     # Add Bitbucket tools if connected
     try:

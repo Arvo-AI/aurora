@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
-import zlib
+
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
@@ -227,12 +227,12 @@ def process_grafana_alert(
                         if not individual_alerts:
                             logger.info("[GRAFANA][ALERT] No alerts array in payload for user %s, skipping incident creation", user_id)
                             return
-                        for single_alert in individual_alerts:
+                        for alert_idx, single_alert in enumerate(individual_alerts):
                             alert_payload = _merge_alert_into_payload(payload, single_alert)
                             fingerprint = single_alert.get("fingerprint")
-                            # source_alert_id is INTEGER; CRC32 the hex fingerprint to a signed 32-bit int
-                            crc = zlib.crc32(fingerprint.encode())
-                            per_alert_source_id = crc - (1 << 32) if crc >= (1 << 31) else crc
+                            # Unique per-alert ID: base webhook row id + index offset
+                            # so multiple alerts in one webhook get distinct source_alert_ids
+                            per_alert_source_id = alert_id * 100 + alert_idx
 
                             per_alert_title = (
                                 alert_payload.get("commonLabels", {}).get("alertname")

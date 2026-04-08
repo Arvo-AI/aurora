@@ -157,7 +157,26 @@ def get_connected_accounts(user_id, target_user_id):
             accounts[provider] = account_info
 
         # ------------------------------
-        # 3) Kubectl agent connections
+        # 3) Webhook-based connectors (Grafana — no secret_ref)
+        # ------------------------------
+        if "grafana" not in accounts:
+            cursor.execute(
+                """SELECT 1 FROM user_tokens
+                   WHERE (user_id = %s OR org_id = %s)
+                     AND provider = 'grafana'
+                     AND is_active = TRUE
+                   LIMIT 1""",
+                (user_id, org_id),
+            )
+            if cursor.fetchone():
+                accounts["grafana"] = {
+                    "isConnected": True,
+                    "name": "Grafana",
+                    "displayText": "Grafana",
+                }
+
+        # ------------------------------
+        # 4) Kubectl agent connections
         # ------------------------------
         if "kubectl" not in accounts:
             result = _check_kubectl(user_id, org_id)
@@ -165,7 +184,7 @@ def get_connected_accounts(user_id, target_user_id):
                 accounts["kubectl"] = {"isConnected": True, "name": "Kubernetes", "displayText": "Kubernetes Cluster"}
 
         # ------------------------------
-        # 4) On-prem VM connections
+        # 5) On-prem VM connections
         # ------------------------------
         if "onprem" not in accounts:
             result = _check_onprem(user_id, org_id)

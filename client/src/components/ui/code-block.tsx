@@ -121,7 +121,9 @@ export const CodeBlock: React.FC<CodeBlockProps> = ({
     if (codeRef.current && language !== 'text') {
       // Use setTimeout to ensure DOM is ready
       setTimeout(() => {
-        Prism.highlightElement(codeRef.current!);
+        if (codeRef.current) {
+          Prism.highlightElement(codeRef.current);
+        }
       }, 0);
     }
   }, [language, formattedCode]);
