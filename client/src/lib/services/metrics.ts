@@ -69,21 +69,6 @@ export interface IncidentFrequencyResponse {
   groupBy: string;
 }
 
-export interface ChangeFailureByService {
-  service: string;
-  totalDeployments: number;
-  failureLinked: number;
-  rate: number;
-}
-
-export interface ChangeFailureRateResponse {
-  totalDeployments: number;
-  failureLinked: number;
-  changeFailureRate: number;
-  windowHours: number;
-  byService: ChangeFailureByService[];
-}
-
 export interface ToolStat {
   toolName: string;
   totalCalls: number;
@@ -122,15 +107,6 @@ export const metricsService = {
   ): Promise<IncidentFrequencyResponse> {
     return apiGet<IncidentFrequencyResponse>(
       `/api/metrics/incident-frequency?period=${period}&group_by=${groupBy}`,
-    );
-  },
-
-  async getChangeFailureRate(
-    period: Period,
-    windowHours: number = 4,
-  ): Promise<ChangeFailureRateResponse> {
-    return apiGet<ChangeFailureRateResponse>(
-      `/api/metrics/change-failure-rate?period=${period}&window_hours=${windowHours}`,
     );
   },
 
