@@ -49,13 +49,15 @@ def fleet_list(user_id):
                i.analyzed_at,
                i.updated_at,
                i.status AS incident_status,
-               LEFT(i.aurora_summary, 300) AS aurora_summary,
+               i.aurora_summary,
                EXTRACT(EPOCH FROM (
                    COALESCE(i.analyzed_at, i.updated_at) - i.created_at
                )) AS duration_seconds,
                cs.id AS session_id,
                (SELECT COUNT(*) FROM incident_suggestions s WHERE s.incident_id = i.id) AS suggestion_count,
-               (SELECT string_agg(s.title, ' | ' ORDER BY s.id) FROM incident_suggestions s WHERE s.incident_id = i.id LIMIT 3) AS suggestion_titles,
+               (SELECT string_agg(s.title, ' | ' ORDER BY s.id) FROM incident_suggestions s WHERE s.incident_id = i.id AND s.type = 'fix') AS fix_titles,
+               (SELECT string_agg(s.title, ' | ' ORDER BY s.id) FROM incident_suggestions s WHERE s.incident_id = i.id AND s.type = 'diagnostic') AS diagnostic_titles,
+               (SELECT string_agg(s.title, ' | ' ORDER BY s.id) FROM incident_suggestions s WHERE s.incident_id = i.id AND s.type = 'mitigation') AS mitigation_titles,
                i.correlated_alert_count
         FROM incidents i
         JOIN chat_sessions cs ON cs.id = i.aurora_chat_session_id::text

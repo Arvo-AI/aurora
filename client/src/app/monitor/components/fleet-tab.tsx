@@ -4,7 +4,7 @@ import { useState, useCallback } from 'react';
 import {
   Activity, CheckCircle2, XCircle, Clock, Loader2,
   ChevronDown, ChevronRight, Zap, AlertTriangle, Lightbulb,
-  ExternalLink, Flame, ShieldAlert,
+  ExternalLink, Flame, ShieldAlert, Search, Shield,
 } from 'lucide-react';
 import { useQuery, jsonFetcher } from '@/lib/query';
 import {
@@ -37,7 +37,9 @@ interface FleetRun {
   duration_seconds: number | null;
   session_id: string;
   suggestion_count: number;
-  suggestion_titles: string | null;
+  fix_titles: string | null;
+  diagnostic_titles: string | null;
+  mitigation_titles: string | null;
   correlated_alert_count: number | null;
 }
 
@@ -183,9 +185,32 @@ export default function FleetTab({ period }: { period: Period }) {
   );
 }
 
+function trimSummary(summary: string): string {
+  let text = summary;
+
+  // Strip "## Incident Report: ..." title line
+  text = text.replace(/^##\s*Incident Report[^\n]*\n*/i, '');
+
+  // Strip metadata lines like "**Triggered:** ... | **Severity:** ..."
+  text = text.replace(/^\*\*(?:Triggered|Incident Date|Severity|Source)[^\n]*\n*/im, '');
+
+  // Strip leading/trailing horizontal rules
+  text = text.replace(/^---\s*\n*/gm, '');
+
+  // Strip "## Suggested Next Steps" and everything after
+  const nextStepsIdx = text.search(/\n*##\s*Suggested Next Steps/i);
+  if (nextStepsIdx !== -1) text = text.slice(0, nextStepsIdx);
+
+  return text.trim();
+}
+
 function RunCard({ run, expanded, onToggle }: { run: FleetRun; expanded: boolean; onToggle: () => void }) {
   const hasResolution = run.aurora_summary || (run.suggestion_count > 0);
   const isActive = ['running', 'analyzing', 'summarizing', 'pending'].includes(run.aurora_status);
+
+  const fixes = run.fix_titles?.split(' | ').filter(Boolean) ?? [];
+  const diagnostics = run.diagnostic_titles?.split(' | ').filter(Boolean) ?? [];
+  const mitigations = run.mitigation_titles?.split(' | ').filter(Boolean) ?? [];
 
   return (
     <div className={`rounded-lg border transition-all duration-200 ${
@@ -240,16 +265,18 @@ function RunCard({ run, expanded, onToggle }: { run: FleetRun; expanded: boolean
                 <span className="text-zinc-700">·</span>
                 <span className="flex items-center gap-1 text-amber-400/80">
                   <Lightbulb className="h-3 w-3" />
-                  {run.suggestion_count} fix{run.suggestion_count !== 1 ? 'es' : ''}
+                  {fixes.length > 0 && `${fixes.length} fix${fixes.length !== 1 ? 'es' : ''}`}
+                  {fixes.length > 0 && (diagnostics.length + mitigations.length) > 0 && ', '}
+                  {(diagnostics.length + mitigations.length) > 0 && `${diagnostics.length + mitigations.length} next step${diagnostics.length + mitigations.length !== 1 ? 's' : ''}`}
                 </span>
               </>
             )}
           </div>
 
           {/* Summary preview (collapsed) */}
-          {!expanded && run.aurora_summary && (
+          {!expanded && run.aurora_summary && trimSummary(run.aurora_summary) && (
             <p className="text-xs text-zinc-500 mt-1.5 line-clamp-1 leading-relaxed">
-              {run.aurora_summary}
+              {trimSummary(run.aurora_summary)}
             </p>
           )}
         </div>
@@ -259,34 +286,46 @@ function RunCard({ run, expanded, onToggle }: { run: FleetRun; expanded: boolean
       {expanded && (
         <div className="px-4 pb-4 pt-0 ml-7 space-y-3">
           {/* Resolution / Summary */}
-          {run.aurora_summary && (
+          {run.aurora_summary && trimSummary(run.aurora_summary) && (
             <div className="rounded-lg bg-zinc-900/60 border border-zinc-800/50 p-3">
               <div className="flex items-center gap-1.5 mb-2">
                 <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500/70" />
                 <span className="text-xs font-medium text-zinc-400 uppercase tracking-wider">Resolution Summary</span>
               </div>
               <p className="text-sm text-zinc-300 leading-relaxed whitespace-pre-line">
-                {run.aurora_summary}
+                {trimSummary(run.aurora_summary)}
               </p>
             </div>
           )}
 
-          {/* Suggestions */}
-          {run.suggestion_titles && (
-            <div className="rounded-lg bg-zinc-900/60 border border-zinc-800/50 p-3">
-              <div className="flex items-center gap-1.5 mb-2">
-                <Lightbulb className="h-3.5 w-3.5 text-amber-400/70" />
-                <span className="text-xs font-medium text-zinc-400 uppercase tracking-wider">Suggested Fixes</span>
-              </div>
-              <div className="space-y-1">
-                {run.suggestion_titles.split(' | ').map((title, i) => (
-                  <div key={i} className="flex items-start gap-2 text-sm text-zinc-300">
-                    <span className="text-zinc-600 mt-0.5">→</span>
-                    <span>{title}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
+          {/* Suggested Fixes */}
+          {fixes.length > 0 && (
+            <SuggestionBlock
+              icon={Lightbulb}
+              iconColor="text-amber-400/70"
+              label="Suggested Fixes"
+              items={fixes}
+            />
+          )}
+
+          {/* Diagnostic Steps */}
+          {diagnostics.length > 0 && (
+            <SuggestionBlock
+              icon={Search}
+              iconColor="text-blue-400/70"
+              label="Diagnostic Steps"
+              items={diagnostics}
+            />
+          )}
+
+          {/* Mitigations */}
+          {mitigations.length > 0 && (
+            <SuggestionBlock
+              icon={Shield}
+              iconColor="text-emerald-400/70"
+              label="Mitigations"
+              items={mitigations}
+            />
           )}
 
           {/* Activity timeline */}
@@ -360,6 +399,33 @@ function ActivitySection({ incidentId }: { incidentId: string }) {
                 <AlertTriangle className="h-3 w-3 shrink-0" /> {evt.error_message.slice(0, 60)}
               </span>
             )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function SuggestionBlock({ icon: Icon, iconColor, label, items }: {
+  icon: React.ComponentType<{ className?: string }>;
+  iconColor: string;
+  label: string;
+  items: string[];
+}) {
+  return (
+    <div className="rounded-lg bg-zinc-900/60 border border-zinc-800/50 p-3">
+      <div className="flex items-center gap-1.5 mb-2">
+        <Icon className={`h-3.5 w-3.5 ${iconColor}`} />
+        <span className="text-xs font-medium text-zinc-400 uppercase tracking-wider">
+          {label}
+          <span className="text-zinc-600 font-normal ml-1">({items.length})</span>
+        </span>
+      </div>
+      <div className="space-y-1">
+        {items.map((title, i) => (
+          <div key={i} className="flex items-start gap-2 text-sm text-zinc-300">
+            <span className="text-zinc-600 mt-0.5">→</span>
+            <span>{title}</span>
           </div>
         ))}
       </div>
