@@ -90,13 +90,14 @@ def _query_alert_details(client, identifier: str) -> dict:
         f_alert = pool.submit(client.get_alert, identifier)
         f_logs = pool.submit(client.get_alert_logs, identifier)
         f_notes = pool.submit(client.get_alert_notes, identifier)
-    return {
-        "resource_type": "alert_details",
-        "results": [{"alert": f_alert.result().get("data", {}),
-                      "logs": f_logs.result().get("data", []),
-                      "notes": f_notes.result().get("data", [])}],
-        "count": 1,
-    }
+        result = {
+            "resource_type": "alert_details",
+            "results": [{"alert": f_alert.result().get("data", {}),
+                          "logs": f_logs.result().get("data", []),
+                          "notes": f_notes.result().get("data", [])}],
+            "count": 1,
+        }
+    return result
 
 
 def _query_incidents(client, query: str, limit: int) -> dict:
@@ -112,12 +113,13 @@ def _query_incident_details(client, identifier: str) -> dict:
     with ThreadPoolExecutor(max_workers=2) as pool:
         f_incident = pool.submit(client.get_incident, identifier)
         f_timeline = pool.submit(client.get_incident_timeline, identifier)
-    return {
-        "resource_type": "incident_details",
-        "results": [{"incident": f_incident.result().get("data", {}),
-                      "timeline": f_timeline.result().get("data", [])}],
-        "count": 1,
-    }
+        result = {
+            "resource_type": "incident_details",
+            "results": [{"incident": f_incident.result().get("data", {}),
+                          "timeline": f_timeline.result().get("data", [])}],
+            "count": 1,
+        }
+    return result
 
 
 def _query_services(client, limit: int) -> dict:
@@ -228,7 +230,9 @@ def query_opsgenie(
         if was_truncated:
             result["results"] = truncated_results
             result["truncated"] = True
-            result["note"] = f"Results truncated from {len(results_list)} to {len(truncated_results)} due to size limit."
+            truncation_msg = f"Results truncated from {len(results_list)} to {len(truncated_results)} due to size limit."
+            existing_note = result.get("note")
+            result["note"] = f"{existing_note} — {truncation_msg}" if existing_note else truncation_msg
             result["count"] = len(truncated_results)
 
         return json.dumps(result)

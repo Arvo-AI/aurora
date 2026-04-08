@@ -1532,6 +1532,7 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
             ),
             args_schema=QueryOpsGenieArgs,
         ))
+        logging.info(f"Added {_og_label} tool for user {user_id}")
 
     # Add Bitbucket tools if connected
     try:
