@@ -297,6 +297,10 @@ from routes.grafana import bp as grafana_bp  # noqa: F401
 import routes.grafana.tasks  # noqa: F401
 app.register_blueprint(grafana_bp, url_prefix="/grafana")
 
+# --- Loki Integration Routes ---
+from routes.loki import bp as loki_bp  # noqa: F401
+app.register_blueprint(loki_bp, url_prefix="/loki")
+
 # --- Datadog Integration Routes ---
 from routes.datadog import bp as datadog_bp  # noqa: F401
 import routes.datadog.tasks  # noqa: F401

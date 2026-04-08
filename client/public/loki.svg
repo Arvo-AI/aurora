@@ -1,0 +1,80 @@
+<svg width="90" height="104" xmlns="http://www.w3.org/2000/svg" xml:space="preserve" version="1.1">
+ <defs>
+  <linearGradient y2="-10.03227" x2="-1.11688" y1="3.20515" x1="0.92016" id="SVGID_1_">
+   <stop stop-color="#faed1e" offset="0"/>
+   <stop stop-color="#f15b2b" offset="1"/>
+  </linearGradient>
+  <linearGradient y2="-5.80664" x2="0.1441" y1="3.29112" x1="0.65888" id="SVGID_2_">
+   <stop stop-color="#faed1e" offset="0"/>
+   <stop stop-color="#f15b2b" offset="1"/>
+  </linearGradient>
+  <linearGradient y2="-8.67569" x2="-0.90813" y1="4.56173" x1="1.12891" id="SVGID_3_">
+   <stop stop-color="#faed1e" offset="0"/>
+   <stop stop-color="#f15b2b" offset="1"/>
+  </linearGradient>
+  <linearGradient y2="-10.03286" x2="-1.11711" y1="3.20457" x1="0.91993" id="SVGID_4_">
+   <stop stop-color="#faed1e" offset="0"/>
+   <stop stop-color="#f15b2b" offset="1"/>
+  </linearGradient>
+  <linearGradient y2="-8.67558" x2="-0.90967" y1="4.56184" x1="1.1295" id="SVGID_5_">
+   <stop stop-color="#faed1e" offset="0"/>
+   <stop stop-color="#f15b2b" offset="1"/>
+  </linearGradient>
+  <linearGradient y2="-6.73907" x2="0.09149" y1="2.35869" x1="0.60627" id="SVGID_6_">
+   <stop stop-color="#faed1e" offset="0"/>
+   <stop stop-color="#f15b2b" offset="1"/>
+  </linearGradient>
+  <linearGradient y2="-10.03239" x2="-1.11851" y1="3.20504" x1="0.92067" id="SVGID_7_">
+   <stop stop-color="#faed1e" offset="0"/>
+   <stop stop-color="#f15b2b" offset="1"/>
+  </linearGradient>
+  <linearGradient y2="-8.67616" x2="-0.9079" y1="4.56126" x1="1.12914" id="SVGID_8_">
+   <stop stop-color="#faed1e" offset="0"/>
+   <stop stop-color="#f15b2b" offset="1"/>
+  </linearGradient>
+  <linearGradient y2="-0.12392" x2="0.03412" y1="1.67227" x1="1.38324" id="SVGID_9_">
+   <stop stop-color="#faed1e" offset="0"/>
+   <stop stop-color="#f15b2b" offset="1"/>
+  </linearGradient>
+  <linearGradient y2="-0.12429" x2="0.02552" y1="1.67294" x1="1.39878" id="SVGID_10_">
+   <stop stop-color="#faed1e" offset="0"/>
+   <stop stop-color="#f15b2b" offset="1"/>
+  </linearGradient>
+  <linearGradient y2="-0.12462" x2="0.0188" y1="1.67361" x1="1.4112" id="SVGID_11_">
+   <stop stop-color="#faed1e" offset="0"/>
+   <stop stop-color="#f15b2b" offset="1"/>
+  </linearGradient>
+  <linearGradient y2="-0.12413" x2="0.02991" y1="1.67278" x1="1.39129" id="SVGID_12_">
+   <stop stop-color="#faed1e" offset="0"/>
+   <stop stop-color="#f15b2b" offset="1"/>
+  </linearGradient>
+  <linearGradient y2="-0.12361" x2="0.04447" y1="1.67151" x1="1.36444" id="SVGID_13_">
+   <stop stop-color="#faed1e" offset="0"/>
+   <stop stop-color="#f15b2b" offset="1"/>
+  </linearGradient>
+  <linearGradient y2="-0.12384" x2="0.0397" y1="1.6719" x1="1.37304" id="SVGID_14_">
+   <stop stop-color="#faed1e" offset="0"/>
+   <stop stop-color="#f15b2b" offset="1"/>
+  </linearGradient>
+ </defs>
+ <g>
+  <g id="svg_1">
+   <g id="svg_15">
+    <polygon id="svg_16" fill="url(#SVGID_1_)" points="21.18999481201172,94.35999757051468 12.909996032714844,95.63999634981155 14.189994812011719,103.92000275850296 22.470001220703125,102.64999848604202 "/>
+    <polygon id="svg_17" fill="url(#SVGID_2_)" points="51.090003967285156,84.96999818086624 87.6500015258789,79.34000092744827 86.37000274658203,71.0600021481514 49.81999969482422,76.6799972653389 "/>
+    <polygon id="svg_18" fill="url(#SVGID_3_)" points="36.849998474121094,78.6799972653389 38.1199951171875,86.9600036740303 46.409996032714844,85.68999940156937 45.12999725341797,77.39999848604202 "/>
+    <polygon id="svg_19" fill="url(#SVGID_4_)" points="35.43999481201172,100.64999848604202 34.159996032714844,92.36999970674515 25.87999725341797,93.63999634981155 27.150001525878906,101.9299972653389 "/>
+    <polygon id="svg_20" fill="url(#SVGID_5_)" points="12.189994812011719,90.95000153779984 20.470001220703125,89.6799972653389 19.199996948242188,81.38999634981155 10.919998168945312,82.67000275850296 "/>
+    <polygon id="svg_21" fill="url(#SVGID_6_)" points="88.37000274658203,84.03000336885452 51.81000518798828,89.64999848604202 53.090003967285156,97.93999940156937 89.6399917602539,92.3100021481514 "/>
+    <polygon id="svg_22" fill="url(#SVGID_7_)" points="38.849998474121094,91.64999848604202 40.1199951171875,99.9299972653389 48.400001525878906,98.66000062227249 47.12999725341797,90.36999970674515 "/>
+    <polygon id="svg_23" fill="url(#SVGID_8_)" points="25.159996032714844,88.9600036740303 33.43999481201172,87.6799972653389 32.16999816894531,79.39999848604202 23.87999725341797,80.67000275850296 "/>
+    <polygon id="svg_24" fill="url(#SVGID_9_)" points="10.199996948242188,77.99000245332718 13.689994812011719,77.45000153779984 3.5,11.169999897480011 0,11.709999859333038 "/>
+    <polygon id="svg_25" fill="url(#SVGID_10_)" points="15,77.24999696016312 18.5,76.7100036740303 7.55999755859375,5.550000011920929 4.05999755859375,6.089999973773956 "/>
+    <polygon id="svg_26" fill="url(#SVGID_11_)" points="23.220001220703125,75.98000031709671 26.709999084472656,75.43999940156937 15.110000610351562,0 11.610000610351562,0.5400000214576721 "/>
+    <polygon id="svg_27" fill="url(#SVGID_12_)" points="28.019996643066406,75.24000245332718 31.519996643066406,74.70000153779984 20.93999481201172,5.919999897480011 17.43999481201172,6.459999859333038 "/>
+    <polygon id="svg_28" fill="url(#SVGID_13_)" points="36.12999725341797,73.99999696016312 39.62999725341797,73.4600036740303 30.229995727539062,12.360000431537628 26.729995727539062,12.89000016450882 "/>
+    <polygon id="svg_29" fill="url(#SVGID_14_)" points="40.93999481201172,73.25999909639359 44.43999481201172,72.71999818086624 34.68000030517578,9.279999554157257 31.18000030517578,9.810000240802765 "/>
+   </g>
+  </g>
+ </g>
+</svg>
