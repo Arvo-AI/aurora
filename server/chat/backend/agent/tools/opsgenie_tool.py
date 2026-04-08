@@ -143,6 +143,8 @@ def _query_on_call(client, identifier: str) -> dict:
             logger.warning("[OPSGENIE-TOOL] Failed to get on-call for schedule %s", schedule["id"])
             return None
 
+    if not schedules:
+        return {"resource_type": "on_call", "count": 0, "results": []}
     with ThreadPoolExecutor(max_workers=min(len(schedules), 8)) as pool:
         on_call_results = [r for r in pool.map(_fetch_on_call, schedules) if r is not None]
     return {"resource_type": "on_call", "count": len(on_call_results), "results": on_call_results}

@@ -1512,8 +1512,12 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
         ))
         logging.info(f"Added New Relic tool for user {user_id}")
 
-    # --- OpsGenie tool ---
+    # --- OpsGenie / JSM Operations tool ---
     if user_id and is_opsgenie_connected(user_id):
+        from utils.auth.token_management import get_token_data as _get_td
+        _og_creds = _get_td(user_id, "opsgenie")
+        _og_is_jsm = _og_creds.get("auth_type") == "jsm_basic" if _og_creds else False
+        _og_label = "JSM Operations" if _og_is_jsm else "OpsGenie"
         context_wrapped_og = with_user_context(query_opsgenie)
         notification_wrapped_og = with_completion_notification(context_wrapped_og)
         final_og_func = wrap_func_with_capture(notification_wrapped_og, "query_opsgenie") if tool_capture else notification_wrapped_og
@@ -1521,7 +1525,7 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
             func=final_og_func,
             name="query_opsgenie",
             description=(
-                "Query OpsGenie for alerts, incidents, services, on-call schedules, and teams. "
+                f"Query {_og_label} for alerts, incidents, services, on-call schedules, and teams. "
                 "Use resource_type to specify what to query: 'alerts', 'alert_details', "
                 "'incidents', 'incident_details', 'services', 'on_call', 'schedules', 'teams'. "
                 "For detail queries, provide the identifier parameter with the alert or incident ID."
