@@ -5,6 +5,7 @@ import { isOvhEnabled, isScalewayEnabled } from "@/lib/feature-flags";
 import { getEnv } from '@/lib/env';
 import type { ConnectorConfig } from "@/components/connectors/types";
 import { slackService } from "@/lib/services/slack";
+import { googleChatService } from "@/lib/services/google-chat";
 import {
   getConnectedAccounts,
   subscribe,
@@ -13,7 +14,7 @@ import { fetchR } from '@/lib/query';
 
 const pagerdutyService = require("@/lib/services/pagerduty").pagerdutyService;
 
-const SPECIAL_CONNECTORS = new Set(["github", "bitbucket", "onprem", "slack", "pagerduty"]);
+const SPECIAL_CONNECTORS = new Set(["github", "bitbucket", "onprem", "slack", "google_chat", "pagerduty"]);
 
 /**
  * Connection status for a single connector card.
@@ -31,6 +32,7 @@ export function useConnectorStatus(
   const [isCheckingConnection, setIsCheckingConnection] = useState(true);
   const [isLoadingDetails, setIsLoadingDetails] = useState(false);
   const [slackStatus, setSlackStatus] = useState<any>(null);
+  const [googleChatStatus, setGoogleChatStatus] = useState<any>(null);
 
   const hasOverride = connectedOverride !== undefined;
   const isSpecial = SPECIAL_CONNECTORS.has(connector.id);
@@ -58,6 +60,7 @@ export function useConnectorStatus(
       if (connector.id === "github") checkGitHubStatus();
       else if (connector.id === "bitbucket") checkBitbucketStatus();
       else if (connector.id === "slack") checkSlackStatus();
+      else if (connector.id === "google_chat") checkGoogleChatStatus();
       else if (connector.id === "pagerduty") checkPagerDutyStatus();
       else if (connector.id === "onprem") checkVmConfigStatus();
     };
@@ -65,6 +68,14 @@ export function useConnectorStatus(
     window.addEventListener("providerStateChanged", check);
     return () => window.removeEventListener("providerStateChanged", check);
   }, [connector.id, userId, hasOverride, isSpecial]);
+
+  // Fetch display details for messaging connectors even when batch-overridden
+  useEffect(() => {
+    if (!connectedOverride) return;
+    if (connector.id === "slack") checkSlackStatus();
+    else if (connector.id === "google_chat") checkGoogleChatStatus();
+  }, [connector.id, connectedOverride]);
+
 
   const checkGitHubStatus = async () => {
     if (!userId) return;
@@ -99,6 +110,21 @@ export function useConnectorStatus(
     } catch {
       setIsConnected(false);
       setSlackStatus(null);
+    } finally {
+      setIsLoadingDetails(false);
+      setIsCheckingConnection(false);
+    }
+  };
+
+  const checkGoogleChatStatus = async () => {
+    setIsLoadingDetails(true);
+    try {
+      const data = await googleChatService.getStatus();
+      setIsConnected(data?.connected || false);
+      setGoogleChatStatus(data);
+    } catch {
+      setIsConnected(false);
+      setGoogleChatStatus(null);
     } finally {
       setIsLoadingDetails(false);
       setIsCheckingConnection(false);
@@ -171,6 +197,7 @@ export function useConnectorStatus(
     else if (connector.id === "bitbucket") checkBitbucketStatus();
     else if (connector.id === "onprem") checkVmConfigStatus();
     else if (connector.id === "slack") checkSlackStatus();
+    else if (connector.id === "google_chat") checkGoogleChatStatus();
     else if (connector.id === "pagerduty") checkPagerDutyStatus();
     else {
       const { providerIds } = getConnectedAccounts();
@@ -184,9 +211,11 @@ export function useConnectorStatus(
     isCheckingConnection,
     isLoadingDetails,
     slackStatus,
+    googleChatStatus,
     checkGitHubStatus,
     checkBitbucketStatus,
     checkSlackStatus,
+    checkGoogleChatStatus,
     checkPagerDutyStatus,
     checkVmConfigStatus,
     checkConnectionStatus,

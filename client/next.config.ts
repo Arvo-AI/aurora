@@ -104,6 +104,10 @@ const nextConfig: NextConfig = {
         source: "/azure/:path*",
         destination: `${backendUrl}/azure/:path*`,
       },
+      {
+        source: "/google-chat/events",
+        destination: `${backendUrl}/google-chat/events`,
+      },
     ];
   },
   async redirects() {

@@ -204,6 +204,11 @@ secrets:
     SLACK_CLIENT_SECRET: ""
     SLACK_SIGNING_SECRET: ""
 
+    # --- Optional: Google Chat Integration ---
+    GOOGLE_CHAT_CLIENT_ID: ""              # OAuth client ID (for setup flow)
+    GOOGLE_CHAT_CLIENT_SECRET: ""          # OAuth client secret (for setup flow)
+    GOOGLE_CHAT_SERVICE_ACCOUNT_KEY: ""    # JSON key for the Chat app service account (for messaging)
+
     # --- Optional: GitHub OAuth ---
     GH_OAUTH_CLIENT_ID: ""       # Get from: https://github.com/settings/developers
     GH_OAUTH_CLIENT_SECRET: ""

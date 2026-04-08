@@ -253,6 +253,19 @@ def _check_slack(creds: Dict[str, Any]) -> Dict[str, Any]:
         return {"connected": False}
 
 
+def _check_google_chat(creds: Dict[str, Any]) -> Dict[str, Any]:
+    """Validates Google Chat connection via service account."""
+    from connectors.google_chat_connector.client import get_chat_app_client
+
+    if not creds.get("incidents_space_name"):
+        return {"connected": False}
+    try:
+        return {"connected": get_chat_app_client() is not None}
+    except Exception as e:
+        logger.debug("Google Chat status check failed: %s", e)
+        return {"connected": False}
+
+
 def _check_github(creds: Dict[str, Any]) -> Dict[str, Any]:
     """Mirrors /github/status — validates via GitHub user API."""
     access_token = creds.get("access_token")
@@ -635,6 +648,7 @@ PROVIDER_CHECKERS = {
     "confluence": _check_confluence,
     "jira": _check_jira,
     "slack": _check_slack,
+    "google_chat": _check_google_chat,
     "github": _check_github,
     "bitbucket": _check_bitbucket,
     "thousandeyes": _check_thousandeyes,

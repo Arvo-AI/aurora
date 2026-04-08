@@ -137,6 +137,10 @@ CORS(app, origins=FRONTEND_URL, supports_credentials=True,
                        "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
                                          "Authorization", "X-Provider-Preference"],
                        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"]},
+         r"/google-chat/*": {"origins": FRONTEND_URL, "supports_credentials": True,
+                             "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
+                                               "Authorization", "X-Provider-Preference"],
+                             "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"]},
          r"/grafana/*": {"origins": FRONTEND_URL, "supports_credentials": True,
                          "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
                                             "Authorization", "X-Provider-Preference"],
@@ -282,6 +286,12 @@ from routes.slack.slack_routes import slack_bp
 from routes.slack.slack_events import slack_events_bp
 app.register_blueprint(slack_bp, url_prefix="/slack")
 app.register_blueprint(slack_events_bp, url_prefix="/slack")
+
+# --- Google Chat Integration Routes ---
+from routes.google_chat.google_chat_routes import google_chat_bp
+from routes.google_chat.google_chat_events import google_chat_events_bp
+app.register_blueprint(google_chat_bp, url_prefix="/google-chat")
+app.register_blueprint(google_chat_events_bp, url_prefix="/google-chat")
 
 # --- Jenkins Integration Routes ---
 from routes.jenkins import bp as jenkins_bp  # noqa: F401
