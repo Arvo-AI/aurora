@@ -158,10 +158,11 @@ class JSMOperationsClient:
     All management endpoints use /v1/ paths per Atlassian docs.
     """
 
-    def __init__(self, email: str, api_token: str, cloud_id: str):
+    def __init__(self, email: str, api_token: str, cloud_id: str, site_url: str = ""):
         self.email = email
         self.api_token = api_token
         self.cloud_id = cloud_id
+        self.site_url = site_url.rstrip("/") if site_url else ""
         self.base_url = f"https://api.atlassian.com/jsm/ops/api/{cloud_id}"
 
     @property
@@ -244,15 +245,66 @@ class JSMOperationsClient:
     def get_alert_notes(self, alert_id: str) -> Dict[str, Any]:
         return self._normalize(self._request("GET", f"/v1/alerts/{alert_id}/notes").json())
 
-    # ── Incidents (stubs — JSM incidents are Jira issues) ────────────
-    def list_incidents(self, **kwargs) -> Dict[str, Any]:
-        return {"data": [], "note": "JSM incidents are Jira issues. Use the Jira connector."}
+    # ── Incidents (JSM incidents are Jira issues queried via JQL) ────
+    def list_incidents(
+        self,
+        query: Optional[str] = None,
+        offset: int = 0,
+        limit: int = 50,
+        **kwargs,
+    ) -> Dict[str, Any]:
+        if not self.site_url:
+            return {"data": [], "note": "Site URL not configured. Cannot query JSM incidents."}
+        jql = 'issuetype = "[System] Incident" ORDER BY created DESC'
+        if query:
+            jql = f'issuetype = "[System] Incident" AND (summary ~ "{query}" OR description ~ "{query}") ORDER BY created DESC'
+        payload = {
+            "jql": jql,
+            "maxResults": max(1, min(limit, 100)),
+            "startAt": offset,
+            "fields": ["id", "key", "summary", "status", "priority", "created", "updated", "assignee", "reporter"],
+        }
+        try:
+            r = requests.post(
+                f"{self.site_url}/rest/api/3/search/jql",
+                json=payload,
+                headers=self.headers,
+                timeout=OPSGENIE_TIMEOUT,
+            )
+            r.raise_for_status()
+            resp = r.json()
+            incidents = []
+            for issue in resp.get("issues", []):
+                fields = issue.get("fields", {})
+                incidents.append({
+                    "id": issue.get("id"),
+                    "key": issue.get("key"),
+                    "message": fields.get("summary", ""),
+                    "status": fields.get("status", {}).get("name", ""),
+                    "priority": fields.get("priority", {}).get("name", ""),
+                    "createdAt": fields.get("created"),
+                    "updatedAt": fields.get("updated"),
+                    "assignee": fields.get("assignee", {}).get("displayName") if fields.get("assignee") else None,
+                    "reporter": fields.get("reporter", {}).get("displayName") if fields.get("reporter") else None,
+                })
+            return {"data": incidents}
+        except requests.RequestException as exc:
+            logger.error("[JSM_OPS] Failed to list incidents: %s", exc)
+            raise OpsGenieAPIError(f"Failed to query JSM incidents: {exc}") from exc
 
     def get_incident(self, incident_id: str) -> Dict[str, Any]:
-        return {"data": {}, "note": "JSM incidents are Jira issues. Use the Jira connector."}
+        url = f"https://api.atlassian.com/jsm/incidents/cloudId/{self.cloud_id}/v1/incident/{incident_id}"
+        try:
+            r = requests.get(url, headers=self.headers, timeout=OPSGENIE_TIMEOUT)
+            r.raise_for_status()
+            return {"data": r.json()}
+        except requests.RequestException as exc:
+            logger.error("[JSM_OPS] Failed to get incident %s: %s", incident_id, exc)
+            raise OpsGenieAPIError(f"Failed to get JSM incident: {exc}") from exc
 
     def get_incident_timeline(self, incident_id: str) -> Dict[str, Any]:
-        return {"data": [], "note": "JSM incidents are Jira issues. Use the Jira connector."}
+        # JSM doesn't have a dedicated timeline API — return empty
+        return {"data": []}
 
     # ── Services ──────────────────────────────────────────────────────
     def list_services(self, offset: int = 0, limit: int = 50) -> Dict[str, Any]:
@@ -338,7 +390,8 @@ def _build_client_from_creds(creds: Dict[str, Any]) -> Optional["OpsGenieClient 
         cloud_id = creds.get("cloud_id")
         if not email or not api_token or not cloud_id:
             return None
-        return JSMOperationsClient(email=email, api_token=api_token, cloud_id=cloud_id)
+        site_url = creds.get("site_url", "")
+        return JSMOperationsClient(email=email, api_token=api_token, cloud_id=cloud_id, site_url=site_url)
     # Default: OpsGenie GenieKey
     api_key = creds.get("api_key")
     region = creds.get("region", "us")

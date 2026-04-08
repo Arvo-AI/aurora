@@ -102,7 +102,10 @@ def _query_alert_details(client, identifier: str) -> dict:
 def _query_incidents(client, query: str, limit: int) -> dict:
     response = client.list_incidents(query=query or None, limit=limit)
     data = response.get("data", [])[:limit]
-    return {"resource_type": "incidents", "count": len(data), "results": data}
+    result = {"resource_type": "incidents", "count": len(data), "results": data}
+    if response.get("note"):
+        result["note"] = response["note"]
+    return result
 
 
 def _query_incident_details(client, identifier: str) -> dict:
