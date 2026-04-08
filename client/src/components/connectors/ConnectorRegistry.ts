@@ -138,8 +138,8 @@ class ConnectorRegistry {
 
     this.register({
       id: "opsgenie",
-      name: "OpsGenie",
-      description: "Connect OpsGenie for incident management, alert tracking, and on-call schedules",
+      name: "OpsGenie / JSM",
+      description: "Connect OpsGenie or Jira Service Management for alert tracking and on-call schedules",
       iconPath: "/opsgenie.svg",
       iconBgColor: "bg-white dark:bg-white",
       category: "Incident Management",

@@ -10,11 +10,17 @@ export interface OpsGenieStatus {
   accountName?: string | null;
   plan?: string | null;
   error?: string;
+  authType?: string;
+  siteUrl?: string;
 }
 
 export interface OpsGenieConnectPayload {
-  apiKey: string;
-  region: string;
+  apiKey?: string;
+  region?: string;
+  authType?: string;
+  email?: string;
+  apiToken?: string;
+  siteUrl?: string;
 }
 
 export interface OpsGenieWebhookInfo {
@@ -36,6 +42,8 @@ export const opsgenieService = {
         accountName: ((data?.accountName ?? data?.account_name) as string | null) ?? null,
         plan: (data?.plan as string | null) ?? null,
         error: data?.error as string | undefined,
+        authType: (data?.authType as string) || undefined,
+        siteUrl: (data?.siteUrl as string) || undefined,
       };
     } catch (error) {
       console.error('[opsgenieService] Failed to fetch status:', error);
@@ -54,6 +62,7 @@ export const opsgenieService = {
       region: (data?.region as string) || undefined,
       accountName: ((data?.accountName ?? data?.account_name) as string | null) ?? null,
       plan: (data?.plan as string | null) ?? null,
+      authType: (data?.authType as string) || undefined,
     };
   },
 

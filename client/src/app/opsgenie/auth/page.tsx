@@ -19,6 +19,10 @@ export default function OpsGenieAuthPage() {
   const { toast } = useToast();
   const [apiKey, setApiKey] = useState("");
   const [region, setRegion] = useState(DEFAULT_REGION);
+  const [authType, setAuthType] = useState<"opsgenie" | "jsm">("opsgenie");
+  const [jsmEmail, setJsmEmail] = useState("");
+  const [jsmApiToken, setJsmApiToken] = useState("");
+  const [jsmSiteUrl, setJsmSiteUrl] = useState("");
   const [status, setStatus] = useState<OpsGenieStatus | null>(null);
   const [loading, setLoading] = useState(false);
   const [webhookUrl, setWebhookUrl] = useState<string | null>(null);
@@ -60,6 +64,9 @@ export default function OpsGenieAuthPage() {
 
     if (result?.connected) {
       setRegion(result.region || DEFAULT_REGION);
+      if (result.authType === 'jsm_basic') {
+        setAuthType('jsm');
+      }
       await loadWebhookUrl();
     } else if (typeof window !== 'undefined') {
       localStorage.removeItem(CACHE_KEYS.WEBHOOK);
@@ -111,7 +118,18 @@ export default function OpsGenieAuthPage() {
   const handleConnect = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
 
-    if (!apiKey.trim()) {
+    const isJSM = authType === 'jsm';
+
+    if (isJSM) {
+      if (!jsmEmail.trim() || !jsmApiToken.trim() || !jsmSiteUrl.trim()) {
+        toast({
+          title: 'Validation error',
+          description: 'Email, API token, and site URL are all required.',
+          variant: 'destructive',
+        });
+        return;
+      }
+    } else if (!apiKey.trim()) {
       toast({
         title: 'Validation error',
         description: 'API key is required.',
@@ -123,8 +141,10 @@ export default function OpsGenieAuthPage() {
     setLoading(true);
 
     try {
-      const payload = { apiKey, region };
-      const result = await opsgenieService.connect(payload);
+      const connectPayload = isJSM
+        ? { authType: 'jsm', email: jsmEmail, apiToken: jsmApiToken, siteUrl: jsmSiteUrl }
+        : { apiKey, region };
+      const result = await opsgenieService.connect(connectPayload);
       setStatus(result);
 
       if (typeof window !== 'undefined') {
@@ -133,7 +153,9 @@ export default function OpsGenieAuthPage() {
 
       toast({
         title: 'Success',
-        description: 'OpsGenie connected successfully. Configure the webhook below to start receiving alerts.',
+        description: isJSM
+          ? 'JSM Operations connected successfully. Configure the webhook below to start receiving alerts.'
+          : 'OpsGenie connected successfully. Configure the webhook below to start receiving alerts.',
       });
 
       updateLocalStorageConnection(true);
@@ -230,9 +252,13 @@ export default function OpsGenieAuthPage() {
     <ConnectorAuthGuard connectorName="OpsGenie">
       <div className="container mx-auto py-8 px-4 max-w-5xl">
         <div className="mb-6">
-          <h1 className="text-3xl font-bold">OpsGenie Integration</h1>
+          <h1 className="text-3xl font-bold">
+            {authType === 'jsm' ? 'JSM Operations Integration' : 'OpsGenie Integration'}
+          </h1>
           <p className="text-muted-foreground mt-1">
-            Securely connect OpsGenie to ingest alerts, incidents, and on-call schedules inside Aurora.
+            {authType === 'jsm'
+              ? 'Securely connect JSM Operations to ingest alerts and on-call schedules inside Aurora.'
+              : 'Securely connect OpsGenie to ingest alerts, incidents, and on-call schedules inside Aurora.'}
           </p>
         </div>
 
@@ -250,7 +276,7 @@ export default function OpsGenieAuthPage() {
 
         <div className="flex items-center justify-center mb-6 text-sm font-medium">
           <span className={!isConnected ? 'text-purple-600' : 'text-muted-foreground'}>
-            Connect OpsGenie
+            {authType === 'jsm' ? 'Connect JSM Operations' : 'Connect OpsGenie'}
           </span>
           <span className="mx-4 text-muted-foreground">&rarr;</span>
           <span className={isConnected ? 'text-purple-600' : 'text-muted-foreground'}>
@@ -264,6 +290,14 @@ export default function OpsGenieAuthPage() {
             setApiKey={setApiKey}
             region={region}
             setRegion={setRegion}
+            authType={authType}
+            setAuthType={setAuthType}
+            jsmEmail={jsmEmail}
+            setJsmEmail={setJsmEmail}
+            jsmApiToken={jsmApiToken}
+            setJsmApiToken={setJsmApiToken}
+            jsmSiteUrl={jsmSiteUrl}
+            setJsmSiteUrl={setJsmSiteUrl}
             loading={loading}
             onConnect={handleConnect}
           />
@@ -275,6 +309,7 @@ export default function OpsGenieAuthPage() {
             onCopy={handleCopyWebhook}
             onDisconnect={handleDisconnect}
             loading={loading}
+            authType={authType}
           />
         ) : null}
       </div>
