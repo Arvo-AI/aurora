@@ -392,9 +392,9 @@ def post_jsm_comment(self, user_id: str, alert_message: str, comment: str) -> No
         issue_key = client.find_incident_for_alert(alert_message)
         if issue_key:
             client.add_comment_to_issue(issue_key, comment)
-            logger.info("[OPSGENIE] Posted comment to JSM incident %s", issue_key)
+            logger.info("[OPSGENIE] Posted comment to linked JSM incident")
         else:
-            logger.debug("[OPSGENIE] No JSM incident found for alert: %s", alert_message[:80])
+            logger.debug("[OPSGENIE] No JSM incident found matching alert")
     except Exception as exc:
         logger.warning("[OPSGENIE] Failed to post JSM comment: %s", exc)
         raise self.retry(exc=exc)

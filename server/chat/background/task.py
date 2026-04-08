@@ -506,7 +506,7 @@ def run_background_chat(
                                 if frontend_url and incident_id:
                                     comment += f"\n\nView in Aurora: {frontend_url}/incidents/{incident_id}"
                                 jsm_client.add_comment_to_issue(issue_key, comment)
-                                logger.info(f"[BackgroundChat] Posted RCA-complete comment to {issue_key}")
+                                logger.info("[BackgroundChat] Posted RCA-complete comment to linked JSM incident")
                 except Exception as e:
                     logger.debug(f"[BackgroundChat] Could not post JSM RCA-complete comment: {e}")
 

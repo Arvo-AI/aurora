@@ -52,7 +52,7 @@ class OpsGenieClient:
                 method, url, headers=self.headers, timeout=OPSGENIE_TIMEOUT, **kwargs
             )
         except requests.RequestException as exc:
-            logger.error("[OPSGENIE] %s %s network error: %s", method, url, exc, exc_info=True)
+            logger.error("[OPSGENIE] %s %s network error: %s", method, path, exc)
             raise OpsGenieAPIError("Unable to reach OpsGenie") from exc
 
         # OpsGenie uses X-RateLimit-State header for rate limiting
@@ -64,8 +64,8 @@ class OpsGenieClient:
             response.raise_for_status()
         except requests.HTTPError as exc:
             logger.error(
-                "[OPSGENIE] %s %s failed (%s): %s",
-                method, url, response.status_code, response.text,
+                "[OPSGENIE] %s %s failed with status %s",
+                method, path, response.status_code,
             )
             raise OpsGenieAPIError(response.text or str(exc), status_code=response.status_code) from exc
 
@@ -182,7 +182,7 @@ class JSMOperationsClient:
                 method, url, headers=self.headers, timeout=OPSGENIE_TIMEOUT, **kwargs
             )
         except requests.RequestException as exc:
-            logger.error("[JSM_OPS] %s %s network error: %s", method, url, exc, exc_info=True)
+            logger.error("[JSM_OPS] %s %s network error: %s", method, path, exc)
             raise OpsGenieAPIError("Unable to reach JSM Operations API") from exc
 
         if response.status_code == 429:
@@ -193,8 +193,8 @@ class JSMOperationsClient:
             response.raise_for_status()
         except requests.HTTPError as exc:
             logger.error(
-                "[JSM_OPS] %s %s failed (%s): %s",
-                method, url, response.status_code, response.text,
+                "[JSM_OPS] %s %s failed with status %s",
+                method, path, response.status_code,
             )
             raise OpsGenieAPIError(response.text or str(exc), status_code=response.status_code) from exc
 
@@ -328,7 +328,7 @@ class JSMOperationsClient:
             r.raise_for_status()
             return r.json()
         except requests.RequestException as exc:
-            logger.error("[JSM_OPS] Failed to post comment to %s: %s", issue_key, exc)
+            logger.error("[JSM_OPS] Failed to post comment to issue: %s", exc)
             return None
 
     def find_incident_for_alert(self, alert_message: str) -> Optional[str]:
@@ -622,7 +622,7 @@ def disconnect(user_id):
             event_rows = cursor.rowcount
             conn.commit()
 
-        logger.info("[OPSGENIE] Disconnected provider (tokens=%s, events=%s)", token_rows, event_rows)
+        logger.info("[OPSGENIE] Disconnected provider (events=%s)", event_rows)
         return jsonify({
             "success": True,
             "message": "OpsGenie disconnected successfully",
