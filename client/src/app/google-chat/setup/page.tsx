@@ -331,8 +331,6 @@ GOOGLE_CHAT_SERVICE_ACCOUNT_KEY='{"type":"service_account",...}'`;
                       <code className="bg-black/50 px-1 py-0.5 rounded">
                         GOOGLE_CHAT_SERVICE_ACCOUNT_KEY
                       </code>
-                      . With a service account, notifications appear as
-                      &quot;Aurora&quot; instead of your name.
                     </p>
                     <a
                       href="https://console.cloud.google.com/iam-admin/serviceaccounts/create"
