@@ -8,7 +8,7 @@ import { useRouter } from "next/navigation";
 import { Loader2 } from "lucide-react";
 import dynamic from "next/dynamic";
 // Core chat components
-import { VirtualizedMessages } from "@/components/chat/virtualized-messages";
+import { MessageList } from "@/components/chat/message-list";
 import EnhancedChatInput from "@/components/chat/enhanced-chat-input";
 import EmptyStateHeader from "@/components/chat/empty-state-header";
 
@@ -415,7 +415,7 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
 
         {/* Messages — full-width so scrollbar sits at page edge */}
         <div className="flex-1 min-h-0">
-            <VirtualizedMessages
+            <MessageList
               key={currentSessionId || "new"}
               messages={memoizedMessages} 
               sendRaw={chatWebSocket.sendRaw}

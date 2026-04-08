@@ -4,7 +4,7 @@ import React, { useRef, useEffect } from "react";
 import { MessageItem } from "./message-item";
 import { Message } from "../../app/chat/types";
 
-interface VirtualizedMessagesProps {
+interface MessageListProps {
   messages: Message[];
   sendRaw?: (data: string) => boolean;
   onUpdateMessage?: (messageId: number, updater: (message: Message) => Message) => void;
@@ -12,7 +12,7 @@ interface VirtualizedMessagesProps {
   userId?: string;
 }
 
-export function VirtualizedMessages({ messages, sendRaw, onUpdateMessage, sessionId, userId }: VirtualizedMessagesProps) {
+export function MessageList({ messages, sendRaw, onUpdateMessage, sessionId, userId }: MessageListProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const isAtBottomRef = useRef(true);
