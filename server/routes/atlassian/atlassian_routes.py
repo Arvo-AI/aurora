@@ -25,6 +25,7 @@ from connectors.confluence_connector.client import (
     normalize_confluence_base_url,
 )
 from connectors.jira_connector.client import JiraClient
+import requests
 from utils.auth.oauth2_state_cache import retrieve_oauth2_state, store_oauth2_state
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.token_management import get_token_data, store_tokens_in_db
@@ -34,7 +35,7 @@ logger = logging.getLogger(__name__)
 
 atlassian_bp = Blueprint("atlassian", __name__)
 
-VALID_PRODUCTS = {"confluence", "jira"}
+VALID_PRODUCTS = {"confluence", "jira", "jsm_ops"}
 
 
 def _refresh_credentials(user_id: str, creds: Dict[str, Any], provider: str) -> Optional[Dict[str, Any]]:
@@ -89,6 +90,22 @@ def _validate_jira(access_token: str, base_url: str, auth_type: str, cloud_id: O
         return None
 
 
+def _validate_jsm_ops(access_token: str, cloud_id: str) -> Optional[Dict[str, Any]]:
+    """Validate JSM Operations credentials via a lightweight alerts query."""
+    if not cloud_id:
+        logger.warning("[ATLASSIAN] JSM Ops validation requires a cloud_id")
+        return None
+    url = f"https://api.atlassian.com/jsm/ops/api/{cloud_id}/v1/alerts"
+    headers = {"Authorization": f"Bearer {access_token}", "Accept": "application/json"}
+    try:
+        r = requests.get(url, headers=headers, params={"limit": 1}, timeout=10)
+        r.raise_for_status()
+        return r.json()
+    except Exception as exc:
+        logger.warning("[ATLASSIAN] JSM Ops validation failed: %s", exc)
+        return None
+
+
 # ------------------------------------------------------------------
 # POST /atlassian/connect
 # ------------------------------------------------------------------
@@ -123,6 +140,13 @@ def connect(user_id):
 
             if product == "confluence":
                 user_payload = _validate_confluence(pat_token, base_url, "pat", None)
+            elif product == "jsm_ops":
+                # JSM PAT uses Basic auth (email:api_token) against the cloud API
+                cloud_id = data.get("cloudId")
+                if not cloud_id:
+                    results[product] = {"connected": False, "error": "cloudId required for JSM Operations PAT"}
+                    continue
+                user_payload = _validate_jsm_ops(pat_token, cloud_id)
             else:
                 user_payload = _validate_jira(pat_token, base_url, "pat", None)
 
@@ -130,13 +154,23 @@ def connect(user_id):
                 results[product] = {"connected": False, "error": f"Failed to validate {product} PAT"}
                 continue
 
-            token_payload: Dict[str, Any] = {
-                "auth_type": "pat",
-                "base_url": base_url.rstrip("/"),
-                "pat_token": pat_token,
-            }
-            store_tokens_in_db(user_id, token_payload, product)
-            results[product] = {"connected": True, "authType": "pat", "baseUrl": base_url}
+            if product == "jsm_ops":
+                token_payload_jsm: Dict[str, Any] = {
+                    "auth_type": "jsm_pat",
+                    "api_token": pat_token,
+                    "site_url": base_url.rstrip("/"),
+                    "cloud_id": data.get("cloudId"),
+                }
+                store_tokens_in_db(user_id, token_payload_jsm, "opsgenie")
+                results[product] = {"connected": True, "authType": "jsm_pat", "baseUrl": base_url}
+            else:
+                token_payload: Dict[str, Any] = {
+                    "auth_type": "pat",
+                    "base_url": base_url.rstrip("/"),
+                    "pat_token": pat_token,
+                }
+                store_tokens_in_db(user_id, token_payload, product)
+                results[product] = {"connected": True, "authType": "pat", "baseUrl": base_url}
 
         return jsonify({"success": True, "results": results})
 
@@ -211,6 +245,8 @@ def connect(user_id):
     for product in stored_products:
         if product == "confluence":
             user_payload = _validate_confluence(access_token, base_url, "oauth", cloud_id)
+        elif product == "jsm_ops":
+            user_payload = _validate_jsm_ops(access_token, cloud_id)
         else:
             user_payload = _validate_jira(access_token, base_url, "oauth", cloud_id)
 
@@ -218,15 +254,26 @@ def connect(user_id):
             results[product] = {"connected": False, "error": f"Token lacks {product} access"}
             continue
 
-        payload: Dict[str, Any] = {
-            "auth_type": "oauth",
-            "base_url": base_url.rstrip("/") if base_url else "",
-            "access_token": access_token,
-            "refresh_token": refresh_token,
-            "cloud_id": cloud_id,
-        }
-        store_tokens_in_db(user_id, payload, product)
-        results[product] = {"connected": True, "authType": "oauth", "baseUrl": base_url, "cloudId": cloud_id}
+        if product == "jsm_ops":
+            jsm_payload: Dict[str, Any] = {
+                "auth_type": "jsm_oauth",
+                "access_token": access_token,
+                "refresh_token": refresh_token,
+                "cloud_id": cloud_id,
+                "site_url": base_url.rstrip("/") if base_url else "",
+            }
+            store_tokens_in_db(user_id, jsm_payload, "opsgenie")
+            results[product] = {"connected": True, "authType": "jsm_oauth", "baseUrl": base_url, "cloudId": cloud_id}
+        else:
+            payload: Dict[str, Any] = {
+                "auth_type": "oauth",
+                "base_url": base_url.rstrip("/") if base_url else "",
+                "access_token": access_token,
+                "refresh_token": refresh_token,
+                "cloud_id": cloud_id,
+            }
+            store_tokens_in_db(user_id, payload, product)
+            results[product] = {"connected": True, "authType": "oauth", "baseUrl": base_url, "cloudId": cloud_id}
 
     return jsonify({"success": True, "connected": True, "results": results})
 
@@ -242,14 +289,22 @@ def status(user_id):
     result: Dict[str, Any] = {}
 
     for product in VALID_PRODUCTS:
-        creds = get_token_data(user_id, product)
+        # JSM Ops creds are stored under the "opsgenie" provider
+        provider = "opsgenie" if product == "jsm_ops" else product
+        creds = get_token_data(user_id, provider)
         if not creds:
             result[product] = {"connected": False}
             continue
 
         auth_type = (creds.get("auth_type") or "oauth").lower()
-        base_url = creds.get("base_url", "")
-        cloud_id = creds.get("cloud_id") if auth_type == "oauth" else None
+
+        # For jsm_ops, only report connected if creds are actually JSM
+        if product == "jsm_ops" and auth_type != "jsm_basic":
+            result[product] = {"connected": False}
+            continue
+
+        base_url = creds.get("base_url") or creds.get("site_url") or ""
+        cloud_id = creds.get("cloud_id") if auth_type in ("oauth", "jsm_oauth") else None
         token = creds.get("pat_token") if auth_type == "pat" else creds.get("access_token")
 
         if not token:
@@ -258,15 +313,19 @@ def status(user_id):
 
         if product == "confluence":
             user_payload = _validate_confluence(token, base_url, auth_type, cloud_id)
+        elif product == "jsm_ops":
+            user_payload = _validate_jsm_ops(token, cloud_id)
         else:
             user_payload = _validate_jira(token, base_url, auth_type, cloud_id)
 
-        if not user_payload and auth_type == "oauth":
-            refreshed = _refresh_credentials(user_id, creds, product)
+        if not user_payload and auth_type in ("oauth", "jsm_oauth"):
+            refreshed = _refresh_credentials(user_id, creds, provider)
             if refreshed:
                 token = refreshed.get("access_token")
                 if product == "confluence":
                     user_payload = _validate_confluence(token, base_url, auth_type, cloud_id)
+                elif product == "jsm_ops":
+                    user_payload = _validate_jsm_ops(token, cloud_id)
                 else:
                     user_payload = _validate_jira(token, base_url, auth_type, cloud_id)
 
