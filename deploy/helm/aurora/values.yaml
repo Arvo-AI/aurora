@@ -198,7 +198,11 @@ secrets:
     VAULT_TOKEN: ""              # REQUIRED - Root token from Vault init - Set after running: kubectl exec -it statefulset/<release>-vault -- vault operator init
     STORAGE_ACCESS_KEY: ""       # REQUIRED - Your S3 access key
     STORAGE_SECRET_KEY: ""       # REQUIRED - Your S3 secret key
-
+    
+    # --- Optional: Datadog Integration ---
+    DATADOG_API_KEY: ""          # Get from: https://app.datadoghq.com/organization/settings/api-keys
+    DATADOG_APP_KEY: ""          # Get from: https://app.datadoghq.com/organization/settings/application-keys
+    
     # --- Optional: Slack Integration ---
     SLACK_CLIENT_ID: ""          # Get from: https://api.slack.com/apps
     SLACK_CLIENT_SECRET: ""
@@ -301,17 +305,17 @@ resources:
   frontend:
     requests:
       cpu: "50m"
-      memory: "256Mi"
-    limits:
-      cpu: "300m"
-      memory: "512Mi"
-  redis:
-    requests:
-      cpu: "50m"
-      memory: "128Mi"
+      memory: "64Mi"
     limits:
       cpu: "200m"
       memory: "256Mi"
+  redis:
+    requests:
+      cpu: "50m"
+      memory: "256Mi"
+    limits:
+      cpu: "200m"
+      memory: "512Mi"
   searxng:
     requests:
       cpu: "50m"
