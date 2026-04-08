@@ -1,11 +1,11 @@
 'use client';
 
 import { useMemo } from 'react';
-import { Activity, Clock, Zap, TrendingDown, AlertTriangle, Radio, Timer, ShieldCheck, Brain } from 'lucide-react';
+import { Activity, Clock, Zap, AlertTriangle, Radio, Timer, ShieldCheck, Brain } from 'lucide-react';
 import { useQuery, jsonFetcher } from '@/lib/query';
 import type {
   MetricsSummary, MttrResponse, MttsResponse, IncidentFrequencyResponse,
-  ChangeFailureRateResponse, AgentExecutionResponse,
+  AgentExecutionResponse,
 } from '@/lib/services/metrics';
 import {
   StatCard, StatCardSkeleton, ChartPanel, ChartSkeleton, EmptyState,
@@ -61,12 +61,6 @@ export default function SreTab({ period }: { period: Period }) {
 
   const { data: frequency, isLoading: freqLoading } = useQuery<IncidentFrequencyResponse>(
     `/api/metrics/incident-frequency?period=${period}&group_by=severity`,
-    jsonFetcher,
-    { staleTime: 30_000 },
-  );
-
-  const { data: cfr, isLoading: cfrLoading } = useQuery<ChangeFailureRateResponse>(
-    `/api/metrics/change-failure-rate?period=${period}&window_hours=4`,
     jsonFetcher,
     { staleTime: 30_000 },
   );
@@ -163,19 +157,6 @@ export default function SreTab({ period }: { period: Period }) {
       }));
   }, [mttd]);
 
-  // CFR bar chart data
-  const cfrBarData = useMemo(() => {
-    if (!cfr?.byService?.length) return [];
-    return [...cfr.byService]
-      .sort((a, b) => b.rate - a.rate)
-      .slice(0, 10)
-      .map(s => ({
-        name: s.service,
-        Deployments: s.totalDeployments,
-        Failures: s.failureLinked,
-      }));
-  }, [cfr]);
-
   // MTTR by severity table (human-resolved only)
   const mttrTableData = mttr?.bySeverity?.length
     ? [...mttr.bySeverity].sort((a, b) => SEVERITY_ORDER.indexOf(a.severity) - SEVERITY_ORDER.indexOf(b.severity))
@@ -199,21 +180,15 @@ export default function SreTab({ period }: { period: Period }) {
   return (
     <div className="space-y-6">
       {/* Summary cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         {summaryLoading ? (
-          Array.from({ length: 5 }).map((_, i) => <StatCardSkeleton key={i} />)
+          Array.from({ length: 4 }).map((_, i) => <StatCardSkeleton key={i} />)
         ) : summary ? (
           <>
             <StatCard label="Total Incidents" value={String(summary.totalIncidents)} icon={Activity} sub={`${summary.activeIncidents} active`} />
             <StatCard label="MTTS" value={formatDuration(summary.avgMttsSeconds)} icon={Brain} sub="Aurora solution time" />
             <StatCard label="MTTR" value={summary.avgMttrSeconds ? formatDuration(summary.avgMttrSeconds) : '—'} icon={Timer} sub={summary.avgMttrSeconds ? 'human resolution time' : 'no resolved incidents yet'} />
             <StatCard label="MTTD" value={formatDuration(summary.avgMttdSeconds)} icon={Zap} sub="mean time to detect" />
-            <StatCard
-              label="Change Failure Rate"
-              value={`${Number(summary.changeFailureRate ?? 0).toFixed(1)}%`}
-              icon={TrendingDown}
-              sub={`${summary.totalDeployments} deployments`}
-            />
           </>
         ) : null}
       </div>
@@ -395,79 +370,59 @@ export default function SreTab({ period }: { period: Period }) {
         )}
       </ChartPanel>
 
-      <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-        {/* Change Failure Rate */}
-        <ChartPanel title="Change Failure Rate" subtitle={cfr ? `${cfr.totalDeployments} deployments, ${Number(cfr.changeFailureRate ?? 0).toFixed(1)}% failure rate` : undefined} loading={cfrLoading}>
-          {cfrLoading ? (
-            <ChartSkeleton height={220} />
-          ) : !cfrBarData.length ? (
-            <EmptyState icon={TrendingDown} message="No deployment data" hint="Connect a CI/CD source to track failure rates" />
-          ) : (
-            <GrafanaBarChart
-              data={cfrBarData}
-              series={[
-                { key: 'Deployments', name: 'Deployments', color: '#3b82f6' },
-                { key: 'Failures', name: 'Failure-Linked', color: '#ef4444' },
-              ]}
-              height={220}
-            />
-          )}
-        </ChartPanel>
-
-        {/* Agent Performance */}
-        <ChartPanel title="Agent Performance" loading={agentLoading}>
-          {agentLoading ? (
-            <ChartSkeleton height={220} />
-          ) : !agentExec ? (
-            <EmptyState icon={Zap} message="No agent execution data" />
-          ) : (
-            <div className="space-y-4">
-              <div className="grid grid-cols-3 gap-3">
-                <div className="bg-zinc-800/40 rounded-lg p-3">
-                  <p className="text-xs text-zinc-500 mb-1">Avg Steps / RCA</p>
-                  <p className="text-xl font-semibold text-zinc-100" style={{ fontVariantNumeric: 'tabular-nums' }}>
-                    {Number(agentExec.avgStepsPerRca ?? 0).toFixed(1)}
-                  </p>
-                </div>
-                <div className="bg-zinc-800/40 rounded-lg p-3">
-                  <p className="text-xs text-zinc-500 mb-1">RCAs Completed</p>
-                  <p className="text-xl font-semibold text-zinc-100" style={{ fontVariantNumeric: 'tabular-nums' }}>
-                    {agentExec.totalRcasCompleted}
-                  </p>
-                </div>
-                <div className="bg-zinc-800/40 rounded-lg p-3">
-                  <p className="text-xs text-zinc-500 mb-1">Tools Used</p>
-                  <p className="text-xl font-semibold text-zinc-100" style={{ fontVariantNumeric: 'tabular-nums' }}>
-                    {agentExec.toolStats.length}
-                  </p>
-                </div>
+      {/* Agent Performance */}
+      <ChartPanel title="Agent Performance" loading={agentLoading}>
+        {agentLoading ? (
+          <ChartSkeleton height={220} />
+        ) : !agentExec ? (
+          <EmptyState icon={Zap} message="No agent execution data" />
+        ) : (
+          <div className="space-y-4">
+            <div className="grid grid-cols-3 gap-3">
+              <div className="bg-zinc-800/40 rounded-lg p-3">
+                <p className="text-xs text-zinc-500 mb-1">Avg Steps / RCA</p>
+                <p className="text-xl font-semibold text-zinc-100" style={{ fontVariantNumeric: 'tabular-nums' }}>
+                  {Number(agentExec.avgStepsPerRca ?? 0).toFixed(1)}
+                </p>
               </div>
-              {agentExec.toolStats.length > 0 && (
-                <div className="overflow-hidden rounded-lg border border-zinc-800/60 max-h-48 overflow-y-auto">
-                  <table className="w-full text-xs">
-                    <thead className="sticky top-0 bg-zinc-900">
-                      <tr className="border-b border-zinc-800/60 text-zinc-500 uppercase tracking-wider">
-                        <th className="text-left px-3 py-2 font-medium">Tool</th>
-                        <th className="text-right px-3 py-2 font-medium">Calls</th>
-                        <th className="text-right px-3 py-2 font-medium">Incidents</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {[...agentExec.toolStats].sort((a, b) => b.totalCalls - a.totalCalls).slice(0, 10).map(t => (
-                        <tr key={t.toolName} className="border-b border-zinc-800/40 hover:bg-zinc-800/20 transition-colors">
-                          <td className="px-3 py-1.5 text-zinc-300 font-mono">{t.toolName}</td>
-                          <td className="px-3 py-1.5 text-right text-zinc-400" style={{ fontVariantNumeric: 'tabular-nums' }}>{t.totalCalls}</td>
-                          <td className="px-3 py-1.5 text-right text-zinc-400" style={{ fontVariantNumeric: 'tabular-nums' }}>{t.incidentsUsed}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
+              <div className="bg-zinc-800/40 rounded-lg p-3">
+                <p className="text-xs text-zinc-500 mb-1">RCAs Completed</p>
+                <p className="text-xl font-semibold text-zinc-100" style={{ fontVariantNumeric: 'tabular-nums' }}>
+                  {agentExec.totalRcasCompleted}
+                </p>
+              </div>
+              <div className="bg-zinc-800/40 rounded-lg p-3">
+                <p className="text-xs text-zinc-500 mb-1">Tools Used</p>
+                <p className="text-xl font-semibold text-zinc-100" style={{ fontVariantNumeric: 'tabular-nums' }}>
+                  {agentExec.toolStats.length}
+                </p>
+              </div>
             </div>
-          )}
-        </ChartPanel>
-      </div>
+            {agentExec.toolStats.length > 0 && (
+              <div className="overflow-hidden rounded-lg border border-zinc-800/60 max-h-48 overflow-y-auto">
+                <table className="w-full text-xs">
+                  <thead className="sticky top-0 bg-zinc-900">
+                    <tr className="border-b border-zinc-800/60 text-zinc-500 uppercase tracking-wider">
+                      <th className="text-left px-3 py-2 font-medium">Tool</th>
+                      <th className="text-right px-3 py-2 font-medium">Calls</th>
+                      <th className="text-right px-3 py-2 font-medium">Incidents</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {[...agentExec.toolStats].sort((a, b) => b.totalCalls - a.totalCalls).slice(0, 10).map(t => (
+                      <tr key={t.toolName} className="border-b border-zinc-800/40 hover:bg-zinc-800/20 transition-colors">
+                        <td className="px-3 py-1.5 text-zinc-300 font-mono">{t.toolName}</td>
+                        <td className="px-3 py-1.5 text-right text-zinc-400" style={{ fontVariantNumeric: 'tabular-nums' }}>{t.totalCalls}</td>
+                        <td className="px-3 py-1.5 text-right text-zinc-400" style={{ fontVariantNumeric: 'tabular-nums' }}>{t.incidentsUsed}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
+      </ChartPanel>
     </div>
   );
 }
