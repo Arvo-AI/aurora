@@ -915,7 +915,7 @@ async def handle_connection(websocket) -> None:
             model = data.get('model')  # Extract selected model from frontend
             mode_input = data.get('mode')    # Extract chat mode (agent / ask)
             attachments = data.get('attachments', []) # Extract file attachments if present
-            trigger_rca_requested = data.get('trigger_rca', False)
+            trigger_rca_requested = data.get('trigger_rca') is True
 
             mode = _normalize_mode(mode_input)
 
@@ -1210,7 +1210,7 @@ async def handle_connection(websocket) -> None:
                 if isinstance(human_message.content, str):
                     human_message = HumanMessage(content=rca_instruction + human_message.content)
                 elif isinstance(human_message.content, list):
-                    human_message.content.insert(0, {"type": "text", "text": rca_instruction})
+                    human_message = HumanMessage(content=[{"type": "text", "text": rca_instruction}] + human_message.content)
 
             messages_list = [human_message]
 

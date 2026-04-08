@@ -79,8 +79,7 @@ def trigger_rca(
                 "This tool is only available in interactive chat."
             })
     except Exception as e:
-        logger.error(f"[TriggerRCA] Failed to check background state: {e}")
-        return json.dumps({"error": "Unable to verify session state. Please try again."})
+        logger.warning(f"[TriggerRCA] Could not check background state, allowing: {e}")
 
     try:
         from chat.background.task import is_background_chat_allowed
@@ -91,8 +90,11 @@ def trigger_rca(
             })
     except Exception as e:
         logger.warning(f"[TriggerRCA] Rate limit check failed: {e}")
+        return json.dumps({
+            "error": "Rate limit check unavailable — please try again shortly."
+        })
 
-    incident_title = title or f"User-reported: {issue_description[:80]}"
+    incident_title = (title or f"User-reported: {issue_description[:80]}")[:200]
     severity = severity.lower() if severity else "medium"
     if severity not in ("critical", "high", "medium", "low"):
         severity = "medium"
@@ -114,6 +116,8 @@ def trigger_rca(
     from utils.db.connection_pool import db_pool
 
     org_id = get_org_id_for_user(user_id)
+    if not org_id:
+        return json.dumps({"error": "Could not resolve organization for user."})
 
     incident_id = None
     try:
@@ -215,6 +219,16 @@ def trigger_rca(
 
     except Exception as e:
         logger.exception(f"[TriggerRCA] Failed to dispatch background RCA: {e}")
+        try:
+            with db_pool.get_admin_connection() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        "UPDATE incidents SET status = 'failed' WHERE id = %s",
+                        (incident_id,),
+                    )
+                conn.commit()
+        except Exception:
+            logger.warning(f"[TriggerRCA] Could not mark incident {incident_id} as failed")
         return json.dumps({
             "incident_id": incident_id,
             "error": f"Incident created but RCA dispatch failed: {e}",
