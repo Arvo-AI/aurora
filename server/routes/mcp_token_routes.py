@@ -49,21 +49,17 @@ def create_mcp_token(user_id):
         if not org_id:
             return jsonify({'error': 'Organization context required'}), 400
 
-        conn = connect_to_db_as_user()
-        try:
-            cursor = conn.cursor(cursor_factory=RealDictCursor)
-            cursor.execute("SET myapp.current_user_id = %s", (user_id,))
-            cursor.execute("SET myapp.current_org_id = %s", (org_id,))
-            cursor.execute("""
-                INSERT INTO mcp_tokens (token, user_id, org_id, name, expires_at, status)
-                VALUES (%s, %s, %s, %s, %s, 'active')
-                RETURNING id, token, name, created_at, expires_at
-            """, (token, user_id, org_id, name, expires_at))
-            result = cursor.fetchone()
-            conn.commit()
-            cursor.close()
-        finally:
-            conn.close()
+        with connect_to_db_as_user() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+                cursor.execute("SET myapp.current_user_id = %s", (user_id,))
+                cursor.execute("SET myapp.current_org_id = %s", (org_id,))
+                cursor.execute("""
+                    INSERT INTO mcp_tokens (token, user_id, org_id, name, expires_at, status)
+                    VALUES (%s, %s, %s, %s, %s, 'active')
+                    RETURNING id, token, name, created_at, expires_at
+                """, (token, user_id, org_id, name, expires_at))
+                result = cursor.fetchone()
+                conn.commit()
 
         logger.info(f"Created MCP token for user {user_id}, name: {name}")
         return jsonify({
@@ -89,20 +85,16 @@ def list_mcp_tokens(user_id):
         if not org_id:
             return jsonify({'error': 'Organization context required'}), 400
 
-        conn = connect_to_db_as_user()
-        try:
-            cursor = conn.cursor(cursor_factory=RealDictCursor)
-            cursor.execute("SET myapp.current_user_id = %s", (user_id,))
-            cursor.execute("SET myapp.current_org_id = %s", (org_id,))
-            cursor.execute("""
-                SELECT id, name, created_at, last_used_at, expires_at, status,
-                       CONCAT(SUBSTRING(token, 1, 20), '...') as token_preview
-                FROM mcp_tokens WHERE user_id = %s AND org_id = %s ORDER BY created_at DESC
-            """, (user_id, org_id))
-            tokens = cursor.fetchall()
-            cursor.close()
-        finally:
-            conn.close()
+        with connect_to_db_as_user() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+                cursor.execute("SET myapp.current_user_id = %s", (user_id,))
+                cursor.execute("SET myapp.current_org_id = %s", (org_id,))
+                cursor.execute("""
+                    SELECT id, name, created_at, last_used_at, expires_at, status,
+                           CONCAT(SUBSTRING(token, 1, 20), '...') as token_preview
+                    FROM mcp_tokens WHERE user_id = %s AND org_id = %s ORDER BY created_at DESC
+                """, (user_id, org_id))
+                tokens = cursor.fetchall()
 
         for t in tokens:
             t['created_at'] = _to_iso(t['created_at'])
@@ -124,20 +116,16 @@ def revoke_mcp_token(user_id, token_id):
         if not org_id:
             return jsonify({'error': 'Organization context required'}), 400
 
-        conn = connect_to_db_as_user()
-        try:
-            cursor = conn.cursor(cursor_factory=RealDictCursor)
-            cursor.execute("SET myapp.current_user_id = %s", (user_id,))
-            cursor.execute("SET myapp.current_org_id = %s", (org_id,))
-            cursor.execute(
-                "UPDATE mcp_tokens SET status = 'revoked' WHERE id = %s AND user_id = %s AND org_id = %s RETURNING id",
-                (token_id, user_id, org_id)
-            )
-            result = cursor.fetchone()
-            conn.commit()
-            cursor.close()
-        finally:
-            conn.close()
+        with connect_to_db_as_user() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+                cursor.execute("SET myapp.current_user_id = %s", (user_id,))
+                cursor.execute("SET myapp.current_org_id = %s", (org_id,))
+                cursor.execute(
+                    "UPDATE mcp_tokens SET status = 'revoked' WHERE id = %s AND user_id = %s AND org_id = %s RETURNING id",
+                    (token_id, user_id, org_id)
+                )
+                result = cursor.fetchone()
+                conn.commit()
 
         if not result:
             return jsonify({'error': 'Token not found or unauthorized'}), 404
