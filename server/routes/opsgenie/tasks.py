@@ -275,18 +275,21 @@ def process_opsgenie_event(
                         logger.warning("[OPSGENIE][WEBHOOK] Failed to notify SSE: %s", e)
 
                     # Trigger summary generation
-                    from chat.background.summarization import generate_incident_summary
+                    try:
+                        from chat.background.summarization import generate_incident_summary
 
-                    generate_incident_summary.delay(
-                        incident_id=str(incident_id),
-                        user_id=user_id,
-                        source_type="opsgenie",
-                        alert_title=alert_message or "Unknown Alert",
-                        severity=severity,
-                        service=service,
-                        raw_payload=payload,
-                        alert_metadata=alert_metadata,
-                    )
+                        generate_incident_summary.delay(
+                            incident_id=str(incident_id),
+                            user_id=user_id,
+                            source_type="opsgenie",
+                            alert_title=alert_message or "Unknown Alert",
+                            severity=severity,
+                            service=service,
+                            raw_payload=payload,
+                            alert_metadata=alert_metadata,
+                        )
+                    except Exception as e:
+                        logger.error("[OPSGENIE][WEBHOOK] Failed to trigger summary: %s", e)
 
                     # Trigger background chat for RCA
                     try:

@@ -282,8 +282,8 @@ def _get_connected_integrations(user_id: str) -> Dict[str, bool]:
     try:
         from chat.backend.agent.tools.opsgenie_tool import is_opsgenie_connected
         integrations['opsgenie'] = is_opsgenie_connected(user_id)
-    except Exception:
-        logger.debug("OpsGenie connection check failed for user %s", user_id)
+    except Exception as e:
+        logger.debug(f"[BackgroundChat] Error checking OpsGenie: {e}")
 
     return integrations
 

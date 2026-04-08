@@ -625,6 +625,7 @@ def initialize_tables():
                     CREATE INDEX IF NOT EXISTS idx_opsgenie_events_user_id ON opsgenie_events(user_id, received_at DESC);
                     CREATE INDEX IF NOT EXISTS idx_opsgenie_events_alert_id ON opsgenie_events(alert_id);
                     CREATE INDEX IF NOT EXISTS idx_opsgenie_events_received_at ON opsgenie_events(received_at DESC);
+                    CREATE INDEX IF NOT EXISTS idx_opsgenie_events_status ON opsgenie_events(status);
                 """,
                 "incidents": """
                      CREATE TABLE IF NOT EXISTS incidents (
