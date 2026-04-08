@@ -704,8 +704,8 @@ def webhook_url(user_id):
 @require_permission("connectors", "read")
 def list_ingested_events(user_id):
     org_id = get_org_id_from_request()
-    limit = request.args.get("limit", default=50, type=int)
-    offset = request.args.get("offset", default=0, type=int)
+    limit = max(1, min(request.args.get("limit", default=50, type=int), 200))
+    offset = max(0, request.args.get("offset", default=0, type=int))
     status_filter = request.args.get("status")
     type_filter = request.args.get("event_type")
 

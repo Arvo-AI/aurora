@@ -301,6 +301,10 @@ def status(user_id):
         if product == "jsm_ops" and auth_type not in ("jsm_basic", "jsm_pat", "jsm_oauth"):
             result[product] = {"connected": False}
             continue
+        # jsm_basic validates via /opsgenie/status, not here — just report connected
+        if product == "jsm_ops" and auth_type == "jsm_basic":
+            result[product] = {"connected": True, "authType": auth_type, "baseUrl": creds.get("site_url", "")}
+            continue
 
         base_url = creds.get("base_url") or creds.get("site_url") or ""
         cloud_id = creds.get("cloud_id") if auth_type in ("oauth", "jsm_oauth", "jsm_pat") else None
