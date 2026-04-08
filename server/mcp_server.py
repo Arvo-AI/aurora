@@ -165,7 +165,7 @@ mcp = FastMCP(
 
 @mcp.tool()
 async def list_incidents(status: str | None = None, limit: int = 20) -> dict:
-    """List Aurora incidents. Optionally filter by status (active/investigating/resolved)."""
+    """List Aurora incidents. Optionally filter by status (investigating/analyzed/merged/resolved)."""
     params: dict = {"limit": limit}
     if status:
         params["status"] = status
