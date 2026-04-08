@@ -316,18 +316,27 @@ GOOGLE_CHAT_SERVICE_ACCOUNT_KEY='{"type":"service_account",...}'`;
                   {/* Step 4 */}
                   <div className="break-words border-t border-white/5 pt-4">
                     <p className="text-white/90 font-medium mb-1">
-                      4. Create a service account (recommended)
+                      4. Create a service account
                     </p>
                     <p className="text-white/60 text-xs mb-2">
                       Go to{" "}
                       <strong>
                         IAM &amp; Admin → Service Accounts → Create Service Account
                       </strong>
-                      . Name it something like <strong>aurora-chat-bot</strong>,
-                      then create a JSON key for it.
+                      . Name it something like <strong>aurora-chat-bot</strong>.
                     </p>
-                    <p className="text-white/40 text-xs">
-                      The JSON key content is your{" "}
+                    <p className="text-white/60 text-xs mb-2">
+                      No IAM roles are needed — the service account
+                      authenticates as the Chat app via the{" "}
+                      <code className="bg-black/50 px-1 py-0.5 rounded">chat.bot</code>{" "}
+                      scope, which is granted automatically when you link it
+                      in the Chat app settings (step 5).
+                    </p>
+                    <p className="text-white/60 text-xs mb-2">
+                      After creating the account, go to its{" "}
+                      <strong>Keys</strong> tab, click{" "}
+                      <strong>Add Key → Create new key → JSON</strong>.
+                      The downloaded JSON is your{" "}
                       <code className="bg-black/50 px-1 py-0.5 rounded">
                         GOOGLE_CHAT_SERVICE_ACCOUNT_KEY
                       </code>
@@ -475,6 +484,16 @@ GOOGLE_CHAT_SERVICE_ACCOUNT_KEY='{"type":"service_account",...}'`;
                             <strong className="text-white/90">
                               HTTP endpoint URL
                             </strong>
+                          </p>
+                          <p className="text-white/50">
+                            Under{" "}
+                            <strong className="text-white/70">
+                              Service account
+                            </strong>
+                            , select the service account you created in step 4
+                            (e.g. <em>aurora-chat-bot@your-project.iam.gserviceaccount.com</em>).
+                            This links the service account to the Chat app so
+                            it can send messages as &quot;Aurora&quot;.
                           </p>
                         </div>
                       </div>
