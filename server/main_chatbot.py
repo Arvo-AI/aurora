@@ -599,7 +599,7 @@ async def process_workflow_async(wf, state, websocket, user_id, incident_id=None
         if websocket_connected:
             error_msg = {
                 "type": "error",
-                "data": {"text": f"Workflow error: {str(e)}"},
+                "data": {"text": "A workflow error occurred. Please try again."},
             }
             if hasattr(state, 'session_id') and state.session_id:
                 error_msg["session_id"] = state.session_id

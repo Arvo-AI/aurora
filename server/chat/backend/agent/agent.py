@@ -863,7 +863,7 @@ class Agent:
             try:
                 self._cleanup_terraform_files(state.user_id if hasattr(state, 'user_id') else None)
                 
-            except:
-                pass  # Ignore cleanup errors in error handler
+            except Exception as cleanup_err:
+                logging.debug(f"Cleanup error in error handler: {cleanup_err}", exc_info=True)
                 
             raise
