@@ -17,22 +17,47 @@ export function MessageList({ messages, sendRaw, onUpdateMessage, sessionId, use
   const bottomRef = useRef<HTMLDivElement>(null);
   const isAtBottomRef = useRef(true);
   const prevMessageCountRef = useRef(messages.length);
+  // Stays true after user sends a message until they manually scroll up
+  const stickyScrollRef = useRef(true);
 
   // Track whether user is near the bottom
   const handleScroll = () => {
     const el = containerRef.current;
     if (!el) return;
     const threshold = 80;
-    isAtBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < threshold;
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < threshold;
+    isAtBottomRef.current = atBottom;
+    // Only clear sticky scroll when user deliberately scrolls up
+    if (!atBottom) {
+      stickyScrollRef.current = false;
+    }
   };
 
-  // Auto-scroll to bottom when new messages arrive (only if already at bottom)
+  // Auto-scroll: on send, on new messages, and during streaming
   useEffect(() => {
     const prevCount = prevMessageCountRef.current;
     prevMessageCountRef.current = messages.length;
 
-    if (messages.length > prevCount && isAtBottomRef.current) {
-      bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    const lastMessage = messages[messages.length - 1];
+    const shouldScroll = isAtBottomRef.current || stickyScrollRef.current;
+
+    // Always scroll when the user sends a message (even if scrolled up)
+    if (messages.length > prevCount && lastMessage?.sender === "user") {
+      bottomRef.current?.scrollIntoView({ behavior: "instant" });
+      isAtBottomRef.current = true;
+      stickyScrollRef.current = true;
+      return;
+    }
+
+    // Scroll on new messages if at bottom or sticky
+    if (messages.length > prevCount && shouldScroll) {
+      bottomRef.current?.scrollIntoView({ behavior: "instant" });
+      return;
+    }
+
+    // Keep scrolling during streaming if at bottom or sticky
+    if (lastMessage?.isStreaming && shouldScroll) {
+      bottomRef.current?.scrollIntoView({ behavior: "instant" });
     }
   }, [messages]);
 
