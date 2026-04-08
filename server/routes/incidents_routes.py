@@ -245,8 +245,7 @@ def get_incidents(user_id):
                 cursor.execute("SET myapp.current_org_id = %s", (org_id,))
                 conn.commit()
 
-                cursor.execute(
-                    """
+                query = """
                     SELECT 
                         i.id, i.user_id, i.source_type, i.source_alert_id, i.status, i.severity,
                         i.alert_title, i.alert_service, i.alert_environment, i.aurora_status, i.aurora_summary,
@@ -257,11 +256,22 @@ def get_incidents(user_id):
                     LEFT JOIN incidents target ON i.merged_into_incident_id = target.id
                     WHERE i.org_id = %s
                       AND i.status != 'merged'
-                    ORDER BY i.started_at DESC
-                    LIMIT 100
-                    """,
-                    (org_id,),
-                )
+                """
+                params = [org_id]
+
+                status_filter = request.args.get("status")
+                if status_filter:
+                    query += " AND i.status = %s"
+                    params.append(status_filter)
+
+                query += " ORDER BY i.started_at DESC"
+
+                limit = request.args.get("limit", 100, type=int)
+                limit = max(1, min(limit, 100))
+                query += " LIMIT %s"
+                params.append(limit)
+
+                cursor.execute(query, tuple(params))
                 rows = cursor.fetchall()
 
                 incidents = [
