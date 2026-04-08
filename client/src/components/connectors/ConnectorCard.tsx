@@ -9,6 +9,7 @@ import { Check, ExternalLink, AlertCircle, Loader2, BarChart2, LogOut, KeyRound,
 import { useToast } from "@/hooks/use-toast";
 import { useConnectorStatus } from "@/hooks/use-connector-status";
 import { slackService } from "@/lib/services/slack";
+import { googleChatService } from "@/lib/services/google-chat";
 import { useConnectorOAuth } from "@/hooks/use-connector-oauth";
 import { ConnectorDialogs } from "./ConnectorDialogs";
 import { ConnectorCardContent } from "./ConnectorCardContent";
@@ -19,6 +20,7 @@ import { useGraphDiscoveryStatus } from "@/hooks/use-graph-discovery-status";
 import { useUser } from "@/hooks/useAuthHooks";
 import { canWrite as checkCanWrite } from "@/lib/roles";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { DisconnectConfirmDialog } from "@/components/ui/disconnect-confirm-dialog";
 
 let pendingGitHubDialog = false;
 
@@ -40,6 +42,7 @@ export default function ConnectorCard({ connector, connectedOverride }: Connecto
   const [showScalewayDialog, setShowScalewayDialog] = useState(false);
   const [showAzureDialog, setShowAzureDialog] = useState(false);
   const [isConnectingOAuth, setIsConnectingOAuth] = useState(false);
+  const [showDisconnectDialog, setShowDisconnectDialog] = useState(false);
   
   const hasOverride = connectedOverride !== undefined;
 
@@ -59,6 +62,7 @@ export default function ConnectorCard({ connector, connectedOverride }: Connecto
     isCheckingConnection,
     isLoadingDetails,
     slackStatus,
+    googleChatStatus,
     checkGitHubStatus,
   } = useConnectorStatus(connector, userId, connectedOverride);
 
@@ -104,6 +108,33 @@ export default function ConnectorCard({ connector, connectedOverride }: Connecto
         });
       } finally {
         setIsConnectingOAuth(false);
+        setShowDisconnectDialog(false);
+      }
+    }
+
+    if (connector.id === "google_chat") {
+      setIsConnectingOAuth(true);
+      try {
+        await googleChatService.disconnect();
+        setIsConnected(false);
+        if (typeof window !== "undefined") {
+          localStorage.removeItem('isGoogleChatConnected');
+          window.dispatchEvent(new CustomEvent("providerStateChanged"));
+        }
+        toast({
+          title: "Success",
+          description: "Google Chat disconnected successfully",
+        });
+      } catch (error: any) {
+        console.error("Google Chat disconnect error:", error);
+        toast({
+          title: "Disconnect Failed",
+          description: error.message || "Failed to disconnect Google Chat",
+          variant: "destructive",
+        });
+      } finally {
+        setIsConnectingOAuth(false);
+        setShowDisconnectDialog(false);
       }
     }
   };
@@ -129,7 +160,16 @@ export default function ConnectorCard({ connector, connectedOverride }: Connecto
       if (!isConnected) {
         await handleSlackOAuth();
       } else {
-        await handleDisconnect();
+        setShowDisconnectDialog(true);
+      }
+      return;
+    }
+
+    if (connector.id === "google_chat") {
+      if (!isConnected) {
+        router.push("/google-chat/setup");
+      } else {
+        setShowDisconnectDialog(true);
       }
       return;
     }
@@ -281,10 +321,15 @@ export default function ConnectorCard({ connector, connectedOverride }: Connecto
               slackStatus={slackStatus}
               description={connector.description}
             />
+          ) : connector.id === "google_chat" && isConnected ? (
+            <ConnectorCardContent
+              isLoading={isLoadingDetails}
+              googleChatStatus={googleChatStatus}
+              description={connector.description}
+            />
           ) : (
             <ConnectorCardContent
               isLoading={false}
-              slackStatus={null}
               description={connector.description}
             />
           )}
@@ -373,9 +418,14 @@ export default function ConnectorCard({ connector, connectedOverride }: Connecto
                         {isConnecting ? (
                           <>
                             <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                            {connector.id === "slack" && isConnected ? "Disconnecting..." : "Connecting..."}
+                            {connector.id === "slack" && isConnected ? "Disconnecting..." : connector.id === "google_chat" && isConnected ? "Disconnecting..." : "Connecting..."}
                           </>
                         ) : connector.id === "slack" && isConnected ? (
+                          <>
+                            <LogOut className="h-4 w-4 mr-2" />
+                            Disconnect
+                          </>
+                        ) : connector.id === "google_chat" && isConnected ? (
                           <>
                             <LogOut className="h-4 w-4 mr-2" />
                             Disconnect
@@ -484,6 +534,13 @@ export default function ConnectorCard({ connector, connectedOverride }: Connecto
         onOvhDialogChange={setShowOvhDialog}
         onScalewayDialogChange={setShowScalewayDialog}
         onGitHubDialogClose={() => setShowGitHubDialog(false)}
+      />
+
+      <DisconnectConfirmDialog
+        open={showDisconnectDialog}
+        onOpenChange={setShowDisconnectDialog}
+        connectorName={connector.name}
+        onConfirm={handleDisconnect}
       />
     </>
   );

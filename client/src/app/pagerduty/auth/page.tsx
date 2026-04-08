@@ -9,16 +9,7 @@ import { PagerDutyWebhookStep } from "@/components/pagerduty/PagerDutyWebhookSte
 import { TokenInputModal } from "@/components/pagerduty/TokenInputModal";
 import { ConnectionLoadingOverlay } from "@/components/ui/connection-loading-overlay";
 import { isPagerDutyOAuthEnabled } from "@/lib/feature-flags";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
+import { DisconnectConfirmDialog } from "@/components/ui/disconnect-confirm-dialog";
 import { getUserFriendlyError } from "@/lib/utils";
 import ConnectorAuthGuard from "@/components/connectors/ConnectorAuthGuard";
 
@@ -337,22 +328,12 @@ export default function PagerDutyAuthPage() {
         submitLabel="Change Token"
       />
 
-      <AlertDialog open={showDisconnectDialog} onOpenChange={setShowDisconnectDialog}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Disconnect PagerDuty?</AlertDialogTitle>
-            <AlertDialogDescription>
-              This will remove your PagerDuty credentials from Aurora. You can reconnect at any time.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={handleDisconnectConfirm} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
-              Disconnect
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <DisconnectConfirmDialog
+        open={showDisconnectDialog}
+        onOpenChange={setShowDisconnectDialog}
+        connectorName="PagerDuty"
+        onConfirm={handleDisconnectConfirm}
+      />
     </div>
     </ConnectorAuthGuard>
   );

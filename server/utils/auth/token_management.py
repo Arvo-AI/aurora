@@ -287,6 +287,22 @@ def store_tokens_in_db(user_id: str, token_data: Dict, provider: str,
                     "is_active = TRUE",
                     (user_id, request_org_id, secret_ref, provider, team_id)
                 )
+            elif provider == "google_chat":
+                # Google Chat: Store domain in subscription_name, user_email in email
+                gc_domain = token_data.get("domain") if isinstance(token_data, dict) else None
+                gc_email = token_data.get("user_email") if isinstance(token_data, dict) else None
+
+                cursor.execute(
+                    "INSERT INTO user_tokens (user_id, org_id, secret_ref, provider, subscription_name, email) "
+                    "VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT (user_id, provider) DO UPDATE "
+                    "SET secret_ref = EXCLUDED.secret_ref, "
+                    "org_id = COALESCE(EXCLUDED.org_id, user_tokens.org_id), "
+                    "subscription_name = EXCLUDED.subscription_name, "
+                    "email = EXCLUDED.email, "
+                    "timestamp = CURRENT_TIMESTAMP, "
+                    "is_active = TRUE",
+                    (user_id, request_org_id, secret_ref, provider, gc_domain, gc_email)
+                )
             elif provider == "coroot":
                 coroot_url = token_data.get("url") if isinstance(token_data, dict) else None
                 coroot_email = token_data.get("email") if isinstance(token_data, dict) else None

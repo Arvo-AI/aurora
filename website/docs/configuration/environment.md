@@ -328,6 +328,22 @@ SLACK_CLIENT_SECRET=your-client-secret
 SLACK_SIGNING_SECRET=your-signing-secret
 ```
 
+### Google Chat
+
+| Variable | Description |
+|----------|-------------|
+| `GOOGLE_CHAT_CLIENT_ID` | Google Cloud OAuth 2.0 Client ID |
+| `GOOGLE_CHAT_CLIENT_SECRET` | Google Cloud OAuth 2.0 Client Secret |
+| `GOOGLE_CHAT_PROJECT_NUMBER` | Google Cloud project number (used for event verification) |
+| `GOOGLE_CHAT_VERIFICATION_TOKEN` | Verification token from Chat API configuration |
+
+```bash
+GOOGLE_CHAT_CLIENT_ID=your-client-id
+GOOGLE_CHAT_CLIENT_SECRET=your-client-secret
+GOOGLE_CHAT_PROJECT_NUMBER=your-project-number
+GOOGLE_CHAT_VERIFICATION_TOKEN=your-verification-token
+```
+
 ### PagerDuty
 
 | Variable | Default | Description |

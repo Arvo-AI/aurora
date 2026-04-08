@@ -333,6 +333,91 @@ SLACK_SIGNING_SECRET=your-signing-secret
 
 ---
 
+### Google Chat
+
+OAuth 2.0 authentication for Google Chat spaces.
+
+#### 1. Create a Google Cloud Project
+
+Go to [Google Cloud Console](https://console.cloud.google.com/projectcreate) and create a new project (or select an existing one).
+
+#### 2. Enable the Google Chat API
+
+In your project, go to **APIs & Services → Library**, search for "Google Chat API", and click **Enable**.
+
+[Enable Google Chat API →](https://console.cloud.google.com/apis/library/chat.googleapis.com)
+
+#### 3. Create OAuth Credentials
+
+1. Go to **APIs & Services → Credentials → Create Credentials → OAuth client ID**
+2. Select **Web application** as the type
+3. Add an Authorized redirect URI:
+   - Local (with tunnel): `https://your-ngrok-url.ngrok-free.app/google-chat/callback`
+   - Production: `https://your-domain.com/google-chat/callback`
+4. Save the **Client ID** and **Client Secret** — these are `GOOGLE_CHAT_CLIENT_ID` and `GOOGLE_CHAT_CLIENT_SECRET`
+
+[Create OAuth Client →](https://console.cloud.google.com/apis/credentials/oauthclient)
+
+#### 4. Configure the Chat App
+
+Go to the [Google Chat API Configuration page](https://console.cloud.google.com/apis/api/chat.googleapis.com/hangouts-chat) and set the following. Leave everything else as default.
+
+> **Important:** Uncheck **Build this Chat app as a Workspace add-on** at the top of the page first.
+
+**Application info:**
+- **App name:** `Aurora`
+- **Avatar URL:** `https://raw.githubusercontent.com/arvo-ai/aurora/main/client/public/arvologo.png`
+- **Description:** `AI incident response assistant`
+
+**Interactive features:**
+- Enable **Interactive features**
+- Under Functionality, check **Join spaces and group conversations**
+
+**Connection settings:**
+- Select the **HTTP endpoint URL** radio button
+- Paste your publicly accessible HTTPS endpoint in the field:
+  - Local (with tunnel): `https://your-ngrok-url.ngrok-free.app/google-chat/events`
+  - Production: `https://your-domain.com/google-chat/events`
+- Set **Authentication Audience** to **Project Number**
+
+**Visibility:**
+- Check **Make this Chat app available to specific people and groups** and add your email address (or a Google Group to let multiple people find and add the bot)
+- This controls who can *find and add* the bot — once added to a space, all members of that space can interact with it. You don't need to add every user here.
+
+The **Verification token** shown on this page is your `GOOGLE_CHAT_VERIFICATION_TOKEN`.
+
+#### 5. Find Your Project Number
+
+Go to your project's [Dashboard](https://console.cloud.google.com/home/dashboard) in the Cloud Console. The **Project number** is displayed in the Project info card. This is `GOOGLE_CHAT_PROJECT_NUMBER`.
+
+#### 6. Configure Environment
+
+```bash
+GOOGLE_CHAT_CLIENT_ID=your-client-id
+GOOGLE_CHAT_CLIENT_SECRET=your-client-secret
+GOOGLE_CHAT_PROJECT_NUMBER=your-project-number
+GOOGLE_CHAT_VERIFICATION_TOKEN=your-verification-token
+```
+
+Then rebuild and restart Aurora:
+
+```bash
+make down
+make dev
+```
+
+#### Troubleshooting
+
+| Error | Solution |
+|-------|----------|
+| `invalid_scope` | Ensure you haven't added service-account-only scopes (e.g. `chat.bot`) to the OAuth request |
+| `bad_redirect_uri` | Redirect URI must match exactly in Google Cloud Console |
+| "Google Chat OAuth credentials not configured" | Set all four `GOOGLE_CHAT_*` variables in `.env` |
+| Event verification failing | Ensure `GOOGLE_CHAT_PROJECT_NUMBER` matches the project hosting the Chat app |
+| Connector shows "not connected" after OAuth | Verify `GOOGLE_CHAT_VERIFICATION_TOKEN` is set and restart the server |
+
+---
+
 ## Documentation & Project Management
 
 ### Atlassian (Confluence + Jira)

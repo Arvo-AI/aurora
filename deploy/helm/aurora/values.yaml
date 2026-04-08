@@ -204,6 +204,12 @@ secrets:
     SLACK_CLIENT_SECRET: ""
     SLACK_SIGNING_SECRET: ""
 
+    # --- Optional: Google Chat Integration ---
+    GOOGLE_CHAT_CLIENT_ID: ""    # Get from: https://console.cloud.google.com/apis/credentials
+    GOOGLE_CHAT_CLIENT_SECRET: ""
+    GOOGLE_CHAT_PROJECT_NUMBER: ""
+    GOOGLE_CHAT_VERIFICATION_TOKEN: ""
+
     # --- Optional: GitHub OAuth ---
     GH_OAUTH_CLIENT_ID: ""       # Get from: https://github.com/settings/developers
     GH_OAUTH_CLIENT_SECRET: ""

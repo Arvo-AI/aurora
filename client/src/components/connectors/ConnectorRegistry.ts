@@ -228,6 +228,17 @@ class ConnectorRegistry {
         useCustomConnection: true,
       });
 
+    this.register({
+        id: "google_chat",
+        name: "Google Chat",
+        description: "Receive alerts and notifications directly in Google Chat. Connect your Google Workspace to get real-time updates and interact with Aurora.",
+        iconPath: "/google-chat.svg",
+        iconBgColor: "bg-white dark:bg-white",
+        category: "Communication",
+        storageKey: "isGoogleChatConnected",
+        useCustomConnection: true,
+      });
+
     // Cloud Providers (now under Infrastructure category)
     this.register({
       id: "gcp",

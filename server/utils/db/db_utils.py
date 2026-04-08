@@ -624,6 +624,7 @@ def initialize_tables():
                          started_at TIMESTAMP NOT NULL,
                          analyzed_at TIMESTAMP,
                          slack_message_ts VARCHAR(50),
+                         google_chat_message_name VARCHAR(255),
                          active_tab VARCHAR(10) DEFAULT 'thoughts',
                          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -652,6 +653,7 @@ def initialize_tables():
                         started_at TIMESTAMP NOT NULL,
                         analyzed_at TIMESTAMP,
                         slack_message_ts VARCHAR(50),
+                        google_chat_message_name VARCHAR(255),
                         active_tab VARCHAR(10) DEFAULT 'thoughts',
                         visualization_code TEXT,
                         visualization_updated_at TIMESTAMP,
@@ -1501,6 +1503,21 @@ def initialize_tables():
                 )
                 conn.rollback()
 
+            # Add google_chat_message_name column to incidents table for Google Chat message updates
+            try:
+                cursor.execute(
+                    """
+                    ALTER TABLE incidents
+                    ADD COLUMN IF NOT EXISTS google_chat_message_name VARCHAR(255);
+                    """
+                )
+                conn.commit()
+            except Exception as e:
+                logging.warning(
+                    f"Error adding google_chat_message_name column to incidents: {e}"
+                )
+                conn.rollback()
+
             # Migration: Add active_tab column to incidents for UI state persistence
             try:
                 cursor.execute(
@@ -1624,6 +1641,7 @@ def initialize_tables():
                 "CREATE INDEX IF NOT EXISTS idx_user_tokens_last_activity ON user_tokens(last_activity);",
                 "CREATE INDEX IF NOT EXISTS idx_user_tokens_active ON user_tokens(user_id, is_active);",
                 "CREATE INDEX IF NOT EXISTS idx_user_tokens_slack_team ON user_tokens(provider, subscription_id) WHERE provider = 'slack' AND subscription_id IS NOT NULL;",
+                "CREATE INDEX IF NOT EXISTS idx_user_tokens_google_chat_domain ON user_tokens(provider, subscription_name) WHERE provider = 'google_chat' AND subscription_name IS NOT NULL;",
                 "CREATE INDEX IF NOT EXISTS idx_user_manual_vms_user_id ON user_manual_vms(user_id);",
                 "CREATE INDEX IF NOT EXISTS idx_user_manual_vms_key ON user_manual_vms(user_id, ssh_key_id);",
                 "CREATE INDEX IF NOT EXISTS idx_user_manual_vms_connection_verified ON user_manual_vms(user_id, connection_verified);",

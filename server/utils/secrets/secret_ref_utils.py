@@ -61,6 +61,7 @@ SUPPORTED_SECRET_PROVIDERS: Set[str] = {
     "cloudbees", # CloudBees CI connector tokens
     "spinnaker", # Spinnaker CD connector tokens
     "newrelic",  # New Relic connector tokens
+    "google",   # Google Chat connector tokens
 }
 
 
