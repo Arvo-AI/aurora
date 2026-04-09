@@ -32,6 +32,7 @@ from .github_repos_tool import get_connected_repos, GetConnectedReposArgs
 from .jenkins_rca_tool import jenkins_rca, JenkinsRCAArgs
 from .cloudbees_rca_tool import cloudbees_rca, CloudBeesRCAArgs
 from .spinnaker_rca_tool import spinnaker_rca, SpinnakerRCAArgs
+from .trigger_rca_tool import trigger_rca, TriggerRCAArgs
 
 # Visualization trigger caching
 from cachetools import TTLCache
@@ -115,6 +116,7 @@ from .datadog_tool import (
     is_datadog_connected,
     QueryDatadogArgs,
 )
+from .opsgenie_tool import query_opsgenie, is_opsgenie_connected, QueryOpsGenieArgs
 from .newrelic_tool import (
     query_newrelic,
     is_newrelic_connected,
@@ -867,10 +869,11 @@ def get_cloud_tools():
     # - When no tool_capture is active we can safely cache per-user
     # - When a tool_capture **is** active we additionally key on the `id()` of the object so each
     #   session gets its own wrapped functions that close over the *right* capture instance.
+    rca_flag = getattr(state_context, 'trigger_rca_requested', False) if state_context else False
     if tool_capture is None:
-        cache_key = f"{user_id}:nocapture:{mode_suffix}"
+        cache_key = f"{user_id}:nocapture:{mode_suffix}:rca={rca_flag}"
     else:
-        cache_key = f"{user_id}:capture:{id(tool_capture)}:{mode_suffix}"
+        cache_key = f"{user_id}:capture:{id(tool_capture)}:{mode_suffix}:rca={rca_flag}"
     
     if user_id:
         current_time = time.time()
@@ -1165,6 +1168,10 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
         (analyze_zip_file, "analyze_zip_file"),
         # (web_search, "web_search"),  # Moved to dedicated registration below with explicit args_schema
     ]
+
+    # Only include trigger_rca when the user explicitly requested it via the UI button
+    if state_context and getattr(state_context, 'trigger_rca_requested', False):
+        tool_functions.append((trigger_rca, "trigger_rca"))
     
     # Process Aurora native tools
     for func, name in tool_functions:
@@ -1318,6 +1325,20 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                 name=name,
                 description="Fetch and parse a Confluence runbook into markdown and steps for LLM use. Parameter: page_url (string, required).",
                 args_schema=ConfluenceRunbookArgs,
+            )
+        elif name == 'trigger_rca':
+            tool = StructuredTool.from_function(
+                func=final_func,
+                name=name,
+                description=(
+                    "Trigger a full automated Root Cause Analysis investigation. "
+                    "Use this when the user reports an operational incident or describes symptoms "
+                    "that warrant investigation (e.g. high CPU, errors, latency spikes, outages). "
+                    "Creates an incident and dispatches a background RCA using all connected integrations. "
+                    "Parameters: issue_description (required), title (optional), service (optional), "
+                    "severity (optional: critical/high/medium/low)."
+                ),
+                args_schema=TriggerRCAArgs,
             )
         else:
             tool = StructuredTool.from_function(final_func)
@@ -1510,6 +1531,28 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
             args_schema=QueryNewRelicArgs,
         ))
         logging.info(f"Added New Relic tool for user {user_id}")
+
+    # --- OpsGenie / JSM Operations tool ---
+    if user_id and is_opsgenie_connected(user_id):
+        from routes.opsgenie.opsgenie_routes import _get_stored_opsgenie_credentials
+        _og_creds = _get_stored_opsgenie_credentials(user_id)
+        _og_is_jsm = _og_creds.get("auth_type") == "jsm_basic" if _og_creds else False
+        _og_label = "JSM Operations" if _og_is_jsm else "OpsGenie"
+        context_wrapped_og = with_user_context(query_opsgenie)
+        notification_wrapped_og = with_completion_notification(context_wrapped_og)
+        final_og_func = wrap_func_with_capture(notification_wrapped_og, "query_opsgenie") if tool_capture else notification_wrapped_og
+        tools.append(StructuredTool.from_function(
+            func=final_og_func,
+            name="query_opsgenie",
+            description=(
+                f"Query {_og_label} for alerts, incidents, services, on-call schedules, and teams. "
+                "Use resource_type to specify what to query: 'alerts', 'alert_details', "
+                "'incidents', 'incident_details', 'services', 'on_call', 'schedules', 'teams'. "
+                "For detail queries, provide the identifier parameter with the alert or incident ID."
+            ),
+            args_schema=QueryOpsGenieArgs,
+        ))
+        logging.info(f"Added {_og_label} tool for user {user_id}")
 
     # Add Bitbucket tools if connected
     try:

@@ -606,6 +606,27 @@ def initialize_tables():
                     CREATE INDEX IF NOT EXISTS idx_pagerduty_events_status ON pagerduty_events(incident_status);
                     CREATE INDEX IF NOT EXISTS idx_pagerduty_events_received_at ON pagerduty_events(received_at DESC);
                 """,
+                "opsgenie_events": """
+                    CREATE TABLE IF NOT EXISTS opsgenie_events (
+                        id SERIAL PRIMARY KEY,
+                        user_id VARCHAR(255) NOT NULL,
+                        org_id VARCHAR(255),
+                        action VARCHAR(100),
+                        alert_id VARCHAR(255),
+                        alert_message TEXT,
+                        priority VARCHAR(10),
+                        status VARCHAR(50),
+                        source VARCHAR(255),
+                        payload JSONB NOT NULL,
+                        received_at TIMESTAMP NOT NULL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+
+                    CREATE INDEX IF NOT EXISTS idx_opsgenie_events_user_id ON opsgenie_events(user_id, received_at DESC);
+                    CREATE INDEX IF NOT EXISTS idx_opsgenie_events_alert_id ON opsgenie_events(alert_id);
+                    CREATE INDEX IF NOT EXISTS idx_opsgenie_events_received_at ON opsgenie_events(received_at DESC);
+                    CREATE INDEX IF NOT EXISTS idx_opsgenie_events_status ON opsgenie_events(status);
+                """,
                 "incidents": """
                      CREATE TABLE IF NOT EXISTS incidents (
                          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -624,6 +645,7 @@ def initialize_tables():
                          started_at TIMESTAMP NOT NULL,
                          analyzed_at TIMESTAMP,
                          slack_message_ts VARCHAR(50),
+                         google_chat_message_name VARCHAR(255),
                          active_tab VARCHAR(10) DEFAULT 'thoughts',
                          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -636,39 +658,6 @@ def initialize_tables():
                      CREATE INDEX IF NOT EXISTS idx_incidents_source ON incidents(source_type, source_alert_id);
                      CREATE INDEX IF NOT EXISTS idx_incidents_merged ON incidents(merged_into_incident_id) WHERE merged_into_incident_id IS NOT NULL;
                  """,
-                "incident_alerts": """
-                    CREATE TABLE IF NOT EXISTS incident_alerts (
-                        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                        incident_id UUID NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
-                        source_type VARCHAR(20) NOT NULL,
-                        source_alert_id INTEGER NOT NULL,
-                        alert_title TEXT,
-                        alert_service TEXT,
-                        alert_environment TEXT,
-                        aurora_status VARCHAR(20) DEFAULT 'idle',
-                        aurora_summary TEXT,
-                        aurora_chat_session_id UUID,
-                        rca_celery_task_id VARCHAR(255),
-                        started_at TIMESTAMP NOT NULL,
-                        analyzed_at TIMESTAMP,
-                        slack_message_ts VARCHAR(50),
-                        active_tab VARCHAR(10) DEFAULT 'thoughts',
-                        visualization_code TEXT,
-                        visualization_updated_at TIMESTAMP,
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        UNIQUE(source_type, source_alert_id, user_id)
-                        alert_severity VARCHAR(20),
-                        correlation_strategy TEXT,
-                        correlation_score FLOAT,
-                        correlation_details JSONB,
-                        alert_metadata JSONB,
-                        received_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                    );
-
-                    CREATE INDEX IF NOT EXISTS idx_incident_alerts_incident_id ON incident_alerts(incident_id);
-                    CREATE INDEX IF NOT EXISTS idx_incident_alerts_source ON incident_alerts(source_type, source_alert_id);
-                """,
                 "incident_alerts": """
                     CREATE TABLE IF NOT EXISTS incident_alerts (
                         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -934,6 +923,22 @@ def initialize_tables():
                     CREATE INDEX IF NOT EXISTS idx_kubectl_tokens_token ON kubectl_agent_tokens(token);
                     CREATE INDEX IF NOT EXISTS idx_kubectl_tokens_status ON kubectl_agent_tokens(status);
                 """,
+                "mcp_tokens": """
+                    CREATE TABLE IF NOT EXISTS mcp_tokens (
+                        id SERIAL PRIMARY KEY,
+                        token VARCHAR(128) UNIQUE NOT NULL,
+                        user_id TEXT NOT NULL,
+                        org_id VARCHAR(255),
+                        name TEXT,
+                        created_at TIMESTAMP DEFAULT NOW(),
+                        last_used_at TIMESTAMP,
+                        expires_at TIMESTAMP,
+                        status TEXT DEFAULT 'active' CHECK (status IN ('active', 'revoked', 'expired'))
+                    );
+
+                    CREATE INDEX IF NOT EXISTS idx_mcp_tokens_token ON mcp_tokens(token);
+                    CREATE INDEX IF NOT EXISTS idx_mcp_tokens_user ON mcp_tokens(user_id);
+                """,
                 "active_kubectl_connections": """
                     CREATE TABLE IF NOT EXISTS active_kubectl_connections (
                         id SERIAL PRIMARY KEY,
@@ -1116,6 +1121,7 @@ def initialize_tables():
                 "llm_usage_tracking",
                 "rca_notification_emails",
                 "kubectl_agent_tokens",
+                "mcp_tokens",
                 "user_manual_vms",
             ]
 
@@ -1129,6 +1135,7 @@ def initialize_tables():
             rls_tables.append("jenkins_deployment_events")
             rls_tables.append("spinnaker_deployment_events")
             rls_tables.append("dynatrace_problems")
+            rls_tables.append("opsgenie_events")
 
             # Add incidents table
             # Note: incident_suggestions and incident_thoughts are child tables with CASCADE DELETE
@@ -1562,6 +1569,21 @@ def initialize_tables():
                 )
                 conn.rollback()
 
+            # Add google_chat_message_name column to incidents table for Google Chat message updates
+            try:
+                cursor.execute(
+                    """
+                    ALTER TABLE incidents
+                    ADD COLUMN IF NOT EXISTS google_chat_message_name VARCHAR(255);
+                    """
+                )
+                conn.commit()
+            except Exception as e:
+                logging.error(
+                    f"Failed to add google_chat_message_name column to incidents: {e}"
+                )
+                conn.rollback()
+
             # Migration: Add active_tab column to incidents for UI state persistence
             try:
                 cursor.execute(
@@ -1685,6 +1707,7 @@ def initialize_tables():
                 "CREATE INDEX IF NOT EXISTS idx_user_tokens_last_activity ON user_tokens(last_activity);",
                 "CREATE INDEX IF NOT EXISTS idx_user_tokens_active ON user_tokens(user_id, is_active);",
                 "CREATE INDEX IF NOT EXISTS idx_user_tokens_slack_team ON user_tokens(provider, subscription_id) WHERE provider = 'slack' AND subscription_id IS NOT NULL;",
+                "CREATE INDEX IF NOT EXISTS idx_user_tokens_google_chat_domain ON user_tokens(provider, subscription_name) WHERE provider = 'google_chat' AND subscription_name IS NOT NULL;",
                 "CREATE INDEX IF NOT EXISTS idx_user_manual_vms_user_id ON user_manual_vms(user_id);",
                 "CREATE INDEX IF NOT EXISTS idx_user_manual_vms_key ON user_manual_vms(user_id, ssh_key_id);",
                 "CREATE INDEX IF NOT EXISTS idx_user_manual_vms_connection_verified ON user_manual_vms(user_id, connection_verified);",
@@ -1782,7 +1805,7 @@ def initialize_tables():
             _org_id_tables = list(set(rls_tables + [
                 "users", "workspaces", "aurora_deployments",
                 "cloud_feed_metadata", "cloud_ingestion_state",
-                "pagerduty_events", "knowledge_base_memory",
+                "pagerduty_events", "opsgenie_events", "knowledge_base_memory",
                 "knowledge_base_documents",
             ]))
             for tbl in _org_id_tables:
@@ -1850,6 +1873,7 @@ def initialize_tables():
                     "user_tokens",
                     "llm_usage_tracking",
                     "kubectl_agent_tokens",
+                    "mcp_tokens",
                     "user_manual_vms",
                     "incident_alerts",
                     "incident_feedback",
@@ -1938,10 +1962,11 @@ def initialize_tables():
                 "deployment_tasks", "deployments", "chat_sessions",
                 "llm_usage_tracking", "cloud_feed_metadata", "cloud_ingestion_state",
                 "grafana_alerts", "datadog_events", "netdata_alerts",
-                "pagerduty_events", "incidents", "incident_alerts",
+                "pagerduty_events", "opsgenie_events", "incidents", "incident_alerts",
                 "rca_notification_emails", "splunk_alerts",
                 "jenkins_deployment_events", "dynatrace_problems",
                 "bigpanda_events", "kubectl_agent_tokens",
+                "mcp_tokens",
                 "k8s_pods", "k8s_nodes", "k8s_node_conditions",
                 "k8s_services", "k8s_deployments", "k8s_ingresses",
                 "k8s_pod_metrics", "k8s_node_metrics",

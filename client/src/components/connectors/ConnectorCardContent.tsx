@@ -5,16 +5,18 @@ import { Loader2 } from "lucide-react";
 /**
  * Props for ConnectorCardContent component.
  * Note: This is a generic component used for all connectors.
- * - For Slack: Shows Slack-specific connection details (workspace, team ID, channel) when slackStatus is provided
+ * - For Slack: Shows Slack-specific connection details when slackStatus is provided
+ * - For Google Chat: Shows Google Chat-specific details when googleChatStatus is provided
  * - For all other connectors: Simply displays the connector description
  */
 interface ConnectorCardContentProps {
   isLoading: boolean;
-  slackStatus: any; // Slack-specific status object (only used when connector.id === "slack")
-  description: string; // Generic description shown for all connectors when slackStatus is null
+  slackStatus?: any;
+  googleChatStatus?: any;
+  description: string;
 }
 
-export function ConnectorCardContent({ isLoading, slackStatus, description }: ConnectorCardContentProps) {
+export function ConnectorCardContent({ isLoading, slackStatus, googleChatStatus, description }: ConnectorCardContentProps) {
   if (isLoading) {
     return (
       <div className="flex items-center gap-2 py-2 text-muted-foreground">
@@ -57,6 +59,22 @@ export function ConnectorCardContent({ isLoading, slackStatus, description }: Co
             <span className="text-sm text-muted-foreground font-medium">Notification Channel:</span>
             <span className="text-sm font-semibold text-foreground">
               #{slackStatus.incidents_channel_name}
+            </span>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  if (googleChatStatus) {
+    return (
+      <div className="space-y-2 py-1">
+        <CardDescription className="text-sm leading-relaxed">{description}</CardDescription>
+        {googleChatStatus.incidents_space_display_name && (
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-muted-foreground font-medium">Notification Space:</span>
+            <span className="text-sm font-semibold text-foreground">
+              {googleChatStatus.incidents_space_display_name}
             </span>
           </div>
         )}

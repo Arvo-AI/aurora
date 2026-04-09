@@ -3,27 +3,55 @@ import Credentials from "next-auth/providers/credentials"
 
 const ROLE_REVALIDATE_SECONDS = 60 // re-check role/org every 60 seconds
 
-async function refreshUserFromBackend(userId: string): Promise<{
+type RefreshResult = {
   role: string
   orgId: string | null
   orgName: string | null
   mustChangePassword: boolean
-} | null | "not_found"> {
+} | null | "not_found"
+
+// Deduplicate concurrent refresh calls — all middleware requests share one
+// in-flight fetch instead of each independently hitting a stale connection.
+let inflightRefresh: Promise<RefreshResult> | null = null
+
+async function refreshUserFromBackend(userId: string): Promise<RefreshResult> {
+  if (inflightRefresh) return inflightRefresh
+
+  inflightRefresh = doRefreshUserFromBackend(userId).finally(() => {
+    inflightRefresh = null
+  })
+
+  return inflightRefresh
+}
+
+async function doRefreshUserFromBackend(userId: string): Promise<RefreshResult> {
   const backendUrl = process.env.BACKEND_URL
   if (!backendUrl) return null
 
   try {
     const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), 5000)
-    const res = await fetch(`${backendUrl}/api/auth/me`, {
-      headers: { "X-User-ID": userId },
-      cache: "no-store",
-      signal: controller.signal,
-    })
-    clearTimeout(timeout)
-    if (res.status === 404) return "not_found"
-    if (!res.ok) return null
-    return await res.json()
+    const abortTimeout = setTimeout(() => controller.abort(), 5000)
+
+    // Promise.race guarantees we return within 3s at the JS level, even if
+    // the runtime's native TCP layer is blocked retransmitting on a stale
+    // socket (which ignores AbortController for up to ~20s).
+    const result = await Promise.race<RefreshResult>([
+      (async () => {
+        const res = await fetch(`${backendUrl}/api/auth/me`, {
+          headers: { "X-User-ID": userId },
+          cache: "no-store",
+          signal: controller.signal,
+        })
+        clearTimeout(abortTimeout)
+        if (res.status === 404) return "not_found" as const
+        if (!res.ok) return null
+        return await res.json()
+      })(),
+      new Promise<null>(resolve => setTimeout(() => resolve(null), 3000)),
+    ])
+
+    clearTimeout(abortTimeout)
+    return result
   } catch (err) {
     // Intentionally return null on failure so the JWT keeps its current
     // values and the user isn't logged out by a transient backend error.

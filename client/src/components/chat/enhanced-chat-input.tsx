@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useCallback, useState } from "react";
-import { Send, Loader2, Square, X, ImageIcon } from "lucide-react";
+import { Send, Loader2, Square, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { AutoResizeTextarea } from "@/components/ui/auto-resize-textarea";
 import ChatControls from "./chat-controls";
@@ -15,6 +15,8 @@ interface EnhancedChatInputProps {
   input: string;
   setInput: (value: string) => void;
   onSend: () => void;
+  rcaActive?: boolean;
+  onToggleRCA?: () => void;
   isSending: boolean;
   selectedModel: string;
   onModelChange: (model: string) => void;
@@ -35,6 +37,8 @@ export default function EnhancedChatInput({
   input,
   setInput,
   onSend,
+  rcaActive = false,
+  onToggleRCA,
   isSending,
   selectedModel,
   onModelChange,
@@ -215,6 +219,8 @@ export default function EnhancedChatInput({
           selectedMode={selectedMode}
           onModeChange={onModeChange}
           selectedProviders={selectedProviders}
+          rcaActive={rcaActive}
+          onToggleRCA={onToggleRCA}
         />
       </div>
     </div>

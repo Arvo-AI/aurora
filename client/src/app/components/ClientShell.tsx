@@ -11,6 +11,7 @@ import { useToast } from "@/hooks/use-toast";
 import AppLayout from "@/app/components/AppLayout";
 import GlobalProjectSelectionMonitor from "@/components/cloud-provider/GlobalProjectSelectionMonitor";
 import { WebViewWarning } from "@/components/WebViewWarning";
+import { useConnectionHealth } from "@/hooks/useConnectionHealth";
 
 type WorkspaceConfig = {
   type: "iac"
@@ -77,6 +78,7 @@ export default function ClientShell({ children }: ClientShellProps) {
   const pathname = usePathname();
   const router = useRouter();
   const { user, isLoaded } = useUser();
+  useConnectionHealth();
 
   // All the state that was in layout.tsx
   const [isChatExpanded, setIsChatExpanded] = useState(true);

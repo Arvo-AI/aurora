@@ -26,11 +26,13 @@ ATLASSIAN_AUDIENCE = "api.atlassian.com"
 
 CONFLUENCE_SCOPES = "read:page:confluence read:space:confluence read:user:confluence search:confluence"
 JIRA_SCOPES = "read:jira-work write:jira-work read:jira-user"
+JSM_OPS_SCOPES = "read:ops-alert:jira-service-management read:ops-config:jira-service-management"
 COMMON_SCOPES = "offline_access"
 
 PRODUCT_SCOPES: Dict[str, str] = {
     "confluence": CONFLUENCE_SCOPES,
     "jira": JIRA_SCOPES,
+    "jsm_ops": JSM_OPS_SCOPES,
 }
 
 FRONTEND_URL = os.getenv("FRONTEND_URL", "")

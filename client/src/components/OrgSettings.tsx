@@ -13,6 +13,7 @@ import OrgOverview from "@/app/org/components/OrgOverview";
 import OrgMembers from "@/app/org/components/OrgMembers";
 import OrgActivity from "@/app/org/components/OrgActivity";
 import OrgInvitations from "@/app/org/components/OrgInvitations";
+import McpTokens from "@/app/org/components/McpTokens";
 
 interface OrgData {
   id: string;
@@ -175,13 +176,13 @@ export function OrgSettings() {
       <Tabs defaultValue="overview" className="w-full">
         <div className="border-b border-border mb-6">
           <TabsList className="h-auto p-0 bg-transparent rounded-none gap-5">
-            {["overview", "members", "invitations", "activity"].map((tab) => (
+            {["overview", "members", "invitations", "activity", "mcp"].map((tab) => (
               <TabsTrigger
                 key={tab}
                 value={tab}
                 className="px-0 pb-2 pt-0 rounded-none border-b-2 border-transparent data-[state=active]:border-foreground data-[state=active]:bg-transparent data-[state=active]:shadow-none text-muted-foreground data-[state=active]:text-foreground capitalize text-sm font-medium"
               >
-                {tab}
+                {tab === "mcp" ? "MCP" : tab}
               </TabsTrigger>
             ))}
           </TabsList>
@@ -198,6 +199,9 @@ export function OrgSettings() {
         </TabsContent>
         <TabsContent value="activity">
           <OrgActivity />
+        </TabsContent>
+        <TabsContent value="mcp">
+          <McpTokens />
         </TabsContent>
       </Tabs>
     </div>

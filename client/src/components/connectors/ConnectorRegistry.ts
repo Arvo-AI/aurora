@@ -137,6 +137,17 @@ class ConnectorRegistry {
     });
 
     this.register({
+      id: "opsgenie",
+      name: "OpsGenie / JSM",
+      description: "Connect OpsGenie or Jira Service Management for alert tracking and on-call schedules",
+      iconPath: "/opsgenie.svg",
+      iconBgColor: "bg-white dark:bg-white",
+      category: "Incident Management",
+      path: "/opsgenie/auth",
+      storageKey: "isOpsGenieConnected",
+    });
+
+    this.register({
         id: "bigpanda",
         name: "BigPanda",
         description: "Connect BigPanda for AIOps incident correlation. Receive pre-correlated incident clusters with enriched metadata for improved root cause analysis.",
@@ -225,6 +236,17 @@ class ConnectorRegistry {
         iconBgColor: "bg-white dark:bg-white",
         category: "Communication",
         storageKey: "isSlackConnected",
+        useCustomConnection: true,
+      });
+
+    this.register({
+        id: "google_chat",
+        name: "Google Chat",
+        description: "Receive alerts and notifications directly in Google Chat. Connect your Google Workspace to get real-time updates and interact with Aurora.",
+        iconPath: "/google-chat.svg",
+        iconBgColor: "bg-white dark:bg-white",
+        category: "Communication",
+        storageKey: "isGoogleChatConnected",
         useCustomConnection: true,
       });
 

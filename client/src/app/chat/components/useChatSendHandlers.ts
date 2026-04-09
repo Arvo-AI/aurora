@@ -35,7 +35,7 @@ interface ChatSendHandlerResult {
   setSelectedProviders: (providers: string[]) => void;
   isSending: boolean;
   setIsSending: (value: boolean) => void;
-  handleSend: (messageText: string, socket: ChatWebSocket, overrideMode?: string) => Promise<boolean>;
+  handleSend: (messageText: string, socket: ChatWebSocket, overrideMode?: string, options?: { triggerRca?: boolean }) => Promise<boolean>;
   handlePromptClick: (prompt: string, socket: ChatWebSocket) => void;
 }
 
@@ -157,6 +157,7 @@ export function useChatSendHandlers({
     socket: ChatWebSocket,
     modeOverride?: string,
     providersOverride?: string[],
+    options?: { triggerRca?: boolean },
   ) => {
     const trimmed = messageText.trim();
     if (!trimmed || isSending || !userId) return false;
@@ -233,6 +234,7 @@ export function useChatSendHandlers({
       mode: effectiveMode,
       provider_preference: finalProviders,
       attachments: attachments.length > 0 ? attachments : undefined,
+      ...(options?.triggerRca ? { trigger_rca: true } : {}),
       ui_state: {
         selectedModel,
         selectedMode: effectiveMode,
@@ -248,7 +250,7 @@ export function useChatSendHandlers({
     setHasCreatedSession, isSending, getConnectedProviders, images
   ]);
 
-  const initiateSend = useCallback(async (messageText: string, socket: ChatWebSocket, modeOverride?: string) => {
+  const initiateSend = useCallback(async (messageText: string, socket: ChatWebSocket, modeOverride?: string, options?: { triggerRca?: boolean }) => {
     const trimmed = messageText.trim();
     if (!trimmed) return false;
 
@@ -262,11 +264,11 @@ export function useChatSendHandlers({
     }
 
     // Let sendMessage handle provider enforcement and normalization
-    return await sendMessage(messageText, socket, targetMode);
+    return await sendMessage(messageText, socket, targetMode, undefined, options);
   }, [anyProviderConnected, selectedMode, sendMessage, toast]);
 
-  const handleSend = useCallback(async (messageText: string, socket: ChatWebSocket, overrideMode?: string) => {
-    return await initiateSend(messageText, socket, overrideMode);
+  const handleSend = useCallback(async (messageText: string, socket: ChatWebSocket, overrideMode?: string, options?: { triggerRca?: boolean }) => {
+    return await initiateSend(messageText, socket, overrideMode, options);
   }, [initiateSend]);
 
   const handlePromptClick = useCallback((prompt: string, socket: ChatWebSocket) => {
