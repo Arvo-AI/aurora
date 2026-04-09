@@ -796,15 +796,20 @@ class MemgraphClient:
 
     @staticmethod
     def _node_to_dict(node):
-        """Convert a neo4j Node to a plain dict."""
+        """Convert a neo4j Node to a plain dict with JSON-safe values."""
         if isinstance(node, dict):
-            return node
-        try:
-            if hasattr(node, "items"):
-                return dict(node.items())
-            return dict(node)
-        except Exception:
-            return {"id": str(node)}
+            raw = node
+        else:
+            try:
+                raw = dict(node.items()) if hasattr(node, "items") else dict(node)
+            except Exception:
+                return {"id": str(node)}
+        for k, v in raw.items():
+            if hasattr(v, "isoformat"):
+                raw[k] = v.isoformat()
+            elif not isinstance(v, (str, int, float, bool, list, dict, type(None))):
+                raw[k] = str(v)
+        return raw
 
     @staticmethod
     def _make_service_id(user_id, provider, name):
