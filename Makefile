@@ -1,3 +1,4 @@
+# test workflow trigger
 .PHONY: help dev down logs rebuild-server restart prod prod-build prod-logs prod-down clean nuke build-no-cache dev-fresh prod-clean prod-nuke prod-build-no-cache prod-fresh prod-prebuilt prod-local init prod-local-logs prod-local-down prod-local-clean prod-local-nuke deploy-build deploy package-airtight prod-airtight vm-deploy
 
 help:
