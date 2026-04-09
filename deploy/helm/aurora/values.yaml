@@ -91,6 +91,7 @@ config:
   
   # --- Redis Cache ---
   REDIS_URL: ""  # Auto-generated if empty: redis://<release>-redis:6379/0
+  REDIS_MAXMEMORY: "256mb"  # Max memory for in-cluster Redis; staging/prod can override
   
   # --- S3-Compatible Object Storage (REQUIRED) ---
   # Supports: AWS S3, MinIO, Cloudflare R2, Backblaze B2, etc.

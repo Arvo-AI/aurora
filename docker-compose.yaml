@@ -294,7 +294,7 @@ services:
     logging: *default-logging
     ports:
       - "6379:6379"
-    command: ["redis-server", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
+    command: ["redis-server", "--maxmemory", "${REDIS_MAXMEMORY:-256mb}", "--maxmemory-policy", "allkeys-lru"]
 
   searxng:
     image: searxng/searxng:2025.5.8-7ca24eee4

@@ -45,7 +45,7 @@ export async function GET(
         request.signal.addEventListener('abort', () => {
           clearInterval(interval);
           reader.cancel().catch(() => {});
-          try { ctrl.close(); } catch {}
+          try { ctrl.close(); } catch (_) {}
         });
 
         try {

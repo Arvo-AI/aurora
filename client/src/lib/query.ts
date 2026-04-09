@@ -55,6 +55,11 @@ interface Snap { data: unknown; error: Error | null; validating: boolean; versio
 const evictionInterval = 60_000; // check at most once per minute
 let lastEviction = 0;
 
+function touchAccess(key: string) {
+  accessedAt.delete(key);
+  accessedAt.set(key, Date.now());
+}
+
 function evictStale() {
   const now = Date.now();
   const overCap = store.size > maxCacheEntries;
@@ -66,7 +71,7 @@ function evictStale() {
     const e = store.get(key);
     if (e && e.listeners.size > 0) continue;
     if (e && e.inflight) continue;
-    if (now - ts < cacheTtl) continue;
+    if (!overCap && now - ts < cacheTtl) continue;
     store.delete(key);
     snapshots.delete(key);
     accessedAt.delete(key);
@@ -74,7 +79,7 @@ function evictStale() {
 }
 
 function entry<T>(key: string): Entry<T> {
-  accessedAt.set(key, Date.now());
+  touchAccess(key);
   if (!store.has(key)) {
     evictStale();
     store.set(key, {
@@ -93,8 +98,7 @@ function emit(e: Entry) {
 function snap<T>(key: string): Snap | undefined {
   const e = store.get(key);
   if (!e) return undefined;
-  accessedAt.set(key, Date.now());
-  evictStale();
+  touchAccess(key);
   const cached = snapshots.get(key);
   if (cached && cached.version === e.version) return cached.snap;
   const s: Snap = { data: e.data, error: e.error, validating: e.validating, version: e.version };
@@ -201,7 +205,7 @@ export const queryClient = {
   /** Sync read from cache. Never triggers a fetch. */
   read<T>(key: string): T | undefined {
     const e = store.get(key);
-    if (e !== undefined) accessedAt.set(key, Date.now());
+    if (e !== undefined) touchAccess(key);
     return e?.data as T | undefined;
   },
 
