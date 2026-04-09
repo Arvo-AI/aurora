@@ -796,9 +796,9 @@ class MemgraphClient:
 
     @staticmethod
     def _node_to_dict(node):
-        """Convert a neo4j Node to a plain dict with JSON-safe values."""
+        """Convert a Memgraph node to a plain dict with JSON-safe values."""
         if isinstance(node, dict):
-            raw = node
+            raw = dict(node)
         else:
             try:
                 raw = dict(node.items()) if hasattr(node, "items") else dict(node)
