@@ -107,7 +107,7 @@ def connect_to_db_as_user():
 def initialize_tables():
     """Create tables and apply RLS policies using the admin connection,
     then transfer ownership to appuser."""
-    logging.debug("Initializing Kubernetes database tables using admin credentials.")
+    logging.debug("Initializing database tables.")
     try:
         with db_pool.get_admin_connection() as conn:
             cursor = conn.cursor()
@@ -130,6 +130,49 @@ def initialize_tables():
                 cursor.execute("SELECT pg_advisory_lock(1234567890);")
                 lock_acquired = True
                 logging.info("Advisory lock acquired after clearing stale locks")
+
+            # Check if the current user has CREATE privilege on the public schema.
+            # PostgreSQL 15+ revoked this from PUBLIC by default, so managed DB
+            # users created with only GRANT ALL ON DATABASE will lack it.
+            cursor.execute(
+                "SELECT has_schema_privilege(current_user, 'public', 'CREATE');"
+            )
+            can_create = cursor.fetchone()[0]
+
+            if not can_create:
+                cursor.execute("SELECT current_user;")
+                db_user = cursor.fetchone()[0]
+
+                remediation = (
+                    "-- Run as a superuser / DBA to grant the required privileges:\n"
+                    f"GRANT USAGE, CREATE ON SCHEMA public TO {db_user};\n"
+                    f"ALTER DEFAULT PRIVILEGES IN SCHEMA public "
+                    f"GRANT ALL ON TABLES TO {db_user};\n"
+                    f"ALTER DEFAULT PRIVILEGES IN SCHEMA public "
+                    f"GRANT ALL ON SEQUENCES TO {db_user};"
+                )
+
+                logging.error(
+                    "Database user '%s' lacks CREATE privilege on the public schema. "
+                    "This is required for Aurora to initialize its tables. "
+                    "On PostgreSQL 15+, GRANT ALL ON DATABASE does not include "
+                    "schema-level privileges.\n\n%s\n",
+                    db_user,
+                    remediation,
+                )
+
+                try:
+                    with conn.cursor() as unlock_cursor:
+                        unlock_cursor.execute(
+                            "SELECT pg_advisory_unlock(1234567890);"
+                        )
+                except Exception:
+                    pass
+
+                raise SystemExit(
+                    f"FATAL: Database user '{db_user}' cannot CREATE in the "
+                    f"public schema. See log output above for remediation SQL."
+                )
 
             # Define table creation scripts.
             create_tables = {
