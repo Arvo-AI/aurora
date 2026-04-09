@@ -2,7 +2,7 @@
 
 import Link from "next/link"
 import { usePathname, useRouter } from "next/navigation"
-import { ChevronLeft, Settings, LogOut, User, Zap, Plug, Gauge } from "lucide-react"
+import { ChevronLeft, Settings, LogOut, User, Zap, Plug, Gauge, SquarePen } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import ChatHistory from "@/components/ChatHistory"
@@ -148,6 +148,24 @@ export default function Navigation({
 
         {/* Menu content */}
         <ul className="flex flex-col p-2.5 space-y-1 flex-1 min-h-0 overflow-hidden">
+          {/* New Chat */}
+          <li>
+            <Link
+              href="/chat"
+              className={cn(
+                "w-full flex items-center justify-between px-2.5 py-1.5 rounded-md hover:bg-primary/10 transition-colors text-sm border border-transparent hover:border-border/50",
+                pathname?.startsWith("/chat")
+                  ? "bg-card rounded-lg border border-border shadow-sm"
+                  : "text-muted-foreground"
+              )}
+            >
+              <div className="flex items-center">
+                <SquarePen size={16} />
+                <span className="ml-2">New Chat</span>
+              </div>
+            </Link>
+          </li>
+
           {/* Incidents - with running indicator */}
           <li>
             <Link
