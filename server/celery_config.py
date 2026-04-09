@@ -42,6 +42,7 @@ celery_app.conf.update(
     worker_max_tasks_per_child=1,  # Restart worker after each task
     worker_prefetch_multiplier=1,  # Process one task at a time
     broker_connection_retry_on_startup=True,  # Explicitly enable for Celery 6.0+
+    result_expires=3600,  # Expire task results in Redis after 1 hour
     # Explicitly include task modules from their new locations
     include=[
         'connectors.gcp_connector.gcp_post_auth_tasks',

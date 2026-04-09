@@ -41,6 +41,13 @@ export async function GET(
         }, 30_000);
 
         const reader = backendBody.getReader();
+
+        request.signal.addEventListener('abort', () => {
+          clearInterval(interval);
+          reader.cancel().catch(() => {});
+          try { ctrl.close(); } catch {}
+        });
+
         try {
           while (true) {
             const { done, value } = await reader.read();
@@ -49,7 +56,7 @@ export async function GET(
           }
           ctrl.close();
         } catch (err) {
-          ctrl.error(err);
+          if (!request.signal.aborted) ctrl.error(err);
         } finally {
           clearInterval(interval);
           reader.releaseLock();

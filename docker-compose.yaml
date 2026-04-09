@@ -1,3 +1,10 @@
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "5"
+    compress: "true"
+
 x-common-env: &common-env
   # Global
   AURORA_ENV: ${AURORA_ENV}
@@ -136,6 +143,7 @@ services:
       target: dev
     image: aurora_server:latest
     container_name: aurora-server
+    logging: *default-logging
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
@@ -221,6 +229,7 @@ services:
       dockerfile: Dockerfile
       target: dev
     image: aurora_celery-worker:latest
+    logging: *default-logging
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
@@ -263,6 +272,7 @@ services:
       context: ./server
       dockerfile: Dockerfile
       target: dev
+    logging: *default-logging
     volumes:
       - ./server:/app
     environment:
@@ -281,12 +291,15 @@ services:
 
   redis:
     image: redis:7-alpine
+    logging: *default-logging
     ports:
       - "6379:6379"
+    command: ["redis-server", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
 
   searxng:
     image: searxng/searxng:2025.5.8-7ca24eee4
     container_name: aurora-searxng
+    logging: *default-logging
     ports:
       - "8082:8080"
     volumes:
@@ -299,6 +312,7 @@ services:
   vault:
     image: hashicorp/vault:1.15
     container_name: aurora-vault
+    logging: *default-logging
     ports:
       - "8200:8200"
     environment:
@@ -322,6 +336,7 @@ services:
   vault-init:
     image: busybox:1.37.0
     container_name: aurora-vault-init
+    logging: *default-logging
     restart: "no"
     volumes:
       - ./scripts/vault-init-persistent.sh:/vault-init.sh:ro
@@ -341,6 +356,7 @@ services:
       dockerfile: Dockerfile
       target: dev
     image: aurora_chatbot:latest
+    logging: *default-logging
     extra_hosts:
       - "host.docker.internal:host-gateway"
     stdin_open: true
@@ -378,6 +394,7 @@ services:
   postgres:
     image: postgres:15-alpine
     container_name: aurora-postgres
+    logging: *default-logging
     ports:
       - "5432:5432"
     environment:
@@ -395,6 +412,7 @@ services:
   weaviate:
     image: cr.weaviate.io/semitechnologies/weaviate:1.27.6
     container_name: weaviate
+    logging: *default-logging
     depends_on:
       postgres:
         condition: service_healthy
@@ -456,6 +474,7 @@ services:
 
   t2v-transformers:
     image: cr.weaviate.io/semitechnologies/transformers-inference:sentence-transformers-all-MiniLM-L6-v2
+    logging: *default-logging
     environment:
       ENABLE_CUDA: '0'
 
@@ -465,6 +484,7 @@ services:
       dockerfile: Dockerfile
       target: dev
     image: aurora_frontend:latest
+    logging: *default-logging
     environment:
       # Next.js development configuration
       NODE_ENV: development
@@ -503,6 +523,7 @@ services:
   seaweedfs-master:
     image: chrislusf/seaweedfs:4.07
     container_name: aurora-seaweedfs-master
+    logging: *default-logging
     command: >
       master
       -ip=seaweedfs-master
@@ -526,6 +547,7 @@ services:
   seaweedfs-volume:
     image: chrislusf/seaweedfs:4.07
     container_name: aurora-seaweedfs-volume
+    logging: *default-logging
     command: >
       volume
       -mserver=seaweedfs-master:9333
@@ -551,6 +573,7 @@ services:
   seaweedfs-filer:
     image: chrislusf/seaweedfs:4.07
     container_name: aurora-seaweedfs-filer
+    logging: *default-logging
     command: >
       filer
       -master=seaweedfs-master:9333
@@ -582,6 +605,7 @@ services:
   seaweedfs-init:
     image: amazon/aws-cli:2.34.6
     container_name: aurora-seaweedfs-init
+    logging: *default-logging
     restart: "no"
     entrypoint: /bin/sh
     command: >
@@ -606,6 +630,7 @@ services:
   memgraph:
     image: memgraph/memgraph-mage:3.8.1
     container_name: aurora-memgraph
+    logging: *default-logging
     ports:
       - "7687:7687"
       - "7444:7444"
@@ -629,6 +654,7 @@ services:
   memgraph-lab:
     image: memgraph/lab:3.8.0
     container_name: aurora-memgraph-lab
+    logging: *default-logging
     ports:
       - "3001:3000"
     depends_on:

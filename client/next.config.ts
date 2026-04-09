@@ -23,6 +23,9 @@ const nextConfig: NextConfig = {
   eslint: {
     ignoreDuringBuilds: true,
   },
+  experimental: {
+    isrMemoryCacheSize: 0,
+  },
   webpack: (config, { isServer, dev }) => {
     // Aggressive tree shaking configuration
     if (!isServer && !dev) {

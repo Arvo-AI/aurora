@@ -43,13 +43,34 @@ interface Entry<T = unknown> {
   version: number;
 }
 
+const MAX_CACHE_ENTRIES = 500;
+const CACHE_TTL = 5 * 60_000; // evict entries not accessed in 5 minutes
+
 const store = new Map<string, Entry>();
 const snapshots = new Map<string, { version: number; snap: Snap }>();
+const accessedAt = new Map<string, number>();
 
 interface Snap { data: unknown; error: Error | null; validating: boolean; version: number }
 
+function evictStale() {
+  if (store.size <= MAX_CACHE_ENTRIES) return;
+  const now = Date.now();
+  for (const [key, ts] of accessedAt) {
+    if (store.size <= MAX_CACHE_ENTRIES * 0.75) break;
+    const e = store.get(key);
+    if (e && e.listeners.size > 0) continue;   // active subscribers
+    if (e && e.inflight) continue;              // in-flight request
+    if (now - ts < CACHE_TTL) continue;         // recently accessed
+    store.delete(key);
+    snapshots.delete(key);
+    accessedAt.delete(key);
+  }
+}
+
 function entry<T>(key: string): Entry<T> {
+  accessedAt.set(key, Date.now());
   if (!store.has(key)) {
+    evictStale();
     store.set(key, {
       data: undefined, error: null, fetchedAt: 0, validating: false,
       inflight: null, retryTimer: null, listeners: new Set(), version: 0,
@@ -66,6 +87,7 @@ function emit(e: Entry) {
 function snap<T>(key: string): Snap | undefined {
   const e = store.get(key);
   if (!e) return undefined;
+  accessedAt.set(key, Date.now());
   const cached = snapshots.get(key);
   if (cached && cached.version === e.version) return cached.snap;
   const s: Snap = { data: e.data, error: e.error, validating: e.validating, version: e.version };

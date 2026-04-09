@@ -3,6 +3,13 @@
 # No build sections — every service uses a local image with pull_policy: never.
 # Usage: make prod-airtight AIRTIGHT_BUNDLE=aurora-airtight-<version>.tar.gz
 
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "5"
+    compress: "true"
+
 x-common-env: &common-env
   # Global
   AURORA_ENV: ${AURORA_ENV}
@@ -127,6 +134,7 @@ services:
     image: aurora_server:latest
     pull_policy: never
     container_name: aurora-server
+    logging: *default-logging
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
@@ -191,6 +199,7 @@ services:
   celery_worker:
     image: aurora_celery-worker:latest
     pull_policy: never
+    logging: *default-logging
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
@@ -229,6 +238,7 @@ services:
   celery_beat:
     image: aurora_celery-beat:latest
     pull_policy: never
+    logging: *default-logging
     environment:
       <<: *common-env
       OTEL_SERVICE_NAME: celery-beat
@@ -246,8 +256,10 @@ services:
     image: redis:7-alpine
     pull_policy: never
     container_name: aurora-redis
+    logging: *default-logging
     ports:
       - "6379:6379"
+    command: ["redis-server", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
@@ -259,6 +271,7 @@ services:
     image: searxng/searxng:2025.5.8-7ca24eee4
     pull_policy: never
     container_name: aurora-searxng
+    logging: *default-logging
     ports:
       - "8082:8080"
     volumes:
@@ -272,6 +285,7 @@ services:
     image: hashicorp/vault:1.15
     pull_policy: never
     container_name: aurora-vault
+    logging: *default-logging
     ports:
       - "8200:8200"
     environment:
@@ -297,6 +311,7 @@ services:
     image: busybox:1.37.0
     pull_policy: never
     container_name: aurora-vault-init
+    logging: *default-logging
     restart: "no"
     volumes:
       - ./scripts/vault-init-persistent.sh:/vault-init.sh:ro
@@ -312,6 +327,7 @@ services:
   chatbot:
     image: aurora_chatbot:latest
     pull_policy: never
+    logging: *default-logging
     extra_hosts:
       - "host.docker.internal:host-gateway"
     stdin_open: true
@@ -345,6 +361,7 @@ services:
     image: postgres:15-alpine
     pull_policy: never
     container_name: aurora-postgres
+    logging: *default-logging
     ports:
       - "5432:5432"
     environment:
@@ -364,6 +381,7 @@ services:
     image: cr.weaviate.io/semitechnologies/weaviate:1.27.6
     pull_policy: never
     container_name: weaviate
+    logging: *default-logging
     depends_on:
       postgres:
         condition: service_healthy
@@ -403,6 +421,7 @@ services:
   t2v-transformers:
     image: cr.weaviate.io/semitechnologies/transformers-inference:sentence-transformers-all-MiniLM-L6-v2
     pull_policy: never
+    logging: *default-logging
     environment:
       ENABLE_CUDA: '0'
     restart: unless-stopped
@@ -410,6 +429,7 @@ services:
   frontend:
     image: aurora_frontend:latest
     pull_policy: never
+    logging: *default-logging
     environment:
       NODE_ENV: production
       NEXT_PUBLIC_BACKEND_URL: ${NEXT_PUBLIC_BACKEND_URL}
@@ -432,6 +452,7 @@ services:
     image: chrislusf/seaweedfs:4.07
     pull_policy: never
     container_name: aurora-seaweedfs-master
+    logging: *default-logging
     command: >
       master
       -ip=seaweedfs-master
@@ -456,6 +477,7 @@ services:
     image: chrislusf/seaweedfs:4.07
     pull_policy: never
     container_name: aurora-seaweedfs-volume
+    logging: *default-logging
     command: >
       volume
       -mserver=seaweedfs-master:9333
@@ -482,6 +504,7 @@ services:
     image: chrislusf/seaweedfs:4.07
     pull_policy: never
     container_name: aurora-seaweedfs-filer
+    logging: *default-logging
     command: >
       filer
       -master=seaweedfs-master:9333
@@ -514,6 +537,7 @@ services:
     image: amazon/aws-cli:2.34.6
     pull_policy: never
     container_name: aurora-seaweedfs-init
+    logging: *default-logging
     restart: "no"
     entrypoint: /bin/sh
     command: >
@@ -537,6 +561,7 @@ services:
     image: memgraph/memgraph-mage:3.8.1
     pull_policy: never
     container_name: aurora-memgraph
+    logging: *default-logging
     ports:
       - "7687:7687"
       - "7444:7444"
@@ -561,6 +586,7 @@ services:
     image: memgraph/lab:3.8.0
     pull_policy: never
     container_name: aurora-memgraph-lab
+    logging: *default-logging
     ports:
       - "3001:3000"
     depends_on:
