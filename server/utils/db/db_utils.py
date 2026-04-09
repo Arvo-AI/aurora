@@ -29,13 +29,14 @@ DB_PARAMS = {
 
 def ensure_database_exists():
     """Ensure that the target database exists.
-    Note: With unified postgres credentials, the database is typically created by the postgres container.
-    This function verifies connectivity and creates the database if needed."""
+    On local Docker, connects to 'postgres' DB to check/create the target DB.
+    On managed databases (e.g. RDS) where the user may lack access to 'postgres',
+    falls back to verifying the target DB is reachable directly."""
     logging.debug("Starting the database existence check.")
     conn = None
     cursor = None
     try:
-        # First connect to 'postgres' database to check/create target database
+        # Try connecting to 'postgres' database to check/create target database
         init_params = DB_PARAMS.copy()
         init_params["dbname"] = "postgres"
 
@@ -54,6 +55,24 @@ def ensure_database_exists():
         else:
             logging.info(f"Database '{target_db}' already exists.")
 
+    except psycopg2.OperationalError:
+        logging.info(
+            "Cannot connect to 'postgres' database (likely managed DB). "
+            "Verifying target database '%s' is reachable directly.",
+            DB_PARAMS["dbname"],
+        )
+        if cursor:
+            cursor.close()
+            cursor = None
+        if conn:
+            conn.close()
+            conn = None
+        try:
+            conn = psycopg2.connect(**DB_PARAMS)
+            logging.info(f"Database '{DB_PARAMS['dbname']}' is reachable.")
+        except Exception as e:
+            logging.error(f"Cannot connect to target database: {e}")
+            raise
     except Exception as e:
         logging.error(f"Error ensuring database exists: {e}")
         raise
