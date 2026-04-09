@@ -406,7 +406,7 @@ async def process_workflow_async(wf, state, websocket, user_id, incident_id=None
                                         
                                         try:
                                             tool_input = json.loads(tool_args) if isinstance(tool_args, str) else tool_args
-                                        except:
+                                        except Exception:
                                             tool_input = tool_args
                                         
                                         tool_call_msg = {
@@ -504,7 +504,7 @@ async def process_workflow_async(wf, state, websocket, user_id, incident_id=None
                                                     
                                                     try:
                                                         tool_input = json.loads(tool_args) if isinstance(tool_args, str) else tool_args
-                                                    except:
+                                                    except Exception:
                                                         tool_input = tool_args
                                                     
                                                     tool_call_msg = {
