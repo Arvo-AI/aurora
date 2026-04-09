@@ -10,6 +10,7 @@ class State(BaseModel):
     user_id: Optional[str] = None
     session_id: Optional[str] = None  # Add session ID for tracking chat sessions
     incident_id: Optional[str] = None  # Incident ID for RCA sessions
+    org_id: Optional[str] = None  # Org ID for tenant-scoped telemetry
     provider_preference: Optional[List[str]] = None  # Must be explicitly set, e.g. ["gcp", "aws", "azure"]
     selected_project_id: Optional[str] = None  # Selected project ID from frontend UI
     attachments: Optional[List[Dict[str, Any]]] = None  # File attachments

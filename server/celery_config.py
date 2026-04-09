@@ -53,6 +53,7 @@ celery_app.conf.update(
         'routes.dynatrace.tasks',
         'routes.bigpanda.tasks',
         'routes.pagerduty.tasks',
+        'routes.opsgenie.tasks',
         'routes.newrelic.tasks',
         'routes.jenkins.tasks',
         'routes.spinnaker.tasks',
@@ -137,6 +138,12 @@ try:
     logging.info("PagerDuty tasks imported successfully")
 except ImportError as e:
     logging.warning(f"Failed to import PagerDuty tasks: {e}")
+
+try:
+    import routes.opsgenie.tasks  # noqa: F401
+    logging.info("OpsGenie tasks imported successfully")
+except ImportError as e:
+    logging.warning(f"Failed to import OpsGenie tasks: {e}")
 
 try:
     import routes.jenkins.tasks  # noqa: F401

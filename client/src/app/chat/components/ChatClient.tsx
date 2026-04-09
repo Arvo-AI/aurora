@@ -8,7 +8,7 @@ import { useRouter } from "next/navigation";
 import { Loader2 } from "lucide-react";
 import dynamic from "next/dynamic";
 // Core chat components
-import { VirtualizedMessages } from "@/components/chat/virtualized-messages";
+import { MessageList } from "@/components/chat/message-list";
 import EnhancedChatInput from "@/components/chat/enhanced-chat-input";
 import EmptyStateHeader from "@/components/chat/empty-state-header";
 
@@ -305,7 +305,18 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
 
   // Load session once user is determined
   useEffect(() => {
-    if (!userId || !initialSessionId) return;
+    if (!userId) return;
+
+    // New chat (no sessionId): clear previous session state
+    if (!initialSessionId) {
+      if (currentSessionId) {
+        setCurrentSessionId(null);
+        setHasCreatedSession(false);
+        onClearMessages();
+        lastLoadedSessionRef.current = null;
+      }
+      return;
+    }
     
     // Skip if we've already loaded this session
     if (lastLoadedSessionRef.current === initialSessionId) {
@@ -403,27 +414,24 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
   if (hasMessages) {
     // Standard chat interface with messages
     return (
-      <div className="flex flex-col h-full w-full">
+      <div className="flex flex-col h-full w-full overflow-hidden">
 
-        {/* Messages */}
-        <div className="flex-1 min-h-0 flex justify-center pt-6">
-          <div className="w-full max-w-4xl">
-            <VirtualizedMessages 
+        {/* Messages — full-width so scrollbar sits at page edge */}
+        <div className="flex-1 min-h-0">
+            <MessageList
+              key={currentSessionId || "new"}
               messages={memoizedMessages} 
               sendRaw={chatWebSocket.sendRaw}
               onUpdateMessage={onUpdateMessage}
               sessionId={currentSessionId || undefined}
               userId={userId || undefined}
             />
-          </div>
         </div>
 
         {/* Enhanced Input */}
         <div className="p-4 relative z-10 bg-background flex-shrink-0">
           <div className="max-w-4xl mx-auto space-y-2">
-            <SessionUsagePanel sessionUsage={sessionUsage} />
-          </div>
-          <div className="flex justify-center">
+            <SessionUsagePanel sessionUsage={sessionUsage} isSending={isSending} />
             {isReadOnly ? (
               <p className="text-sm text-muted-foreground py-2">Read-only access. Editors and admins can interact with infrastructure.</p>
             ) : (

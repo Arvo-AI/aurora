@@ -91,9 +91,9 @@ helm-charts/.worktrees/
 # SearXNG local config
 config/searxng/
 
-# Airtight deployment bundles
-aurora-airtight-*.tar.gz
-aurora-airtight-*.tar.gz.sha256
+# Release and deployment bundles
+aurora-*.tar.gz
+aurora-*.tar.gz.sha256
 
 # Vault init credentials (written by k8s-deploy.sh)
 vault-init-*.txt

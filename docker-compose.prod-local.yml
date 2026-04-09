@@ -185,6 +185,11 @@ services:
       SLACK_CLIENT_SECRET: ${SLACK_CLIENT_SECRET}
       SLACK_SIGNING_SECRET: ${SLACK_SIGNING_SECRET}
 
+      # Google Chat (OAuth for setup, service account for messaging)
+      GOOGLE_CHAT_CLIENT_ID: ${GOOGLE_CHAT_CLIENT_ID}
+      GOOGLE_CHAT_CLIENT_SECRET: ${GOOGLE_CHAT_CLIENT_SECRET}
+      GOOGLE_CHAT_SERVICE_ACCOUNT_KEY: ${GOOGLE_CHAT_SERVICE_ACCOUNT_KEY}
+
       # Security & Rate Limiting
       RATE_LIMITING_ENABLED: ${RATE_LIMITING_ENABLED}
       RATE_LIMIT_BYPASS_TOKEN: ${RATE_LIMIT_BYPASS_TOKEN}
@@ -253,6 +258,9 @@ services:
       OVH_EU_CLIENT_SECRET: ${OVH_EU_CLIENT_SECRET}
       OVH_US_CLIENT_ID: ${OVH_US_CLIENT_ID}
       OVH_US_CLIENT_SECRET: ${OVH_US_CLIENT_SECRET}
+
+      # Google Chat (service account needed to send responses)
+      GOOGLE_CHAT_SERVICE_ACCOUNT_KEY: ${GOOGLE_CHAT_SERVICE_ACCOUNT_KEY}
     depends_on:
       - redis
       - vault
@@ -443,6 +451,31 @@ services:
       interval: 10s
       timeout: 5s
       retries: 3
+
+  aurora-mcp:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+      target: prod
+    container_name: aurora-mcp
+    ports:
+      - "${MCP_PORT:-8811}:8811"
+    command: ["python", "mcp_server.py"]
+    environment:
+      <<: *common-env
+      OTEL_SERVICE_NAME: aurora-mcp
+    depends_on:
+      aurora-server:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import socket; s=socket.socket(); s.settimeout(2); s.connect(('localhost',8811)); s.close()"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
   t2v-transformers:
     image: cr.weaviate.io/semitechnologies/transformers-inference:sentence-transformers-all-MiniLM-L6-v2

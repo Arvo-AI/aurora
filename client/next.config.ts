@@ -11,8 +11,10 @@ try {
   withBundleAnalyzer = (config: NextConfig) => config;
 }
 
-// Use server-side backend URL for rewrites and redirects (Docker service name)
-const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL;
+// Use server-side backend URL for rewrites and redirects (Docker service name).
+// BACKEND_URL (aurora-server:5080) uses Docker DNS directly; NEXT_PUBLIC_BACKEND_URL
+// (localhost:5080) goes through Docker NAT and is prone to stale connections.
+const backendUrl = process.env.BACKEND_URL || process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5080';
 
 const nextConfig: NextConfig = {
   typescript: {
@@ -83,12 +85,28 @@ const nextConfig: NextConfig = {
     
     return config;
   },
+  async headers() {
+    return [
+      {
+        source: '/(.*)',
+        headers: [
+          // Tell browsers to close idle connections after 120s, well before
+          // Docker Desktop's ~10min silent TCP drop window.
+          { key: 'Keep-Alive', value: 'timeout=120' },
+        ],
+      },
+    ];
+  },
   async rewrites() {
     return [
       // Only rewrite /azure/ routes - all /api/ routes are handled by Next.js API routes which proxy to backend
       {
         source: "/azure/:path*",
         destination: `${backendUrl}/azure/:path*`,
+      },
+      {
+        source: "/google-chat/events",
+        destination: `${backendUrl}/google-chat/events`,
       },
     ];
   },

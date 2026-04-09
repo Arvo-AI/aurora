@@ -9,16 +9,7 @@ import { PagerDutyWebhookStep } from "@/components/pagerduty/PagerDutyWebhookSte
 import { TokenInputModal } from "@/components/pagerduty/TokenInputModal";
 import { ConnectionLoadingOverlay } from "@/components/ui/connection-loading-overlay";
 import { isPagerDutyOAuthEnabled } from "@/lib/feature-flags";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
+import { DisconnectConfirmDialog } from "@/components/ui/disconnect-confirm-dialog";
 import { getUserFriendlyError } from "@/lib/utils";
 import ConnectorAuthGuard from "@/components/connectors/ConnectorAuthGuard";
 
@@ -294,27 +285,27 @@ export default function PagerDutyAuthPage() {
         <div className={isConnecting && !isConnected ? 'pointer-events-none opacity-50' : ''}>
           {!isConnected ? (
             <PagerDutyConnectionStep
-            displayName={displayName}
-            setDisplayName={setDisplayName}
-            token={token}
-            setToken={setToken}
-            loading={loading}
-            error={null}
-            onConnect={handleConnect}
-            onOAuthConnect={isPagerDutyOAuthEnabled() ? handleOAuthConnect : undefined}
-          />
-        ) : status ? (
-          <div className="space-y-4">
-            <PagerDutyConnectedView
-              status={status}
-              onChangeToken={() => setShowRotateModal(true)}
-              onDisconnect={() => setShowDisconnectDialog(true)}
+              displayName={displayName}
+              setDisplayName={setDisplayName}
+              token={token}
+              setToken={setToken}
               loading={loading}
+              error={null}
+              onConnect={handleConnect}
+              onOAuthConnect={isPagerDutyOAuthEnabled() ? handleOAuthConnect : undefined}
             />
-            <PagerDutyWebhookStep />
-          </div>
-        ) : null}
-      </div>
+          ) : status ? (
+            <div className="space-y-4">
+              <PagerDutyConnectedView
+                status={status}
+                onChangeToken={() => setShowRotateModal(true)}
+                onDisconnect={() => setShowDisconnectDialog(true)}
+                loading={loading}
+              />
+              <PagerDutyWebhookStep />
+            </div>
+          ) : null}
+        </div>
 
       {/* Loading Progress Indicator - Overlay (only during connection) */}
       <ConnectionLoadingOverlay
@@ -337,23 +328,13 @@ export default function PagerDutyAuthPage() {
         submitLabel="Change Token"
       />
 
-      <AlertDialog open={showDisconnectDialog} onOpenChange={setShowDisconnectDialog}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Disconnect PagerDuty?</AlertDialogTitle>
-            <AlertDialogDescription>
-              This will remove your PagerDuty credentials from Aurora. You can reconnect at any time.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={handleDisconnectConfirm} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
-              Disconnect
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-    </div>
+      <DisconnectConfirmDialog
+        open={showDisconnectDialog}
+        onOpenChange={setShowDisconnectDialog}
+        connectorName="PagerDuty"
+        onConfirm={handleDisconnectConfirm}
+      />
+      </div>
     </ConnectorAuthGuard>
   );
 }

@@ -9,6 +9,7 @@ here.  This is the single source of truth for "is this provider actually
 connected right now?"
 """
 
+import base64
 import logging
 import time as _time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -33,8 +34,23 @@ HTTP_TIMEOUT = (3.5, 5)
 # ── Providers with live API validation ──────────────────────────────
 
 
-def _check_grafana(creds: Dict[str, Any]) -> Dict[str, Any]:
-    return {"connected": True}
+def _check_grafana(user_id: str, org_id: str) -> Dict[str, Any]:
+    """Grafana is webhook-based — check is_active directly (no secret_ref needed)."""
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """SELECT 1 FROM user_tokens
+                       WHERE (user_id = %s OR org_id = %s)
+                         AND provider = 'grafana'
+                         AND is_active = TRUE
+                       LIMIT 1""",
+                    (user_id, org_id),
+                )
+                return {"connected": cursor.fetchone() is not None}
+    except Exception as exc:
+        logger.warning("[STATUS] grafana check failed: %s", exc)
+        return {"connected": False}
 
 
 def _check_datadog(creds: Dict[str, Any]) -> Dict[str, Any]:
@@ -234,6 +250,19 @@ def _check_slack(creds: Dict[str, Any]) -> Dict[str, Any]:
             return {"connected": True}
         return {"connected": False}
     except Exception:
+        return {"connected": False}
+
+
+def _check_google_chat(creds: Dict[str, Any]) -> Dict[str, Any]:
+    """Validates Google Chat connection via service account."""
+    from connectors.google_chat_connector.client import get_chat_app_client
+
+    if not creds.get("incidents_space_name"):
+        return {"connected": False}
+    try:
+        return {"connected": get_chat_app_client() is not None}
+    except Exception as e:
+        logger.debug("Google Chat status check failed: %s", e)
         return {"connected": False}
 
 
@@ -464,6 +493,61 @@ def _check_pagerduty(creds: Dict[str, Any]) -> Dict[str, Any]:
             return {"connected": False}
 
 
+def _check_opsgenie(creds: Dict[str, Any]) -> Dict[str, Any]:
+    """Validate OpsGenie / JSM Operations credentials."""
+    auth_type = creds.get("auth_type", "opsgenie")
+
+    # ── JSM Operations (Basic auth: email + api_token) ──────────────
+    if auth_type == "jsm_basic":
+        cloud_id = creds.get("cloud_id")
+        email = creds.get("email")
+        api_token = creds.get("api_token")
+        if not cloud_id or not email or not api_token:
+            return {"connected": False}
+
+        url = f"https://api.atlassian.com/jsm/ops/api/{cloud_id}/v1/alerts"
+        cred_str = f"{email}:{api_token}"
+        encoded = base64.b64encode(cred_str.encode()).decode()
+        headers = {"Authorization": f"Basic {encoded}", "Accept": "application/json"}
+
+        try:
+            r = requests.get(url, headers=headers, params={"limit": 1}, timeout=HTTP_TIMEOUT)
+            if r.ok:
+                return {
+                    "connected": True,
+                    "authType": auth_type,
+                    "siteUrl": creds.get("site_url"),
+                }
+            return {"connected": False}
+        except Exception:
+            return {"connected": False}
+
+    # ── OpsGenie GenieKey (unchanged) ────────────────────────────────
+    api_key = creds.get("api_key")
+    if not api_key:
+        return {"connected": False}
+    region = creds.get("region", "us")
+    base_url = "https://api.eu.opsgenie.com" if region == "eu" else "https://api.opsgenie.com"
+    try:
+        r = requests.get(
+            f"{base_url}/v2/account",
+            headers={"Authorization": f"GenieKey {api_key}"},
+            timeout=HTTP_TIMEOUT,
+        )
+        if r.ok:
+            data = r.json().get("data", {})
+            return {
+                "connected": True,
+                "region": region,
+                "accountName": data.get("name"),
+                "plan": data.get("plan", {}).get("name") if isinstance(data.get("plan"), dict) else None,
+                "authType": auth_type,
+            }
+        return {"connected": False}
+    except Exception:
+        return {"connected": False}
+
+
 def _check_dynatrace(creds: Dict[str, Any]) -> Dict[str, Any]:
     """Mirrors /dynatrace/connect validation — live API call via token lookup."""
     api_token = creds.get("api_token")
@@ -564,6 +648,7 @@ PROVIDER_CHECKERS = {
     "confluence": _check_confluence,
     "jira": _check_jira,
     "slack": _check_slack,
+    "google_chat": _check_google_chat,
     "github": _check_github,
     "bitbucket": _check_bitbucket,
     "thousandeyes": _check_thousandeyes,
@@ -572,6 +657,7 @@ PROVIDER_CHECKERS = {
     "sharepoint": _check_sharepoint,
     "spinnaker": _check_spinnaker,
     "pagerduty": _check_pagerduty,
+    "opsgenie":      _check_opsgenie,
     "dynatrace": _check_dynatrace,
     "bigpanda": _check_bigpanda,
     "tailscale": _check_tailscale,
@@ -639,6 +725,8 @@ def _check_all_connectors(user_id: str, org_id: str) -> Dict[str, Dict[str, Any]
             return provider, _check_onprem(user_id, org_id)
         if provider == "kubectl":
             return provider, _check_kubectl(user_id, org_id)
+        if provider == "grafana":
+            return provider, _check_grafana(user_id, org_id)
         creds = get_token_data(token_owner_id, provider)
         if not creds:
             with db_pool.get_admin_connection() as fallback_conn:
@@ -660,6 +748,7 @@ def _check_all_connectors(user_id: str, org_id: str) -> Dict[str, Dict[str, Any]
 
     providers.setdefault("onprem", user_id)
     providers.setdefault("kubectl", user_id)
+    providers.setdefault("grafana", user_id)
 
     with ThreadPoolExecutor(max_workers=12) as pool:
         futures = {

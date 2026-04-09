@@ -467,6 +467,9 @@ def build_rca_prompt(
         labels_str = ", ".join(f"{k}={v}" for k, v in labels.items()) if labels else "none"
     elif source == 'chat':
         labels_str = ", ".join(f"{k}={v}" for k, v in labels.items()) if labels else "user-reported"
+    elif source == 'opsgenie':
+        tags = alert_details.get('tags', [])
+        labels_str = ", ".join(tags[:10]) if tags else "none"
     else:
         labels_str = str(labels)
 
@@ -1267,3 +1270,41 @@ def build_chat_rca_prompt(
     }
 
     return build_rca_prompt("chat", alert_details, providers, user_id)
+
+
+def build_opsgenie_rca_prompt(
+    payload: Dict[str, Any],
+    providers: Optional[List[str]] = None,
+    user_id: Optional[str] = None,
+) -> str:
+    """Build RCA prompt from OpsGenie alert webhook payload."""
+    alert = payload.get("alert", {})
+    message = alert.get("message") or "Unknown Alert"
+    action = payload.get("action") or "unknown"
+    priority = alert.get("priority") or "unknown"
+    status = alert.get("status") or "unknown"
+    source = alert.get("source") or "unknown"
+    description = alert.get("description") or ""
+    entity = alert.get("entity") or ""
+    tags = alert.get("tags", [])
+    teams = alert.get("teams", [])
+
+    message_parts = []
+    if description:
+        message_parts.append(description)
+    if entity:
+        message_parts.append(f"Entity: {entity}")
+    if teams:
+        message_parts.append(f"Teams: {', '.join(teams) if isinstance(teams, list) else str(teams)}")
+
+    alert_details = {
+        'title': message,
+        'status': f"{status} (action: {action}, priority: {priority})",
+        'message': ". ".join(message_parts) if message_parts else message,
+        'tags': tags,
+        'source': source,
+    }
+    if entity:
+        alert_details['entity'] = entity
+
+    return build_rca_prompt('opsgenie', alert_details, providers, user_id)

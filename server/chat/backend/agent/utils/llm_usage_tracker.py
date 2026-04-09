@@ -182,8 +182,8 @@ class LLMUsageTracker:
                         logger.warning(
                             f"Failed to get OpenRouter dynamic pricing for {model_name}: {e}"
                         )
-                else:
-                    # Direct mode: try provider-specific billing API
+                elif any(kw in model_name.lower() for kw in ("gemini", "google", "vertex")):
+                    # Only call GCP Billing Catalog API for Google/Gemini models
                     try:
                         provider_svc = get_provider_pricing_service()
                         pricing = provider_svc.get_model_pricing(model_name)
@@ -548,18 +548,24 @@ class LLMUsageTracker:
 
         if provider_mode != "openrouter":
             provider_cache = {}
+            gemini_dynamic = False
             try:
                 provider_svc = get_provider_pricing_service()
                 provider_cache = provider_svc.get_cache_info()
+                gemini_dynamic = provider_cache.get("models_cached", 0) > 0
             except Exception as e:
                 logger.debug("Could not fetch provider pricing cache info: %s", e)
 
             return {
-                "dynamic_pricing_enabled": True,
-                "pricing_source": "provider_billing_api",
+                "dynamic_pricing_enabled": gemini_dynamic,
+                "pricing_source": "provider_billing_api+static"
+                if gemini_dynamic
+                else "static",
                 "fallback_models_count": len(cls.MODEL_PRICING),
                 "provider_mode": provider_mode,
                 "provider_cache": provider_cache,
+                "note": "Dynamic billing API pricing applies to Google/Gemini models only; "
+                "Anthropic and OpenAI use static rates.",
             }
 
         try:

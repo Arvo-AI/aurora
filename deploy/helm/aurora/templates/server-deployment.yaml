@@ -40,7 +40,7 @@ spec:
           imagePullPolicy: IfNotPresent
           command: ["sh", "-c"]
           args:
-            - gunicorn main_compute:app --bind 0.0.0.0:5080 -k gthread --threads 4 --workers 2 --timeout 120 --preload
+            - gunicorn main_compute:app --bind 0.0.0.0:5080 -k gthread --threads 16 --workers 2 --timeout 120 --preload
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
