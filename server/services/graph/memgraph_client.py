@@ -802,7 +802,8 @@ class MemgraphClient:
         else:
             try:
                 raw = dict(node.items()) if hasattr(node, "items") else dict(node)
-            except Exception:
+            except Exception as e:
+                logger.error(f"Failed to convert node to dict: {e}")
                 return {"id": str(node)}
         for k, v in raw.items():
             if hasattr(v, "isoformat"):
