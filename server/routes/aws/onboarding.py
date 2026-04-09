@@ -49,23 +49,12 @@ def check_aws_environment(_user_id):
         has_secret_key = bool(secret_access_key)
         configured = has_access_key and has_secret_key
         
-        account_id = None
-        if configured:
-            try:
-                from utils.aws.aws_sts_client import get_aurora_account_id
-                account_id = get_aurora_account_id()
-            except Exception as e:
-                logger.debug(f"Could not get account ID even though credentials are set: {e}")
+        from utils.aws.aws_sts_client import get_aurora_account_id
+        account_id = get_aurora_account_id()
 
-        if not configured:
-            try:
-                from utils.aws.aws_sts_client import get_aurora_account_id
-                account_id = get_aurora_account_id()
-                if account_id:
-                    configured = True
-                    logger.info("AWS credentials available via boto3 credential chain (IRSA/instance profile)")
-            except Exception as e:
-                logger.debug(f"No AWS credentials available via credential chain: {e}")
+        if not configured and account_id:
+            configured = True
+            logger.info("AWS credentials available via boto3 credential chain (IRSA/instance profile)")
         
         return jsonify({
             "configured": configured,
