@@ -2,6 +2,8 @@
 
 import ModelSelector from "@/components/ModelSelector";
 import ModeSelector from "@/components/ModeSelector";
+import { Button } from "@/components/ui/button";
+import { Radar } from "lucide-react";
 import { useConnectedAccounts } from "@/hooks/useConnectedAccounts";
 
 interface ChatControlsProps {
@@ -12,6 +14,8 @@ interface ChatControlsProps {
   selectedProviders?: string[]; // Kept for compatibility but not used
   disabled?: boolean;
   className?: string;
+  rcaActive?: boolean;
+  onToggleRCA?: () => void;
 }
 
 export default function ChatControls({
@@ -20,21 +24,40 @@ export default function ChatControls({
   selectedMode,
   onModeChange,
   disabled = false,
-  className = ""
+  className = "",
+  rcaActive = false,
+  onToggleRCA,
 }: ChatControlsProps) {
   // Get all connected providers from database
   const { infraProviders } = useConnectedAccounts();
 
   return (
     <div className={`flex items-center justify-between ${className}`}>
-      {/* Left: Mode selector only */}
-      <div className="flex items-center">
+      {/* Left: Mode selector + Trigger RCA */}
+      <div className="flex items-center gap-1">
         <ModeSelector
           selectedMode={selectedMode}
           onModeChange={onModeChange}
           disabled={disabled}
           className="h-7 text-sm"
         />
+        {onToggleRCA && (
+          <Button
+            variant="ghost"
+            onClick={onToggleRCA}
+            disabled={disabled}
+            aria-pressed={rcaActive}
+            className={`h-6 px-2 text-xs font-medium transition-colors gap-1 ${
+              rcaActive
+                ? "text-orange-500 bg-orange-500/15 hover:bg-orange-500/20"
+                : "text-muted-foreground hover:text-orange-500 hover:bg-orange-500/10"
+            }`}
+            title={rcaActive ? "RCA mode active — click Send to investigate" : "Enable RCA mode"}
+          >
+            <Radar className="h-3 w-3" />
+            <span>RCA</span>
+          </Button>
+        )}
       </div>
 
       {/* Right: Model selector + Provider logos */}

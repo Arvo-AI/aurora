@@ -917,6 +917,7 @@ async def handle_connection(websocket) -> None:
             model = data.get('model')  # Extract selected model from frontend
             mode_input = data.get('mode')    # Extract chat mode (agent / ask)
             attachments = data.get('attachments', []) # Extract file attachments if present
+            trigger_rca_requested = data.get('trigger_rca') is True
 
             mode = _normalize_mode(mode_input)
 
@@ -1200,7 +1201,19 @@ async def handle_connection(websocket) -> None:
                 # Regular text-only message
                 human_message = HumanMessage(content=question)
 
-            # Prepare messages list 
+            # Prepare messages list
+            if trigger_rca_requested:
+                rca_instruction = (
+                    "[RCA INVESTIGATION REQUESTED]\n"
+                    "The user has explicitly requested a Root Cause Analysis investigation. "
+                    "You MUST call the trigger_rca tool with their message as the issue_description. "
+                    "Extract a short title, affected service, and severity from their description.\n\n"
+                )
+                if isinstance(human_message.content, str):
+                    human_message = HumanMessage(content=rca_instruction + human_message.content)
+                elif isinstance(human_message.content, list):
+                    human_message = HumanMessage(content=[{"type": "text", "text": rca_instruction}] + human_message.content)
+
             messages_list = [human_message]
 
             # Resolve incident_id — reuse result from RBAC check to avoid duplicate query
@@ -1217,7 +1230,8 @@ async def handle_connection(websocket) -> None:
                 question=question,
                 attachments=attachments,
                 model=model,
-                mode=mode
+                mode=mode,
+                trigger_rca_requested=bool(trigger_rca_requested),
             )
 
             logger.info(f"Created state with {len(attachments) if attachments else 0} attachments for regular query")

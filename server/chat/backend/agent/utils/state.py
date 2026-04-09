@@ -16,6 +16,7 @@ class State(BaseModel):
     attachments: Optional[List[Dict[str, Any]]] = None  # File attachments
     model: Optional[str] = None  # Selected model from frontend
     mode: Optional[str] = None  # Chat mode: 'agent' or 'ask'
+    trigger_rca_requested: bool = False  # True when user explicitly clicked "Trigger RCA" button
     is_background: bool = (
         False  # True for background chats (webhook-triggered, no user interaction)
     )

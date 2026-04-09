@@ -465,6 +465,8 @@ def build_rca_prompt(
         labels_str = ", ".join(f"{k}={v}" for k, v in labels.items()) if labels else "none"
     elif source == 'newrelic':
         labels_str = ", ".join(f"{k}={v}" for k, v in labels.items()) if labels else "none"
+    elif source == 'chat':
+        labels_str = ", ".join(f"{k}={v}" for k, v in labels.items()) if labels else "user-reported"
     elif source == 'opsgenie':
         tags = alert_details.get('tags', [])
         labels_str = ", ".join(tags[:10]) if tags else "none"
@@ -1237,6 +1239,37 @@ def build_newrelic_rca_prompt(
         alert_details['issueUrl'] = issue_url
 
     return build_rca_prompt('newrelic', alert_details, providers, user_id)
+
+
+def build_chat_rca_prompt(
+    description: str,
+    title: str = "",
+    service: str = "",
+    severity: str = "medium",
+    providers: Optional[List[str]] = None,
+    user_id: Optional[str] = None,
+) -> str:
+    """Build RCA prompt from a user-reported incident in chat.
+
+    Wraps the user's free-text description into the standard alert_details
+    format and delegates to the shared build_rca_prompt().
+    """
+    alert_title = title or f"User-reported: {description[:80]}"
+
+    labels: Dict[str, str] = {}
+    if service:
+        labels["service"] = service
+    if severity:
+        labels["severity"] = severity
+
+    alert_details = {
+        "title": alert_title,
+        "status": "investigating",
+        "message": description,
+        "labels": labels,
+    }
+
+    return build_rca_prompt("chat", alert_details, providers, user_id)
 
 
 def build_opsgenie_rca_prompt(

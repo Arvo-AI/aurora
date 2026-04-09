@@ -23,6 +23,9 @@ node_modules
 # mac os
 .DS_Store
 
+# Claude Code
+.claude/
+
 # AWS CLI installation artifacts
 awscliv2.zip
 *.pem
