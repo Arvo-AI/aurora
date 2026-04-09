@@ -234,6 +234,10 @@ package-airtight:
 	@chmod +x scripts/package-airtight.sh
 	@./scripts/package-airtight.sh
 
+package-airtight-patch:
+	@chmod +x scripts/package-airtight-patch.sh
+	@./scripts/package-airtight-patch.sh
+
 prod-airtight:
 	@if [ ! -f .env ]; then \
 		echo "Error: .env file not found."; \
