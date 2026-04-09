@@ -730,8 +730,11 @@ def process_pagerduty_event(
                         except Exception as e:
                             try:
                                 cursor.execute("ROLLBACK TO SAVEPOINT sp_incident_lifecycle")
-                            except Exception:
-                                pass
+                            except Exception as rb_exc:
+                                logger.debug(
+                                    "[PAGERDUTY] Rollback to sp_incident_lifecycle failed for incident %s: %s",
+                                    incident_db_id, rb_exc,
+                                )
                             logger.warning(
                                 "[PAGERDUTY] Failed to record lifecycle %s event for incident %s: %s",
                                 ev_type, incident_db_id, e,

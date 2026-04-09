@@ -330,8 +330,11 @@ def process_datadog_event(
                     except Exception as e:
                         try:
                             cursor.execute("ROLLBACK TO SAVEPOINT sp_incident_lifecycle")
-                        except Exception:
-                            pass
+                        except Exception as rb_exc:
+                            logger.debug(
+                                "[DATADOG] Rollback to sp_incident_lifecycle failed for incident %s: %s",
+                                incident_id, rb_exc,
+                            )
                         logger.warning(
                             "[DATADOG] Failed to record lifecycle 'created' event for incident %s: %s",
                             incident_id, e,

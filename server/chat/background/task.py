@@ -1794,8 +1794,11 @@ def cleanup_stale_background_chats() -> Dict[str, Any]:
                             except Exception as lc_exc:
                                 try:
                                     cursor.execute("ROLLBACK TO SAVEPOINT sp_rca_error")
-                                except Exception:
-                                    pass
+                                except Exception as rb_exc:
+                                    logger.debug(
+                                        "[BackgroundChat:Cleanup] Rollback to sp_rca_error failed for incident %s: %s",
+                                        incident_id, rb_exc,
+                                    )
                                 logger.warning(
                                     "[BackgroundChat:Cleanup] Failed to record rca_error lifecycle event "
                                     "for incident %s (user %s): %s",

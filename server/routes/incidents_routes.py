@@ -105,8 +105,8 @@ def _record_lifecycle_event(cursor, incident_id, user_id, event_type, previous_v
     except Exception as e:
         try:
             cursor.execute("ROLLBACK TO SAVEPOINT sp_incident_lifecycle")
-        except Exception:
-            pass
+        except Exception as rb_exc:
+            logger.debug("[INCIDENTS] Rollback to sp_incident_lifecycle failed: %s", rb_exc)
         logger.warning("[INCIDENTS] Failed to record lifecycle event %s for %s: %s", event_type, incident_id, e)
 
 
