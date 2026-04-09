@@ -455,6 +455,7 @@ services:
       dockerfile: Dockerfile
       target: dev
     container_name: aurora-mcp
+    logging: *default-logging
     ports:
       - "${MCP_PORT:-8811}:8811"
     volumes:
