@@ -245,7 +245,7 @@ export default function ConnectorCard({ connector, connectedOverride }: Connecto
     // source of truth. Never fall through to the generic isConnected path
     // for these connectors — that would flash "Connected" while the
     // dedicated hook is still loading.
-    const devToolStatus =
+    const devToolStatus = hasOverride ? null :
       connector.id === "github" ? githubStatus :
       connector.id === "bitbucket" ? bitbucketStatus :
       null;
