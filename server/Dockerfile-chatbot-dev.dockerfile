@@ -1,5 +1,5 @@
 # Use the official Python image as the base
-FROM python:3.11-slim
+FROM python:3.12-slim
 
 # Development Dockerfile for Chatbot
 # This includes cloud CLI tools (gcloud, aws, az, terraform, helm) for local development
