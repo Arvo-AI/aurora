@@ -97,7 +97,9 @@ def fleet_summary(user_id):
 
     time_range = request.args.get("time_range", "30d")
     interval_map = {"1d": "1 day", "7d": "7 days", "30d": "30 days", "90d": "90 days"}
-    pg_interval = interval_map.get(time_range, "30 days")
+    if time_range not in interval_map:
+        return jsonify({"error": f"Unsupported time_range '{time_range}'. Must be one of: {', '.join(sorted(interval_map))}"}), 400
+    pg_interval = interval_map[time_range]
 
     query = """
         SELECT

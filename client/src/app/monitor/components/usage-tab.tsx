@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState, useCallback } from 'react';
+import { useMemo, useState, useEffect, useCallback } from 'react';
 import { DollarSign, Cpu, Zap, AlertTriangle, Hash } from 'lucide-react';
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, ReferenceArea,
@@ -74,24 +74,45 @@ function formatTokenAxis(n: number): string {
   return String(n);
 }
 
+// Pure time formatter. The hour-granularity "day header" behavior used to live
+// here as mutable closure state, but that got stale whenever the input data
+// changed and produced wrong axis labels. The header decision is now made at
+// the data-transform step (see makeHourAxisFormatter below), so this function
+// stays a pure function of the single input.
 function makeTimeFormatter(granularity: 'hour' | 'day' | 'week' = 'day') {
-  let lastDateStr = '';
   return (dateStr: string): string => {
     const d = new Date(dateStr);
     if (isNaN(d.getTime())) return dateStr;
     if (granularity === 'hour') {
-      const dayStr = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-      const hour = d.toLocaleString('en-US', { hour: 'numeric', hour12: true });
-      if (dayStr !== lastDateStr) {
-        lastDateStr = dayStr;
-        return dayStr;
-      }
-      return hour;
-    }
-    if (granularity === 'week') {
-      return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+      return d.toLocaleString('en-US', { hour: 'numeric', hour12: true });
     }
     return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  };
+}
+
+// Build a pure axis formatter for hour-granularity timelines that shows the
+// day label on the first tick of each new day and the hour otherwise. The
+// "first of day" decision is precomputed from the data so the returned
+// formatter has no mutable state and is safe across re-renders.
+function makeHourAxisFormatter(dates: string[]) {
+  const dayHeaderAt = new Set<string>();
+  let lastDayStr = '';
+  for (const ds of dates) {
+    const d = new Date(ds);
+    if (isNaN(d.getTime())) continue;
+    const dayStr = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    if (dayStr !== lastDayStr) {
+      dayHeaderAt.add(ds);
+      lastDayStr = dayStr;
+    }
+  }
+  return (dateStr: string): string => {
+    const d = new Date(dateStr);
+    if (isNaN(d.getTime())) return dateStr;
+    if (dayHeaderAt.has(dateStr)) {
+      return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    }
+    return d.toLocaleString('en-US', { hour: 'numeric', hour12: true });
   };
 }
 
@@ -138,6 +159,16 @@ function DualAxisTokenChart({ data, timeFormat }: { data: Array<{ date: string; 
   const [startIdx, setStartIdx] = useState(0);
   const [endIdx, setEndIdx] = useState(data.length - 1);
   const [zoomed, setZoomed] = useState(false);
+
+  // Reset / clamp zoom state when the data prop changes so that sliced()
+  // never indexes out of bounds after a period or filter switch.
+  useEffect(() => {
+    setStartIdx(0);
+    setEndIdx(Math.max(0, data.length - 1));
+    setZoomed(false);
+    setRefLeft('');
+    setRefRight('');
+  }, [data.length]);
 
   const handleMouseDown = useCallback((e: any) => {
     if (e?.activeLabel) setRefLeft(e.activeLabel);
@@ -294,23 +325,27 @@ export default function UsageTab({ period }: { period: Period }) {
   );
 
   const granularity = costData?.granularity ?? 'day';
-  const timeFormat = useMemo(() => makeTimeFormatter(granularity), [granularity]);
 
   const { costChartData, costSeries } = useMemo(() => {
     if (!costData?.data?.length) return { costChartData: [], costSeries: [] };
 
-    const groups = new Set<string>();
+    // Aggregate cost per short model name so we can pick the top-N by spend
+    // rather than by arbitrary first-appearance order.
+    const modelCosts = new Map<string, number>();
     const dateMap = new Map<string, Record<string, number>>();
 
     for (const pt of costData.data) {
       const short = shortModelName(pt.group);
-      groups.add(short);
+      modelCosts.set(short, (modelCosts.get(short) ?? 0) + pt.cost);
       if (!dateMap.has(pt.date)) dateMap.set(pt.date, {});
       const entry = dateMap.get(pt.date)!;
       entry[short] = (entry[short] || 0) + pt.cost;
     }
 
-    const allGroups = Array.from(groups).slice(0, 7);
+    const allGroups = Array.from(modelCosts.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 7)
+      .map(([name]) => name);
 
     const series = allGroups.map((g, i) => ({
       key: g,
@@ -327,6 +362,16 @@ export default function UsageTab({ period }: { period: Period }) {
 
     return { costChartData: data, costSeries: series };
   }, [costData]);
+
+  // Time formatter depends on both granularity and the actual dates in the
+  // chart so the "day header on first tick of each day" behavior stays in
+  // sync when the data changes.
+  const timeFormat = useMemo(() => {
+    if (granularity === 'hour') {
+      return makeHourAxisFormatter(costChartData.map(d => d.date as string));
+    }
+    return makeTimeFormatter(granularity);
+  }, [granularity, costChartData]);
 
   const tokenChartData = useMemo(() => {
     if (!costData?.data?.length) return [];

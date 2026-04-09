@@ -4,7 +4,7 @@ import { useState, useCallback } from 'react';
 import {
   Activity, CheckCircle2, XCircle, Clock, Loader2,
   ChevronDown, ChevronRight, Zap, AlertTriangle, Lightbulb,
-  ExternalLink, Flame, ShieldAlert, Search, Shield,
+  ExternalLink, Search, Shield,
 } from 'lucide-react';
 import { useQuery, jsonFetcher } from '@/lib/query';
 import {
@@ -191,8 +191,8 @@ function trimSummary(summary: string): string {
   // Strip "## Incident Report: ..." title line
   text = text.replace(/^##\s*Incident Report[^\n]*\n*/i, '');
 
-  // Strip metadata lines like "**Triggered:** ... | **Severity:** ..."
-  text = text.replace(/^\*\*(?:Triggered|Incident Date|Severity|Source)[^\n]*\n*/im, '');
+  // Strip metadata lines like "**Triggered:** ... | **Severity:** ..." (all occurrences)
+  text = text.replace(/^\*\*(?:Triggered|Incident Date|Severity|Source)[^\n]*\n*/gim, '');
 
   // Strip leading/trailing horizontal rules
   text = text.replace(/^---\s*\n*/gm, '');
@@ -205,9 +205,6 @@ function trimSummary(summary: string): string {
 }
 
 function RunCard({ run, expanded, onToggle }: { run: FleetRun; expanded: boolean; onToggle: () => void }) {
-  const hasResolution = run.aurora_summary || (run.suggestion_count > 0);
-  const isActive = ['running', 'analyzing', 'summarizing', 'pending'].includes(run.aurora_status);
-
   const fixes = run.fix_titles?.split(' | ').filter(Boolean) ?? [];
   const diagnostics = run.diagnostic_titles?.split(' | ').filter(Boolean) ?? [];
   const mitigations = run.mitigation_titles?.split(' | ').filter(Boolean) ?? [];

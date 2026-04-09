@@ -59,8 +59,8 @@ export default function WaterfallTab({ period }: { period: Period }) {
     return Math.max(...sortedTools.map(t => t.call_count), 1);
   }, [sortedTools]);
 
-  const successRate = rca && rca.total_rcas > 0
-    ? ((rca.successful_rcas / rca.total_rcas) * 100).toFixed(1)
+  const successRateDisplay = rca && rca.total_rcas > 0
+    ? `${((rca.successful_rcas / rca.total_rcas) * 100).toFixed(1)}%`
     : '—';
 
   return (
@@ -72,7 +72,7 @@ export default function WaterfallTab({ period }: { period: Period }) {
         ) : rca ? (
           <>
             <StatCard label="Total RCAs" value={String(rca.total_rcas)} icon={Timer} sub={`${rca.failed_rcas} failed`} />
-            <StatCard label="Success Rate" value={`${successRate}%`} icon={CheckCircle2} />
+            <StatCard label="Success Rate" value={successRateDisplay} icon={CheckCircle2} />
             <StatCard label="Avg Duration" value={formatDuration(rca.avg_rca_duration_seconds)} icon={Clock} sub={rca.avg_tool_calls_per_rca ? `~${Math.round(rca.avg_tool_calls_per_rca)} tool calls` : undefined} />
             <StatCard label="Avg Cost / RCA" value={rca.avg_cost_per_rca ? formatCost(rca.avg_cost_per_rca) : '—'} icon={DollarSign} sub={rca.avg_tokens_per_rca ? `~${formatCompact(rca.avg_tokens_per_rca)} tokens` : undefined} />
           </>
@@ -116,7 +116,9 @@ export default function WaterfallTab({ period }: { period: Period }) {
 
       {/* Tool performance table */}
       <ChartPanel title="Tool Performance" loading={isLoading}>
-        {!sortedTools.length ? (
+        {isLoading ? (
+          <ChartSkeleton height={300} />
+        ) : !sortedTools.length ? (
           <EmptyState icon={Wrench} message="No tool performance data" />
         ) : (
           <div className="overflow-x-auto rounded-lg border border-zinc-800/60">

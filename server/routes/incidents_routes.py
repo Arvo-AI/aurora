@@ -84,8 +84,16 @@ def _build_source_url(source_type: str, user_id: str) -> str:
 
 
 def _record_lifecycle_event(cursor, incident_id, user_id, event_type, previous_value=None, new_value=None, metadata=None, org_id=None):
-    """Insert an incident lifecycle event."""
+    """Insert an incident lifecycle event.
+
+    Wraps the insert in a savepoint so a failure here doesn't leave the outer
+    transaction in an ABORTED state and break subsequent statements in the
+    caller (e.g. the incident status UPDATE). On failure the savepoint is
+    rolled back and the exception is logged and re-raised so callers can
+    decide how to handle it.
+    """
     try:
+        cursor.execute("SAVEPOINT sp_incident_lifecycle")
         cursor.execute(
             """INSERT INTO incident_lifecycle_events
                (incident_id, user_id, org_id, event_type, previous_value, new_value, metadata)
@@ -93,7 +101,12 @@ def _record_lifecycle_event(cursor, incident_id, user_id, event_type, previous_v
             (incident_id, user_id, org_id, event_type, previous_value, new_value,
              json.dumps(metadata or {}))
         )
+        cursor.execute("RELEASE SAVEPOINT sp_incident_lifecycle")
     except Exception as e:
+        try:
+            cursor.execute("ROLLBACK TO SAVEPOINT sp_incident_lifecycle")
+        except Exception:
+            pass
         logger.warning("[INCIDENTS] Failed to record lifecycle event %s for %s: %s", event_type, incident_id, e)
 
 

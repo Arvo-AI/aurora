@@ -1,7 +1,7 @@
 'use client';
 
 import { useMemo } from 'react';
-import { Activity, Clock, Zap, AlertTriangle, Radio, Timer, ShieldCheck, Brain } from 'lucide-react';
+import { Activity, Zap, AlertTriangle, Radio, Timer, Brain } from 'lucide-react';
 import { useQuery, jsonFetcher } from '@/lib/query';
 import type {
   MetricsSummary, MttrResponse, MttsResponse, IncidentFrequencyResponse,
@@ -10,8 +10,8 @@ import type {
 import {
   StatCard, StatCardSkeleton, ChartPanel, ChartSkeleton, EmptyState,
   GrafanaAreaChart, GrafanaBarChart, GrafanaLineChart,
-  formatDuration, formatDate, formatCompact,
-  SEVERITY_COLORS, CHART_COLORS, type Period,
+  formatDuration,
+  SEVERITY_COLORS, type Period,
 } from './charts';
 
 interface MttdBySeverity {
@@ -117,18 +117,6 @@ export default function SreTab({ period }: { period: Period }) {
     }));
     return { freqChartData: data, freqSeries: series };
   }, [frequency]);
-
-  // MTTR bar chart data (human-resolved only)
-  const mttrBarData = useMemo(() => {
-    if (!mttr?.bySeverity?.length) return [];
-    return mttr.bySeverity
-      .sort((a, b) => SEVERITY_ORDER.indexOf(a.severity) - SEVERITY_ORDER.indexOf(b.severity))
-      .map(s => ({
-        name: s.severity.charAt(0).toUpperCase() + s.severity.slice(1),
-        'Detection → RCA': Math.round(s.avgDetectionToRcaSeconds ?? 0),
-        'RCA → Resolve': Math.round(s.avgRcaToResolveSeconds ?? 0),
-      }));
-  }, [mttr]);
 
   // MTTS bar chart data (Aurora solution time by severity)
   const mttsBarData = useMemo(() => {
@@ -243,7 +231,7 @@ export default function SreTab({ period }: { period: Period }) {
               data={mttdBarData}
               series={[
                 { key: 'avg', name: 'Avg MTTD', color: '#06b6d4' },
-                { key: 'p95', name: 'p95 MTTD', color: '#06b6d4' },
+                { key: 'p95', name: 'p95 MTTD', color: '#2563eb' },
               ]}
               height={220}
               layout="vertical"
@@ -394,11 +382,11 @@ export default function SreTab({ period }: { period: Period }) {
               <div className="bg-zinc-800/40 rounded-lg p-3">
                 <p className="text-xs text-zinc-500 mb-1">Tools Used</p>
                 <p className="text-xl font-semibold text-zinc-100" style={{ fontVariantNumeric: 'tabular-nums' }}>
-                  {agentExec.toolStats.length}
+                  {agentExec.toolStats?.length ?? 0}
                 </p>
               </div>
             </div>
-            {agentExec.toolStats.length > 0 && (
+            {(agentExec.toolStats?.length ?? 0) > 0 && (
               <div className="overflow-hidden rounded-lg border border-zinc-800/60 max-h-48 overflow-y-auto">
                 <table className="w-full text-xs">
                   <thead className="sticky top-0 bg-zinc-900">
@@ -409,7 +397,7 @@ export default function SreTab({ period }: { period: Period }) {
                     </tr>
                   </thead>
                   <tbody>
-                    {[...agentExec.toolStats].sort((a, b) => b.totalCalls - a.totalCalls).slice(0, 10).map(t => (
+                    {[...(agentExec.toolStats ?? [])].sort((a, b) => b.totalCalls - a.totalCalls).slice(0, 10).map(t => (
                       <tr key={t.toolName} className="border-b border-zinc-800/40 hover:bg-zinc-800/20 transition-colors">
                         <td className="px-3 py-1.5 text-zinc-300 font-mono">{t.toolName}</td>
                         <td className="px-3 py-1.5 text-right text-zinc-400" style={{ fontVariantNumeric: 'tabular-nums' }}>{t.totalCalls}</td>

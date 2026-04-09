@@ -113,6 +113,16 @@ def get_session_usage_options(session_id):
     return create_cors_response()
 
 
+@llm_usage_bp.route('/api/llm-usage/cost-over-time', methods=['OPTIONS'])
+def get_cost_over_time_options():
+    return create_cors_response()
+
+
+@llm_usage_bp.route('/api/llm-usage/summary', methods=['OPTIONS'])
+def get_usage_summary_options():
+    return create_cors_response()
+
+
 @llm_usage_bp.route('/api/llm-usage/cost-over-time', methods=['GET'])
 @require_permission("llm_usage", "read")
 def get_cost_over_time(user_id):
@@ -177,6 +187,10 @@ def get_cost_over_time(user_id):
                 "request_count": row[6] or 0,
             })
 
+        logger.info(
+            "Cost-over-time fetched: %d points, group_by=%s, period=%s, granularity=%s",
+            len(data), group_by, period, trunc,
+        )
         return jsonify({"data": data, "group_by": group_by, "period": period, "granularity": trunc})
     except Exception as e:
         logger.error(f"Error fetching cost-over-time: {e}")
@@ -219,17 +233,26 @@ def get_usage_summary(user_id):
 
         total_requests = row[4] or 0
         error_count = row[5] or 0
+        total_cost = float(row[0]) if row[0] else 0.0
+        avg_response_ms = int(row[6]) if row[6] else None
+        models_used = row[7] or 0
+        error_rate = round(error_count / total_requests * 100, 1) if total_requests > 0 else 0
+
+        logger.info(
+            "Usage summary fetched: total_cost=%.4f, total_requests=%d, error_count=%d, error_rate=%s, avg_response_ms=%s, models_used=%d, period=%s",
+            total_cost, total_requests, error_count, error_rate, avg_response_ms, models_used, period,
+        )
 
         return jsonify({
-            "total_cost": float(row[0]) if row[0] else 0.0,
+            "total_cost": total_cost,
             "total_tokens": row[1] or 0,
             "total_input_tokens": row[2] or 0,
             "total_output_tokens": row[3] or 0,
             "total_requests": total_requests,
             "error_count": error_count,
-            "error_rate": round(error_count / total_requests * 100, 1) if total_requests > 0 else 0,
-            "avg_response_ms": int(row[6]) if row[6] else None,
-            "models_used": row[7] or 0,
+            "error_rate": error_rate,
+            "avg_response_ms": avg_response_ms,
+            "models_used": models_used,
             "period": period,
         })
     except Exception as e:

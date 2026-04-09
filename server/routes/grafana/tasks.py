@@ -246,9 +246,13 @@ def process_grafana_alert(
                                         "[GRAFANA][ALERT] Could not parse startsAt=%r for fp=%s; leaving alert_fired_at=None",
                                         starts_at, fingerprint,
                                     )
-                            # source_alert_id is INTEGER; CRC32 the hex fingerprint to a signed 32-bit int
-                            crc = zlib.crc32(fingerprint.encode())
-                            per_alert_source_id = crc - (1 << 32) if crc >= (1 << 31) else crc
+                            # source_alert_id is INTEGER; CRC32 the hex fingerprint to a signed 32-bit int.
+                            # fingerprint is Optional — guard against None so we don't crash on malformed payloads.
+                            if fingerprint:
+                                crc = zlib.crc32(fingerprint.encode())
+                                per_alert_source_id = crc - (1 << 32) if crc >= (1 << 31) else crc
+                            else:
+                                per_alert_source_id = None
 
                             per_alert_title = (
                                 alert_payload.get("commonLabels", {}).get("alertname")
@@ -423,17 +427,25 @@ def process_grafana_alert(
                             conn.commit()
 
                             # Record lifecycle event only on actual inserts so re-deliveries
-                            # don't append duplicate 'created' rows.
+                            # don't append duplicate 'created' rows. Wrap in a savepoint so a
+                            # failure here doesn't leave the outer transaction in ABORTED state
+                            # and break the subsequent incident_alerts insert.
                             if incident_id and incident_was_inserted:
                                 try:
+                                    cursor.execute("SAVEPOINT sp_incident_lifecycle")
                                     cursor.execute(
                                         """INSERT INTO incident_lifecycle_events
                                            (incident_id, user_id, org_id, event_type, new_value)
                                            VALUES (%s, %s, %s, %s, %s)""",
                                         (incident_id, user_id, org_id, 'created', 'investigating'),
                                     )
+                                    cursor.execute("RELEASE SAVEPOINT sp_incident_lifecycle")
                                     conn.commit()
                                 except Exception as exc:
+                                    try:
+                                        cursor.execute("ROLLBACK TO SAVEPOINT sp_incident_lifecycle")
+                                    except Exception:
+                                        pass
                                     logger.warning(
                                         "[GRAFANA][ALERT] Failed to record lifecycle 'created' event for incident %s: %s",
                                         incident_id, exc,

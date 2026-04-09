@@ -1,6 +1,6 @@
 'use client';
 
-import { ReactNode, useMemo, useState, useCallback } from 'react';
+import { ReactNode, useMemo, useState, useEffect, useCallback } from 'react';
 import {
   AreaChart, Area, BarChart, Bar, LineChart, Line,
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
@@ -50,6 +50,7 @@ export function formatDate(dateStr: string): string {
   const d = parts.length === 3 && parts.every(n => Number.isFinite(n))
     ? new Date(parts[0], parts[1] - 1, parts[2])
     : new Date(dateStr);
+  if (!Number.isFinite(d.getTime())) return '—';
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
@@ -286,25 +287,26 @@ const ANIMATION_DURATION = 600;
 const ANIMATION_EASING = 'ease-out' as const;
 const CURSOR_STYLE = { stroke: '#52525b', strokeDasharray: '4 4' };
 
-const BRUSH_STYLE = {
-  height: 24,
-  fill: '#18181b',
-  stroke: '#3f3f46',
-  travellerWidth: 8,
-};
-
 // ---------------------------------------------------------------------------
 // useChartZoom — drag-to-zoom state for any chart type
 // ---------------------------------------------------------------------------
 
 function useChartZoom(data: Record<string, unknown>[], xKey: string) {
-  const [left, setLeft] = useState<string | null>(null);
-  const [right, setRight] = useState<string | null>(null);
   const [refLeft, setRefLeft] = useState('');
   const [refRight, setRefRight] = useState('');
   const [zoomed, setZoomed] = useState(false);
   const [startIdx, setStartIdx] = useState(0);
   const [endIdx, setEndIdx] = useState(data.length - 1);
+
+  // Reset / clamp zoom state whenever the incoming data array changes
+  // so sliced() never indexes out of bounds.
+  useEffect(() => {
+    setStartIdx(0);
+    setEndIdx(Math.max(0, data.length - 1));
+    setZoomed(false);
+    setRefLeft('');
+    setRefRight('');
+  }, [data.length]);
 
   const handleMouseDown = useCallback((e: { activeLabel?: string }) => {
     if (e?.activeLabel) setRefLeft(e.activeLabel);
@@ -323,8 +325,6 @@ function useChartZoom(data: Record<string, unknown>[], xKey: string) {
         const hi = Math.max(leftIdx, rightIdx);
         setStartIdx(lo);
         setEndIdx(hi);
-        setLeft(String(data[lo][xKey]));
-        setRight(String(data[hi][xKey]));
         setZoomed(true);
       }
     }
@@ -333,8 +333,6 @@ function useChartZoom(data: Record<string, unknown>[], xKey: string) {
   }, [data, xKey, refLeft, refRight]);
 
   const handleReset = useCallback(() => {
-    setLeft(null);
-    setRight(null);
     setStartIdx(0);
     setEndIdx(data.length - 1);
     setZoomed(false);

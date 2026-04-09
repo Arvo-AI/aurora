@@ -265,7 +265,7 @@ def process_datadog_event(
                         END,
                         alert_metadata = EXCLUDED.alert_metadata,
                         alert_fired_at = COALESCE(EXCLUDED.alert_fired_at, incidents.alert_fired_at)
-                    RETURNING id
+                    RETURNING id, (xmax = 0) AS inserted
                     """,
                     (
                         user_id,
@@ -283,6 +283,7 @@ def process_datadog_event(
                 )
                 incident_row = cursor.fetchone()
                 incident_id = incident_row[0] if incident_row else None
+                incident_was_inserted = bool(incident_row[1]) if incident_row else False
                 conn.commit()
 
                 try:
@@ -313,17 +314,24 @@ def process_datadog_event(
                 except Exception as e:
                     logger.warning("[DATADOG] Failed to record primary alert: %s", e)
 
-                # Record lifecycle event for new incidents
-                if incident_id:
+                # Record lifecycle event only on fresh inserts so redelivered
+                # webhooks don't append duplicate 'created' rows.
+                if incident_id and incident_was_inserted:
                     try:
+                        cursor.execute("SAVEPOINT sp_incident_lifecycle")
                         cursor.execute(
                             """INSERT INTO incident_lifecycle_events
                                (incident_id, user_id, org_id, event_type, new_value)
                                VALUES (%s, %s, %s, %s, %s)""",
                             (incident_id, user_id, org_id, 'created', 'investigating'),
                         )
+                        cursor.execute("RELEASE SAVEPOINT sp_incident_lifecycle")
                         conn.commit()
                     except Exception as e:
+                        try:
+                            cursor.execute("ROLLBACK TO SAVEPOINT sp_incident_lifecycle")
+                        except Exception:
+                            pass
                         logger.warning(
                             "[DATADOG] Failed to record lifecycle 'created' event for incident %s: %s",
                             incident_id, e,

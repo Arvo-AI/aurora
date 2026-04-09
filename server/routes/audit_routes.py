@@ -18,7 +18,13 @@ def record_audit_event(org_id, user_id, action, resource_type,
         ip_address = None
         user_agent = None
         if req:
-            ip_address = req.headers.get("X-Forwarded-For", req.remote_addr)
+            # X-Forwarded-For can be a comma-separated chain; the first token
+            # is the original client IP, the rest are intermediate proxies.
+            forwarded = req.headers.get("X-Forwarded-For")
+            if forwarded:
+                ip_address = forwarded.split(",", 1)[0].strip() or req.remote_addr
+            else:
+                ip_address = req.remote_addr
             user_agent = req.headers.get("User-Agent")
 
         with db_pool.get_admin_connection() as conn:
@@ -120,8 +126,15 @@ def _synthetic_events(cur, org_id, pg_interval):
 def get_audit_log(user_id):
     """Paginated, filterable audit log — merges audit_log table with synthetic activity events."""
     org_id = get_org_id_from_request()
-    page = max(int(request.args.get("page", 1)), 1)
-    per_page = min(int(request.args.get("per_page", 50)), 200)
+
+    try:
+        page = max(int(request.args.get("page", 1)), 1)
+    except (TypeError, ValueError):
+        return jsonify({"error": "page must be a positive integer"}), 400
+    try:
+        per_page = min(max(int(request.args.get("per_page", 50)), 1), 200)
+    except (TypeError, ValueError):
+        return jsonify({"error": "per_page must be a positive integer"}), 400
 
     action_filter = request.args.get("action")
     resource_filter = request.args.get("resource_type")

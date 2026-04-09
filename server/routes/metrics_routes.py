@@ -24,12 +24,31 @@ def _get_period_interval(period_str: str) -> str:
     return _PERIOD_MAP.get(period_str, "30 days")
 
 
+def _parse_window_hours(default: int = 4) -> tuple[int | None, tuple | None]:
+    """Parse and validate the window_hours query parameter.
+
+    Returns (value, None) on success or (None, (response, status)) on failure
+    so the caller can do `if err: return err`.
+    """
+    raw = request.args.get("window_hours", str(default))
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return None, (jsonify({"error": "window_hours must be a positive integer"}), 400)
+    if value < 1:
+        return None, (jsonify({"error": "window_hours must be a positive integer"}), 400)
+    return value, None
+
+
 @metrics_bp.route("/api/metrics/summary", methods=["GET"])
 @require_permission("incidents", "read")
 def get_metrics_summary(user_id):
     """Dashboard overview — key SRE metrics in a single call."""
     org_id = get_org_id_from_request()
     period = _get_period_interval(request.args.get("period", "30d"))
+    window_hours, err = _parse_window_hours()
+    if err:
+        return err
 
     try:
         with db_pool.get_user_connection() as conn:
@@ -92,8 +111,7 @@ def get_metrics_summary(user_id):
             """, (period,))
             avg_mttd = cursor.fetchone()[0]
 
-            # Change Failure Rate
-            window_hours = int(request.args.get("window_hours", 4))
+            # Change Failure Rate (window_hours validated above)
             cursor.execute("""
                 WITH deploys AS (
                     SELECT id, service, received_at
@@ -424,7 +442,9 @@ def get_change_failure_rate(user_id):
     """Percentage of deployments followed by an incident within a time window."""
     org_id = get_org_id_from_request()
     period = _get_period_interval(request.args.get("period", "30d"))
-    window_hours = int(request.args.get("window_hours", 4))
+    window_hours, err = _parse_window_hours()
+    if err:
+        return err
 
     try:
         with db_pool.get_user_connection() as conn:

@@ -13,7 +13,7 @@ export async function GET(
     if (authResult instanceof NextResponse) return authResult;
     const { headers: authHeaders } = authResult;
     const { incidentId } = await params;
-    const url = `${API_BASE_URL}/api/monitor/fleet/${incidentId}/activity`;
+    const url = `${API_BASE_URL}/api/monitor/fleet/${encodeURIComponent(incidentId)}/activity`;
     const response = await fetch(url, { method: 'GET', headers: authHeaders, credentials: 'include', cache: 'no-store' });
     if (!response.ok) {
       const text = await response.text();

@@ -111,6 +111,7 @@ export default function AuditTab({ period }: { period: Period }) {
             <input
               type="text"
               placeholder="Filter by action..."
+              aria-label="Filter by action"
               value={actionFilter}
               onChange={(e) => { setActionFilter(e.target.value); setPage(1); }}
               className="bg-zinc-800/50 border border-zinc-700/50 rounded-md px-2.5 py-1 text-xs text-zinc-300 placeholder-zinc-600 focus:outline-none focus:ring-1 focus:ring-zinc-600 w-36 transition-all"
@@ -119,6 +120,7 @@ export default function AuditTab({ period }: { period: Period }) {
           <input
             type="text"
             placeholder="Filter by resource..."
+            aria-label="Filter by resource"
             value={resourceFilter}
             onChange={(e) => { setResourceFilter(e.target.value); setPage(1); }}
             className="bg-zinc-800/50 border border-zinc-700/50 rounded-md px-2.5 py-1 text-xs text-zinc-300 placeholder-zinc-600 focus:outline-none focus:ring-1 focus:ring-zinc-600 w-36 transition-all"
@@ -188,6 +190,7 @@ export default function AuditTab({ period }: { period: Period }) {
                   <button
                     onClick={() => goPage(page - 1)}
                     disabled={page <= 1}
+                    aria-label="Previous page"
                     className="p-1 rounded-md text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/60 disabled:opacity-30 disabled:cursor-not-allowed transition-all"
                   >
                     <ChevronLeft className="h-4 w-4" />
@@ -195,6 +198,7 @@ export default function AuditTab({ period }: { period: Period }) {
                   <button
                     onClick={() => goPage(page + 1)}
                     disabled={page >= data.total_pages}
+                    aria-label="Next page"
                     className="p-1 rounded-md text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/60 disabled:opacity-30 disabled:cursor-not-allowed transition-all"
                   >
                     <ChevronRight className="h-4 w-4" />

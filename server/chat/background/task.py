@@ -1779,13 +1779,28 @@ def cleanup_stale_background_chats() -> Dict[str, Any]:
                                 "UPDATE incidents SET aurora_status = 'error', status = 'analyzed', updated_at = %s WHERE id = %s",
                                 (datetime.now(), incident_id)
                             )
-                            # Record lifecycle event for stale session error
-                            cursor.execute(
-                                """INSERT INTO incident_lifecycle_events
-                                   (incident_id, user_id, org_id, event_type, new_value)
-                                   VALUES (%s, %s, %s, %s, %s)""",
-                                (incident_id, user_id, None, 'rca_error', 'error')
-                            )
+                            # Record lifecycle event for stale session error. Wrap in savepoint
+                            # so a failure here doesn't abort the outer transaction and stop
+                            # the status UPDATE from committing for remaining sessions.
+                            try:
+                                cursor.execute("SAVEPOINT sp_rca_error")
+                                cursor.execute(
+                                    """INSERT INTO incident_lifecycle_events
+                                       (incident_id, user_id, org_id, event_type, new_value)
+                                       VALUES (%s, %s, %s, %s, %s)""",
+                                    (incident_id, user_id, None, 'rca_error', 'error')
+                                )
+                                cursor.execute("RELEASE SAVEPOINT sp_rca_error")
+                            except Exception as lc_exc:
+                                try:
+                                    cursor.execute("ROLLBACK TO SAVEPOINT sp_rca_error")
+                                except Exception:
+                                    pass
+                                logger.warning(
+                                    "[BackgroundChat:Cleanup] Failed to record rca_error lifecycle event "
+                                    "for incident %s (user %s): %s",
+                                    incident_id, user_id, lc_exc,
+                                )
                 conn.commit()
             
             logger.info(f"[BackgroundChat:Cleanup] Marked {cleaned_count} stale sessions as failed")

@@ -704,28 +704,34 @@ def process_pagerduty_event(
                         )
 
                 # Record a lifecycle row only on a real state change so retried webhooks
-                # don't bloat the timeline:
-                #   - 'created' on the first INSERT
-                #   - status transition rows when PD-driven status actually changes
+                # don't bloat the timeline. Reuse the vocabulary established in
+                # server/routes/incidents_routes.py: 'created', 'resolved',
+                # 'status_changed' — keep the specific status values in
+                # previous_value / new_value rather than inventing new event types.
                 if incident_db_id:
                     lifecycle_writes = []
                     if incident_was_inserted and event_type == "incident.triggered":
                         lifecycle_writes.append(("created", None, "investigating"))
                     elif previous_status is not None and previous_status != aurora_status:
-                        lifecycle_writes.append(
-                            (f"status_{aurora_status}", previous_status, aurora_status)
-                        )
+                        ev_name = "resolved" if aurora_status == "resolved" else "status_changed"
+                        lifecycle_writes.append((ev_name, previous_status, aurora_status))
 
                     for ev_type, prev_val, new_val in lifecycle_writes:
                         try:
+                            cursor.execute("SAVEPOINT sp_incident_lifecycle")
                             cursor.execute(
                                 """INSERT INTO incident_lifecycle_events
                                    (incident_id, user_id, org_id, event_type, previous_value, new_value)
                                    VALUES (%s, %s, %s, %s, %s, %s)""",
                                 (incident_db_id, user_id, org_id, ev_type, prev_val, new_val),
                             )
+                            cursor.execute("RELEASE SAVEPOINT sp_incident_lifecycle")
                             conn.commit()
                         except Exception as e:
+                            try:
+                                cursor.execute("ROLLBACK TO SAVEPOINT sp_incident_lifecycle")
+                            except Exception:
+                                pass
                             logger.warning(
                                 "[PAGERDUTY] Failed to record lifecycle %s event for incident %s: %s",
                                 ev_type, incident_db_id, e,

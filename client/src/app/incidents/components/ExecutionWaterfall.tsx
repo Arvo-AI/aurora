@@ -164,7 +164,7 @@ export default function ExecutionWaterfall({ incidentId }: { incidentId: string 
       setLoading(true);
       setError(null);
       try {
-        const res = await fetch(`/api/metrics/agent-execution?incident_id=${incidentId}`);
+        const res = await fetch(`/api/metrics/agent-execution?incident_id=${encodeURIComponent(incidentId)}`);
         if (!res.ok) {
           throw new Error(`Failed to fetch (${res.status})`);
         }

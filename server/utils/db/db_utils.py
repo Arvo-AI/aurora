@@ -1752,14 +1752,22 @@ def initialize_tables():
             # resolution time and skew MTTR for legacy incidents. Leave legacy
             # resolved_at as NULL — those rows will simply not contribute to MTTR.
 
-            # Indexes for SRE metrics queries
+            # Indexes for SRE metrics queries. These queries are org-scoped via
+            # RLS (SET myapp.current_org_id) and do not filter by user_id in their
+            # WHERE clauses, so user_id as a leading column would not contribute
+            # to selectivity. Index only the columns actually used as predicates.
+            # We DROP any earlier (user_id, ...) variants so dev/staging environments
+            # that saw the first definition get the corrected indexes on next boot.
             try:
                 cursor.execute("""
+                    DROP INDEX IF EXISTS idx_incidents_resolved_at;
+                    DROP INDEX IF EXISTS idx_incidents_service_started;
+
                     CREATE INDEX IF NOT EXISTS idx_incidents_resolved_at
-                    ON incidents(user_id, resolved_at DESC) WHERE resolved_at IS NOT NULL;
+                    ON incidents(resolved_at DESC) WHERE resolved_at IS NOT NULL;
 
                     CREATE INDEX IF NOT EXISTS idx_incidents_service_started
-                    ON incidents(user_id, alert_service, started_at DESC);
+                    ON incidents(alert_service, started_at DESC);
                 """)
                 logging.info("Created SRE metrics indexes on incidents table.")
                 conn.commit()
