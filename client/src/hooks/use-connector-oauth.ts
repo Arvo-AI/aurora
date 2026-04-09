@@ -6,6 +6,7 @@ import type { ConnectorConfig } from "@/components/connectors/types";
 import { ToastAction } from "@/components/ui/toast";
 import { ExternalLink } from "lucide-react";
 import { slackService } from "@/lib/services/slack";
+import { ProjectCache } from "@/components/cloud-provider/projects/projectUtils";
 
 export function useConnectorOAuth(connector: ConnectorConfig, userId: string | null) {
   const { toast } = useToast();
@@ -183,6 +184,7 @@ export function useConnectorOAuth(connector: ConnectorConfig, userId: string | n
         const data = await response.json();
         
         if (data.login_url) {
+          ProjectCache.invalidate('gcp');
           localStorage.setItem("aurora_graph_discovery_trigger", "1");
           window.location.href = data.login_url;
         } else {
