@@ -43,8 +43,8 @@ interface Entry<T = unknown> {
   version: number;
 }
 
-const MAX_CACHE_ENTRIES = 500;
-const CACHE_TTL = 5 * 60_000; // evict entries not accessed in 5 minutes
+const maxCacheEntries = 500;
+const cacheTtl = 5 * 60_000; // evict entries not accessed in 5 minutes
 
 const store = new Map<string, Entry>();
 const snapshots = new Map<string, { version: number; snap: Snap }>();
@@ -52,15 +52,21 @@ const accessedAt = new Map<string, number>();
 
 interface Snap { data: unknown; error: Error | null; validating: boolean; version: number }
 
+const evictionInterval = 60_000; // check at most once per minute
+let lastEviction = 0;
+
 function evictStale() {
-  if (store.size <= MAX_CACHE_ENTRIES) return;
   const now = Date.now();
+  const overCap = store.size > maxCacheEntries;
+  const staleCheckDue = now - lastEviction >= evictionInterval;
+  if (!overCap && !staleCheckDue) return;
+  lastEviction = now;
   for (const [key, ts] of accessedAt) {
-    if (store.size <= MAX_CACHE_ENTRIES * 0.75) break;
+    if (overCap && store.size <= maxCacheEntries * 0.75) break;
     const e = store.get(key);
-    if (e && e.listeners.size > 0) continue;   // active subscribers
-    if (e && e.inflight) continue;              // in-flight request
-    if (now - ts < CACHE_TTL) continue;         // recently accessed
+    if (e && e.listeners.size > 0) continue;
+    if (e && e.inflight) continue;
+    if (now - ts < cacheTtl) continue;
     store.delete(key);
     snapshots.delete(key);
     accessedAt.delete(key);
@@ -88,6 +94,7 @@ function snap<T>(key: string): Snap | undefined {
   const e = store.get(key);
   if (!e) return undefined;
   accessedAt.set(key, Date.now());
+  evictStale();
   const cached = snapshots.get(key);
   if (cached && cached.version === e.version) return cached.snap;
   const s: Snap = { data: e.data, error: e.error, validating: e.validating, version: e.version };
@@ -193,7 +200,9 @@ export const queryClient = {
 
   /** Sync read from cache. Never triggers a fetch. */
   read<T>(key: string): T | undefined {
-    return store.get(key)?.data as T | undefined;
+    const e = store.get(key);
+    if (e !== undefined) accessedAt.set(key, Date.now());
+    return e?.data as T | undefined;
   },
 
   /** Optimistic write — sets data + notifies all subscribers. */
