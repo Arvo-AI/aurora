@@ -33,7 +33,7 @@ Aurora is a natural-language interface for managing cloud infrastructure. Before
 
 - Docker and Docker Compose >= 28.x
 - Node.js >= 18.x (for frontend development)
-- Python >= 3.11 (for backend development)
+- Python >= 3.12 (for backend development)
 - Make (for using Makefile commands)
 
 ### Initial Setup
