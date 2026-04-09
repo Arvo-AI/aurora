@@ -27,7 +27,8 @@ onboarding_bp = Blueprint("aws_onboarding_bp", __name__)
 @require_permission("connectors", "read")
 def check_aws_environment(_user_id):
     """
-    Check if Aurora has AWS environment configured (AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY).
+    Check if Aurora has AWS credentials available via any method
+    (env vars, IRSA web identity, instance profile, etc.).
     
     Returns:
         {
@@ -55,6 +56,16 @@ def check_aws_environment(_user_id):
                 account_id = get_aurora_account_id()
             except Exception as e:
                 logger.debug(f"Could not get account ID even though credentials are set: {e}")
+
+        if not configured:
+            try:
+                from utils.aws.aws_sts_client import get_aurora_account_id
+                account_id = get_aurora_account_id()
+                if account_id:
+                    configured = True
+                    logger.info("AWS credentials available via boto3 credential chain (IRSA/instance profile)")
+            except Exception as e:
+                logger.debug(f"No AWS credentials available via credential chain: {e}")
         
         return jsonify({
             "configured": configured,
