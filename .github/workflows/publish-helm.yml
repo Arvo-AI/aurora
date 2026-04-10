@@ -6,7 +6,6 @@ name: Publish Helm Chart
 on:
   push:
     tags: ['v*.*.*']
-    branches: [public-helm]  # TODO: remove after testing
   workflow_dispatch:
 
 concurrency:
@@ -26,8 +25,8 @@ env:
 jobs:
   # ===========================================================================
   # Method 1: GitHub Pages via chart-releaser
-  # Usage:
-  #   helm repo add aurora https://arvo-ai.github.io/aurora
+  # Your Pages URL serves Docusaurus docs, so use the raw gh-pages branch URL:
+  #   helm repo add aurora https://raw.githubusercontent.com/Arvo-AI/aurora/gh-pages
   #   helm install aurora aurora/aurora
   # ===========================================================================
   publish-ghpages:
@@ -59,7 +58,7 @@ jobs:
   # ===========================================================================
   # Method 2: OCI push to GHCR
   # Usage:
-  #   helm install aurora oci://ghcr.io/arvo-ai/charts/aurora --version 0.1.0
+  #   helm install aurora oci://ghcr.io/arvo-ai/charts/aurora
   # ===========================================================================
   publish-oci:
     name: Publish to GHCR (OCI)
@@ -106,7 +105,7 @@ jobs:
           echo "GHCR OCI:     ${{ needs.publish-oci.result }}"
           echo ""
           echo "Install methods:"
-          echo "  helm repo add aurora https://arvo-ai.github.io/aurora"
+          echo "  helm repo add aurora https://raw.githubusercontent.com/Arvo-AI/aurora/gh-pages"
           echo "  helm install aurora aurora/aurora"
           echo ""
           echo "  helm install aurora oci://ghcr.io/arvo-ai/charts/aurora"
