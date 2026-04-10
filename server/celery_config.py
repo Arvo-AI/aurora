@@ -34,14 +34,18 @@ celery_app = Celery('aurora_tasks',
 # Configure SSL for Redis broker/backend when using rediss:// scheme
 if redis_url.startswith('rediss://'):
     import ssl as _ssl
-    _ssl_cert_reqs_str = os.getenv('REDIS_SSL_CERT_REQS', '')
     _ssl_cert_reqs_map = {
         'none': _ssl.CERT_NONE,
         'optional': _ssl.CERT_OPTIONAL,
         'required': _ssl.CERT_REQUIRED,
     }
+    _ssl_cert_reqs_str = os.getenv('REDIS_SSL_CERT_REQS', '').strip().lower()
+    if not _ssl_cert_reqs_str:
+        _ssl_cert_reqs_str = 'required'
+    if _ssl_cert_reqs_str not in _ssl_cert_reqs_map:
+        raise ValueError(f"Invalid REDIS_SSL_CERT_REQS={_ssl_cert_reqs_str!r}, must be one of: {', '.join(_ssl_cert_reqs_map)}")
     _broker_ssl = {
-        'ssl_cert_reqs': _ssl_cert_reqs_map.get(_ssl_cert_reqs_str, _ssl.CERT_NONE),
+        'ssl_cert_reqs': _ssl_cert_reqs_map[_ssl_cert_reqs_str],
     }
     _ssl_ca_certs = os.getenv('REDIS_SSL_CA_CERTS')
     if _ssl_ca_certs:
