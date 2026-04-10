@@ -28,6 +28,7 @@ spec:
         runAsUser: 100
         runAsGroup: 1000
         fsGroup: 1000
+      {{- include "aurora.scheduling" (dict "service" "vault" "global" $) | nindent 6 }}
       containers:
         - name: vault
           image: hashicorp/vault:1.15

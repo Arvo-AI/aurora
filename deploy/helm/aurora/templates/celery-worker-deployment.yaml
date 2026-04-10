@@ -34,6 +34,7 @@ spec:
       imagePullSecrets:
         {{- toYaml .Values.image.pullSecrets | nindent 8 }}
       {{- end }}
+      {{- include "aurora.scheduling" (dict "service" "celeryWorker" "global" $) | nindent 6 }}
       containers:
         - name: celery-worker
           image: "{{ .Values.image.registry }}/aurora-server:{{ .Values.image.tag }}"

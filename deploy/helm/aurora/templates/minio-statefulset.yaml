@@ -25,6 +25,7 @@ spec:
         runAsUser: 1000
         runAsGroup: 1000
         fsGroup: 1000
+      {{- include "aurora.scheduling" (dict "service" "minio" "global" $) | nindent 6 }}
       containers:
         - name: minio
           image: minio/minio:RELEASE.2025-04-22T22-12-26Z

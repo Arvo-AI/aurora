@@ -362,6 +362,89 @@ resources:
       memory: "512Mi"
 
 # ------------------------------------------------------------------------------
+# Pod scheduling: tolerations, nodeSelector, affinity
+# ------------------------------------------------------------------------------
+# Global values applied to ALL pods. Override per-service below.
+# ref: https://kubernetes.io/docs/concepts/scheduling-eviction/taint-and-toleration/
+#
+# Example - schedule on nodes tainted for your team:
+#   tolerations:
+#     - key: "team"
+#       operator: "Equal"
+#       value: "platform"
+#       effect: "NoSchedule"
+#
+# Example - restrict to specific node labels:
+#   nodeSelector:
+#     node-pool: "aurora"
+#
+# Example - prefer spreading across zones:
+#   affinity:
+#     podAntiAffinity:
+#       preferredDuringSchedulingIgnoredDuringExecution:
+#         - weight: 100
+#           podAffinityTerm:
+#             labelSelector:
+#               matchLabels:
+#                 app.kubernetes.io/part-of: aurora
+#             topologyKey: topology.kubernetes.io/zone
+
+tolerations: []
+nodeSelector: {}
+affinity: {}
+
+# Per-service overrides (only the fields you set are overridden; the rest inherit from global)
+# scheduling:
+#   server:
+#     tolerations: []
+#     nodeSelector: {}
+#     affinity: {}
+#   celeryWorker:
+#     tolerations: []
+#     nodeSelector: {}
+#     affinity: {}
+#   celeryBeat:
+#     tolerations: []
+#     nodeSelector: {}
+#     affinity: {}
+#   chatbot:
+#     tolerations: []
+#     nodeSelector: {}
+#     affinity: {}
+#   frontend:
+#     tolerations: []
+#     nodeSelector: {}
+#     affinity: {}
+#   searxng:
+#     tolerations: []
+#     nodeSelector: {}
+#     affinity: {}
+#   transformers:
+#     tolerations: []
+#     nodeSelector: {}
+#     affinity: {}
+#   postgres:
+#     tolerations: []
+#     nodeSelector: {}
+#     affinity: {}
+#   redis:
+#     tolerations: []
+#     nodeSelector: {}
+#     affinity: {}
+#   weaviate:
+#     tolerations: []
+#     nodeSelector: {}
+#     affinity: {}
+#   vault:
+#     tolerations: []
+#     nodeSelector: {}
+#     affinity: {}
+#   minio:
+#     tolerations: []
+#     nodeSelector: {}
+#     affinity: {}
+
+# ------------------------------------------------------------------------------
 # Persistent storage
 # ------------------------------------------------------------------------------
 persistence:

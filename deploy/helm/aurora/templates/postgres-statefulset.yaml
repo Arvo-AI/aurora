@@ -28,6 +28,7 @@ spec:
         runAsUser: 70
         runAsGroup: 70
         fsGroup: 70
+      {{- include "aurora.scheduling" (dict "service" "postgres" "global" $) | nindent 6 }}
       containers:
         - name: postgres
           image: postgres:15-alpine

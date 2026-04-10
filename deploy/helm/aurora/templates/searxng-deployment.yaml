@@ -26,6 +26,7 @@ spec:
         runAsUser: 977
         runAsGroup: 977
         fsGroup: 977
+      {{- include "aurora.scheduling" (dict "service" "searxng" "global" $) | nindent 6 }}
       containers:
         - name: searxng
           image: searxng/searxng:2025.5.8-7ca24eee4

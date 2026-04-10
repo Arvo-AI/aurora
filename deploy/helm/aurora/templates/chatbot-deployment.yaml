@@ -35,6 +35,7 @@ spec:
       imagePullSecrets:
         {{- toYaml .Values.image.pullSecrets | nindent 8 }}
       {{- end }}
+      {{- include "aurora.scheduling" (dict "service" "chatbot" "global" $) | nindent 6 }}
       containers:
         - name: aurora-chatbot
           image: "{{ .Values.image.registry }}/aurora-server:{{ .Values.image.tag }}"

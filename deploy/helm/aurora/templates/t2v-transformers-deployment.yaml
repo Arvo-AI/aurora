@@ -18,6 +18,7 @@ spec:
         app.kubernetes.io/part-of: aurora
     spec:
       automountServiceAccountToken: false
+      {{- include "aurora.scheduling" (dict "service" "transformers" "global" $) | nindent 6 }}
       containers:
         - name: transformers
           image: cr.weaviate.io/semitechnologies/transformers-inference:sentence-transformers-all-MiniLM-L6-v2

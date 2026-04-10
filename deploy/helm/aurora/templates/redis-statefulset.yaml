@@ -25,6 +25,7 @@ spec:
         runAsUser: 999
         runAsGroup: 1000
         fsGroup: 1000
+      {{- include "aurora.scheduling" (dict "service" "redis" "global" $) | nindent 6 }}
       containers:
         - name: redis
           image: redis:7-alpine
