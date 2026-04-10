@@ -108,6 +108,16 @@ config:
   WEAVIATE_PORT: "8080"
   WEAVIATE_GRPC_PORT: "50051"
   
+  # --- SSL/TLS for External Services ---
+  # PostgreSQL: "prefer" auto-negotiates TLS (works for RDS/Cloud SQL out of box)
+  POSTGRES_SSLMODE: "prefer"
+  POSTGRES_SSLROOTCERT: ""        # Path to CA cert (mount via ssl.caCertSecret)
+  # Redis: use rediss:// in REDIS_URL to enable TLS
+  REDIS_SSL_CA_CERTS: ""          # Path to CA cert for Redis TLS
+  REDIS_SSL_CERT_REQS: ""         # "none", "optional", "required"
+  # Weaviate: set to "true" for HTTPS+gRPC-TLS
+  WEAVIATE_SECURE: "false"
+  
   # --- Public URLs (REQUIRED) ---
   # NEXT_PUBLIC_* vars are written to window.__ENV by docker-entrypoint.sh at startup.
   # Changing them only requires a pod restart, not an image rebuild.
@@ -184,6 +194,19 @@ config:
   
   # --- Development (optional) ---
   NGROK_URL: ""
+
+# ------------------------------------------------------------------------------
+# SSL/TLS Certificate Mounting
+# ------------------------------------------------------------------------------
+# Mount a Kubernetes Secret containing CA certificates into backend pods.
+# Useful for RDS, ElastiCache, or other managed services requiring custom CA certs.
+# Example:
+#   kubectl create secret generic aurora-ca-cert --from-file=ca.crt=rds-combined-ca-bundle.pem
+#   ssl.caCertSecret: "aurora-ca-cert"
+#   config.POSTGRES_SSLROOTCERT: "/etc/ssl/aurora/ca.crt"
+ssl:
+  caCertSecret: ""                       # K8s Secret name containing CA cert (key: ca.crt)
+  caCertMountPath: "/etc/ssl/aurora"     # Mount path inside pods
 
 # ------------------------------------------------------------------------------
 # Secrets (REQUIRED - must be set in values.generated.yaml)

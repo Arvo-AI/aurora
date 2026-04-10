@@ -70,6 +70,8 @@ def _get_pool() -> psycopg2.pool.ThreadedConnectionPool:
             dbname=os.environ["POSTGRES_DB"],
             user=os.environ["POSTGRES_USER"],
             password=os.environ["POSTGRES_PASSWORD"],
+            sslmode=os.environ.get("POSTGRES_SSLMODE", "prefer") or None,
+            sslrootcert=os.environ.get("POSTGRES_SSLROOTCERT") or None,
         )
     return _pool
 

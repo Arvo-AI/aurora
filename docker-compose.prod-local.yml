@@ -37,6 +37,13 @@ x-common-env: &common-env
   WEAVIATE_PORT: ${WEAVIATE_PORT}
   WEAVIATE_GRPC_PORT: ${WEAVIATE_GRPC_PORT}
 
+  # SSL/TLS for external services
+  POSTGRES_SSLMODE: ${POSTGRES_SSLMODE:-prefer}
+  POSTGRES_SSLROOTCERT: ${POSTGRES_SSLROOTCERT:-}
+  REDIS_SSL_CA_CERTS: ${REDIS_SSL_CA_CERTS:-}
+  REDIS_SSL_CERT_REQS: ${REDIS_SSL_CERT_REQS:-}
+  WEAVIATE_SECURE: ${WEAVIATE_SECURE:-false}
+
   # Knowledge Base storage uses the pluggable storage system (SeaWeedFS/S3-compatible)
   # Configure via STORAGE_* environment variables
 

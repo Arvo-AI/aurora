@@ -56,6 +56,11 @@ spec:
           volumeMounts:
             - name: terraform-workdir
               mountPath: /app/terraform_workdir
+            {{- if .Values.ssl.caCertSecret }}
+            - name: ssl-ca-cert
+              mountPath: {{ .Values.ssl.caCertMountPath }}
+              readOnly: true
+            {{- end }}
           readinessProbe:
             httpGet:
               path: /health/readiness
@@ -77,3 +82,8 @@ spec:
       volumes:
         - name: terraform-workdir
           emptyDir: {}
+        {{- if .Values.ssl.caCertSecret }}
+        - name: ssl-ca-cert
+          secret:
+            secretName: {{ .Values.ssl.caCertSecret }}
+        {{- end }}

@@ -41,7 +41,9 @@ def check_database_health():
             port=port,
             dbname=dbname,
             user=user,
-            password=password
+            password=password,
+            sslmode=os.getenv('POSTGRES_SSLMODE', 'prefer') or None,
+            sslrootcert=os.getenv('POSTGRES_SSLROOTCERT') or None,
         )
 
         cursor = conn.cursor()
@@ -59,8 +61,9 @@ def check_redis_health():
     if not redis:
         return {"status": "unhealthy", "error": "redis library not installed"}
     try:
+        from utils.cache.redis_client import get_redis_ssl_kwargs
         redis_url = os.getenv('REDIS_URL', 'redis://redis:6379/0')
-        r = redis.from_url(redis_url)
+        r = redis.from_url(redis_url, **get_redis_ssl_kwargs())
         r.ping()
         return {"status": "healthy", "message": "Redis connection successful"}
     except Exception as e:
@@ -72,7 +75,9 @@ def check_weaviate_health():
     try:
         weaviate_host = os.getenv('WEAVIATE_HOST', 'weaviate')
         weaviate_port = os.getenv('WEAVIATE_PORT', '8080')
-        response = requests.get(f"http://{weaviate_host}:{weaviate_port}/v1/.well-known/ready", timeout=5)
+        weaviate_secure = os.getenv('WEAVIATE_SECURE', 'false').lower() in ('1', 'true', 'yes')
+        scheme = "https" if weaviate_secure else "http"
+        response = requests.get(f"{scheme}://{weaviate_host}:{weaviate_port}/v1/.well-known/ready", timeout=5)
         response.raise_for_status()
         return {"status": "healthy", "message": "Weaviate connection successful"}
     except requests.RequestException as e:

@@ -53,6 +53,11 @@ spec:
           volumeMounts:
             - name: terraform-workdir
               mountPath: /app/terraform_workdir
+            {{- if .Values.ssl.caCertSecret }}
+            - name: ssl-ca-cert
+              mountPath: {{ .Values.ssl.caCertMountPath }}
+              readOnly: true
+            {{- end }}
           # Celery workers are self-healing and reconnect to Redis automatically.
           # Using startup probe to ensure initial startup, then let Kubernetes restart the container if the main process exits.
           startupProbe:
@@ -69,3 +74,8 @@ spec:
       volumes:
         - name: terraform-workdir
           emptyDir: {}
+        {{- if .Values.ssl.caCertSecret }}
+        - name: ssl-ca-cert
+          secret:
+            secretName: {{ .Values.ssl.caCertSecret }}
+        {{- end }}
