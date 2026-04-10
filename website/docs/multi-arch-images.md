@@ -111,7 +111,13 @@ Every merge also runs `docker buildx imagetools inspect` and fails the job if bo
 
 ## Air-gapped deployments
 
-For air-gapped environments, `.github/workflows/publish-airtight.yml` produces per-arch tarballs via a native matrix:
+For air-gapped environments, `.github/workflows/publish-airtight.yml` builds `scripts/package-airtight.sh` natively for each arch and publishes a single gzipped tarball per build:
+
+```text
+aurora-airtight-<version>-<arch>.tar.gz
+```
+
+The bundles are uploaded to per-arch GCS buckets:
 
 - `aurora-airtight-bucket` — `linux/amd64`
 - `aurora-airtight-bucket-arm64` — `linux/arm64`
@@ -119,7 +125,7 @@ For air-gapped environments, `.github/workflows/publish-airtight.yml` produces p
 Download the bundle that matches your target host, transfer it across the air gap, and point `make prod-airtight` at it with the `AIRTIGHT_BUNDLE` variable:
 
 ```bash
-make prod-airtight AIRTIGHT_BUNDLE=/path/to/aurora-airtight-<arch>.tar
+make prod-airtight AIRTIGHT_BUNDLE=/path/to/aurora-airtight-<version>-<arch>.tar.gz
 ```
 
-`prod-airtight` runs `docker load < $AIRTIGHT_BUNDLE` to import the images before starting Aurora. If `AIRTIGHT_BUNDLE` is not set, the target skips the load step and assumes the images are already present in the local Docker daemon — so first-time installs must always set it.
+`prod-airtight` runs `docker load < $AIRTIGHT_BUNDLE` to import the gzipped tarball before starting Aurora (`docker load` auto-detects gzip). If `AIRTIGHT_BUNDLE` is not set, the target skips the load step and assumes the images are already present in the local Docker daemon — so first-time installs must always set it.
