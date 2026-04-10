@@ -294,6 +294,8 @@ containerSecurityContext:
 
 # Per-service overrides (replaces the ENTIRE merged context for that service).
 # Use when a specific service needs a completely different security posture.
+# Note: {} means "no override" (use merged defaults). This differs from scheduling
+# overrides below, where [] / {} actively clears the inherited value.
 # podSecurityContextOverrides:
 #   postgres:
 #     runAsNonRoot: true
@@ -431,7 +433,9 @@ tolerations: []
 nodeSelector: {}
 affinity: {}
 
-# Per-service overrides (only the fields you set are overridden; the rest inherit from global)
+# Per-service scheduling overrides (field-level merge, not full replacement).
+# Only the fields you set are overridden; the rest inherit from global.
+# Setting a field to [] or {} actively clears it for that service.
 # scheduling:
 #   server:
 #     tolerations: []

@@ -35,9 +35,9 @@ Per-service values in .Values.scheduling.<service> override the global defaults.
 {{- $aff := $ctx.Values.affinity -}}
 {{- if and $ctx.Values.scheduling (index $ctx.Values.scheduling $svc) -}}
   {{- $override := index $ctx.Values.scheduling $svc -}}
-  {{- if $override.tolerations -}}{{- $tol = $override.tolerations -}}{{- end -}}
-  {{- if $override.nodeSelector -}}{{- $ns = $override.nodeSelector -}}{{- end -}}
-  {{- if $override.affinity -}}{{- $aff = $override.affinity -}}{{- end -}}
+  {{- if hasKey $override "tolerations" -}}{{- $tol = $override.tolerations -}}{{- end -}}
+  {{- if hasKey $override "nodeSelector" -}}{{- $ns = $override.nodeSelector -}}{{- end -}}
+  {{- if hasKey $override "affinity" -}}{{- $aff = $override.affinity -}}{{- end -}}
 {{- end -}}
 {{- if $tol }}
 tolerations:
@@ -57,6 +57,9 @@ affinity:
 Pod-level securityContext.
 Merges global .Values.podSecurityContext with per-service UID/GID defaults.
 Per-service override in .Values.podSecurityContextOverrides replaces the entire block.
+Note: Unlike aurora.scheduling (field-level merge where [] clears a field),
+overrides here are full replacement. An empty map {} means "no override" and
+falls through to the merged defaults — this is intentional.
 Usage: include "aurora.podSecurityContext" (dict "service" "server" "global" $ "defaults" (dict "runAsUser" 1000 ...))
 */}}
 {{- define "aurora.podSecurityContext" -}}
@@ -75,6 +78,7 @@ Usage: include "aurora.podSecurityContext" (dict "service" "server" "global" $ "
 Container-level securityContext.
 Merges global .Values.containerSecurityContext with per-service defaults.
 Per-service override in .Values.containerSecurityContextOverrides replaces the entire block.
+Same full-replacement semantics as aurora.podSecurityContext (see note above).
 Usage: include "aurora.containerSecurityContext" (dict "service" "server" "global" $ "defaults" (dict))
 */}}
 {{- define "aurora.containerSecurityContext" -}}
