@@ -551,11 +551,11 @@ You can mix and match -- use `existingSecret` for some groups and inline values 
 **Example:** Creating the secrets before installing the chart:
 
 ```bash
-kubectl create secret generic my-db-secret -n aurora \
+kubectl create secret generic my-db-secret -n aurora-oss \
   --from-literal=POSTGRES_USER=aurora \
   --from-literal=POSTGRES_PASSWORD="$(openssl rand -base64 32)"
 
-kubectl create secret generic my-backend-secret -n aurora \
+kubectl create secret generic my-backend-secret -n aurora-oss \
   --from-literal=VAULT_TOKEN="your-vault-token" \
   --from-literal=STORAGE_ACCESS_KEY="your-access-key" \
   --from-literal=STORAGE_SECRET_KEY="your-secret-key"
