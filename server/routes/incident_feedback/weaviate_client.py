@@ -84,29 +84,29 @@ def _get_weaviate_client():
             if openai_api_key:
                 headers["X-OpenAI-Api-Key"] = openai_api_key
 
-        if WEAVIATE_SECURE:
-            _client = weaviate.connect_to_custom(
-                http_host=WEAVIATE_HOST,
-                http_port=WEAVIATE_PORT,
-                http_secure=True,
-                grpc_host=WEAVIATE_HOST,
-                grpc_port=WEAVIATE_GRPC_PORT,
-                grpc_secure=True,
-                headers=headers,
-                additional_config=AdditionalConfig(
-                    timeout=Timeout(init=10, query=30, insert=60)
-                ),
-            )
-        else:
-            _client = weaviate.connect_to_local(
-                host=WEAVIATE_HOST,
-                port=WEAVIATE_PORT,
-                grpc_port=WEAVIATE_GRPC_PORT,
-                headers=headers,
-                additional_config=AdditionalConfig(
-                    timeout=Timeout(init=10, query=30, insert=60)
-                ),
-            )
+            if WEAVIATE_SECURE:
+                _client = weaviate.connect_to_custom(
+                    http_host=WEAVIATE_HOST,
+                    http_port=WEAVIATE_PORT,
+                    http_secure=True,
+                    grpc_host=WEAVIATE_HOST,
+                    grpc_port=WEAVIATE_GRPC_PORT,
+                    grpc_secure=True,
+                    headers=headers,
+                    additional_config=AdditionalConfig(
+                        timeout=Timeout(init=10, query=30, insert=60)
+                    ),
+                )
+            else:
+                _client = weaviate.connect_to_local(
+                    host=WEAVIATE_HOST,
+                    port=WEAVIATE_PORT,
+                    grpc_port=WEAVIATE_GRPC_PORT,
+                    headers=headers,
+                    additional_config=AdditionalConfig(
+                        timeout=Timeout(init=10, query=30, insert=60)
+                    ),
+                )
 
             logger.info(f"[AURORA LEARN] Connected to {WEAVIATE_HOST}:{WEAVIATE_PORT}")
 
