@@ -190,12 +190,23 @@ config:
 # ------------------------------------------------------------------------------
 secrets:
   # --- Database Credentials (secret-db.yaml) ---
-  db: # Mounted by: server, celery-worker, celery-beat, chatbot, postgres
+  # Mounted by: server, celery-worker, celery-beat, chatbot, postgres
+  db:
+    # Use a pre-existing Kubernetes Secret instead of chart-managed secrets.
+    # When set, the chart will not create secret-db and all pods will reference
+    # this secret directly. It must contain keys: POSTGRES_USER, POSTGRES_PASSWORD
+    # existingSecret: ""
     POSTGRES_USER: "aurora"
     POSTGRES_PASSWORD: ""        # REQUIRED - Generate with: openssl rand -base64 32
   
   # --- Backend Secrets (secret-backend.yaml) ---
-  backend:  # Mounted by: server, celery-worker, celery-beat, chatbot
+  # Mounted by: server, celery-worker, celery-beat, chatbot
+  backend:
+    # Use a pre-existing Kubernetes Secret instead of chart-managed secrets.
+    # When set, the chart will not create secret-backend and all pods will reference
+    # this secret directly. It must contain keys: VAULT_TOKEN, STORAGE_ACCESS_KEY,
+    # STORAGE_SECRET_KEY, plus any optional integration keys you use.
+    # existingSecret: ""
     VAULT_TOKEN: ""              # REQUIRED - Root token from Vault init - Set after running: kubectl exec -it statefulset/<release>-vault -- vault operator init
     STORAGE_ACCESS_KEY: ""       # REQUIRED - Your S3 access key
     STORAGE_SECRET_KEY: ""       # REQUIRED - Your S3 secret key
@@ -244,7 +255,13 @@ secrets:
     BB_OAUTH_CLIENT_SECRET: ""
 
   # --- Application Secrets (secret-app.yaml) ---
-  app:   # Mounted by: server, celery-worker, celery-beat, chatbot, frontend, searxng
+  # Mounted by: server, celery-worker, celery-beat, chatbot, frontend, searxng
+  app:
+    # Use a pre-existing Kubernetes Secret instead of chart-managed secrets.
+    # When set, the chart will not create secret-app and all pods will reference
+    # this secret directly. It must contain keys: FLASK_SECRET_KEY, AUTH_SECRET,
+    # SEARXNG_SECRET, plus any optional keys you use.
+    # existingSecret: ""
     FLASK_SECRET_KEY: ""         # REQUIRED - Generate with: openssl rand -base64 32
     AUTH_SECRET: ""              # REQUIRED - Generate with: openssl rand -base64 32
     SEARXNG_SECRET: ""           # REQUIRED - Generate with: openssl rand -base64 32
@@ -265,8 +282,13 @@ secrets:
     RATE_LIMIT_BYPASS_TOKEN: ""  # Custom token to bypass rate limits
   
   # --- LLM API Keys (secret-llm.yaml) ---
-  llm:  # Mounted by: chatbot, celery-worker, celery-beat
-    # At least one LLM API key is required
+  # Mounted by: chatbot, celery-worker, celery-beat
+  llm:
+    # Use a pre-existing Kubernetes Secret instead of chart-managed secrets.
+    # When set, the chart will not create secret-llm and all pods will reference
+    # this secret directly. It must contain at least one of: OPENROUTER_API_KEY,
+    # OPENAI_API_KEY, ANTHROPIC_API_KEY, GOOGLE_AI_API_KEY.
+    # existingSecret: ""
     OPENROUTER_API_KEY: ""       # Get from: https://openrouter.ai/keys
     OPENAI_API_KEY: ""           # Get from: https://platform.openai.com/api-keys
     ANTHROPIC_API_KEY: ""        # Get from: https://console.anthropic.com/

@@ -14,9 +14,15 @@ spec:
     metadata:
       annotations:
         checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- if not .Values.secrets.db.existingSecret }}
         checksum/secret-db: {{ include (print $.Template.BasePath "/secret-db.yaml") . | sha256sum }}
+        {{- end }}
+        {{- if not .Values.secrets.backend.existingSecret }}
         checksum/secret-backend: {{ include (print $.Template.BasePath "/secret-backend.yaml") . | sha256sum }}
+        {{- end }}
+        {{- if not .Values.secrets.app.existingSecret }}
         checksum/secret-app: {{ include (print $.Template.BasePath "/secret-app.yaml") . | sha256sum }}
+        {{- end }}
       labels:
         app.kubernetes.io/name: {{ include "aurora.name" . }}-celery-beat
         app.kubernetes.io/instance: {{ .Release.Name }}
@@ -53,10 +59,10 @@ spec:
             - configMapRef:
                 name: {{ include "aurora.fullname" . }}-config
             - secretRef:
-                name: {{ include "aurora.fullname" . }}-secrets-db
+                name: {{ include "aurora.secretName.db" . }}
             - secretRef:
-                name: {{ include "aurora.fullname" . }}-secrets-backend
+                name: {{ include "aurora.secretName.backend" . }}
             - secretRef:
-                name: {{ include "aurora.fullname" . }}-secrets-app
+                name: {{ include "aurora.secretName.app" . }}
           resources:
             {{- toYaml .Values.resources.celeryBeat | nindent 12 }}

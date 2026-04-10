@@ -518,3 +518,47 @@ Leave them empty unless using external managed services.
 ### All Values
 
 See `deploy/helm/aurora/values.yaml` for the complete list of configuration options.
+
+### Using Pre-Existing Kubernetes Secrets
+
+By default, the chart creates Kubernetes Secrets from values in `values.yaml`. For production deployments where secrets are managed externally (via Terraform, External Secrets Operator, Sealed Secrets, or manual `kubectl create secret`), you can point each secret group to a pre-existing Kubernetes Secret instead.
+
+Set `existingSecret` on any of the four secret groups to skip chart-managed secret creation for that group:
+
+```yaml
+secrets:
+  db:
+    existingSecret: "my-db-secret"
+  backend:
+    existingSecret: "my-backend-secret"
+  app:
+    existingSecret: "my-app-secret"
+  llm:
+    existingSecret: "my-llm-secret"
+```
+
+You can mix and match -- use `existingSecret` for some groups and inline values for others.
+
+**Required keys per group:**
+
+| Group | Required Keys |
+|-------|--------------|
+| `db` | `POSTGRES_USER`, `POSTGRES_PASSWORD` |
+| `backend` | `VAULT_TOKEN`, `STORAGE_ACCESS_KEY`, `STORAGE_SECRET_KEY` (plus any optional integration keys) |
+| `app` | `FLASK_SECRET_KEY`, `AUTH_SECRET`, `SEARXNG_SECRET` |
+| `llm` | At least one of: `OPENROUTER_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_AI_API_KEY` |
+
+**Example:** Creating the secrets before installing the chart:
+
+```bash
+kubectl create secret generic my-db-secret -n aurora \
+  --from-literal=POSTGRES_USER=aurora \
+  --from-literal=POSTGRES_PASSWORD="$(openssl rand -base64 32)"
+
+kubectl create secret generic my-backend-secret -n aurora \
+  --from-literal=VAULT_TOKEN="your-vault-token" \
+  --from-literal=STORAGE_ACCESS_KEY="your-access-key" \
+  --from-literal=STORAGE_SECRET_KEY="your-secret-key"
+```
+
+The external secrets must exist in the target namespace **before** running `helm install`.
