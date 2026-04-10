@@ -105,7 +105,7 @@ make deploy-build PLATFORMS=linux/arm64
 
 ## Publishing workflow
 
-`.github/workflows/publish-images.yml` builds `aurora-server` and `aurora-frontend` natively on both `ubuntu-24.04` (amd64) and `ubuntu-24.04-arm` (arm64) GitHub-hosted runners in parallel, pushes each arch as a digest-only image to GHCR, and then merges the per-arch digests into a single manifest list under each published tag (`:edge`, `:1.2.3`, `:1.2`, `:sha-abc123`, `:latest`). Native builds avoid QEMU emulation overhead and keep publish times reasonable even as the Python layer grows.
+`.github/workflows/publish-images.yml` builds `aurora-server` and `aurora-frontend` natively on both `ubuntu-24.04` (amd64) and `ubuntu-24.04-arm` (arm64) GitHub-hosted runners in parallel, pushes each arch as a digest-only image to GHCR, and then merges the per-arch digests into a single manifest list under each published tag (`:edge`, `:1.2.3`, `:1.2`, `:sha-abc123`, `:latest`). `:latest` is only pushed for stable release-tag events (`refs/tags/v*.*.*`, excluding prereleases); pushes to `main` publish `:edge` and `:sha-<short>` but not `:latest`. Native builds avoid QEMU emulation overhead and keep publish times reasonable even as the Python layer grows.
 
 Every merge also runs `docker buildx imagetools inspect` and fails the job if both `linux/amd64` and `linux/arm64` aren't present in the published manifest list, so a broken multi-arch publish is caught in CI rather than at pull time.
 
@@ -116,4 +116,10 @@ For air-gapped environments, `.github/workflows/publish-airtight.yml` produces p
 - `aurora-airtight-bucket` — `linux/amd64`
 - `aurora-airtight-bucket-arm64` — `linux/arm64`
 
-Download the bundle that matches your target host, transfer it across the air gap, and `make prod-airtight` will load and run it with `docker load`.
+Download the bundle that matches your target host, transfer it across the air gap, and point `make prod-airtight` at it with the `AIRTIGHT_BUNDLE` variable:
+
+```bash
+make prod-airtight AIRTIGHT_BUNDLE=/path/to/aurora-airtight-<arch>.tar
+```
+
+`prod-airtight` runs `docker load < $AIRTIGHT_BUNDLE` to import the images before starting Aurora. If `AIRTIGHT_BUNDLE` is not set, the target skips the load step and assumes the images are already present in the local Docker daemon — so first-time installs must always set it.
