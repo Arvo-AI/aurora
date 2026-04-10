@@ -67,7 +67,7 @@ docker buildx imagetools inspect ghcr.io/arvo-ai/aurora-server:edge
 
 The output should list both platforms under `Manifests`:
 
-```
+```text
 Name:      ghcr.io/arvo-ai/aurora-server:edge
 MediaType: application/vnd.oci.image.index.v1+json
 ...
@@ -105,7 +105,7 @@ make deploy-build PLATFORMS=linux/arm64
 
 ## Publishing workflow
 
-`.github/workflows/publish-images.yml` builds `aurora-server` and `aurora-frontend` natively on both `ubuntu-24.04` (amd64) and `ubuntu-24.04-arm` (arm64) GitHub-hosted runners in parallel, pushes each arch as a digest-only image to GHCR, and then merges the per-arch digests into a single manifest list under each published tag (`:edge`, `:v1.2.3`, `:sha-abc123`, `:latest`). Native builds avoid QEMU emulation overhead and keep publish times reasonable even as the Python layer grows.
+`.github/workflows/publish-images.yml` builds `aurora-server` and `aurora-frontend` natively on both `ubuntu-24.04` (amd64) and `ubuntu-24.04-arm` (arm64) GitHub-hosted runners in parallel, pushes each arch as a digest-only image to GHCR, and then merges the per-arch digests into a single manifest list under each published tag (`:edge`, `:1.2.3`, `:1.2`, `:sha-abc123`, `:latest`). Native builds avoid QEMU emulation overhead and keep publish times reasonable even as the Python layer grows.
 
 Every merge also runs `docker buildx imagetools inspect` and fails the job if both `linux/amd64` and `linux/arm64` aren't present in the published manifest list, so a broken multi-arch publish is caught in CI rather than at pull time.
 
