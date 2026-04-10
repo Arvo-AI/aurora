@@ -16,7 +16,7 @@ def get_redis_ssl_kwargs() -> dict:
     ssl_* kwargs from being passed to a plain redis:// connection (which
     would raise TypeError).
     """
-    redis_url = os.getenv("REDIS_URL", "redis://redis:6379/0")
+    redis_url = os.getenv("REDIS_URL", "")
     if not redis_url.startswith("rediss://"):
         return {}
     kwargs = {}
