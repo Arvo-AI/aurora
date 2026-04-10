@@ -27,10 +27,7 @@ spec:
       # Pod isolation requires K8s API access to create terminal pods
       automountServiceAccountToken: {{ eq .Values.config.ENABLE_POD_ISOLATION "true" }}
       securityContext:
-        runAsNonRoot: true
-        runAsUser: 1000
-        runAsGroup: 1000
-        fsGroup: 1000
+        {{- include "aurora.podSecurityContext" (dict "service" "chatbot" "global" $ "defaults" (dict "runAsUser" 1000 "runAsGroup" 1000 "fsGroup" 1000)) | nindent 8 }}
       {{- if .Values.image.pullSecrets }}
       imagePullSecrets:
         {{- toYaml .Values.image.pullSecrets | nindent 8 }}
@@ -42,9 +39,7 @@ spec:
           imagePullPolicy: IfNotPresent
           command: ["python", "main_chatbot.py"]
           securityContext:
-            allowPrivilegeEscalation: false
-            capabilities:
-              drop: ["ALL"]
+            {{- include "aurora.containerSecurityContext" (dict "service" "chatbot" "global" $ "defaults" (dict)) | nindent 12 }}
           ports:
             - name: ws
               containerPort: 5006

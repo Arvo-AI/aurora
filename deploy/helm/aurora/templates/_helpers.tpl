@@ -52,3 +52,39 @@ affinity:
   {{- toYaml $aff | nindent 2 }}
 {{- end }}
 {{- end }}
+
+{{/*
+Pod-level securityContext.
+Merges global .Values.podSecurityContext with per-service UID/GID defaults.
+Per-service override in .Values.podSecurityContextOverrides replaces the entire block.
+Usage: include "aurora.podSecurityContext" (dict "service" "server" "global" $ "defaults" (dict "runAsUser" 1000 ...))
+*/}}
+{{- define "aurora.podSecurityContext" -}}
+{{- $svc := .service -}}
+{{- $ctx := .global -}}
+{{- $defaults := .defaults -}}
+{{- if and $ctx.Values.podSecurityContextOverrides (index $ctx.Values.podSecurityContextOverrides $svc) }}
+{{- toYaml (index $ctx.Values.podSecurityContextOverrides $svc) }}
+{{- else }}
+{{- $merged := merge (deepCopy $ctx.Values.podSecurityContext) $defaults }}
+{{- toYaml $merged }}
+{{- end }}
+{{- end }}
+
+{{/*
+Container-level securityContext.
+Merges global .Values.containerSecurityContext with per-service defaults.
+Per-service override in .Values.containerSecurityContextOverrides replaces the entire block.
+Usage: include "aurora.containerSecurityContext" (dict "service" "server" "global" $ "defaults" (dict))
+*/}}
+{{- define "aurora.containerSecurityContext" -}}
+{{- $svc := .service -}}
+{{- $ctx := .global -}}
+{{- $defaults := .defaults -}}
+{{- if and $ctx.Values.containerSecurityContextOverrides (index $ctx.Values.containerSecurityContextOverrides $svc) }}
+{{- toYaml (index $ctx.Values.containerSecurityContextOverrides $svc) }}
+{{- else }}
+{{- $merged := merge (deepCopy $ctx.Values.containerSecurityContext) $defaults }}
+{{- toYaml $merged }}
+{{- end }}
+{{- end }}

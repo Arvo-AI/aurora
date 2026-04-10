@@ -21,10 +21,7 @@ spec:
     spec:
       automountServiceAccountToken: false
       securityContext:
-        runAsNonRoot: true
-        runAsUser: 999
-        runAsGroup: 1000
-        fsGroup: 1000
+        {{- include "aurora.podSecurityContext" (dict "service" "redis" "global" $ "defaults" (dict "runAsUser" 999 "runAsGroup" 1000 "fsGroup" 1000)) | nindent 8 }}
       {{- include "aurora.scheduling" (dict "service" "redis" "global" $) | nindent 6 }}
       containers:
         - name: redis
@@ -32,10 +29,7 @@ spec:
           imagePullPolicy: IfNotPresent
           command: ["redis-server", "--appendonly", "yes", "--dir", "/data", "--maxmemory", {{ .Values.config.REDIS_MAXMEMORY | default "256mb" | quote }}, "--maxmemory-policy", "allkeys-lru"]
           securityContext:
-            allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: true
-            capabilities:
-              drop: ["ALL"]
+            {{- include "aurora.containerSecurityContext" (dict "service" "redis" "global" $ "defaults" (dict "readOnlyRootFilesystem" true)) | nindent 12 }}
           ports:
             - name: redis
               containerPort: 6379

@@ -24,10 +24,7 @@ spec:
       serviceAccountName: {{ include "aurora.fullname" . }}-vault
       automountServiceAccountToken: false
       securityContext:
-        runAsNonRoot: true
-        runAsUser: 100
-        runAsGroup: 1000
-        fsGroup: 1000
+        {{- include "aurora.podSecurityContext" (dict "service" "vault" "global" $ "defaults" (dict "runAsUser" 100 "runAsGroup" 1000 "fsGroup" 1000)) | nindent 8 }}
       {{- include "aurora.scheduling" (dict "service" "vault" "global" $) | nindent 6 }}
       containers:
         - name: vault
@@ -39,11 +36,9 @@ spec:
               vault server -config=/vault/config/vault.hcl
           # Note: Vault typically needs IPC_LOCK capability for mlock (prevents secrets
           # from being swapped to disk). Since disable_mlock=true in vault.hcl, we can
-          # drop all capabilities. If you enable mlock, add: capabilities.add: ["IPC_LOCK"]
+          # drop all capabilities. If you enable mlock, override via containerSecurityContextOverrides.
           securityContext:
-            allowPrivilegeEscalation: false
-            capabilities:
-              drop: ["ALL"]
+            {{- include "aurora.containerSecurityContext" (dict "service" "vault" "global" $ "defaults" (dict)) | nindent 12 }}
           ports:
             - name: http
               containerPort: 8200

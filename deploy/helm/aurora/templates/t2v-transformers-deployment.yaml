@@ -18,15 +18,15 @@ spec:
         app.kubernetes.io/part-of: aurora
     spec:
       automountServiceAccountToken: false
+      securityContext:
+        {{- include "aurora.podSecurityContext" (dict "service" "transformers" "global" $ "defaults" (dict "runAsUser" 1000 "runAsGroup" 1000 "fsGroup" 1000)) | nindent 8 }}
       {{- include "aurora.scheduling" (dict "service" "transformers" "global" $) | nindent 6 }}
       containers:
         - name: transformers
           image: cr.weaviate.io/semitechnologies/transformers-inference:sentence-transformers-all-MiniLM-L6-v2
           imagePullPolicy: IfNotPresent
           securityContext:
-            allowPrivilegeEscalation: false
-            capabilities:
-              drop: ["ALL"]
+            {{- include "aurora.containerSecurityContext" (dict "service" "transformers" "global" $ "defaults" (dict)) | nindent 12 }}
           ports:
             - name: http
               containerPort: 8080

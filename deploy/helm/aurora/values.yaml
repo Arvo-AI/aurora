@@ -273,6 +273,44 @@ secrets:
     GOOGLE_AI_API_KEY: ""        # Get from: https://makersuite.google.com/app/apikey
 
 # ------------------------------------------------------------------------------
+# Security contexts
+# ------------------------------------------------------------------------------
+# ref: https://kubernetes.io/docs/tasks/configure-pod-container/security-context/
+#
+# Global pod-level security context — merged into every pod.
+# Each service also has hardcoded UID/GID defaults (e.g. postgres=70, vault=100).
+# The global values here are merged with those defaults, so you only need to set
+# shared fields once (like seccompProfile) rather than repeating per-service.
+podSecurityContext:
+  runAsNonRoot: true
+  seccompProfile:
+    type: RuntimeDefault
+
+# Global container-level security context — merged into every container.
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: ["ALL"]
+
+# Per-service overrides (replaces the ENTIRE merged context for that service).
+# Use when a specific service needs a completely different security posture.
+# podSecurityContextOverrides:
+#   postgres:
+#     runAsNonRoot: true
+#     runAsUser: 70
+#     runAsGroup: 70
+#     fsGroup: 70
+#     seccompProfile:
+#       type: Localhost
+#       localhostProfile: profiles/custom.json
+# containerSecurityContextOverrides:
+#   vault:
+#     allowPrivilegeEscalation: false
+#     capabilities:
+#       drop: ["ALL"]
+#       add: ["IPC_LOCK"]
+
+# ------------------------------------------------------------------------------
 # Resource requests and limits
 # ------------------------------------------------------------------------------
 resources:

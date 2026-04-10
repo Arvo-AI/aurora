@@ -25,10 +25,7 @@ spec:
       serviceAccountName: {{ include "aurora.fullname" . }}-celery-beat
       automountServiceAccountToken: false
       securityContext:
-        runAsNonRoot: true
-        runAsUser: 1000
-        runAsGroup: 1000
-        fsGroup: 1000
+        {{- include "aurora.podSecurityContext" (dict "service" "celeryBeat" "global" $ "defaults" (dict "runAsUser" 1000 "runAsGroup" 1000 "fsGroup" 1000)) | nindent 8 }}
       {{- if .Values.image.pullSecrets }}
       imagePullSecrets:
         {{- toYaml .Values.image.pullSecrets | nindent 8 }}
@@ -40,9 +37,7 @@ spec:
           imagePullPolicy: IfNotPresent
           command: ["celery", "-A", "celery_config", "beat", "--loglevel=info", "--pidfile=/tmp/celerybeat.pid", "--schedule=/tmp/celerybeat-schedule"]
           securityContext:
-            allowPrivilegeEscalation: false
-            capabilities:
-              drop: ["ALL"]
+            {{- include "aurora.containerSecurityContext" (dict "service" "celeryBeat" "global" $ "defaults" (dict)) | nindent 12 }}
           # Beat doesn't serve HTTP; use pidfile-based liveness check
           livenessProbe:
             exec:

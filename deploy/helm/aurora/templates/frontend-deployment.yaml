@@ -23,10 +23,7 @@ spec:
       serviceAccountName: {{ include "aurora.fullname" . }}-frontend
       automountServiceAccountToken: false
       securityContext:
-        runAsNonRoot: true
-        runAsUser: 1000
-        runAsGroup: 1000
-        fsGroup: 1000
+        {{- include "aurora.podSecurityContext" (dict "service" "frontend" "global" $ "defaults" (dict "runAsUser" 1000 "runAsGroup" 1000 "fsGroup" 1000)) | nindent 8 }}
       {{- if .Values.image.pullSecrets }}
       imagePullSecrets:
         {{- toYaml .Values.image.pullSecrets | nindent 8 }}
@@ -37,9 +34,7 @@ spec:
           image: "{{ .Values.image.registry }}/aurora-frontend:{{ .Values.image.tag }}"
           imagePullPolicy: IfNotPresent
           securityContext:
-            allowPrivilegeEscalation: false
-            capabilities:
-              drop: ["ALL"]
+            {{- include "aurora.containerSecurityContext" (dict "service" "frontend" "global" $ "defaults" (dict)) | nindent 12 }}
           ports:
             - name: http
               containerPort: 3000
