@@ -39,6 +39,11 @@ const sidebars: SidebarsConfig = {
       ],
     },
     {
+      type: 'doc',
+      id: 'multi-arch-images',
+      label: 'Multi-arch Images',
+    },
+    {
       type: 'category',
       label: 'Architecture',
       items: [
