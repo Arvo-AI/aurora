@@ -10,7 +10,15 @@ _redis_client: Optional[redis.Redis] = None
 
 
 def get_redis_ssl_kwargs() -> dict:
-    """Build SSL kwargs for redis.from_url() based on REDIS_SSL_* env vars."""
+    """Build SSL kwargs for redis.from_url() based on REDIS_SSL_* env vars.
+
+    Returns an empty dict when REDIS_URL is not rediss://, preventing
+    ssl_* kwargs from being passed to a plain redis:// connection (which
+    would raise TypeError).
+    """
+    redis_url = os.getenv("REDIS_URL", "redis://redis:6379/0")
+    if not redis_url.startswith("rediss://"):
+        return {}
     kwargs = {}
     ca_certs = os.getenv("REDIS_SSL_CA_CERTS")
     if ca_certs:

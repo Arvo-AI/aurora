@@ -16,6 +16,7 @@ from config.rate_limiting import (
     RATE_LIMITING_ENABLED,
 )
 from utils.auth.stateless_auth import get_user_id_from_request
+from utils.cache.redis_client import get_redis_ssl_kwargs
 
 
 def _get_remote_ip() -> str:
@@ -95,6 +96,7 @@ limiter = Limiter(
     default_limits=DEFAULT_RATE_LIMITS,
     strategy=RATE_LIMIT_STRATEGY,
     storage_uri=RATE_LIMIT_STORAGE_URL,
+    storage_options=get_redis_ssl_kwargs(),
     enabled=RATE_LIMITING_ENABLED,
     headers_enabled=RATE_LIMIT_HEADERS_ENABLED,
 )
