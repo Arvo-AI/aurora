@@ -6,7 +6,7 @@ name: Publish Helm Chart
 on:
   push:
     tags: ['v*.*.*']
-    branches: [helm-fixes]  # TODO: remove after testing
+    branches: [public-helm]  # TODO: remove after testing
   workflow_dispatch:
 
 concurrency:
