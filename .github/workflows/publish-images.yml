@@ -16,8 +16,6 @@ concurrency:
 
 env:
   REGISTRY: ghcr.io
-  SERVER_IMAGE: ghcr.io/arvo-ai/aurora-server
-  FRONTEND_IMAGE: ghcr.io/arvo-ai/aurora-frontend
 
 permissions:
   contents: read
