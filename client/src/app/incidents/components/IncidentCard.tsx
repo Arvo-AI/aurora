@@ -44,7 +44,6 @@ interface IncidentCardProps {
   showThoughts: boolean;
   onToggleThoughts: () => void;
   citations?: Citation[];
-  onExecutionStarted?: () => void;
   onRefresh?: () => void;
 }
 
@@ -99,7 +98,7 @@ function isSafeUrl(url: string | undefined): boolean {
   }
 }
 
-export default function IncidentCard({ incident, duration, showThoughts, onToggleThoughts, citations = [], onExecutionStarted, onRefresh }: IncidentCardProps) {
+export default function IncidentCard({ incident, duration, showThoughts, onToggleThoughts, citations = [], onRefresh }: IncidentCardProps) {
   const [showRawPayload, setShowRawPayload] = useState(false);
   const [selectedCitation, setSelectedCitation] = useState<Citation | null>(null);
   const [selectedSuggestion, setSelectedSuggestion] = useState<Suggestion | null>(null);
@@ -263,6 +262,8 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
           const isFixType = matchingSuggestion?.type === 'fix';
           const canExecute = Boolean(matchingSuggestion?.command);
           const canShowAction = canWrite && (canExecute || isFixType);
+          const wasExecuted = Boolean(matchingSuggestion?.executedAt);
+          const execStatus = matchingSuggestion?.executionStatus;
 
           return (
             <li className="text-zinc-300 text-sm">
@@ -274,21 +275,45 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
                     e.stopPropagation();
                     if (isFixType) {
                       setSelectedFixSuggestion(matchingSuggestion);
+                    } else if (wasExecuted && matchingSuggestion.executionSessionId) {
+                      router.push(`/chat?sessionId=${matchingSuggestion.executionSessionId}`);
                     } else {
                       setSelectedSuggestion(matchingSuggestion);
                     }
                   }}
-                  className={`inline-flex items-center justify-center w-5 h-5 rounded transition-colors align-middle ml-1.5 ${
+                  className={`inline-flex items-center justify-center rounded transition-colors align-middle ml-1.5 ${
                     isFixType
-                      ? 'bg-green-500/20 hover:bg-green-500/40 text-green-400'
-                      : 'bg-orange-500/20 hover:bg-orange-500/40 text-orange-400'
+                      ? 'w-5 h-5 bg-green-500/20 hover:bg-green-500/40 text-green-400'
+                      : wasExecuted
+                        ? execStatus === 'completed'
+                          ? 'h-5 gap-1 px-1.5 bg-green-500/20 hover:bg-green-500/40 text-green-400'
+                          : execStatus === 'failed'
+                            ? 'h-5 gap-1 px-1.5 bg-red-500/20 hover:bg-red-500/40 text-red-400'
+                            : 'h-5 gap-1 px-1.5 bg-orange-500/20 hover:bg-orange-500/40 text-orange-400'
+                        : 'w-5 h-5 bg-orange-500/20 hover:bg-orange-500/40 text-orange-400'
                   }`}
                   title={isFixType
                     ? `Create PR: ${matchingSuggestion.filePath || 'Fix suggestion'}`
-                    : `Run: ${matchingSuggestion.command?.split('\n')[0] || ''}`
+                    : wasExecuted
+                      ? `View output (${execStatus || 'executed'})`
+                      : `Run: ${matchingSuggestion.command?.split('\n')[0] || ''}`
                   }
                 >
-                  {isFixType ? <GitBranch className="w-3 h-3" /> : <Play className="w-3 h-3" />}
+                  {isFixType ? (
+                    <GitBranch className="w-3 h-3" />
+                  ) : wasExecuted ? (
+                    <>
+                      {execStatus === 'completed' && <CheckCircle2 className="w-3 h-3" />}
+                      {execStatus === 'failed' && <AlertCircle className="w-3 h-3" />}
+                      {execStatus === 'in_progress' && <span className="w-2 h-2 bg-orange-400 rounded-full animate-pulse" />}
+                      {!execStatus && <CheckCircle2 className="w-3 h-3" />}
+                      <span className="text-[10px] font-medium">
+                        {execStatus === 'completed' ? 'Done' : execStatus === 'failed' ? 'Failed' : execStatus === 'in_progress' ? 'Running' : 'Ran'}
+                      </span>
+                    </>
+                  ) : (
+                    <Play className="w-3 h-3" />
+                  )}
                 </button>
               )}
             </li>
@@ -758,7 +783,6 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
         chatSessionId={incident.chatSessionId}
         isOpen={selectedSuggestion !== null}
         onClose={() => setSelectedSuggestion(null)}
-        onExecutionStarted={onExecutionStarted}
       />
 
       {/* Fix Suggestion Modal */}

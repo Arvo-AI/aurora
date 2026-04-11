@@ -1121,6 +1121,26 @@ def _update_session_status(session_id: str, status: str) -> None:
     except Exception as e:
         logger.error(f"[BackgroundChat] Failed to update session {session_id} status to '{status}': {e}")
 
+    # Propagate status to any suggestion that was executed via this session
+    if status in ("completed", "failed"):
+        try:
+            with db_pool.get_admin_connection() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """UPDATE incident_suggestions
+                           SET execution_status = %s
+                           WHERE execution_session_id = %s::uuid
+                             AND execution_status = 'in_progress'""",
+                        (status, session_id),
+                    )
+                    if cursor.rowcount > 0:
+                        conn.commit()
+                        logger.info(f"[BackgroundChat] Updated suggestion execution_status to '{status}' for session {session_id}")
+                    else:
+                        conn.rollback()
+        except Exception as e:
+            logger.warning(f"[BackgroundChat] Failed to update suggestion execution_status for session {session_id}: {e}")
+
 
 def _update_incident_aurora_status(incident_id: str, aurora_status: str, user_id: Optional[str] = None, org_id: Optional[str] = None) -> None:
     """Update incident aurora_status (running/complete/error).

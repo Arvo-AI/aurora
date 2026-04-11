@@ -75,6 +75,10 @@ export interface Suggestion {
   type: SuggestionType;
   risk: SuggestionRisk;
   command?: string; // Optional command to run
+  // Execution tracking
+  executedAt?: string;
+  executionSessionId?: string;
+  executionStatus?: 'in_progress' | 'completed' | 'failed';
   // Fix-type suggestion fields
   filePath?: string;
   originalContent?: string;

@@ -1,4 +1,4 @@
-import { useCallback, useRef } from 'react';
+import { useCallback, useRef, useEffect, useState } from 'react';
 import { Message } from '@/app/chat/types';
 import { useChatHistory } from '@/hooks/useChatHistory';
 import { SimpleChatUiState } from '@/hooks/useSessionPersistence';
@@ -16,6 +16,36 @@ export const useSessionLoader = ({
 }: UseSessionLoaderProps) => {
   const { loadSession, isLoadingSession } = useChatHistory();
   const lastIncidentIdRef = useRef<string | null>(null);
+  const [pollingSessionId, setPollingSessionId] = useState<string | null>(null);
+
+  // Poll for background session updates while in_progress
+  useEffect(() => {
+    if (!pollingSessionId) return;
+
+    let cancelled = false;
+    const interval = setInterval(async () => {
+      if (cancelled) return;
+      try {
+        const sessionData = await loadSession(pollingSessionId);
+        if (cancelled || !sessionData) return;
+
+        if (sessionData.messages && sessionData.messages.length > 0) {
+          onMessagesLoaded(sessionData.messages as Message[]);
+        }
+
+        if (sessionData.status !== 'in_progress') {
+          setPollingSessionId(null);
+        }
+      } catch {
+        // Silently retry on next interval
+      }
+    }, 2000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [pollingSessionId, loadSession, onMessagesLoaded]);
 
   const loadSessionData = useCallback(async (sessionId: string): Promise<boolean> => {
     try {
@@ -47,6 +77,11 @@ export const useSessionLoader = ({
           input: uiState.input,
         };
         onUiStateLoaded(simplifiedUiState);
+      }
+
+      // Start polling if the session is still in progress (background execution)
+      if (sessionData.status === 'in_progress') {
+        setPollingSessionId(sessionId);
       }
 
       console.debug(`Loaded session ${sessionId} with ${sessionData.messages?.length || 0} messages`);

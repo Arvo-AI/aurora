@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
+import { useRouter } from 'next/navigation';
 import { Suggestion, incidentsService } from '@/lib/services/incidents';
 import {
   Dialog,
@@ -16,10 +17,9 @@ import { copyToClipboard } from '@/lib/utils';
 interface SuggestionModalProps {
   suggestion: Suggestion | null;
   incidentId: string;
-  chatSessionId?: string;  // Existing RCA session to continue
+  chatSessionId?: string;
   isOpen: boolean;
   onClose: () => void;
-  onExecutionStarted?: () => void;  // Callback when execution starts
 }
 
 const typeIcons = {
@@ -46,11 +46,9 @@ export default function SuggestionModal({
   chatSessionId,
   isOpen,
   onClose,
-  onExecutionStarted,
 }: SuggestionModalProps) {
+  const router = useRouter();
   const [copied, setCopied] = useState(false);
-  const [isExecuting, setIsExecuting] = useState(false);
-  const [executeError, setExecuteError] = useState<string | null>(null);
   const [confirmText, setConfirmText] = useState('');
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -63,11 +61,8 @@ export default function SuggestionModal({
     };
   }, []);
 
-  // Reset state when modal closes
   useEffect(() => {
     if (!isOpen) {
-      setExecuteError(null);
-      setIsExecuting(false);
       setCopied(false);
       setConfirmText('');
     }
@@ -89,38 +84,21 @@ export default function SuggestionModal({
     }
   };
 
-  const buildChatUrl = () => {
-    const baseUrl = `/api/incidents/${incidentId}/chat`;
-    return chatSessionId ? `${baseUrl}?session_id=${chatSessionId}` : baseUrl;
+  const handleExecute = () => {
+    if (!suggestion.command) return;
+    const message = encodeURIComponent(`Execute this command: ${suggestion.command}`);
+    const params = new URLSearchParams({ message, mode: 'agent' });
+    if (chatSessionId) {
+      params.set('sessionId', chatSessionId);
+    }
+    onClose();
+    router.push(`/chat?${params.toString()}`);
   };
 
-  const handleExecute = async () => {
-    if (!suggestion.command) return;
-    setIsExecuting(true);
-    setExecuteError(null);
-
-    try {
-      const response = await fetch(buildChatUrl(), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          question: `Execute this command: ${suggestion.command}`,
-          mode: 'agent',
-        }),
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.error || 'Failed to execute command');
-      }
-
-      onExecutionStarted?.();
-      onClose();
-    } catch (err) {
-      console.error('Failed to execute command:', err);
-      setExecuteError(err instanceof Error ? err.message : 'Failed to execute command');
-      setIsExecuting(false);
-    }
+  const handleViewOutput = () => {
+    if (!suggestion.executionSessionId) return;
+    onClose();
+    router.push(`/chat?sessionId=${suggestion.executionSessionId}`);
   };
 
   const suggestionType = suggestion.type as keyof typeof typeIcons;
@@ -128,9 +106,9 @@ export default function SuggestionModal({
   const typeLabel = typeLabels[suggestionType] || suggestion.type;
   const badgeStyles = typeBadgeStyles[suggestionType] || typeBadgeStyles.diagnostic;
 
-  // High-risk commands require typing CONFIRM
   const requiresConfirmation = ['medium', 'high'].includes(suggestion.risk);
   const isConfirmed = !requiresConfirmation || confirmText === 'CONFIRM';
+  const isAlreadyExecuted = Boolean(suggestion.executedAt);
 
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
@@ -143,10 +121,8 @@ export default function SuggestionModal({
         </DialogHeader>
 
         <div className="space-y-4">
-          {/* Description */}
           <p className="text-sm text-zinc-300">{suggestion.description}</p>
 
-          {/* Type and Risk badges */}
           <div className="flex items-center gap-3">
             <span className={`px-2 py-1 text-xs rounded border ${badgeStyles}`}>
               {typeLabel}
@@ -158,7 +134,6 @@ export default function SuggestionModal({
             </span>
           </div>
 
-          {/* Command */}
           {suggestion.command && (
             <div className="space-y-2">
               <label className="text-xs font-medium text-zinc-500 uppercase tracking-wider">
@@ -172,7 +147,6 @@ export default function SuggestionModal({
             </div>
           )}
 
-          {/* Warning and confirmation for medium/high risk */}
           {requiresConfirmation && (
             <div className="space-y-3">
               <div className="flex items-start gap-2 p-3 rounded-lg bg-yellow-500/10 border border-yellow-500/30">
@@ -196,11 +170,15 @@ export default function SuggestionModal({
             </div>
           )}
 
-          {/* Error message */}
-          {executeError && (
-            <div className="flex items-start gap-2 p-3 rounded-lg bg-red-500/10 border border-red-500/30">
-              <AlertTriangle className="w-4 h-4 text-red-400 mt-0.5 flex-shrink-0" />
-              <p className="text-xs text-red-300">{executeError}</p>
+          {isAlreadyExecuted && (
+            <div className="flex items-start gap-2 p-3 rounded-lg bg-green-500/10 border border-green-500/30">
+              <Check className="w-4 h-4 text-green-400 mt-0.5 flex-shrink-0" />
+              <div className="text-xs text-green-300">
+                <span className="font-medium">Already executed</span>
+                {suggestion.executionStatus === 'completed' && ' — completed successfully'}
+                {suggestion.executionStatus === 'failed' && ' — execution failed'}
+                {suggestion.executionStatus === 'in_progress' && ' — still running...'}
+              </div>
             </div>
           )}
         </div>
@@ -224,22 +202,23 @@ export default function SuggestionModal({
               </>
             )}
           </Button>
+          {isAlreadyExecuted && suggestion.executionSessionId && (
+            <Button
+              variant="outline"
+              onClick={handleViewOutput}
+              className="border-zinc-700 hover:bg-zinc-800 text-green-400"
+            >
+              <MessageSquare className="w-4 h-4 mr-2" />
+              View Output
+            </Button>
+          )}
           <Button
             onClick={handleExecute}
-            disabled={!suggestion.command || isExecuting || !isConfirmed}
+            disabled={!suggestion.command || !isConfirmed}
             className="bg-orange-600 hover:bg-orange-700 text-white"
           >
-            {isExecuting ? (
-              <>
-                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                Starting...
-              </>
-            ) : (
-              <>
-                <Play className="w-4 h-4 mr-2" />
-                Execute
-              </>
-            )}
+            <Play className="w-4 h-4 mr-2" />
+            {isAlreadyExecuted ? 'Re-execute' : 'Execute'}
           </Button>
         </DialogFooter>
       </DialogContent>

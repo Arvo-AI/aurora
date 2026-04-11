@@ -632,7 +632,8 @@ def get_incident(user_id, incident_id: str):
                     """
                     SELECT id, incident_id, title, description, type, risk, command, created_at,
                            file_path, original_content, suggested_content, user_edited_content,
-                           repository, pr_url, pr_number, created_branch, applied_at
+                           repository, pr_url, pr_number, created_branch, applied_at,
+                           executed_at, execution_session_id, execution_status
                     FROM incident_suggestions
                     WHERE incident_id = %s
                     ORDER BY created_at ASC
@@ -651,6 +652,9 @@ def get_incident(user_id, incident_id: str):
                         "risk": srow[5] or "safe",
                         "command": srow[6],
                         "createdAt": _format_timestamp(srow[7]),
+                        "executedAt": _format_timestamp(srow[17]),
+                        "executionSessionId": str(srow[18]) if srow[18] else None,
+                        "executionStatus": srow[19],
                     }
                     # Add fix-type fields if present
                     if srow[4] == "fix":
@@ -1122,6 +1126,9 @@ def incident_chat(user_id, incident_id: str):
     if mode not in ("ask", "agent"):
         return jsonify({"error": 'Invalid mode. Must be "ask" or "agent"'}), 400
 
+    # Optional suggestion_id — marks the suggestion as executed once the task is queued
+    suggestion_id = data.get("suggestion_id")
+
     # Check for session_id in query params
     existing_session_id = request.args.get("session_id")
     logger.info(
@@ -1234,6 +1241,20 @@ def incident_chat(user_id, incident_id: str):
                         thoughts_list.append(f"[{timestamp_str}] {row[0]}")
 
             # Build context message with clear structure for the LLM
+            # Mode-aware instructions: "ask" mode is read-only, "agent" mode allows execution
+            if mode == "agent":
+                mode_instructions = (
+                    "2. If the user is asking you to execute a command or take action:\n"
+                    "   → You are in AGENT mode with full execution capability. Execute commands directly using your tools.\n"
+                    "   → Do NOT just describe what you would do — actually do it.\n"
+                )
+            else:
+                mode_instructions = (
+                    "2. If the user is explicitly asking you to investigate something specific (e.g., \"check the database logs\", \"investigate the API\", \"look at service X\"):\n"
+                    "   → Acknowledge their request and explain what you would investigate and why, based on the context above.\n"
+                    "   → You are in READ-ONLY mode, so describe your investigation approach rather than executing commands.\n"
+                )
+
             context_prefix = f"""<context>
 <incident>
 Title: {alert_title}
@@ -1254,10 +1275,7 @@ You are having a conversation with a user about the incident above. Follow these
 1. If the user is just greeting you or asking a simple question (e.g., "hi", "what's the summary?", "what happened?"):
    → Respond conversationally and briefly. DO NOT start investigating.
 
-2. If the user is explicitly asking you to investigate something specific (e.g., "check the database logs", "investigate the API", "look at service X"):
-   → Acknowledge their request and explain what you would investigate and why, based on the context above.
-   → You are in READ-ONLY mode, so describe your investigation approach rather than executing commands.
-
+{mode_instructions}
 3. If the user is providing hints or context (e.g., "I think it's related to X", "this might be a database issue"):
    → Acknowledge their insight and explain how it connects to the investigation so far.
    → Suggest what should be investigated next based on their hint.
@@ -1325,6 +1343,30 @@ KEY: Do NOT automatically start a full investigation unless explicitly asked. De
             is_new_session,
             mode,
         )
+
+        # Mark the suggestion as executed if a suggestion_id was provided
+        if suggestion_id:
+            try:
+                sid_int = _parse_suggestion_id(str(suggestion_id))
+                if sid_int is not None:
+                    with db_pool.get_admin_connection() as conn:
+                        with conn.cursor() as cursor:
+                            cursor.execute(
+                                """UPDATE incident_suggestions
+                                   SET executed_at = NOW(),
+                                       execution_session_id = %s::uuid,
+                                       execution_status = 'in_progress'
+                                   WHERE id = %s AND incident_id = %s""",
+                                (session_id, sid_int, incident_id),
+                            )
+                            conn.commit()
+                    logger.info(
+                        "[INCIDENTS] Marked suggestion %s as executed (session %s)",
+                        suggestion_id, session_id,
+                    )
+            except Exception as exc:
+                logger.warning("[INCIDENTS] Failed to mark suggestion %s as executed: %s", suggestion_id, exc)
+
         return jsonify(
             {
                 "session_id": session_id,

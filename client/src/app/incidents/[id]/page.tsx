@@ -186,10 +186,6 @@ export default function IncidentDetailPage() {
                 }
               }}
               citations={incident.citations}
-              onExecutionStarted={() => {
-                setShowThoughts(true);
-                userClosedThoughtsRef.current = false;
-              }}
               onRefresh={refreshIncident}
             />
           </div>

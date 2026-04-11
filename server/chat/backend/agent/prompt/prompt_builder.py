@@ -1296,6 +1296,8 @@ def build_background_mode_segment(state: Optional[Any]) -> str:
     source = rca_context.get('source', '').lower()
     providers = rca_context.get('providers', [])
     providers_lower = [p.lower() for p in providers] if providers else []
+    mode = getattr(state, 'mode', 'ask') or 'ask'
+    is_agent_mode = mode.strip().lower() == 'agent'
     integrations = rca_context.get('integrations', {})
 
     parts = [
@@ -1708,7 +1710,7 @@ def build_background_mode_segment(state: Optional[Any]) -> str:
             "2. *Evidence* - show findings from investigation or supporting data",
             "3. *Next steps* - actionable recommendations if needed (numbered list)",
             "",
-            "READ-ONLY mode - investigate only, no changes unless explicitly requested.",
+            f"{'AGENT mode - investigate and execute commands as needed.' if is_agent_mode else 'READ-ONLY mode - investigate only, no changes unless explicitly requested.'}",
             "=" * 40,
         ])
     else:
@@ -1737,7 +1739,7 @@ def build_background_mode_segment(state: Optional[Any]) -> str:
             "NEVER stop after listing resources - that's just step 1.",
             "On failure: try 3-4 alternatives immediately.",
             "",
-            "READ-ONLY mode - investigate only, no changes.",
+            f"{'AGENT mode - investigate and execute remediation as needed.' if is_agent_mode else 'READ-ONLY mode - investigate only, no changes.'}",
             "=" * 40,
         ])
 
