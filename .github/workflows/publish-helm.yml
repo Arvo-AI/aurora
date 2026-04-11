@@ -2,11 +2,9 @@ name: Publish Helm Chart
 
 # Trigger on:
 #   - Git tag v*.*.* → publishes chart to GitHub Pages AND GHCR OCI registry
-#   - Manual trigger (workflow_dispatch) for hotfixes
 on:
   push:
     tags: ['v*.*.*']
-  workflow_dispatch:
 
 concurrency:
   group: publish-helm-${{ github.ref }}
@@ -56,7 +54,7 @@ jobs:
     name: Publish to GitHub Pages
     runs-on: ubuntu-24.04
     needs: [validate-version]
-    if: github.repository == 'Arvo-AI/aurora' && always() && (needs.validate-version.result == 'success' || needs.validate-version.result == 'skipped')
+    if: github.repository == 'Arvo-AI/aurora' && needs.validate-version.result == 'success'
 
     steps:
       - name: Checkout repository
@@ -88,7 +86,7 @@ jobs:
     name: Publish to GHCR (OCI)
     runs-on: ubuntu-24.04
     needs: [validate-version]
-    if: github.repository == 'Arvo-AI/aurora' && always() && (needs.validate-version.result == 'success' || needs.validate-version.result == 'skipped')
+    if: github.repository == 'Arvo-AI/aurora' && needs.validate-version.result == 'success'
     outputs:
       chart_version: ${{ steps.package.outputs.chart_version }}
 

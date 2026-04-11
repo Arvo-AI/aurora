@@ -468,8 +468,8 @@ This skips registry push, enables built-in MinIO for S3 storage, and builds imag
 ## Upgrading
 
 ```bash
-# Config-only change (published chart)
-helm upgrade aurora-oss aurora/aurora-oss \
+# Config-only change (published chart) — pin --version to avoid unintended upgrades
+helm upgrade aurora-oss aurora/aurora-oss --version <current-version> \
   --reset-values -f values.generated.yaml -n aurora-oss
 
 # Config-only change (local chart)
