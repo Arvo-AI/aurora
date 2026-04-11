@@ -20,6 +20,21 @@ from connectors.gcp_connector.gcp.project_selection import (
 logger = logging.getLogger(__name__)
 
 
+# Discriminators for the `auth_type` field stored in the Vault-backed GCP
+# token payload. OAuth payloads omit the field (implicit oauth); SA payloads
+# set it explicitly. Also used as the `auth_method` string returned in SA mode
+# by the cached-auth/isolated-env setup helpers.
+GCP_AUTH_TYPE_OAUTH = "oauth"
+GCP_AUTH_TYPE_SA = "service_account"
+
+
+def get_gcp_auth_type(token_data: Optional[Dict]) -> str:
+    """Return the auth-type discriminator for a stored GCP token payload."""
+    if token_data and token_data.get("auth_type") == GCP_AUTH_TYPE_SA:
+        return GCP_AUTH_TYPE_SA
+    return GCP_AUTH_TYPE_OAUTH
+
+
 def _get_user_sa_suffix(user_id: str, sa_type: str = 'full') -> str:
     """Generate a stable, short hash from user_id for SA naming.
 
@@ -405,11 +420,66 @@ def generate_sa_access_token(user_id: str, scopes: List[str] = None,
     from utils.auth.token_management import get_token_data
     from connectors.gcp_connector.auth.oauth import get_credentials
     from connectors.gcp_connector.gcp.projects import get_project_list, select_best_project
-    
+    from google.oauth2 import service_account as google_service_account
+    from google.auth.transport.requests import Request as GoogleAuthRequest
+
     token_data = get_token_data(user_id, "gcp")
     if not token_data:
         raise ValueError("No GCP token data for user")
-    
+
+    # Service account branch: skip the per-user Aurora SA impersonation chain
+    # entirely. The uploaded SA key IS the working identity, so we just refresh
+    # it and return its own access token bound to the default project.
+    if get_gcp_auth_type(token_data) == GCP_AUTH_TYPE_SA:
+        sa_client_email = token_data.get("client_email")
+        try:
+            sa_info = json.loads(token_data["service_account_json"])
+            sa_creds = google_service_account.Credentials.from_service_account_info(
+                sa_info,
+                scopes=scopes,
+            )
+            # google-auth caches the token until expiry; only hit the token
+            # endpoint when the cached token is actually stale.
+            if not sa_creds.valid:
+                sa_creds.refresh(GoogleAuthRequest())
+        except Exception as e:
+            logger.error(
+                "Failed to refresh GCP service account credentials (error_type=%s)",
+                type(e).__name__,
+            )
+            # Surface a user-safe message so the raw google-auth error does
+            # not bubble into chat/UI surfaces. The full exception is logged
+            # above for debugging.
+            raise ValueError(
+                "Failed to refresh GCP service account credentials. The key may have been revoked or the service account disabled."
+            ) from e
+
+        # Pick the project: user-selected if accessible, else default.
+        target_project_id = token_data.get("default_project_id") or sa_info.get("project_id")
+        accessible = token_data.get("accessible_projects") or []
+        if selected_project_id:
+            accessible_ids = {p.get("project_id") for p in accessible if isinstance(p, dict)}
+            if selected_project_id in accessible_ids:
+                target_project_id = selected_project_id
+            else:
+                logger.info("GCP SA: selected project is not in accessible list; using default project")
+
+        # google-auth stores `expiry` as a naive UTC datetime; attach tzinfo
+        # explicitly so the serialized string is a valid RFC3339 UTC timestamp.
+        expire_time = None
+        if sa_creds.expiry:
+            expire_time = sa_creds.expiry.replace(tzinfo=datetime.timezone.utc).isoformat()
+
+        return {
+            "access_token": sa_creds.token,
+            "expire_time": expire_time,
+            "project_id": target_project_id,
+            "service_account_email": sa_client_email,
+            # Signal to downstream env-var setup that impersonation must be
+            # skipped — the uploaded SA IS the working identity.
+            "auth_type": GCP_AUTH_TYPE_SA,
+        }
+
     user_creds = get_credentials(token_data)
     iam_service = build('iam', 'v1', credentials=user_creds)
     
@@ -593,27 +663,52 @@ def verify_project_access(user_id: str, project_id: str) -> dict:
         }
 
 def create_local_credentials_file(token_data, project_id: str) -> str:
-    """Create a temporary file with GCP OAuth credentials.
-    
+    """Create a temporary file with GCP credentials for CLI tools.
+
+    For OAuth: writes an `authorized_user` JSON with the refreshed token.
+    For service account: writes the uploaded SA key JSON verbatim (already
+    has `"type": "service_account"` so google-auth picks it up).
+
     Args:
-        token_data: OAuth token data
+        token_data: OAuth token data or SA token payload
         project_id: GCP project ID
-    
+
     Returns:
         str: Path to the credentials file
     """
     from connectors.gcp_connector.auth.oauth import refresh_token_if_needed, CLIENT_ID, CLIENT_SECRET, TOKEN_URL
-    
+
+    # Service account branch: the uploaded SA key IS already a complete
+    # google-auth-compatible credentials file.
+    if get_gcp_auth_type(token_data) == GCP_AUTH_TYPE_SA:
+        try:
+            sa_json_str = token_data["service_account_json"]
+            # Validate it's parseable before writing, so errors surface clearly.
+            json.loads(sa_json_str)
+
+            fd, credentials_path = tempfile.mkstemp(suffix='.json', prefix='gcp_sa_credentials_')
+            with os.fdopen(fd, 'w') as file:
+                file.write(sa_json_str)
+
+            logger.info("Created SA credentials file for local GCP tooling")
+            os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = credentials_path
+            os.environ["GOOGLE_CLOUD_PROJECT"] = project_id
+            return credentials_path
+        except Exception as e:
+            error_msg = "Failed to create SA credentials file"
+            logger.error("%s (error_type=%s)", error_msg, type(e).__name__)
+            raise ValueError(error_msg) from e
+
     try:
         # Check if we have a refresh token before attempting refresh
         if not token_data.get('refresh_token'):
             raise ValueError("No refresh token available for credentials file creation")
-        
+
         # Make sure token is up-to-date
         success, updated_token_data = refresh_token_if_needed(token_data)
         if not success:
             raise ValueError("Failed to refresh token")
-        
+
         # Create the credentials file content
         credentials = {
             "type": "authorized_user",
@@ -629,23 +724,23 @@ def create_local_credentials_file(token_data, project_id: str) -> str:
             "project_id": project_id,
             "quota_project_id": project_id
         }
-        
+
         # Create a temporary file
-        fd, credentials_path = tempfile.mkstemp(suffix='.json', prefix=f'gcp_credentials_{project_id}_')
-        
+        fd, credentials_path = tempfile.mkstemp(suffix='.json', prefix='gcp_credentials_')
+
         # Write the credentials to the file
         with os.fdopen(fd, 'w') as file:
             json.dump(credentials, file)
-        
-        logger.info(f"Created credentials file at {credentials_path}")
-        
+
+        logger.info("Created OAuth credentials file for local GCP tooling")
+
         # Set environment variables for GCP tools
         os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = credentials_path
         os.environ["GOOGLE_CLOUD_PROJECT"] = project_id
-        
+
         return credentials_path
-        
+
     except Exception as e:
-        error_msg = f"Failed to create credentials file: {str(e)}"
-        logger.error(error_msg)
-        raise ValueError(error_msg)
+        error_msg = "Failed to create credentials file"
+        logger.error("%s (error_type=%s)", error_msg, type(e).__name__)
+        raise ValueError(error_msg) from e

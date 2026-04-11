@@ -8,7 +8,9 @@ import { ProjectListItem } from '@/components/cloud-provider/ui/ProjectListItem'
 import { fetchProjects, saveProjects, ProjectCache } from '@/components/cloud-provider/projects/projectUtils';
 import { Project } from '@/components/cloud-provider/types';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import { Badge } from '@/components/ui/badge';
 import { getEnv } from '@/lib/env';
+import { useConnectedAccounts } from '@/hooks/useConnectedAccounts';
 
 const BACKEND_URL = getEnv('NEXT_PUBLIC_BACKEND_URL');
 
@@ -24,6 +26,11 @@ export default function GcpProviderIntegration({ onDisconnect }: GcpProviderInte
   const [isDisconnecting, setIsDisconnecting] = useState(false);
   const [togglingProjectId, setTogglingProjectId] = useState<string | null>(null);
   const { toast } = useToast();
+
+  const { accounts } = useConnectedAccounts();
+  const rawAuthType = (accounts.gcp as { authType?: string } | undefined)?.authType;
+  const authType: 'oauth' | 'service_account' | null =
+    rawAuthType === 'service_account' || rawAuthType === 'oauth' ? rawAuthType : null;
 
   // Fetch user ID on mount
   useEffect(() => {
@@ -191,12 +198,19 @@ export default function GcpProviderIntegration({ onDisconnect }: GcpProviderInte
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div>
-          <h3 className="text-lg font-semibold">GCP Projects</h3>
+          <div className="flex items-center gap-2">
+            <h3 className="text-lg font-semibold">GCP Projects</h3>
+            {authType && (
+              <Badge variant="secondary" className="text-xs">
+                {authType === 'service_account' ? 'Service Account' : 'OAuth'}
+              </Badge>
+            )}
+          </div>
           <p className="text-sm text-muted-foreground">
             Manage which projects your service account can access
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap justify-end">
           <Button
             variant="outline"
             size="sm"
