@@ -61,3 +61,5 @@ To actively feed audits into this system:
    - Set the destination to the Aurora API Destination created above.
 
 Your Aurora application is now actively serving as the brain of your AWS Security tracking network!
+
+![WhatsApp Image 2026-04-11 at 1 27 00 PM](https://github.com/user-attachments/assets/f7eec989-5f26-405b-9d02-07750d40af22)
