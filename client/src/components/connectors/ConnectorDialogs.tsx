@@ -27,7 +27,6 @@ interface ConnectorDialogsProps {
   onGcpDialogChange: (open: boolean) => void;
   onGcpConnectDialogChange: (open: boolean) => void;
   onGcpOAuthConnect: () => Promise<void> | void;
-  onGcpSwitchAuthMethod: () => void;
   onAzureDialogChange: (open: boolean) => void;
   onOvhDialogChange: (open: boolean) => void;
   onScalewayDialogChange: (open: boolean) => void;
@@ -48,7 +47,6 @@ export function ConnectorDialogs({
   onGcpDialogChange,
   onGcpConnectDialogChange,
   onGcpOAuthConnect,
-  onGcpSwitchAuthMethod,
   onAzureDialogChange,
   onOvhDialogChange,
   onScalewayDialogChange,
@@ -87,7 +85,6 @@ export function ConnectorDialogs({
               </DialogHeader>
               <GcpProviderIntegration
                 onDisconnect={() => onGcpDialogChange(false)}
-                onSwitchAuthMethod={onGcpSwitchAuthMethod}
               />
             </DialogContent>
           </Dialog>

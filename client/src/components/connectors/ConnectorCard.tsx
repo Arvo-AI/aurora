@@ -534,10 +534,6 @@ export default function ConnectorCard({ connector, connectedOverride }: Connecto
         onGcpDialogChange={setShowGcpDialog}
         onGcpConnectDialogChange={setShowGcpConnectDialog}
         onGcpOAuthConnect={handleGCPOAuth}
-        onGcpSwitchAuthMethod={() => {
-          setShowGcpDialog(false);
-          setShowGcpConnectDialog(true);
-        }}
         onAzureDialogChange={setShowAzureDialog}
         onOvhDialogChange={setShowOvhDialog}
         onScalewayDialogChange={setShowScalewayDialog}

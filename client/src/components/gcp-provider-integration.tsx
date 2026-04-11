@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { Button } from "@/components/ui/button";
 import { useToast } from '@/hooks/use-toast';
-import { Loader2, RefreshCw, LogOut, RefreshCcw } from 'lucide-react';
+import { Loader2, RefreshCw, LogOut } from 'lucide-react';
 import { ProjectListItem } from '@/components/cloud-provider/ui/ProjectListItem';
 import { fetchProjects, saveProjects, ProjectCache } from '@/components/cloud-provider/projects/projectUtils';
 import { Project } from '@/components/cloud-provider/types';
@@ -11,32 +11,20 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
 import { getEnv } from '@/lib/env';
 import { useConnectedAccounts } from '@/hooks/useConnectedAccounts';
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from '@/components/ui/alert-dialog';
 
 const BACKEND_URL = getEnv('NEXT_PUBLIC_BACKEND_URL');
 
 interface GcpProviderIntegrationProps {
   onDisconnect?: () => void;
-  onSwitchAuthMethod?: () => void;
 }
 
-export default function GcpProviderIntegration({ onDisconnect, onSwitchAuthMethod }: GcpProviderIntegrationProps) {
+export default function GcpProviderIntegration({ onDisconnect }: GcpProviderIntegrationProps) {
   const [userId, setUserId] = useState<string | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [isDisconnecting, setIsDisconnecting] = useState(false);
   const [togglingProjectId, setTogglingProjectId] = useState<string | null>(null);
-  const [showSwitchConfirm, setShowSwitchConfirm] = useState(false);
   const { toast } = useToast();
 
   const { accounts } = useConnectedAccounts();
@@ -232,17 +220,6 @@ export default function GcpProviderIntegration({ onDisconnect, onSwitchAuthMetho
             <RefreshCw className={`h-4 w-4 mr-2 ${isLoading ? 'animate-spin' : ''}`} />
             Refresh
           </Button>
-          {onSwitchAuthMethod && (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setShowSwitchConfirm(true)}
-              disabled={isDisconnecting}
-            >
-              <RefreshCcw className="h-4 w-4 mr-2" />
-              Switch auth method
-            </Button>
-          )}
           <Button
             variant="destructive"
             size="sm"
@@ -263,30 +240,6 @@ export default function GcpProviderIntegration({ onDisconnect, onSwitchAuthMetho
           </Button>
         </div>
       </div>
-
-      <AlertDialog open={showSwitchConfirm} onOpenChange={setShowSwitchConfirm}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Switch GCP authentication method?</AlertDialogTitle>
-            <AlertDialogDescription>
-              You already have GCP connected. Continuing will replace the
-              existing connection with the new authentication method. Your
-              project selections may need to be re-applied.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() => {
-                setShowSwitchConfirm(false);
-                if (onSwitchAuthMethod) onSwitchAuthMethod();
-              }}
-            >
-              Continue
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
 
       {projects.length === 0 ? (
         <div className="text-center py-8 text-muted-foreground">
