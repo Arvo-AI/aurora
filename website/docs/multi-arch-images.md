@@ -81,7 +81,9 @@ Manifests:
 
 ## Make commands
 
-Every `make` target that builds or pulls images auto-detects the host architecture. There are no arch flags to set.
+Most `make` targets that build or pull images auto-detect the host architecture — on Apple Silicon you get arm64 everywhere by default; on an x86_64 CI runner you get amd64. No flags, no branching.
+
+The one exception is **`make deploy-build`**, which is intentionally *not* host-scoped: it defaults to building both `linux/amd64` and `linux/arm64` regardless of where it runs, so a single push produces a multi-arch manifest list suitable for any target cluster. Override this with the `PLATFORMS` variable (e.g. `make deploy-build PLATFORMS=linux/arm64`) if you only need one arch for a quick demo.
 
 | Command | Arch behavior |
 |---|---|
@@ -89,9 +91,7 @@ Every `make` target that builds or pulls images auto-detects the host architectu
 | `make prod` / `make prod-prebuilt` | Pulls the matching arch from GHCR (Docker auto-resolves the manifest list). |
 | `make prod-build` / `make prod-local` | Builds for host arch from local source. |
 | `make prod-airtight` | Loads whichever per-arch tarball you provide (see the airtight section below). |
-| `make deploy-build` | Builds **both** `linux/amd64` and `linux/arm64` and pushes a multi-arch manifest list to your configured registry. Override with `make deploy-build PLATFORMS=linux/arm64` to build a single arch. |
-
-On Apple Silicon you get arm64 everywhere by default; on an x86_64 CI runner you get amd64. Same commands, no flags, no branching.
+| `make deploy-build` | Defaults to building **both** `linux/amd64` and `linux/arm64` and pushes a multi-arch manifest list to your configured registry. Override with `PLATFORMS=linux/arm64` (or any subset) to build a single arch. |
 
 ### Note on `make deploy-build`
 
