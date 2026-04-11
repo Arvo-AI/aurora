@@ -48,6 +48,14 @@ export const useSessionLoader = ({
   }, [pollingSessionId, loadSession, onMessagesLoaded]);
 
   const loadSessionData = useCallback(async (sessionId: string): Promise<boolean> => {
+    // Stop any existing polling for a previous session before loading a new one
+    setPollingSessionId(prev => {
+      if (prev && prev !== sessionId) {
+        return null;
+      }
+      return prev;
+    });
+
     try {
       const sessionData = await loadSession(sessionId);
       
@@ -59,15 +67,12 @@ export const useSessionLoader = ({
 
       lastIncidentIdRef.current = sessionData.incidentId || null;
 
-      // Clear current messages first
       onClearMessages();
 
-      // Load messages
       if (sessionData.messages && sessionData.messages.length > 0) {
         onMessagesLoaded(sessionData.messages as Message[]);
       }
 
-      // Load UI state if available
       if (sessionData.uiState) {
         const uiState = sessionData.uiState as any;
         const simplifiedUiState: SimpleChatUiState = {
@@ -79,7 +84,6 @@ export const useSessionLoader = ({
         onUiStateLoaded(simplifiedUiState);
       }
 
-      // Start polling if the session is still in progress (background execution)
       if (sessionData.status === 'in_progress') {
         setPollingSessionId(sessionId);
       }

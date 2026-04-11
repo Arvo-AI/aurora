@@ -87,11 +87,13 @@ export default function SuggestionModal({
   const handleExecute = async () => {
     if (!suggestion.command) return;
 
-    // Mark the suggestion as executed in the database
     try {
-      await fetch(`/api/incidents/suggestions/${suggestion.id}/mark-executed`, {
+      const res = await fetch(`/api/incidents/suggestions/${suggestion.id}/mark-executed`, {
         method: 'POST',
       });
+      if (!res.ok) {
+        console.error('Failed to mark suggestion as executed:', res.status);
+      }
     } catch (err) {
       console.error('Failed to mark suggestion as executed:', err);
     }

@@ -103,7 +103,7 @@ export const useWebSocket = (config: WebSocketConfig) => {
     }));
 
     // Send initialization message with user_id
-    const userId = user?.id;
+    const userId = user?.id || configRef.current.userId || undefined;
     if (userId && wsRef.current) {
       const initMessage: WebSocketMessage = {
         type: 'init',
@@ -115,8 +115,6 @@ export const useWebSocket = (config: WebSocketConfig) => {
         hasUser: !!user?.id,
         hasConfigUserId: !!configRef.current.userId,
         hasWebSocket: !!wsRef.current,
-        userId: user?.id,
-        configUserId: configRef.current.userId
       });
     }
 

@@ -1121,25 +1121,34 @@ def _update_session_status(session_id: str, status: str) -> None:
     except Exception as e:
         logger.error(f"[BackgroundChat] Failed to update session {session_id} status to '{status}': {e}")
 
-    # Propagate status to any suggestion that was executed via this session
     if status in ("completed", "failed"):
-        try:
-            with db_pool.get_admin_connection() as conn:
-                with conn.cursor() as cursor:
-                    cursor.execute(
-                        """UPDATE incident_suggestions
-                           SET execution_status = %s
-                           WHERE execution_session_id = %s::uuid
-                             AND execution_status = 'in_progress'""",
-                        (status, session_id),
-                    )
-                    if cursor.rowcount > 0:
-                        conn.commit()
-                        logger.info(f"[BackgroundChat] Updated suggestion execution_status to '{status}' for session {session_id}")
-                    else:
-                        conn.rollback()
-        except Exception as e:
-            logger.warning(f"[BackgroundChat] Failed to update suggestion execution_status for session {session_id}: {e}")
+        _propagate_suggestion_status(session_id, status)
+
+
+def _propagate_suggestion_status(session_id: str, status: str) -> None:
+    """Propagate a terminal session status to any linked incident_suggestions rows.
+
+    This ensures suggestions whose execution was kicked off via *session_id*
+    get their ``execution_status`` moved out of ``in_progress`` (or ``executed``)
+    when the session finishes or is cleaned up.
+    """
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """UPDATE incident_suggestions
+                       SET execution_status = %s
+                       WHERE execution_session_id = %s::uuid
+                         AND execution_status IN ('in_progress', 'executed')""",
+                    (status, session_id),
+                )
+                if cursor.rowcount > 0:
+                    conn.commit()
+                    logger.info(f"[BackgroundChat] Updated suggestion execution_status to '{status}' for session {session_id}")
+                else:
+                    conn.rollback()
+    except Exception as e:
+        logger.warning(f"[BackgroundChat] Failed to update suggestion execution_status for session {session_id}: {e}")
 
 
 def _update_incident_aurora_status(incident_id: str, aurora_status: str, user_id: Optional[str] = None, org_id: Optional[str] = None) -> None:
@@ -1939,6 +1948,10 @@ def cleanup_stale_background_chats() -> Dict[str, Any]:
                 cleaned_count = cursor.rowcount
             conn.commit()
             
+            # Propagate failed status to any linked suggestions
+            for session_id, user_id, incident_id in stale_sessions:
+                _propagate_suggestion_status(str(session_id), 'failed')
+
             # Update associated incidents (both aurora_status and status)
             if stale_sessions:
                 with conn.cursor() as cursor:
