@@ -4,6 +4,7 @@ import os
 import re
 import shlex
 import subprocess
+import tempfile
 from utils.terminal.terminal_run import terminal_run
 import time
 import requests
@@ -547,6 +548,42 @@ def setup_aws_environments_all_accounts(user_id: str):
     return account_envs
 
 
+# Cache of per-user SA credentials file paths. Without an explicit
+# GOOGLE_APPLICATION_CREDENTIALS source, gcloud retries on API errors fall
+# through to Application Default Credentials, which probes the (unreachable)
+# GCE metadata server and can inflate a ~1s 403 into a 60s timeout. Writing
+# the SA JSON once per user and pointing GOOGLE_APPLICATION_CREDENTIALS at it
+# gives gcloud a concrete, refreshable credential source.
+_sa_adc_file_cache: dict[str, str] = {}
+
+
+def _get_sa_adc_file(user_id: str) -> Optional[str]:
+    """Return a tempfile path containing the user's SA JSON (cached per user)."""
+    cached = _sa_adc_file_cache.get(user_id)
+    if cached and os.path.exists(cached):
+        return cached
+    try:
+        from utils.auth.token_management import get_token_data
+        from connectors.gcp_connector.auth import GCP_AUTH_TYPE_SA, get_gcp_auth_type
+        token_data = get_token_data(user_id, "gcp")
+        if not token_data or get_gcp_auth_type(token_data) != GCP_AUTH_TYPE_SA:
+            return None
+        sa_json = token_data.get("service_account_json")
+        if not sa_json:
+            return None
+        # Sanity-check that the stored JSON parses before writing it.
+        json.loads(sa_json)
+        fd, path = tempfile.mkstemp(suffix=".json", prefix="gcp_sa_adc_")
+        with os.fdopen(fd, "w") as f:
+            f.write(sa_json)
+        _sa_adc_file_cache[user_id] = path
+        logger.info(f"Wrote SA ADC file for user {user_id} at {path}")
+        return path
+    except Exception as e:
+        logger.warning(f"Failed to write SA ADC file for user {user_id}: {e}")
+        return None
+
+
 def setup_gcp_environment_isolated(user_id: str, selected_project_id: str | None = None, provider_preference: str | None = None):
     """Set up GCP environment with isolated credentials - NO global state modification."""
     try:
@@ -578,7 +615,15 @@ def setup_gcp_environment_isolated(user_id: str, selected_project_id: str | None
             "GOOGLE_CLOUD_PROJECT": project_id,
             "CLOUDSDK_CONFIG": "/tmp/.gcloud",
         }
-        if not is_sa_mode:
+        if is_sa_mode:
+            # Point gcloud at a concrete ADC source so it doesn't fall through
+            # to GCE metadata-server probing when the access token hits a 403
+            # (that probe hangs in non-GCE environments and turns fast API
+            # errors into 60s timeouts).
+            adc_file = _get_sa_adc_file(user_id)
+            if adc_file:
+                isolated_env["GOOGLE_APPLICATION_CREDENTIALS"] = adc_file
+        else:
             # OAuth mode: set gcloud to impersonate Aurora's per-user SA so
             # API calls run as that SA identity. SA mode skips this because
             # the uploaded key already IS the working identity.

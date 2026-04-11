@@ -135,14 +135,35 @@ def clear_gcp_cache_for_user(user_id: str) -> None:
             os.environ.pop(var, None)
             logger.debug(f"Cleared environment variable: {var}")
     
+    # Also drop any cached SA ADC file for this user from cloud_exec_tool's
+    # in-memory cache so the next tool call rewrites it from the fresh Vault
+    # payload.
+    try:
+        from chat.backend.agent.tools.cloud_exec_tool import _sa_adc_file_cache
+        stale_path = _sa_adc_file_cache.pop(user_id, None)
+        if stale_path and os.path.exists(stale_path):
+            try:
+                os.remove(stale_path)
+            except Exception as e:
+                logger.debug(f"Could not remove cached SA ADC file {stale_path}: {e}")
+    except Exception as e:
+        logger.debug(f"Could not clear SA ADC file cache for user {user_id}: {e}")
+
     # Clean up temporary credentials files
     try:
         import tempfile
         import glob
         temp_dir = tempfile.gettempdir()
-        # Look for GCP credentials files (created by create_local_credentials_file)
-        pattern = os.path.join(temp_dir, 'gcp_credentials_*.json')
-        cred_files = glob.glob(pattern)
+        # Cover both the OAuth-mode authorized_user file and the SA-mode files
+        # (including the cloud_exec_tool ADC file prefix).
+        patterns = [
+            os.path.join(temp_dir, 'gcp_credentials_*.json'),
+            os.path.join(temp_dir, 'gcp_sa_credentials_*.json'),
+            os.path.join(temp_dir, 'gcp_sa_adc_*.json'),
+        ]
+        cred_files: list[str] = []
+        for pattern in patterns:
+            cred_files.extend(glob.glob(pattern))
         
         cleaned_files = 0
         for cred_file in cred_files:
