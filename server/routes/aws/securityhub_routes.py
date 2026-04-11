@@ -35,11 +35,11 @@ def _validate_api_key(org_id: str, api_key: str) -> bool:
                 # We check the user_tokens table for an aws_securityhub configuration
                 # Org ID is mapped to a tenant config
                 cursor.execute(
-                    \"\"\"
+                    """
                     SELECT token_data FROM user_tokens 
                     WHERE org_id = %s AND provider = 'aws_securityhub' AND is_active = true
                     LIMIT 1
-                    \"\"\",
+                    """,
                     (org_id,)
                 )
                 row = cursor.fetchone()

@@ -55,7 +55,7 @@ def process_securityhub_finding(payload: dict, org_id: str):
                     # Human-in-the-loop: Agent ONLY suggests
                     ai_triage = _generate_ai_triage(finding)
 
-                    query = \"\"\"
+                    query = """
                         INSERT INTO aws_security_findings (
                             org_id, finding_id, source, title, severity_label, 
                             payload, ai_summary, ai_risk_level, ai_suggested_fix
@@ -67,7 +67,7 @@ def process_securityhub_finding(payload: dict, org_id: str):
                             severity_label = EXCLUDED.severity_label,
                             payload = EXCLUDED.payload,
                             updated_at = NOW()
-                    \"\"\"
+                    """
                     
                     cursor.execute(query, (
                         org_id,
