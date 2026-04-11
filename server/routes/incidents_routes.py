@@ -1442,24 +1442,40 @@ def mark_suggestion_executed(user_id, suggestion_id: str):
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
                 cursor.execute(
-                    """SELECT s.id FROM incident_suggestions s
+                    """SELECT s.id, s.incident_id FROM incident_suggestions s
                        JOIN incidents i ON s.incident_id = i.id
                        WHERE s.id = %s AND i.org_id = %s""",
                     (suggestion_id_int, org_id),
                 )
-                if not cursor.fetchone():
+                row = cursor.fetchone()
+                if not row:
                     return jsonify({"error": "Suggestion not found"}), 404
+
+                incident_id = str(row[1])
+
+                session_id = create_background_chat_session(
+                    user_id=user_id,
+                    title="Next Step Execution",
+                    trigger_metadata={
+                        "source": "suggestion_execution",
+                        "suggestion_id": str(suggestion_id_int),
+                        "incident_id": incident_id,
+                    },
+                    incident_id=incident_id,
+                )
 
                 cursor.execute(
                     """UPDATE incident_suggestions
-                       SET executed_at = NOW(), execution_status = 'executed'
+                       SET executed_at = NOW(),
+                           execution_status = 'executed',
+                           execution_session_id = %s::uuid
                        WHERE id = %s""",
-                    (suggestion_id_int,),
+                    (session_id, suggestion_id_int),
                 )
                 conn.commit()
 
-        logger.info("[INCIDENTS] Marked suggestion %s as executed", suggestion_id)
-        return jsonify({"success": True}), 200
+        logger.info("[INCIDENTS] Marked suggestion %s as executed (session %s)", suggestion_id, session_id)
+        return jsonify({"success": True, "sessionId": session_id}), 200
 
     except Exception as exc:
         logger.exception("[INCIDENTS] Failed to mark suggestion %s as executed", suggestion_id)
