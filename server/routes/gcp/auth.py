@@ -404,13 +404,21 @@ def connect_service_account(user_id):
         if cursor is not None:
             try:
                 cursor.close()
-            except Exception:
-                pass
+            except Exception as exc:
+                logging.warning(
+                    "GCP SA connect: failed to close DB cursor for user %s (error_type=%s)",
+                    user_id,
+                    type(exc).__name__,
+                )
         if conn is not None:
             try:
                 conn.close()
-            except Exception:
-                pass
+            except Exception as exc:
+                logging.warning(
+                    "GCP SA connect: failed to close DB connection for user %s (error_type=%s)",
+                    user_id,
+                    type(exc).__name__,
+                )
 
     if secret_ref_to_clear:
         try:
