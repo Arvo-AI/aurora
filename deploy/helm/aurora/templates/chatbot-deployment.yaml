@@ -64,22 +64,28 @@ spec:
               mountPath: {{ .Values.ssl.caCertMountPath }}
               readOnly: true
             {{- end }}
-          readinessProbe:
+          startupProbe:
             httpGet:
               path: /health
               port: 5007
             initialDelaySeconds: 10
             periodSeconds: 10
             timeoutSeconds: 5
-            failureThreshold: 6
+            failureThreshold: 30
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 5007
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
           livenessProbe:
             httpGet:
               path: /health
               port: 5007
-            initialDelaySeconds: 20
             periodSeconds: 20
             timeoutSeconds: 5
-            failureThreshold: 6
+            failureThreshold: 3
           resources:
             {{- toYaml .Values.resources.chatbot | nindent 12 }}
       volumes:

@@ -61,11 +61,18 @@ spec:
               mountPath: {{ .Values.ssl.caCertMountPath }}
               readOnly: true
             {{- end }}
+          startupProbe:
+            httpGet:
+              path: /health/readiness
+              port: 5080
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 30
           readinessProbe:
             httpGet:
               path: /health/readiness
               port: 5080
-            initialDelaySeconds: 20
             periodSeconds: 10
             timeoutSeconds: 5
             failureThreshold: 3
@@ -73,7 +80,6 @@ spec:
             httpGet:
               path: /health/liveness
               port: 5080
-            initialDelaySeconds: 60
             periodSeconds: 20
             timeoutSeconds: 5
             failureThreshold: 3
