@@ -14,7 +14,9 @@ spec:
     metadata:
       annotations:
         checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- if not .Values.secrets.app.existingSecret }}
         checksum/secret-app: {{ include (print $.Template.BasePath "/secret-app.yaml") . | sha256sum }}
+        {{- end }}
       labels:
         app.kubernetes.io/name: {{ include "aurora.name" . }}-frontend
         app.kubernetes.io/instance: {{ .Release.Name }}
@@ -23,22 +25,18 @@ spec:
       serviceAccountName: {{ include "aurora.fullname" . }}-frontend
       automountServiceAccountToken: false
       securityContext:
-        runAsNonRoot: true
-        runAsUser: 1000
-        runAsGroup: 1000
-        fsGroup: 1000
+        {{- include "aurora.podSecurityContext" (dict "service" "frontend" "global" $ "defaults" (dict "runAsUser" 1000 "runAsGroup" 1000 "fsGroup" 1000)) | nindent 8 }}
       {{- if .Values.image.pullSecrets }}
       imagePullSecrets:
         {{- toYaml .Values.image.pullSecrets | nindent 8 }}
       {{- end }}
+      {{- include "aurora.scheduling" (dict "service" "frontend" "global" $) | nindent 6 }}
       containers:
         - name: aurora-frontend
           image: "{{ .Values.image.registry }}/aurora-frontend:{{ .Values.image.tag }}"
           imagePullPolicy: IfNotPresent
           securityContext:
-            allowPrivilegeEscalation: false
-            capabilities:
-              drop: ["ALL"]
+            {{- include "aurora.containerSecurityContext" (dict "service" "frontend" "global" $ "defaults" (dict)) | nindent 12 }}
           ports:
             - name: http
               containerPort: 3000
@@ -46,7 +44,7 @@ spec:
             - configMapRef:
                 name: {{ include "aurora.fullname" . }}-config
             - secretRef:
-                name: {{ include "aurora.fullname" . }}-secrets-app
+                name: {{ include "aurora.secretName.app" . }}
           env:
             - name: NODE_ENV
               value: "production"

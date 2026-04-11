@@ -21,10 +21,8 @@ spec:
     spec:
       automountServiceAccountToken: false
       securityContext:
-        runAsNonRoot: true
-        runAsUser: 1000
-        runAsGroup: 1000
-        fsGroup: 1000
+        {{- include "aurora.podSecurityContext" (dict "service" "minio" "global" $ "defaults" (dict "runAsUser" 1000 "runAsGroup" 1000 "fsGroup" 1000)) | nindent 8 }}
+      {{- include "aurora.scheduling" (dict "service" "minio" "global" $) | nindent 6 }}
       containers:
         - name: minio
           image: minio/minio:RELEASE.2025-04-22T22-12-26Z
@@ -34,17 +32,15 @@ spec:
             - name: MINIO_ROOT_USER
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "aurora.fullname" . }}-secrets-backend
+                  name: {{ include "aurora.secretName.backend" . }}
                   key: STORAGE_ACCESS_KEY
             - name: MINIO_ROOT_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "aurora.fullname" . }}-secrets-backend
+                  name: {{ include "aurora.secretName.backend" . }}
                   key: STORAGE_SECRET_KEY
           securityContext:
-            allowPrivilegeEscalation: false
-            capabilities:
-              drop: ["ALL"]
+            {{- include "aurora.containerSecurityContext" (dict "service" "minio" "global" $ "defaults" (dict)) | nindent 12 }}
           ports:
             - name: api
               containerPort: 9000

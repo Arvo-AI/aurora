@@ -25,6 +25,12 @@ DB_PARAMS = {
     "host": os.environ["POSTGRES_HOST"],
     "port": int(os.environ["POSTGRES_PORT"]),
 }
+_pg_sslmode = os.getenv("POSTGRES_SSLMODE", "prefer")
+if _pg_sslmode:
+    DB_PARAMS["sslmode"] = _pg_sslmode
+    _pg_sslrootcert = os.getenv("POSTGRES_SSLROOTCERT")
+    if _pg_sslrootcert:
+        DB_PARAMS["sslrootcert"] = _pg_sslrootcert
 
 
 def ensure_database_exists():

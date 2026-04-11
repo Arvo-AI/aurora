@@ -37,6 +37,12 @@ class DatabaseConnectionPool:
             'host': os.getenv('POSTGRES_HOST'),
             'port': int(os.getenv('POSTGRES_PORT'))
         }
+        pg_sslmode = os.getenv('POSTGRES_SSLMODE', 'prefer')
+        if pg_sslmode:
+            self.db_params['sslmode'] = pg_sslmode
+            pg_sslrootcert = os.getenv('POSTGRES_SSLROOTCERT')
+            if pg_sslrootcert:
+                self.db_params['sslrootcert'] = pg_sslrootcert
 
         # Connection pool configuration
         self.min_connections = 1

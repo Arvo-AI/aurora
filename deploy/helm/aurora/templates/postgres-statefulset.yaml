@@ -16,7 +16,9 @@ spec:
     metadata:
       annotations:
         checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- if not .Values.secrets.db.existingSecret }}
         checksum/secret-db: {{ include (print $.Template.BasePath "/secret-db.yaml") . | sha256sum }}
+        {{- end }}
       labels:
         app.kubernetes.io/name: {{ include "aurora.name" . }}-postgres
         app.kubernetes.io/instance: {{ .Release.Name }}
@@ -24,18 +26,14 @@ spec:
     spec:
       automountServiceAccountToken: false
       securityContext:
-        runAsNonRoot: true
-        runAsUser: 70
-        runAsGroup: 70
-        fsGroup: 70
+        {{- include "aurora.podSecurityContext" (dict "service" "postgres" "global" $ "defaults" (dict "runAsUser" 70 "runAsGroup" 70 "fsGroup" 70)) | nindent 8 }}
+      {{- include "aurora.scheduling" (dict "service" "postgres" "global" $) | nindent 6 }}
       containers:
         - name: postgres
           image: postgres:15-alpine
           imagePullPolicy: IfNotPresent
           securityContext:
-            allowPrivilegeEscalation: false
-            capabilities:
-              drop: ["ALL"]
+            {{- include "aurora.containerSecurityContext" (dict "service" "postgres" "global" $ "defaults" (dict)) | nindent 12 }}
           ports:
             - name: postgres
               containerPort: 5432
@@ -43,7 +41,7 @@ spec:
             - configMapRef:
                 name: {{ include "aurora.fullname" . }}-config
             - secretRef:
-                name: {{ include "aurora.fullname" . }}-secrets-db
+                name: {{ include "aurora.secretName.db" . }}
           env:
             - name: PGDATA
               value: /var/lib/postgresql/data/pgdata

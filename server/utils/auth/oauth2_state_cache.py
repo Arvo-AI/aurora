@@ -30,6 +30,8 @@ from typing import Dict, Optional, Any
 
 import redis
 
+from utils.cache.redis_client import get_redis_ssl_kwargs
+
 logger = logging.getLogger(__name__)
 
 # Redis configuration - REQUIRED (no default to force explicit configuration)
@@ -47,7 +49,8 @@ try:
         REDIS_URL,
         decode_responses=True,
         socket_connect_timeout=5,
-        socket_timeout=5
+        socket_timeout=5,
+        **get_redis_ssl_kwargs()
     )
     # Test connection
     redis_client.ping()

@@ -76,7 +76,17 @@ def _build_db_url() -> str:
     db_password = urllib.parse.quote_plus(os.getenv("POSTGRES_PASSWORD", ""))
     db_host = os.environ["POSTGRES_HOST"]
     db_port = os.environ["POSTGRES_PORT"]
-    return f"postgresql://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}"
+    url = f"postgresql://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}"
+    query_params = {}
+    pg_sslmode = os.getenv("POSTGRES_SSLMODE", "prefer")
+    if pg_sslmode:
+        query_params["sslmode"] = pg_sslmode
+        pg_sslrootcert = os.getenv("POSTGRES_SSLROOTCERT")
+        if pg_sslrootcert:
+            query_params["sslrootcert"] = pg_sslrootcert
+    if query_params:
+        url += "?" + urllib.parse.urlencode(query_params)
+    return url
 
 
 def _model_path() -> str:
