@@ -11,22 +11,18 @@ import GcpProviderIntegration from "@/components/gcp-provider-integration";
 import OvhProviderIntegration from "@/components/ovh-provider-integration";
 import ScalewayProviderIntegration from "@/components/scaleway-provider-integration";
 import AzureProviderIntegration from "@/components/azure-provider-integration";
-import { GcpConnectDialog } from "@/components/connectors/GcpConnectDialog";
 
 interface ConnectorDialogsProps {
   connectorId: string;
   showGitHubDialog: boolean;
   showBitbucketDialog: boolean;
   showGcpDialog: boolean;
-  showGcpConnectDialog: boolean;
   showAzureDialog: boolean;
   showOvhDialog: boolean;
   showScalewayDialog: boolean;
   onGitHubDialogChange: (open: boolean) => void;
   onBitbucketDialogChange: (open: boolean) => void;
   onGcpDialogChange: (open: boolean) => void;
-  onGcpConnectDialogChange: (open: boolean) => void;
-  onGcpOAuthConnect: () => Promise<void> | void;
   onAzureDialogChange: (open: boolean) => void;
   onOvhDialogChange: (open: boolean) => void;
   onScalewayDialogChange: (open: boolean) => void;
@@ -38,15 +34,12 @@ export function ConnectorDialogs({
   showGitHubDialog,
   showBitbucketDialog,
   showGcpDialog,
-  showGcpConnectDialog,
   showAzureDialog,
   showOvhDialog,
   showScalewayDialog,
   onGitHubDialogChange,
   onBitbucketDialogChange,
   onGcpDialogChange,
-  onGcpConnectDialogChange,
-  onGcpOAuthConnect,
   onAzureDialogChange,
   onOvhDialogChange,
   onScalewayDialogChange,
@@ -77,24 +70,16 @@ export function ConnectorDialogs({
       )}
 
       {connectorId === "gcp" && (
-        <>
-          <Dialog open={showGcpDialog} onOpenChange={onGcpDialogChange}>
-            <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
-              <DialogHeader>
-                <DialogTitle>GCP Project Management</DialogTitle>
-              </DialogHeader>
-              <GcpProviderIntegration
-                onDisconnect={() => onGcpDialogChange(false)}
-              />
-            </DialogContent>
-          </Dialog>
-          <GcpConnectDialog
-            open={showGcpConnectDialog}
-            onOpenChange={onGcpConnectDialogChange}
-            onSuccess={() => onGcpConnectDialogChange(false)}
-            onOAuthConnect={onGcpOAuthConnect}
-          />
-        </>
+        <Dialog open={showGcpDialog} onOpenChange={onGcpDialogChange}>
+          <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle>GCP Project Management</DialogTitle>
+            </DialogHeader>
+            <GcpProviderIntegration
+              onDisconnect={() => onGcpDialogChange(false)}
+            />
+          </DialogContent>
+        </Dialog>
       )}
 
       {connectorId === "azure" && (
