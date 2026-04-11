@@ -149,7 +149,11 @@ def get_credentials(token_data=None):
                 "Failed to load/refresh GCP service account credentials (error_type=%s)",
                 type(e).__name__,
             )
-            raise
+            # Wrap in a stable user-safe message so the raw google-auth error
+            # does not bubble into downstream UI/API surfaces.
+            raise ValueError(
+                "Failed to load GCP service account credentials. The key may be malformed, revoked, or the service account may have been disabled."
+            ) from e
 
     try:
         credentials = Credentials(

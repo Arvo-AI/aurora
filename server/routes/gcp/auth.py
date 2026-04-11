@@ -290,11 +290,8 @@ def connect_service_account(user_id):
         )
     except Exception as exc:
         logging.warning(
-            "GCP SA connect: failed to build credentials for %s (user=%s): %s: %s",
-            client_email,
-            user_id,
+            "GCP SA connect: failed to build credentials (error_type=%s)",
             type(exc).__name__,
-            exc,
         )
         # Do not echo the raw Google exception back to the client — it can
         # contain SA identifiers, token URIs, or other internals.
@@ -306,11 +303,8 @@ def connect_service_account(user_id):
         creds.refresh(Request())
     except Exception as exc:
         logging.warning(
-            "GCP SA connect: credential refresh failed for %s (user=%s): %s: %s",
-            client_email,
-            user_id,
+            "GCP SA connect: credential refresh failed (error_type=%s)",
             type(exc).__name__,
-            exc,
         )
         # Do not echo the raw Google exception back to the client — it can
         # contain SA identifiers, token URIs, or other internals.
@@ -332,13 +326,12 @@ def connect_service_account(user_id):
         ] or home_fallback
         if accessible_projects is home_fallback:
             logging.warning(
-                "GCP SA connect: projects.list returned empty for %s — falling back to SA's embedded project_id",
-                client_email,
+                "GCP SA connect: projects.list returned empty — falling back to SA's embedded project_id"
             )
-    except Exception:
-        logging.exception(
-            "GCP SA connect: projects.list failed for %s — falling back to SA's embedded project_id",
-            client_email,
+    except Exception as exc:
+        logging.warning(
+            "GCP SA connect: projects.list failed (error_type=%s) — falling back to SA's embedded project_id",
+            type(exc).__name__,
         )
         accessible_projects = home_fallback
 
@@ -357,17 +350,15 @@ def connect_service_account(user_id):
     try:
         store_tokens_in_db(user_id, token_payload, "gcp")
         logging.info(
-            "GCP SA connect: stored service account credentials for user %s (client_email=%s, projects=%d)",
+            "GCP SA connect: stored service account credentials for user %s (projects=%d)",
             user_id,
-            client_email,
             len(accessible_projects),
         )
     except Exception as exc:
-        logging.exception(
-            "GCP SA connect: failed to store credentials for user %s (client_email=%s): %s",
+        logging.error(
+            "GCP SA connect: failed to store credentials for user %s (error_type=%s)",
             user_id,
-            client_email,
-            exc,
+            type(exc).__name__,
         )
         return jsonify({"error": "Failed to store GCP service account credentials"}), 500
 

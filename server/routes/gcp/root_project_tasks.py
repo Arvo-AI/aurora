@@ -36,6 +36,9 @@ def setup_root_project_async(self, user_id: str, project_id: str) -> dict:
             "service_account_email": token_data.get("client_email"),
         }
         store_user_preference(user_id, "gcp_service_accounts", setup_result)
+        # Persist the root project explicitly so the task is self-contained
+        # and doesn't rely on the calling route having already stored it.
+        store_user_preference(user_id, "gcp_root_project", project_id)
         logger.info(
             "[RootProjectTask] SA mode — skipping Aurora SA provisioning for user=%s project=%s",
             user_id,
