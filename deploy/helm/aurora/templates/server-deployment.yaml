@@ -63,7 +63,7 @@ spec:
             {{- end }}
           startupProbe:
             httpGet:
-              path: /health/readiness
+              path: /health/liveness
               port: 5080
             initialDelaySeconds: 10
             periodSeconds: 10

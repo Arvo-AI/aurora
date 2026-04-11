@@ -65,17 +65,15 @@ spec:
               readOnly: true
             {{- end }}
           startupProbe:
-            httpGet:
-              path: /health
-              port: 5007
+            tcpSocket:
+              port: 5006
             initialDelaySeconds: 10
             periodSeconds: 10
             timeoutSeconds: 5
             failureThreshold: 30
           readinessProbe:
-            httpGet:
-              path: /health
-              port: 5007
+            tcpSocket:
+              port: 5006
             periodSeconds: 10
             timeoutSeconds: 5
             failureThreshold: 3
