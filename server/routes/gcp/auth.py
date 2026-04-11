@@ -381,6 +381,9 @@ def connect_service_account(user_id):
 
     # Clear Redis GCP caches for the user (mirrors /api/gcp/force-disconnect).
     org_id = get_org_id_from_request()
+    conn = None
+    cursor = None
+    secret_ref_to_clear = None
     try:
         conn = connect_to_db_as_admin()
         cursor = conn.cursor()
@@ -389,18 +392,38 @@ def connect_service_account(user_id):
             (user_id, org_id),
         )
         result = cursor.fetchone()
-        cursor.close()
-        conn.close()
-
         if result and result[0]:
-            clear_secret_cache(result[0])
+            secret_ref_to_clear = result[0]
+    except Exception as exc:
+        logging.warning(
+            "GCP SA connect: failed to look up secret_ref for user %s (error_type=%s)",
+            user_id,
+            type(exc).__name__,
+        )
+    finally:
+        if cursor is not None:
+            try:
+                cursor.close()
+            except Exception:
+                pass
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    if secret_ref_to_clear:
+        try:
+            clear_secret_cache(secret_ref_to_clear)
             logging.info(
                 "GCP SA connect: cleared Redis cache for user %s after SA upload", user_id,
             )
-    except Exception as exc:
-        logging.warning(
-            "GCP SA connect: failed to clear Redis cache for user %s: %s", user_id, exc,
-        )
+        except Exception as exc:
+            logging.warning(
+                "GCP SA connect: failed to clear Redis cache for user %s (error_type=%s)",
+                user_id,
+                type(exc).__name__,
+            )
 
     # Also clear the per-user GCP setup cache (Redis + in-process env vars +
     # temp cred files). Critical on OAuth → SA switches so stale impersonation
@@ -410,9 +433,9 @@ def connect_service_account(user_id):
         clear_gcp_cache_for_user(user_id)
     except Exception as exc:
         logging.warning(
-            "GCP SA connect: failed to clear gcp_cached_auth state for user %s: %s",
+            "GCP SA connect: failed to clear gcp_cached_auth state for user %s (error_type=%s)",
             user_id,
-            exc,
+            type(exc).__name__,
         )
 
     return jsonify({

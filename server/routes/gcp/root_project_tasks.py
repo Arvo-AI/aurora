@@ -30,6 +30,24 @@ def setup_root_project_async(self, user_id: str, project_id: str) -> dict:
     # GCP. Skip the provisioning step entirely and record a minimal
     # preference entry so the UI can still read "root project" state.
     if get_gcp_auth_type(token_data) == GCP_AUTH_TYPE_SA:
+        # Guard against persisting a project the uploaded SA cannot actually
+        # see. accessible_projects is populated at SA connect time via
+        # cloudresourcemanager.projects.list; anything outside that set would
+        # push the failure into later gcloud/kubectl flows with no signal.
+        accessible = token_data.get("accessible_projects") or []
+        accessible_ids = {
+            p.get("project_id") for p in accessible if isinstance(p, dict)
+        }
+        if accessible_ids and project_id not in accessible_ids:
+            logger.error(
+                "[RootProjectTask] SA mode — rejecting project %s for user=%s: not in accessible_projects",
+                project_id,
+                user_id,
+            )
+            raise ValueError(
+                "Selected root project is not accessible to the uploaded service account."
+            )
+
         setup_result = {
             "root_project": project_id,
             "auth_type": GCP_AUTH_TYPE_SA,

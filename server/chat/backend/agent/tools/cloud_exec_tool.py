@@ -1946,11 +1946,18 @@ Security & Compliance
                 
         # --- Auto-inject impersonation flag for gsutil ---------------------------------
         if provider.lower() in ['gcp', 'gcloud'] and cli_tool == 'gsutil' and auth_method == 'impersonated':
-            # Use whichever env-var we previously set to retrieve SA email.
-            sa_email = (
-                os.environ.get("CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT") or
-                os.environ.get("CLOUDSDK_IMPERSONATE_SERVICE_ACCOUNT")
-            )
+            # Read the impersonation email from the per-subprocess isolated_env
+            # built by setup_gcp_environment_isolated. os.environ is NOT
+            # consulted — this worker is long-lived, and a previous user's
+            # terraform call may have left stale CLOUDSDK_*_IMPERSONATE_* vars
+            # in os.environ. Using those here would cross-contaminate one
+            # user's gsutil command with another user's SA identity.
+            sa_email = None
+            if isinstance(isolated_env, dict):
+                sa_email = (
+                    isolated_env.get("CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT")
+                    or isolated_env.get("CLOUDSDK_IMPERSONATE_SERVICE_ACCOUNT")
+                )
             if sa_email and "-i" not in command.split():
                 # Prepend the -i flag right after 'gsutil'
                 if command.startswith('gsutil'):
