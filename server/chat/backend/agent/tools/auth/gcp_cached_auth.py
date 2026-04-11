@@ -297,13 +297,13 @@ def setup_gcp_impersonation_cached(
                     text=True,
                     timeout=10,
                 )
-                logger.info(f"TIME: gcloud config set impersonate_sa took {time.perf_counter() - imp_start:.2f}s")
+                logger.info("TIME: gcloud config set impersonate_sa took %.2fs", time.perf_counter() - imp_start)
                 if imp_result.returncode == 0:
-                    logger.info(f"Configured gcloud to impersonate {sa_email}")
+                    logger.info("Configured gcloud to impersonate the per-user Aurora service account")
                 else:
-                    logger.warning(f"Failed to configure SA impersonation: {imp_result.stderr}")
+                    logger.warning("Failed to configure gcloud SA impersonation (returncode=%s)", imp_result.returncode)
         except Exception as e:
-            logger.warning(f"Failed to configure gcloud settings: {e}")
+            logger.warning("Failed to configure gcloud settings (error_type=%s)", type(e).__name__)
 
         try:
             _cache_set(key, {
@@ -314,8 +314,8 @@ def setup_gcp_impersonation_cached(
                 "ts": time.time(),
                 "mode": current_mode or "agent",
             })
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Failed to persist GCP setup cache entry (error_type=%s)", type(e).__name__)
 
         logger.info("Successfully set up GCP access (%s)", auth_method)
         logger.info("TIME: setup_gcp_impersonation (cached helper) completed in %.2fs", time.perf_counter() - fn_start)

@@ -375,6 +375,19 @@ def connect_service_account(user_id):
     # per-user Aurora SA and grants impersonation, which only applies to OAuth
     # mode. The uploaded SA key IS the working identity for SA mode.
 
+    # Clear any OAuth-era preferences so stale Aurora-created SA metadata and
+    # the previous root project don't leak into the SA-mode UI. The user can
+    # set a new root project via the manage dialog after connecting.
+    try:
+        from utils.auth.stateless_auth import store_user_preference
+        store_user_preference(user_id, "gcp_service_accounts", None)
+        store_user_preference(user_id, "gcp_root_project", None)
+    except Exception as exc:
+        logging.warning(
+            "GCP SA connect: failed to clear stale GCP preferences (error_type=%s)",
+            type(exc).__name__,
+        )
+
     # Clear Redis GCP caches for the user (mirrors /api/gcp/force-disconnect).
     org_id = get_org_id_from_request()
     try:

@@ -11,7 +11,7 @@ import GcpProviderIntegration from "@/components/gcp-provider-integration";
 import OvhProviderIntegration from "@/components/ovh-provider-integration";
 import ScalewayProviderIntegration from "@/components/scaleway-provider-integration";
 import AzureProviderIntegration from "@/components/azure-provider-integration";
-import { GcpConnectDialog } from "./GcpConnectDialog";
+import { GcpConnectDialog } from "@/components/connectors/GcpConnectDialog";
 
 interface ConnectorDialogsProps {
   connectorId: string;

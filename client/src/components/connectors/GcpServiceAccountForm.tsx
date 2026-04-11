@@ -27,12 +27,13 @@ interface ValidationState {
 }
 
 const REQUIRED_FIELDS: Array<{
-  key: "project_id" | "client_email" | "private_key";
+  key: "project_id" | "client_email" | "private_key" | "token_uri";
   label: string;
 }> = [
   { key: "project_id", label: "project_id" },
   { key: "client_email", label: "client_email" },
   { key: "private_key", label: "private_key" },
+  { key: "token_uri", label: "token_uri" },
 ];
 
 function validateServiceAccountJson(raw: string): ValidationState {

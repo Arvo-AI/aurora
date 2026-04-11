@@ -11,7 +11,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { Loader2 } from "lucide-react";
-import { GcpServiceAccountForm } from "./GcpServiceAccountForm";
+import { GcpServiceAccountForm } from "@/components/connectors/GcpServiceAccountForm";
 
 interface GcpConnectDialogProps {
   open: boolean;
