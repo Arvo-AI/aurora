@@ -112,6 +112,7 @@ jobs:
       - name: Export digest
         env:
           DIGEST: ${{ steps.build-server.outputs.digest || steps.build-frontend.outputs.digest }}
+          ARCH: ${{ matrix.arch }}
         run: |
           set -euo pipefail
           if [ -z "${DIGEST:-}" ]; then
@@ -119,8 +120,11 @@ jobs:
             exit 1
           fi
           mkdir -p /tmp/digests
-          # Strip the "sha256:" prefix so the filename is just the hex digest.
-          touch "/tmp/digests/${DIGEST#sha256:}"
+          # File name = arch, content = sha256:<hex>. Per-arch filenames let the
+          # merge job validate that every expected arch is present *before*
+          # calling `imagetools create`, so we never publish a half-populated
+          # manifest list to the registry.
+          printf '%s' "$DIGEST" > "/tmp/digests/${ARCH}"
 
       - name: Upload digest artifact
         uses: actions/upload-artifact@v4
@@ -175,16 +179,31 @@ jobs:
           IMAGE_NAME: ghcr.io/arvo-ai/aurora-${{ matrix.image }}
         run: |
           set -euo pipefail
-          tags=$(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON")
-          sources=""
-          for digest_file in *; do
-            [ -f "$digest_file" ] || continue
-            sources="$sources ${IMAGE_NAME}@sha256:${digest_file}"
+
+          # Fail fast if any expected arch's digest is missing, *before* we
+          # touch the registry. Keep this list in sync with the build matrix
+          # (currently amd64 + arm64).
+          expected_arches="amd64 arm64"
+          missing=""
+          for arch in $expected_arches; do
+            if [ ! -s "$arch" ]; then
+              missing="${missing} $arch"
+            fi
           done
-          if [ -z "$sources" ]; then
-            echo "No digest files found to merge" >&2
+          if [ -n "$missing" ]; then
+            echo "Missing digest file(s) for arch(es):$missing" >&2
+            echo "Contents of /tmp/digests:" >&2
+            ls -la >&2
             exit 1
           fi
+
+          tags=$(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON")
+          sources=""
+          for arch in $expected_arches; do
+            digest=$(cat "$arch")
+            sources="${sources} ${IMAGE_NAME}@${digest}"
+          done
+
           # shellcheck disable=SC2086
           docker buildx imagetools create $tags $sources
 
