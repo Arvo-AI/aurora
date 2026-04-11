@@ -312,28 +312,53 @@ def connect_service_account(user_id):
             "error": "Google rejected the service account key — it may be revoked, the SA may be disabled, or the project may not have the required APIs enabled"
         }), 400
 
-    # Fallback rationale: the SA always has access to its home project even if
-    # it cannot enumerate siblings (e.g. missing CRM API enablement or
-    # resourcemanager.projects.list permission), so the SA's own project_id is
-    # a safe minimum.
+    # Fallback rationale: if projects.list fails or comes back empty, we would
+    # like to at least surface the SA's own home project. BUT being created in
+    # a project does not automatically grant an SA any access to that project
+    # — SAs need explicit IAM role bindings. A phantom accessible_projects
+    # entry would break every downstream gcloud/kubectl flow with no signal.
+    # Reality-check via projects.get before accepting the fallback.
     home_fallback = [{"project_id": home_project_id, "name": home_project_id}]
+    needs_reality_check = False
     try:
         listed = get_project_list(creds)
         accessible_projects = [
             {"project_id": p.get("projectId"), "name": p.get("name") or p.get("projectId")}
             for p in listed
             if p.get("projectId")
-        ] or home_fallback
-        if accessible_projects is home_fallback:
+        ]
+        if not accessible_projects:
             logging.warning(
-                "GCP SA connect: projects.list returned empty — falling back to SA's embedded project_id"
+                "GCP SA connect: projects.list returned empty — verifying home project access"
             )
+            needs_reality_check = True
     except Exception as exc:
         logging.warning(
-            "GCP SA connect: projects.list failed (error_type=%s) — falling back to SA's embedded project_id",
+            "GCP SA connect: projects.list failed (error_type=%s) — verifying home project access",
             type(exc).__name__,
         )
-        accessible_projects = home_fallback
+        accessible_projects = []
+        needs_reality_check = True
+
+    if needs_reality_check:
+        try:
+            from googleapiclient.discovery import build as _build
+            _build("cloudresourcemanager", "v1", credentials=creds).projects().get(
+                projectId=home_project_id
+            ).execute()
+            accessible_projects = home_fallback
+        except Exception as exc:
+            logging.warning(
+                "GCP SA connect: SA cannot access its home project %s (error_type=%s)",
+                home_project_id,
+                type(exc).__name__,
+            )
+            return jsonify({
+                "error": (
+                    "The uploaded service account has no accessible GCP projects. "
+                    "Grant it at least roles/viewer on a project before connecting."
+                )
+            }), 400
 
     # `email` is set so store_tokens_in_db populates the user_tokens.email
     # column the connected-accounts UI uses as a display label.
@@ -365,86 +390,14 @@ def connect_service_account(user_id):
     # gcp_post_auth_setup_task is intentionally NOT fired: that task creates a
     # per-user Aurora SA and grants impersonation, which only applies to OAuth
     # mode. The uploaded SA key IS the working identity for SA mode.
-
-    # Clear any OAuth-era preferences so stale Aurora-created SA metadata and
-    # the previous root project don't leak into the SA-mode UI. The user can
-    # set a new root project via the manage dialog after connecting.
-    try:
-        from utils.auth.stateless_auth import store_user_preference
-        store_user_preference(user_id, "gcp_service_accounts", None)
-        store_user_preference(user_id, "gcp_root_project", None)
-    except Exception as exc:
-        logging.warning(
-            "GCP SA connect: failed to clear stale GCP preferences (error_type=%s)",
-            type(exc).__name__,
-        )
-
-    # Clear Redis GCP caches for the user (mirrors /api/gcp/force-disconnect).
-    org_id = get_org_id_from_request()
-    conn = None
-    cursor = None
-    secret_ref_to_clear = None
-    try:
-        conn = connect_to_db_as_admin()
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT secret_ref FROM user_tokens WHERE user_id = %s AND (org_id = %s OR org_id IS NULL) AND provider = 'gcp'",
-            (user_id, org_id),
-        )
-        result = cursor.fetchone()
-        if result and result[0]:
-            secret_ref_to_clear = result[0]
-    except Exception as exc:
-        logging.warning(
-            "GCP SA connect: failed to look up secret_ref for user %s (error_type=%s)",
-            user_id,
-            type(exc).__name__,
-        )
-    finally:
-        if cursor is not None:
-            try:
-                cursor.close()
-            except Exception as exc:
-                logging.warning(
-                    "GCP SA connect: failed to close DB cursor for user %s (error_type=%s)",
-                    user_id,
-                    type(exc).__name__,
-                )
-        if conn is not None:
-            try:
-                conn.close()
-            except Exception as exc:
-                logging.warning(
-                    "GCP SA connect: failed to close DB connection for user %s (error_type=%s)",
-                    user_id,
-                    type(exc).__name__,
-                )
-
-    if secret_ref_to_clear:
-        try:
-            clear_secret_cache(secret_ref_to_clear)
-            logging.info(
-                "GCP SA connect: cleared Redis cache for user %s after SA upload", user_id,
-            )
-        except Exception as exc:
-            logging.warning(
-                "GCP SA connect: failed to clear Redis cache for user %s (error_type=%s)",
-                user_id,
-                type(exc).__name__,
-            )
-
-    # Also clear the per-user GCP setup cache (Redis + in-process env vars +
-    # temp cred files). Critical on OAuth → SA switches so stale impersonation
-    # env vars from a prior OAuth run can't leak into SA-mode gcloud calls.
-    try:
-        from chat.backend.agent.tools.auth.gcp_cached_auth import clear_gcp_cache_for_user
-        clear_gcp_cache_for_user(user_id)
-    except Exception as exc:
-        logging.warning(
-            "GCP SA connect: failed to clear gcp_cached_auth state for user %s (error_type=%s)",
-            user_id,
-            type(exc).__name__,
-        )
+    #
+    # Note: there is intentionally no "clear stale OAuth state" block here.
+    # Users can only reach this route by (a) connecting for the first time or
+    # (b) disconnecting an existing connection first. The disconnect handler
+    # (`clear_gcp_cache_for_user` via DELETE /api/connected-accounts/gcp) is
+    # responsible for wiping Redis/env/preference state — duplicating that on
+    # connect is dead code now that the in-place "Switch auth method" flow
+    # has been removed.
 
     return jsonify({
         "success": True,

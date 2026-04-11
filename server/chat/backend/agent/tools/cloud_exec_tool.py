@@ -606,6 +606,20 @@ def setup_gcp_environment_isolated(user_id: str, selected_project_id: str | None
         is_sa_mode = token_resp.get("auth_type") == GCP_AUTH_TYPE_SA
         auth_method = "service_account" if is_sa_mode else "impersonated"
 
+        # Per-user gcloud config directory so concurrent users don't race on
+        # the same gcloud config/cache files and leak auth state between
+        # sessions. A user_id in Aurora is a UUID, which is already safe to
+        # embed in a filesystem path.
+        cloudsdk_config_dir = f"/tmp/.gcloud-{user_id}"
+        try:
+            os.makedirs(cloudsdk_config_dir, exist_ok=True)
+        except OSError as mkdir_err:
+            logger.warning(
+                "GCP isolated env: could not create per-user CLOUDSDK_CONFIG dir (error_type=%s) — falling back to shared path",
+                type(mkdir_err).__name__,
+            )
+            cloudsdk_config_dir = "/tmp/.gcloud"
+
         isolated_env = {
             "PATH": os.environ.get("PATH", ""),
             "HOME": "/home/appuser",
@@ -613,7 +627,7 @@ def setup_gcp_environment_isolated(user_id: str, selected_project_id: str | None
             "GOOGLE_OAUTH_ACCESS_TOKEN": access_token,
             "CLOUDSDK_AUTH_ACCESS_TOKEN": access_token,
             "GOOGLE_CLOUD_PROJECT": project_id,
-            "CLOUDSDK_CONFIG": "/tmp/.gcloud",
+            "CLOUDSDK_CONFIG": cloudsdk_config_dir,
         }
         if is_sa_mode:
             # Point gcloud at a concrete ADC source so it doesn't fall through
