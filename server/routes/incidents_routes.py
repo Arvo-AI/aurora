@@ -1359,11 +1359,18 @@ KEY: Do NOT automatically start a full investigation unless explicitly asked. De
                                    WHERE id = %s AND incident_id = %s""",
                                 (session_id, sid_int, incident_id),
                             )
-                            conn.commit()
-                    logger.info(
-                        "[INCIDENTS] Marked suggestion %s as executed (session %s)",
-                        suggestion_id, session_id,
-                    )
+                            if cursor.rowcount > 0:
+                                conn.commit()
+                                logger.info(
+                                    "[INCIDENTS] Marked suggestion %s as executed (session %s)",
+                                    suggestion_id, session_id,
+                                )
+                            else:
+                                conn.rollback()
+                                logger.warning(
+                                    "[INCIDENTS] Suggestion %s not found for incident %s — skipped marking",
+                                    suggestion_id, incident_id,
+                                )
             except Exception as exc:
                 logger.warning("[INCIDENTS] Failed to mark suggestion %s as executed: %s", suggestion_id, exc)
 
@@ -1472,6 +1479,9 @@ def mark_suggestion_executed(user_id, suggestion_id: str):
                        WHERE id = %s""",
                     (session_id, suggestion_id_int),
                 )
+                if cursor.rowcount == 0:
+                    conn.rollback()
+                    return jsonify({"error": "Suggestion update failed — row not found"}), 404
                 conn.commit()
 
         logger.info("[INCIDENTS] Marked suggestion %s as executed (session %s)", suggestion_id, session_id)

@@ -50,6 +50,7 @@ export default function SuggestionModal({
   const router = useRouter();
   const [copied, setCopied] = useState(false);
   const [confirmText, setConfirmText] = useState('');
+  const [isExecuting, setIsExecuting] = useState(false);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -85,7 +86,8 @@ export default function SuggestionModal({
   };
 
   const handleExecute = async () => {
-    if (!suggestion.command) return;
+    if (!suggestion.command || isExecuting) return;
+    setIsExecuting(true);
 
     let sessionId: string | undefined;
     try {
@@ -94,12 +96,14 @@ export default function SuggestionModal({
       });
       if (!res.ok) {
         console.error('Failed to mark suggestion as executed:', res.status);
+        setIsExecuting(false);
         return;
       }
       const data = await res.json();
       sessionId = data?.sessionId;
     } catch (err) {
       console.error('Failed to mark suggestion as executed:', err);
+      setIsExecuting(false);
       return;
     }
 
@@ -233,11 +237,11 @@ export default function SuggestionModal({
           )}
           <Button
             onClick={handleExecute}
-            disabled={!suggestion.command || !isConfirmed}
+            disabled={!suggestion.command || !isConfirmed || isExecuting}
             className="bg-orange-600 hover:bg-orange-700 text-white"
           >
             <Play className="w-4 h-4 mr-2" />
-            {isAlreadyExecuted ? 'Re-execute' : 'Execute'}
+            {isExecuting ? 'Executing…' : isAlreadyExecuted ? 'Re-execute' : 'Execute'}
           </Button>
         </DialogFooter>
       </DialogContent>
