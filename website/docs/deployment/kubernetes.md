@@ -6,7 +6,7 @@ sidebar_position: 2
 
 Deploy Aurora on any Kubernetes cluster using Helm.
 
-## Install the Helm Chart
+## Add the Helm Chart Source
 
 Aurora's Helm chart is published to two registries. Use whichever your cluster tooling supports:
 
