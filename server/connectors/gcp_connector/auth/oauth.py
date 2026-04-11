@@ -133,8 +133,6 @@ def get_credentials(token_data=None):
     # Service account branch: the uploaded key IS the working identity, so we
     # do NOT need the OAuth refresh-token / DB fallback path below.
     if token_data.get("auth_type") == "service_account":
-        sa_client_email = token_data.get("client_email")
-        sa_user_id = token_data.get("user_id")
         try:
             sa_info = json.loads(token_data["service_account_json"])
             sa_creds = service_account.Credentials.from_service_account_info(
@@ -148,11 +146,8 @@ def get_credentials(token_data=None):
             return sa_creds
         except Exception as e:
             logger.error(
-                "Failed to load/refresh GCP service account credentials (user_id=%s, client_email=%s): %s: %s",
-                sa_user_id,
-                sa_client_email,
+                "Failed to load/refresh GCP service account credentials (error_type=%s)",
                 type(e).__name__,
-                e,
             )
             raise
 

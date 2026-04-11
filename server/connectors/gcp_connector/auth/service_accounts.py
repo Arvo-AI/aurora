@@ -444,11 +444,8 @@ def generate_sa_access_token(user_id: str, scopes: List[str] = None,
                 sa_creds.refresh(GoogleAuthRequest())
         except Exception as e:
             logger.error(
-                "Failed to refresh GCP service account credentials (user_id=%s, client_email=%s): %s: %s",
-                user_id,
-                sa_client_email,
+                "Failed to refresh GCP service account credentials (error_type=%s)",
                 type(e).__name__,
-                e,
             )
             # Surface a user-safe message so the raw google-auth error does
             # not bubble into chat/UI surfaces. The full exception is logged
@@ -465,11 +462,7 @@ def generate_sa_access_token(user_id: str, scopes: List[str] = None,
             if selected_project_id in accessible_ids:
                 target_project_id = selected_project_id
             else:
-                logger.info(
-                    "GCP SA: selected project %s not in accessible list; using default %s",
-                    selected_project_id,
-                    target_project_id,
-                )
+                logger.info("GCP SA: selected project is not in accessible list; using default project")
 
         # google-auth stores `expiry` as a naive UTC datetime; attach tzinfo
         # explicitly so the serialized string is a valid RFC3339 UTC timestamp.
@@ -693,24 +686,18 @@ def create_local_credentials_file(token_data, project_id: str) -> str:
             # Validate it's parseable before writing, so errors surface clearly.
             json.loads(sa_json_str)
 
-            fd, credentials_path = tempfile.mkstemp(
-                suffix='.json', prefix=f'gcp_sa_credentials_{project_id}_'
-            )
+            fd, credentials_path = tempfile.mkstemp(suffix='.json', prefix='gcp_sa_credentials_')
             with os.fdopen(fd, 'w') as file:
                 file.write(sa_json_str)
 
-            logger.info(
-                "Created SA credentials file at %s for project %s", credentials_path, project_id,
-            )
+            logger.info("Created SA credentials file for local GCP tooling")
             os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = credentials_path
             os.environ["GOOGLE_CLOUD_PROJECT"] = project_id
             return credentials_path
         except Exception as e:
-            error_msg = (
-                f"Failed to create SA credentials file (client_email={token_data.get('client_email')}): {e}"
-            )
-            logger.error(error_msg)
-            raise ValueError(error_msg)
+            error_msg = "Failed to create SA credentials file"
+            logger.error("%s (error_type=%s)", error_msg, type(e).__name__)
+            raise ValueError(error_msg) from e
 
     try:
         # Check if we have a refresh token before attempting refresh
@@ -739,21 +726,21 @@ def create_local_credentials_file(token_data, project_id: str) -> str:
         }
 
         # Create a temporary file
-        fd, credentials_path = tempfile.mkstemp(suffix='.json', prefix=f'gcp_credentials_{project_id}_')
+        fd, credentials_path = tempfile.mkstemp(suffix='.json', prefix='gcp_credentials_')
 
         # Write the credentials to the file
         with os.fdopen(fd, 'w') as file:
             json.dump(credentials, file)
-        
-        logger.info(f"Created credentials file at {credentials_path}")
-        
+
+        logger.info("Created OAuth credentials file for local GCP tooling")
+
         # Set environment variables for GCP tools
         os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = credentials_path
         os.environ["GOOGLE_CLOUD_PROJECT"] = project_id
-        
+
         return credentials_path
-        
+
     except Exception as e:
-        error_msg = f"Failed to create credentials file: {str(e)}"
-        logger.error(error_msg)
-        raise ValueError(error_msg)
+        error_msg = "Failed to create credentials file"
+        logger.error("%s (error_type=%s)", error_msg, type(e).__name__)
+        raise ValueError(error_msg) from e

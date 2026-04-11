@@ -577,10 +577,10 @@ def _get_sa_adc_file(user_id: str) -> Optional[str]:
         with os.fdopen(fd, "w") as f:
             f.write(sa_json)
         _sa_adc_file_cache[user_id] = path
-        logger.info(f"Wrote SA ADC file for user {user_id} at {path}")
+        logger.info("Wrote SA ADC file for local GCP tooling")
         return path
     except Exception as e:
-        logger.warning(f"Failed to write SA ADC file for user {user_id}: {e}")
+        logger.warning("Failed to write SA ADC file (error_type=%s)", type(e).__name__)
         return None
 
 
@@ -630,8 +630,8 @@ def setup_gcp_environment_isolated(user_id: str, selected_project_id: str | None
             isolated_env["CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT"] = sa_email
             isolated_env["CLOUDSDK_IMPERSONATE_SERVICE_ACCOUNT"] = sa_email
 
-        logger.info(f"GCP isolated environment configured ({auth_method}) for project: {project_id}")
-        logger.info(f"TIME: setup_gcp_environment_isolated completed in {time.perf_counter() - fn_start:.2f}s")
+        logger.info("GCP isolated environment configured (%s)", auth_method)
+        logger.info("TIME: setup_gcp_environment_isolated completed in %.2fs", time.perf_counter() - fn_start)
 
         return True, project_id, auth_method, isolated_env
 

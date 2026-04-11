@@ -30,18 +30,16 @@ def setup_root_project_async(self, user_id: str, project_id: str) -> dict:
     # GCP. Skip the provisioning step entirely and record a minimal
     # preference entry so the UI can still read "root project" state.
     if get_gcp_auth_type(token_data) == GCP_AUTH_TYPE_SA:
-        sa_client_email = token_data.get("client_email")
         setup_result = {
             "root_project": project_id,
             "auth_type": GCP_AUTH_TYPE_SA,
-            "service_account_email": sa_client_email,
+            "service_account_email": token_data.get("client_email"),
         }
         store_user_preference(user_id, "gcp_service_accounts", setup_result)
         logger.info(
-            "[RootProjectTask] SA mode — skipping Aurora SA provisioning for user=%s project=%s (sa=%s)",
+            "[RootProjectTask] SA mode — skipping Aurora SA provisioning for user=%s project=%s",
             user_id,
             project_id,
-            sa_client_email,
         )
         return setup_result
 

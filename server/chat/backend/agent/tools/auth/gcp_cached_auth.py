@@ -317,8 +317,8 @@ def setup_gcp_impersonation_cached(
         except Exception:
             pass
 
-        logger.info(f"Successfully set up GCP access ({auth_method}) for project: {project_id}")
-        logger.info(f"TIME: setup_gcp_impersonation (cached helper) completed in {time.perf_counter() - fn_start:.2f}s")
+        logger.info("Successfully set up GCP access (%s)", auth_method)
+        logger.info("TIME: setup_gcp_impersonation (cached helper) completed in %.2fs", time.perf_counter() - fn_start)
         return True, project_id, auth_method
 
     except Exception as e:
