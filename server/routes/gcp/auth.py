@@ -390,14 +390,6 @@ def connect_service_account(user_id):
     # gcp_post_auth_setup_task is intentionally NOT fired: that task creates a
     # per-user Aurora SA and grants impersonation, which only applies to OAuth
     # mode. The uploaded SA key IS the working identity for SA mode.
-    #
-    # Note: there is intentionally no "clear stale OAuth state" block here.
-    # Users can only reach this route by (a) connecting for the first time or
-    # (b) disconnecting an existing connection first. The disconnect handler
-    # (`clear_gcp_cache_for_user` via DELETE /api/connected-accounts/gcp) is
-    # responsible for wiping Redis/env/preference state — duplicating that on
-    # connect is dead code now that the in-place "Switch auth method" flow
-    # has been removed.
 
     return jsonify({
         "success": True,
