@@ -38,6 +38,7 @@ export default function ConnectorCard({ connector, connectedOverride }: Connecto
   const [showGitHubDialog, setShowGitHubDialog] = useState(false);
   const [showBitbucketDialog, setShowBitbucketDialog] = useState(false);
   const [showGcpDialog, setShowGcpDialog] = useState(false);
+  const [showGcpConnectDialog, setShowGcpConnectDialog] = useState(false);
   const [showOvhDialog, setShowOvhDialog] = useState(false);
   const [showScalewayDialog, setShowScalewayDialog] = useState(false);
   const [showAzureDialog, setShowAzureDialog] = useState(false);
@@ -176,7 +177,7 @@ export default function ConnectorCard({ connector, connectedOverride }: Connecto
 
     if (connector.id === "gcp") {
       if (!isConnected) {
-        await handleGCPOAuth();
+        setShowGcpConnectDialog(true);
       } else {
         setShowGcpDialog(true);
       }
@@ -505,6 +506,7 @@ export default function ConnectorCard({ connector, connectedOverride }: Connecto
         showGitHubDialog={showGitHubDialog}
         showBitbucketDialog={showBitbucketDialog}
         showGcpDialog={showGcpDialog}
+        showGcpConnectDialog={showGcpConnectDialog}
         showAzureDialog={showAzureDialog}
         showOvhDialog={showOvhDialog}
         showScalewayDialog={showScalewayDialog}
@@ -530,6 +532,12 @@ export default function ConnectorCard({ connector, connectedOverride }: Connecto
           }
         }}
         onGcpDialogChange={setShowGcpDialog}
+        onGcpConnectDialogChange={setShowGcpConnectDialog}
+        onGcpOAuthConnect={handleGCPOAuth}
+        onGcpSwitchAuthMethod={() => {
+          setShowGcpDialog(false);
+          setShowGcpConnectDialog(true);
+        }}
         onAzureDialogChange={setShowAzureDialog}
         onOvhDialogChange={setShowOvhDialog}
         onScalewayDialogChange={setShowScalewayDialog}
