@@ -84,9 +84,19 @@ export default function SuggestionModal({
     }
   };
 
-  const handleExecute = () => {
+  const handleExecute = async () => {
     if (!suggestion.command) return;
-    const message = encodeURIComponent(`Execute this command: ${suggestion.command}`);
+
+    // Mark the suggestion as executed in the database
+    try {
+      await fetch(`/api/incidents/suggestions/${suggestion.id}/mark-executed`, {
+        method: 'POST',
+      });
+    } catch (err) {
+      console.error('Failed to mark suggestion as executed:', err);
+    }
+
+    const message = `Execute this command and report the output concisely. If the command fails, report the error and stop — do NOT investigate further or run alternative commands.\n\nCommand: ${suggestion.command}`;
     const params = new URLSearchParams({ message, mode: 'agent' });
     if (chatSessionId) {
       params.set('sessionId', chatSessionId);

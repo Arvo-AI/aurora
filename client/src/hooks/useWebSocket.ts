@@ -35,6 +35,7 @@ export interface WebSocketMessage {
 
 export interface WebSocketConfig {
   url: string;
+  userId?: string | null;
   reconnectInterval?: number;
   maxReconnectAttempts?: number;
   onMessage?: (message: WebSocketMessage) => void;
@@ -335,7 +336,7 @@ export const useWebSocket = (config: WebSocketConfig) => {
     disconnect,
     send,
     sendRaw,
-    isReady: state.isConnected && (user?.id || configRef.current.userId),
+    isReady: state.isConnected && !!(user?.id || configRef.current.userId),
     wsRef // Expose wsRef for better state checking
   };
 }; 

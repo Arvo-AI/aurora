@@ -1429,6 +1429,43 @@ def update_suggestion(user_id, suggestion_id: str):
         return jsonify({"error": "Failed to update suggestion"}), 500
 
 
+@incidents_bp.route("/api/incidents/suggestions/<suggestion_id>/mark-executed", methods=["POST"])
+@require_permission("incidents", "write")
+def mark_suggestion_executed(user_id, suggestion_id: str):
+    suggestion_id_int = _parse_suggestion_id(suggestion_id)
+    if suggestion_id_int is None:
+        return jsonify({"error": "Invalid suggestion ID"}), 400
+
+    org_id = get_org_id_from_request()
+
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """SELECT s.id FROM incident_suggestions s
+                       JOIN incidents i ON s.incident_id = i.id
+                       WHERE s.id = %s AND i.org_id = %s""",
+                    (suggestion_id_int, org_id),
+                )
+                if not cursor.fetchone():
+                    return jsonify({"error": "Suggestion not found"}), 404
+
+                cursor.execute(
+                    """UPDATE incident_suggestions
+                       SET executed_at = NOW(), execution_status = 'executed'
+                       WHERE id = %s""",
+                    (suggestion_id_int,),
+                )
+                conn.commit()
+
+        logger.info("[INCIDENTS] Marked suggestion %s as executed", suggestion_id)
+        return jsonify({"success": True}), 200
+
+    except Exception as exc:
+        logger.exception("[INCIDENTS] Failed to mark suggestion %s as executed", suggestion_id)
+        return jsonify({"error": "Failed to mark suggestion"}), 500
+
+
 @incidents_bp.route(
     "/api/incidents/suggestions/<suggestion_id>/apply", methods=["POST"]
 )

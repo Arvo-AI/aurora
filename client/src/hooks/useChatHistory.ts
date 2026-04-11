@@ -224,7 +224,7 @@ export function useChatHistory(): UseChatHistoryReturn {
       const cleanedMessages = cleanupStaleToolCalls(rawMessages, data.updated_at);
       const cleanupTime = performance.now() - cleanupStart;
       // DON'T refresh sessions when just loading - this prevents sessions from moving to top
-      return { messages: cleanedMessages, uiState, incidentId: data.incident_id || null, status: data.status || null };
+      return { messages: cleanedMessages as ChatMessage[], uiState, incidentId: data.incident_id || null, status: data.status || null };
     } catch (err) {
       console.error('[useChatHistory] Error loading chat session:', err);
       setCrudError(err instanceof Error ? err.message : 'Failed to load chat session');

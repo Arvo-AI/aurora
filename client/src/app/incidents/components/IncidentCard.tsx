@@ -113,7 +113,7 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
   const { toast } = useToast();
   const { user } = useUser();
   const canWrite = checkCanWrite(user?.role);
-  const showSeverity = (alert.severity && alert.severity !== 'unknown') || incident.status === 'analyzed';
+  const showSeverity = (alert.severity && (alert.severity as string) !== 'unknown') || incident.status === 'analyzed';
 
   const handleResolveIncident = async () => {
     setResolvingIncident(true);
@@ -306,7 +306,7 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
                       {execStatus === 'completed' && <CheckCircle2 className="w-3 h-3" />}
                       {execStatus === 'failed' && <AlertCircle className="w-3 h-3" />}
                       {execStatus === 'in_progress' && <span className="w-2 h-2 bg-orange-400 rounded-full animate-pulse" />}
-                      {!execStatus && <CheckCircle2 className="w-3 h-3" />}
+                      {(execStatus === 'executed' || !execStatus) && <Play className="w-3 h-3" />}
                       <span className="text-[10px] font-medium">
                         {execStatus === 'completed' ? 'Done' : execStatus === 'failed' ? 'Failed' : execStatus === 'in_progress' ? 'Running' : 'Ran'}
                       </span>
@@ -422,7 +422,7 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
             )}
             {isSafeUrl(alert.metadata?.alertUrl) && (
               <a 
-                href={alert.metadata.alertUrl}
+                href={alert.metadata!.alertUrl}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-blue-400 hover:text-blue-300"
@@ -432,7 +432,7 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
             )}
             {isSafeUrl(alert.metadata?.dashboardUrl) && (
               <a 
-                href={alert.metadata.dashboardUrl}
+                href={alert.metadata!.dashboardUrl}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-blue-400 hover:text-blue-300"
@@ -442,7 +442,7 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
             )}
             {isSafeUrl(alert.metadata?.runbookUrl) && (
               <a 
-                href={alert.metadata.runbookUrl}
+                href={alert.metadata!.runbookUrl}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-green-400 hover:text-green-300"
