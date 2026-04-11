@@ -235,9 +235,9 @@ helm show values aurora/aurora > my-values.yaml
 helm install aurora aurora/aurora --namespace aurora --create-namespace -f my-values.yaml
 
 # Option B: OCI registry (GHCR)
-helm show values oci://ghcr.io/arvo-ai/charts/aurora --version 0.1.0 > my-values.yaml
+helm show values oci://ghcr.io/arvo-ai/charts/aurora --version 1.2.6 > my-values.yaml
 # Edit my-values.yaml with your config, then:
-helm install aurora oci://ghcr.io/arvo-ai/charts/aurora --version 0.1.0 \
+helm install aurora oci://ghcr.io/arvo-ai/charts/aurora --version 1.2.6 \
   --namespace aurora --create-namespace -f my-values.yaml
 ```
 

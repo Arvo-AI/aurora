@@ -21,7 +21,7 @@ helm search repo aurora
 ### Option 2: OCI registry (GHCR)
 
 ```bash
-helm show values oci://ghcr.io/arvo-ai/charts/aurora --version 0.1.0 > my-values.yaml
+helm show values oci://ghcr.io/arvo-ai/charts/aurora --version 1.2.6 > my-values.yaml
 ```
 
 Both methods deliver the same chart. Choose OCI if your GitOps tooling (ArgoCD, Flux) already uses OCI, or the traditional repo if you prefer `helm repo add`.
@@ -131,7 +131,7 @@ For more control, deploy step by step.
 ```bash
 # 1. Pull the default values
 helm show values aurora/aurora > values.generated.yaml
-# or: helm show values oci://ghcr.io/arvo-ai/charts/aurora --version 0.1.0 > values.generated.yaml
+# or: helm show values oci://ghcr.io/arvo-ai/charts/aurora --version 1.2.6 > values.generated.yaml
 ```
 
 Edit `values.generated.yaml` — see [Configuration Reference](#configuration-reference) below for all options. At minimum, set:
@@ -180,7 +180,7 @@ helm upgrade --install aurora-oss aurora/aurora \
   -f values.generated.yaml
 
 # Or deploy from the OCI registry
-helm upgrade --install aurora-oss oci://ghcr.io/arvo-ai/charts/aurora --version 0.1.0 \
+helm upgrade --install aurora-oss oci://ghcr.io/arvo-ai/charts/aurora --version 1.2.6 \
   --namespace aurora-oss --create-namespace --reset-values \
   -f values.generated.yaml
 
@@ -473,7 +473,7 @@ helm upgrade aurora-oss ./deploy/helm/aurora \
   --reset-values -f deploy/helm/aurora/values.generated.yaml -n aurora-oss
 
 # Upgrade to a new chart version (OCI)
-helm upgrade aurora-oss oci://ghcr.io/arvo-ai/charts/aurora --version 0.2.0 \
+helm upgrade aurora-oss oci://ghcr.io/arvo-ai/charts/aurora --version 1.2.7 \
   --reset-values -f values.generated.yaml -n aurora-oss
 
 # Rollback

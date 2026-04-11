@@ -64,6 +64,8 @@ jobs:
     name: Publish to GHCR (OCI)
     runs-on: ubuntu-24.04
     if: github.repository == 'Arvo-AI/aurora'
+    outputs:
+      chart_version: ${{ steps.package.outputs.chart_version }}
 
     steps:
       - name: Checkout repository
@@ -78,10 +80,12 @@ jobs:
       - name: Package chart
         id: package
         run: |
+          CHART_VERSION=$(grep '^version:' ${{ env.CHART_DIR }}/aurora/Chart.yaml | awk '{print $2}')
           helm package ${{ env.CHART_DIR }}/aurora --destination .helm-pkg
           PKG=$(ls .helm-pkg/*.tgz)
           echo "package=$PKG" >> "$GITHUB_OUTPUT"
-          echo "Packaged: $PKG"
+          echo "chart_version=$CHART_VERSION" >> "$GITHUB_OUTPUT"
+          echo "Packaged: $PKG (version $CHART_VERSION)"
 
       - name: Push to GHCR
         run: helm push ${{ steps.package.outputs.package }} oci://${{ env.OCI_REPO }}
@@ -108,7 +112,7 @@ jobs:
           echo "  helm repo add aurora https://raw.githubusercontent.com/Arvo-AI/aurora/gh-pages"
           echo "  helm install aurora aurora/aurora"
           echo ""
-          echo "  helm install aurora oci://ghcr.io/arvo-ai/charts/aurora"
+          echo "  helm install aurora oci://ghcr.io/arvo-ai/charts/aurora --version ${{ needs.publish-oci.outputs.chart_version }}"
           echo ""
           if [ "${{ needs.publish-ghpages.result }}" != "success" ] || [ "${{ needs.publish-oci.result }}" != "success" ]; then
             echo "One or more publishes failed!"
