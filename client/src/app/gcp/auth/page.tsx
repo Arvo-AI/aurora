@@ -6,7 +6,7 @@ import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { ChevronLeft, Loader2 } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import { ProjectCache } from "@/components/cloud-provider/projects/projectUtils";
 import { fetchConnectedAccounts } from "@/lib/connected-accounts-cache";
 import { GcpServiceAccountForm } from "@/components/connectors/GcpServiceAccountForm";
@@ -54,14 +54,6 @@ export default function GcpAuthPage() {
 
   return (
     <div className="container mx-auto py-8 px-4 max-w-3xl">
-      <button
-        onClick={() => router.push("/connectors")}
-        className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors mb-6"
-      >
-        <ChevronLeft className="h-4 w-4" />
-        Back to Connectors
-      </button>
-
       <div className="flex items-center gap-4 mb-8">
         <div className="p-2 rounded-xl shadow-sm border overflow-hidden">
           <img src="/google-cloud-svgrepo-com.svg" alt="Google Cloud" className="h-9 w-9 object-contain rounded-md" />
