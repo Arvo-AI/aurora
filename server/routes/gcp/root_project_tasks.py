@@ -3,6 +3,7 @@
 import logging
 
 from celery_config import celery_app
+from connectors.gcp_connector.auth import GCP_AUTH_TYPE_SA, get_gcp_auth_type
 from connectors.gcp_connector.auth.oauth import get_credentials
 from routes.gcp.root_project_service import RootProjectSetupManager
 from utils.auth.stateless_auth import get_credentials_from_db, store_user_preference
@@ -22,6 +23,27 @@ def setup_root_project_async(self, user_id: str, project_id: str) -> dict:
         error_message = f"No GCP credentials found for user {user_id}"
         logger.error(error_message)
         raise ValueError(error_message)
+
+    # Service-account mode: Aurora never created a per-user SA to provision
+    # against the root project. The uploaded SA is already the working
+    # identity and has whatever IAM roles the user granted it directly in
+    # GCP. Skip the provisioning step entirely and record a minimal
+    # preference entry so the UI can still read "root project" state.
+    if get_gcp_auth_type(token_data) == GCP_AUTH_TYPE_SA:
+        sa_client_email = token_data.get("client_email")
+        setup_result = {
+            "root_project": project_id,
+            "auth_type": GCP_AUTH_TYPE_SA,
+            "service_account_email": sa_client_email,
+        }
+        store_user_preference(user_id, "gcp_service_accounts", setup_result)
+        logger.info(
+            "[RootProjectTask] SA mode — skipping Aurora SA provisioning for user=%s project=%s (sa=%s)",
+            user_id,
+            project_id,
+            sa_client_email,
+        )
+        return setup_result
 
     credentials = get_credentials(token_data)
     manager = RootProjectSetupManager(credentials)

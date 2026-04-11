@@ -291,14 +291,23 @@ def setup_gcp_terraform_environment_isolated(user_id: str):
                 os.environ["TF_VAR_project_id"] = cached_project_id
                 # Also try to create credentials file for Terraform (best-effort)
                 try:
-                    from connectors.gcp_connector.auth.service_accounts import create_local_credentials_file
+                    from connectors.gcp_connector.auth import (
+                        create_local_credentials_file,
+                        GCP_AUTH_TYPE_SA,
+                    )
                     token_data = get_token_data(user_id, "gcp")
-                    if token_data and token_data.get('refresh_token'):
+                    # SA mode uses service_account_json; OAuth mode uses refresh_token.
+                    # create_local_credentials_file handles both.
+                    has_creds = token_data and (
+                        token_data.get("auth_type") == GCP_AUTH_TYPE_SA
+                        or token_data.get("refresh_token")
+                    )
+                    if has_creds:
                         credentials_file_path = create_local_credentials_file(token_data, cached_project_id)
                         os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = credentials_file_path
                         logger.info(f"Created credentials file for Terraform: {credentials_file_path}")
                     else:
-                        logger.warning("Could not get token data for Terraform credentials file - missing refresh token")
+                        logger.warning("Could not get token data for Terraform credentials file")
                 except Exception as e:
                     logger.warning(f"Failed to create credentials file for Terraform: {e}")
                 return True, cached_project_id, None
@@ -325,14 +334,22 @@ def setup_gcp_terraform_environment_isolated(user_id: str):
         # Method 2: Create credentials file for Terraform (more reliable)
         credentials_file_path = None
         try:
-            from connectors.gcp_connector.auth.service_accounts import create_local_credentials_file
+            from connectors.gcp_connector.auth import (
+                create_local_credentials_file,
+                GCP_AUTH_TYPE_SA,
+            )
             token_data = get_token_data(user_id, "gcp")
-            if token_data and token_data.get('refresh_token'):
+            # SA mode uses service_account_json; OAuth mode uses refresh_token.
+            has_creds = token_data and (
+                token_data.get("auth_type") == GCP_AUTH_TYPE_SA
+                or token_data.get("refresh_token")
+            )
+            if has_creds:
                 credentials_file_path = create_local_credentials_file(token_data, project_id)
                 isolated_env["GOOGLE_APPLICATION_CREDENTIALS"] = credentials_file_path
                 logger.info(f"Created credentials file for Terraform: {credentials_file_path}")
             else:
-                logger.warning("Could not get token data for Terraform credentials file - missing refresh token")
+                logger.warning("Could not get token data for Terraform credentials file")
         except Exception as e:
             logger.warning(f"Failed to create credentials file for Terraform: {e}")
             # Continue with access token only

@@ -565,24 +565,30 @@ def setup_gcp_environment_isolated(user_id: str, selected_project_id: str | None
         access_token = token_resp["access_token"]
         project_id = token_resp["project_id"]
         sa_email = token_resp["service_account_email"]
+        from connectors.gcp_connector.auth import GCP_AUTH_TYPE_SA
+        is_sa_mode = token_resp.get("auth_type") == GCP_AUTH_TYPE_SA
+        auth_method = "service_account" if is_sa_mode else "impersonated"
 
-        # BUILD ISOLATED ENVIRONMENT - NO global os.environ modification!
         isolated_env = {
             "PATH": os.environ.get("PATH", ""),
-            "HOME": "/home/appuser",  # Use terminal pod's writable home directory
+            "HOME": "/home/appuser",
             "USER": os.environ.get("USER", ""),
             "GOOGLE_OAUTH_ACCESS_TOKEN": access_token,
             "CLOUDSDK_AUTH_ACCESS_TOKEN": access_token,
             "GOOGLE_CLOUD_PROJECT": project_id,
-            "CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT": sa_email,
-            "CLOUDSDK_IMPERSONATE_SERVICE_ACCOUNT": sa_email,
             "CLOUDSDK_CONFIG": "/tmp/.gcloud",
         }
-        
-        logger.info(f"GCP isolated environment configured for project: {project_id}")
+        if not is_sa_mode:
+            # OAuth mode: set gcloud to impersonate Aurora's per-user SA so
+            # API calls run as that SA identity. SA mode skips this because
+            # the uploaded key already IS the working identity.
+            isolated_env["CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT"] = sa_email
+            isolated_env["CLOUDSDK_IMPERSONATE_SERVICE_ACCOUNT"] = sa_email
+
+        logger.info(f"GCP isolated environment configured ({auth_method}) for project: {project_id}")
         logger.info(f"TIME: setup_gcp_environment_isolated completed in {time.perf_counter() - fn_start:.2f}s")
-        
-        return True, project_id, "impersonated", isolated_env
+
+        return True, project_id, auth_method, isolated_env
 
     except Exception as e:
         logger.error(f"Failed to generate SA access token: {e}")
