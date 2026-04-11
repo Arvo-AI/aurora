@@ -21,7 +21,7 @@ helm search repo aurora
 ### Option 2: OCI registry (GHCR)
 
 ```bash
-helm show values oci://ghcr.io/arvo-ai/charts/aurora --version 1.2.6 > my-values.yaml
+helm show values oci://ghcr.io/arvo-ai/charts/aurora-oss > my-values.yaml
 ```
 
 Both methods deliver the same chart. Choose OCI if your GitOps tooling (ArgoCD, Flux) already uses OCI, or the traditional repo if you prefer `helm repo add`.
@@ -129,9 +129,13 @@ For more control, deploy step by step.
 #### Using the published chart (recommended)
 
 ```bash
-# 1. Pull the default values
-helm show values aurora/aurora > values.generated.yaml
-# or: helm show values oci://ghcr.io/arvo-ai/charts/aurora --version 1.2.6 > values.generated.yaml
+# 1. Add the repo (skip if already added)
+helm repo add aurora https://raw.githubusercontent.com/Arvo-AI/aurora/gh-pages
+helm repo update
+
+# 2. Pull the default values
+helm show values aurora/aurora-oss > values.generated.yaml
+# or via OCI: helm show values oci://ghcr.io/arvo-ai/charts/aurora-oss > values.generated.yaml
 ```
 
 Edit `values.generated.yaml` — see [Configuration Reference](#configuration-reference) below for all options. At minimum, set:
@@ -175,12 +179,12 @@ ingress:
 kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.8.1/deploy/static/provider/cloud/deploy.yaml
 
 # 3. Deploy from the published chart
-helm upgrade --install aurora-oss aurora/aurora \
+helm upgrade --install aurora-oss aurora/aurora-oss \
   --namespace aurora-oss --create-namespace --reset-values \
   -f values.generated.yaml
 
 # Or deploy from the OCI registry
-helm upgrade --install aurora-oss oci://ghcr.io/arvo-ai/charts/aurora --version 1.2.6 \
+helm upgrade --install aurora-oss oci://ghcr.io/arvo-ai/charts/aurora-oss \
   --namespace aurora-oss --create-namespace --reset-values \
   -f values.generated.yaml
 
@@ -465,15 +469,15 @@ This skips registry push, enables built-in MinIO for S3 storage, and builds imag
 
 ```bash
 # Config-only change (published chart)
-helm upgrade aurora-oss aurora/aurora \
+helm upgrade aurora-oss aurora/aurora-oss \
   --reset-values -f values.generated.yaml -n aurora-oss
 
 # Config-only change (local chart)
 helm upgrade aurora-oss ./deploy/helm/aurora \
   --reset-values -f deploy/helm/aurora/values.generated.yaml -n aurora-oss
 
-# Upgrade to a new chart version (OCI)
-helm upgrade aurora-oss oci://ghcr.io/arvo-ai/charts/aurora --version 1.2.7 \
+# Upgrade to a newer chart version (OCI) — replace <version> with the target release
+helm upgrade aurora-oss oci://ghcr.io/arvo-ai/charts/aurora-oss --version <version> \
   --reset-values -f values.generated.yaml -n aurora-oss
 
 # Rollback

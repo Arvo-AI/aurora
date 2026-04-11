@@ -230,15 +230,15 @@ Aurora's Helm chart is published to two registries — no need to clone the repo
 # Option A: Helm repository
 helm repo add aurora https://raw.githubusercontent.com/Arvo-AI/aurora/gh-pages
 helm repo update
-helm show values aurora/aurora > my-values.yaml
+helm show values aurora/aurora-oss > my-values.yaml
 # Edit my-values.yaml with your config, then:
-helm install aurora aurora/aurora --namespace aurora --create-namespace -f my-values.yaml
+helm install aurora-oss aurora/aurora-oss --namespace aurora-oss --create-namespace -f my-values.yaml
 
 # Option B: OCI registry (GHCR)
-helm show values oci://ghcr.io/arvo-ai/charts/aurora --version 1.2.6 > my-values.yaml
+helm show values oci://ghcr.io/arvo-ai/charts/aurora-oss > my-values.yaml
 # Edit my-values.yaml with your config, then:
-helm install aurora oci://ghcr.io/arvo-ai/charts/aurora --version 1.2.6 \
-  --namespace aurora --create-namespace -f my-values.yaml
+helm install aurora-oss oci://ghcr.io/arvo-ai/charts/aurora-oss \
+  --namespace aurora-oss --create-namespace -f my-values.yaml
 ```
 
 See the full [Kubernetes deployment guide](https://arvo-ai.github.io/aurora/docs/deployment/kubernetes) for prerequisites, Vault setup, TLS, and configuration reference.
