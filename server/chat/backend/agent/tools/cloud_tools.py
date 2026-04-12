@@ -1332,20 +1332,6 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                 ),
                 args_schema=TriggerRCAArgs,
             )
-        elif name == 'trigger_rca':
-            tool = StructuredTool.from_function(
-                func=final_func,
-                name=name,
-                description=(
-                    "Trigger a full automated Root Cause Analysis investigation. "
-                    "Use this when the user reports an operational incident or describes symptoms "
-                    "that warrant investigation (e.g. high CPU, errors, latency spikes, outages). "
-                    "Creates an incident and dispatches a background RCA using all connected integrations. "
-                    "Parameters: issue_description (required), title (optional), service (optional), "
-                    "severity (optional: critical/high/medium/low)."
-                ),
-                args_schema=TriggerRCAArgs,
-            )
         else:
             tool = StructuredTool.from_function(final_func)
         tools.append(tool)
