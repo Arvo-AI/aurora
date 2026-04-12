@@ -39,6 +39,8 @@ spec:
             - configMapRef:
                 name: {{ include "aurora.fullname" . }}-config
             - secretRef:
+                name: {{ include "aurora.fullname" . }}-secrets-app
+          startupProbe:
                 name: {{ include "aurora.secretName.app" . }}
           readinessProbe:
             httpGet:
@@ -46,13 +48,19 @@ spec:
               port: 8080
             initialDelaySeconds: 5
             periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 30
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            periodSeconds: 10
             timeoutSeconds: 3
             failureThreshold: 3
           livenessProbe:
             httpGet:
               path: /healthz
               port: 8080
-            initialDelaySeconds: 10
             periodSeconds: 30
             timeoutSeconds: 5
             failureThreshold: 3
