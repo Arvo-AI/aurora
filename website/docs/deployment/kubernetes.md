@@ -6,6 +6,26 @@ sidebar_position: 2
 
 Deploy Aurora on any Kubernetes cluster using Helm.
 
+## Add the Helm Chart Source
+
+Aurora's Helm chart is published to two registries. Use whichever your cluster tooling supports:
+
+### Option 1: Helm repository
+
+```bash
+helm repo add aurora https://raw.githubusercontent.com/Arvo-AI/aurora/gh-pages
+helm repo update
+helm search repo aurora
+```
+
+### Option 2: OCI registry (GHCR)
+
+```bash
+helm show values oci://ghcr.io/arvo-ai/charts/aurora-oss > my-values.yaml
+```
+
+Both methods deliver the same chart. Choose OCI if your GitOps tooling (ArgoCD, Flux) already uses OCI, or the traditional repo if you prefer `helm repo add`.
+
 ## Prerequisites
 
 You need a Kubernetes cluster with:
@@ -104,11 +124,18 @@ The script will:
 
 ### Option B: Manual Helm deployment
 
-For more control, deploy step by step:
+For more control, deploy step by step.
+
+#### Using the published chart (recommended)
 
 ```bash
-# 1. Create values file
-cp deploy/helm/aurora/values.yaml deploy/helm/aurora/values.generated.yaml
+# 1. Add the repo (skip if already added)
+helm repo add aurora https://raw.githubusercontent.com/Arvo-AI/aurora/gh-pages
+helm repo update
+
+# 2. Pull the default values
+helm show values aurora/aurora-oss > values.generated.yaml
+# or via OCI: helm show values oci://ghcr.io/arvo-ai/charts/aurora-oss > values.generated.yaml
 ```
 
 Edit `values.generated.yaml` — see [Configuration Reference](#configuration-reference) below for all options. At minimum, set:
@@ -151,7 +178,35 @@ ingress:
 # Example: nginx ingress (optional — use any controller that supports the Kubernetes Ingress API)
 kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.8.1/deploy/static/provider/cloud/deploy.yaml
 
-# 3. Deploy
+# 3. Deploy from the published chart
+helm upgrade --install aurora-oss aurora/aurora-oss \
+  --namespace aurora-oss --create-namespace --reset-values \
+  -f values.generated.yaml
+
+# Or deploy from the OCI registry
+helm upgrade --install aurora-oss oci://ghcr.io/arvo-ai/charts/aurora-oss \
+  --namespace aurora-oss --create-namespace --reset-values \
+  -f values.generated.yaml
+
+# 4. Set up Vault — see Step 4 below
+```
+
+#### Using the chart from a local clone
+
+If you prefer to install from a local checkout (e.g., for development or custom chart modifications):
+
+```bash
+# 1. Create values file
+cp deploy/helm/aurora/values.yaml deploy/helm/aurora/values.generated.yaml
+```
+
+Edit `values.generated.yaml` with the same settings shown above, then:
+
+```bash
+# 2. Install an ingress controller if not already installed (see Ingress Controller section below)
+kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.8.1/deploy/static/provider/cloud/deploy.yaml
+
+# 3. Deploy from local chart
 helm upgrade --install aurora-oss ./deploy/helm/aurora \
   --namespace aurora-oss --create-namespace --reset-values \
   -f deploy/helm/aurora/values.generated.yaml
@@ -413,12 +468,17 @@ This skips registry push, enables built-in MinIO for S3 storage, and builds imag
 ## Upgrading
 
 ```bash
-# Config-only change
+# Config-only change (published chart) — pin --version to avoid unintended upgrades
+helm upgrade aurora-oss aurora/aurora-oss --version <current-version> \
+  --reset-values -f values.generated.yaml -n aurora-oss
+
+# Config-only change (local chart)
 helm upgrade aurora-oss ./deploy/helm/aurora \
   --reset-values -f deploy/helm/aurora/values.generated.yaml -n aurora-oss
 
-# New code/images
-git pull && make deploy
+# Upgrade to a newer chart version (OCI) — replace <version> with the target release
+helm upgrade aurora-oss oci://ghcr.io/arvo-ai/charts/aurora-oss --version <version> \
+  --reset-values -f values.generated.yaml -n aurora-oss
 
 # Rollback
 helm rollback aurora-oss -n aurora-oss
@@ -518,3 +578,47 @@ Leave them empty unless using external managed services.
 ### All Values
 
 See `deploy/helm/aurora/values.yaml` for the complete list of configuration options.
+
+### Using Pre-Existing Kubernetes Secrets
+
+By default, the chart creates Kubernetes Secrets from values in `values.yaml`. For production deployments where secrets are managed externally (via Terraform, External Secrets Operator, Sealed Secrets, or manual `kubectl create secret`), you can point each secret group to a pre-existing Kubernetes Secret instead.
+
+Set `existingSecret` on any of the four secret groups to skip chart-managed secret creation for that group:
+
+```yaml
+secrets:
+  db:
+    existingSecret: "my-db-secret"
+  backend:
+    existingSecret: "my-backend-secret"
+  app:
+    existingSecret: "my-app-secret"
+  llm:
+    existingSecret: "my-llm-secret"
+```
+
+You can mix and match -- use `existingSecret` for some groups and inline values for others.
+
+**Required keys per group:**
+
+| Group | Required Keys |
+|-------|--------------|
+| `db` | `POSTGRES_USER`, `POSTGRES_PASSWORD` |
+| `backend` | `VAULT_TOKEN`, `STORAGE_ACCESS_KEY`, `STORAGE_SECRET_KEY` (plus any optional integration keys) |
+| `app` | `FLASK_SECRET_KEY`, `AUTH_SECRET`, `SEARXNG_SECRET` |
+| `llm` | At least one of: `OPENROUTER_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_AI_API_KEY` |
+
+**Example:** Creating the secrets before installing the chart:
+
+```bash
+kubectl create secret generic my-db-secret -n aurora-oss \
+  --from-literal=POSTGRES_USER=aurora \
+  --from-literal=POSTGRES_PASSWORD="$(openssl rand -base64 32)"
+
+kubectl create secret generic my-backend-secret -n aurora-oss \
+  --from-literal=VAULT_TOKEN="your-vault-token" \
+  --from-literal=STORAGE_ACCESS_KEY="your-access-key" \
+  --from-literal=STORAGE_SECRET_KEY="your-secret-key"
+```
+
+The external secrets must exist in the target namespace **before** running `helm install`.

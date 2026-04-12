@@ -80,7 +80,6 @@ export default function ConnectorCard({ connector, connectedOverride }: Connecto
     isConnecting: isConnectingOAuthHandler,
     handleGitHubOAuth,
     handleSlackOAuth,
-    handleGCPOAuth,
   } = useConnectorOAuth(connector, userId);
 
   const isConnecting = isConnectingOAuth || isConnectingOAuthHandler;
@@ -176,7 +175,7 @@ export default function ConnectorCard({ connector, connectedOverride }: Connecto
 
     if (connector.id === "gcp") {
       if (!isConnected) {
-        await handleGCPOAuth();
+        router.push("/gcp/auth");
       } else {
         setShowGcpDialog(true);
       }

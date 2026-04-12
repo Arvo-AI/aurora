@@ -20,6 +20,9 @@ from .service_accounts import (
     get_aurora_service_account_email,
     update_service_account_project_access,
     create_local_credentials_file,
+    get_gcp_auth_type,
+    GCP_AUTH_TYPE_OAUTH,
+    GCP_AUTH_TYPE_SA,
 )
 from ..gcp.projects import (
     get_project_list,
@@ -40,6 +43,9 @@ __all__ = [
     'get_aurora_service_account_email',
     'update_service_account_project_access',
     'create_local_credentials_file',
+    'get_gcp_auth_type',
+    'GCP_AUTH_TYPE_OAUTH',
+    'GCP_AUTH_TYPE_SA',
     # Project functions
     'get_project_list',
 ]

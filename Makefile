@@ -264,12 +264,29 @@ prod-airtight:
 	@echo "View logs with: docker compose -f docker-compose.airtight.yml logs --tail 50 -f"
 
 # Kubernetes deployment commands
+# deploy-build produces a multi-arch (linux/amd64 + linux/arm64) manifest list
+# for each pushed image so the same tag works on both Graviton/Apple Silicon
+# (arm64) and x86_64 Kubernetes nodes. Override the platform list with e.g.
+# `make deploy-build PLATFORMS=linux/arm64` if you only need a single arch.
+#
+# NOTE: multi-arch buildx requires a docker-container builder (the default
+# `docker` driver is single-arch only). This target creates one named
+# `aurora-multiarch` on first use. Building the non-native arch locally uses
+# QEMU emulation and is significantly slower than native — CI publishes
+# (`.github/workflows/publish-images.yml`) use native matrix runners instead.
+PLATFORMS ?= linux/amd64,linux/arm64
+
 deploy-build:
-	@echo "Building and pushing images for Kubernetes deployment..."
+	@echo "Building and pushing multi-arch images for Kubernetes deployment..."
+	@echo "Target platforms: $(PLATFORMS)"
 	@if [ ! -f deploy/helm/aurora/values.generated.yaml ]; then \
 		echo "Error: values.generated.yaml not found. Copy values.yaml to values.generated.yaml and configure it."; \
 		exit 1; \
 	fi
+	@echo "Ensuring multi-arch buildx builder exists..."
+	@docker buildx inspect aurora-multiarch >/dev/null 2>&1 || \
+		docker buildx create --name aurora-multiarch --driver docker-container --use >/dev/null
+	@docker buildx use aurora-multiarch
 	@echo "Extracting image registry and build args from values.generated.yaml..."
 	@set -e; \
 	IMAGE_REGISTRY=$$(yq '.image.registry' deploy/helm/aurora/values.generated.yaml); \
@@ -287,17 +304,21 @@ deploy-build:
 		fi; \
 	done; \
 	echo "Using git SHA tag: $$GIT_SHA"; \
-	echo "Building backend image: $$IMAGE_REGISTRY/aurora-server:$$GIT_SHA"; \
-	docker buildx build --platform linux/amd64 -t $$IMAGE_REGISTRY/aurora-server:$$GIT_SHA -f server/Dockerfile --target prod ./server --push; \
-	echo "Building frontend image: $$IMAGE_REGISTRY/aurora-frontend:$$GIT_SHA"; \
-	docker buildx build --platform linux/amd64 -t $$IMAGE_REGISTRY/aurora-frontend:$$GIT_SHA \
+	echo "Building backend image: $$IMAGE_REGISTRY/aurora-server:$$GIT_SHA ($(PLATFORMS))"; \
+	docker buildx build --platform $(PLATFORMS) \
+		-t $$IMAGE_REGISTRY/aurora-server:$$GIT_SHA \
+		-f server/Dockerfile --target prod ./server --push; \
+	echo "Building frontend image: $$IMAGE_REGISTRY/aurora-frontend:$$GIT_SHA ($(PLATFORMS))"; \
+	docker buildx build --platform $(PLATFORMS) \
+		-t $$IMAGE_REGISTRY/aurora-frontend:$$GIT_SHA \
 		-f client/Dockerfile --target prod \
 		$$BUILD_ARGS \
 		./client --push; \
 	ENABLE_POD_ISOLATION=$$(yq '.config.ENABLE_POD_ISOLATION' deploy/helm/aurora/values.generated.yaml); \
 	if [ "$$ENABLE_POD_ISOLATION" = "true" ]; then \
-		echo "Pod isolation enabled, building terminal image: $$IMAGE_REGISTRY/aurora-terminal:$$GIT_SHA"; \
-		docker buildx build --platform linux/amd64 -t $$IMAGE_REGISTRY/aurora-terminal:$$GIT_SHA \
+		echo "Pod isolation enabled, building terminal image: $$IMAGE_REGISTRY/aurora-terminal:$$GIT_SHA ($(PLATFORMS))"; \
+		docker buildx build --platform $(PLATFORMS) \
+			-t $$IMAGE_REGISTRY/aurora-terminal:$$GIT_SHA \
 			-f server/Dockerfile-user-terminal \
 			./server --push; \
 		echo "Updating TERMINAL_IMAGE in values.generated.yaml..."; \
@@ -306,6 +327,12 @@ deploy-build:
 		echo "Pod isolation disabled, skipping terminal image build"; \
 	fi; \
 	echo "Images built and pushed successfully with tag: $$GIT_SHA"; \
+	echo "Verifying multi-arch manifests..."; \
+	docker buildx imagetools inspect $$IMAGE_REGISTRY/aurora-server:$$GIT_SHA; \
+	docker buildx imagetools inspect $$IMAGE_REGISTRY/aurora-frontend:$$GIT_SHA; \
+	if [ "$$ENABLE_POD_ISOLATION" = "true" ]; then \
+		docker buildx imagetools inspect $$IMAGE_REGISTRY/aurora-terminal:$$GIT_SHA; \
+	fi; \
 	echo "Updating values.generated.yaml with new tag..."; \
 	yq -i ".image.tag = \"$$GIT_SHA\"" deploy/helm/aurora/values.generated.yaml
 

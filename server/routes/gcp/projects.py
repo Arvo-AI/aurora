@@ -11,6 +11,8 @@ from connectors.gcp_connector.gcp.projects import get_project_list
 from connectors.gcp_connector.auth.service_accounts import (
     get_aurora_service_account_email,
     update_service_account_project_access,
+    get_gcp_auth_type,
+    GCP_AUTH_TYPE_SA,
 )
 from connectors.gcp_connector.billing import has_active_billing
 from googleapiclient.discovery import build
@@ -108,20 +110,45 @@ def sa_project_access(user_id):
         return create_cors_response()
 
     try:
-        if request.method == "GET":
+        provider = "gcp"
+        token_data = get_token_data(user_id, provider)
+        if not token_data:
+            logging.warning(f"No token data found for user_id: {user_id}, provider: {provider}")
+            return jsonify({"error": "No GCP credentials found. Please authenticate with GCP."}), 401
 
-            provider = "gcp"
-            # Refresh token for user
+        # Service-account mode: Aurora never created a per-user SA to manage,
+        # so there are no IAM bindings to toggle. The uploaded SA already has
+        # whatever roles the user granted it directly in GCP. GET surfaces
+        # the auto-discovered accessible_projects list with all entries
+        # marked enabled; POST is a no-op (selection is an OAuth-only
+        # concept).
+        if get_gcp_auth_type(token_data) == GCP_AUTH_TYPE_SA:
+            if request.method == "GET":
+                accessible = token_data.get("accessible_projects") or []
+                root_project = get_user_preference(user_id, 'gcp_root_project')
+                result = []
+                for proj in accessible:
+                    pid = proj.get("project_id")
+                    if not pid:
+                        continue
+                    result.append({
+                        "projectId": pid,
+                        "name": proj.get("name") or pid,
+                        "enabled": True,
+                        "hasPermission": True,
+                        "isRootProject": pid == root_project,
+                    })
+                result.sort(key=lambda x: x['name'])
+                return jsonify({"projects": result, "root_project": root_project}), 200
+            # POST: nothing to persist — Aurora does not manage IAM in SA mode.
+            return jsonify({"success": True}), 200
+
+        if request.method == "GET":
             try:
                 refresh_token_if_needed(user_id, provider)
             except Exception as e:
                 return jsonify({"error": "Token refresh failed"}), 401
 
-            token_data = get_token_data(user_id, provider)
-            if not token_data:
-                logging.warning(f"No token data found for user_id: {user_id}, provider: {provider}")
-                return jsonify({"error": "No GCP credentials found. Please authenticate with GCP."}), 401
-            
             credentials = get_credentials(token_data)
 
             # Determine SA email (root project logic inside helper)
@@ -176,12 +203,10 @@ def sa_project_access(user_id):
 
         elif request.method == "POST":
             data = request.get_json()
-            # Use authenticated user ID - DO NOT trust request body
             projects = data.get("projects")  # list of {projectId, enabled}
             if projects is None:
                 return jsonify({"error": "projects required"}), 400
 
-            # Validate structure
             selections = {}
             for p in projects:
                 pid = p.get('projectId') or p.get('id')
@@ -189,15 +214,10 @@ def sa_project_access(user_id):
                 if pid:
                     selections[pid] = enabled
 
-            provider = "gcp"
             try:
                 refresh_token_if_needed(user_id, provider)
             except Exception as e:
                 return jsonify({"error": "Token refresh failed"}), 401
-            token_data = get_token_data(user_id, provider)
-            if not token_data:
-                logging.warning(f"No token data found for user_id: {user_id}, provider: {provider}")
-                return jsonify({"error": "No GCP credentials found. Please authenticate with GCP."}), 401
             credentials = get_credentials(token_data)
             sa_email = get_aurora_service_account_email(user_id)
 

@@ -32,12 +32,12 @@ spec:
             - name: MINIO_ROOT_USER
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "aurora.fullname" . }}-secrets-backend
+                  name: {{ include "aurora.secretName.backend" . }}
                   key: STORAGE_ACCESS_KEY
             - name: MINIO_ROOT_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "aurora.fullname" . }}-secrets-backend
+                  name: {{ include "aurora.secretName.backend" . }}
                   key: STORAGE_SECRET_KEY
           securityContext:
             {{- include "aurora.containerSecurityContext" (dict "service" "minio" "global" $ "defaults" (dict)) | nindent 12 }}

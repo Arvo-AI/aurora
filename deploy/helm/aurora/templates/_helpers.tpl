@@ -88,3 +88,39 @@ Usage: include "aurora.containerSecurityContext" (dict "service" "server" "globa
 {{- toYaml $merged }}
 {{- end }}
 {{- end }}
+
+{{/*
+Resolve the secret name for each group.
+If existingSecret is set, use the user-provided name; otherwise use the chart-managed name.
+*/}}
+{{- define "aurora.secretName.db" -}}
+{{- if .Values.secrets.db.existingSecret -}}
+{{- .Values.secrets.db.existingSecret -}}
+{{- else -}}
+{{- include "aurora.fullname" . -}}-secrets-db
+{{- end -}}
+{{- end -}}
+
+{{- define "aurora.secretName.backend" -}}
+{{- if .Values.secrets.backend.existingSecret -}}
+{{- .Values.secrets.backend.existingSecret -}}
+{{- else -}}
+{{- include "aurora.fullname" . -}}-secrets-backend
+{{- end -}}
+{{- end -}}
+
+{{- define "aurora.secretName.app" -}}
+{{- if .Values.secrets.app.existingSecret -}}
+{{- .Values.secrets.app.existingSecret -}}
+{{- else -}}
+{{- include "aurora.fullname" . -}}-secrets-app
+{{- end -}}
+{{- end -}}
+
+{{- define "aurora.secretName.llm" -}}
+{{- if .Values.secrets.llm.existingSecret -}}
+{{- .Values.secrets.llm.existingSecret -}}
+{{- else -}}
+{{- include "aurora.fullname" . -}}-secrets-llm
+{{- end -}}
+{{- end -}}

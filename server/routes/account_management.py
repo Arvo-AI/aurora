@@ -88,9 +88,11 @@ def get_connected_accounts(user_id, target_user_id):
                 return None
             account_info = {"isConnected": True}
             if provider == "gcp":
+                from connectors.gcp_connector.auth import get_gcp_auth_type
                 account_info["email"] = token_data.get("email", "Unknown")
                 account_info["name"] = token_data.get("name", "Google Cloud")
                 account_info["displayText"] = account_info["email"]
+                account_info["authType"] = get_gcp_auth_type(token_data)
             elif provider == "aws":
                 account_info["accountId"] = token_data.get("aws_account_id", "Unknown")
                 account_info["name"] = f"AWS Account"

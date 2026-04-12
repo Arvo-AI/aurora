@@ -1,5 +1,5 @@
 from flask import Blueprint, redirect, request, jsonify
-import urllib.parse, logging
+import urllib.parse, logging, json
 from connectors.gcp_connector.auth.oauth import (
     get_auth_url,
     exchange_code_for_token,
@@ -222,6 +222,181 @@ def force_disconnect_gcp(user_id):
     
     logging.info(f"Successfully force disconnected GCP for user {user_id}")
     return jsonify({"success": True, "message": "GCP disconnected successfully"}), 200
+
+
+@gcp_auth_bp.route("/api/gcp/service-account/connect", methods=["POST", "OPTIONS"])
+@require_permission("connectors", "write")
+def connect_service_account(user_id):
+    """Connect a GCP service account by uploading its JSON key.
+
+    Stores the credential in the same `provider="gcp"` user_tokens slot used by
+    the OAuth flow, discriminated by `auth_type="service_account"` inside the
+    Vault-stored secret. Skips the Aurora per-user SA impersonation chain
+    entirely — the uploaded key itself is the working identity.
+    """
+    # Lazy imports: scope google-api-python-client import failures to this
+    # route so a version-drift breakage can't take out the whole gcp_auth_bp
+    # (login/callback/force-disconnect must stay available).
+    from google.oauth2 import service_account
+    from google.auth.transport.requests import Request
+    from connectors.gcp_connector.gcp.projects import get_project_list
+
+    payload = request.get_json(force=True, silent=True) or {}
+    raw_sa_json = payload.get("service_account_json")
+
+    if not raw_sa_json or not isinstance(raw_sa_json, str):
+        return jsonify({
+            "error": "Missing 'service_account_json' field or value is not a string"
+        }), 400
+
+    # 1. Parse the uploaded JSON text
+    try:
+        sa_info = json.loads(raw_sa_json)
+    except json.JSONDecodeError as exc:
+        logging.warning(
+            "GCP SA connect: uploaded file is not valid JSON for user %s: %s",
+            user_id,
+            exc,
+        )
+        return jsonify({
+            "error": f"Uploaded file is not valid JSON: {exc.msg}"
+        }), 400
+
+    if not isinstance(sa_info, dict):
+        return jsonify({
+            "error": "Service account JSON must be a JSON object"
+        }), 400
+
+    # Validate required fields
+    if sa_info.get("type") != "service_account":
+        return jsonify({
+            "error": "Service account JSON must have 'type' field equal to 'service_account'"
+        }), 400
+
+    required_fields = ("project_id", "private_key", "client_email", "token_uri")
+    for field in required_fields:
+        if not sa_info.get(field):
+            return jsonify({
+                "error": f"Missing required field '{field}' in service account JSON"
+            }), 400
+
+    client_email = sa_info["client_email"]
+    home_project_id = sa_info["project_id"]
+
+    try:
+        creds = service_account.Credentials.from_service_account_info(
+            sa_info,
+            scopes=["https://www.googleapis.com/auth/cloud-platform"],
+        )
+    except Exception as exc:
+        logging.warning(
+            "GCP SA connect: failed to build credentials (error_type=%s)",
+            type(exc).__name__,
+        )
+        # Do not echo the raw Google exception back to the client — it can
+        # contain SA identifiers, token URIs, or other internals.
+        return jsonify({
+            "error": "Service account key is malformed — check that 'private_key' is a valid PEM and all fields are intact"
+        }), 400
+
+    try:
+        creds.refresh(Request())
+    except Exception as exc:
+        logging.warning(
+            "GCP SA connect: credential refresh failed (error_type=%s)",
+            type(exc).__name__,
+        )
+        # Do not echo the raw Google exception back to the client — it can
+        # contain SA identifiers, token URIs, or other internals.
+        return jsonify({
+            "error": "Google rejected the service account key — it may be revoked, the SA may be disabled, or the project may not have the required APIs enabled"
+        }), 400
+
+    # Fallback rationale: if projects.list fails or comes back empty, we would
+    # like to at least surface the SA's own home project. BUT being created in
+    # a project does not automatically grant an SA any access to that project
+    # — SAs need explicit IAM role bindings. A phantom accessible_projects
+    # entry would break every downstream gcloud/kubectl flow with no signal.
+    # Reality-check via projects.get before accepting the fallback.
+    home_fallback = [{"project_id": home_project_id, "name": home_project_id}]
+    needs_reality_check = False
+    try:
+        listed = get_project_list(creds)
+        accessible_projects = [
+            {"project_id": p.get("projectId"), "name": p.get("name") or p.get("projectId")}
+            for p in listed
+            if p.get("projectId")
+        ]
+        if not accessible_projects:
+            logging.warning(
+                "GCP SA connect: projects.list returned empty — verifying home project access"
+            )
+            needs_reality_check = True
+    except Exception as exc:
+        logging.warning(
+            "GCP SA connect: projects.list failed (error_type=%s) — verifying home project access",
+            type(exc).__name__,
+        )
+        accessible_projects = []
+        needs_reality_check = True
+
+    if needs_reality_check:
+        try:
+            from googleapiclient.discovery import build as _build
+            _build("cloudresourcemanager", "v1", credentials=creds).projects().get(
+                projectId=home_project_id
+            ).execute()
+            accessible_projects = home_fallback
+        except Exception as exc:
+            logging.warning(
+                "GCP SA connect: SA cannot access its home project %s (error_type=%s)",
+                home_project_id,
+                type(exc).__name__,
+            )
+            return jsonify({
+                "error": (
+                    "The uploaded service account has no accessible GCP projects. "
+                    "Grant it at least roles/viewer on a project before connecting."
+                )
+            }), 400
+
+    # `email` is set so store_tokens_in_db populates the user_tokens.email
+    # column the connected-accounts UI uses as a display label.
+    from connectors.gcp_connector.auth import GCP_AUTH_TYPE_SA
+    token_payload = {
+        "auth_type": GCP_AUTH_TYPE_SA,
+        "service_account_json": raw_sa_json,
+        "client_email": client_email,
+        "email": client_email,
+        "default_project_id": home_project_id,
+        "accessible_projects": accessible_projects,
+    }
+
+    try:
+        store_tokens_in_db(user_id, token_payload, "gcp")
+        logging.info(
+            "GCP SA connect: stored service account credentials for user %s (projects=%d)",
+            user_id,
+            len(accessible_projects),
+        )
+    except Exception as exc:
+        logging.error(
+            "GCP SA connect: failed to store credentials for user %s (error_type=%s)",
+            user_id,
+            type(exc).__name__,
+        )
+        return jsonify({"error": "Failed to store GCP service account credentials"}), 500
+
+    # gcp_post_auth_setup_task is intentionally NOT fired: that task creates a
+    # per-user Aurora SA and grants impersonation, which only applies to OAuth
+    # mode. The uploaded SA key IS the working identity for SA mode.
+
+    return jsonify({
+        "success": True,
+        "email": client_email,
+        "default_project_id": home_project_id,
+        "accessible_projects": accessible_projects,
+    })
 
 
 @gcp_auth_bp.route("/gcp/post-auth-retry", methods=["POST"])

@@ -75,7 +75,9 @@ export function ConnectorDialogs({
             <DialogHeader>
               <DialogTitle>GCP Project Management</DialogTitle>
             </DialogHeader>
-            <GcpProviderIntegration onDisconnect={() => onGcpDialogChange(false)} />
+            <GcpProviderIntegration
+              onDisconnect={() => onGcpDialogChange(false)}
+            />
           </DialogContent>
         </Dialog>
       )}

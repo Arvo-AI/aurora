@@ -4,6 +4,7 @@ import os
 import re
 import shlex
 import subprocess
+import tempfile
 from utils.terminal.terminal_run import terminal_run
 import time
 import requests
@@ -547,6 +548,42 @@ def setup_aws_environments_all_accounts(user_id: str):
     return account_envs
 
 
+# Cache of per-user SA credentials file paths. Without an explicit
+# GOOGLE_APPLICATION_CREDENTIALS source, gcloud retries on API errors fall
+# through to Application Default Credentials, which probes the (unreachable)
+# GCE metadata server and can inflate a ~1s 403 into a 60s timeout. Writing
+# the SA JSON once per user and pointing GOOGLE_APPLICATION_CREDENTIALS at it
+# gives gcloud a concrete, refreshable credential source.
+_sa_adc_file_cache: dict[str, str] = {}
+
+
+def _get_sa_adc_file(user_id: str) -> Optional[str]:
+    """Return a tempfile path containing the user's SA JSON (cached per user)."""
+    cached = _sa_adc_file_cache.get(user_id)
+    if cached and os.path.exists(cached):
+        return cached
+    try:
+        from utils.auth.token_management import get_token_data
+        from connectors.gcp_connector.auth import GCP_AUTH_TYPE_SA, get_gcp_auth_type
+        token_data = get_token_data(user_id, "gcp")
+        if not token_data or get_gcp_auth_type(token_data) != GCP_AUTH_TYPE_SA:
+            return None
+        sa_json = token_data.get("service_account_json")
+        if not sa_json:
+            return None
+        # Sanity-check that the stored JSON parses before writing it.
+        json.loads(sa_json)
+        fd, path = tempfile.mkstemp(suffix=".json", prefix="gcp_sa_adc_")
+        with os.fdopen(fd, "w") as f:
+            f.write(sa_json)
+        _sa_adc_file_cache[user_id] = path
+        logger.info("Wrote SA ADC file for local GCP tooling")
+        return path
+    except Exception as e:
+        logger.warning("Failed to write SA ADC file (error_type=%s)", type(e).__name__)
+        return None
+
+
 def setup_gcp_environment_isolated(user_id: str, selected_project_id: str | None = None, provider_preference: str | None = None):
     """Set up GCP environment with isolated credentials - NO global state modification."""
     try:
@@ -565,24 +602,52 @@ def setup_gcp_environment_isolated(user_id: str, selected_project_id: str | None
         access_token = token_resp["access_token"]
         project_id = token_resp["project_id"]
         sa_email = token_resp["service_account_email"]
+        from connectors.gcp_connector.auth import GCP_AUTH_TYPE_SA
+        is_sa_mode = token_resp.get("auth_type") == GCP_AUTH_TYPE_SA
+        auth_method = "service_account" if is_sa_mode else "impersonated"
 
-        # BUILD ISOLATED ENVIRONMENT - NO global os.environ modification!
+        # Per-user gcloud config directory so concurrent users don't race on
+        # the same gcloud config/cache files and leak auth state between
+        # sessions. A user_id in Aurora is a UUID, which is already safe to
+        # embed in a filesystem path.
+        cloudsdk_config_dir = f"/tmp/.gcloud-{user_id}"
+        try:
+            os.makedirs(cloudsdk_config_dir, exist_ok=True)
+        except OSError as mkdir_err:
+            logger.warning(
+                "GCP isolated env: could not create per-user CLOUDSDK_CONFIG dir (error_type=%s) — falling back to shared path",
+                type(mkdir_err).__name__,
+            )
+            cloudsdk_config_dir = "/tmp/.gcloud"
+
         isolated_env = {
             "PATH": os.environ.get("PATH", ""),
-            "HOME": "/home/appuser",  # Use terminal pod's writable home directory
+            "HOME": "/home/appuser",
             "USER": os.environ.get("USER", ""),
             "GOOGLE_OAUTH_ACCESS_TOKEN": access_token,
             "CLOUDSDK_AUTH_ACCESS_TOKEN": access_token,
             "GOOGLE_CLOUD_PROJECT": project_id,
-            "CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT": sa_email,
-            "CLOUDSDK_IMPERSONATE_SERVICE_ACCOUNT": sa_email,
-            "CLOUDSDK_CONFIG": "/tmp/.gcloud",
+            "CLOUDSDK_CONFIG": cloudsdk_config_dir,
         }
-        
-        logger.info(f"GCP isolated environment configured for project: {project_id}")
-        logger.info(f"TIME: setup_gcp_environment_isolated completed in {time.perf_counter() - fn_start:.2f}s")
-        
-        return True, project_id, "impersonated", isolated_env
+        if is_sa_mode:
+            # Point gcloud at a concrete ADC source so it doesn't fall through
+            # to GCE metadata-server probing when the access token hits a 403
+            # (that probe hangs in non-GCE environments and turns fast API
+            # errors into 60s timeouts).
+            adc_file = _get_sa_adc_file(user_id)
+            if adc_file:
+                isolated_env["GOOGLE_APPLICATION_CREDENTIALS"] = adc_file
+        else:
+            # OAuth mode: set gcloud to impersonate Aurora's per-user SA so
+            # API calls run as that SA identity. SA mode skips this because
+            # the uploaded key already IS the working identity.
+            isolated_env["CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT"] = sa_email
+            isolated_env["CLOUDSDK_IMPERSONATE_SERVICE_ACCOUNT"] = sa_email
+
+        logger.info("GCP isolated environment configured (%s)", auth_method)
+        logger.info("TIME: setup_gcp_environment_isolated completed in %.2fs", time.perf_counter() - fn_start)
+
+        return True, project_id, auth_method, isolated_env
 
     except Exception as e:
         logger.error(f"Failed to generate SA access token: {e}")
@@ -1895,11 +1960,18 @@ Security & Compliance
                 
         # --- Auto-inject impersonation flag for gsutil ---------------------------------
         if provider.lower() in ['gcp', 'gcloud'] and cli_tool == 'gsutil' and auth_method == 'impersonated':
-            # Use whichever env-var we previously set to retrieve SA email.
-            sa_email = (
-                os.environ.get("CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT") or
-                os.environ.get("CLOUDSDK_IMPERSONATE_SERVICE_ACCOUNT")
-            )
+            # Read the impersonation email from the per-subprocess isolated_env
+            # built by setup_gcp_environment_isolated. os.environ is NOT
+            # consulted — this worker is long-lived, and a previous user's
+            # terraform call may have left stale CLOUDSDK_*_IMPERSONATE_* vars
+            # in os.environ. Using those here would cross-contaminate one
+            # user's gsutil command with another user's SA identity.
+            sa_email = None
+            if isinstance(isolated_env, dict):
+                sa_email = (
+                    isolated_env.get("CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT")
+                    or isolated_env.get("CLOUDSDK_IMPERSONATE_SERVICE_ACCOUNT")
+                )
             if sa_email and "-i" not in command.split():
                 # Prepend the -i flag right after 'gsutil'
                 if command.startswith('gsutil'):
