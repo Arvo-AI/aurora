@@ -85,6 +85,11 @@ class StorageConfig:
                 "STORAGE_ACCESS_KEY/STORAGE_SECRET_KEY not set - "
                 "using default credential chain (IRSA, instance profile, etc.)"
             )
+        elif bool(access_key) != bool(secret_key):
+            logger.warning(
+                "Only one of STORAGE_ACCESS_KEY/STORAGE_SECRET_KEY is set - "
+                "both must be provided together, or neither for default credential chain"
+            )
 
         use_ssl = os.getenv("STORAGE_USE_SSL", "false").lower() in ("1", "true", "yes")
         verify_ssl = os.getenv("STORAGE_VERIFY_SSL", "true").lower() in (

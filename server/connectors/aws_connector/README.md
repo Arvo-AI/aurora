@@ -122,7 +122,7 @@ Example inline policy:
       "Sid": "AWSConnector",
       "Effect": "Allow",
       "Action": "sts:AssumeRole",
-      "Resource": "arn:aws:iam::<YOUR_ACCOUNT_ID>:role/AuroraReadOnly-*"
+      "Resource": "arn:aws:iam::*:role/AuroraReadOnly-*"
     },
     {
       "Sid": "Storage",
@@ -436,7 +436,7 @@ AWS accounts.
 | "Access denied" on bulk register | Role not created, or External ID mismatch | Verify the CFN stack deployed successfully with the correct External ID |
 | "Aurora cannot assume this role" | IAM propagation delay | Wait up to 5 minutes after role creation and retry |
 | "Unable to determine Aurora's AWS account ID" | Credentials not configured | **Static creds:** ensure `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` are set in `.env`. **IRSA:** verify the service account annotation (`eks.amazonaws.com/role-arn`) and that the OIDC trust policy matches the pod's service account. |
-| "not authorized to perform: sts:AssumeRole" on AWS connector | IRSA role missing `sts:AssumeRole` permission | Add `sts:AssumeRole` on `arn:aws:iam::<account>:role/AuroraReadOnly-*` to the IRSA role's inline policy (see Path B above). Static-credential deployments: add `sts:AssumeRole` to the IAM user policy. |
+| "not authorized to perform: sts:AssumeRole" on AWS connector | IRSA role missing `sts:AssumeRole` permission | Add `sts:AssumeRole` on `arn:aws:iam::*:role/AuroraReadOnly-*` to the IRSA role's inline policy (see Path B above). Static-credential deployments: add `sts:AssumeRole` to the IAM user policy. |
 | Some accounts fail, others succeed | IAM role propagation delay | Wait 5 minutes and retry the failed accounts |
 | Discovery finds no resources | Resource Explorer not enabled | Run `aws resource-explorer-2 create-index --type AGGREGATOR` in your primary region |
 | Template deploy fails | `CAPABILITY_NAMED_IAM` not specified | Add `--capabilities CAPABILITY_NAMED_IAM` to your deploy command |

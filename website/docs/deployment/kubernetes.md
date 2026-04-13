@@ -108,7 +108,7 @@ The script will prompt you for several values. Here's what to enter:
 | Bucket name | Your S3 bucket name from Step 2 |
 | Endpoint URL | `https://s3.amazonaws.com` (or your provider's endpoint) |
 | Region | `us-east-1` (or your bucket's region) |
-| Access key / Secret key | From Step 2 |
+| Access key / Secret key | From Step 2 (leave blank when using IRSA/pod identity) |
 | LLM Provider | `openrouter` (or whichever you chose) |
 | API key | Your key from Step 2 |
 | Environment | `staging` (or `production`) |
