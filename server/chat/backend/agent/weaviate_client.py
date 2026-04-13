@@ -1,8 +1,6 @@
 import json
 from typing import Dict, List, Tuple
-import openai
 import re
-from openai.types.chat import ChatCompletionSystemMessageParam, ChatCompletionUserMessageParam
 import weaviate
 from weaviate.classes.query import Filter
 from weaviate.util import generate_uuid5
@@ -27,8 +25,6 @@ class WeaviateClient:
         headers = {}
         if openai_api_key:
             headers["X-OpenAI-Api-Key"] = openai_api_key
-        else:
-            logger.warning("OPENAI_API_KEY not set - Weaviate text2vec-openai vectorizer will not work")
 
         WEAVIATE_HOST = os.getenv("WEAVIATE_HOST", "weaviate.default.svc.cluster.local")
         weaviate_secure = os.getenv("WEAVIATE_SECURE", "false").lower() in ("1", "true", "yes")

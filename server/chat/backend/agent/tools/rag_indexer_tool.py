@@ -155,7 +155,7 @@ def rag_index_zip(attachment_index: int = 0, max_files: int = 200, max_file_byte
                     from weaviate.classes.config import Configure, Property, DataType
                     client.collections.create(
                         name="RAGDoc",
-                        vectorizer_config=Configure.Vectorizer.text2vec_openai(),
+                        vectorizer_config=Configure.Vectorizer.text2vec_transformers(),
                         properties=[
                             Property(name="text", data_type=DataType.TEXT),
                             Property(name="filename", data_type=DataType.TEXT),
