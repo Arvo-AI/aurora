@@ -4,7 +4,7 @@ import { getAuthenticatedUser } from '@/lib/auth-helper';
 const API_BASE_URL = process.env.BACKEND_URL;
 
 export async function POST(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ suggestionId: string }> }
 ) {
   try {
@@ -20,11 +20,20 @@ export async function POST(
     const { headers: authHeaders } = authResult;
     const { suggestionId } = await params;
 
+    let body: string | undefined;
+    try {
+      const json = await request.json();
+      body = JSON.stringify(json);
+    } catch {
+      body = undefined;
+    }
+
     const response = await fetch(
       `${API_BASE_URL}/api/incidents/suggestions/${suggestionId}/mark-executed`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...authHeaders },
+        ...(body ? { body } : {}),
       }
     );
 

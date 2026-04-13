@@ -1718,13 +1718,14 @@ def build_background_mode_segment(state: Optional[Any]) -> str:
             parts.extend([
                 "",
                 "AGENT MODE - EXECUTE AND REPORT:",
-                "You are in agent mode. Execute commands as requested and report results concisely.",
-                "1. Run the requested command or investigation",
-                "2. Report output with specific evidence: errors, metrics, timestamps",
-                "3. If a command fails, report the error clearly and suggest alternatives",
-                "4. Provide actionable next steps if needed",
+                "You are in agent mode executing a specific command from a Next Step suggestion.",
+                "1. Run ONLY the requested command — nothing else",
+                "2. Report the output exactly as returned (errors, metrics, timestamps)",
+                "3. If the command fails, state what the error was in 1-2 sentences",
+                "4. Do NOT run follow-up commands, alternatives, or further investigation",
+                "5. Do NOT start an RCA or diagnose root causes",
+                "6. STOP after reporting the output",
                 "",
-                "AGENT mode - investigate and execute remediation as needed.",
                 "=" * 40,
             ])
         else:

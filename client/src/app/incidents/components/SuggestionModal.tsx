@@ -89,40 +89,38 @@ export default function SuggestionModal({
     if (!suggestion.command || isExecuting) return;
     setIsExecuting(true);
 
-    let sessionId: string | undefined;
     try {
       const res = await fetch(`/api/incidents/suggestions/${suggestion.id}/mark-executed`, {
         method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chatSessionId }),
       });
       if (!res.ok) {
         console.error('Failed to mark suggestion as executed:', res.status);
         setIsExecuting(false);
         return;
       }
-      const data = await res.json();
-      sessionId = data?.sessionId;
     } catch (err) {
       console.error('Failed to mark suggestion as executed:', err);
       setIsExecuting(false);
       return;
     }
 
-    const message = `Execute this command and report the output concisely. If the command fails, report the error and stop — do NOT investigate further or run alternative commands.\n\nCommand: ${suggestion.command}`;
+    const message = `Execute this command and report the output:\n\n\`\`\`\n${suggestion.command}\n\`\`\`\n\nRun ONLY this command. Report the output, then stop. Do not run follow-up commands or investigate further.`;
     const params = new URLSearchParams({ mode: 'agent' });
-    if (sessionId) {
-      params.set('sessionId', sessionId);
-    } else if (chatSessionId) {
+    if (chatSessionId) {
       params.set('sessionId', chatSessionId);
     }
     sessionStorage.setItem('pendingChatMessage', message);
+    setIsExecuting(false);
     onClose();
     router.push(`/chat?${params.toString()}`);
   };
 
   const handleViewOutput = () => {
-    if (!suggestion.executionSessionId) return;
+    if (!chatSessionId) return;
     onClose();
-    router.push(`/chat?sessionId=${suggestion.executionSessionId}`);
+    router.push(`/chat?sessionId=${chatSessionId}`);
   };
 
   const suggestionType = suggestion.type as keyof typeof typeIcons;
@@ -226,7 +224,7 @@ export default function SuggestionModal({
               </>
             )}
           </Button>
-          {isAlreadyExecuted && suggestion.executionSessionId && (
+          {isAlreadyExecuted && chatSessionId && (
             <Button
               variant="outline"
               onClick={handleViewOutput}

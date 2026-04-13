@@ -1447,13 +1447,16 @@ def update_suggestion(user_id, suggestion_id: str):
 @incidents_bp.route("/api/incidents/suggestions/<suggestion_id>/mark-executed", methods=["POST"])
 @require_permission("incidents", "write")
 def mark_suggestion_executed(user_id, suggestion_id: str):
-    """Mark a suggestion as executed by creating a new chat session.
+    """Mark a suggestion as executed.
 
     Suggestion execution_status transitions:
       NULL -> 'executed'   (this endpoint — user clicked "Execute" from UI)
       NULL -> 'in_progress' (incident_chat — background chat triggers execution)
       'executed'/'in_progress' -> 'completed'/'failed'  (_propagate_suggestion_status
                                                           in task.py, driven by session status)
+
+    Re-execution: calling this endpoint on an already-executed suggestion is
+    allowed (idempotent update). The UI "Re-execute" button uses this path.
     """
     suggestion_id_int = _parse_suggestion_id(suggestion_id)
     if suggestion_id_int is None:
@@ -1461,11 +1464,14 @@ def mark_suggestion_executed(user_id, suggestion_id: str):
 
     org_id = get_org_id_from_request()
 
+    data = request.get_json(silent=True) or {}
+    chat_session_id = data.get("chatSessionId")
+
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
                 cursor.execute(
-                    """SELECT s.id, s.incident_id, s.execution_session_id
+                    """SELECT s.id, s.incident_id
                        FROM incident_suggestions s
                        JOIN incidents i ON s.incident_id = i.id
                        WHERE s.id = %s AND i.org_id = %s""",
@@ -1475,43 +1481,31 @@ def mark_suggestion_executed(user_id, suggestion_id: str):
                 if not row:
                     return jsonify({"error": "Suggestion not found"}), 404
 
-                incident_id = str(row[1])
-                existing_session_id = str(row[2]) if row[2] else None
+                update_fields = [
+                    "executed_at = NOW()",
+                    "execution_status = 'executed'",
+                ]
+                params_list: list = []
 
-                # Idempotency: if already executed, return the existing session
-                if existing_session_id:
-                    logger.info(
-                        "[INCIDENTS] Suggestion %s already executed (session %s) — returning existing",
-                        suggestion_id, existing_session_id,
-                    )
-                    return jsonify({"success": True, "sessionId": existing_session_id}), 200
+                if chat_session_id:
+                    update_fields.append("execution_session_id = %s::uuid")
+                    params_list.append(chat_session_id)
 
-                session_id = create_background_chat_session(
-                    user_id=user_id,
-                    title="Next Step Execution",
-                    trigger_metadata={
-                        "source": "suggestion_execution",
-                        "suggestion_id": str(suggestion_id_int),
-                        "incident_id": incident_id,
-                    },
-                    incident_id=incident_id,
-                )
+                params_list.append(suggestion_id_int)
 
                 cursor.execute(
-                    """UPDATE incident_suggestions
-                       SET executed_at = NOW(),
-                           execution_status = 'executed',
-                           execution_session_id = %s::uuid
+                    f"""UPDATE incident_suggestions
+                       SET {', '.join(update_fields)}
                        WHERE id = %s""",
-                    (session_id, suggestion_id_int),
+                    tuple(params_list),
                 )
                 if cursor.rowcount == 0:
                     conn.rollback()
                     return jsonify({"error": "Suggestion update failed — row not found"}), 404
                 conn.commit()
 
-        logger.info("[INCIDENTS] Marked suggestion %s as executed (session %s)", suggestion_id, session_id)
-        return jsonify({"success": True, "sessionId": session_id}), 200
+        logger.info("[INCIDENTS] Marked suggestion %s as executed", suggestion_id)
+        return jsonify({"success": True}), 200
 
     except Exception as exc:
         logger.exception("[INCIDENTS] Failed to mark suggestion %s as executed", suggestion_id)
