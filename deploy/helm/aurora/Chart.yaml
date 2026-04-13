@@ -10,3 +10,5 @@ sources:
 maintainers:
   - name: Arvo AI
     url: https://github.com/Arvo-AI
+annotations:
+  org.opencontainers.image.source: https://github.com/Arvo-AI/aurora
