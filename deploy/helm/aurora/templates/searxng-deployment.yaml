@@ -39,10 +39,8 @@ spec:
             - configMapRef:
                 name: {{ include "aurora.fullname" . }}-config
             - secretRef:
-                name: {{ include "aurora.fullname" . }}-secrets-app
-          startupProbe:
                 name: {{ include "aurora.secretName.app" . }}
-          readinessProbe:
+          startupProbe:
             httpGet:
               path: /healthz
               port: 8080
