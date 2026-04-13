@@ -104,7 +104,7 @@ export default function SuggestionModal({
       return;
     }
 
-    const message = `Execute this command and report the output concisely. If the command fails, report the error and stop — do NOT investigate further or run alternative commands.\n\nCommand: ${suggestion.command}`;
+    const message = `Execute this command and report the output:\n\n\`\`\`\n${suggestion.command}\n\`\`\`\n\nIf the command fails, briefly diagnose why — check which connectors and providers are available, verify credentials/access, and suggest 2-3 likely reasons for the failure. Try one or two reasonable alternatives if the original command doesn't work, but don't go into a full investigation.`;
     const params = new URLSearchParams({ mode: 'agent' });
     if (chatSessionId) {
       params.set('sessionId', chatSessionId);
