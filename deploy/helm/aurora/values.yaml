@@ -45,6 +45,11 @@ services:
 #      Without this, the AWS connector cannot assume cross-account roles and will return
 #      "not authorized to perform: sts:AssumeRole" errors.
 #
+# The IRSA role's trust policy must use StringLike to cover ALL backend SAs:
+#   "StringLike": { "<oidc>:sub": "system:serviceaccount:<ns>:<release>-aurora-oss-*" }
+# Scoping to only the server SA causes AssumeRoleWithWebIdentity failures in
+# the chatbot and celery workers.
+#
 # Example EKS IRSA annotation:
 #   annotations:
 #     eks.amazonaws.com/role-arn: arn:aws:iam::<ACCOUNT_ID>:role/<your-aurora-irsa-role>

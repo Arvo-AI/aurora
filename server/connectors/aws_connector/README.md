@@ -149,7 +149,9 @@ Example inline policy:
 }
 ```
 
-The role's trust policy must allow your cluster's OIDC provider:
+The role's trust policy must allow your cluster's OIDC provider for **all
+backend service accounts** (server, chatbot, celery-worker, celery-beat).
+Use `StringLike` with a wildcard to cover all of them in one statement:
 
 ```json
 {
@@ -162,17 +164,20 @@ The role's trust policy must allow your cluster's OIDC provider:
     "Action": "sts:AssumeRoleWithWebIdentity",
     "Condition": {
       "StringEquals": {
-        "oidc.eks.<REGION>.amazonaws.com/id/<OIDC_ID>:sub": "system:serviceaccount:<NAMESPACE>:<RELEASE_NAME>-aurora-oss-server"
+        "oidc.eks.<REGION>.amazonaws.com/id/<OIDC_ID>:aud": "sts.amazonaws.com"
+      },
+      "StringLike": {
+        "oidc.eks.<REGION>.amazonaws.com/id/<OIDC_ID>:sub": "system:serviceaccount:<NAMESPACE>:<RELEASE_NAME>-aurora-oss-*"
       }
     }
   }]
 }
 ```
 
-> If you run multiple backend pods (server, celery-worker, celery-beat, chatbot),
-> the Helm chart annotates all their service accounts with the same role ARN.
-> The OIDC condition above scopes only the server SA — broaden or duplicate the
-> statement if you want celery workers to also call `sts:AssumeRole`.
+> **All four backend pods need IRSA access.** Scoping the trust policy to only
+> `aurora-oss-server` will cause `AssumeRoleWithWebIdentity` failures in the
+> chatbot and celery workers when they attempt AWS operations (storage, secrets,
+> AWS connector credential refresh).
 
 #### 2. Annotate the Service Accounts via Helm
 
