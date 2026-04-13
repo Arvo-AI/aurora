@@ -1454,6 +1454,9 @@ def mark_suggestion_executed(user_id, suggestion_id: str):
       NULL -> 'in_progress' (incident_chat — background chat triggers execution)
       'executed'/'in_progress' -> 'completed'/'failed'  (_propagate_suggestion_status
                                                           in task.py, driven by session status)
+
+    Re-execution: calling this endpoint on an already-executed suggestion is
+    allowed (idempotent update). The UI "Re-execute" button uses this path.
     """
     suggestion_id_int = _parse_suggestion_id(suggestion_id)
     if suggestion_id_int is None:
@@ -1461,11 +1464,14 @@ def mark_suggestion_executed(user_id, suggestion_id: str):
 
     org_id = get_org_id_from_request()
 
+    data = request.get_json(silent=True) or {}
+    chat_session_id = data.get("chatSessionId")
+
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
                 cursor.execute(
-                    """SELECT s.id, s.incident_id, s.execution_status
+                    """SELECT s.id, s.incident_id
                        FROM incident_suggestions s
                        JOIN incidents i ON s.incident_id = i.id
                        WHERE s.id = %s AND i.org_id = %s""",
@@ -1475,12 +1481,23 @@ def mark_suggestion_executed(user_id, suggestion_id: str):
                 if not row:
                     return jsonify({"error": "Suggestion not found"}), 404
 
+                update_fields = [
+                    "executed_at = NOW()",
+                    "execution_status = 'executed'",
+                ]
+                params_list: list = []
+
+                if chat_session_id:
+                    update_fields.append("execution_session_id = %s::uuid")
+                    params_list.append(chat_session_id)
+
+                params_list.append(suggestion_id_int)
+
                 cursor.execute(
-                    """UPDATE incident_suggestions
-                       SET executed_at = NOW(),
-                           execution_status = 'executed'
+                    f"""UPDATE incident_suggestions
+                       SET {', '.join(update_fields)}
                        WHERE id = %s""",
-                    (suggestion_id_int,),
+                    tuple(params_list),
                 )
                 if cursor.rowcount == 0:
                     conn.rollback()

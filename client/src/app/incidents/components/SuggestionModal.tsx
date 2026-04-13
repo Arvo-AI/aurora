@@ -92,6 +92,8 @@ export default function SuggestionModal({
     try {
       const res = await fetch(`/api/incidents/suggestions/${suggestion.id}/mark-executed`, {
         method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chatSessionId }),
       });
       if (!res.ok) {
         console.error('Failed to mark suggestion as executed:', res.status);
@@ -110,6 +112,7 @@ export default function SuggestionModal({
       params.set('sessionId', chatSessionId);
     }
     sessionStorage.setItem('pendingChatMessage', message);
+    setIsExecuting(false);
     onClose();
     router.push(`/chat?${params.toString()}`);
   };
