@@ -1353,31 +1353,32 @@ KEY: Do NOT automatically start a full investigation unless explicitly asked. De
 
         # Mark the suggestion as executed if a suggestion_id was provided
         if suggestion_id:
+            sid_int = _parse_suggestion_id(str(suggestion_id))
+            if sid_int is None:
+                return jsonify({"error": f"Invalid suggestion_id: {suggestion_id}"}), 400
             try:
-                sid_int = _parse_suggestion_id(str(suggestion_id))
-                if sid_int is not None:
-                    with db_pool.get_admin_connection() as conn:
-                        with conn.cursor() as cursor:
-                            cursor.execute(
-                                """UPDATE incident_suggestions
-                                   SET executed_at = NOW(),
-                                       execution_session_id = %s::uuid,
-                                       execution_status = 'in_progress'
-                                   WHERE id = %s AND incident_id = %s""",
-                                (session_id, sid_int, incident_id),
+                with db_pool.get_admin_connection() as conn:
+                    with conn.cursor() as cursor:
+                        cursor.execute(
+                            """UPDATE incident_suggestions
+                               SET executed_at = NOW(),
+                                   execution_session_id = %s::uuid,
+                                   execution_status = 'in_progress'
+                               WHERE id = %s AND incident_id = %s""",
+                            (session_id, sid_int, incident_id),
+                        )
+                        if cursor.rowcount > 0:
+                            conn.commit()
+                            logger.info(
+                                "[INCIDENTS] Marked suggestion %s as executed (session %s)",
+                                suggestion_id, session_id,
                             )
-                            if cursor.rowcount > 0:
-                                conn.commit()
-                                logger.info(
-                                    "[INCIDENTS] Marked suggestion %s as executed (session %s)",
-                                    suggestion_id, session_id,
-                                )
-                            else:
-                                conn.rollback()
-                                logger.warning(
-                                    "[INCIDENTS] Suggestion %s not found for incident %s — skipped marking",
-                                    suggestion_id, incident_id,
-                                )
+                        else:
+                            conn.rollback()
+                            logger.warning(
+                                "[INCIDENTS] Suggestion %s not found for incident %s — skipped marking",
+                                suggestion_id, incident_id,
+                            )
             except Exception as exc:
                 logger.warning("[INCIDENTS] Failed to mark suggestion %s as executed: %s", suggestion_id, exc)
 
@@ -1464,7 +1465,8 @@ def mark_suggestion_executed(user_id, suggestion_id: str):
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
                 cursor.execute(
-                    """SELECT s.id, s.incident_id FROM incident_suggestions s
+                    """SELECT s.id, s.incident_id, s.execution_session_id
+                       FROM incident_suggestions s
                        JOIN incidents i ON s.incident_id = i.id
                        WHERE s.id = %s AND i.org_id = %s""",
                     (suggestion_id_int, org_id),
@@ -1474,6 +1476,15 @@ def mark_suggestion_executed(user_id, suggestion_id: str):
                     return jsonify({"error": "Suggestion not found"}), 404
 
                 incident_id = str(row[1])
+                existing_session_id = str(row[2]) if row[2] else None
+
+                # Idempotency: if already executed, return the existing session
+                if existing_session_id:
+                    logger.info(
+                        "[INCIDENTS] Suggestion %s already executed (session %s) — returning existing",
+                        suggestion_id, existing_session_id,
+                    )
+                    return jsonify({"success": True, "sessionId": existing_session_id}), 200
 
                 session_id = create_background_chat_session(
                     user_id=user_id,

@@ -635,6 +635,7 @@ def run_background_chat(
                         if cursor.rowcount > 0:
                             conn.commit()
                             logger.warning(f"[BackgroundChat] Finally block marked session {session_id} as failed")
+                            _propagate_suggestion_status(session_id, "failed")
             except Exception as cleanup_err:
                 logger.error(f"[BackgroundChat] Failed to cleanup session {session_id}: {cleanup_err}")
 
