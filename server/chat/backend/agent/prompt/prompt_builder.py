@@ -1296,6 +1296,8 @@ def build_background_mode_segment(state: Optional[Any]) -> str:
     source = rca_context.get('source', '').lower()
     providers = rca_context.get('providers', [])
     providers_lower = [p.lower() for p in providers] if providers else []
+    mode = getattr(state, 'mode', 'ask') or 'ask'
+    is_agent_mode = mode.strip().lower() == 'agent'
     integrations = rca_context.get('integrations', {})
 
     parts = [
@@ -1708,38 +1710,51 @@ def build_background_mode_segment(state: Optional[Any]) -> str:
             "2. *Evidence* - show findings from investigation or supporting data",
             "3. *Next steps* - actionable recommendations if needed (numbered list)",
             "",
-            "READ-ONLY mode - investigate only, no changes unless explicitly requested.",
+            f"{'AGENT mode - investigate and execute commands as needed.' if is_agent_mode else 'READ-ONLY mode - investigate only, no changes unless explicitly requested.'}",
             "=" * 40,
         ])
     else:
-        parts.extend([
-            "",
-            "MANDATORY INVESTIGATION STEPS - DO NOT STOP UNTIL ALL ARE DONE:",
-            f"1. List resources from EVERY provider: {', '.join(providers) if providers else 'None'}",
-            "2. SSH into at least one affected VM (use OpenSSH terminal_exec above)",
-            "3. Check system metrics: top, free -m, df -h, dmesg | tail",
-            "4. Check logs: journalctl, /var/log/, cloud logging",
-            "5. Identify root cause with evidence",
-            "6. Provide remediation steps",
-            "",
-            "YOU MUST make 15-20+ tool calls. After EACH tool call, continue investigating.",
-        ])
-
-        # Non-Anthropic models often don't produce text between tool calls unless instructed to
-        model_name = (getattr(state, 'model', '') or '').lower()
-        if model_name and not model_name.startswith("anthropic/"):
+        if is_agent_mode:
             parts.extend([
-                "THINK OUT LOUD: Before each tool call, briefly state what you're investigating and why (1-2 sentences).",
-                "After each tool result, briefly state your findings before the next tool call.",
+                "",
+                "AGENT MODE - EXECUTE AND REPORT:",
+                "You are in agent mode. Execute commands as requested and report results concisely.",
+                "1. Run the requested command or investigation",
+                "2. Report output with specific evidence: errors, metrics, timestamps",
+                "3. If a command fails, report the error clearly and suggest alternatives",
+                "4. Provide actionable next steps if needed",
+                "",
+                "AGENT mode - investigate and execute remediation as needed.",
+                "=" * 40,
+            ])
+        else:
+            parts.extend([
+                "",
+                "MANDATORY INVESTIGATION STEPS - DO NOT STOP UNTIL ALL ARE DONE:",
+                f"1. List resources from EVERY provider: {', '.join(providers) if providers else 'None'}",
+                "2. SSH into at least one affected VM (use OpenSSH terminal_exec above)",
+                "3. Check system metrics: top, free -m, df -h, dmesg | tail",
+                "4. Check logs: journalctl, /var/log/, cloud logging",
+                "5. Identify root cause with evidence",
+                "6. Provide remediation steps",
+                "",
+                "YOU MUST make 15-20+ tool calls. After EACH tool call, continue investigating.",
             ])
 
-        parts.extend([
-            "NEVER stop after listing resources - that's just step 1.",
-            "On failure: try 3-4 alternatives immediately.",
-            "",
-            "READ-ONLY mode - investigate only, no changes.",
-            "=" * 40,
-        ])
+            model_name = (getattr(state, 'model', '') or '').lower()
+            if model_name and not model_name.startswith("anthropic/"):
+                parts.extend([
+                    "THINK OUT LOUD: Before each tool call, briefly state what you're investigating and why (1-2 sentences).",
+                    "After each tool result, briefly state your findings before the next tool call.",
+                ])
+
+            parts.extend([
+                "NEVER stop after listing resources - that's just step 1.",
+                "On failure: try 3-4 alternatives immediately.",
+                "",
+                "READ-ONLY mode - investigate only, no changes.",
+                "=" * 40,
+            ])
 
     return "\n".join(parts)
 

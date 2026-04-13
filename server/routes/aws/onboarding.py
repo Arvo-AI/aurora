@@ -59,7 +59,7 @@ def check_aws_environment(_user_id):
         return jsonify({
             "configured": configured,
             "hasAccessKey": has_access_key,
-            "hasSecretKey": has_secret_key,
+            "hasSecretKey": has_secret_key, 
             "accountId": account_id
         })
         

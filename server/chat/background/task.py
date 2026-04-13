@@ -635,6 +635,7 @@ def run_background_chat(
                         if cursor.rowcount > 0:
                             conn.commit()
                             logger.warning(f"[BackgroundChat] Finally block marked session {session_id} as failed")
+                            _propagate_suggestion_status(session_id, "failed")
             except Exception as cleanup_err:
                 logger.error(f"[BackgroundChat] Failed to cleanup session {session_id}: {cleanup_err}")
 
@@ -1107,7 +1108,8 @@ def _update_session_status(session_id: str, status: str) -> None:
     Args:
         session_id: The chat session ID
         status: New status ('in_progress', 'completed', 'failed', 'active')
-    """ 
+    """
+    rows_updated = 0
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
@@ -1120,6 +1122,34 @@ def _update_session_status(session_id: str, status: str) -> None:
             logger.info(f"[BackgroundChat] Updated session {session_id} status to '{status}' (rows={rows_updated})")
     except Exception as e:
         logger.error(f"[BackgroundChat] Failed to update session {session_id} status to '{status}': {e}")
+        return
+
+    if rows_updated > 0 and status in ("completed", "failed"):
+        _propagate_suggestion_status(session_id, status)
+
+
+def _propagate_suggestion_status(session_id: str, status: str) -> None:
+    """Propagate a terminal session status to any linked incident_suggestions rows.
+
+    This ensures suggestions whose execution was kicked off via *session_id*
+    get their ``execution_status`` moved out of ``in_progress`` (or ``executed``)
+    when the session finishes or is cleaned up.
+    """
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """UPDATE incident_suggestions
+                       SET execution_status = %s
+                       WHERE execution_session_id = %s::uuid
+                         AND execution_status IN ('in_progress', 'executed')""",
+                    (status, session_id),
+                )
+                if cursor.rowcount > 0:
+                    conn.commit()
+                    logger.info(f"[BackgroundChat] Updated suggestion execution_status to '{status}' for session {session_id}")
+    except Exception as e:
+        logger.warning(f"[BackgroundChat] Failed to update suggestion execution_status for session {session_id}: {e}")
 
 
 def _update_incident_aurora_status(incident_id: str, aurora_status: str, user_id: Optional[str] = None, org_id: Optional[str] = None) -> None:
@@ -1909,21 +1939,28 @@ def cleanup_stale_background_chats() -> Dict[str, Any]:
                     logger.info("[BackgroundChat:Cleanup] No stale sessions found")
                     return {"cleaned": 0}
                 
-                # Mark sessions as failed
+                # Mark sessions as failed, returning IDs actually updated
                 cursor.execute("""
                     UPDATE chat_sessions 
                     SET status = 'failed', updated_at = %s 
                     WHERE status = 'in_progress' AND updated_at < %s
+                    RETURNING id
                 """, (datetime.now(), stale_threshold))
                 
-                cleaned_count = cursor.rowcount
+                actually_failed_ids = {str(r[0]) for r in cursor.fetchall()}
+                cleaned_count = len(actually_failed_ids)
             conn.commit()
             
+            # Propagate failed status only for sessions that were actually updated
+            for session_id, user_id, incident_id in stale_sessions:
+                if str(session_id) in actually_failed_ids:
+                    _propagate_suggestion_status(str(session_id), 'failed')
+
             # Update associated incidents (both aurora_status and status)
-            if stale_sessions:
+            if actually_failed_ids:
                 with conn.cursor() as cursor:
                     for session_id, user_id, incident_id in stale_sessions:
-                        if incident_id:
+                        if incident_id and str(session_id) in actually_failed_ids:
                             cursor.execute(
                                 "UPDATE incidents SET aurora_status = 'error', status = 'analyzed', updated_at = %s WHERE id = %s",
                                 (datetime.now(), incident_id)

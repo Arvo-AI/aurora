@@ -33,6 +33,11 @@ export function MessageList({ messages, sendRaw, onUpdateMessage, sessionId, use
     }
   };
 
+  // Scroll to bottom on initial mount / session switch
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "instant" });
+  }, []);
+
   // Auto-scroll: on send, on new messages, and during streaming
   useEffect(() => {
     const prevCount = prevMessageCountRef.current;

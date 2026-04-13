@@ -40,10 +40,21 @@ interface ChatClientProps {
   initialMode?: string;
 }
 
-export default function ChatClient({ initialSessionId, shouldStartNewChat, initialMessage, incidentContext, initialMode }: ChatClientProps) {
+export default function ChatClient({ initialSessionId, shouldStartNewChat, initialMessage: initialMessageProp, incidentContext, initialMode }: ChatClientProps) {
   const { user, isLoaded } = useUser();
   const { role } = useAuth();
   const router = useRouter();
+  
+  // Resolve initial message from prop (URL) or sessionStorage (long commands).
+  // We only read sessionStorage here; removal happens after the message is sent
+  // to avoid React 18 StrictMode double-invocation clearing it prematurely.
+  const [initialMessage] = useState<string | undefined>(() => {
+    if (initialMessageProp) return initialMessageProp;
+    if (typeof window !== 'undefined') {
+      return sessionStorage.getItem('pendingChatMessage') ?? undefined;
+    }
+    return undefined;
+  });
   
   // Core state
   const [messages, setMessages] = useState<Message[]>([]);
@@ -370,6 +381,7 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
       const timer = setTimeout(() => {
         handleSend(initialMessage, chatWebSocket).then((success) => {
           if (success) {
+            sessionStorage.removeItem('pendingChatMessage');
             const sessionIdToUse = currentSessionId;
             window.history.replaceState({}, '', `/chat${sessionIdToUse ? `?sessionId=${sessionIdToUse}` : ''}`);
           }

@@ -632,7 +632,8 @@ def get_incident(user_id, incident_id: str):
                     """
                     SELECT id, incident_id, title, description, type, risk, command, created_at,
                            file_path, original_content, suggested_content, user_edited_content,
-                           repository, pr_url, pr_number, created_branch, applied_at
+                           repository, pr_url, pr_number, created_branch, applied_at,
+                           executed_at, execution_session_id, execution_status
                     FROM incident_suggestions
                     WHERE incident_id = %s
                     ORDER BY created_at ASC
@@ -641,30 +642,40 @@ def get_incident(user_id, incident_id: str):
                 )
                 suggestion_rows = cursor.fetchall()
 
+                # Column-index mapping for the SELECT above.
+                # If the SELECT is reordered, update these indices to match.
+                S_ID, S_INCIDENT, S_TITLE, S_DESC, S_TYPE, S_RISK, S_CMD, S_CREATED = range(8)
+                S_FILE_PATH, S_ORIG, S_SUGGESTED, S_USER_EDITED = 8, 9, 10, 11
+                S_REPO, S_PR_URL, S_PR_NUM, S_BRANCH, S_APPLIED = 12, 13, 14, 15, 16
+                S_EXECUTED_AT, S_EXEC_SESSION, S_EXEC_STATUS = 17, 18, 19
+
                 suggestions = []
                 for srow in suggestion_rows:
                     suggestion = {
-                        "id": str(srow[0]),
-                        "title": srow[2],
-                        "description": srow[3],
-                        "type": srow[4] or "diagnostic",
-                        "risk": srow[5] or "safe",
-                        "command": srow[6],
-                        "createdAt": _format_timestamp(srow[7]),
+                        "id": str(srow[S_ID]),
+                        "title": srow[S_TITLE],
+                        "description": srow[S_DESC],
+                        "type": srow[S_TYPE] or "diagnostic",
+                        "risk": srow[S_RISK] or "safe",
+                        "command": srow[S_CMD],
+                        "createdAt": _format_timestamp(srow[S_CREATED]),
+                        "executedAt": _format_timestamp(srow[S_EXECUTED_AT]),
+                        "executionSessionId": str(srow[S_EXEC_SESSION]) if srow[S_EXEC_SESSION] else None,
+                        "executionStatus": srow[S_EXEC_STATUS],
                     }
                     # Add fix-type fields if present
-                    if srow[4] == "fix":
+                    if srow[S_TYPE] == "fix":
                         suggestion.update(
                             {
-                                "filePath": srow[8],
-                                "originalContent": srow[9],
-                                "suggestedContent": srow[10],
-                                "userEditedContent": srow[11],
-                                "repository": srow[12],
-                                "prUrl": srow[13],
-                                "prNumber": srow[14],
-                                "createdBranch": srow[15],
-                                "appliedAt": _format_timestamp(srow[16]),
+                                "filePath": srow[S_FILE_PATH],
+                                "originalContent": srow[S_ORIG],
+                                "suggestedContent": srow[S_SUGGESTED],
+                                "userEditedContent": srow[S_USER_EDITED],
+                                "repository": srow[S_REPO],
+                                "prUrl": srow[S_PR_URL],
+                                "prNumber": srow[S_PR_NUM],
+                                "createdBranch": srow[S_BRANCH],
+                                "appliedAt": _format_timestamp(srow[S_APPLIED]),
                             }
                         )
                     suggestions.append(suggestion)
@@ -1122,6 +1133,9 @@ def incident_chat(user_id, incident_id: str):
     if mode not in ("ask", "agent"):
         return jsonify({"error": 'Invalid mode. Must be "ask" or "agent"'}), 400
 
+    # Optional suggestion_id — marks the suggestion as executed once the task is queued
+    suggestion_id = data.get("suggestion_id")
+
     # Check for session_id in query params
     existing_session_id = request.args.get("session_id")
     logger.info(
@@ -1234,6 +1248,20 @@ def incident_chat(user_id, incident_id: str):
                         thoughts_list.append(f"[{timestamp_str}] {row[0]}")
 
             # Build context message with clear structure for the LLM
+            # Mode-aware instructions: "ask" mode is read-only, "agent" mode allows execution
+            if mode == "agent":
+                mode_instructions = (
+                    "2. If the user is asking you to execute a command or take action:\n"
+                    "   → You are in AGENT mode with full execution capability. Execute commands directly using your tools.\n"
+                    "   → Do NOT just describe what you would do — actually do it.\n"
+                )
+            else:
+                mode_instructions = (
+                    "2. If the user is explicitly asking you to investigate something specific (e.g., \"check the database logs\", \"investigate the API\", \"look at service X\"):\n"
+                    "   → Acknowledge their request and explain what you would investigate and why, based on the context above.\n"
+                    "   → You are in READ-ONLY mode, so describe your investigation approach rather than executing commands.\n"
+                )
+
             context_prefix = f"""<context>
 <incident>
 Title: {alert_title}
@@ -1254,10 +1282,7 @@ You are having a conversation with a user about the incident above. Follow these
 1. If the user is just greeting you or asking a simple question (e.g., "hi", "what's the summary?", "what happened?"):
    → Respond conversationally and briefly. DO NOT start investigating.
 
-2. If the user is explicitly asking you to investigate something specific (e.g., "check the database logs", "investigate the API", "look at service X"):
-   → Acknowledge their request and explain what you would investigate and why, based on the context above.
-   → You are in READ-ONLY mode, so describe your investigation approach rather than executing commands.
-
+{mode_instructions}
 3. If the user is providing hints or context (e.g., "I think it's related to X", "this might be a database issue"):
    → Acknowledge their insight and explain how it connects to the investigation so far.
    → Suggest what should be investigated next based on their hint.
@@ -1325,6 +1350,38 @@ KEY: Do NOT automatically start a full investigation unless explicitly asked. De
             is_new_session,
             mode,
         )
+
+        # Mark the suggestion as executed if a suggestion_id was provided
+        if suggestion_id:
+            sid_int = _parse_suggestion_id(str(suggestion_id))
+            if sid_int is None:
+                return jsonify({"error": f"Invalid suggestion_id: {suggestion_id}"}), 400
+            try:
+                with db_pool.get_admin_connection() as conn:
+                    with conn.cursor() as cursor:
+                        cursor.execute(
+                            """UPDATE incident_suggestions
+                               SET executed_at = NOW(),
+                                   execution_session_id = %s::uuid,
+                                   execution_status = 'in_progress'
+                               WHERE id = %s AND incident_id = %s""",
+                            (session_id, sid_int, incident_id),
+                        )
+                        if cursor.rowcount > 0:
+                            conn.commit()
+                            logger.info(
+                                "[INCIDENTS] Marked suggestion %s as executed (session %s)",
+                                suggestion_id, session_id,
+                            )
+                        else:
+                            conn.rollback()
+                            logger.warning(
+                                "[INCIDENTS] Suggestion %s not found for incident %s — skipped marking",
+                                suggestion_id, incident_id,
+                            )
+            except Exception as exc:
+                logger.warning("[INCIDENTS] Failed to mark suggestion %s as executed: %s", suggestion_id, exc)
+
         return jsonify(
             {
                 "session_id": session_id,
@@ -1385,6 +1442,80 @@ def update_suggestion(user_id, suggestion_id: str):
     except Exception as exc:
         logger.exception("[INCIDENTS] Failed to update suggestion %s", suggestion_id)
         return jsonify({"error": "Failed to update suggestion"}), 500
+
+
+@incidents_bp.route("/api/incidents/suggestions/<suggestion_id>/mark-executed", methods=["POST"])
+@require_permission("incidents", "write")
+def mark_suggestion_executed(user_id, suggestion_id: str):
+    """Mark a suggestion as executed by creating a new chat session.
+
+    Suggestion execution_status transitions:
+      NULL -> 'executed'   (this endpoint — user clicked "Execute" from UI)
+      NULL -> 'in_progress' (incident_chat — background chat triggers execution)
+      'executed'/'in_progress' -> 'completed'/'failed'  (_propagate_suggestion_status
+                                                          in task.py, driven by session status)
+    """
+    suggestion_id_int = _parse_suggestion_id(suggestion_id)
+    if suggestion_id_int is None:
+        return jsonify({"error": "Invalid suggestion ID"}), 400
+
+    org_id = get_org_id_from_request()
+
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """SELECT s.id, s.incident_id, s.execution_session_id
+                       FROM incident_suggestions s
+                       JOIN incidents i ON s.incident_id = i.id
+                       WHERE s.id = %s AND i.org_id = %s""",
+                    (suggestion_id_int, org_id),
+                )
+                row = cursor.fetchone()
+                if not row:
+                    return jsonify({"error": "Suggestion not found"}), 404
+
+                incident_id = str(row[1])
+                existing_session_id = str(row[2]) if row[2] else None
+
+                # Idempotency: if already executed, return the existing session
+                if existing_session_id:
+                    logger.info(
+                        "[INCIDENTS] Suggestion %s already executed (session %s) — returning existing",
+                        suggestion_id, existing_session_id,
+                    )
+                    return jsonify({"success": True, "sessionId": existing_session_id}), 200
+
+                session_id = create_background_chat_session(
+                    user_id=user_id,
+                    title="Next Step Execution",
+                    trigger_metadata={
+                        "source": "suggestion_execution",
+                        "suggestion_id": str(suggestion_id_int),
+                        "incident_id": incident_id,
+                    },
+                    incident_id=incident_id,
+                )
+
+                cursor.execute(
+                    """UPDATE incident_suggestions
+                       SET executed_at = NOW(),
+                           execution_status = 'executed',
+                           execution_session_id = %s::uuid
+                       WHERE id = %s""",
+                    (session_id, suggestion_id_int),
+                )
+                if cursor.rowcount == 0:
+                    conn.rollback()
+                    return jsonify({"error": "Suggestion update failed — row not found"}), 404
+                conn.commit()
+
+        logger.info("[INCIDENTS] Marked suggestion %s as executed (session %s)", suggestion_id, session_id)
+        return jsonify({"success": True, "sessionId": session_id}), 200
+
+    except Exception as exc:
+        logger.exception("[INCIDENTS] Failed to mark suggestion %s as executed", suggestion_id)
+        return jsonify({"error": "Failed to mark suggestion"}), 500
 
 
 @incidents_bp.route(

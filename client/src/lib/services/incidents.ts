@@ -75,6 +75,10 @@ export interface Suggestion {
   type: SuggestionType;
   risk: SuggestionRisk;
   command?: string; // Optional command to run
+  // Execution tracking
+  executedAt?: string;
+  executionSessionId?: string;
+  executionStatus?: 'in_progress' | 'completed' | 'failed' | 'executed';
   // Fix-type suggestion fields
   filePath?: string;
   originalContent?: string;
@@ -312,6 +316,9 @@ export const incidentsService = {
           prNumber: s.prNumber,
           createdBranch: s.createdBranch,
           appliedAt: s.appliedAt,
+          executedAt: s.executedAt,
+          executionSessionId: s.executionSessionId,
+          executionStatus: s.executionStatus,
         })),
         citations: (inc.citations || []).map((c: any) => ({
           id: c.id,

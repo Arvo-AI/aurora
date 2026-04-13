@@ -1700,6 +1700,26 @@ def initialize_tables():
                 )
                 conn.rollback()
 
+            # Add execution-tracking columns to incident_suggestions
+            try:
+                cursor.execute(
+                    """
+                    ALTER TABLE incident_suggestions
+                    ADD COLUMN IF NOT EXISTS executed_at TIMESTAMP,
+                    ADD COLUMN IF NOT EXISTS execution_session_id UUID,
+                    ADD COLUMN IF NOT EXISTS execution_status VARCHAR(20);
+                    """
+                )
+                logging.info(
+                    "Added execution-tracking columns to incident_suggestions table (if not exists)."
+                )
+                conn.commit()
+            except Exception as e:
+                logging.warning(
+                    f"Error adding execution-tracking columns to incident_suggestions: {e}"
+                )
+                conn.rollback()
+
             # Migration: Create postmortems table if it doesn't exist
             # Note: 'resolved' is now a valid incident status value.
             # The incidents.status column is VARCHAR so no ALTER TABLE is needed.

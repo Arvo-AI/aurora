@@ -297,6 +297,43 @@ def get_chat_session(user_id, session_id):
         if 'conn' in locals() and conn:
             conn.close()
 
+@chat_bp.route('/sessions/<session_id>/status', methods=['GET'])
+@limiter.exempt
+@require_permission("chat", "read")
+def get_chat_session_status(user_id, session_id):
+    """Lightweight endpoint returning only session status and message count."""
+    org_id = get_org_id_from_request()
+
+    try:
+        conn = connect_to_db_as_user()
+        cursor = conn.cursor()
+
+        cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
+        cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
+        conn.commit()
+
+        cursor.execute("""
+            SELECT COALESCE(status, 'active'),
+                   COALESCE(jsonb_array_length(messages), 0)
+            FROM chat_sessions
+            WHERE id = %s AND org_id = %s AND is_active = true AND status != 'cancelled'
+        """, (session_id, org_id))
+
+        row = cursor.fetchone()
+        if not row:
+            return jsonify({'error': 'Chat session not found'}), 404
+
+        return jsonify({'status': row[0], 'message_count': row[1]}), 200
+
+    except Exception as e:
+        logging.error(f"Error fetching session status: {e}", exc_info=True)
+        return jsonify({'error': 'Failed to fetch session status'}), 500
+    finally:
+        if 'cursor' in locals() and cursor:
+            cursor.close()
+        if 'conn' in locals() and conn:
+            conn.close()
+
 @chat_bp.route('/sessions/<session_id>', methods=['PUT'])
 @require_permission("chat", "write")
 def update_chat_session(user_id, session_id):
