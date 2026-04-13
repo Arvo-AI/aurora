@@ -22,10 +22,13 @@ class WeaviateClient:
     def __init__(self, postgres_client: PostgreSQLClient):
         self.postgres_client = postgres_client
 
-        OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-        assert OPENAI_API_KEY is not None, "OPENAI_API_KEY environment variable not set"
-        os.environ["OPENAI_API_KEY"] = OPENAI_API_KEY
-        
+        openai_api_key = os.getenv("OPENAI_API_KEY", "").strip()
+
+        headers = {}
+        if openai_api_key:
+            headers["X-OpenAI-Api-Key"] = openai_api_key
+        else:
+            logger.warning("OPENAI_API_KEY not set - Weaviate text2vec-openai vectorizer will not work")
 
         WEAVIATE_HOST = os.getenv("WEAVIATE_HOST", "weaviate.default.svc.cluster.local")
         weaviate_secure = os.getenv("WEAVIATE_SECURE", "false").lower() in ("1", "true", "yes")
@@ -37,7 +40,7 @@ class WeaviateClient:
             grpc_host=WEAVIATE_HOST,
             grpc_port=int(os.getenv("WEAVIATE_GRPC_PORT", "50051")),
             grpc_secure=weaviate_secure,
-            headers={"X-OpenAI-Api-Key": OPENAI_API_KEY}
+            headers=headers,
         )
 
         assert self.client.is_ready(), "Weaviate client is not ready. Check the connection."
