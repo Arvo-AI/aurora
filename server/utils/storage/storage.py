@@ -74,11 +74,18 @@ class StorageConfig:
         bucket = os.getenv("STORAGE_BUCKET")
         endpoint_url = os.getenv("STORAGE_ENDPOINT_URL")
 
-        if not all([access_key, secret_key, bucket]):
+        if not bucket:
             raise ValueError(
                 "Missing required storage configuration. "
-                "Set STORAGE_ACCESS_KEY, STORAGE_SECRET_KEY, and STORAGE_BUCKET environment variables."
+                "Set STORAGE_BUCKET environment variable."
             )
+
+        if not access_key and not secret_key:
+            logger.info(
+                "STORAGE_ACCESS_KEY/STORAGE_SECRET_KEY not set - "
+                "using default credential chain (IRSA, instance profile, etc.)"
+            )
+
         use_ssl = os.getenv("STORAGE_USE_SSL", "false").lower() in ("1", "true", "yes")
         verify_ssl = os.getenv("STORAGE_VERIFY_SSL", "true").lower() in (
             "1",
@@ -88,7 +95,7 @@ class StorageConfig:
 
         # Warn about insecure credentials in non-dev environments
         if aurora_env in ("prod", "production", "staging"):
-            if (
+            if access_key and secret_key and (
                 access_key in cls._INSECURE_CREDENTIALS
                 or secret_key in cls._INSECURE_CREDENTIALS
             ):
@@ -415,7 +422,8 @@ class S3Backend(StorageBackend):
 
         except NoCredentialsError as e:
             raise StorageConnectionError(
-                "S3 credentials not configured. Set STORAGE_ACCESS_KEY and STORAGE_SECRET_KEY.",
+                "S3 credentials not found. Provide STORAGE_ACCESS_KEY/STORAGE_SECRET_KEY "
+                "or configure pod-level credentials (IRSA, instance profile, etc.).",
                 cause=e,
             )
         except Exception as e:

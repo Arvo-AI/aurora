@@ -227,12 +227,13 @@ secrets:
   backend:
     # Use a pre-existing Kubernetes Secret instead of chart-managed secrets.
     # When set, the chart will not create secret-backend and all pods will reference
-    # this secret directly. It must contain keys: VAULT_TOKEN, STORAGE_ACCESS_KEY,
-    # STORAGE_SECRET_KEY, plus any optional integration keys you use.
+    # this secret directly. It must contain VAULT_TOKEN (if using Vault), plus any
+    # optional integration keys you use. STORAGE_ACCESS_KEY/STORAGE_SECRET_KEY are
+    # optional when using IRSA or other pod-level credential injection.
     # existingSecret: ""
-    VAULT_TOKEN: ""              # REQUIRED - Root token from Vault init - Set after running: kubectl exec -it statefulset/<release>-vault -- vault operator init
-    STORAGE_ACCESS_KEY: ""       # REQUIRED - Your S3 access key
-    STORAGE_SECRET_KEY: ""       # REQUIRED - Your S3 secret key
+    VAULT_TOKEN: ""              # Required when SECRETS_BACKEND=vault. Not needed for aws_secrets_manager.
+    STORAGE_ACCESS_KEY: ""       # S3 access key (optional when using IRSA/pod identity)
+    STORAGE_SECRET_KEY: ""       # S3 secret key (optional when using IRSA/pod identity)
 
     # --- Optional: Slack Integration ---
     SLACK_CLIENT_ID: ""          # Get from: https://api.slack.com/apps
