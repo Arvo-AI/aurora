@@ -422,7 +422,7 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
             )}
             {isSafeUrl(alert.metadata?.alertUrl) && (
               <a 
-                href={alert.metadata!.alertUrl}
+                href={alert.metadata?.alertUrl}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-blue-400 hover:text-blue-300"

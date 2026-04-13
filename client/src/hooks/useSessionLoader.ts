@@ -16,6 +16,7 @@ export const useSessionLoader = ({
 }: UseSessionLoaderProps) => {
   const { loadSession, isLoadingSession } = useChatHistory();
   const lastIncidentIdRef = useRef<string | null>(null);
+  const lastPollMessageCountRef = useRef<number>(0);
   const [pollingSessionId, setPollingSessionId] = useState<string | null>(null);
 
   // Poll for background session updates while in_progress
@@ -26,15 +27,27 @@ export const useSessionLoader = ({
     const interval = setInterval(async () => {
       if (cancelled) return;
       try {
-        const sessionData = await loadSession(pollingSessionId);
-        if (cancelled || !sessionData) return;
+        const res = await fetch(`/api/chat-sessions/${pollingSessionId}/status`);
+        if (cancelled || !res.ok) return;
+        const { status, message_count } = await res.json();
 
-        if (sessionData.messages && sessionData.messages.length > 0) {
-          onMessagesLoaded(sessionData.messages as Message[]);
+        if (status !== 'in_progress') {
+          setPollingSessionId(null);
+          // Fetch full messages one final time now that the session is done
+          const sessionData = await loadSession(pollingSessionId);
+          if (!cancelled && sessionData?.messages?.length) {
+            onMessagesLoaded(sessionData.messages as Message[]);
+          }
+          return;
         }
 
-        if (sessionData.status !== 'in_progress') {
-          setPollingSessionId(null);
+        // Only do a full load when new messages exist
+        if (message_count > lastPollMessageCountRef.current) {
+          lastPollMessageCountRef.current = message_count;
+          const sessionData = await loadSession(pollingSessionId);
+          if (!cancelled && sessionData?.messages?.length) {
+            onMessagesLoaded(sessionData.messages as Message[]);
+          }
         }
       } catch {
         // Silently retry on next interval
@@ -85,6 +98,7 @@ export const useSessionLoader = ({
       }
 
       if (sessionData.status === 'in_progress') {
+        lastPollMessageCountRef.current = sessionData.messages?.length || 0;
         setPollingSessionId(sessionId);
       }
 

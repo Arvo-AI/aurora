@@ -337,4 +337,4 @@ export const useWebSocket = (config: WebSocketConfig) => {
     isReady: state.isConnected && !!(user?.id || configRef.current.userId),
     wsRef // Expose wsRef for better state checking
   };
-}; 
+};

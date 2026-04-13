@@ -40,10 +40,23 @@ interface ChatClientProps {
   initialMode?: string;
 }
 
-export default function ChatClient({ initialSessionId, shouldStartNewChat, initialMessage, incidentContext, initialMode }: ChatClientProps) {
+export default function ChatClient({ initialSessionId, shouldStartNewChat, initialMessage: initialMessageProp, incidentContext, initialMode }: ChatClientProps) {
   const { user, isLoaded } = useUser();
   const { role } = useAuth();
   const router = useRouter();
+  
+  // Resolve initial message from prop (URL) or sessionStorage (long commands)
+  const [initialMessage] = useState<string | undefined>(() => {
+    if (initialMessageProp) return initialMessageProp;
+    if (typeof window !== 'undefined') {
+      const stored = sessionStorage.getItem('pendingChatMessage');
+      if (stored) {
+        sessionStorage.removeItem('pendingChatMessage');
+        return stored;
+      }
+    }
+    return undefined;
+  });
   
   // Core state
   const [messages, setMessages] = useState<Message[]>([]);

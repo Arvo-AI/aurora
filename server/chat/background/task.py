@@ -1147,8 +1147,6 @@ def _propagate_suggestion_status(session_id: str, status: str) -> None:
                 if cursor.rowcount > 0:
                     conn.commit()
                     logger.info(f"[BackgroundChat] Updated suggestion execution_status to '{status}' for session {session_id}")
-                else:
-                    conn.rollback()
     except Exception as e:
         logger.warning(f"[BackgroundChat] Failed to update suggestion execution_status for session {session_id}: {e}")
 

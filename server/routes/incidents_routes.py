@@ -642,33 +642,40 @@ def get_incident(user_id, incident_id: str):
                 )
                 suggestion_rows = cursor.fetchall()
 
+                # Column-index mapping for the SELECT above.
+                # If the SELECT is reordered, update these indices to match.
+                S_ID, S_INCIDENT, S_TITLE, S_DESC, S_TYPE, S_RISK, S_CMD, S_CREATED = range(8)
+                S_FILE_PATH, S_ORIG, S_SUGGESTED, S_USER_EDITED = 8, 9, 10, 11
+                S_REPO, S_PR_URL, S_PR_NUM, S_BRANCH, S_APPLIED = 12, 13, 14, 15, 16
+                S_EXECUTED_AT, S_EXEC_SESSION, S_EXEC_STATUS = 17, 18, 19
+
                 suggestions = []
                 for srow in suggestion_rows:
                     suggestion = {
-                        "id": str(srow[0]),
-                        "title": srow[2],
-                        "description": srow[3],
-                        "type": srow[4] or "diagnostic",
-                        "risk": srow[5] or "safe",
-                        "command": srow[6],
-                        "createdAt": _format_timestamp(srow[7]),
-                        "executedAt": _format_timestamp(srow[17]),
-                        "executionSessionId": str(srow[18]) if srow[18] else None,
-                        "executionStatus": srow[19],
+                        "id": str(srow[S_ID]),
+                        "title": srow[S_TITLE],
+                        "description": srow[S_DESC],
+                        "type": srow[S_TYPE] or "diagnostic",
+                        "risk": srow[S_RISK] or "safe",
+                        "command": srow[S_CMD],
+                        "createdAt": _format_timestamp(srow[S_CREATED]),
+                        "executedAt": _format_timestamp(srow[S_EXECUTED_AT]),
+                        "executionSessionId": str(srow[S_EXEC_SESSION]) if srow[S_EXEC_SESSION] else None,
+                        "executionStatus": srow[S_EXEC_STATUS],
                     }
                     # Add fix-type fields if present
-                    if srow[4] == "fix":
+                    if srow[S_TYPE] == "fix":
                         suggestion.update(
                             {
-                                "filePath": srow[8],
-                                "originalContent": srow[9],
-                                "suggestedContent": srow[10],
-                                "userEditedContent": srow[11],
-                                "repository": srow[12],
-                                "prUrl": srow[13],
-                                "prNumber": srow[14],
-                                "createdBranch": srow[15],
-                                "appliedAt": _format_timestamp(srow[16]),
+                                "filePath": srow[S_FILE_PATH],
+                                "originalContent": srow[S_ORIG],
+                                "suggestedContent": srow[S_SUGGESTED],
+                                "userEditedContent": srow[S_USER_EDITED],
+                                "repository": srow[S_REPO],
+                                "prUrl": srow[S_PR_URL],
+                                "prNumber": srow[S_PR_NUM],
+                                "createdBranch": srow[S_BRANCH],
+                                "appliedAt": _format_timestamp(srow[S_APPLIED]),
                             }
                         )
                     suggestions.append(suggestion)
@@ -1439,6 +1446,14 @@ def update_suggestion(user_id, suggestion_id: str):
 @incidents_bp.route("/api/incidents/suggestions/<suggestion_id>/mark-executed", methods=["POST"])
 @require_permission("incidents", "write")
 def mark_suggestion_executed(user_id, suggestion_id: str):
+    """Mark a suggestion as executed by creating a new chat session.
+
+    Suggestion execution_status transitions:
+      NULL -> 'executed'   (this endpoint — user clicked "Execute" from UI)
+      NULL -> 'in_progress' (incident_chat — background chat triggers execution)
+      'executed'/'in_progress' -> 'completed'/'failed'  (_propagate_suggestion_status
+                                                          in task.py, driven by session status)
+    """
     suggestion_id_int = _parse_suggestion_id(suggestion_id)
     if suggestion_id_int is None:
         return jsonify({"error": "Invalid suggestion ID"}), 400

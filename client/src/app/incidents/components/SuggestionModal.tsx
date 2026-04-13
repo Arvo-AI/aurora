@@ -108,12 +108,13 @@ export default function SuggestionModal({
     }
 
     const message = `Execute this command and report the output concisely. If the command fails, report the error and stop — do NOT investigate further or run alternative commands.\n\nCommand: ${suggestion.command}`;
-    const params = new URLSearchParams({ message, mode: 'agent' });
+    const params = new URLSearchParams({ mode: 'agent' });
     if (sessionId) {
       params.set('sessionId', sessionId);
     } else if (chatSessionId) {
       params.set('sessionId', chatSessionId);
     }
+    sessionStorage.setItem('pendingChatMessage', message);
     onClose();
     router.push(`/chat?${params.toString()}`);
   };
