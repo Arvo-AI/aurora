@@ -66,6 +66,16 @@ const components = {
       ? children.map(processChildren)
       : processChildren(children);
 
+    // If children contain block-level elements (e.g. CodeBlock renders <div>),
+    // use <div> to avoid invalid <div>-inside-<p> nesting that causes hydration errors.
+    const hasBlockChild = Array.isArray(children)
+      ? children.some((c: any) => React.isValidElement(c) && typeof c.type !== 'string')
+      : React.isValidElement(children) && typeof children.type !== 'string';
+
+    if (hasBlockChild) {
+      return <div className="mb-4" {...props}>{processedChildren}</div>;
+    }
+
     return <p {...props}>{processedChildren}</p>;
   },
   code: ({ node, inline, className, children, ...props }: any) => {
