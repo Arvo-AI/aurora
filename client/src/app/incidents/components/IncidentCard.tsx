@@ -275,8 +275,6 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
                     e.stopPropagation();
                     if (isFixType) {
                       setSelectedFixSuggestion(matchingSuggestion);
-                    } else if (wasExecuted && matchingSuggestion.executionSessionId) {
-                      router.push(`/chat?sessionId=${matchingSuggestion.executionSessionId}`);
                     } else {
                       setSelectedSuggestion(matchingSuggestion);
                     }
