@@ -89,7 +89,6 @@ export default function SuggestionModal({
     if (!suggestion.command || isExecuting) return;
     setIsExecuting(true);
 
-    let sessionId: string | undefined;
     try {
       const res = await fetch(`/api/incidents/suggestions/${suggestion.id}/mark-executed`, {
         method: 'POST',
@@ -99,8 +98,6 @@ export default function SuggestionModal({
         setIsExecuting(false);
         return;
       }
-      const data = await res.json();
-      sessionId = data?.sessionId;
     } catch (err) {
       console.error('Failed to mark suggestion as executed:', err);
       setIsExecuting(false);
@@ -109,9 +106,7 @@ export default function SuggestionModal({
 
     const message = `Execute this command and report the output concisely. If the command fails, report the error and stop — do NOT investigate further or run alternative commands.\n\nCommand: ${suggestion.command}`;
     const params = new URLSearchParams({ mode: 'agent' });
-    if (sessionId) {
-      params.set('sessionId', sessionId);
-    } else if (chatSessionId) {
+    if (chatSessionId) {
       params.set('sessionId', chatSessionId);
     }
     sessionStorage.setItem('pendingChatMessage', message);
@@ -120,9 +115,9 @@ export default function SuggestionModal({
   };
 
   const handleViewOutput = () => {
-    if (!suggestion.executionSessionId) return;
+    if (!chatSessionId) return;
     onClose();
-    router.push(`/chat?sessionId=${suggestion.executionSessionId}`);
+    router.push(`/chat?sessionId=${chatSessionId}`);
   };
 
   const suggestionType = suggestion.type as keyof typeof typeIcons;
@@ -226,7 +221,7 @@ export default function SuggestionModal({
               </>
             )}
           </Button>
-          {isAlreadyExecuted && suggestion.executionSessionId && (
+          {isAlreadyExecuted && chatSessionId && (
             <Button
               variant="outline"
               onClick={handleViewOutput}
