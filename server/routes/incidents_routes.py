@@ -2,7 +2,8 @@
 
 import json
 import logging
-from datetime import timezone
+import uuid as _uuid
+from datetime import datetime as _dt, timezone
 from routes.audit_routes import record_audit_event as _record_audit_event
 from flask import Blueprint, jsonify, request
 from utils.db.connection_pool import db_pool
@@ -1486,16 +1487,38 @@ def mark_suggestion_executed(user_id, suggestion_id: str):
                     )
                     return jsonify({"success": True, "sessionId": existing_session_id}), 200
 
-                session_id = create_background_chat_session(
-                    user_id=user_id,
-                    title="Next Step Execution",
-                    trigger_metadata={
-                        "source": "suggestion_execution",
-                        "suggestion_id": str(suggestion_id_int),
-                        "incident_id": incident_id,
-                    },
-                    incident_id=incident_id,
-                )
+                # Create a normal active session (not a background one) since
+                # execution happens via the live WebSocket chatbot, not a Celery task.
+                session_id = str(_uuid.uuid4())
+                cursor.execute("SELECT org_id FROM users WHERE id = %s", (user_id,))
+                user_row = cursor.fetchone()
+                user_org_id = user_row[0] if user_row else org_id
+
+                cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
+                cursor.execute("SET myapp.current_org_id = %s;", (user_org_id or '',))
+                conn.commit()
+
+                cursor.execute("""
+                    INSERT INTO chat_sessions
+                        (id, user_id, org_id, title, messages, ui_state,
+                         created_at, updated_at, is_active, status, incident_id)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """, (
+                    session_id, user_id, user_org_id,
+                    "Next Step Execution",
+                    json.dumps([]),
+                    json.dumps({
+                        "selectedMode": "agent",
+                        "triggerMetadata": {
+                            "source": "suggestion_execution",
+                            "suggestion_id": str(suggestion_id_int),
+                            "incident_id": incident_id,
+                        },
+                    }),
+                    _dt.now(), _dt.now(),
+                    True, "active", incident_id,
+                ))
+                conn.commit()
 
                 cursor.execute(
                     """UPDATE incident_suggestions
