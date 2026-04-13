@@ -2,8 +2,8 @@ apiVersion: v2
 name: aurora-oss
 description: Aurora – AI-powered cloud operations platform (on-prem deployment)
 type: application
-version: 1.2.10
-appVersion: "1.2.10"
+version: 1.2.11
+appVersion: "1.2.11"
 home: https://github.com/Arvo-AI/aurora
 sources:
   - https://github.com/Arvo-AI/aurora
