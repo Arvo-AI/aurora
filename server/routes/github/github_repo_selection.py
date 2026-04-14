@@ -128,6 +128,8 @@ def save_repo_selections(user_id):
                     if full_name not in existing:
                         newly_added.append(full_name)
 
+                # Empty `repositories` is valid (clears all); only reject if the caller sent
+                # items but none had a usable full_name.
                 if repositories and not incoming:
                     return jsonify({"error": "No valid repositories in request (all missing full_name)"}), 400
 
