@@ -17,6 +17,10 @@ try {
 const backendUrl = process.env.BACKEND_URL || process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5080';
 
 const nextConfig: NextConfig = {
+  // Emit a minimal, self-contained server bundle at .next/standalone/ — Next.js
+  // traces actually-imported modules so the prod image doesn't need a full
+  // node_modules. Dev and `bun run build` are unaffected.
+  output: "standalone",
   typescript: {
     ignoreBuildErrors: true,
   },

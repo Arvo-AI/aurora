@@ -23,11 +23,7 @@ CMD ["bun", "run", "dev"]
 # ============================================
 # Production Builder Stage
 # ============================================
-# BUILDPLATFORM pin keeps bun on the build host's arch so the native Linux SWC
-# binary resolves correctly for the target instead of shipping a darwin one.
-FROM --platform=$BUILDPLATFORM oven/bun:1.2.22-alpine AS builder
-ARG TARGETPLATFORM
-ARG BUILDPLATFORM
+FROM oven/bun:1.2.22-alpine AS builder
 ENV NEXT_TELEMETRY_DISABLED=1
 
 # Declare build arguments for NEXT_PUBLIC_ variables
@@ -71,22 +67,21 @@ RUN bun run build
 FROM oven/bun:1.2.22-alpine AS prod
 
 ENV NEXT_TELEMETRY_DISABLED=1 \
-    NODE_ENV=production
+    NODE_ENV=production \
+    PORT=3000 \
+    HOSTNAME=0.0.0.0
 WORKDIR /app
 
-# We copy the full node_modules from the builder rather than re-installing with
-# `bun install --production`: bun implicitly enables frozen-lockfile under
-# --production and bails on the subtree difference (oven-sh/bun#5792, #19088).
-# The real trim lives in a future `output: "standalone"` migration.
-COPY --chown=1000:1000 --from=builder /app/.next ./.next
+# Standalone output ships server.js + a traced minimal node_modules; .next/static
+# and public/ must be copied in alongside it. The oven/bun-alpine base exposes
+# `node` as a symlink to bun, so `node server.js` runs under the same bun runtime.
+COPY --chown=1000:1000 --from=builder /app/.next/standalone ./
+COPY --chown=1000:1000 --from=builder /app/.next/static ./.next/static
 COPY --chown=1000:1000 --from=builder /app/public ./public
-COPY --chown=1000:1000 --from=builder /app/node_modules ./node_modules
-COPY --chown=1000:1000 --from=builder /app/package.json ./package.json
 
 COPY --chown=1000:1000 docker-entrypoint.sh /docker-entrypoint.sh
 RUN chmod +x /docker-entrypoint.sh
 
-# Expose port and run Next.js
 EXPOSE 3000
 ENTRYPOINT ["/docker-entrypoint.sh"]
-CMD ["bun", "run", "start"]
+CMD ["node", "server.js"]
