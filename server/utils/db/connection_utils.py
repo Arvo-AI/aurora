@@ -57,6 +57,9 @@ def save_connection_metadata(
     try:
         conn = connect_to_db_as_admin()
         with conn.cursor() as cur:
+            if org_id:
+                cur.execute("SET myapp.current_user_id = %s;", (user_id,))
+                cur.execute("SET myapp.current_org_id = %s;", (org_id,))
             cur.execute(
                 sql,
                 (
@@ -93,6 +96,7 @@ def set_connection_status(
     status: str,
 ) -> bool:
     """Update the status column for a connection (disconnect etc.)."""
+    org_id = _resolve_org_id(user_id)
     sql = """
         UPDATE user_connections
         SET status = %s, last_verified_at = %s
@@ -109,6 +113,9 @@ def set_connection_status(
             status,
         )
         with conn.cursor() as cur:
+            if org_id:
+                cur.execute("SET myapp.current_user_id = %s;", (user_id,))
+                cur.execute("SET myapp.current_org_id = %s;", (org_id,))
             cur.execute(sql, (status, datetime.utcnow(), user_id, provider, account_id))
         conn.commit()
         logger.info("[CONN-META] Status update success for %s/%s/%s", user_id, provider, account_id)
