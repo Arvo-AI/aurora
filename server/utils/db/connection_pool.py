@@ -104,8 +104,8 @@ class DatabaseConnectionPool:
                             "RESET myapp.current_user_id; RESET myapp.current_org_id;"
                         )
                     connection.commit()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning("Failed to reset session vars on pool return: %s", e)
                 try:
                     pool.putconn(connection)
                 except Exception as e:

@@ -33,8 +33,8 @@ class PooledConnectionWrapper:
                         "RESET myapp.current_user_id; RESET myapp.current_org_id;"
                     )
                 self._connection.commit()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("Failed to reset session vars on pool return: %s", e)
             try:
                 self._pool.putconn(self._connection)
                 self._closed = True
