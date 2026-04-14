@@ -79,7 +79,7 @@ def save_repo_selections(user_id):
     try:
         data = request.get_json()
         repositories = data.get("repositories") if data else None
-        if not isinstance(repositories, list) or not repositories:
+        if not isinstance(repositories, list):
             return jsonify({"error": "repositories array is required"}), 400
 
         org_id = _get_user_org_id(user_id)
@@ -124,7 +124,7 @@ def save_repo_selections(user_id):
                     if full_name not in existing:
                         newly_added.append(full_name)
 
-                if not incoming:
+                if repositories and not incoming:
                     return jsonify({"error": "No valid repositories in request (all missing full_name)"}), 400
 
                 removed = existing - incoming
