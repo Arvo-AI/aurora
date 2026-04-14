@@ -23,10 +23,8 @@ CMD ["bun", "run", "dev"]
 # ============================================
 # Production Builder Stage
 # ============================================
-# Pin builder to BUILDPLATFORM so bun resolves the correct linux SWC binary
-# for the target architecture (e.g. linux-arm64-musl on Apple Silicon /
-# ARM K8s nodes; linux-x64-musl on amd64 CI). Avoids shipping the 124 MB
-# darwin-arm64 binary into the image.
+# BUILDPLATFORM pin keeps bun on the build host's arch so the native Linux SWC
+# binary resolves correctly for the target instead of shipping a darwin one.
 FROM --platform=$BUILDPLATFORM oven/bun:1.2.22-alpine AS builder
 ARG TARGETPLATFORM
 ARG BUILDPLATFORM
@@ -76,19 +74,10 @@ ENV NEXT_TELEMETRY_DISABLED=1 \
     NODE_ENV=production
 WORKDIR /app
 
-# Copy built application from the builder stage.
-# NOTE: We copy the full node_modules from builder rather than running
-# `bun install --production` here. Bun treats --production as implicitly
-# frozen-lockfile, then reports the prod-only subtree as a "change" vs.
-# the full lockfile and refuses to install (oven-sh/bun#5792, #19088, #20913).
-# None of CI=, --no-frozen-lockfile, or unsetting NODE_ENV override it.
-# A proper fix is either regenerating bun.lock as prod-only (breaks dev) or
-# switching to `output: "standalone"` in next.config.ts (separate migration).
-#
-# Ownership is set via --chown on each COPY rather than a trailing
-# `chown -R 1000:1000 /app`. A recursive chown after the copies rewrites
-# every file's metadata, which creates a full COW duplicate of node_modules
-# + .next (~1.5 GB of pure waste in a separate layer).
+# We copy the full node_modules from the builder rather than re-installing with
+# `bun install --production`: bun implicitly enables frozen-lockfile under
+# --production and bails on the subtree difference (oven-sh/bun#5792, #19088).
+# The real trim lives in a future `output: "standalone"` migration.
 COPY --chown=1000:1000 --from=builder /app/.next ./.next
 COPY --chown=1000:1000 --from=builder /app/public ./public
 COPY --chown=1000:1000 --from=builder /app/node_modules ./node_modules

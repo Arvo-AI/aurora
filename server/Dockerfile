@@ -1,5 +1,5 @@
 # ============================================
-# Builder Stage - compiles native wheels into a venv that gets copied forward
+# Builder Stage
 # ============================================
 FROM python:3.12 AS builder
 
@@ -26,7 +26,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip install -r /tmp/requirements.txt --python /opt/venv/bin/python
 
 # ============================================
-# Production Stage - runtime only, no compilers, no -dev headers
+# Production Stage
 # ============================================
 FROM python:3.12-slim AS prod
 
@@ -36,11 +36,9 @@ ENV PYTHONPATH="/app" \
 
 WORKDIR /app
 
-# Runtime apt deps only.
-# - psycopg2-binary statically links libpq, so libpq-dev / libpq5 are not needed.
-# - Aurora's Postgres runs in its own container; the postgresql server pkg is dropped.
-# - postgresql-client kept defensively (~20 MB): runbook parser classifies psql
-#   command hints, and IaC/terminal tools may shell out to psql from runbooks.
+# psycopg2-binary statically links libpq, so libpq-dev / libpq5 are unneeded;
+# Postgres server runs in its own container so the server pkg is dropped;
+# postgresql-client kept because runbook tools shell out to psql.
 RUN echo 'Acquire::http::Pipeline-Depth "0";' > /etc/apt/apt.conf.d/99fixhash && \
     apt-get update && apt-get install -y --no-install-recommends \
         postgresql-client \
@@ -169,10 +167,8 @@ RUN ARCH=$(uname -m) && \
       -o /usr/local/bin/kubectl && \
     chmod +x /usr/local/bin/kubectl
 
-# Pre-built Python venv from builder stage
 COPY --from=builder /opt/venv /opt/venv
 
-# Application source
 COPY ./chat /app/chat/
 COPY ./config /app/config/
 COPY ./connectors /app/connectors/
@@ -189,7 +185,7 @@ EXPOSE 5006
 CMD ["python", "main_chatbot.py"]
 
 # ============================================
-# Development Stage - same runtime, source mounted as volume by compose
+# Development Stage
 # ============================================
 FROM prod AS dev
 
