@@ -339,6 +339,15 @@ export default function GitHubProviderIntegration() {
     return true;
   }), [allRepos, ownerFilter, visibilityFilter, searchFilter]);
 
+  const allFilteredSelected = useMemo(
+    () => filteredRepos.length > 0 && filteredRepos.every(r => checkedRepos.has(r.full_name)),
+    [filteredRepos, checkedRepos],
+  );
+  const someFilteredSelected = useMemo(
+    () => filteredRepos.some(r => checkedRepos.has(r.full_name)),
+    [filteredRepos, checkedRepos],
+  );
+
   if (!userId || githubStatus.hasReposConnected === null) {
     return (
       <div className="flex items-center gap-2 text-sm text-muted-foreground p-3 border border-border rounded-lg">
@@ -347,8 +356,6 @@ export default function GitHubProviderIntegration() {
     );
   }
 
-  const allFilteredSelected = filteredRepos.length > 0 && filteredRepos.every(r => checkedRepos.has(r.full_name));
-  const someFilteredSelected = filteredRepos.some(r => checkedRepos.has(r.full_name));
   const isFilterActive = ownerFilter !== "all" || visibilityFilter !== "all" || !!searchFilter;
 
   const setFilteredSelection = (selected: boolean) =>
@@ -357,7 +364,9 @@ export default function GitHubProviderIntegration() {
       for (const r of filteredRepos) selected ? next.add(r.full_name) : next.delete(r.full_name);
       return next;
     });
-  const handleClearAll = () => setCheckedRepos(new Set());
+  const isClearFilteredMode = isFilterActive && someFilteredSelected;
+  const handleClear = () =>
+    isClearFilteredMode ? setFilteredSelection(false) : setCheckedRepos(new Set());
 
   const hasUnsavedChanges = (() => {
     const savedSet = new Set(savedRepos.map(r => r.repo_full_name));
@@ -556,10 +565,10 @@ export default function GitHubProviderIntegration() {
                     variant="ghost"
                     size="sm"
                     className="h-6 px-2 text-xs"
-                    onClick={isFilterActive && someFilteredSelected ? () => setFilteredSelection(false) : handleClearAll}
+                    onClick={handleClear}
                     disabled={checkedRepos.size === 0}
                   >
-                    {isFilterActive && someFilteredSelected ? "Clear filtered" : "Clear all"}
+                    {isClearFilteredMode ? "Clear filtered" : "Clear all"}
                   </Button>
                 </div>
               </div>
