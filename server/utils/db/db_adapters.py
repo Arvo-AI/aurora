@@ -27,11 +27,19 @@ class PooledConnectionWrapper:
         """Override close to return connection to pool instead of actually closing."""
         if not self._closed:
             try:
+                self._connection.rollback()
+                with self._connection.cursor() as cur:
+                    cur.execute(
+                        "RESET myapp.current_user_id; RESET myapp.current_org_id;"
+                    )
+                self._connection.commit()
+            except Exception:
+                pass
+            try:
                 self._pool.putconn(self._connection)
                 self._closed = True
-                logger.debug(f"Returned {'admin' if self._is_admin else 'user'} connection to pool via close()")
             except Exception as e:
-                logger.error(f"Error returning connection to pool on close(): {e}")
+                logger.error("Error returning connection to pool on close(): %s", e)
     
     def __enter__(self):
         return self
