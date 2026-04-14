@@ -4,9 +4,9 @@ id: bitbucket
 description: "Bitbucket code repository integration for managing repos, branches, PRs, issues, and CI/CD pipelines"
 category: code_repository
 connection_check:
-  method: is_connected_function
-  module: chat.backend.agent.tools.bitbucket.utils
-  function: is_bitbucket_connected
+  method: get_credentials_from_db
+  provider_key: bitbucket
+  required_field: access_token
 tools:
   - bitbucket_repos
   - bitbucket_branches
@@ -26,7 +26,7 @@ metadata:
 ## Overview
 Bitbucket code repository integration for managing repositories, branches, pull requests, issues, and CI/CD pipelines.
 Connected account: {display_name}
-Selected workspace: {workspace_slug} | Selected repository: {repo_slug} | Selected branch: {branch_name}
+Workspace and repository auto-resolve from saved user selection if not passed explicitly.
 
 ## Instructions
 

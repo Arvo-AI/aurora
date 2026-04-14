@@ -4,10 +4,9 @@ id: kubectl_onprem
 description: "On-prem Kubernetes cluster integration for running kubectl commands on connected clusters via Aurora agent relay"
 category: infrastructure
 connection_check:
-  method: get_credentials_from_db
-  provider_key: kubectl_onprem
-  db_table: active_kubectl_connections
-  db_query: "SELECT cluster_id, cluster_name FROM active_kubectl_connections c JOIN kubectl_agent_tokens t ON c.token = t.token WHERE t.user_id = %s AND c.status = 'active'"
+  method: is_connected_function
+  module: chat.backend.agent.tools.kubectl_onprem_tool
+  function: is_kubectl_onprem_connected
 tools:
   - on_prem_kubectl
 index: "Infrastructure -- run kubectl on connected on-prem Kubernetes clusters"
