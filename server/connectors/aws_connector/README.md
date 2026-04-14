@@ -141,9 +141,14 @@ Example inline policy:
       "Effect": "Allow",
       "Action": ["secretsmanager:GetSecretValue", "secretsmanager:CreateSecret",
                  "secretsmanager:PutSecretValue", "secretsmanager:UpdateSecret",
-                 "secretsmanager:DeleteSecret", "secretsmanager:DescribeSecret",
-                 "secretsmanager:ListSecrets"],
+                 "secretsmanager:DeleteSecret", "secretsmanager:DescribeSecret"],
       "Resource": "arn:aws:secretsmanager:<REGION>:<YOUR_ACCOUNT_ID>:secret:aurora/users/*"
+    },
+    {
+      "Sid": "SecretsManagerList",
+      "Effect": "Allow",
+      "Action": "secretsmanager:ListSecrets",
+      "Resource": "*"
     }
   ]
 }
