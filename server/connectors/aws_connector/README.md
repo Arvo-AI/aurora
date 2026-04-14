@@ -122,7 +122,7 @@ Example inline policy:
       "Sid": "AWSConnector",
       "Effect": "Allow",
       "Action": "sts:AssumeRole",
-      "Resource": "*"
+      "Resource": "arn:aws:iam::*:role/AuroraReadOnly-*"
     },
     {
       "Sid": "Storage",
