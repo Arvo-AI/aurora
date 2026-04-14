@@ -44,7 +44,7 @@ def load_skill(skill_id: str, **kwargs) -> str:
             return json.dumps({
                 "error": f"Integration '{skill_id}' is not connected.",
                 "hint": "Check the CONNECTED INTEGRATIONS index for available skills.",
-                "available": registry.get_all_skill_ids(),
+                "available": registry.get_connected_skill_ids(user_id),
             })
 
         return result.content

@@ -6,7 +6,9 @@ category: knowledge
 connection_check:
   method: get_token_data
   provider_key: jira
-  required_field: access_token
+  required_any_fields:
+    - access_token
+    - pat_token
   feature_flag: is_jira_enabled
 tools:
   - jira_search_issues

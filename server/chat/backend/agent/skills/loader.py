@@ -22,7 +22,7 @@ class SkillMetadata:
     id: str
     name: str
     category: str
-    connection_check: Dict[str, str] = field(default_factory=dict)
+    connection_check: Dict[str, Any] = field(default_factory=dict)
     tools: List[str] = field(default_factory=list)
     index: str = ""
     rca_priority: int = 99

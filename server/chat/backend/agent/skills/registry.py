@@ -24,8 +24,34 @@ logger = logging.getLogger(__name__)
 INTEGRATIONS_DIR = os.path.join(os.path.dirname(__file__), "integrations")
 RCA_DIR = os.path.join(os.path.dirname(__file__), "rca")
 
+def _get_rca_token_budget() -> int:
+    """Resolve RCA skill token budget from env, with a safe default."""
+    raw = (
+        os.getenv("RCA_SKILLS_TOKEN_BUDGET")
+        or os.getenv("RCA_TOKEN_BUDGET")
+        or ""
+    ).strip()
+    if not raw:
+        return 4000
+
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning(
+            f"Invalid RCA token budget '{raw}' — using default (4000)"
+        )
+        return 4000
+
+    if value < 500:
+        logger.warning(
+            f"RCA token budget too low ({value}) — using minimum (500)"
+        )
+        return 500
+    return value
+
+
 # Default token budget for auto-loaded RCA skills
-RCA_TOKEN_BUDGET = 4000
+RCA_TOKEN_BUDGET = _get_rca_token_budget()
 
 
 class SkillRegistry:
@@ -102,27 +128,57 @@ class SkillRegistry:
         if not check:
             logger.debug(f"Skill '{skill_id}' has no connection_check — treating as disconnected")
             return False, {}
+        if not isinstance(check, dict):
+            logger.warning(
+                f"Skill '{skill_id}' has invalid connection_check (expected dict, got {type(check)})"
+            )
+            return False, {}
 
         method = check.get("method", "")
 
         try:
-            return self._dispatch_check(method, check, user_id)
+            return self._dispatch_check(skill_id, method, check, user_id)
         except Exception as e:
             logger.warning(f"Connection check failed for {skill_id}: {e}")
             return False, {}
 
     def _dispatch_check(
-        self, method: str, check: Dict[str, str], user_id: str
+        self, skill_id: str, method: str, check: Dict[str, Any], user_id: str
     ) -> Tuple[bool, Dict[str, Any]]:
         """Dispatch to the correct connection check function."""
         provider_key = check.get("provider_key", "")
-        required_field = check.get("required_field", "")
+
+        def _has_required_fields(creds: Any) -> bool:
+            if not isinstance(creds, dict):
+                return False
+
+            required_field = check.get("required_field")
+            if required_field:
+                if isinstance(required_field, str):
+                    if creds.get(required_field):
+                        return True
+                else:
+                    logger.warning(
+                        f"Invalid required_field type for skill '{skill_id}': {type(required_field)}"
+                    )
+                    return False
+
+            required_any_fields = check.get("required_any_fields")
+            if required_any_fields:
+                if isinstance(required_any_fields, list):
+                    return any(creds.get(str(field)) for field in required_any_fields)
+                logger.warning(
+                    f"Invalid required_any_fields type for skill '{skill_id}': {type(required_any_fields)}"
+                )
+                return False
+
+            return bool(creds)
 
         if method == "get_credentials_from_db":
             from utils.auth.stateless_auth import get_credentials_from_db
 
             creds = get_credentials_from_db(user_id, provider_key)
-            if creds and (not required_field or creds.get(required_field)):
+            if _has_required_fields(creds):
                 return True, creds
             return False, {}
 
@@ -136,7 +192,7 @@ class SkillRegistry:
             from utils.auth.token_management import get_token_data
 
             creds = get_token_data(user_id, provider_key)
-            if creds and (not required_field or creds.get(required_field)):
+            if _has_required_fields(creds):
                 return True, creds
             return False, {}
 
@@ -167,8 +223,27 @@ class SkillRegistry:
             return bool(connected), {}
 
         elif method == "provider_in_preference":
-            # For cloud providers: check if provider is in user's provider_preference
-            # This is handled at call time, not DB lookup
+            # For provider-bound skills (e.g., ovh/scaleway/tailscale/grafana),
+            # only load if the provider is actually connected for this user.
+            from utils.auth.stateless_auth import get_connected_providers
+
+            target_provider = (
+                str(
+                    check.get("provider_key")
+                    or check.get("provider")
+                    or skill_id
+                )
+                .strip()
+                .lower()
+            )
+            connected = [
+                str(p).strip().lower()
+                for p in (get_connected_providers(user_id) or [])
+                if p
+            ]
+            return target_provider in connected, {}
+
+        elif method == "always":
             return True, {}
 
         else:
@@ -179,17 +254,13 @@ class SkillRegistry:
     def _check_feature_flag(flag_name: str) -> bool:
         """Check a feature flag by name."""
         try:
-            from utils.flags.feature_flags import (
-                is_jira_enabled,
-                is_sharepoint_enabled,
-            )
+            from utils.flags import feature_flags
 
-            flag_map = {
-                "is_jira_enabled": is_jira_enabled,
-                "is_sharepoint_enabled": is_sharepoint_enabled,
-            }
-            fn = flag_map.get(flag_name)
-            return fn() if fn else False
+            fn = getattr(feature_flags, flag_name, None)
+            if not callable(fn):
+                logger.warning(f"Unknown feature flag function '{flag_name}'")
+                return False
+            return bool(fn())
         except ImportError:
             return False
 
@@ -205,6 +276,10 @@ class SkillRegistry:
             if is_connected:
                 connected.append(meta)
         return connected
+
+    def get_connected_skill_ids(self, user_id: str) -> List[str]:
+        """Return IDs for all connected integration skills."""
+        return [meta.id for meta in self.get_connected_skills(user_id)]
 
     def build_index(self, user_id: str) -> str:
         """

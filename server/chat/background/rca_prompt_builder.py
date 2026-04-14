@@ -9,11 +9,77 @@ Aurora Learn Integration:
 - Injects context from helpful RCAs to improve new investigations
 """
 
+from functools import lru_cache
 from typing import Any, Dict, List, Optional
 import logging
 import os
 
 logger = logging.getLogger(__name__)
+
+RCA_SEGMENTS_DIR = os.path.normpath(
+    os.path.join(
+        os.path.dirname(__file__),
+        os.pardir,
+        "backend",
+        "agent",
+        "skills",
+        "rca",
+        "segments",
+    )
+)
+
+
+@lru_cache(maxsize=32)
+def _load_rca_segment_template(segment_name: str) -> str:
+    """
+    Load an RCA markdown segment by name (filename without .md).
+
+    Segment content is cached in-process for performance.
+    """
+    try:
+        from chat.backend.agent.skills.loader import load_core_prompt
+
+        return load_core_prompt(RCA_SEGMENTS_DIR, segments=[segment_name]).strip()
+    except Exception as e:
+        logger.warning(f"Failed to load RCA segment '{segment_name}': {e}")
+        return ""
+
+
+def _render_rca_segment(segment_name: str, context: Optional[Dict[str, Any]] = None) -> str:
+    """Render an RCA segment with optional {variable} template substitutions."""
+    template = _load_rca_segment_template(segment_name)
+    if not template:
+        return ""
+
+    if not context:
+        return template
+
+    try:
+        from chat.backend.agent.skills.loader import resolve_template
+
+        return resolve_template(template, context)
+    except Exception as e:
+        logger.warning(f"Failed to render RCA segment '{segment_name}': {e}")
+        return template
+
+
+def _append_rca_segment(
+    prompt_parts: List[str],
+    segment_name: str,
+    context: Optional[Dict[str, Any]] = None,
+    leading_blank: bool = False,
+    trailing_blank: bool = False,
+) -> None:
+    """Append rendered segment to prompt_parts with optional surrounding blank lines."""
+    content = _render_rca_segment(segment_name, context=context)
+    if not content:
+        return
+
+    if leading_blank:
+        prompt_parts.append("")
+    prompt_parts.append(content)
+    if trailing_blank:
+        prompt_parts.append("")
 
 
 # ============================================================================
@@ -399,6 +465,7 @@ def build_rca_prompt(
     alert_details: Dict[str, Any],
     providers: Optional[List[str]] = None,
     user_id: Optional[str] = None,
+    integrations: Optional[Dict[str, bool]] = None,
 ) -> str:
     """Build a comprehensive, provider-aware RCA prompt."""
     # Fetch providers if not provided
@@ -533,7 +600,7 @@ def build_rca_prompt(
             _integrations['confluence'] = has_confluence
             _integrations['jenkins'] = _has_jenkins_connected(user_id)
             _integrations['cloudbees'] = _has_cloudbees_connected(user_id)
-        # Merge with any integrations already passed in
+        # Merge with any integrations already passed in by caller
         for k, v in (integrations or {}).items():
             if k not in _integrations:
                 _integrations[k] = v
@@ -572,35 +639,26 @@ def build_rca_prompt(
         if prediscovery_context:
             prompt_parts.append(prediscovery_context)
 
-    # Critical persistence instructions
-    prompt_parts.extend([
-        "",
-        "## CRITICAL INVESTIGATION REQUIREMENTS:",
-        "",
-    ])
+    # Critical investigation requirements (modular markdown segments)
+    _append_rca_segment(
+        prompt_parts,
+        "critical_requirements_header",
+        leading_blank=True,
+        trailing_blank=True,
+    )
 
     has_infra_providers = bool({'gcp', 'aws', 'azure', 'ovh', 'scaleway'}.intersection(set(providers_lower)))
+    after_context_label = 'Jira' if has_jira else 'Confluence' if has_confluence else 'change'
     
     # Add aggressive persistence prompts only if cost optimization is disabled
     # The immediate action required due to the AgentExecutor which assumes agent is done when it sends a text chunk without a tool call.
     if os.getenv("RCA_OPTIMIZE_COSTS", "").lower() != "true":
-        prompt_parts.extend([
-            "### PERSISTENCE IS MANDATORY:",
-            "- **MINIMUM**: Make AT LEAST 15-20 tool calls before concluding",
-            "- **DO NOT STOP** after 2-3 commands - keep investigating until you find the EXACT root cause",
-            "- **SPEND TIME**: Investigation should take AT LEAST 3-5 minutes of active tool usage",
-            "- **IF BLOCKED**: Try 3-5 alternative approaches before giving up on any single avenue",
-            "- **COMMAND FAILURES ARE NOT STOPPING POINTS**: When a command fails, try alternatives immediately",
-            "",
-            "### IMMEDIATE ACTION REQUIRED:",
-            "- **DO NOT** output a plan or text explanation first.",
-            "- **DO NOT** say 'I will start by...'",
-            "- **If Jira is connected, your FIRST tool call MUST be jira_search_issues.**",
-            f"- After {'Jira' if has_jira else 'Confluence' if has_confluence else 'change'} context, proceed to infrastructure/CI tools.",
-            "- UNLESS YOU ARE DONE, your response MUST contain a tool call.",
-            "- NOT PROVIDING A TOOL CALL WILL END THE INVESTIGATION AUTOMATICALLY",
-            "",
-        ])
+        _append_rca_segment(
+            prompt_parts,
+            "persistence_and_immediate_action",
+            context={"after_context_label": after_context_label},
+            trailing_blank=True,
+        )
     
     depth_steps = []
     if has_jira or has_confluence:
@@ -624,52 +682,13 @@ def build_rca_prompt(
     for i, step in enumerate(depth_steps, 1):
         prompt_parts.append(f"{i}. {step}")
 
-    prompt_parts.extend([
-        "",
-        "### ERROR RESILIENCE:",
-        "- If one tool or data source fails, try an alternative immediately",
-    ])
+    _append_rca_segment(prompt_parts, "error_resilience_intro", leading_blank=True)
     if has_infra_providers:
-        prompt_parts.extend([
-            "- If cloud monitoring/metrics commands fail -> use kubectl directly",
-            "- If kubectl fails -> check cloud provider CLI alternatives",
-            "- If one log source fails -> try another (kubectl logs, cloud logging, container logs)",
-            "- If a resource isn't found -> check other namespaces, regions, or projects",
-        ])
-    prompt_parts.extend([
-        "- **ALWAYS have 3-4 backup approaches ready**",
-        "",
-        "### WHAT TO INVESTIGATE:",
-        "- Resource STATUS and HEALTH (running, pending, failed, etc.)",
-        "- LOGS for error messages, warnings, stack traces",
-        "- METRICS for CPU, memory, disk, network anomalies",
-        "- CONFIGURATIONS for misconfigurations or invalid values",
-        "- EVENTS for recent state changes",
-        "- DEPENDENCIES for cascading failures",
-        "- RECENT CHANGES or deployments that correlate with the issue",
-        "",
-        "## OUTPUT REQUIREMENTS:",
-        "",
-        "### Your analysis MUST include:",
-        "1. **Summary**: Brief description of the incident",
-        "2. **Investigation Steps**: Document EVERY tool call and what it revealed",
-        "3. **Evidence**: Show specific log entries, metric values, config snippets",
-        "4. **Root Cause**: Clearly state the EXACT root cause with supporting evidence",
-        "5. **Impact**: Describe what was affected and how",
-        "6. **Remediation**: Specific, actionable steps to fix the issue",
-        "7. **Code Fix** (if applicable): If the root cause is a code defect and GitHub is connected, "
-        "you MUST call `github_fix` to propose the fix. This creates a review-only suggestion — it is safe and expected.",
-        "",
-        "### Remember:",
-        "- You are in investigation mode — do NOT make direct infrastructure changes (no scaling, restarts, config writes)",
-        "- `github_fix` is the exception: it creates a *suggestion* for user review, not a direct change. Always use it when you find a code defect.",
-        "- The user expects you to find the EXACT root cause, not surface-level symptoms",
-        "- Keep digging until you have definitive answers",
-        "- Never conclude with 'unable to determine' without exhausting all investigation avenues",
-        "",
-        "## BEGIN INVESTIGATION NOW",
-        "Start by understanding the scope of the issue, then systematically investigate using the tools and approaches above.",
-    ])
+        _append_rca_segment(prompt_parts, "error_resilience_infra")
+    _append_rca_segment(prompt_parts, "error_resilience_outro")
+
+    _append_rca_segment(prompt_parts, "what_to_investigate", leading_blank=True)
+    _append_rca_segment(prompt_parts, "output_requirements", leading_blank=True)
 
     return "\n".join(prompt_parts)
 
