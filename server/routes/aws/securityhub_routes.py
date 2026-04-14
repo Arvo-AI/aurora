@@ -4,9 +4,12 @@ import hmac
 import os
 from flask import Blueprint, request, jsonify
 from prometheus_client import Counter, Histogram
+from psycopg2.extras import RealDictCursor
 from utils.db.connection_pool import db_pool
 from .tasks import process_securityhub_finding
 from utils.web.cors_utils import create_cors_response
+from utils.auth.rbac_decorators import require_auth_only
+from utils.auth.stateless_auth import get_org_id_from_request
 
 logger = logging.getLogger(__name__)
 
@@ -91,3 +94,46 @@ def webhook(org_id: str):
     process_securityhub_finding.delay(payload, org_id)
 
     return jsonify({"received": True}), 200
+
+@securityhub_bp.route("/findings", methods=["OPTIONS"])
+def get_findings_options():
+    return create_cors_response()
+
+@securityhub_bp.route("/findings", methods=["GET"])
+@require_auth_only
+def get_findings(user_id):
+    org_id = get_org_id_from_request()
+    limit = request.args.get('limit', 50, type=int)
+    
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+                cursor.execute(
+                    """
+                    SELECT finding_id, source, title, severity_label, 
+                           payload, ai_summary, ai_risk_level, ai_suggested_fix,
+                           created_at, updated_at
+                    FROM aws_security_findings
+                    WHERE org_id = %s
+                    ORDER BY updated_at DESC
+                    LIMIT %s
+                    """,
+                    (org_id, limit)
+                )
+                findings = cursor.fetchall()
+
+        # format records slightly
+        formatted_findings = []
+        for finding in findings:
+            item = dict(finding)
+            # Serialize datetimes to string format compatible with frontend JSON if necessary
+            for k, v in item.items():
+                if hasattr(v, 'isoformat'):
+                    item[k] = v.isoformat()
+            formatted_findings.append(item)
+            
+        return jsonify({"findings": formatted_findings}), 200
+        
+    except Exception as exc:
+        logger.error("[SECURITY_HUB] Failed to fetch findings: %s", exc, exc_info=True)
+        return jsonify({"error": "Failed to fetch security hub findings"}), 500
