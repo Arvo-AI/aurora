@@ -7,6 +7,8 @@ import redis
 from typing import Optional, Dict, Any, List
 import os
 
+from utils.cache.redis_client import get_redis_ssl_kwargs
+
 logger = logging.getLogger(__name__)
 
 
@@ -28,7 +30,8 @@ class RedisCache:
                 redis_url,
                 decode_responses=True,
                 socket_connect_timeout=5,
-                socket_timeout=5
+                socket_timeout=5,
+                **get_redis_ssl_kwargs()
             )
             # Test connection
             self.redis_client.ping()

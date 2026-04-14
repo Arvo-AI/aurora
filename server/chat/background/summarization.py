@@ -677,18 +677,21 @@ def generate_incident_summary_from_chat(
             _send_rca_notification,
             _is_rca_email_notification_enabled,
             _has_slack_connected,
+            _has_google_chat_connected,
         )
 
         email_enabled = _is_rca_email_notification_enabled(user_id)
         slack_enabled = _has_slack_connected(user_id)
+        google_chat_enabled = _has_google_chat_connected(user_id)
 
-        if email_enabled or slack_enabled:
+        if email_enabled or slack_enabled or google_chat_enabled:
             _send_rca_notification(
                 user_id,
                 incident_id,
                 "completed",
                 email_enabled=email_enabled,
                 slack_enabled=slack_enabled,
+                google_chat_enabled=google_chat_enabled,
                 session_id=session_id,
             )
 

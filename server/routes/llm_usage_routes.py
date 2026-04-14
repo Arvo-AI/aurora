@@ -113,6 +113,153 @@ def get_session_usage_options(session_id):
     return create_cors_response()
 
 
+@llm_usage_bp.route('/api/llm-usage/cost-over-time', methods=['OPTIONS'])
+def get_cost_over_time_options():
+    return create_cors_response()
+
+
+@llm_usage_bp.route('/api/llm-usage/summary', methods=['OPTIONS'])
+def get_usage_summary_options():
+    return create_cors_response()
+
+
+@llm_usage_bp.route('/api/llm-usage/cost-over-time', methods=['GET'])
+@require_permission("llm_usage", "read")
+def get_cost_over_time(user_id):
+    """Cost/token aggregates over time, optionally grouped by model or provider.
+    
+    Granularity adapts to period: <=7d uses hourly, <=90d uses daily, >90d uses weekly.
+    Override with ?granularity=hour|day|week.
+    """
+    org_id = get_org_id_from_request()
+    period = request.args.get("period", "30d")
+    group_by = request.args.get("group_by", "model")
+    granularity = request.args.get("granularity")
+
+    interval_map = {"7d": "7 days", "30d": "30 days", "90d": "90 days", "180d": "180 days", "365d": "365 days"}
+    pg_interval = interval_map.get(period, "30 days")
+
+    if granularity in ("hour", "day", "week"):
+        trunc = granularity
+    elif period in ("7d",):
+        trunc = "hour"
+    elif period in ("180d", "365d"):
+        trunc = "week"
+    else:
+        trunc = "day"
+
+    group_col = "model_name" if group_by == "model" else "api_provider"
+
+    try:
+        with db_pool.get_user_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
+            if org_id:
+                cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
+
+            cursor.execute(f"""
+                SELECT
+                    date_trunc('{trunc}', timestamp) AS bucket,
+                    {group_col} AS group_key,
+                    SUM(estimated_cost) AS cost,
+                    SUM(input_tokens) AS input_tokens,
+                    SUM(output_tokens) AS output_tokens,
+                    SUM(total_tokens) AS total_tokens,
+                    COUNT(*) AS request_count
+                FROM llm_usage_tracking
+                WHERE {'org_id = %s' if org_id else 'user_id = %s'}
+                  AND timestamp >= NOW() - %s::interval
+                GROUP BY bucket, {group_col}
+                ORDER BY bucket ASC, group_key ASC
+            """, (org_id or user_id, pg_interval))
+
+            rows = cursor.fetchall()
+
+        data = []
+        for row in rows:
+            data.append({
+                "date": row[0].isoformat() if row[0] else None,
+                "group": row[1],
+                "cost": float(row[2]) if row[2] else 0.0,
+                "input_tokens": row[3] or 0,
+                "output_tokens": row[4] or 0,
+                "total_tokens": row[5] or 0,
+                "request_count": row[6] or 0,
+            })
+
+        logger.info(
+            "Cost-over-time fetched: %d points, group_by=%s, period=%s, granularity=%s",
+            len(data), group_by, period, trunc,
+        )
+        return jsonify({"data": data, "group_by": group_by, "period": period, "granularity": trunc})
+    except Exception as e:
+        logger.error(f"Error fetching cost-over-time: {e}")
+        return jsonify({"error": "Failed to fetch cost data"}), 500
+
+
+@llm_usage_bp.route('/api/llm-usage/summary', methods=['GET'])
+@require_permission("llm_usage", "read")
+def get_usage_summary(user_id):
+    """Aggregate usage summary for the period."""
+    org_id = get_org_id_from_request()
+    period = request.args.get("period", "30d")
+
+    interval_map = {"7d": "7 days", "30d": "30 days", "90d": "90 days", "180d": "180 days", "365d": "365 days"}
+    pg_interval = interval_map.get(period, "30 days")
+
+    try:
+        with db_pool.get_user_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
+            if org_id:
+                cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
+
+            cursor.execute(f"""
+                SELECT
+                    COALESCE(SUM(estimated_cost), 0) AS total_cost,
+                    COALESCE(SUM(total_tokens), 0) AS total_tokens,
+                    COALESCE(SUM(input_tokens), 0) AS total_input_tokens,
+                    COALESCE(SUM(output_tokens), 0) AS total_output_tokens,
+                    COUNT(*) AS total_requests,
+                    COUNT(*) FILTER (WHERE error_message IS NOT NULL) AS error_count,
+                    ROUND(AVG(response_time_ms) FILTER (WHERE response_time_ms IS NOT NULL)) AS avg_response_ms,
+                    COUNT(DISTINCT model_name) AS models_used
+                FROM llm_usage_tracking
+                WHERE {'org_id = %s' if org_id else 'user_id = %s'}
+                  AND timestamp >= NOW() - %s::interval
+            """, (org_id or user_id, pg_interval))
+
+            row = cursor.fetchone()
+
+        total_requests = row[4] or 0
+        error_count = row[5] or 0
+        total_cost = float(row[0]) if row[0] else 0.0
+        avg_response_ms = int(row[6]) if row[6] else None
+        models_used = row[7] or 0
+        error_rate = round(error_count / total_requests * 100, 1) if total_requests > 0 else 0
+
+        logger.info(
+            "Usage summary fetched: total_cost=%.4f, total_requests=%d, error_count=%d, error_rate=%s, avg_response_ms=%s, models_used=%d, period=%s",
+            total_cost, total_requests, error_count, error_rate, avg_response_ms, models_used, period,
+        )
+
+        return jsonify({
+            "total_cost": total_cost,
+            "total_tokens": row[1] or 0,
+            "total_input_tokens": row[2] or 0,
+            "total_output_tokens": row[3] or 0,
+            "total_requests": total_requests,
+            "error_count": error_count,
+            "error_rate": error_rate,
+            "avg_response_ms": avg_response_ms,
+            "models_used": models_used,
+            "period": period,
+        })
+    except Exception as e:
+        logger.error(f"Error fetching usage summary: {e}")
+        return jsonify({"error": "Failed to fetch usage summary"}), 500
+
+
 @llm_usage_bp.route('/api/llm-usage/session/<session_id>', methods=['GET'])
 @require_permission("llm_usage", "read")
 def get_session_usage(user_id, session_id):

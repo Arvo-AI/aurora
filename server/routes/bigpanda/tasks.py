@@ -15,6 +15,7 @@ from celery_config import celery_app
 from services.correlation.alert_correlator import AlertCorrelator
 from services.correlation import handle_correlated_alert
 from utils.auth.stateless_auth import get_user_preference
+from utils.payload_timestamp import extract_alert_fired_at
 
 logger = logging.getLogger(__name__)
 
@@ -200,20 +201,27 @@ def process_bigpanda_event(
                 logger.info("[BIGPANDA] Stored for user %s (RCA disabled)", user_id)
                 return
 
-            # 4. Create new incident
+            # 4. Create new incident — BigPanda exposes incident.start as Unix
+            # seconds; fall back to the first child alert's start time.
+            alert_fired_at = extract_alert_fired_at(
+                incident, ["start", "alerts.0.start", "first_active"]
+            )
+
             cursor.execute(
                 """INSERT INTO incidents
                    (user_id, org_id, source_type, source_alert_id, alert_title, alert_service,
-                    severity, status, started_at, alert_metadata)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    severity, status, started_at, alert_metadata, alert_fired_at)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (org_id, source_type, source_alert_id, user_id) DO UPDATE
                    SET updated_at = CURRENT_TIMESTAMP,
                        started_at = CASE WHEN incidents.status != 'analyzed'
                                     THEN EXCLUDED.started_at ELSE incidents.started_at END,
-                       alert_metadata = EXCLUDED.alert_metadata
+                       alert_metadata = EXCLUDED.alert_metadata,
+                       alert_fired_at = COALESCE(EXCLUDED.alert_fired_at, incidents.alert_fired_at)
                    RETURNING id""",
                 (user_id, org_id, "bigpanda", alert_db_id, title, service,
-                 severity, "investigating", received_at, json.dumps(alert_metadata)),
+                 severity, "investigating", received_at, json.dumps(alert_metadata),
+                 alert_fired_at),
             )
             incident_row = cursor.fetchone()
             aurora_incident_id = incident_row[0] if incident_row else None

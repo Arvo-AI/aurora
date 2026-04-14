@@ -11,6 +11,7 @@ from celery_config import celery_app
 from chat.background.rca_prompt_builder import build_newrelic_rca_prompt
 from services.correlation.alert_correlator import AlertCorrelator
 from services.correlation import handle_correlated_alert
+from utils.payload_timestamp import extract_alert_fired_at
 
 logger = logging.getLogger(__name__)
 
@@ -295,19 +296,33 @@ def process_newrelic_event(
                     )
 
                 # --- Create new incident ---
+                # New Relic exposes the issue's open time under several keys
+                # depending on payload shape (workflow vs classic vs nested).
+                alert_fired_at = extract_alert_fired_at(
+                    payload,
+                    [
+                        "openedAt",
+                        "issueAcceptedAt",
+                        "createdAt",
+                        "current_state.created_at",
+                        "timestamp",
+                    ],
+                )
+
                 cursor.execute(
                     """
                     INSERT INTO incidents
                     (user_id, org_id, source_type, source_alert_id, alert_title, alert_service,
-                     severity, status, started_at, alert_metadata)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                     severity, status, started_at, alert_metadata, alert_fired_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (org_id, source_type, source_alert_id, user_id) DO UPDATE
                     SET updated_at = CURRENT_TIMESTAMP,
                         started_at = CASE
                             WHEN incidents.status != 'analyzed' THEN EXCLUDED.started_at
                             ELSE incidents.started_at
                         END,
-                        alert_metadata = EXCLUDED.alert_metadata
+                        alert_metadata = EXCLUDED.alert_metadata,
+                        alert_fired_at = COALESCE(EXCLUDED.alert_fired_at, incidents.alert_fired_at)
                     RETURNING id
                     """,
                     (
@@ -321,6 +336,7 @@ def process_newrelic_event(
                         "investigating",
                         received_at,
                         json.dumps(alert_metadata),
+                        alert_fired_at,
                     ),
                 )
                 incident_row = cursor.fetchone()

@@ -1,7 +1,7 @@
 # ============================================
 # Base Stage - Common dependencies
 # ============================================
-FROM python:3.11-slim AS base
+FROM python:3.12-slim AS base
 
 ENV PYTHONPATH="/app"
 # Set uv cache directory to a writable location for non-root users
@@ -185,6 +185,7 @@ COPY ./utils /app/utils/
 COPY ./celery_config.py /app/celery_config.py
 COPY ./main_chatbot.py /app/main_chatbot.py
 COPY ./main_compute.py /app/main_compute.py
+COPY ./mcp_server.py /app/mcp_server.py
 COPY ./rbac_model.conf /app/rbac_model.conf
 
 EXPOSE 5006

@@ -137,6 +137,10 @@ CORS(app, origins=FRONTEND_URL, supports_credentials=True,
                        "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
                                          "Authorization", "X-Provider-Preference"],
                        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"]},
+         r"/google-chat/*": {"origins": FRONTEND_URL, "supports_credentials": True,
+                             "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
+                                               "Authorization", "X-Provider-Preference"],
+                             "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"]},
          r"/grafana/*": {"origins": FRONTEND_URL, "supports_credentials": True,
                          "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
                                             "Authorization", "X-Provider-Preference"],
@@ -157,6 +161,10 @@ CORS(app, origins=FRONTEND_URL, supports_credentials=True,
                          "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
                                            "Authorization", "X-Provider-Preference"],
                          "methods": ["GET", "POST", "DELETE", "OPTIONS", "PATCH"]},
+        r"/opsgenie/*": {"origins": FRONTEND_URL, "supports_credentials": True,
+                         "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With",
+                                           "X-User-ID", "Authorization", "X-Provider-Preference"],
+                         "methods": ["GET", "POST", "DELETE", "OPTIONS"]},
         r"/jenkins/*": {"origins": FRONTEND_URL, "supports_credentials": True,
                         "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
                                           "Authorization", "X-Provider-Preference"],
@@ -269,11 +277,21 @@ app.register_blueprint(github_repo_selection_bp, url_prefix="/github")
 from routes.kubectl_token_routes import kubectl_token_bp
 app.register_blueprint(kubectl_token_bp)
 
+# --- MCP API Token Routes ---
+from routes.mcp_token_routes import mcp_token_bp
+app.register_blueprint(mcp_token_bp)
+
 # --- Slack Integration Routes ---
 from routes.slack.slack_routes import slack_bp
 from routes.slack.slack_events import slack_events_bp
 app.register_blueprint(slack_bp, url_prefix="/slack")
 app.register_blueprint(slack_events_bp, url_prefix="/slack")
+
+# --- Google Chat Integration Routes ---
+from routes.google_chat.google_chat_routes import google_chat_bp
+from routes.google_chat.google_chat_events import google_chat_events_bp
+app.register_blueprint(google_chat_bp, url_prefix="/google-chat")
+app.register_blueprint(google_chat_events_bp, url_prefix="/google-chat")
 
 # --- Jenkins Integration Routes ---
 from routes.jenkins import bp as jenkins_bp  # noqa: F401
@@ -340,6 +358,11 @@ import routes.newrelic.tasks  # noqa: F401
 from routes.pagerduty.pagerduty_routes import pagerduty_bp  # noqa: F401
 app.register_blueprint(pagerduty_bp, url_prefix="/pagerduty")
 
+# --- OpsGenie Integration Routes ---
+from routes.opsgenie import bp as opsgenie_bp  # noqa: F401
+import routes.opsgenie.tasks  # noqa: F401
+app.register_blueprint(opsgenie_bp, url_prefix="/opsgenie")
+
 # --- Knowledge Base Routes ---
 from routes.knowledge_base import bp as knowledge_base_bp  # noqa: F401
 app.register_blueprint(knowledge_base_bp, url_prefix="/api/knowledge-base")
@@ -385,9 +408,23 @@ app.register_blueprint(incident_feedback_bp)
 from routes.postmortem_routes import postmortem_bp
 app.register_blueprint(postmortem_bp)
 
+# --- SRE Metrics Routes ---
+from routes.metrics_routes import metrics_bp
+app.register_blueprint(metrics_bp)
+
 # --- Visualization Streaming Routes ---
 from routes.visualization_stream import visualization_bp
 app.register_blueprint(visualization_bp)
+
+# --- Monitor Routes (Agent Fleet / Waterfall) ---
+from routes.monitor.fleet_routes import fleet_bp
+from routes.monitor.waterfall_routes import waterfall_bp
+app.register_blueprint(fleet_bp)
+app.register_blueprint(waterfall_bp)
+
+# --- Audit Log Routes ---
+from routes.audit_routes import audit_bp
+app.register_blueprint(audit_bp)
 
 # --- User & Auth Routes ---
 from routes.user_preferences import user_preferences_bp
@@ -492,6 +529,20 @@ def handle_not_found(error):
 def handle_internal_error(error):
     logger.error(f"Unhandled server error: {error}", exc_info=True)
     return jsonify({"error": "Internal server error"}), 500
+
+
+@app.route('/api/routes', methods=['GET'])
+def list_api_routes():
+    """Auto-generated catalog of all API endpoints (used by MCP server)."""
+    if not request.headers.get("X-User-ID"):
+        return jsonify({"error": "Unauthorized"}), 401
+    routes = []
+    for rule in app.url_map.iter_rules():
+        methods = sorted(rule.methods - {'HEAD', 'OPTIONS'})
+        if methods:
+            routes.append({'path': rule.rule, 'methods': methods})
+    routes.sort(key=lambda r: r['path'])
+    return jsonify(routes)
 
 # ============================================================================
 # Main Application Runner

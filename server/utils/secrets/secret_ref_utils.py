@@ -41,6 +41,7 @@ SUPPORTED_SECRET_PROVIDERS: Set[str] = {
     "datadog",  # Datadog connector tokens
     "netdata",  # Netdata connector tokens
     "pagerduty", # PagerDuty connector tokens
+    "opsgenie",  # OpsGenie connector tokens
     "splunk",    # Splunk connector tokens
     "ovh",      # OVH Cloud
     "scaleway", # Scaleway Cloud
@@ -61,6 +62,7 @@ SUPPORTED_SECRET_PROVIDERS: Set[str] = {
     "cloudbees", # CloudBees CI connector tokens
     "spinnaker", # Spinnaker CD connector tokens
     "newrelic",  # New Relic connector tokens
+    "google",   # Google Chat — provider is "google_chat", split('_')[0] matches this
 }
 
 

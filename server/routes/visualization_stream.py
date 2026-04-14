@@ -6,6 +6,7 @@ from flask import Blueprint, Response, jsonify, stream_with_context
 import redis
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import get_org_id_from_request
+from utils.cache.redis_client import get_redis_ssl_kwargs
 from utils.db.connection_pool import db_pool
 
 logger = logging.getLogger(__name__)
@@ -35,7 +36,7 @@ def stream_visualization_updates(user_id, incident_id: str):
         redis_client = None
         pubsub = None
         try:
-            redis_client = redis.from_url(os.getenv('REDIS_URL', 'redis://redis:6379/0'))
+            redis_client = redis.from_url(os.getenv('REDIS_URL', 'redis://redis:6379/0'), **get_redis_ssl_kwargs())
             pubsub = redis_client.pubsub()
             channel = f"visualization:{incident_id}"
             pubsub.subscribe(channel)

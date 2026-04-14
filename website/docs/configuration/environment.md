@@ -328,6 +328,20 @@ SLACK_CLIENT_SECRET=your-client-secret
 SLACK_SIGNING_SECRET=your-signing-secret
 ```
 
+### Google Chat
+
+| Variable | Description |
+|----------|-------------|
+| `GOOGLE_CHAT_CLIENT_ID` | OAuth client ID (used during setup to create the incidents space in the customer's workspace) |
+| `GOOGLE_CHAT_CLIENT_SECRET` | OAuth client secret |
+| `GOOGLE_CHAT_SERVICE_ACCOUNT_KEY` | JSON key for the Chat app service account (messages appear as "Aurora") |
+
+```bash
+GOOGLE_CHAT_CLIENT_ID=your-client-id
+GOOGLE_CHAT_CLIENT_SECRET=your-client-secret
+GOOGLE_CHAT_SERVICE_ACCOUNT_KEY='{"type":"service_account",...}'
+```
+
 ### PagerDuty
 
 | Variable | Default | Description |

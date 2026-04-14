@@ -26,25 +26,21 @@ spec:
       # Pod isolation requires K8s API access to create terminal pods
       automountServiceAccountToken: {{ eq .Values.config.ENABLE_POD_ISOLATION "true" }}
       securityContext:
-        runAsNonRoot: true
-        runAsUser: 1000
-        runAsGroup: 1000
-        fsGroup: 1000
+        {{- include "aurora.podSecurityContext" (dict "service" "server" "global" $ "defaults" (dict "runAsUser" 1000 "runAsGroup" 1000 "fsGroup" 1000)) | nindent 8 }}
       {{- if .Values.image.pullSecrets }}
       imagePullSecrets:
         {{- toYaml .Values.image.pullSecrets | nindent 8 }}
       {{- end }}
+      {{- include "aurora.scheduling" (dict "service" "server" "global" $) | nindent 6 }}
       containers:
         - name: aurora-server
           image: "{{ .Values.image.registry }}/aurora-server:{{ .Values.image.tag }}"
           imagePullPolicy: IfNotPresent
           command: ["sh", "-c"]
           args:
-            - gunicorn main_compute:app --bind 0.0.0.0:5080 -k gthread --threads 4 --workers 2 --timeout 120 --preload
+            - gunicorn main_compute:app --bind 0.0.0.0:5080 -k gthread --threads 16 --workers 2 --timeout 120 --preload
           securityContext:
-            allowPrivilegeEscalation: false
-            capabilities:
-              drop: ["ALL"]
+            {{- include "aurora.containerSecurityContext" (dict "service" "server" "global" $ "defaults" (dict)) | nindent 12 }}
           ports:
             - name: http
               containerPort: 5080
@@ -60,6 +56,11 @@ spec:
           volumeMounts:
             - name: terraform-workdir
               mountPath: /app/terraform_workdir
+            {{- if .Values.ssl.caCertSecret }}
+            - name: ssl-ca-cert
+              mountPath: {{ .Values.ssl.caCertMountPath }}
+              readOnly: true
+            {{- end }}
           readinessProbe:
             httpGet:
               path: /health/readiness
@@ -81,3 +82,8 @@ spec:
       volumes:
         - name: terraform-workdir
           emptyDir: {}
+        {{- if .Values.ssl.caCertSecret }}
+        - name: ssl-ca-cert
+          secret:
+            secretName: {{ .Values.ssl.caCertSecret }}
+        {{- end }}

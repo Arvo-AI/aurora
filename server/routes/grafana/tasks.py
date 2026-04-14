@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import zlib
+
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
@@ -227,12 +228,31 @@ def process_grafana_alert(
                         if not individual_alerts:
                             logger.info("[GRAFANA][ALERT] No alerts array in payload for user %s, skipping incident creation", user_id)
                             return
-                        for single_alert in individual_alerts:
+                        for alert_idx, single_alert in enumerate(individual_alerts):
                             alert_payload = _merge_alert_into_payload(payload, single_alert)
                             fingerprint = single_alert.get("fingerprint")
-                            # source_alert_id is INTEGER; CRC32 the hex fingerprint to a signed 32-bit int
-                            crc = zlib.crc32(fingerprint.encode())
-                            per_alert_source_id = crc - (1 << 32) if crc >= (1 << 31) else crc
+
+                            # Parse this alert's fire time so each incident gets its own
+                            # MTTD measurement (multi-alert webhooks must not share one).
+                            alert_fired_at = None
+                            starts_at = single_alert.get("startsAt") or payload.get("startsAt")
+                            if starts_at:
+                                try:
+                                    alert_fired_at = datetime.fromisoformat(
+                                        str(starts_at).replace("Z", "+00:00")
+                                    )
+                                except (ValueError, TypeError):
+                                    logger.debug(
+                                        "[GRAFANA][ALERT] Could not parse startsAt=%r for fp=%s; leaving alert_fired_at=None",
+                                        starts_at, fingerprint,
+                                    )
+                            # source_alert_id is INTEGER; CRC32 the hex fingerprint to a signed 32-bit int.
+                            # fingerprint is Optional — guard against None so we don't crash on malformed payloads.
+                            if fingerprint:
+                                crc = zlib.crc32(fingerprint.encode())
+                                per_alert_source_id = crc - (1 << 32) if crc >= (1 << 31) else crc
+                            else:
+                                per_alert_source_id = None
 
                             per_alert_title = (
                                 alert_payload.get("commonLabels", {}).get("alertname")
@@ -383,24 +403,56 @@ def process_grafana_alert(
                                     cursor.execute("ROLLBACK TO SAVEPOINT sp_handle_correlated")
                                     logger.warning("[GRAFANA] handle_correlated_alert failed: %s", exc)
 
-                            # No correlation found — create a new incident
+                            # No correlation found — create a new incident.
+                            # `xmax = 0` is true only for freshly inserted rows (not ON CONFLICT
+                            # updates), so we use it to gate the lifecycle 'created' write.
                             cursor.execute(
                                 """INSERT INTO incidents
                                    (user_id, org_id, source_type, source_alert_id, alert_title, alert_service,
-                                    severity, status, started_at, alert_metadata)
-                                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                                    severity, status, started_at, alert_metadata, alert_fired_at)
+                                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                                    ON CONFLICT (org_id, source_type, source_alert_id, user_id) DO UPDATE
                                    SET updated_at = CURRENT_TIMESTAMP,
                                        started_at = CASE WHEN incidents.status != 'analyzed'
                                            THEN EXCLUDED.started_at ELSE incidents.started_at END,
-                                       alert_metadata = EXCLUDED.alert_metadata
-                                   RETURNING id""",
+                                       alert_metadata = EXCLUDED.alert_metadata,
+                                       alert_fired_at = COALESCE(EXCLUDED.alert_fired_at, incidents.alert_fired_at)
+                                   RETURNING id, (xmax = 0) AS inserted""",
                                 (user_id, org_id, "grafana", per_alert_source_id, per_alert_title, service,
-                                 severity, "investigating", received_at, json.dumps(alert_metadata)),
+                                 severity, "investigating", received_at, json.dumps(alert_metadata), alert_fired_at),
                             )
                             incident_row = cursor.fetchone()
                             incident_id = incident_row[0] if incident_row else None
+                            incident_was_inserted = bool(incident_row[1]) if incident_row else False
                             conn.commit()
+
+                            # Record lifecycle event only on actual inserts so re-deliveries
+                            # don't append duplicate 'created' rows. Wrap in a savepoint so a
+                            # failure here doesn't leave the outer transaction in ABORTED state
+                            # and break the subsequent incident_alerts insert.
+                            if incident_id and incident_was_inserted:
+                                try:
+                                    cursor.execute("SAVEPOINT sp_incident_lifecycle")
+                                    cursor.execute(
+                                        """INSERT INTO incident_lifecycle_events
+                                           (incident_id, user_id, org_id, event_type, new_value)
+                                           VALUES (%s, %s, %s, %s, %s)""",
+                                        (incident_id, user_id, org_id, 'created', 'investigating'),
+                                    )
+                                    cursor.execute("RELEASE SAVEPOINT sp_incident_lifecycle")
+                                    conn.commit()
+                                except Exception as exc:
+                                    try:
+                                        cursor.execute("ROLLBACK TO SAVEPOINT sp_incident_lifecycle")
+                                    except Exception as rb_exc:
+                                        logger.debug(
+                                            "[GRAFANA][ALERT] Rollback to sp_incident_lifecycle failed for incident %s: %s",
+                                            incident_id, rb_exc,
+                                        )
+                                    logger.warning(
+                                        "[GRAFANA][ALERT] Failed to record lifecycle 'created' event for incident %s: %s",
+                                        incident_id, exc,
+                                    )
 
                             # Record as the primary alert for this incident
                             try:

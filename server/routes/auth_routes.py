@@ -3,6 +3,7 @@ Auth routes for user registration, login, and password management.
 Replaces the previous authentication system.
 """
 import logging
+from routes.audit_routes import record_audit_event
 import re
 import bcrypt
 from flask import Blueprint, request, jsonify
@@ -138,7 +139,10 @@ def register():
                     logging.warning(f"Failed to assign Casbin role for {user_id}: {casbin_err}")
                 
                 logging.info(f"New user registered: {email[:3]}***@*** (role=admin, org={org_id})")
-                
+
+                record_audit_event(org_id, user_id, "register", "organization", org_id,
+                                   {"email": email}, request)
+
                 return jsonify({
                     "id": user_id,
                     "email": user_email,
@@ -250,6 +254,9 @@ def setup_org(user_id):
 
                 logging.info(f"User {user_id} created org {org_id} ({org_name})")
 
+                record_audit_event(org_id, user_id, "setup_org", "organization", org_id,
+                                   {"org_name": org_name}, request)
+
                 return jsonify({
                     "orgId": org_id,
                     "orgName": org_display_name,
@@ -307,7 +314,9 @@ def login():
                     return jsonify({"error": "Invalid credentials"}), 401
                 
                 logging.info(f"User logged in: {email}")
-                
+
+                record_audit_event(user_org_id or "", user_id, "login", "session", user_id, {"email": email}, request)
+
                 return jsonify({
                     "id": user_id,
                     "email": user_email,
@@ -373,7 +382,11 @@ def change_password(user_id):
                 conn.commit()
                 
                 logging.info(f"Password changed for user: {user_id}")
-                
+
+                from utils.auth.stateless_auth import get_org_id_from_request as _get_org
+                _org = _get_org() or ""
+                record_audit_event(_org, user_id, "change_password", "user", user_id, {}, request)
+
                 return jsonify({"message": "Password changed successfully"}), 200
         finally:
             conn.close()

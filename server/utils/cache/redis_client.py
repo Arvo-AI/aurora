@@ -9,12 +9,31 @@ logger = logging.getLogger(__name__)
 _redis_client: Optional[redis.Redis] = None
 
 
+def get_redis_ssl_kwargs() -> dict:
+    """Build SSL kwargs for redis.from_url() based on REDIS_SSL_* env vars.
+
+    Returns an empty dict when REDIS_URL is not rediss://, preventing
+    ssl_* kwargs from being passed to a plain redis:// connection (which
+    would raise TypeError).
+    """
+    redis_url = os.getenv("REDIS_URL", "")
+    if not redis_url.startswith("rediss://"):
+        return {}
+    kwargs = {}
+    ca_certs = os.getenv("REDIS_SSL_CA_CERTS")
+    if ca_certs:
+        kwargs["ssl_ca_certs"] = ca_certs
+    cert_reqs = os.getenv("REDIS_SSL_CERT_REQS")
+    if cert_reqs:
+        kwargs["ssl_cert_reqs"] = cert_reqs
+    return kwargs
+
+
 def get_redis_client() -> Optional[redis.Redis]:
     """Get a healthy Redis client with automatic reconnection."""
     global _redis_client
     
     try:
-        # Health check on existing client
         if _redis_client is not None:
             try:
                 _redis_client.ping()
@@ -23,9 +42,8 @@ def get_redis_client() -> Optional[redis.Redis]:
                 logger.warning("Redis client unhealthy, reconnecting...")
                 _redis_client = None
         
-        # Create new client
         url = os.getenv("REDIS_URL", "redis://redis:6379/0")
-        _redis_client = redis.from_url(url, decode_responses=True)
+        _redis_client = redis.from_url(url, decode_responses=True, **get_redis_ssl_kwargs())
         
         _redis_client.ping()
         logger.debug("Redis client connected")

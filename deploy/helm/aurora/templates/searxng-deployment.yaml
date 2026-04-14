@@ -22,20 +22,14 @@ spec:
     spec:
       automountServiceAccountToken: false
       securityContext:
-        runAsNonRoot: true
-        runAsUser: 977
-        runAsGroup: 977
-        fsGroup: 977
+        {{- include "aurora.podSecurityContext" (dict "service" "searxng" "global" $ "defaults" (dict "runAsUser" 977 "runAsGroup" 977 "fsGroup" 977)) | nindent 8 }}
+      {{- include "aurora.scheduling" (dict "service" "searxng" "global" $) | nindent 6 }}
       containers:
         - name: searxng
           image: searxng/searxng:2025.5.8-7ca24eee4
           imagePullPolicy: IfNotPresent
           securityContext:
-            runAsUser: 977
-            runAsGroup: 977
-            allowPrivilegeEscalation: false
-            capabilities:
-              drop: ["ALL"]
+            {{- include "aurora.containerSecurityContext" (dict "service" "searxng" "global" $ "defaults" (dict "runAsUser" 977 "runAsGroup" 977)) | nindent 12 }}
           ports:
             - name: http
               containerPort: 8080

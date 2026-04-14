@@ -44,14 +44,14 @@ export default function GcpProviderIntegration({ onDisconnect }: GcpProviderInte
   // Fetch projects when userId is available
   useEffect(() => {
     if (userId) {
-      loadProjects();
+      loadProjects(true);
     }
   }, [userId]);
 
-  const loadProjects = async () => {
+  const loadProjects = async (forceRefresh = false) => {
     setIsLoading(true);
     try {
-      const fetchedProjects = await fetchProjects('gcp', false, projects);
+      const fetchedProjects = await fetchProjects('gcp', forceRefresh, projects);
       setProjects(fetchedProjects);
     } catch (error: any) {
       console.error('Error loading GCP projects:', error);
@@ -151,7 +151,7 @@ export default function GcpProviderIntegration({ onDisconnect }: GcpProviderInte
 
       // Clear local state
       setProjects([]);
-      
+      ProjectCache.invalidate('gcp');
       // Notify other components to refresh their status
       if (typeof window !== 'undefined') {
         window.dispatchEvent(new CustomEvent('providerStateChanged'));
@@ -200,7 +200,7 @@ export default function GcpProviderIntegration({ onDisconnect }: GcpProviderInte
           <Button
             variant="outline"
             size="sm"
-            onClick={loadProjects}
+            onClick={() => loadProjects(true)}
             disabled={isLoading}
           >
             <RefreshCw className={`h-4 w-4 mr-2 ${isLoading ? 'animate-spin' : ''}`} />

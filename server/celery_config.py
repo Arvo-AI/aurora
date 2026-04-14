@@ -26,9 +26,34 @@ os.environ.setdefault("CELERYD_HIJACK_ROOT_LOGGER", "False")
 load_dotenv()
 
 # Initialize Celery
+redis_url = os.getenv('REDIS_URL', 'redis://redis:6379/0')
 celery_app = Celery('aurora_tasks',
-                    broker=os.getenv('REDIS_URL', 'redis://redis:6379/0'),
-                    backend=os.getenv('REDIS_URL', 'redis://redis:6379/0'))
+                    broker=redis_url,
+                    backend=redis_url)
+
+# Configure SSL for Redis broker/backend when using rediss:// scheme
+if redis_url.startswith('rediss://'):
+    import ssl as _ssl
+    _ssl_cert_reqs_map = {
+        'none': _ssl.CERT_NONE,
+        'optional': _ssl.CERT_OPTIONAL,
+        'required': _ssl.CERT_REQUIRED,
+    }
+    _ssl_cert_reqs_str = os.getenv('REDIS_SSL_CERT_REQS', '').strip().lower()
+    if not _ssl_cert_reqs_str:
+        _ssl_cert_reqs_str = 'required'
+    if _ssl_cert_reqs_str not in _ssl_cert_reqs_map:
+        raise ValueError(f"Invalid REDIS_SSL_CERT_REQS={_ssl_cert_reqs_str!r}, must be one of: {', '.join(_ssl_cert_reqs_map)}")
+    _broker_ssl = {
+        'ssl_cert_reqs': _ssl_cert_reqs_map[_ssl_cert_reqs_str],
+    }
+    _ssl_ca_certs = os.getenv('REDIS_SSL_CA_CERTS')
+    if _ssl_ca_certs:
+        _broker_ssl['ssl_ca_certs'] = _ssl_ca_certs
+    celery_app.conf.update(
+        broker_use_ssl=_broker_ssl,
+        redis_backend_use_ssl=_broker_ssl,
+    )
 
 # Configure Celery
 celery_app.conf.update(
@@ -42,6 +67,7 @@ celery_app.conf.update(
     worker_max_tasks_per_child=1,  # Restart worker after each task
     worker_prefetch_multiplier=1,  # Process one task at a time
     broker_connection_retry_on_startup=True,  # Explicitly enable for Celery 6.0+
+    result_expires=3600,  # Expire task results after 1 hour (backend= is set above)
     # Explicitly include task modules from their new locations
     include=[
         'connectors.gcp_connector.gcp_post_auth_tasks',
@@ -53,6 +79,7 @@ celery_app.conf.update(
         'routes.dynatrace.tasks',
         'routes.bigpanda.tasks',
         'routes.pagerduty.tasks',
+        'routes.opsgenie.tasks',
         'routes.newrelic.tasks',
         'routes.jenkins.tasks',
         'routes.spinnaker.tasks',
@@ -137,6 +164,12 @@ try:
     logging.info("PagerDuty tasks imported successfully")
 except ImportError as e:
     logging.warning(f"Failed to import PagerDuty tasks: {e}")
+
+try:
+    import routes.opsgenie.tasks  # noqa: F401
+    logging.info("OpsGenie tasks imported successfully")
+except ImportError as e:
+    logging.warning(f"Failed to import OpsGenie tasks: {e}")
 
 try:
     import routes.jenkins.tasks  # noqa: F401

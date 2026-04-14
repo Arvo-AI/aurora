@@ -2,7 +2,7 @@
 
 import Link from "next/link"
 import { usePathname, useRouter } from "next/navigation"
-import { ChevronLeft, Settings, LogOut, User, Zap, Plug } from "lucide-react"
+import { ChevronLeft, Settings, LogOut, User, Zap, Plug, Gauge, SquarePen } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import ChatHistory from "@/components/ChatHistory"
@@ -108,7 +108,7 @@ export default function Navigation({
     <div className="h-full flex-shrink-0 relative">
       {/* Navigation sidebar */}
       <nav className={cn(
-        "bg-muted dark:bg-[#111111] h-full border-r border-border transition-all duration-300 overflow-hidden flex flex-col",
+        "bg-muted dark:bg-[#111111] h-full border-r border-border transition-[width] duration-300 overflow-hidden flex flex-col",
         isExpanded ? "w-56" : "w-0"
       )}>
         <div className="p-3 flex items-center justify-between border-b border-border/30">
@@ -148,6 +148,24 @@ export default function Navigation({
 
         {/* Menu content */}
         <ul className="flex flex-col p-2.5 space-y-1 flex-1 min-h-0 overflow-hidden">
+          {/* New Chat */}
+          <li>
+            <Link
+              href="/chat"
+              className={cn(
+                "w-full flex items-center justify-between px-2.5 py-1.5 rounded-md hover:bg-primary/10 transition-colors text-sm border border-transparent hover:border-border/50",
+                pathname?.startsWith("/chat")
+                  ? "bg-card rounded-lg border border-border shadow-sm"
+                  : "text-muted-foreground"
+              )}
+            >
+              <div className="flex items-center">
+                <SquarePen size={16} />
+                <span className="ml-2">New Chat</span>
+              </div>
+            </Link>
+          </li>
+
           {/* Incidents - with running indicator */}
           <li>
             <Link
@@ -171,14 +189,32 @@ export default function Navigation({
               </Link>
             </li>
 
+          {/* Monitor Navigation Item */}
+          <li>
+            <Link
+              href="/monitor"
+              className={cn(
+                "w-full flex items-center justify-between px-2.5 py-1.5 rounded-md hover:bg-primary/10 transition-colors text-sm border border-transparent hover:border-border/50",
+                pathname?.startsWith("/monitor")
+                  ? "bg-card rounded-lg border border-border shadow-sm"
+                  : "text-muted-foreground"
+              )}
+            >
+              <div className="flex items-center">
+                <Gauge size={16} />
+                <span className="ml-2">Monitor</span>
+              </div>
+            </Link>
+          </li>
+
           {/* Connectors Navigation Item */}
           <li>
             <Link
               href="/connectors"
               className={cn(
                 "w-full flex items-center justify-between px-2.5 py-1.5 rounded-md hover:bg-primary/10 transition-colors text-sm border border-transparent hover:border-border/50",
-                pathname === "/connectors" 
-                  ? "bg-card rounded-lg border border-border shadow-sm" 
+                pathname === "/connectors"
+                  ? "bg-card rounded-lg border border-border shadow-sm"
                   : "text-muted-foreground"
               )}
             >

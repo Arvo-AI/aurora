@@ -87,7 +87,8 @@ class RedisPrefixCacheBackend(PrefixCacheBackend):
     def __init__(self, url: str, namespace: str = "aurora:prefixcache"):
         if not redis:
             raise RuntimeError("redis library not available")
-        self.client = redis.from_url(url)
+        from utils.cache.redis_client import get_redis_ssl_kwargs
+        self.client = redis.from_url(url, **get_redis_ssl_kwargs())
         self.ns = namespace.rstrip(":")
 
     def _rk(self, key: str) -> str:

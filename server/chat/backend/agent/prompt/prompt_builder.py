@@ -705,165 +705,6 @@ def build_system_invariant() -> str:
         "ROOT CAUSE ANALYSIS (RCA) & INVESTIGATION MODE - CRITICAL:\n"
         "When performing RCA for alerts, incidents, troubleshooting, or any investigation task:\n\n"
     )
-    
-    # Add aggressive persistence prompts only if cost optimization is disabled
-    if os.getenv("RCA_OPTIMIZE_COSTS", "").lower() != "true":
-        parts.append(
-            "PERSISTENCE IS ABSOLUTELY MANDATORY:\n"
-            "- DO NOT STOP after 2-3 commands - this is UNACCEPTABLE\n"
-            "- MINIMUM: 20-30 tool calls for any investigation\n"
-            "- You have up to 50 tool calls available - USE THEM\n"
-            "- Investigation should take AT LEAST 5 minutes of active tool usage\n"
-            "- Command failures are NOT stopping points - try 3-5 alternatives\n"
-            "- NEVER conclude with 'unable to determine' without exhausting ALL avenues\n\n"
-        )
-    
-    parts.append(
-        "TOOL AVAILABILITY BY PROVIDER:\n"
-        "- For OVH/Scaleway: Use cloud CLI commands directly for all investigation\n"
-        "- OVH errors: Use Context7 MCP to look up correct syntax\n"
-        "- Scaleway: Always use the scaleway provider, not terminal commands\n\n"
-
-        "PROVIDER SELECTION FOR INVESTIGATIONS:\n"
-        "- Use provider='gcp' for Google Cloud resources and GKE clusters\n"
-        "- Use provider='aws' for AWS resources and EKS clusters\n"
-        "- Use provider='azure' for Azure resources and AKS clusters\n"
-        "- Use provider='ovh' for OVH Cloud resources and Kubernetes\n"
-        "- Use provider='scaleway' for Scaleway resources and Kubernetes\n"
-        "- Don't confuse resource names with providers: a pod named 'aurora-celery-worker' in a real cluster → use provider='gcp/aws/azure'\n\n"
-        
-        "KUBERNETES SYNTAX - CRITICAL:\n"
-        "- kubectl is standalone, NOT a cloud CLI subcommand\n"
-        "- CORRECT: cloud_exec('gcp', 'kubectl get pods -n namespace')\n"
-        "- CORRECT: cloud_exec('aws', 'kubectl get pods -n namespace')\n"
-        "- CORRECT: cloud_exec('azure', 'kubectl get pods -n namespace')\n"
-        "- WRONG: cloud_exec('gcp', 'gcloud kubectl ...')\n"
-        "\n"
-        
-        "CONDUCT A SUPER THOROUGH INVESTIGATION:\n"
-        "- This is NOT a quick scan - conduct a DEEP, EXHAUSTIVE investigation\n"
-        "- KEEP INVESTIGATING until you find the EXACT root cause\n"
-        "- MINIMUM: 20-30 tool calls, 5+ minutes of investigation\n"
-        "- Start broad, then drill down into specifics:\n"
-        "  * For ALL providers: Start with list/describe commands to map infrastructure\n"
-        "  * List all relevant resources (VMs, clusters, buckets, networks, databases, load balancers, etc.)\n"
-        "  * Check the STATUS and HEALTH of each resource\n"
-        "  * Examine LOGS for error messages, warnings, and anomalies\n"
-        "  * Review METRICS for CPU, memory, disk, network usage patterns\n"
-        "  * Inspect CONFIGURATIONS for misconfigurations or recent changes\n"
-        "  * Check FIREWALL RULES, SECURITY GROUPS, and NETWORK connectivity\n"
-        "  * Verify IAM PERMISSIONS and service account/role configurations\n"
-        "  * Look for RECENT CHANGES or deployments that correlate with the issue\n"
-        "- If initial investigation doesn't reveal the root cause, GO DEEPER:\n"
-        "  * Pull detailed logs from application pods/containers/instances\n"
-        "  * Check system logs (syslog, kernel logs, audit logs, CloudWatch, Stackdriver)\n"
-        "  * Examine resource quotas and limits\n"
-        "  * Review load balancer and ingress/ALB/Application Gateway configurations\n"
-        "  * Investigate DNS resolution and network policies/NSGs\n"
-        "  * Check for cascading failures or dependencies\n"
-        "- Continue until you can confidently identify the EXACT root cause\n\n"
-        
-        "USE ALL AVAILABLE TOOLS EXTENSIVELY:\n"
-        "- cloud_exec: Run cloud CLI commands (gcloud, aws, az, kubectl) for resource inspection\n"
-        "- terminal_exec: Run ANY shell command (curl, grep logs, check files, test connectivity, etc.)\n"
-        "- Execute multiple commands in sequence - don't stop after just one or two\n"
-        "- For logs, use appropriate filters and time ranges to find relevant entries\n"
-        "- Check MULTIPLE resource types, not just the obvious ones\n\n"
-        
-        "EXAMPLE INVESTIGATION FLOWS:\n"
-        "For Kubernetes (GKE/EKS/AKS) issues:\n"
-        "  1. cloud_exec('PROVIDER', 'kubectl get pod POD -n NAMESPACE -o yaml')\n"
-        "  2. cloud_exec('PROVIDER', 'kubectl describe pod POD -n NAMESPACE')\n"
-        "  3. cloud_exec('PROVIDER', 'kubectl top pod POD -n NAMESPACE')\n"
-        "  4. cloud_exec('PROVIDER', 'kubectl logs POD -n NAMESPACE --since=1h')\n"
-        "  5. cloud_exec('PROVIDER', 'kubectl get pods -n NAMESPACE -l app=APP')\n"
-        "  6. cloud_exec('PROVIDER', 'kubectl top pods -n NAMESPACE')\n"
-        "  7. cloud_exec('PROVIDER', 'kubectl describe node NODE')\n"
-        "  8. cloud_exec('PROVIDER', 'kubectl get events -n NAMESPACE --sort-by=.lastTimestamp')\n"
-        "  9. Check cloud-specific logs (gcloud logging read / aws logs filter-log-events / az monitor log-analytics query)\n"
-        "  10. cloud_exec('PROVIDER', 'kubectl get deployment DEPLOYMENT -n NAMESPACE -o yaml')\n"
-        "  11. cloud_exec('PROVIDER', 'kubectl get hpa -n NAMESPACE')\n"
-        "  12. cloud_exec('PROVIDER', 'kubectl get pvc -n NAMESPACE')\n"
-        "  ... and continue with 5-10 more checks as needed\n\n"
-        
-        "For VM/EC2/Compute Engine issues:\n"
-        "  - Check instance status and metadata\n"
-        "  - Review system logs and application logs\n"
-        "  - Examine security groups/firewall rules\n"
-        "  - Check IAM roles and permissions\n"
-        "  - Review recent configuration changes\n"
-        "  - Check network connectivity and routes\n"
-        "  - Examine resource utilization (CPU, memory, disk, network)\n\n"
-        
-        "ERROR RESILIENCE - NEVER GIVE UP:\n"
-        "- When commands fail during investigation, IMMEDIATELY try alternative commands\n"
-        "- DO NOT just note the failure and move on - TRY ALTERNATIVES RIGHT AWAY\n\n"
-        "CORRECT CLI COMMANDS BY PROVIDER (CRITICAL - USE THESE EXACT SYNTAXES):\n\n"
-        "GCP METRICS AND LOGS:\n"
-        "- WRONG: 'gcloud monitoring metrics list' - THIS COMMAND DOES NOT EXIST!\n"
-        "- For VM console logs: gcloud compute instances get-serial-port-output INSTANCE --zone=ZONE\n"
-        "- For Cloud Logging: gcloud logging read 'resource.type=gce_instance' --limit=100 --freshness=1h\n"
-        "- For specific instance logs: gcloud logging read 'resource.labels.instance_id=INSTANCE_ID' --limit=100\n"
-        "- For syslog: gcloud logging read 'logName:syslog' --limit=100\n"
-        "- GCP metrics require API/SDK - use SSH instead: gcloud compute ssh INSTANCE --zone=ZONE --command='top -bn1'\n\n"
-        "AWS METRICS AND LOGS:\n"
-        "- CPU metrics: aws cloudwatch get-metric-statistics --namespace AWS/EC2 --metric-name CPUUtilization --dimensions Name=InstanceId,Value=i-xxx --period 3600 --statistics Average --start-time 2024-01-01T00:00:00Z --end-time 2024-01-01T01:00:00Z\n"
-        "- CloudWatch logs: aws logs filter-log-events --log-group-name LOG_GROUP --start-time TIMESTAMP_MS\n"
-        "- List log groups: aws logs describe-log-groups\n"
-        "- EC2 console output: aws ec2 get-console-output --instance-id i-xxx\n\n"
-        "AZURE METRICS AND LOGS:\n"
-        "- CPU metrics: az monitor metrics list --resource VM_RESOURCE_ID --metric 'Percentage CPU' --interval PT1H\n"
-        "- Or: az vm monitor metrics tail --name VM_NAME -g RESOURCE_GROUP --metric 'Percentage CPU'\n"
-        "- Activity logs: az monitor activity-log list --resource-group RG --start-time 2024-01-01\n"
-        "- List metric definitions: az vm monitor metrics list-definitions --name VM --resource-group RG\n\n"
-        "OVH METRICS AND LOGS:\n"
-        "- OVH has NO native CLI for instance metrics - use SSH or OpenStack client\n"
-        "- OpenStack instance stats: openstack server show INSTANCE_ID\n"
-        "- For K8s: Use kubectl via kubeconfig from 'ovh cloud kube kubeconfig generate'\n"
-        "- For logs: OVH uses Logs Data Platform (not CLI accessible)\n"
-        "- BEST APPROACH: SSH into instance and check directly\n\n"
-        "SCALEWAY METRICS AND LOGS:\n"
-        "- Scaleway has NO native CLI for instance CPU metrics\n"
-        "- List instances: scw instance server list\n"
-        "- Instance details: scw instance server get SERVER_ID\n"
-        "- For metrics: Use Scaleway Cockpit (Grafana-based) or SSH into instance\n"
-        "- Database metrics: scw rdb instance get INSTANCE_ID (includes some stats)\n"
-        "- BEST APPROACH: SSH into instance and check directly\n\n"
-        "SPECIFIC FALLBACKS FOR COMMON FAILURES:\n"
-        "- GCP metrics fail → SSH into VM: gcloud compute ssh INSTANCE --zone=ZONE --command='top -bn1; free -h; df -h'\n"
-        "- AWS CloudWatch fail → get console output: aws ec2 get-console-output --instance-id i-xxx, or SSH in\n"
-        "- Azure metrics fail → SSH or use serial console: az vm boot-diagnostics get-boot-log --name VM -g RG\n"
-        "- OVH/Scaleway → ALWAYS SSH since no native metrics CLI exists\n"
-        "- Logs empty → try broader queries, different time ranges, check if logging agent is installed\n"
-        "- kubectl fails → check if cluster exists first, verify kubeconfig, try cloud CLI\n\n"
-        "FOR VM/INSTANCE HIGH LOAD ALERTS - ALWAYS:\n"
-        "- SSH into the VM to check actual resource usage: top, htop, vmstat, iostat\n"
-        "- Check what processes are running: ps aux --sort=-%cpu | head -20\n"
-        "- Check memory usage: free -h, cat /proc/meminfo\n"
-        "- Check disk usage: df -h, du -sh /*\n"
-        "- Check network: netstat -tulpn, ss -tulpn\n"
-        "- Check system logs: tail -100 /var/log/syslog or /var/log/messages\n\n"
-        "- Always have 3-4 backup approaches ready\n"
-        "- Command errors are opportunities to try different approaches, not stopping points\n\n"
-        
-        "PROVIDE COMPLETE ANALYSIS:\n"
-        "- Document EVERY step of your investigation\n"
-        "- Show the commands you ran and what they revealed\n"
-        "- Clearly identify the EXACT root cause (not just symptoms)\n"
-        "- Explain the chain of events that led to the issue\n"
-        "- Note any anomalies, errors, or misconfigurations discovered\n"
-        "- Provide specific, actionable remediation steps for the specific cloud provider\n\n"
-        
-        "STRUCTURED OUTPUT:\n"
-        "- Start with a brief summary of the incident/trigger\n"
-        "- Document each investigation step with findings\n"
-        "- Show evidence (log snippets, metric values, config details)\n"
-        "- Clearly state the ROOT CAUSE with supporting evidence\n"
-        "- End with detailed remediation recommendations\n\n"
-        
-        "CRITICAL: The user expects you to find the EXACT root cause, not just surface-level issues. "
-        "Keep digging until you have definitive answers. Never conclude after 2-3 failed attempts.\n\n"
-        )
 
 
 def build_regional_rules() -> str:
@@ -1010,7 +851,7 @@ def build_background_mode_segment(state: Optional[Any]) -> str:
         "BACKGROUND RCA MODE",
         "=" * 40,
         "",
-        f"Source: {source.upper()} alert | Providers: {', '.join(providers) if providers else 'None'}",
+        f"Source: {'USER-REPORTED INCIDENT' if source == 'chat' else f'{source.upper()} alert'} | Providers: {', '.join(providers) if providers else 'None'}",
         "",
     ]
 
@@ -1095,6 +936,28 @@ def build_background_mode_segment(state: Optional[Any]) -> str:
             "",
             "SLACK FORMATTING REQUIREMENTS:",
             "Use Slack markdown: *bold*, _italic_, `code`, ```code blocks```",
+            "Structure responses: *Section Headers* + bullet points (•) or numbered lists",
+            "Keep paragraphs short (2-3 sentences max)",
+            "NO HTML, NO dropdowns, NO complex UI - plain text only",
+            "",
+            "INVESTIGATION GUIDANCE:",
+            "Use tools when needed: kubectl, cloud commands, logs, metrics",
+            "Check actual state with tool calls - don't assume",
+            "For troubleshooting: Investigate thoroughly (resources → logs → root cause → fix)",
+            "For info requests: Answer directly if you have the data",
+            "Include specific evidence: exact errors, metrics, timestamps, resource names",
+            "",
+        ])
+    elif source == 'google_chat':
+        parts.extend([
+            "",
+            "GOOGLE CHAT CONVERSATION CONTEXT:",
+            "The user's message includes 'Recent conversation context' section with previous Google Chat thread messages.",
+            "ALWAYS review this context - users reference earlier messages with 'earlier', 'that', 'it', etc.",
+            "Build on the conversation - don't ignore what was already discussed in the thread.",
+            "",
+            "GOOGLE CHAT FORMATTING REQUIREMENTS:",
+            "Use Google Chat markdown: *bold*, _italic_, `code`, ```code blocks```",
             "Structure responses: *Section Headers* + bullet points (•) or numbered lists",
             "Keep paragraphs short (2-3 sentences max)",
             "NO HTML, NO dropdowns, NO complex UI - plain text only",

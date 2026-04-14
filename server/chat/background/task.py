@@ -17,13 +17,17 @@ from celery_config import celery_app
 from langchain_core.messages import HumanMessage
 from utils.cache.redis_client import get_redis_client
 from utils.notifications.email_service import get_email_service
-from utils.auth.stateless_auth import get_user_email
+from utils.auth.stateless_auth import get_user_email, get_credentials_from_db
 from utils.notifications.slack_notification_service import (
     send_slack_investigation_started_notification,
     send_slack_investigation_completed_notification,
 )
+from utils.notifications.google_chat_notification_service import (
+    send_google_chat_investigation_started_notification,
+    send_google_chat_investigation_completed_notification,
+)
+from connectors.google_chat_connector.client import get_chat_app_client
 from utils.db.connection_pool import db_pool
-from langchain_core.messages import ToolMessage
 from chat.background.visualization_generator import update_visualization
 from chat.backend.constants import MAX_TOOL_OUTPUT_CHARS, INFRASTRUCTURE_TOOLS
 
@@ -126,7 +130,7 @@ _RATE_LIMIT_WINDOW_SECONDS = 300  # 5 minute window
 _RATE_LIMIT_MAX_REQUESTS = 5  # Max 5 background chats per window
 
 # RCA sources that use rca_context in system prompt
-_RCA_SOURCES = {'grafana', 'datadog', 'netdata', 'splunk', 'slack', 'pagerduty', 'dynatrace', 'jenkins', 'cloudbees', 'spinnaker', 'newrelic'}
+_RCA_SOURCES = {'grafana', 'datadog', 'netdata', 'splunk', 'slack', 'google_chat', 'pagerduty', 'dynatrace', 'jenkins', 'cloudbees', 'spinnaker', 'newrelic', 'chat', 'opsgenie'}
 
 # Initialize Redis client at module load time - fails if Redis is unavailable
 _redis_client = get_redis_client()
@@ -180,6 +184,7 @@ def _get_connected_integrations(user_id: str) -> Dict[str, bool]:
         'cloudbees': False,
         'spinnaker': False,
         'newrelic': False,
+        'opsgenie': False,
     }
 
     try:
@@ -203,7 +208,6 @@ def _get_connected_integrations(user_id: str) -> Dict[str, bool]:
 
     try:
         # Check GitHub
-        from utils.auth.stateless_auth import get_credentials_from_db
         github_creds = get_credentials_from_db(user_id, "github")
         integrations['github'] = bool(github_creds and github_creds.get("access_token"))
     except Exception as e:
@@ -276,6 +280,13 @@ def _get_connected_integrations(user_id: str) -> Dict[str, bool]:
         integrations['newrelic'] = is_newrelic_connected(user_id)
     except Exception as e:
         logger.debug(f"[BackgroundChat] Error checking New Relic: {e}")
+
+    # OpsGenie
+    try:
+        from chat.backend.agent.tools.opsgenie_tool import is_opsgenie_connected
+        integrations['opsgenie'] = is_opsgenie_connected(user_id)
+    except Exception as e:
+        logger.debug(f"[BackgroundChat] Error checking OpsGenie: {e}")
 
     return integrations
 
@@ -415,14 +426,37 @@ def run_background_chat(
                                 f"[BackgroundChat] Linked session {session_id} and task {self.request.id} to incident {incident_id}"
                             )
                     
-                    # Set incident aurora_status to running
+                    # Set incident aurora_status to running and stamp the moment
+                    # the worker actually picked up the task. Used by the SRE
+                    # metrics dashboard to compute pickup latency (MTTD as
+                    # "time from webhook arrival to investigation start"). We
+                    # COALESCE so a retry doesn't overwrite the original pickup.
+                    pickup_at = datetime.now()
                     with conn.cursor() as cursor:
                         cursor.execute(
-                            "UPDATE incidents SET aurora_status = %s, updated_at = %s WHERE id = %s",
-                            ("running", datetime.now(), incident_id)
+                            """UPDATE incidents
+                               SET aurora_status = %s,
+                                   investigation_started_at = COALESCE(investigation_started_at, %s),
+                                   updated_at = %s
+                               WHERE id = %s""",
+                            ("running", pickup_at, pickup_at, incident_id),
                         )
                         conn.commit()
                         logger.info(f"[BackgroundChat] Set incident {incident_id} aurora_status to 'running' at start of RCA")
+
+                    # Record lifecycle event for RCA start
+                    try:
+                        with conn.cursor() as cursor:
+                            cursor.execute(
+                                """INSERT INTO incident_lifecycle_events
+                                   (incident_id, user_id, org_id, event_type, new_value)
+                                   VALUES (%s, %s, %s, %s, %s)""",
+                                (incident_id, user_id, None, 'rca_started', 'running')
+                            )
+                            conn.commit()
+                            logger.info(f"[BackgroundChat] Recorded lifecycle event 'rca_started' for incident {incident_id}")
+                    except Exception as le:
+                        logger.error(f"[BackgroundChat] Failed to record lifecycle event 'rca_started' for incident {incident_id}: {le}")
                     
                     # Send investigation started notifications (if enabled)
                     # Skip notifications if explicitly disabled (e.g., for Slack @mentions)
@@ -433,11 +467,13 @@ def run_background_chat(
                     email_start_notification_enabled = email_general_enabled and email_start_enabled
                     
                     slack_notification_enabled = _has_slack_connected(user_id)
+                    google_chat_notification_enabled = _has_google_chat_connected(user_id)
                     
-                    if send_notifications and (email_start_notification_enabled or slack_notification_enabled):
+                    if send_notifications and (email_start_notification_enabled or slack_notification_enabled or google_chat_notification_enabled):
                         _send_rca_notification(user_id, incident_id, 'started', 
                             email_enabled=email_start_notification_enabled,
-                            slack_enabled=slack_notification_enabled
+                            slack_enabled=slack_notification_enabled,
+                            google_chat_enabled=google_chat_notification_enabled
                         )
             except Exception as e:
                 logger.error(f"[BackgroundChat] Failed to link session to incident: {e}")
@@ -479,8 +515,30 @@ def run_background_chat(
                 logger.warning(f"[BackgroundChat] Failed to clear task ID for incident {incident_id}: {e}")
             
             _update_incident_status(incident_id, "analyzed")
-            _update_incident_aurora_status(incident_id, "summarizing")
-            
+
+            _update_incident_aurora_status(incident_id, "summarizing",  user_id=user_id)
+
+            # Post RCA-complete comment to linked JSM incident
+            if (trigger_metadata or {}).get("source") == "opsgenie":
+                try:
+                    from routes.opsgenie.opsgenie_routes import _build_client_from_creds, _get_stored_opsgenie_credentials
+                    jsm_creds = _get_stored_opsgenie_credentials(user_id)
+                    if jsm_creds and jsm_creds.get("auth_type") == "jsm_basic":
+                        jsm_client = _build_client_from_creds(jsm_creds)
+                        if jsm_client and hasattr(jsm_client, "find_incident_for_alert"):
+                            alert_title = (trigger_metadata or {}).get("alert_title", "")
+                            issue_key = jsm_client.find_incident_for_alert(alert_title)
+                            if issue_key:
+                                summary = result.get("summary", "RCA complete. See Aurora for details.")
+                                comment = f"Aurora RCA complete.\n\n{summary[:500]}" if len(str(summary)) > 10 else "Aurora RCA analysis complete."
+                                frontend_url = os.getenv("FRONTEND_URL", "").rstrip("/")
+                                if frontend_url and incident_id:
+                                    comment += f"\n\nView in Aurora: {frontend_url}/incidents/{incident_id}"
+                                jsm_client.add_comment_to_issue(issue_key, comment)
+                                logger.info("[BackgroundChat] Posted RCA-complete comment to linked JSM incident")
+                except Exception as e:
+                    logger.debug(f"[BackgroundChat] Could not post JSM RCA-complete comment: {e}")
+
             # Determine severity from RCA if currently unknown
             try:
                 _determine_severity_from_rca(incident_id, session_id, user_id)
@@ -506,7 +564,7 @@ def run_background_chat(
                 )
             except Exception as e:
                 logger.error(f"[BackgroundChat] Failed to enqueue post-RCA summarization for incident {incident_id}: {e}")
-                _update_incident_aurora_status(incident_id, "complete")
+                _update_incident_aurora_status(incident_id, "complete", user_id=user_id)
             
             # Generate final complete visualization
             try:
@@ -531,6 +589,13 @@ def run_background_chat(
             except Exception as e:
                 logger.error(f"[BackgroundChat] Failed to send response to Slack: {e}", exc_info=True)
         
+        # Send response back to Google Chat if this was triggered from Google Chat
+        if trigger_metadata and trigger_metadata.get('source') in ['google_chat', 'google_chat_button']:
+            try:
+                _send_response_to_google_chat(user_id, session_id, trigger_metadata)
+            except Exception as e:
+                logger.error(f"[BackgroundChat] Failed to send response to Google Chat: {e}", exc_info=True)
+        
         completed_successfully = True
         logger.info(f"[BackgroundChat] Completed for session {session_id}")
         return result
@@ -539,18 +604,18 @@ def run_background_chat(
         logger.error(f"[BackgroundChat] Timeout after 30 minutes for session {session_id}")
         _update_session_status(session_id, "failed")
         if incident_id:
-            _update_incident_aurora_status(incident_id, "error")
+            _update_incident_aurora_status(incident_id, "error", user_id=user_id)
         return {
             "session_id": session_id,
             "status": "failed",
             "error": "Background chat exceeded 30 minute timeout",
         }
-        
+
     except Exception as e:
         logger.exception(f"[BackgroundChat] Failed for session {session_id}: {e}")
         _update_session_status(session_id, "failed")
         if incident_id:
-            _update_incident_aurora_status(incident_id, "error")
+            _update_incident_aurora_status(incident_id, "error", user_id=user_id)
         return {
             "session_id": session_id,
             "status": "failed",
@@ -1057,22 +1122,56 @@ def _update_session_status(session_id: str, status: str) -> None:
         logger.error(f"[BackgroundChat] Failed to update session {session_id} status to '{status}': {e}")
 
 
-def _update_incident_aurora_status(incident_id: str, aurora_status: str) -> None:
+def _update_incident_aurora_status(incident_id: str, aurora_status: str, user_id: Optional[str] = None, org_id: Optional[str] = None) -> None:
     """Update incident aurora_status (running/complete/error).
-    
+
     Args:
         incident_id: The incident ID
-        aurora_status: New status ('running', 'complete', 'error')
+        aurora_status: New status ('running', 'complete', 'error', 'summarizing')
+        user_id: The user ID for lifecycle event recording
+        org_id: The org ID for lifecycle event recording (optional)
     """
+    # Map aurora_status values to lifecycle event types
+    _STATUS_EVENT_MAP = {
+        'running': 'rca_started',
+        'complete': 'rca_completed',
+        'error': 'rca_error',
+    }
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
-                cursor.execute(
-                    "UPDATE incidents SET aurora_status = %s, updated_at = %s WHERE id = %s",
-                    (aurora_status, datetime.now(), incident_id)
-                )
+                now = datetime.now()
+                if aurora_status == 'complete':
+                    cursor.execute(
+                        """UPDATE incidents
+                           SET aurora_status = %s, updated_at = %s,
+                               analyzed_at = COALESCE(analyzed_at, %s)
+                           WHERE id = %s""",
+                        (aurora_status, now, now, incident_id)
+                    )
+                else:
+                    cursor.execute(
+                        "UPDATE incidents SET aurora_status = %s, updated_at = %s WHERE id = %s",
+                        (aurora_status, now, incident_id)
+                    )
             conn.commit()
             logger.info(f"[BackgroundChat] Set incident {incident_id} aurora_status to '{aurora_status}'")
+
+            # Record lifecycle event for trackable status transitions
+            event_type = _STATUS_EVENT_MAP.get(aurora_status)
+            if event_type and user_id:
+                try:
+                    with conn.cursor() as cursor:
+                        cursor.execute(
+                            """INSERT INTO incident_lifecycle_events
+                               (incident_id, user_id, org_id, event_type, new_value)
+                               VALUES (%s, %s, %s, %s, %s)""",
+                            (incident_id, user_id, org_id, event_type, aurora_status)
+                        )
+                    conn.commit()
+                    logger.info(f"[BackgroundChat] Recorded lifecycle event '{event_type}' for incident {incident_id}")
+                except Exception as le:
+                    logger.error(f"[BackgroundChat] Failed to record lifecycle event '{event_type}' for incident {incident_id}: {le}")
     except Exception as e:
         logger.error(f"[BackgroundChat] Failed to update aurora_status: {e}")
 
@@ -1276,6 +1375,18 @@ def _has_slack_connected(user_id: str) -> bool:
         return False
 
 
+def _has_google_chat_connected(user_id: str) -> bool:
+    """Check if user's org has Google Chat connected with a service account."""
+    try:
+        config = get_credentials_from_db(user_id, "google_chat")
+        if not config or not config.get("incidents_space_name"):
+            return False
+        return get_chat_app_client() is not None
+    except Exception as e:
+        logger.error(f"[GChatNotification] Error checking Google Chat connection: {e}")
+        return False
+
+
 def _is_rca_email_start_notification_enabled(user_id: str) -> bool:
     """Check if user has RCA investigation start email notifications enabled.
     
@@ -1333,7 +1444,7 @@ def _get_incident_data(incident_id: str) -> Optional[Dict[str, Any]]:
                     """
                     SELECT id, user_id, source_type, status, severity, alert_title, 
                            alert_service, aurora_status, aurora_summary, started_at, 
-                           analyzed_at, created_at, slack_message_ts
+                           analyzed_at, created_at, slack_message_ts, google_chat_message_name
                     FROM incidents 
                     WHERE id = %s
                     """,
@@ -1355,6 +1466,7 @@ def _get_incident_data(incident_id: str) -> Optional[Dict[str, Any]]:
                         'analyzed_at': result[10],
                         'created_at': result[11],
                         'slack_message_ts': result[12] if len(result) > 12 else None,
+                        'google_chat_message_name': result[13] if len(result) > 13 else None,
                     }
         
         return None
@@ -1364,8 +1476,8 @@ def _get_incident_data(incident_id: str) -> Optional[Dict[str, Any]]:
         return None
 
 
-def _send_rca_notification(user_id: str, incident_id: str, event_type: str, email_enabled: bool = False, slack_enabled: bool = False, session_id: Optional[str] = None) -> None:
-    """Send RCA email and Slack notifications.
+def _send_rca_notification(user_id: str, incident_id: str, event_type: str, email_enabled: bool = False, slack_enabled: bool = False, google_chat_enabled: bool = False, session_id: Optional[str] = None) -> None:
+    """Send RCA email, Slack, and Google Chat notifications.
     
     Args:
         user_id: The user ID
@@ -1373,6 +1485,7 @@ def _send_rca_notification(user_id: str, incident_id: str, event_type: str, emai
         event_type: 'started' or 'completed'
         email_enabled: Whether to send email notifications
         slack_enabled: Whether to send Slack notifications
+        google_chat_enabled: Whether to send Google Chat notifications
         session_id: Optional chat session ID (used to extract last message for 'completed' notifications)
     """
     # Get incident data (needed for both email and Slack)
@@ -1480,6 +1593,16 @@ def _send_rca_notification(user_id: str, incident_id: str, event_type: str, emai
         except Exception as e:
             # Don't fail if Slack fails
             logger.error(f"[SlackNotification] Failed to send {event_type} notification: {e}", exc_info=True)
+    
+    # --- GOOGLE CHAT NOTIFICATIONS ---
+    if google_chat_enabled:
+        try:
+            if event_type == 'started':
+                send_google_chat_investigation_started_notification(user_id, incident_data)
+            elif event_type == 'completed':
+                send_google_chat_investigation_completed_notification(user_id, incident_data)
+        except Exception as e:
+            logger.error(f"[GChatNotification] Failed to send {event_type} notification: {e}", exc_info=True)
 
 
 def _send_response_to_slack(user_id: str, session_id: str, trigger_metadata: Dict[str, Any]) -> None:
@@ -1606,6 +1729,89 @@ def _send_response_to_slack(user_id: str, session_id: str, trigger_metadata: Dic
         raise
 
 
+def _send_response_to_google_chat(user_id: str, session_id: str, trigger_metadata: Dict[str, Any]) -> None:
+    """Send Aurora's response back to Google Chat after background chat completes."""
+    try:
+        from routes.google_chat.google_chat_events_helpers import format_response_for_google_chat
+
+        space_name = trigger_metadata.get('space_name')
+        thread_key = trigger_metadata.get('thread_key')
+        thinking_message_name = trigger_metadata.get('thinking_message_name')
+        source = trigger_metadata.get('source')
+
+        if not space_name:
+            logger.warning(f"[BackgroundChat] No Google Chat space in trigger_metadata for session {session_id}")
+            return
+
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT messages FROM chat_sessions WHERE id = %s AND user_id = %s",
+                    (session_id, user_id)
+                )
+                row = cursor.fetchone()
+
+                if not row or not row[0]:
+                    logger.warning(f"[BackgroundChat] No messages found in session {session_id}")
+                    return
+
+                messages = row[0]
+                if isinstance(messages, str):
+                    messages = json.loads(messages)
+
+                last_assistant_message = None
+                for msg in reversed(messages):
+                    if msg.get('sender') in ('bot', 'assistant'):
+                        last_assistant_message = msg.get('text') or msg.get('content')
+                        break
+
+                if not last_assistant_message:
+                    logger.warning(f"[BackgroundChat] No assistant message found in session {session_id}")
+                    return
+
+        formatted_message = format_response_for_google_chat(last_assistant_message)
+
+        if source == 'google_chat_button':
+            clicker_name = trigger_metadata.get('clicker_name')
+            suggestion_title = trigger_metadata.get('suggestion_title')
+            suggestion_command = trigger_metadata.get('suggestion_command')
+
+            header_lines = ["━━━━━━━━━━━━━━"]
+            if suggestion_title:
+                header_lines.append(f"*{suggestion_title}*")
+                header_lines.append("─" * min(len(suggestion_title), 50))
+            if clicker_name:
+                header_lines.append(f"_Executed by {clicker_name}_")
+            if suggestion_command:
+                cmd_display = suggestion_command[:100] + '...' if len(suggestion_command) > 100 else suggestion_command
+                header_lines.append(f"`{cmd_display}`")
+            header_lines.append("")
+
+            attribution = "\n".join(header_lines)
+            formatted_message = f"{attribution}\n{formatted_message}"
+
+        client = get_chat_app_client()
+        if not client:
+            logger.error(f"[BackgroundChat] Could not get Google Chat client for user {user_id}")
+            return
+
+        if thinking_message_name:
+            client.update_message(
+                message_name=thinking_message_name,
+                text=formatted_message
+            )
+        else:
+            client.send_message(
+                space_name=space_name,
+                text=formatted_message,
+                thread_key=thread_key
+            )
+
+    except Exception as e:
+        logger.error(f"[BackgroundChat] Error sending response to Google Chat: {e}", exc_info=True)
+        raise
+
+
 def create_background_chat_session(
     user_id: str,
     title: str,
@@ -1722,6 +1928,31 @@ def cleanup_stale_background_chats() -> Dict[str, Any]:
                                 "UPDATE incidents SET aurora_status = 'error', status = 'analyzed', updated_at = %s WHERE id = %s",
                                 (datetime.now(), incident_id)
                             )
+                            # Record lifecycle event for stale session error. Wrap in savepoint
+                            # so a failure here doesn't abort the outer transaction and stop
+                            # the status UPDATE from committing for remaining sessions.
+                            try:
+                                cursor.execute("SAVEPOINT sp_rca_error")
+                                cursor.execute(
+                                    """INSERT INTO incident_lifecycle_events
+                                       (incident_id, user_id, org_id, event_type, new_value)
+                                       VALUES (%s, %s, %s, %s, %s)""",
+                                    (incident_id, user_id, None, 'rca_error', 'error')
+                                )
+                                cursor.execute("RELEASE SAVEPOINT sp_rca_error")
+                            except Exception as lc_exc:
+                                try:
+                                    cursor.execute("ROLLBACK TO SAVEPOINT sp_rca_error")
+                                except Exception as rb_exc:
+                                    logger.debug(
+                                        "[BackgroundChat:Cleanup] Rollback to sp_rca_error failed for incident %s: %s",
+                                        incident_id, rb_exc,
+                                    )
+                                logger.warning(
+                                    "[BackgroundChat:Cleanup] Failed to record rca_error lifecycle event "
+                                    "for incident %s (user %s): %s",
+                                    incident_id, user_id, lc_exc,
+                                )
                 conn.commit()
             
             logger.info(f"[BackgroundChat:Cleanup] Marked {cleaned_count} stale sessions as failed")

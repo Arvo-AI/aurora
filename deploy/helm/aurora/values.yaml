@@ -91,6 +91,7 @@ config:
   
   # --- Redis Cache ---
   REDIS_URL: ""  # Auto-generated if empty: redis://<release>-redis:6379/0
+  REDIS_MAXMEMORY: "256mb"  # Max memory for in-cluster Redis; staging/prod can override
   
   # --- S3-Compatible Object Storage (REQUIRED) ---
   # Supports: AWS S3, MinIO, Cloudflare R2, Backblaze B2, etc.
@@ -106,6 +107,16 @@ config:
   WEAVIATE_HOST: ""  # Auto-generated if empty: <release>-weaviate
   WEAVIATE_PORT: "8080"
   WEAVIATE_GRPC_PORT: "50051"
+  
+  # --- SSL/TLS for External Services ---
+  # PostgreSQL: "prefer" auto-negotiates TLS (works for RDS/Cloud SQL out of box)
+  POSTGRES_SSLMODE: "prefer"
+  POSTGRES_SSLROOTCERT: ""        # Path to CA cert (mount via ssl.caCertSecret)
+  # Redis: use rediss:// in REDIS_URL to enable TLS
+  REDIS_SSL_CA_CERTS: ""          # Path to CA cert for Redis TLS
+  REDIS_SSL_CERT_REQS: ""         # "none", "optional", "required"
+  # Weaviate: set to "true" for HTTPS+gRPC-TLS
+  WEAVIATE_SECURE: "false"
   
   # --- Public URLs (REQUIRED) ---
   # NEXT_PUBLIC_* vars are written to window.__ENV by docker-entrypoint.sh at startup.
@@ -185,6 +196,19 @@ config:
   NGROK_URL: ""
 
 # ------------------------------------------------------------------------------
+# SSL/TLS Certificate Mounting
+# ------------------------------------------------------------------------------
+# Mount a Kubernetes Secret containing CA certificates into backend pods.
+# Useful for RDS, ElastiCache, or other managed services requiring custom CA certs.
+# Example:
+#   kubectl create secret generic aurora-ca-cert --from-file=ca.crt=rds-combined-ca-bundle.pem
+#   ssl.caCertSecret: "aurora-ca-cert"
+#   config.POSTGRES_SSLROOTCERT: "/etc/ssl/aurora/ca.crt"
+ssl:
+  caCertSecret: ""                       # K8s Secret name containing CA cert (key: ca.crt)
+  caCertMountPath: "/etc/ssl/aurora"     # Mount path inside pods
+
+# ------------------------------------------------------------------------------
 # Secrets (REQUIRED - must be set in values.generated.yaml)
 # ------------------------------------------------------------------------------
 secrets:
@@ -203,6 +227,11 @@ secrets:
     SLACK_CLIENT_ID: ""          # Get from: https://api.slack.com/apps
     SLACK_CLIENT_SECRET: ""
     SLACK_SIGNING_SECRET: ""
+
+    # --- Optional: Google Chat Integration ---
+    GOOGLE_CHAT_CLIENT_ID: ""              # OAuth client ID (for setup flow)
+    GOOGLE_CHAT_CLIENT_SECRET: ""          # OAuth client secret (for setup flow)
+    GOOGLE_CHAT_SERVICE_ACCOUNT_KEY: ""    # JSON key for the Chat app service account (for messaging)
 
     # --- Optional: GitHub OAuth ---
     GH_OAUTH_CLIENT_ID: ""       # Get from: https://github.com/settings/developers
@@ -265,6 +294,44 @@ secrets:
     OPENAI_API_KEY: ""           # Get from: https://platform.openai.com/api-keys
     ANTHROPIC_API_KEY: ""        # Get from: https://console.anthropic.com/
     GOOGLE_AI_API_KEY: ""        # Get from: https://makersuite.google.com/app/apikey
+
+# ------------------------------------------------------------------------------
+# Security contexts
+# ------------------------------------------------------------------------------
+# ref: https://kubernetes.io/docs/tasks/configure-pod-container/security-context/
+#
+# Global pod-level security context — merged into every pod.
+# Each service also has hardcoded UID/GID defaults (e.g. postgres=70, vault=100).
+# The global values here are merged with those defaults, so you only need to set
+# shared fields once (like seccompProfile) rather than repeating per-service.
+podSecurityContext:
+  runAsNonRoot: true
+  seccompProfile:
+    type: RuntimeDefault
+
+# Global container-level security context — merged into every container.
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: ["ALL"]
+
+# Per-service overrides (full replacement — provide all fields you need).
+# Use when a specific service needs a completely different security posture.
+# podSecurityContextOverrides:
+#   postgres:
+#     runAsNonRoot: true
+#     runAsUser: 70
+#     runAsGroup: 70
+#     fsGroup: 70
+#     seccompProfile:
+#       type: Localhost
+#       localhostProfile: profiles/custom.json
+# containerSecurityContextOverrides:
+#   vault:
+#     allowPrivilegeEscalation: false
+#     capabilities:
+#       drop: ["ALL"]
+#       add: ["IPC_LOCK"]
 
 # ------------------------------------------------------------------------------
 # Resource requests and limits
@@ -354,6 +421,89 @@ resources:
     limits:
       cpu: "200m"
       memory: "512Mi"
+
+# ------------------------------------------------------------------------------
+# Pod scheduling: tolerations, nodeSelector, affinity
+# ------------------------------------------------------------------------------
+# Global values applied to ALL pods. Override per-service below.
+# ref: https://kubernetes.io/docs/concepts/scheduling-eviction/taint-and-toleration/
+#
+# Example - schedule on nodes tainted for your team:
+#   tolerations:
+#     - key: "team"
+#       operator: "Equal"
+#       value: "platform"
+#       effect: "NoSchedule"
+#
+# Example - restrict to specific node labels:
+#   nodeSelector:
+#     node-pool: "aurora"
+#
+# Example - prefer spreading across zones:
+#   affinity:
+#     podAntiAffinity:
+#       preferredDuringSchedulingIgnoredDuringExecution:
+#         - weight: 100
+#           podAffinityTerm:
+#             labelSelector:
+#               matchLabels:
+#                 app.kubernetes.io/part-of: aurora
+#             topologyKey: topology.kubernetes.io/zone
+
+tolerations: []
+nodeSelector: {}
+affinity: {}
+
+# Per-service scheduling overrides (full replacement — provide all three fields).
+# scheduling:
+#   server:
+#     tolerations: []
+#     nodeSelector: {}
+#     affinity: {}
+#   celeryWorker:
+#     tolerations: []
+#     nodeSelector: {}
+#     affinity: {}
+#   celeryBeat:
+#     tolerations: []
+#     nodeSelector: {}
+#     affinity: {}
+#   chatbot:
+#     tolerations: []
+#     nodeSelector: {}
+#     affinity: {}
+#   frontend:
+#     tolerations: []
+#     nodeSelector: {}
+#     affinity: {}
+#   searxng:
+#     tolerations: []
+#     nodeSelector: {}
+#     affinity: {}
+#   transformers:
+#     tolerations: []
+#     nodeSelector: {}
+#     affinity: {}
+#   postgres:
+#     tolerations: []
+#     nodeSelector: {}
+#     affinity: {}
+#   redis:
+#     tolerations: []
+#     nodeSelector: {}
+#     affinity: {}
+#   weaviate:
+#     tolerations: []
+#     nodeSelector: {}
+#     affinity: {}
+#   vault:
+#     tolerations: []
+#     nodeSelector: {}
+#     affinity: {}
+#   minio:
+#     tolerations: []
+#     nodeSelector: {}
+#     affinity: {}
 
 # ------------------------------------------------------------------------------
 # Persistent storage

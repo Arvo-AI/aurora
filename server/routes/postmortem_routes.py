@@ -8,6 +8,7 @@ from uuid import UUID
 
 import requests
 from flask import Blueprint, jsonify, request
+from routes.audit_routes import record_audit_event
 
 from connectors.confluence_connector.client import (
     ConfluenceClient,
@@ -170,6 +171,7 @@ def update_postmortem(user_id, incident_id):
         if not updated:
             return jsonify({"error": "Postmortem not found"}), 404
 
+        record_audit_event(org_id, user_id, "update_postmortem", "postmortem", incident_id, {}, request)
         return jsonify({"success": True})
 
     except Exception as e:
@@ -329,6 +331,8 @@ def export_to_confluence(user_id, incident_id):
         )
         # Still return success since the page was created
 
+    record_audit_event(org_id, user_id, "export_postmortem_confluence", "postmortem", incident_id,
+                       {"page_url": page_url}, request)
     return jsonify({"success": True, "pageUrl": page_url, "pageId": str(page_id)})
 
 
@@ -542,6 +546,9 @@ def export_to_jira(user_id, incident_id):
                 conn.commit()
     except Exception as e:
         logger.warning("[POSTMORTEM] Failed to update Jira metadata for postmortem %s: %s", postmortem_id, e)
+
+    record_audit_event(org_id, user_id, "export_postmortem_jira", "postmortem", incident_id,
+                       {"issue_key": parent_key, "issue_url": parent_url}, request)
 
     return jsonify({
         "success": True,

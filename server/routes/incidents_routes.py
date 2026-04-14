@@ -3,6 +3,7 @@
 import json
 import logging
 from datetime import timezone
+from routes.audit_routes import record_audit_event as _record_audit_event
 from flask import Blueprint, jsonify, request
 from utils.db.connection_pool import db_pool
 from utils.auth.token_management import get_token_data
@@ -82,6 +83,33 @@ def _build_source_url(source_type: str, user_id: str) -> str:
     return ""
 
 
+def _record_lifecycle_event(cursor, incident_id, user_id, event_type, previous_value=None, new_value=None, metadata=None, org_id=None):
+    """Insert an incident lifecycle event.
+
+    Wraps the insert in a savepoint so a failure here doesn't leave the outer
+    transaction in an ABORTED state and break subsequent statements in the
+    caller (e.g. the incident status UPDATE). On failure the savepoint is
+    rolled back and the exception is logged and re-raised so callers can
+    decide how to handle it.
+    """
+    try:
+        cursor.execute("SAVEPOINT sp_incident_lifecycle")
+        cursor.execute(
+            """INSERT INTO incident_lifecycle_events
+               (incident_id, user_id, org_id, event_type, previous_value, new_value, metadata)
+               VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+            (incident_id, user_id, org_id, event_type, previous_value, new_value,
+             json.dumps(metadata or {}))
+        )
+        cursor.execute("RELEASE SAVEPOINT sp_incident_lifecycle")
+    except Exception as e:
+        try:
+            cursor.execute("ROLLBACK TO SAVEPOINT sp_incident_lifecycle")
+        except Exception as rb_exc:
+            logger.debug("[INCIDENTS] Rollback to sp_incident_lifecycle failed: %s", rb_exc)
+        logger.warning("[INCIDENTS] Failed to record lifecycle event %s for %s: %s", event_type, incident_id, e)
+
+
 def _format_incident_response(
     row: tuple, include_metadata: bool = False, include_correlation: bool = False, include_merge_target: bool = False
 ) -> Dict[str, Any]:
@@ -105,6 +133,8 @@ def _format_incident_response(
             active_tab,
             created_at,
             updated_at,
+            resolved_at,
+            alert_fired_at,
             alert_metadata,
             correlated_alert_count,
             affected_services,
@@ -130,6 +160,8 @@ def _format_incident_response(
             active_tab,
             created_at,
             updated_at,
+            resolved_at,
+            alert_fired_at,
             alert_metadata,
             correlated_alert_count,
             affected_services,
@@ -155,6 +187,8 @@ def _format_incident_response(
             active_tab,
             created_at,
             updated_at,
+            resolved_at,
+            alert_fired_at,
             alert_metadata,
         ) = row
         correlated_alert_count = None
@@ -180,6 +214,8 @@ def _format_incident_response(
             active_tab,
             created_at,
             updated_at,
+            resolved_at,
+            alert_fired_at,
         ) = row
         alert_metadata = None
         correlated_alert_count = None
@@ -207,6 +243,8 @@ def _format_incident_response(
         "activeTab": active_tab or "thoughts",
         "startedAt": _format_timestamp(started_at),
         "analyzedAt": _format_timestamp(analyzed_at),
+        "resolvedAt": _format_timestamp(resolved_at),
+        "alertFiredAt": _format_timestamp(alert_fired_at),
         "createdAt": _format_timestamp(created_at),
         "updatedAt": _format_timestamp(updated_at),
     }
@@ -245,23 +283,34 @@ def get_incidents(user_id):
                 cursor.execute("SET myapp.current_org_id = %s", (org_id,))
                 conn.commit()
 
-                cursor.execute(
-                    """
+                query = """
                     SELECT 
                         i.id, i.user_id, i.source_type, i.source_alert_id, i.status, i.severity,
                         i.alert_title, i.alert_service, i.alert_environment, i.aurora_status, i.aurora_summary,
                         i.aurora_chat_session_id, i.started_at, i.analyzed_at, i.active_tab, i.created_at, i.updated_at,
+                        i.resolved_at, i.alert_fired_at,
                         i.alert_metadata, i.correlated_alert_count, i.affected_services,
                         i.merged_into_incident_id, target.alert_title as merged_into_title
                     FROM incidents i
                     LEFT JOIN incidents target ON i.merged_into_incident_id = target.id
                     WHERE i.org_id = %s
                       AND i.status != 'merged'
-                    ORDER BY i.started_at DESC
-                    LIMIT 100
-                    """,
-                    (org_id,),
-                )
+                """
+                params = [org_id]
+
+                status_filter = request.args.get("status")
+                if status_filter:
+                    query += " AND i.status = %s"
+                    params.append(status_filter)
+
+                query += " ORDER BY i.started_at DESC"
+
+                limit = request.args.get("limit", 100, type=int)
+                limit = max(1, min(limit, 100))
+                query += " LIMIT %s"
+                params.append(limit)
+
+                cursor.execute(query, tuple(params))
                 rows = cursor.fetchall()
 
                 incidents = [
@@ -309,6 +358,7 @@ def get_incident(user_id, incident_id: str):
                         i.id, i.user_id, i.source_type, i.source_alert_id, i.status, i.severity,
                         i.alert_title, i.alert_service, i.alert_environment, i.aurora_status, i.aurora_summary,
                         i.aurora_chat_session_id, i.started_at, i.analyzed_at, i.active_tab, i.created_at, i.updated_at,
+                        i.resolved_at, i.alert_fired_at,
                         i.alert_metadata, i.correlated_alert_count, i.affected_services,
                         i.merged_into_incident_id, target.alert_title as merged_into_title
                     FROM incidents i
@@ -359,28 +409,39 @@ def get_incident(user_id, incident_id: str):
                             source_alert_id,
                         )
                 elif source_type == "grafana":
-                    # For grafana, try integer lookup for old records
+                    # source_alert_id is grafana_alerts.id * 100 + alert_index.
+                    # Recover the row id by integer-dividing by 100.
+                    # Direct lookup first, fingerprint fallback for legacy CRC32 records.
                     try:
-                        alert_id_int = int(source_alert_id)
+                        alert_id_int = int(source_alert_id) // 100
                         cursor.execute(
                             "SELECT payload FROM grafana_alerts WHERE id = %s AND user_id = %s",
                             (alert_id_int, user_id),
                         )
                         alert_row = cursor.fetchone()
-                        if alert_row:
-                            raw_payload = (
-                                alert_row[0] if alert_row[0] is not None else None
-                            )
-                            logger.debug(
-                                "[INCIDENTS] Found Grafana payload: type=%s, has_data=%s",
-                                type(raw_payload).__name__ if raw_payload else None,
-                                bool(raw_payload),
-                            )
+                        if alert_row and alert_row[0] is not None:
+                            raw_payload = alert_row[0]
                     except (ValueError, TypeError):
-                        logger.debug(
-                            "[INCIDENTS] Skipping payload fetch for grafana fingerprint: %s",
-                            source_alert_id,
+                        pass
+                    if not raw_payload:
+                        fingerprint = (
+                            incident.get("alert", {}).get("metadata", {}).get("fingerprint")
                         )
+                        if fingerprint:
+                            cursor.execute(
+                                """SELECT payload FROM grafana_alerts
+                                   WHERE user_id = %s
+                                     AND payload -> 'alerts' @> %s::jsonb
+                                   ORDER BY received_at DESC LIMIT 1""",
+                                (user_id, json.dumps([{"fingerprint": fingerprint}])),
+                            )
+                            alert_row = cursor.fetchone()
+                            if alert_row and alert_row[0] is not None:
+                                raw_payload = alert_row[0]
+                    logger.debug(
+                        "[INCIDENTS] Grafana payload lookup: has_source_alert_id=%s, found=%s",
+                        bool(source_alert_id), bool(raw_payload),
+                    )
                 elif source_type == "datadog":
                     # For datadog, try integer lookup for old records
                     try:
@@ -490,6 +551,19 @@ def get_incident(user_id, incident_id: str):
                             logger.debug("[INCIDENTS] Found New Relic payload for alert")
                     except (ValueError, TypeError):
                         logger.debug("[INCIDENTS] Skipping payload fetch for newrelic alert (non-integer id)")
+                elif source_type == "opsgenie":
+                    try:
+                        alert_id_int = int(source_alert_id)
+                        cursor.execute(
+                            "SELECT payload FROM opsgenie_events WHERE id = %s AND user_id = %s",
+                            (alert_id_int, user_id),
+                        )
+                        alert_row = cursor.fetchone()
+                        if alert_row and alert_row[0] is not None:
+                            raw_payload = alert_row[0]
+                            logger.debug("[INCIDENTS] Found OpsGenie/JSM payload for alert")
+                    except (ValueError, TypeError):
+                        logger.debug("[INCIDENTS] Skipping payload fetch for opsgenie alert (non-integer id)")
 
                 # Log warning if no payload found for any source type
                 if not raw_payload:
@@ -940,6 +1014,8 @@ def update_incident(user_id, incident_id: str):
                     # Auto-set timestamps based on status
                     if data["status"] == "analyzed" and "analyzed_at" not in data:
                         update_fields.append("analyzed_at = CURRENT_TIMESTAMP")
+                    if data["status"] == "resolved":
+                        update_fields.append("resolved_at = CURRENT_TIMESTAMP")
 
                 if "auroraStatus" in data:
                     update_fields.append("aurora_status = %s")
@@ -958,7 +1034,7 @@ def update_incident(user_id, incident_id: str):
 
                 # Check previous status before updating (for transition detection)
                 previous_status = None
-                if data.get("status") == "resolved":
+                if "status" in data:
                     cursor.execute(
                         "SELECT status FROM incidents WHERE id = %s AND org_id = %s",
                         (incident_id, org_id),
@@ -986,6 +1062,17 @@ def update_incident(user_id, incident_id: str):
                     return jsonify({"error": "Incident not found"}), 404
 
                 conn.commit()
+
+                # Record lifecycle event on status transition
+                if "status" in data and previous_status and previous_status != data["status"]:
+                    event_type = "resolved" if data["status"] == "resolved" else "status_changed"
+                    _record_lifecycle_event(
+                        cursor, incident_id, user_id, event_type,
+                        previous_value=previous_status, new_value=data["status"],
+                        org_id=org_id,
+                    )
+                    conn.commit()
+                    _record_audit_event(org_id or "", user_id, f"incident_{event_type}", "incident", incident_id, {"from": previous_status, "to": data["status"]}, request)
 
                 # Trigger postmortem generation only on transition to resolved
                 if data.get("status") == "resolved" and previous_status != "resolved":
@@ -1348,6 +1435,8 @@ def apply_fix_suggestion(user_id, suggestion_id: str):
                 suggestion_id,
                 result.get("pr_url"),
             )
+            _record_audit_event(org_id or "", user_id, "apply_fix", "suggestion", suggestion_id,
+                                {"pr_url": result.get("pr_url")}, request)
             return jsonify(result), 200
 
         logger.warning(
@@ -1615,6 +1704,9 @@ def merge_alert_to_incident(user_id, target_incident_id: str):
                     target_incident_id,
                     user_id,
                 )
+
+                _record_audit_event(org_id or "", user_id, "merge_incident", "incident", target_incident_id,
+                                    {"source_incident_id": source_incident_id}, request)
 
                 return jsonify({
                     "success": True,

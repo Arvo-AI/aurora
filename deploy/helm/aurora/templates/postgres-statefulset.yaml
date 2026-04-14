@@ -24,18 +24,14 @@ spec:
     spec:
       automountServiceAccountToken: false
       securityContext:
-        runAsNonRoot: true
-        runAsUser: 70
-        runAsGroup: 70
-        fsGroup: 70
+        {{- include "aurora.podSecurityContext" (dict "service" "postgres" "global" $ "defaults" (dict "runAsUser" 70 "runAsGroup" 70 "fsGroup" 70)) | nindent 8 }}
+      {{- include "aurora.scheduling" (dict "service" "postgres" "global" $) | nindent 6 }}
       containers:
         - name: postgres
           image: postgres:15-alpine
           imagePullPolicy: IfNotPresent
           securityContext:
-            allowPrivilegeEscalation: false
-            capabilities:
-              drop: ["ALL"]
+            {{- include "aurora.containerSecurityContext" (dict "service" "postgres" "global" $ "defaults" (dict)) | nindent 12 }}
           ports:
             - name: postgres
               containerPort: 5432

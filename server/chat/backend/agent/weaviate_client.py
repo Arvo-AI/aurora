@@ -27,32 +27,18 @@ class WeaviateClient:
         os.environ["OPENAI_API_KEY"] = OPENAI_API_KEY
         
 
-        WEAVIATE_HOST = os.getenv("WEAVIATE_HOST", "weaviate.default.svc.cluster.local")  # Default Kubernetes service name
+        WEAVIATE_HOST = os.getenv("WEAVIATE_HOST", "weaviate.default.svc.cluster.local")
+        weaviate_secure = os.getenv("WEAVIATE_SECURE", "false").lower() in ("1", "true", "yes")
 
-
-        #production version-----------------------------
         self.client = weaviate.connect_to_custom(
             http_host=WEAVIATE_HOST,
-            http_port=8080,
-            http_secure=False,   # Using HTTP, not HTTPS
+            http_port=int(os.getenv("WEAVIATE_PORT", "8080")),
+            http_secure=weaviate_secure,
             grpc_host=WEAVIATE_HOST,
-            grpc_port=50051,
-            grpc_secure=False,   # Using insecure gRPC
+            grpc_port=int(os.getenv("WEAVIATE_GRPC_PORT", "50051")),
+            grpc_secure=weaviate_secure,
             headers={"X-OpenAI-Api-Key": OPENAI_API_KEY}
         )
-        #------------------------------------------------
-
-        """
-        #local version (Docker Compose only)-----------------------------------
-        self.client = weaviate.connect_to_local(
-            host="weaviate",
-            headers={"X-OpenAI-Api-Key": OPENAI_API_KEY},
-            port=8080,
-            grpc_port=50051
-        )
-        #------------------------------------------------
-        """
-       
 
         assert self.client.is_ready(), "Weaviate client is not ready. Check the connection."
 

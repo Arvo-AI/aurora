@@ -11,6 +11,7 @@ from utils.auth import VALID_ROLES
 from utils.auth.rbac_decorators import require_permission, require_auth_only
 from utils.auth.stateless_auth import get_org_id_from_request
 from utils.auth.enforcer import assign_role_to_user, remove_role_from_user, get_user_roles_in_org
+from routes.audit_routes import record_audit_event
 
 logger = logging.getLogger(__name__)
 
@@ -355,6 +356,8 @@ def update_org(user_id):
                 if not row:
                     return jsonify({"error": "Organization not found"}), 404
 
+                record_audit_event(org_id, user_id, "update_org", "organization", org_id,
+                                   {"name": name, "slug": slug}, request)
                 return jsonify({"id": row[0], "name": row[1], "slug": row[2]})
     except Exception as e:
         logger.error("Error updating org: %s", e)
@@ -413,6 +416,9 @@ def add_member(user_id):
                     assign_role_to_user(target_user_id, role, org_id)
                 except Exception as e:
                     logger.error("Failed to assign Casbin role: %s", e)
+
+                record_audit_event(org_id, user_id, "add_member", "organization", org_id,
+                                   {"target_user_id": target_user_id, "email": row[1], "role": role}, request)
 
                 return jsonify({
                     "id": row[0],
@@ -482,6 +488,9 @@ def remove_member(user_id, target_user_id):
 
                 for r in get_user_roles_in_org(target_user_id, org_id):
                     remove_role_from_user(target_user_id, r, org_id)
+
+                record_audit_event(org_id, user_id, "remove_member", "organization", org_id,
+                                   {"target_user_id": target_user_id}, request)
 
                 return jsonify({"removed": True})
     except Exception as e:
@@ -569,6 +578,8 @@ def decline_invitation(user_id, invitation_id):
                 if not row:
                     return jsonify({"error": "Invitation not found or already handled"}), 404
 
+                record_audit_event("", user_id, "decline_invitation", "invitation", invitation_id, {}, request)
+
                 return jsonify({"declined": True}), 200
     except Exception as e:
         logger.error("Error declining invitation: %s", e)
@@ -600,6 +611,8 @@ def cancel_invitation(user_id, invitation_id):
 
                 if not row:
                     return jsonify({"error": "Invitation not found or already handled"}), 404
+
+                record_audit_event(org_id, user_id, "cancel_invitation", "invitation", invitation_id, {}, request)
 
                 return jsonify({"cancelled": True}), 200
     except Exception as e:
@@ -715,6 +728,9 @@ def _create_invitation(org_id: str, user_id: str):
                 )
                 row = cursor.fetchone()
                 conn.commit()
+
+                record_audit_event(org_id, user_id, "create_invitation", "invitation", invitation_id,
+                                   {"email": email, "role": role}, request)
 
                 return jsonify({
                     "id": row[0],
@@ -846,6 +862,9 @@ def join_org(user_id):
                     assign_role_to_user(user_id, new_role, new_org_id)
                 except Exception as e:
                     logger.error("Failed to assign Casbin role for %s in org %s: %s", user_id, new_org_id, e)
+
+                record_audit_event(new_org_id, user_id, "join_org", "organization", new_org_id,
+                                   {"old_org_id": old_org_id, "role": new_role}, request)
 
                 return jsonify({
                     "id": org_row[0],
@@ -1106,6 +1125,8 @@ def update_org_preferences(user_id):
                             (user_id, org_id, email),
                         )
                 conn.commit()
+                record_audit_event(org_id, user_id, "update_org_preferences", "organization", org_id,
+                                   {"keys": list(data.keys())}, request)
                 return jsonify({"ok": True})
     except Exception as e:
         logger.error("Error updating org preferences: %s", e)

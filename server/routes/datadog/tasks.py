@@ -146,6 +146,12 @@ def process_datadog_event(
                     return
 
                 received_at = datetime.now(timezone.utc)
+
+                alert_fired_at = None
+                date_happened = payload.get("date_happened") or payload.get("last_updated")
+                if date_happened and isinstance(date_happened, (int, float)):
+                    alert_fired_at = datetime.fromtimestamp(date_happened, tz=timezone.utc)
+
                 cursor.execute(
                     """
                     INSERT INTO datadog_events (user_id, org_id, event_type, event_title, status, scope, payload, received_at)
@@ -247,18 +253,19 @@ def process_datadog_event(
 
                 cursor.execute(
                     """
-                    INSERT INTO incidents 
-                    (user_id, org_id, source_type, source_alert_id, alert_title, alert_service, 
-                     severity, status, started_at, alert_metadata)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    INSERT INTO incidents
+                    (user_id, org_id, source_type, source_alert_id, alert_title, alert_service,
+                     severity, status, started_at, alert_metadata, alert_fired_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (org_id, source_type, source_alert_id, user_id) DO UPDATE
                     SET updated_at = CURRENT_TIMESTAMP,
-                        started_at = CASE 
+                        started_at = CASE
                             WHEN incidents.status != 'analyzed' THEN EXCLUDED.started_at
                             ELSE incidents.started_at
                         END,
-                        alert_metadata = EXCLUDED.alert_metadata
-                    RETURNING id
+                        alert_metadata = EXCLUDED.alert_metadata,
+                        alert_fired_at = COALESCE(EXCLUDED.alert_fired_at, incidents.alert_fired_at)
+                    RETURNING id, (xmax = 0) AS inserted
                     """,
                     (
                         user_id,
@@ -271,10 +278,12 @@ def process_datadog_event(
                         "investigating",
                         received_at,
                         json.dumps(alert_metadata),
+                        alert_fired_at,
                     ),
                 )
                 incident_row = cursor.fetchone()
                 incident_id = incident_row[0] if incident_row else None
+                incident_was_inserted = bool(incident_row[1]) if incident_row else False
                 conn.commit()
 
                 try:
@@ -304,6 +313,32 @@ def process_datadog_event(
                     conn.commit()
                 except Exception as e:
                     logger.warning("[DATADOG] Failed to record primary alert: %s", e)
+
+                # Record lifecycle event only on fresh inserts so redelivered
+                # webhooks don't append duplicate 'created' rows.
+                if incident_id and incident_was_inserted:
+                    try:
+                        cursor.execute("SAVEPOINT sp_incident_lifecycle")
+                        cursor.execute(
+                            """INSERT INTO incident_lifecycle_events
+                               (incident_id, user_id, org_id, event_type, new_value)
+                               VALUES (%s, %s, %s, %s, %s)""",
+                            (incident_id, user_id, org_id, 'created', 'investigating'),
+                        )
+                        cursor.execute("RELEASE SAVEPOINT sp_incident_lifecycle")
+                        conn.commit()
+                    except Exception as e:
+                        try:
+                            cursor.execute("ROLLBACK TO SAVEPOINT sp_incident_lifecycle")
+                        except Exception as rb_exc:
+                            logger.debug(
+                                "[DATADOG] Rollback to sp_incident_lifecycle failed for incident %s: %s",
+                                incident_id, rb_exc,
+                            )
+                        logger.warning(
+                            "[DATADOG] Failed to record lifecycle 'created' event for incident %s: %s",
+                            incident_id, e,
+                        )
 
                 if incident_id:
                     logger.info(

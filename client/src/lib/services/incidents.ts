@@ -202,6 +202,8 @@ export interface Incident {
   postMortem?: PostmortemData;
   startedAt: string;
   analyzedAt?: string;
+  resolvedAt?: string;
+  alertFiredAt?: string;
   createdAt?: string;
   updatedAt?: string;
   chatSessionId?: string; // RCA chat session ID
@@ -239,7 +241,8 @@ export const incidentsService = {
           source: inc.sourceType as AlertSource,
           sourceUrl: inc.alert?.sourceUrl || '',
           rawPayload: '',
-          triggeredAt: inc.startedAt,
+          // Prefer the actual alert fire time so the UI matches MTTD math.
+          triggeredAt: inc.alertFiredAt ?? inc.startedAt,
           title: inc.alert.title,
           severity: inc.severity,
           service: inc.alert.service,
@@ -255,6 +258,8 @@ export const incidentsService = {
         postMortem: inc.postMortem ?? undefined,
         startedAt: inc.startedAt,
         analyzedAt: inc.analyzedAt,
+        resolvedAt: inc.resolvedAt,
+        alertFiredAt: inc.alertFiredAt,
         createdAt: inc.createdAt,
         updatedAt: inc.updatedAt,
         activeTab: inc.activeTab || 'thoughts',
@@ -276,7 +281,7 @@ export const incidentsService = {
           source: inc.sourceType as AlertSource,
           sourceUrl: inc.alert?.sourceUrl || '',
           rawPayload: inc.alert?.rawPayload || '',
-          triggeredAt: inc.startedAt,
+          triggeredAt: inc.alertFiredAt ?? inc.startedAt,
           title: inc.alert?.title || '',
           severity: inc.severity,
           service: inc.alert?.service || 'unknown',
@@ -341,6 +346,8 @@ export const incidentsService = {
         postMortem: inc.postMortem ?? undefined,
         startedAt: inc.startedAt,
         analyzedAt: inc.analyzedAt,
+        resolvedAt: inc.resolvedAt,
+        alertFiredAt: inc.alertFiredAt,
         createdAt: inc.createdAt,
         updatedAt: inc.updatedAt,
         chatSessionId: inc.chatSessionId,

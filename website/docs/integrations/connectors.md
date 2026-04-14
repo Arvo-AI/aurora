@@ -333,6 +333,109 @@ SLACK_SIGNING_SECRET=your-signing-secret
 
 ---
 
+### Google Chat
+
+Hybrid authentication for Google Chat spaces. User OAuth is used during setup
+to create the incidents space in the customer's Google Workspace. A service
+account handles all ongoing messaging so notifications and @Aurora replies
+appear as the Chat app ("Aurora"), not as a human user.
+
+#### 1. Create a Google Cloud Project
+
+Go to [Google Cloud Console](https://console.cloud.google.com/projectcreate) and create a new project (or select an existing one).
+
+#### 2. Enable the Google Chat API
+
+In your project, go to **APIs & Services → Library**, search for "Google Chat API", and click **Enable**.
+
+[Enable Google Chat API →](https://console.cloud.google.com/apis/library/chat.googleapis.com)
+
+#### 3. Create OAuth Credentials
+
+1. Go to **APIs & Services → Credentials → Create Credentials → OAuth client ID**
+2. Select **Web application** as the type
+3. Add an **Authorized redirect URI**:
+   - Local dev: `http://localhost:5080/google-chat/callback`
+   - Production: `https://your-domain.com/google-chat/callback`
+   - The exact URL for your deployment is shown on the Google Chat setup page in Aurora — navigate to **Connectors → Google Chat** to copy it.
+4. Copy the **Client ID** and **Client Secret** — these are your `GOOGLE_CHAT_CLIENT_ID` and `GOOGLE_CHAT_CLIENT_SECRET` environment variables
+
+[Create OAuth Client →](https://console.cloud.google.com/apis/credentials/oauthclient)
+
+#### 4. Create a Service Account
+
+1. Go to **IAM & Admin → Service Accounts → Create Service Account**
+2. Name it something like `aurora-chat-bot`
+3. Click **Create and Continue** — no IAM roles are needed. The service account authenticates as the Chat app via the `chat.bot` scope, which is granted automatically when you link it in step 5.
+4. On the service account page, go to **Keys → Add Key → Create new key → JSON**
+5. The downloaded JSON content is your `GOOGLE_CHAT_SERVICE_ACCOUNT_KEY`
+
+[Create Service Account →](https://console.cloud.google.com/iam-admin/serviceaccounts/create)
+
+#### 5. Configure the Chat App
+
+Go to the [Google Chat API Configuration page](https://console.cloud.google.com/apis/api/chat.googleapis.com/hangouts-chat) and set the following. Leave everything else as default.
+
+> **Important:** Uncheck **Build this Chat app as a Workspace add-on** at the top of the page first.
+
+**Application info:**
+- **App name:** `Aurora`
+- **Avatar URL:** `https://raw.githubusercontent.com/arvo-ai/aurora/main/client/public/arvologo.png`
+- **Description:** `AI incident response assistant`
+
+**Interactive features:**
+- Enable **Interactive features**
+- Under Functionality, check **Join spaces and group conversations**
+
+**Connection settings:**
+- Select the **HTTP endpoint URL** radio button
+- Paste your publicly accessible HTTPS endpoint in the field:
+  - Local (with tunnel): `https://your-ngrok-url.ngrok-free.app/google-chat/events`
+  - Production: `https://your-domain.com/google-chat/events`
+  - The exact URL for your deployment is also shown on the Google Chat setup page in Aurora.
+- Set **Authentication Audience** to **HTTP endpoint URL**
+
+> **Local development with ngrok:** Run `ngrok http 3000` (pointing to the frontend, not the backend). Aurora's Next.js server rewrites `/google-chat/events` to the backend automatically. Set `FRONTEND_URL` in `.env` to your ngrok HTTPS URL so that Google Chat card buttons (e.g. "View Investigation") link to a reachable address. The OAuth redirect URI (`http://localhost:5080/google-chat/callback`) does not need ngrok because it's a browser redirect that your local machine can reach directly.
+
+**Visibility:**
+- Check **Make this Chat app available to specific people and groups** and add your email address (or a Google Group to let multiple people find and add the bot)
+- This controls who can *find and add* the bot — once added to a space, all members of that space can interact with it. You don't need to add every user here.
+
+#### 6. Configure Environment
+
+```bash
+GOOGLE_CHAT_CLIENT_ID=your-client-id
+GOOGLE_CHAT_CLIENT_SECRET=your-client-secret
+GOOGLE_CHAT_SERVICE_ACCOUNT_KEY='{"type":"service_account",...}'
+```
+
+> **Important:** The service account JSON must be on a **single line** in your `.env` file. Convert the downloaded key file with:
+> ```bash
+> cat your-key-file.json | jq -c .
+> ```
+> Then paste the output after `GOOGLE_CHAT_SERVICE_ACCOUNT_KEY=`.
+
+Then rebuild and restart Aurora:
+
+```bash
+make down && make dev          # development
+make down && make prod-local   # production (build from source)
+make down && make prod-prebuilt # production (prebuilt images)
+```
+
+#### Troubleshooting
+
+| Error | Solution |
+|-------|----------|
+| `invalid_scope` | Ensure the service account has the `chat.bot` scope |
+| "Google Chat OAuth credentials not configured" | Set `GOOGLE_CHAT_CLIENT_ID` and `GOOGLE_CHAT_CLIENT_SECRET` in `.env` |
+| "bad_redirect_uri" | Redirect URI must match exactly in Google Cloud Console OAuth settings |
+| Event verification failing | Ensure the Chat app's Authentication Audience is set to **HTTP endpoint URL** and the URL matches your events endpoint |
+| Messages appear as your name | Set `GOOGLE_CHAT_SERVICE_ACCOUNT_KEY` to enable the Chat app identity |
+| Card buttons do nothing on click | Use **Chrome** — Safari does not reliably handle `openLink` button clicks in Google Chat cards |
+
+---
+
 ## Documentation & Project Management
 
 ### Atlassian (Confluence + Jira)
