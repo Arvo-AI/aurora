@@ -37,6 +37,12 @@ class DatabaseConnectionPool:
             'host': os.getenv('POSTGRES_HOST'),
             'port': int(os.getenv('POSTGRES_PORT'))
         }
+        pg_sslmode = os.getenv('POSTGRES_SSLMODE', 'prefer')
+        if pg_sslmode:
+            self.db_params['sslmode'] = pg_sslmode
+            pg_sslrootcert = os.getenv('POSTGRES_SSLROOTCERT')
+            if pg_sslrootcert:
+                self.db_params['sslrootcert'] = pg_sslrootcert
 
         # Connection pool configuration
         self.min_connections = 1
@@ -85,17 +91,25 @@ class DatabaseConnectionPool:
             if connection:
                 try:
                     connection.rollback()
-                except:
+                except Exception:
                     pass
             logger.error(f"Error with connection: {e}")
             raise
         finally:
             if connection:
                 try:
-                    pool.putconn(connection)
-                    logger.debug("Returned connection to pool")
+                    connection.rollback()
+                    with connection.cursor() as cur:
+                        cur.execute(
+                            "RESET myapp.current_user_id; RESET myapp.current_org_id;"
+                        )
+                    connection.commit()
                 except Exception as e:
-                    logger.error(f"Error returning connection to pool: {e}")
+                    logger.warning("Failed to reset session vars on pool return: %s", e)
+                try:
+                    pool.putconn(connection)
+                except Exception as e:
+                    logger.error("Error returning connection to pool: %s", e)
 
     # Backward compatibility aliases
     def get_user_connection(self):
