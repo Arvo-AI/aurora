@@ -1,5 +1,6 @@
 import psycopg2
 import psycopg2.pool
+import psycopg2.extensions
 import logging
 import os
 import threading
@@ -35,7 +36,11 @@ class DatabaseConnectionPool:
             'user': os.getenv('POSTGRES_USER'),
             'password': os.getenv('POSTGRES_PASSWORD'),
             'host': os.getenv('POSTGRES_HOST'),
-            'port': int(os.getenv('POSTGRES_PORT'))
+            'port': int(os.getenv('POSTGRES_PORT')),
+            'keepalives': 1,
+            'keepalives_idle': 30,
+            'keepalives_interval': 10,
+            'keepalives_count': 5,
         }
         pg_sslmode = os.getenv('POSTGRES_SSLMODE', 'prefer')
         if pg_sslmode:
@@ -73,31 +78,66 @@ class DatabaseConnectionPool:
                         logger.error(f"Failed to create connection pool: {e}")
                         raise
         return self._pool
+
+    def _validate_connection(self, connection) -> bool:
+        """Check if a pooled connection is still usable."""
+        try:
+            if connection.closed:
+                return False
+            status = connection.info.transaction_status
+            if status == psycopg2.extensions.TRANSACTION_STATUS_UNKNOWN:
+                return False
+            old_autocommit = connection.autocommit
+            connection.autocommit = True
+            with connection.cursor() as cur:
+                cur.execute("SELECT 1")
+            connection.autocommit = old_autocommit
+            return True
+        except Exception:
+            return False
     
     @contextmanager
-    def get_connection(self):
-        """Get a connection from the pool with automatic cleanup."""
+    def get_connection(self, org_id: Optional[str] = None):
+        """Get a connection from the pool with automatic cleanup.
+
+        Args:
+            org_id: If provided, ``SET myapp.current_org_id`` is executed on
+                    the connection so that RLS policies see the caller's org.
+        """
         pool = self._get_pool()
         connection = None
         try:
             connection = pool.getconn()
-            if connection:
-                connection.autocommit = False
-                logger.debug("Retrieved connection from pool")
-                yield connection
-            else:
-                raise Exception("Failed to get connection from pool")
+            if not connection or not self._validate_connection(connection):
+                if connection:
+                    try:
+                        pool.putconn(connection, close=True)
+                    except Exception:
+                        pass
+                connection = pool.getconn()
+                if not connection:
+                    raise Exception("Failed to get connection from pool")
+            connection.autocommit = False
+            if org_id:
+                with connection.cursor() as cur:
+                    cur.execute("SET myapp.current_org_id = %s", (org_id,))
+            logger.debug("Retrieved connection from pool")
+            yield connection
         except Exception as e:
             if connection:
                 try:
                     connection.rollback()
-                except:
+                except Exception:
                     pass
             logger.error(f"Error with connection: {e}")
             raise
         finally:
             if connection:
                 try:
+                    if org_id:
+                        with connection.cursor() as cur:
+                            cur.execute("RESET myapp.current_org_id")
+                        connection.commit()
                     pool.putconn(connection)
                     logger.debug("Returned connection to pool")
                 except Exception as e:
@@ -108,9 +148,9 @@ class DatabaseConnectionPool:
         """Alias for get_connection() - kept for backward compatibility."""
         return self.get_connection()
 
-    def get_admin_connection(self):
-        """Alias for get_connection() - kept for backward compatibility."""
-        return self.get_connection()
+    def get_admin_connection(self, org_id: Optional[str] = None):
+        """Get a connection with optional RLS org context."""
+        return self.get_connection(org_id=org_id)
     
     def get_pool_status(self) -> dict:
         """Get status information about the connection pool."""

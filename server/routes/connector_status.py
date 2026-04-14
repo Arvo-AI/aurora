@@ -37,7 +37,7 @@ HTTP_TIMEOUT = (3.5, 5)
 def _check_grafana(user_id: str, org_id: str) -> Dict[str, Any]:
     """Grafana is webhook-based — check is_active directly (no secret_ref needed)."""
     try:
-        with db_pool.get_admin_connection() as conn:
+        with db_pool.get_admin_connection(org_id=org_id) as conn:
             with conn.cursor() as cursor:
                 cursor.execute(
                     """SELECT 1 FROM user_tokens
@@ -705,7 +705,7 @@ def get_connected_count(user_id: str, org_id: str) -> int:
 
 def _check_all_connectors(user_id: str, org_id: str) -> Dict[str, Dict[str, Any]]:
 
-    with db_pool.get_admin_connection() as conn:
+    with db_pool.get_admin_connection(org_id=org_id) as conn:
         with conn.cursor() as cursor:
             cursor.execute(
                 """
@@ -745,7 +745,7 @@ def _check_all_connectors(user_id: str, org_id: str) -> Dict[str, Dict[str, Any]
             return provider, _check_grafana(user_id, org_id)
         creds = get_token_data(token_owner_id, provider)
         if not creds:
-            with db_pool.get_admin_connection() as fallback_conn:
+            with db_pool.get_admin_connection(org_id=org_id) as fallback_conn:
                 with fallback_conn.cursor() as cur:
                     cur.execute(
                         "SELECT 1 FROM user_connections WHERE (user_id = %s OR org_id = %s) AND provider = %s AND status = 'active' LIMIT 1",
@@ -785,7 +785,7 @@ def _check_all_connectors(user_id: str, org_id: str) -> Dict[str, Dict[str, Any]
 
 def _check_onprem(user_id: str, org_id: str) -> Dict[str, Any]:
     try:
-        with db_pool.get_admin_connection() as conn:
+        with db_pool.get_admin_connection(org_id=org_id) as conn:
             with conn.cursor() as cursor:
                 cursor.execute(
                     """SELECT COUNT(*) FROM user_manual_vms
@@ -802,7 +802,7 @@ def _check_onprem(user_id: str, org_id: str) -> Dict[str, Any]:
 
 def _check_kubectl(user_id: str, org_id: str) -> Dict[str, Any]:
     try:
-        with db_pool.get_admin_connection() as conn:
+        with db_pool.get_admin_connection(org_id=org_id) as conn:
             with conn.cursor() as cursor:
                 cursor.execute(
                     """SELECT COUNT(*) FROM active_kubectl_connections ac

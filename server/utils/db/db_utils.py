@@ -1916,6 +1916,7 @@ def initialize_tables():
                     "user_preferences",
                     "deployment_tasks",
                     "user_tokens",
+                    "user_connections",
                     "llm_usage_tracking",
                     "kubectl_agent_tokens",
                     "mcp_tokens",

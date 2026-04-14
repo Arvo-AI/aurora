@@ -76,10 +76,8 @@ def store_tokens_in_db(user_id: str, token_data: Dict, provider: str,
                 logger.error("[STORE-TOKENS] Please ensure VAULT_ADDR and VAULT_TOKEN environment variables are configured")
             raise
         
-        with db_pool.get_admin_connection() as conn:
+        with db_pool.get_admin_connection(org_id=request_org_id) as conn:
             cursor = conn.cursor()
-            
-            # Store only metadata and secret reference in database
             if provider == "azure":
                 cursor.execute(
                     "INSERT INTO user_tokens (user_id, org_id, secret_ref, provider, subscription_name, subscription_id, tenant_id, client_id, client_secret) "

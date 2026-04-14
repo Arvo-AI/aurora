@@ -5,7 +5,8 @@ import logging
 from datetime import datetime
 from typing import Optional, List, Dict
 
-from utils.db.db_utils import connect_to_db_as_user, connect_to_db_as_admin
+from utils.db.connection_pool import db_pool
+from utils.db.db_utils import connect_to_db_as_user
 
 logger = logging.getLogger(__name__)
 
@@ -53,37 +54,31 @@ def save_connection_metadata(
             status = EXCLUDED.status,
             last_verified_at = EXCLUDED.last_verified_at;
     """
-    conn = None
     try:
-        conn = connect_to_db_as_admin()
-        with conn.cursor() as cur:
-            cur.execute(
-                sql,
-                (
-                    user_id,
-                    org_id,
-                    provider,
-                    account_id,
-                    role_arn,
-                    read_only_role_arn,
-                    connection_method,
-                    region,
-                    workspace_id,
-                    status,
-                    datetime.utcnow(),
-                ),
-            )
-        conn.commit()
+        with db_pool.get_admin_connection(org_id=org_id) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    sql,
+                    (
+                        user_id,
+                        org_id,
+                        provider,
+                        account_id,
+                        role_arn,
+                        read_only_role_arn,
+                        connection_method,
+                        region,
+                        workspace_id,
+                        status,
+                        datetime.utcnow(),
+                    ),
+                )
+            conn.commit()
         logger.info("[CONN-META] Upsert successful for %s/%s/%s", user_id, provider, account_id)
         return True
     except Exception as e:
         logger.error("Failed to save connection metadata: %s", e)
-        if conn:
-            conn.rollback()
         return False
-    finally:
-        if conn:
-            conn.close()
 
 
 def set_connection_status(
@@ -93,34 +88,29 @@ def set_connection_status(
     status: str,
 ) -> bool:
     """Update the status column for a connection (disconnect etc.)."""
+    org_id = _resolve_org_id(user_id)
     sql = """
         UPDATE user_connections
         SET status = %s, last_verified_at = %s
         WHERE user_id = %s AND provider = %s AND account_id = %s;
     """
-    conn = None
     try:
-        conn = connect_to_db_as_admin()
-        logger.info(
-            "[CONN-META] Updating status user=%s provider=%s account=%s → %s",
-            user_id,
-            provider,
-            account_id,
-            status,
-        )
-        with conn.cursor() as cur:
-            cur.execute(sql, (status, datetime.utcnow(), user_id, provider, account_id))
-        conn.commit()
+        with db_pool.get_admin_connection(org_id=org_id) as conn:
+            logger.info(
+                "[CONN-META] Updating status user=%s provider=%s account=%s -> %s",
+                user_id,
+                provider,
+                account_id,
+                status,
+            )
+            with conn.cursor() as cur:
+                cur.execute(sql, (status, datetime.utcnow(), user_id, provider, account_id))
+            conn.commit()
         logger.info("[CONN-META] Status update success for %s/%s/%s", user_id, provider, account_id)
         return True
     except Exception as e:
         logger.error("Failed to set connection status: %s", e)
-        if conn:
-            conn.rollback()
         return False
-    finally:
-        if conn:
-            conn.close()
 
 
 def list_active_connections(user_id: str) -> List[Dict]:
@@ -291,6 +281,7 @@ def delete_connection_secret(
 
     Returns ``True`` when database update succeeds.
     """
+    org_id = _resolve_org_id(user_id)
 
     sql_select = (
         "SELECT role_arn "
@@ -304,47 +295,44 @@ def delete_connection_secret(
         "WHERE user_id = %s AND provider = %s AND account_id = %s;"
     )
 
-    conn = None
     try:
-        conn = connect_to_db_as_admin()
-        with conn.cursor() as cur:
-            cur.execute(sql_select, (user_id, provider, account_id))
-            row = cur.fetchone()
-            
-            if not row:
-                logger.warning("[CONN-META] No active connection found for %s/%s/%s", user_id, provider, account_id)
-                return False
+        with db_pool.get_admin_connection(org_id=org_id) as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql_select, (user_id, provider, account_id))
+                row = cur.fetchone()
+                
+                if not row:
+                    logger.warning("[CONN-META] No active connection found for %s/%s/%s", user_id, provider, account_id)
+                    return False
 
-            if provider in ['gcp', 'azure', 'github']:
-                try:
-                    from utils.secrets.secret_ref_utils import SecretRefManager
-                    # Try to get secret_ref if column exists (may not for all schemas)
+                if provider in ['gcp', 'azure', 'github']:
                     try:
-                        cur.execute(
-                            "SELECT secret_ref FROM user_connections WHERE user_id = %s AND provider = %s AND account_id = %s",
-                            (user_id, provider, account_id)
-                        )
-                        secret_row = cur.fetchone()
-                        if secret_row and secret_row[0]:
-                            srm = SecretRefManager()
-                            srm.delete_secret(secret_row[0])
-                    except Exception:
-                        # Column doesn't exist or no secret_ref - that's fine
-                        pass
-                except Exception as e:
-                    logger.warning("[CONN-META] Vault secret deletion skipped for %s/%s/%s: %s", user_id, provider, account_id, e)
+                        from utils.secrets.secret_ref_utils import SecretRefManager
+                        try:
+                            cur.execute(
+                                "SELECT secret_ref FROM user_connections WHERE user_id = %s AND provider = %s AND account_id = %s",
+                                (user_id, provider, account_id)
+                            )
+                            secret_row = cur.fetchone()
+                            if secret_row and secret_row[0]:
+                                srm = SecretRefManager()
+                                srm.delete_secret(secret_row[0])
+                        except Exception:
+                            pass
+                    except Exception as e:
+                        logger.warning("[CONN-META] Vault secret deletion skipped for %s/%s/%s: %s", user_id, provider, account_id, e)
 
-            cur.execute(
-                sql_update,
-                (
-                    datetime.utcnow(),
-                    user_id,
-                    provider,
-                    account_id,
-                ),
-            )
+                cur.execute(
+                    sql_update,
+                    (
+                        datetime.utcnow(),
+                        user_id,
+                        provider,
+                        account_id,
+                    ),
+                )
 
-        conn.commit()
+            conn.commit()
         logger.info(
             "[CONN-META] Connection %s/%s/%s marked as inactive",
             user_id,
@@ -354,12 +342,7 @@ def delete_connection_secret(
         return True
     except Exception as e:
         logger.error("[CONN-META] Failed to delete connection: %s", e)
-        if conn:
-            conn.rollback()
         return False
-    finally:
-        if conn:
-            conn.close()
 
 
 def get_inactive_aws_connections(user_id: str) -> List[Dict]:
