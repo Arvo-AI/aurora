@@ -641,19 +641,18 @@ services:
       start_period: 15s
 
   seaweedfs-init:
-    image: minio/mc:latest
+    image: minio/mc:RELEASE.2025-08-13T08-35-41Z@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727
     container_name: aurora-seaweedfs-init
     logging: *default-logging
     restart: "no"
     entrypoint: ["/bin/sh", "-c"]
-    command: >
-      "
-        echo 'Waiting for SeaweedFS S3 API...';
-        sleep 5;
-        echo 'Creating aurora-storage bucket...';
-        mc mb -p seaweed/aurora-storage || true;
-        echo 'SeaweedFS initialization complete!';
-      "
+    command: |
+      set -e
+      echo 'Waiting for SeaweedFS S3 API...'
+      sleep 5
+      echo 'Creating aurora-storage bucket...'
+      mc mb -p seaweed/aurora-storage
+      echo 'SeaweedFS initialization complete!'
     environment:
       MC_HOST_seaweed: "http://admin:admin@seaweedfs-filer:8333"
     depends_on:
