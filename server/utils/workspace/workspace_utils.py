@@ -103,18 +103,20 @@ def update_workspace_aws_role(
     artifact_bucket: Optional[str] = None,
     artifact_key: Optional[str] = None,
     read_only_role_arn: Optional[str] = None,
+    region: Optional[str] = None,
 ) -> None:
     """
     Save AWS connection to user_connections (single source of truth).
     Workspace table is only used for aws_external_id (needed for STS).
-    
+
     Args:
         workspace_id: Workspace identifier
         role_arn: IAM role ARN for Aurora to assume
         artifact_bucket: Optional S3 bucket (legacy, not used in manual flow)
         artifact_key: Optional S3 key (legacy, not used in manual flow)
         read_only_role_arn: Optional read-only IAM role ARN
-        
+        region: Optional AWS region (e.g. us-west-2)
+
     Raises:
         Exception: Database errors
     """
@@ -145,6 +147,7 @@ def update_workspace_aws_role(
             role_arn=role_arn,
             read_only_role_arn=read_only_role_arn,
             connection_method="sts_assume_role",
+            region=region,
             workspace_id=workspace_id,
             status="active",
         )

@@ -1159,10 +1159,32 @@ def build_system_invariant() -> str:
     )
 
 
-def build_regional_rules() -> str:
+def _get_user_aws_default_region(user_id: Optional[str]) -> Optional[str]:
+    """Look up the default region from the user's primary AWS connection."""
+    if not user_id:
+        return None
+    try:
+        from utils.db.connection_utils import get_user_aws_connection
+        conn = get_user_aws_connection(user_id)
+        if conn:
+            return conn.get("region")
+    except Exception:
+        pass
+    return None
+
+
+def build_regional_rules(user_id: Optional[str] = None) -> str:
+    aws_region = _get_user_aws_default_region(user_id)
+    aws_hint = ""
+    if aws_region:
+        aws_hint = (
+            f"- AWS default region preference: {aws_region}. Use this when the user doesn't specify a region. "
+            "If the user asks for a different region in their message, use that instead.\n"
+        )
     return (
-        "REGION AND ZONE SELECTION - CRITICAL:\n"
-        "When user specifies geographic requirements, honor them in terraform code:\n"
+        "REGION AND ZONE SELECTION:\n"
+        "When user specifies a region or geographic requirement, ALWAYS honor it.\n"
+        f"{aws_hint}"
         "- North America (non-US): northamerica-northeast1-a or northamerica-northeast2-a (Canada)\n"
         "- Europe: europe-west1-a (Belgium) or europe-west2-a (London)\n"
         "- Asia: asia-southeast1-a (Singapore) or asia-northeast1-a (Tokyo)\n"
@@ -1866,7 +1888,7 @@ def build_prompt_segments(provider_preference: Optional[Any], mode: Optional[str
     return PromptSegments(
         system_invariant=system_invariant,
         provider_constraints=provider_constraints,
-        regional_rules=build_regional_rules(),
+        regional_rules=build_regional_rules(getattr(state, 'user_id', None) if state else None),
         ephemeral_rules=build_ephemeral_rules(mode),
         long_documents_note=build_long_documents_note(has_zip_reference),
         provider_context=provider_context,

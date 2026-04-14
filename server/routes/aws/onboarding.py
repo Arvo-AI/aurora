@@ -147,6 +147,7 @@ def set_aws_role(user_id, workspace_id):
             return jsonify({"error": "Invalid role ARN format"}), 400
 
         read_only_role_arn = data.get('readOnlyRoleArn') or data.get('read_only_role_arn')
+        region = (data.get('region') or 'us-east-1').strip()
 
         from utils.aws.aws_sts_client import assume_workspace_role, get_aurora_account_id
 
@@ -214,6 +215,7 @@ def set_aws_role(user_id, workspace_id):
             workspace_id,
             role_arn,
             read_only_role_arn=read_only_role_arn,
+            region=region,
         )
 
         logger.info(
