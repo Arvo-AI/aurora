@@ -608,23 +608,21 @@ services:
       start_period: 15s
 
   seaweedfs-init:
-    image: amazon/aws-cli:2.34.6
+    image: minio/mc:latest
     container_name: aurora-seaweedfs-init
     logging: *default-logging
     restart: "no"
-    entrypoint: /bin/sh
+    entrypoint: ["/bin/sh", "-c"]
     command: >
-      -c "
-        echo 'Waiting for SeaweedFS S3 API...'
-        sleep 5
-        echo 'Creating aurora-storage bucket...'
-        aws --endpoint-url http://seaweedfs-filer:8333 s3 mb s3://aurora-storage 2>/dev/null || true
-        echo 'SeaweedFS initialization complete!'
+      "
+        echo 'Waiting for SeaweedFS S3 API...';
+        sleep 5;
+        echo 'Creating aurora-storage bucket...';
+        mc mb -p seaweed/aurora-storage || true;
+        echo 'SeaweedFS initialization complete!';
       "
     environment:
-      AWS_ACCESS_KEY_ID: "admin"
-      AWS_SECRET_ACCESS_KEY: "admin"
-      AWS_DEFAULT_REGION: "us-east-1"
+      MC_HOST_seaweed: "http://admin:admin@seaweedfs-filer:8333"
     depends_on:
       seaweedfs-filer:
         condition: service_healthy
