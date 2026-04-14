@@ -147,7 +147,11 @@ def set_aws_role(user_id, workspace_id):
             return jsonify({"error": "Invalid role ARN format"}), 400
 
         read_only_role_arn = data.get('readOnlyRoleArn') or data.get('read_only_role_arn')
-        region = (data.get('region') or 'us-east-1').strip()
+        raw_region = data.get('region')
+        if isinstance(raw_region, str) and raw_region.strip():
+            region = raw_region.strip()
+        else:
+            region = 'us-east-1'
 
         from utils.aws.aws_sts_client import assume_workspace_role, get_aurora_account_id
 
@@ -448,7 +452,8 @@ def bulk_register_aws_accounts(user_id, workspace_id):
                 continue
             role_arn = (entry.get("roleArn") or "").strip()
             account_id = (entry.get("accountId") or "").strip()
-            region = (entry.get("region") or "us-east-1").strip()
+            raw_region = entry.get("region")
+            region = raw_region.strip() if isinstance(raw_region, str) and raw_region.strip() else "us-east-1"
 
             if not role_arn or not account_id:
                 results.append({"accountId": account_id, "success": False, "error": "roleArn and accountId are required"})

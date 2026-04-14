@@ -1938,8 +1938,7 @@ Security & Compliance
                     resource_id = specified_region
                     label = (isolated_env.get("AURORA_AWS_ACCOUNT_ALIAS") or
                              isolated_env.get("AURORA_AWS_ACCOUNT_ID") or "").strip()
-                    if label:
-                        resource_name = f"{label} - {specified_region}"
+                    resource_name = f"{label} - {specified_region}" if label else specified_region
 
             # Add output json for better parsing if not already specified
             if '--output' not in command and ('list' in command or 'describe' in command or 'get' in command):

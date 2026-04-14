@@ -1159,6 +1159,15 @@ def build_system_invariant() -> str:
     )
 
 
+import re as _re
+
+_AWS_REGION_RE = _re.compile(r'^[a-z]{2}(-[a-z]+-\d+)$')
+
+
+def _is_valid_aws_region(value: str) -> bool:
+    return bool(_AWS_REGION_RE.match(value))
+
+
 def _get_user_aws_default_region(user_id: Optional[str]) -> Optional[str]:
     """Look up the default region from the user's primary AWS connection."""
     if not user_id:
@@ -1167,10 +1176,12 @@ def _get_user_aws_default_region(user_id: Optional[str]) -> Optional[str]:
         from utils.db.connection_utils import get_user_aws_connection
         conn = get_user_aws_connection(user_id)
         if conn:
-            return conn.get("region")
+            region = conn.get("region")
+            if region and _is_valid_aws_region(region):
+                return region
     except (ImportError, AttributeError, TypeError, KeyError):
-        # Best-effort lookup: if connection utilities/data are unavailable, omit region hint.
-        return None
+        import logging
+        logging.warning("Failed to look up AWS default region for user %s", user_id)
     return None
 
 
