@@ -1190,18 +1190,18 @@ def build_regional_rules(user_id: Optional[str] = None) -> str:
     aws_hint = ""
     if aws_region:
         aws_hint = (
-            f"- AWS default region preference: {aws_region}. Use this when the user doesn't specify a region. "
-            "If the user asks for a different region in their message, use that instead.\n"
+            f"- AWS ONLY: The user's default AWS region is {aws_region}. Use this for AWS CLI commands and AWS Terraform resources "
+            "when the user doesn't specify a region. This does NOT apply to GCP, Azure, OVH, or any other provider.\n"
         )
     return (
         "REGION AND ZONE SELECTION:\n"
-        "When user specifies a region or geographic requirement, ALWAYS honor it.\n"
+        "When the user specifies a region or geographic requirement, ALWAYS honor it.\n"
+        "Each cloud provider has its own region naming — never use one provider's region for another:\n"
         f"{aws_hint}"
-        "- North America (non-US): northamerica-northeast1-a or northamerica-northeast2-a (Canada)\n"
-        "- Europe: europe-west1-a (Belgium) or europe-west2-a (London)\n"
-        "- Asia: asia-southeast1-a (Singapore) or asia-northeast1-a (Tokyo)\n"
-        "- US: Use US regions only if explicitly requested or if no geography specified\n"
-        "Do not just add comments; actually use the correct zone in code.\n"
+        "- GCP zones: northamerica-northeast1-a, europe-west1-a, asia-southeast1-a, us-central1-a, etc.\n"
+        "- AWS regions: us-east-1, eu-west-1, ap-southeast-1, etc.\n"
+        "- Azure locations: eastus, westeurope, southeastasia, etc.\n"
+        "Do not just add comments; actually use the correct region/zone in code.\n"
     )
 
 
