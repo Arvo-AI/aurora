@@ -101,6 +101,45 @@ def estimate_tokens(text: str) -> int:
     return len(text) // 4
 
 
+def load_core_prompt(directory: str, segments: Optional[List[str]] = None) -> str:
+    """
+    Load and concatenate core prompt markdown files from directory.
+
+    If segments is given, only those filenames (without .md) are loaded
+    in the specified order. Otherwise all .md files are loaded in sorted order.
+    """
+    if not os.path.isdir(directory):
+        logger.warning(f"Core prompt directory not found: {directory}")
+        return ""
+
+    if segments:
+        paths = []
+        for name in segments:
+            path = os.path.join(directory, f"{name}.md")
+            if os.path.isfile(path):
+                paths.append(path)
+            else:
+                logger.warning(f"Core prompt segment not found: {path}")
+    else:
+        paths = sorted(
+            os.path.join(directory, f)
+            for f in os.listdir(directory)
+            if f.endswith(".md")
+        )
+
+    parts: List[str] = []
+    for path in paths:
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                content = f.read().strip()
+            if content:
+                parts.append(content)
+        except OSError as e:
+            logger.error(f"Failed to read core prompt file {path}: {e}")
+
+    return "\n\n".join(parts)
+
+
 def discover_skill_files(directory: str) -> List[str]:
     """
     Find skill files following the LangChain deep agents convention:
