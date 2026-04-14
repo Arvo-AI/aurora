@@ -108,7 +108,7 @@ The script will prompt you for several values. Here's what to enter:
 | Bucket name | Your S3 bucket name from Step 2 |
 | Endpoint URL | `https://s3.amazonaws.com` (or your provider's endpoint) |
 | Region | `us-east-1` (or your bucket's region) |
-| Access key / Secret key | From Step 2 |
+| Access key / Secret key | From Step 2 (leave blank when using IRSA/pod identity) |
 | LLM Provider | `openrouter` (or whichever you chose) |
 | API key | Your key from Step 2 |
 | Environment | `staging` (or `production`) |
@@ -157,8 +157,8 @@ secrets:
   db:
     POSTGRES_PASSWORD: ""         # openssl rand -base64 32
   backend:
-    STORAGE_ACCESS_KEY: ""
-    STORAGE_SECRET_KEY: ""
+    STORAGE_ACCESS_KEY: ""        # optional when using IRSA/pod identity
+    STORAGE_SECRET_KEY: ""        # optional when using IRSA/pod identity
   app:
     FLASK_SECRET_KEY: ""          # openssl rand -base64 32
     AUTH_SECRET: ""               # openssl rand -base64 32
@@ -604,7 +604,7 @@ You can mix and match -- use `existingSecret` for some groups and inline values 
 | Group | Required Keys |
 |-------|--------------|
 | `db` | `POSTGRES_USER`, `POSTGRES_PASSWORD` |
-| `backend` | `VAULT_TOKEN`, `STORAGE_ACCESS_KEY`, `STORAGE_SECRET_KEY` (plus any optional integration keys) |
+| `backend` | `VAULT_TOKEN` (if using Vault). `STORAGE_ACCESS_KEY`, `STORAGE_SECRET_KEY` are optional when using IRSA/pod identity. |
 | `app` | `FLASK_SECRET_KEY`, `AUTH_SECRET`, `SEARXNG_SECRET` |
 | `llm` | At least one of: `OPENROUTER_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_AI_API_KEY` |
 

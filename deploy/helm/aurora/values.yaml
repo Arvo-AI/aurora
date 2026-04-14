@@ -37,6 +37,22 @@ services:
 # Each service gets its own ServiceAccount for proper RBAC
 # On-prem: annotations can be left empty
 # Cloud: add workload identity annotations as needed (GKE, EKS IRSA, AKS, etc.)
+#
+# IRSA (EKS) — the annotated role must have ALL of the following permissions:
+#   1. S3 access on your storage bucket (if not using static STORAGE_ACCESS_KEY/SECRET_KEY)
+#   2. secretsmanager:* on aurora/users/* (if SECRETS_BACKEND=aws_secrets_manager)
+#   3. sts:AssumeRole on * (for the AWS connector — needs cross-account access, so resource must be *)
+#      Without this, the AWS connector cannot assume cross-account roles and will return
+#      "not authorized to perform: sts:AssumeRole" errors.
+#
+# The IRSA role's trust policy must use StringLike to cover ALL backend SAs:
+#   "StringLike": { "<oidc>:sub": "system:serviceaccount:<ns>:<release>-aurora-oss-*" }
+# Scoping to only the server SA causes AssumeRoleWithWebIdentity failures in
+# the chatbot and celery workers.
+#
+# Example EKS IRSA annotation:
+#   annotations:
+#     eks.amazonaws.com/role-arn: arn:aws:iam::<ACCOUNT_ID>:role/<your-aurora-irsa-role>
 serviceAccount:
   # Annotations applied to backend service accounts (server, chatbot, celery)
   annotations: {}
@@ -227,12 +243,13 @@ secrets:
   backend:
     # Use a pre-existing Kubernetes Secret instead of chart-managed secrets.
     # When set, the chart will not create secret-backend and all pods will reference
-    # this secret directly. It must contain keys: VAULT_TOKEN, STORAGE_ACCESS_KEY,
-    # STORAGE_SECRET_KEY, plus any optional integration keys you use.
+    # this secret directly. It must contain VAULT_TOKEN (if using Vault), plus any
+    # optional integration keys you use. STORAGE_ACCESS_KEY/STORAGE_SECRET_KEY are
+    # optional when using IRSA or other pod-level credential injection.
     # existingSecret: ""
-    VAULT_TOKEN: ""              # REQUIRED - Root token from Vault init - Set after running: kubectl exec -it statefulset/<release>-vault -- vault operator init
-    STORAGE_ACCESS_KEY: ""       # REQUIRED - Your S3 access key
-    STORAGE_SECRET_KEY: ""       # REQUIRED - Your S3 secret key
+    VAULT_TOKEN: ""              # Required when SECRETS_BACKEND=vault. Not needed for aws_secrets_manager.
+    STORAGE_ACCESS_KEY: ""       # S3 access key (optional when using IRSA/pod identity)
+    STORAGE_SECRET_KEY: ""       # S3 secret key (optional when using IRSA/pod identity)
 
     # --- Optional: Slack Integration ---
     SLACK_CLIENT_ID: ""          # Get from: https://api.slack.com/apps
