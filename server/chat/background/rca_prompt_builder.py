@@ -515,6 +515,10 @@ def build_rca_prompt(
         f"You have access to: {', '.join(_display_providers) if _display_providers else 'No cloud/monitoring providers connected'}",
     ])
 
+    # Check integration connectivity (used by both skill loading and persistence prompts)
+    has_jira = _has_jira_connected(user_id) if user_id else False
+    has_confluence = _has_confluence_connected(user_id) if user_id else False
+
     # All integration guidance (GitHub, Jira, Confluence, Jenkins, CloudBees,
     # provider investigation commands) loaded from skill files via SkillRegistry.
     try:
@@ -525,8 +529,8 @@ def build_rca_prompt(
         _integrations = {}
         if user_id:
             _integrations['github'] = _get_github_connected(user_id)
-            _integrations['jira'] = _has_jira_connected(user_id)
-            _integrations['confluence'] = _has_confluence_connected(user_id)
+            _integrations['jira'] = has_jira
+            _integrations['confluence'] = has_confluence
             _integrations['jenkins'] = _has_jenkins_connected(user_id)
             _integrations['cloudbees'] = _has_cloudbees_connected(user_id)
         # Merge with any integrations already passed in
@@ -546,7 +550,6 @@ def build_rca_prompt(
     except Exception as e:
         logger.warning(f"Failed to load RCA skills: {e}")
     # Inline integration blocks removed — loaded from skill files above
-
 
     # Aurora Learn: Inject context from similar past incidents
     if user_id:
