@@ -77,8 +77,10 @@ def get_repo_selections(user_id):
 def save_repo_selections(user_id):
     """Sync the set of connected repos. Upserts new, removes deselected, triggers metadata gen."""
     try:
-        data = request.get_json()
-        repositories = data.get("repositories") if data else None
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            return jsonify({"error": "Request body must be a JSON object"}), 400
+        repositories = data.get("repositories")
         if not isinstance(repositories, list):
             return jsonify({"error": "repositories array is required"}), 400
 
@@ -96,6 +98,8 @@ def save_repo_selections(user_id):
                 newly_added = []
 
                 for repo in repositories:
+                    if not isinstance(repo, dict):
+                        return jsonify({"error": "Each repository must be an object"}), 400
                     full_name = repo.get("full_name")
                     if not full_name:
                         continue
