@@ -1168,8 +1168,9 @@ def _get_user_aws_default_region(user_id: Optional[str]) -> Optional[str]:
         conn = get_user_aws_connection(user_id)
         if conn:
             return conn.get("region")
-    except Exception:
-        pass
+    except (ImportError, AttributeError, TypeError, KeyError):
+        # Best-effort lookup: if connection utilities/data are unavailable, omit region hint.
+        return None
     return None
 
 
