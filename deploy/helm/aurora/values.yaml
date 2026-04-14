@@ -643,6 +643,24 @@ ingress:
     api: "api.aurora.example.com"
     ws: "ws.aurora.example.com"
 
+  # Additional Ingress resources (e.g., external ingress for webhooks).
+  # Each entry creates a separate Kubernetes Ingress object.
+  # Service names (server, frontend, chatbot) auto-resolve to full release names.
+  additional: []
+    # - name: external-webhooks
+    #   className: "nginx"
+    #   annotations: {}
+    #   tls: []
+    #   rules:
+    #     - host: "api-external.example.com"
+    #       http:
+    #         paths:
+    #           - path: /
+    #             pathType: Prefix
+    #             backend:
+    #               service: server
+    #               port: 5080
+
 # ------------------------------------------------------------------------------
 # Vault Configuration
 # ------------------------------------------------------------------------------
