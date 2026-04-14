@@ -67,6 +67,14 @@ trace.log
 
 Roo-Code/
 
+# Runtime state files that leak in from local dev
+celerybeat-schedule
+celerybeat-schedule.*
+
+# Jupyter notebooks (not part of runtime)
+**/*.ipynb
+**/.ipynb_checkpoints
+
 # Ignore tests
 tests/
 
