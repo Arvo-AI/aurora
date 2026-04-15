@@ -85,7 +85,10 @@ export default function ThoughtsPanel({ thoughts, incident, isVisible, canIntera
   // Preserves optimistic sessions that exist in local state but not yet in parent's data.
   useEffect(() => {
     // Parent's data: from incident prop (polled from backend every 3s)
-    const incidentSessions = incident.chatSessions || [];
+    // Exclude the RCA session — its content is already shown in the Thoughts tab
+    const incidentSessions = (incident.chatSessions || []).filter(
+      (s: ChatSession) => s.id !== incident.chatSessionId
+    );
     
     // Clean up creatingSessionIds: remove IDs that now exist in parent's data
     // This prevents the Set from growing indefinitely
@@ -116,8 +119,8 @@ export default function ThoughtsPanel({ thoughts, incident, isVisible, canIntera
     // Don't reset if we're creating a session
     if (creatingSessionIds.current.size > 0) return;
     
-    if (incident.activeTab === 'chat' && incident.chatSessions && incident.chatSessions.length > 0) {
-      setActiveTab(incident.chatSessions[incident.chatSessions.length - 1].id);
+    if (incident.activeTab === 'chat' && chatSessions.length > 0) {
+      setActiveTab(chatSessions[chatSessions.length - 1].id);
     } else {
       setActiveTab('thoughts');
     }
@@ -157,21 +160,36 @@ export default function ThoughtsPanel({ thoughts, incident, isVisible, canIntera
         };
       }).filter((m: ChatMessage) => m.content.trim() !== '');
       
-      // Only update messages if we have more messages than before, or if switching tabs
-      // This prevents the flash when the optimistic message (in local state) is briefly replaced
-      // by stale data from parent's poll (which might not have the new session yet)
+      // Merge server messages with local optimistic state.
+      // The optimistic user message lives in local state while the streaming bot
+      // response arrives from the server via polling.  We keep the local user
+      // messages and append/update any server-side assistant messages.
       setCurrentMessages((prev: ChatMessage[]) => {
-        // If we're currently polling this session (waiting for response), check if data is actually newer
         if (pollingSessionId === activeTab && prev.length > 0) {
-          // Only keep prev if messages haven't changed (same length AND same last message content)
-          // This allows assistant responses to come through even if message count is same
-          const prevLastContent = prev[prev.length - 1]?.content || '';
-          const messagesLastContent = messages[messages.length - 1]?.content || '';
-          
-          if (messages.length < prev.length || 
-              (messages.length === prev.length && messagesLastContent === prevLastContent)) {
-            return prev; // Keep optimistic messages - data is stale or unchanged
+          // Preserve optimistic user messages from local state
+          const localUserMessages = prev.filter((m: ChatMessage) => m.role === 'user');
+          const serverAssistantMessages = messages.filter((m: ChatMessage) => m.role === 'assistant');
+
+          // If server has no new assistant content, keep previous state unchanged
+          if (serverAssistantMessages.length === 0) {
+            return prev;
           }
+
+          // Check if assistant content actually changed
+          const prevAssistant = prev.filter((m: ChatMessage) => m.role === 'assistant');
+          const prevAssistantLast = prevAssistant[prevAssistant.length - 1]?.content || '';
+          const serverAssistantLast = serverAssistantMessages[serverAssistantMessages.length - 1]?.content || '';
+          if (prevAssistant.length === serverAssistantMessages.length && prevAssistantLast === serverAssistantLast) {
+            return prev; // No change
+          }
+
+          // Merge: local user messages + all server messages (preserving order)
+          // Server messages from DB may also include user messages once the final save happens
+          const serverUserMessages = messages.filter((m: ChatMessage) => m.role === 'user');
+          if (serverUserMessages.length >= localUserMessages.length) {
+            return messages; // Server has caught up, use server state entirely
+          }
+          return [...localUserMessages, ...serverAssistantMessages];
         }
         return messages;
       });
@@ -446,9 +464,9 @@ export default function ThoughtsPanel({ thoughts, incident, isVisible, canIntera
                 <div className={
                   msg.role === 'user'
                     ? 'rounded-2xl py-2 px-4 max-w-[70%] bg-muted text-foreground'
-                    : 'w-full text-foreground'
+                    : 'min-w-0 w-full text-foreground overflow-hidden'
                 }>
-                  <div className="break-words leading-relaxed">
+                  <div className="break-words leading-relaxed min-w-0">
                     <MarkdownRenderer content={msg.content} />
                   </div>
                 </div>
