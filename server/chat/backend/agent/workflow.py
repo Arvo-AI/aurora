@@ -1396,6 +1396,9 @@ class Workflow:
                 
             elif 'AI' in msg_type:
                 raw_content = getattr(msg, 'content', '')
+                # Skip synthetic RCA summary injected by _compress_rca_context
+                if isinstance(raw_content, str) and raw_content.startswith('[RCA Investigation Summary'):
+                    continue
                 # Extract text content (handles Gemini thinking model list format).
                 # Include thinking when text is empty and message has tool calls,
                 # so Gemini's reasoning appears in chat alongside tool cards.
