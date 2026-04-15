@@ -35,12 +35,11 @@ class ContextManager:
     def save_context_history(cls, session_id: str, user_id: str, 
                            messages: List[Dict[str, Any]], 
                            tool_capture: Optional[List[Any]] = None) -> bool:
-        """Optimized save with caching and async execution.
-        
-        This method replaces the original synchronous save with:
-        1. Deduplication checking
-        2. Cached serialization
-        3. Async non-blocking saves
+        """Save LLM context with Redis-based dedup + cached serialization.
+
+        Runs synchronously. The previous async-queue path was removed because
+        it raced with asyncio.run() teardown in Celery tasks and silently
+        dropped saves.
         """
         instance = cls._get_instance()
         
@@ -61,24 +60,6 @@ class ContextManager:
                     logger.debug(f"Skipping duplicate save for session {session_id}")
                     return True
             
-            # Try async save first
-            if hasattr(instance, 'async_queue'):
-                try:
-                    loop = asyncio.get_running_loop()
-                    # Schedule async save without blocking
-                    future = asyncio.create_task(
-                        instance.async_queue.enqueue_save(
-                            session_id, user_id, messages, tool_capture
-                        )
-                    )
-                    logger.debug(f"Scheduled async save for session {session_id}")
-                    return True  # Return immediately, save happens in background
-                    
-                except RuntimeError:
-                    # No event loop, fall back to sync save
-                    pass
-            
-            # Fallback to synchronous save if async not available
             return instance._execute_actual_save(
                 session_id, user_id, messages, tool_capture
             )
