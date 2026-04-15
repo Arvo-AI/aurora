@@ -29,12 +29,49 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import { getEnv } from '@/lib/env';
 import ConnectorAuthGuard from "@/components/connectors/ConnectorAuthGuard";
 import { copyToClipboard } from '@/lib/utils';
 import { useToast } from '@/hooks/use-toast';
 
 const BACKEND_URL = getEnv('NEXT_PUBLIC_BACKEND_URL');
+
+const AWS_REGIONS = [
+  { value: 'us-east-1', label: 'US East (N. Virginia)' },
+  { value: 'us-east-2', label: 'US East (Ohio)' },
+  { value: 'us-west-1', label: 'US West (N. California)' },
+  { value: 'us-west-2', label: 'US West (Oregon)' },
+  { value: 'af-south-1', label: 'Africa (Cape Town)' },
+  { value: 'ap-east-1', label: 'Asia Pacific (Hong Kong)' },
+  { value: 'ap-south-1', label: 'Asia Pacific (Mumbai)' },
+  { value: 'ap-south-2', label: 'Asia Pacific (Hyderabad)' },
+  { value: 'ap-southeast-1', label: 'Asia Pacific (Singapore)' },
+  { value: 'ap-southeast-2', label: 'Asia Pacific (Sydney)' },
+  { value: 'ap-southeast-3', label: 'Asia Pacific (Jakarta)' },
+  { value: 'ap-northeast-1', label: 'Asia Pacific (Tokyo)' },
+  { value: 'ap-northeast-2', label: 'Asia Pacific (Seoul)' },
+  { value: 'ap-northeast-3', label: 'Asia Pacific (Osaka)' },
+  { value: 'ca-central-1', label: 'Canada (Central)' },
+  { value: 'eu-central-1', label: 'Europe (Frankfurt)' },
+  { value: 'eu-central-2', label: 'Europe (Zurich)' },
+  { value: 'eu-west-1', label: 'Europe (Ireland)' },
+  { value: 'eu-west-2', label: 'Europe (London)' },
+  { value: 'eu-west-3', label: 'Europe (Paris)' },
+  { value: 'eu-south-1', label: 'Europe (Milan)' },
+  { value: 'eu-south-2', label: 'Europe (Spain)' },
+  { value: 'eu-north-1', label: 'Europe (Stockholm)' },
+  { value: 'il-central-1', label: 'Israel (Tel Aviv)' },
+  { value: 'me-south-1', label: 'Middle East (Bahrain)' },
+  { value: 'me-central-1', label: 'Middle East (UAE)' },
+  { value: 'sa-east-1', label: 'South America (São Paulo)' },
+];
 
 interface OnboardingData {
   workspaceId: string;
@@ -149,6 +186,7 @@ export default function AWSOnboardingPage() {
   const [inactiveAccounts, setInactiveAccounts] = useState<ConnectedAccount[]>([]);
   const [reconnectingId, setReconnectingId] = useState<string | null>(null);
   const [setupMethod, setSetupMethod] = useState<'manual' | 'cloudformation'>('manual');
+  const [defaultRegion, setDefaultRegion] = useState('us-east-1');
 
   // Auto-set connected flag when configured
   useEffect(() => {
@@ -311,7 +349,7 @@ export default function AWSOnboardingPage() {
             'X-User-ID': userId,
           },
           credentials: 'include',
-          body: JSON.stringify({ roleArn }),
+          body: JSON.stringify({ roleArn, region: defaultRegion }),
         }
       );
 
@@ -402,7 +440,7 @@ export default function AWSOnboardingPage() {
   const fetchQuickCreateData = useCallback(async (rt: 'ReadOnly' | 'Admin' = 'ReadOnly') => {
     if (!workspaceId || !userId) return;
     try {
-      const res = await fetch(`${BACKEND_URL}/workspaces/${workspaceId}/aws/cfn-quickcreate?roleType=${rt}&_t=${Date.now()}`, {
+      const res = await fetch(`${BACKEND_URL}/workspaces/${workspaceId}/aws/cfn-quickcreate?roleType=${rt}&region=${defaultRegion}&_t=${Date.now()}`, {
         credentials: 'include',
         headers: { 'X-User-ID': userId },
       });
@@ -419,7 +457,7 @@ export default function AWSOnboardingPage() {
     } catch (err) {
       console.error('Failed to fetch quick-create data:', err);
     }
-  }, [workspaceId, userId]);
+  }, [workspaceId, userId, defaultRegion]);
 
   const fetchInactiveAccounts = useCallback(async () => {
     if (!workspaceId || !userId) return;
@@ -547,7 +585,7 @@ export default function AWSOnboardingPage() {
       const accounts = lines.map(line => {
         const parts = line.split(',').map(p => p.trim());
         const accountId = parts[0];
-        const region = parts[1] || 'us-east-1';
+        const region = parts[1] || defaultRegion;
         const roleName = parts[2] || (roleType === 'Admin' ? 'AuroraAdminRole' : 'AuroraReadOnlyRole');
         return {
           accountId,
@@ -630,7 +668,7 @@ export default function AWSOnboardingPage() {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json', 'X-User-ID': userId },
-        body: JSON.stringify({ accounts: [{ accountId, roleArn: arn, region: 'us-east-1' }] }),
+        body: JSON.stringify({ accounts: [{ accountId, roleArn: arn, region: defaultRegion }] }),
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
@@ -733,7 +771,7 @@ export default function AWSOnboardingPage() {
                 <p className="text-white/90 font-medium mb-1">3. Add to <code className="bg-black/50 px-1 py-0.5 rounded text-xs">.env</code>:</p>
                 <pre className="bg-black/50 p-3 rounded border border-white/10 text-xs mt-2 overflow-x-auto whitespace-pre break-all">{`AWS_ACCESS_KEY_ID=your-access-key-id
 AWS_SECRET_ACCESS_KEY=your-secret-access-key
-AWS_DEFAULT_REGION=us-east-1`}</pre>
+AWS_DEFAULT_REGION=${defaultRegion}`}</pre>
               </div>
 
               <div className="break-words">
@@ -1084,6 +1122,23 @@ make dev`}</pre>
 
                 <RoleTypeToggle value={roleType} onChange={setRoleType} />
 
+                {/* Default region for new accounts */}
+                <div className="space-y-1.5">
+                  <label className="text-xs text-white/50">Default region</label>
+                  <Select value={defaultRegion} onValueChange={setDefaultRegion}>
+                    <SelectTrigger className="w-full bg-black/50 text-white border-white/10 focus:ring-white/20 text-xs h-9">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent className="bg-black border-white/10 max-h-60">
+                      {AWS_REGIONS.map((r) => (
+                        <SelectItem key={r.value} value={r.value} className="text-white/80 focus:bg-white/10 focus:text-white text-xs">
+                          {r.value} — {r.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
                 {/* Method toggle */}
                 <div className="space-y-2">
                   <p className="text-xs text-white/50">1. Create the IAM role</p>
@@ -1192,7 +1247,7 @@ make dev`}</pre>
                     <p className="text-sm font-medium text-white/70">Bulk Register AWS Accounts</p>
                     <p className="text-xs text-white/40">
                       After deploying the CloudFormation template to your accounts, paste account IDs below.
-                      One per line: <code className="bg-black/50 px-1 py-0.5 rounded">ACCOUNT_ID,REGION,ROLE_NAME</code> (region defaults to us-east-1 if omitted; specify the region where you deployed the stack)
+                      One per line: <code className="bg-black/50 px-1 py-0.5 rounded">ACCOUNT_ID,REGION,ROLE_NAME</code> (region defaults to your selected default region if omitted)
                     </p>
                   </div>
                   <textarea
@@ -1247,6 +1302,24 @@ make dev`}</pre>
               <div className="space-y-2">
                 <p className="text-sm text-white/70 font-medium">Access level</p>
                 <RoleTypeToggle value={roleType} onChange={setRoleType} />
+              </div>
+
+              {/* Default region selector */}
+              <div className="space-y-2">
+                <p className="text-sm text-white/70 font-medium">Default region</p>
+                <Select value={defaultRegion} onValueChange={setDefaultRegion}>
+                  <SelectTrigger className="w-full bg-white/5 text-white border-white/10 focus:ring-white/20 text-sm">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent className="bg-black border-white/10 max-h-60">
+                    {AWS_REGIONS.map((r) => (
+                      <SelectItem key={r.value} value={r.value} className="text-white/80 focus:bg-white/10 focus:text-white text-xs">
+                        {r.value} — {r.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-white/40">Your preferred region for CLI commands and API calls. Can be overridden per-request in chat.</p>
               </div>
 
               {/* Setup method toggle */}

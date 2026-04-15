@@ -1159,15 +1159,49 @@ def build_system_invariant() -> str:
     )
 
 
-def build_regional_rules() -> str:
+import re as _re
+
+_AWS_REGION_RE = _re.compile(r'^[a-z]{2}(-[a-z]+-\d+)$')
+
+
+def _is_valid_aws_region(value: str) -> bool:
+    return bool(_AWS_REGION_RE.match(value))
+
+
+def _get_user_aws_default_region(user_id: Optional[str]) -> Optional[str]:
+    """Look up the default region from the user's primary AWS connection."""
+    if not user_id:
+        return None
+    try:
+        from utils.db.connection_utils import get_user_aws_connection
+        conn = get_user_aws_connection(user_id)
+        if conn:
+            region = conn.get("region")
+            if region and _is_valid_aws_region(region):
+                return region
+    except (ImportError, AttributeError, TypeError, KeyError):
+        import logging
+        logging.warning("Failed to look up AWS default region for user %s", user_id)
+    return None
+
+
+def build_regional_rules(user_id: Optional[str] = None) -> str:
+    aws_region = _get_user_aws_default_region(user_id)
+    aws_hint = ""
+    if aws_region:
+        aws_hint = (
+            f"- AWS ONLY: The user's default AWS region is {aws_region}. Use this for AWS CLI commands and AWS Terraform resources "
+            "when the user doesn't specify a region. This does NOT apply to GCP, Azure, OVH, or any other provider.\n"
+        )
     return (
-        "REGION AND ZONE SELECTION - CRITICAL:\n"
-        "When user specifies geographic requirements, honor them in terraform code:\n"
-        "- North America (non-US): northamerica-northeast1-a or northamerica-northeast2-a (Canada)\n"
-        "- Europe: europe-west1-a (Belgium) or europe-west2-a (London)\n"
-        "- Asia: asia-southeast1-a (Singapore) or asia-northeast1-a (Tokyo)\n"
-        "- US: Use US regions only if explicitly requested or if no geography specified\n"
-        "Do not just add comments; actually use the correct zone in code.\n"
+        "REGION AND ZONE SELECTION:\n"
+        "When the user specifies a region or geographic requirement, ALWAYS honor it.\n"
+        "Each cloud provider has its own region naming — never use one provider's region for another:\n"
+        f"{aws_hint}"
+        "- GCP zones: northamerica-northeast1-a, europe-west1-a, asia-southeast1-a, us-central1-a, etc.\n"
+        "- AWS regions: us-east-1, eu-west-1, ap-southeast-1, etc.\n"
+        "- Azure locations: eastus, westeurope, southeastasia, etc.\n"
+        "Do not just add comments; actually use the correct region/zone in code.\n"
     )
 
 
@@ -1866,7 +1900,7 @@ def build_prompt_segments(provider_preference: Optional[Any], mode: Optional[str
     return PromptSegments(
         system_invariant=system_invariant,
         provider_constraints=provider_constraints,
-        regional_rules=build_regional_rules(),
+        regional_rules=build_regional_rules(getattr(state, 'user_id', None) if state else None),
         ephemeral_rules=build_ephemeral_rules(mode),
         long_documents_note=build_long_documents_note(has_zip_reference),
         provider_context=provider_context,

@@ -1929,12 +1929,16 @@ Security & Compliance
                 command += f" --region {region_or_project}"
                 logger.info(f"Using explicit region: {region_or_project}")
             else:
-                # Extract the region from the command if specified
                 import re
                 region_match = re.search(r'--region[=\s]+([^\s]+)', command)
                 if region_match:
                     specified_region = region_match.group(1)
                     logger.info(f"Using user-specified region: {specified_region}")
+                    region_or_project = specified_region
+                    resource_id = specified_region
+                    label = (isolated_env.get("AURORA_AWS_ACCOUNT_ALIAS") or
+                             isolated_env.get("AURORA_AWS_ACCOUNT_ID") or "").strip()
+                    resource_name = f"{label} - {specified_region}" if label else specified_region
 
             # Add output json for better parsing if not already specified
             if '--output' not in command and ('list' in command or 'describe' in command or 'get' in command):
