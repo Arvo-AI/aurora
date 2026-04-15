@@ -166,30 +166,30 @@ export default function ThoughtsPanel({ thoughts, incident, isVisible, canIntera
       // messages and append/update any server-side assistant messages.
       setCurrentMessages((prev: ChatMessage[]) => {
         if (pollingSessionId === activeTab && prev.length > 0) {
-          // Preserve optimistic user messages from local state
+          const serverUserMessages = messages.filter((m: ChatMessage) => m.role === 'user');
           const localUserMessages = prev.filter((m: ChatMessage) => m.role === 'user');
-          const serverAssistantMessages = messages.filter((m: ChatMessage) => m.role === 'assistant');
 
-          // If server has no new assistant content, keep previous state unchanged
+          // Server has caught up with all optimistic user messages — use server state as-is
+          if (serverUserMessages.length >= localUserMessages.length) {
+            return messages;
+          }
+
+          // Check if assistant content actually changed since last render
+          const serverAssistantMessages = messages.filter((m: ChatMessage) => m.role === 'assistant');
           if (serverAssistantMessages.length === 0) {
             return prev;
           }
-
-          // Check if assistant content actually changed
           const prevAssistant = prev.filter((m: ChatMessage) => m.role === 'assistant');
           const prevAssistantLast = prevAssistant[prevAssistant.length - 1]?.content || '';
           const serverAssistantLast = serverAssistantMessages[serverAssistantMessages.length - 1]?.content || '';
           if (prevAssistant.length === serverAssistantMessages.length && prevAssistantLast === serverAssistantLast) {
-            return prev; // No change
+            return prev;
           }
 
-          // Merge: local user messages + all server messages (preserving order)
-          // Server messages from DB may also include user messages once the final save happens
-          const serverUserMessages = messages.filter((m: ChatMessage) => m.role === 'user');
-          if (serverUserMessages.length >= localUserMessages.length) {
-            return messages; // Server has caught up, use server state entirely
-          }
-          return [...localUserMessages, ...serverAssistantMessages];
+          // Server has new assistant content but hasn't persisted all our user messages yet.
+          // Keep server order and append only the optimistic user messages the server is missing.
+          const optimisticTail = localUserMessages.slice(serverUserMessages.length);
+          return [...messages, ...optimisticTail];
         }
         return messages;
       });

@@ -325,7 +325,7 @@ async def process_workflow_async(wf, state, websocket, user_id, incident_id=None
             with db_pool.get_admin_connection() as conn:
                 with conn.cursor() as cursor:
                     cursor.execute(
-                        "SELECT messages FROM chat_sessions WHERE id = %s",
+                        "SELECT messages FROM chat_sessions WHERE id = %s FOR UPDATE",
                         (session_id,),
                     )
                     row = cursor.fetchone()
