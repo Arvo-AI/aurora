@@ -217,14 +217,27 @@ def _ensure_llm_context_history(
             if not ai_tool_calls:
                 continue
 
-            ai_content = ui_msg.get("content", "") if ui_msg.get("sender") == "bot" else ""
+            if ui_msg.get("sender") == "bot":
+                ai_content = ui_msg.get("text") or ui_msg.get("content") or ""
+            else:
+                ai_content = ""
             rebuilt_messages.append(AIMessage(content=ai_content, tool_calls=ai_tool_calls))
             rebuilt_messages.extend(tool_messages)
 
         if not rebuilt_messages:
             return []
 
-        ContextManager.save_context_history(session_id, user_id, rebuilt_messages)
+        # Bypass ContextManager.save_context_history's Redis dedup — a stale
+        # hash from the lost async save would cause this forced rewrite to
+        # no-op. We already know the DB column is empty, so write directly.
+        saved = ContextManager._get_instance()._execute_actual_save(
+            session_id, user_id, rebuilt_messages
+        )
+        if not saved:
+            logger.error(
+                f"[BackgroundChat] Forced rewrite of llm_context_history failed for session {session_id}"
+            )
+            return None
         logger.info(
             f"[BackgroundChat] Rebuilt llm_context_history for session {session_id} "
             f"with {len(rebuilt_messages)} synthetic messages"
