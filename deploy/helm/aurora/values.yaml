@@ -645,6 +645,8 @@ ingress:
 
   # Additional Ingress resources (e.g., external ingress for webhooks).
   # Each entry creates a separate Kubernetes Ingress object.
+  # IMPORTANT: 'name' is required, must be unique across entries, and must not
+  # be 'ingress' (reserved for the primary ingress object).
   # Service names are NOT auto-resolved. Use the full Kubernetes service name.
   # Aurora services follow the pattern: <release-name>-<component>
   # e.g., aurora-oss-server, aurora-oss-frontend, aurora-oss-chatbot
