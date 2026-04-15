@@ -458,34 +458,38 @@ export default function ThoughtsPanel({ thoughts, incident, isVisible, canIntera
       {/* Chat View - for any chat session tab */}
       {activeTab !== 'thoughts' && (
         <div className="flex-1 relative overflow-hidden">
-          <div className="absolute inset-0 overflow-y-auto py-4 pb-32">
-            {currentMessages.map((msg: ChatMessage) => (
-              <div key={msg.id} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'} px-4 py-2`}>
-                <div className={
+          <div className="absolute inset-0 overflow-y-auto p-5 pb-32">
+            <div className="space-y-4">
+              {currentMessages.map((msg: ChatMessage) => (
+                <div key={msg.id} className={
                   msg.role === 'user'
-                    ? 'rounded-2xl py-2 px-4 max-w-[70%] bg-muted text-foreground'
-                    : 'min-w-0 w-full text-foreground overflow-hidden'
+                    ? 'pl-4 border-l-2 border-blue-500/50'
+                    : 'pl-4 border-l-2 border-zinc-700 hover:border-orange-500/50 transition-colors'
                 }>
-                  <div className="break-words leading-relaxed min-w-0">
+                  <div className="text-xs text-zinc-500 mb-1">
+                    {msg.role === 'user' ? 'You' : 'Aurora'}
+                  </div>
+                  <div className="text-sm text-zinc-300 break-words leading-relaxed min-w-0 overflow-hidden">
                     <MarkdownRenderer content={msg.content} />
                   </div>
                 </div>
-              </div>
-            ))}
-            {isLoading && pollingSessionId === activeTab && (
-              <div className="flex justify-start px-4 py-2">
-                <div className="w-full text-foreground">
-                  <div className="flex gap-1 items-center">
-                    <span className="w-2 h-2 bg-muted-foreground rounded-full animate-bounce" />
-                    <span className="w-2 h-2 bg-muted-foreground rounded-full animate-bounce" style={{ animationDelay: '100ms' }} />
-                    <span className="w-2 h-2 bg-muted-foreground rounded-full animate-bounce" style={{ animationDelay: '200ms' }} />
+              ))}
+              {isLoading && pollingSessionId === activeTab && (
+                <div className="pl-4 border-l-2 border-orange-500/50">
+                  <div className="flex items-center gap-2 text-sm text-zinc-400">
+                    <div className="flex gap-1">
+                      <span className="w-1.5 h-1.5 bg-orange-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+                      <span className="w-1.5 h-1.5 bg-orange-400 rounded-full animate-bounce" style={{ animationDelay: '100ms' }} />
+                      <span className="w-1.5 h-1.5 bg-orange-400 rounded-full animate-bounce" style={{ animationDelay: '200ms' }} />
+                    </div>
+                    <span>Thinking...</span>
                   </div>
                 </div>
-              </div>
-            )}
-            {currentMessages.length === 0 && !isLoading && (
-              <p className="text-center text-zinc-500 text-sm py-8">No messages in this chat yet</p>
-            )}
+              )}
+              {currentMessages.length === 0 && !isLoading && (
+                <p className="text-center text-zinc-500 text-sm py-8">No messages in this chat yet</p>
+              )}
+            </div>
           </div>
 
           {/* Input at bottom */}
