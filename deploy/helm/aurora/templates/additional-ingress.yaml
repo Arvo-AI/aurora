@@ -28,7 +28,7 @@ spec:
             pathType: {{ .pathType | default "Prefix" }}
             backend:
               service:
-                name: {{ include "aurora.fullname" $ }}-{{ .backend.service }}
+                name: {{ .backend.service }}
                 port:
                   number: {{ .backend.port }}
           {{- end }}

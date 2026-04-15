@@ -645,7 +645,9 @@ ingress:
 
   # Additional Ingress resources (e.g., external ingress for webhooks).
   # Each entry creates a separate Kubernetes Ingress object.
-  # Service names (server, frontend, chatbot) auto-resolve to full release names.
+  # Service names are NOT auto-resolved. Use the full Kubernetes service name.
+  # Aurora services follow the pattern: <release-name>-<component>
+  # e.g., aurora-oss-server, aurora-oss-frontend, aurora-oss-chatbot
   additional: []
     # - name: external-webhooks
     #   className: "nginx"
@@ -658,7 +660,7 @@ ingress:
     #           - path: /
     #             pathType: Prefix
     #             backend:
-    #               service: server
+    #               service: aurora-oss-server
     #               port: 5080
 
 # ------------------------------------------------------------------------------
