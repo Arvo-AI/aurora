@@ -91,27 +91,36 @@ def cancel_rca_for_incident(incident_id: str) -> bool:
         return False
 
 
-def _extract_tool_calls_for_viz(session_id: str, user_id: str) -> List[Dict]:
-    """Extract infrastructure tool calls from database for final visualization."""
+def _extract_tool_calls_for_viz(
+    session_id: str,
+    user_id: str,
+    llm_context: Optional[List[Dict[str, Any]]] = None,
+) -> List[Dict]:
+    """Extract infrastructure tool calls for visualization.
+
+    Accepts a pre-loaded ``llm_context`` to avoid an extra SELECT on the happy
+    path (``_ensure_llm_context_history`` already fetches the column).
+    """
     try:
-        with db_pool.get_admin_connection() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute("""
-                    SELECT llm_context_history
-                    FROM chat_sessions
-                    WHERE id = %s AND user_id = %s
-                """, (session_id, user_id))
-                
-                row = cursor.fetchone()
-        
-        if not row or not row[0]:
-            logger.warning(f"[Visualization] No llm_context_history for session {session_id}")
-            return []
-        
-        llm_context = row[0]
-        if isinstance(llm_context, str):
-            llm_context = json.loads(llm_context)
-        
+        if llm_context is None:
+            with db_pool.get_admin_connection() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        SELECT llm_context_history
+                        FROM chat_sessions
+                        WHERE id = %s AND user_id = %s
+                        """,
+                        (session_id, user_id),
+                    )
+                    row = cursor.fetchone()
+            if not row or not row[0]:
+                logger.warning(f"[Visualization] No llm_context_history for session {session_id}")
+                return []
+            llm_context = row[0]
+            if isinstance(llm_context, str):
+                llm_context = json.loads(llm_context)
+
         tool_calls = []
         for msg in llm_context:
             if isinstance(msg, dict) and msg.get('name') in INFRASTRUCTURE_TOOLS:
@@ -119,12 +128,140 @@ def _extract_tool_calls_for_viz(session_id: str, user_id: str) -> List[Dict]:
                     'tool': msg.get('name'),
                     'output': str(msg.get('content', ''))[:MAX_TOOL_OUTPUT_CHARS]
                 })
-        
+
         return tool_calls
-    
-    except Exception as e:
-        logger.error(f"[Visualization] Failed to extract tool calls from database: {e}")
+
+    except Exception:
+        logger.exception(f"[Visualization] Failed to extract tool calls for session {session_id}")
         return []
+
+
+def _ensure_llm_context_history(
+    session_id: str, user_id: str
+) -> Optional[List[Dict[str, Any]]]:
+    """Return the session's llm_context_history, rebuilding from UI messages if empty.
+
+    Returns the deserialized context list so the caller can skip a second DB
+    read. Returns ``None`` when the session row is missing or on error.
+    """
+    from langchain_core.messages import AIMessage, ToolMessage
+    from chat.backend.agent.utils.llm_context_manager import LLMContextManager
+    from chat.backend.agent.utils.persistence.context_manager import ContextManager
+
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT llm_context_history, messages
+                    FROM chat_sessions
+                    WHERE id = %s AND user_id = %s
+                    """,
+                    (session_id, user_id),
+                )
+                row = cursor.fetchone()
+
+        if not row:
+            return None
+
+        llm_context, ui_messages = row[0], row[1]
+        if isinstance(llm_context, str):
+            try:
+                llm_context = json.loads(llm_context) if llm_context else []
+            except (ValueError, TypeError) as e:
+                logger.error(
+                    f"[BackgroundChat] Malformed llm_context_history JSON for session {session_id}: {e}; treating as empty"
+                )
+                llm_context = []
+        if llm_context:
+            return llm_context
+
+        if isinstance(ui_messages, str):
+            try:
+                ui_messages = json.loads(ui_messages) if ui_messages else []
+            except (ValueError, TypeError) as e:
+                logger.error(
+                    f"[BackgroundChat] Malformed messages JSON for session {session_id}: {e}; cannot rebuild context"
+                )
+                return []
+        if not ui_messages:
+            return []
+
+        logger.warning(
+            f"[BackgroundChat] llm_context_history empty for session {session_id}; "
+            f"rebuilding from UI messages as fallback"
+        )
+
+        rebuilt_messages: List[Any] = []
+        for ui_msg in ui_messages:
+            tool_calls_ui = ui_msg.get("toolCalls") or []
+            if not tool_calls_ui:
+                continue
+
+            ai_tool_calls = []
+            tool_messages: List[ToolMessage] = []
+            for tc in tool_calls_ui:
+                tool_call_id = tc.get("id")
+                if not tool_call_id:
+                    continue
+                tool_name = tc.get("tool_name") or tc.get("name") or "unknown"
+                try:
+                    args = json.loads(tc["input"]) if isinstance(tc.get("input"), str) else (tc.get("input") or {})
+                except (ValueError, TypeError):
+                    args = {}
+                ai_tool_calls.append({
+                    "id": tool_call_id,
+                    "name": tool_name,
+                    "args": args,
+                    "type": "tool_call",
+                })
+                output = tc.get("output")
+                if output is None:
+                    continue
+                tool_messages.append(
+                    ToolMessage(
+                        content=str(output),
+                        tool_call_id=tool_call_id,
+                        name=tool_name,
+                    )
+                )
+
+            if not ai_tool_calls:
+                continue
+
+            if ui_msg.get("sender") == "bot":
+                ai_content = ui_msg.get("text") or ui_msg.get("content") or ""
+            else:
+                ai_content = ""
+            rebuilt_messages.append(AIMessage(content=ai_content, tool_calls=ai_tool_calls))
+            rebuilt_messages.extend(tool_messages)
+
+        if not rebuilt_messages:
+            return []
+
+        # Bypass ContextManager.save_context_history's Redis dedup — a stale
+        # hash from the lost async save would cause this forced rewrite to
+        # no-op. We already know the DB column is empty, so write directly.
+        saved = ContextManager._get_instance()._execute_actual_save(
+            session_id, user_id, rebuilt_messages
+        )
+        if not saved:
+            logger.error(
+                f"[BackgroundChat] Forced rewrite of llm_context_history failed for session {session_id}"
+            )
+            return None
+        logger.info(
+            f"[BackgroundChat] Rebuilt llm_context_history for session {session_id} "
+            f"with {len(rebuilt_messages)} synthetic messages"
+        )
+        return [LLMContextManager.serialize_message(m) for m in rebuilt_messages]
+
+    except Exception:
+        logger.exception(
+            f"[BackgroundChat] Failed to ensure llm_context_history for session {session_id}"
+        )
+        return None
+
 
 _RATE_LIMIT_WINDOW_SECONDS = 300  # 5 minute window
 _RATE_LIMIT_MAX_REQUESTS = 5  # Max 5 background chats per window
@@ -1069,9 +1206,10 @@ async def _execute_background_chat(
                         logger.error(f"[BackgroundChat] ⚠️ WARNING: Incident {incident_id} aurora_status is already 'complete' before we set it! This indicates a race condition.")
         
         logger.info(f"[BackgroundChat] Workflow execution completed - all streams and tool calls finished")
-        
-        # Extract tool calls from database llm_context_history
-        tool_calls = _extract_tool_calls_for_viz(session_id, user_id)
+
+        # Fallback: rebuild llm_context_history from UI messages if the save was lost.
+        llm_context = _ensure_llm_context_history(session_id, user_id)
+        tool_calls = _extract_tool_calls_for_viz(session_id, user_id, llm_context)
         logger.info(f"[BackgroundChat] Extracted {len(tool_calls)} tool calls for visualization")
         
         return {
