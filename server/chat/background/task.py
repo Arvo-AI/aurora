@@ -166,12 +166,24 @@ def _ensure_llm_context_history(
 
         llm_context, ui_messages = row[0], row[1]
         if isinstance(llm_context, str):
-            llm_context = json.loads(llm_context) if llm_context else []
+            try:
+                llm_context = json.loads(llm_context) if llm_context else []
+            except (ValueError, TypeError) as e:
+                logger.error(
+                    f"[BackgroundChat] Malformed llm_context_history JSON for session {session_id}: {e}; treating as empty"
+                )
+                llm_context = []
         if llm_context:
             return llm_context
 
         if isinstance(ui_messages, str):
-            ui_messages = json.loads(ui_messages) if ui_messages else []
+            try:
+                ui_messages = json.loads(ui_messages) if ui_messages else []
+            except (ValueError, TypeError) as e:
+                logger.error(
+                    f"[BackgroundChat] Malformed messages JSON for session {session_id}: {e}; cannot rebuild context"
+                )
+                return []
         if not ui_messages:
             return []
 
