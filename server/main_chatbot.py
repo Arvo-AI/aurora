@@ -1239,7 +1239,7 @@ async def handle_connection(websocket) -> None:
 
             # IMMEDIATE SAVE: Save user message immediately when received
             if session_id and user_id:
-                handle_immediate_save(session_id, user_id, question, messages_list)
+                handle_immediate_save(session_id, user_id, question)
 
             # Launch workflow processing as async task without blocking
             # Set UI state in workflow before processing so it gets saved
