@@ -10,16 +10,12 @@ logger = logging.getLogger(__name__)
 
 
 def handle_immediate_save(session_id: str, user_id: str, question: str) -> bool:
-    """Persist the user's UI message immediately on receipt.
+    """Append the user's UI message on receipt so a mid-turn websocket drop doesn't lose it.
 
-    We intentionally do NOT write to llm_context_history here. That column is
-    fully replaced by the UPDATE in ContextManager._execute_actual_save, so
-    passing only the new HumanMessage would wipe the accumulated agent context
-    (RCA chat history loss bug). The end-of-stream save in workflow.stream()
-    is authoritative for llm_context_history and runs synchronously.
-
-    The UI-formatted message is still appended here so a websocket disconnect
-    mid-turn does not lose the user's prompt.
+    Does NOT touch llm_context_history: ContextManager._execute_actual_save
+    fully replaces that column, so writing only the new HumanMessage here
+    would wipe the accumulated agent context. The end-of-stream save in
+    workflow.stream() is authoritative for llm_context_history.
     """
     try:
         ui_messages = [{
