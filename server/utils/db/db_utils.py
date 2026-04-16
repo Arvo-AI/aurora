@@ -1083,7 +1083,11 @@ def initialize_tables():
                         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         confluence_page_id TEXT,
                         confluence_page_url TEXT,
-                        confluence_exported_at TIMESTAMP
+                        confluence_exported_at TIMESTAMP,
+                        notion_page_id TEXT,
+                        notion_page_url TEXT,
+                        notion_exported_at TIMESTAMP,
+                        notion_database_id TEXT
                     );
 
                     CREATE UNIQUE INDEX IF NOT EXISTS idx_postmortems_incident_id ON postmortems(incident_id);
@@ -1734,7 +1738,11 @@ def initialize_tables():
                         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         confluence_page_id TEXT,
                         confluence_page_url TEXT,
-                        confluence_exported_at TIMESTAMP
+                        confluence_exported_at TIMESTAMP,
+                        notion_page_id TEXT,
+                        notion_page_url TEXT,
+                        notion_exported_at TIMESTAMP,
+                        notion_database_id TEXT
                     );
                     CREATE UNIQUE INDEX IF NOT EXISTS idx_postmortems_incident_id ON postmortems(incident_id);
                     CREATE INDEX IF NOT EXISTS idx_postmortems_user_id ON postmortems(user_id);
@@ -1793,6 +1801,21 @@ def initialize_tables():
                 conn.commit()
             except Exception as e:
                 logging.warning(f"Error adding Jira columns to postmortems: {e}")
+                conn.rollback()
+
+            # Migration: Add Notion columns to postmortems table
+            try:
+                cursor.execute("""
+                    ALTER TABLE postmortems
+                        ADD COLUMN IF NOT EXISTS notion_page_id TEXT,
+                        ADD COLUMN IF NOT EXISTS notion_page_url TEXT,
+                        ADD COLUMN IF NOT EXISTS notion_exported_at TIMESTAMP,
+                        ADD COLUMN IF NOT EXISTS notion_database_id TEXT;
+                """)
+                logging.info("Added Notion columns to postmortems table (if not exist).")
+                conn.commit()
+            except Exception as e:
+                logging.warning(f"Error adding Notion columns to postmortems: {e}")
                 conn.rollback()
 
             # Migration: Add resolved_at, alert_fired_at, and investigation_started_at
