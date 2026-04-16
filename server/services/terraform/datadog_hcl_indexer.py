@@ -128,12 +128,14 @@ def extract_resources_from_hcl(content: str, file_path: str) -> List[IndexedReso
     for resource_block in resources:
         if not isinstance(resource_block, dict):
             continue
-        for rtype, named_blocks in resource_block.items():
+        for rtype_raw, named_blocks in resource_block.items():
+            rtype = _unquote(rtype_raw)
             if rtype not in TF_DATADOG_RESOURCE_TYPES:
                 continue
             if not isinstance(named_blocks, dict):
                 continue
-            for name, body in named_blocks.items():
+            for name_raw, body in named_blocks.items():
+                name = _unquote(name_raw)
                 if not isinstance(body, dict):
                     continue
                 address = f"{rtype}.{name}"
@@ -147,8 +149,8 @@ def extract_resources_from_hcl(content: str, file_path: str) -> List[IndexedReso
                     raw_block=raw,
                 )
                 if rtype == "datadog_monitor":
-                    row.monitor_name = _first(body.get("name"))
-                    row.query_hash = _query_hash(body.get("query"))
+                    row.monitor_name = _clean_scalar(body.get("name"))
+                    row.query_hash = _query_hash(_clean_scalar(body.get("query")))
                     options = _first(body.get("options"))
                     if isinstance(options, dict):
                         silenced = _first(options.get("silenced"))
@@ -156,7 +158,7 @@ def extract_resources_from_hcl(content: str, file_path: str) -> List[IndexedReso
                             row.silenced_inline = silenced if isinstance(silenced, dict) else {"_raw": silenced}
                 elif rtype == "datadog_downtime":
                     row.scope = _stringify_scope(body.get("scope"))
-                    row.downtime_monitor_ref = _first(body.get("monitor_id"))
+                    row.downtime_monitor_ref = _clean_scalar(body.get("monitor_id"))
                     tags = _first(body.get("monitor_tags"))
                     if tags and not row.scope:
                         row.scope = _stringify_scope(tags)
@@ -164,7 +166,7 @@ def extract_resources_from_hcl(content: str, file_path: str) -> List[IndexedReso
                     row.scope = _stringify_scope(body.get("scope"))
                     mid = _first(body.get("monitor_identifier"))
                     if isinstance(mid, dict):
-                        row.downtime_monitor_ref = _first(mid.get("monitor_id"))
+                        row.downtime_monitor_ref = _clean_scalar(mid.get("monitor_id"))
                 results.append(row)
     return results
 
@@ -449,8 +451,19 @@ def _first(value: Any) -> Any:
     return value
 
 
+def _unquote(s: Any) -> Any:
+    """python-hcl2 ≥5 returns identifiers and string literals with surrounding quotes."""
+    if isinstance(s, str) and len(s) >= 2 and s[0] == s[-1] and s[0] in ('"', "'"):
+        return s[1:-1]
+    return s
+
+
+def _clean_scalar(value: Any) -> Any:
+    return _unquote(_first(value))
+
+
 def _query_hash(query: Any) -> Optional[str]:
-    q = _first(query)
+    q = _unquote(_first(query))
     if not isinstance(q, str) or not q.strip():
         return None
     return hashlib.sha1(q.strip().encode("utf-8")).hexdigest()
@@ -461,8 +474,8 @@ def _stringify_scope(scope: Any) -> Optional[str]:
     if s is None:
         return None
     if isinstance(s, list):
-        return ",".join(str(x) for x in s)
-    return str(s)
+        return ",".join(_unquote(str(x)) for x in s)
+    return _unquote(str(s))
 
 
 def _similarity(a: str, b: str) -> float:
