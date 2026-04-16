@@ -847,9 +847,8 @@ class Workflow:
         from chat.backend.agent.utils.chat_context_manager import ChatContextManager
         from chat.backend.agent.utils.tool_context_capture import ToolContextCapture
 
-        # Record how many messages arrived as "fresh turn input" before we
-        # prepend any history / compressed prefix. Used at end-of-stream to
-        # slice out just this turn's new messages for the append-only UI save.
+        # Snapshot before any history is prepended; used to slice out this
+        # turn's new messages for the append-only UI save.
         new_turn_input_count = len(input_state.messages)
 
         # Initialize tool context capture for this session
@@ -866,11 +865,7 @@ class Workflow:
             from chat.backend.agent.tools.cloud_tools import _set_ctx
             _set_ctx("workflow", self)
         
-        # Load existing context if session_id is provided. RCA compression
-        # can rewrite input_state.messages, but the UI lane is saved via
-        # _append_new_turn_ui_messages below (append-only, not reconstructed
-        # from LangChain state), so the UI column is unaffected regardless of
-        # what happens to the LLM-facing messages here.
+        # Load existing context if session_id is provided
         if input_state.session_id and input_state.user_id:
             import time as _time
             _ctx_start = _time.perf_counter()
@@ -948,9 +943,8 @@ class Workflow:
                             input_state.messages = combined_messages
                             logger.info(f"Migrated and loaded {len(existing_context)} messages for legacy session {input_state.session_id}")
         
-        # Everything in input_state.messages up to this point is "history" —
-        # pre-existing messages we prepended (loaded or compressed context).
-        # Anything beyond is the new turn's fresh input (the user message).
+        # Number of history messages prepended above; anything after this index
+        # in _last_state.messages belongs to this turn.
         history_prefix_len = len(input_state.messages) - new_turn_input_count
 
         # Log initial state
@@ -1143,7 +1137,7 @@ class Workflow:
                 messages_full = messages
                 messages_for_context = messages_full
 
-                # LLM-lane compression (shrinks what the agent sees next turn)
+                # Check if context compression is needed
                 model = self._get_state_attr(self._last_state, 'model')
                 if model:
                     compressed_messages, was_compressed = ChatContextManager.compress_context_if_needed(
@@ -1153,19 +1147,16 @@ class Workflow:
                         messages_for_context = compressed_messages
                         logger.info(f"Context compression: {len(compressed_messages)} messages preserved for session {session_id}")
 
-                # Save LLM context (may be compressed)
+                # Save context history (complete conversation including AI responses and tool calls)
                 success = LLMContextManager.save_context_history(session_id, user_id, messages_for_context, tool_capture)
                 if success:
                     logger.debug(f"[WORKFLOW FINAL] Successfully saved final context for session {session_id} ({len(messages_for_context)} messages)")
                 else:
                     logger.warning(f"[WORKFLOW FINAL] Failed to save final context for session {session_id}")
 
-                # UI lane — append THIS turn's new messages only. Slicing with
-                # history_prefix_len strips the history/compressed prefix that
-                # was prepended at stream entry, so we never re-serialize a
-                # synthetic RCA summary (or any prior-turn content) into the UI
-                # column. The append writer dedupes the leading user message
-                # against the one handle_immediate_save already wrote.
+                # Append only this turn's new messages to the UI column so RCA
+                # compression (or any future state rewrite) can't truncate the
+                # persisted chat history.
                 turn_langchain = messages[history_prefix_len:]
                 tool_capture = getattr(self.agent, 'tool_capture_instance', None)
                 turn_ui_messages = self._convert_to_ui_messages(turn_langchain, tool_capture)
@@ -1610,17 +1601,10 @@ class Workflow:
         turn_ui_messages: list,
         ui_state: Optional[dict] = None,
     ) -> bool:
-        """Append this turn's UI messages to chat_sessions.messages.
+        """Append this turn's UI messages to chat_sessions.messages (never overwrite).
 
-        Defence-in-depth for the UI lane: load the existing column, append only
-        the messages produced by this turn (with renumbered message_number),
-        and write back. This prevents any caller from accidentally truncating
-        the UI history via a full-column overwrite — e.g. if a future
-        compression path rewrites the LangChain state it sees.
-
-        Dedupe: if the first new message is the user's prompt and matches the
-        last existing message (which handle_immediate_save already wrote), skip
-        it so we don't duplicate the prompt bubble.
+        Dedupes the leading user bubble against the last existing message,
+        since handle_immediate_save already wrote it on receipt.
         """
         try:
             from utils.db.connection_pool import db_pool
