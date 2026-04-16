@@ -1067,6 +1067,11 @@ class Workflow:
                                 content = output.additional_kwargs.get("reasoning_content", "")
                             if content:
                                 logger.info(f"[STREAM FALLBACK] Extracted {len(content)} chars from on_chat_model_end (streaming didn't fire)")
+                                msg_id = getattr(output, 'id', None)
+                                if msg_id:
+                                    self._stream_text_by_id[msg_id] = (
+                                        self._stream_text_by_id.get(msg_id, "") + content
+                                    )
                                 yield ("token", content)
 
                         # Extract provider-reported usage_metadata for accurate tracking
