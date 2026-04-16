@@ -80,17 +80,19 @@ def build_silence_inventory(user_id: str) -> List[Silence]:
     silences: List[Silence] = []
     silences.extend(_list_active_downtimes(client))
     silences.extend(_list_legacy_silenced_monitors(client))
-    # Dedupe on (monitor_id, scope, source) to avoid duplicates when the legacy
-    # field and a v2 downtime cover the same scope.
-    seen = set()
-    deduped: List[Silence] = []
+    # When the same monitor+scope shows up in both the v2 downtime API and the
+    # legacy `silenced` map, prefer the v2 row — it carries muted_since/message
+    # and is the path Datadog itself recommends.
+    deduped: Dict[tuple, Silence] = {}
     for s in silences:
-        key = (s.source, s.monitor_id, s.scope or "", s.downtime_id or "")
-        if key in seen:
+        key = (s.monitor_id, s.scope or "")
+        existing = deduped.get(key)
+        if existing is None:
+            deduped[key] = s
             continue
-        seen.add(key)
-        deduped.append(s)
-    return deduped
+        if existing.source != "downtime_v2" and s.source == "downtime_v2":
+            deduped[key] = s
+    return list(deduped.values())
 
 
 def compute_drift(
@@ -147,7 +149,11 @@ def compute_drift(
             report.drifted.append(row)
 
     report.monitors_total = len(monitor_ids_seen)
-    _persist_drift_snapshot(user_id, report)
+    # Only persist when the run covers the full canonical inventory; a
+    # monitor_name / scope filter would otherwise overwrite the snapshot with a
+    # subset. (repo_full_name is allowed — the snapshot table is user-level.)
+    if not (monitor_filter or scope_filter):
+        _persist_drift_snapshot(user_id, report)
     return report
 
 
@@ -362,9 +368,8 @@ def _persist_drift_snapshot(user_id: str, report: DriftReport) -> None:
                     (user_id, monitor_id, monitor_name, scope, downtime_id, muted_since,
                      source, matched_tf_file, tf_match_confidence, original_message)
                     VALUES %s
-                    ON CONFLICT (user_id, monitor_id, scope, source) DO UPDATE
+                    ON CONFLICT (user_id, monitor_id, scope, source, downtime_id) DO UPDATE
                     SET monitor_name = EXCLUDED.monitor_name,
-                        downtime_id = EXCLUDED.downtime_id,
                         muted_since = EXCLUDED.muted_since,
                         matched_tf_file = EXCLUDED.matched_tf_file,
                         tf_match_confidence = EXCLUDED.tf_match_confidence,

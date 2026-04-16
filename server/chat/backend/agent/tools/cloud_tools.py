@@ -1170,10 +1170,6 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
         (cloudbees_rca, "cloudbees_rca"),
         (spinnaker_rca, "spinnaker_rca"),
         (github_apply_fix, "github_apply_fix"),
-        (list_datadog_silence_drift, "list_datadog_silence_drift"),
-        (silence_datadog_monitor_via_terraform, "silence_datadog_monitor_via_terraform"),
-        (silence_all_drifted_monitors, "silence_all_drifted_monitors"),
-        (reindex_terraform_repo, "reindex_terraform_repo"),
         (cloud_exec_wrapper, "cloud_exec"),
         (terminal_exec, "terminal_exec"),
         (tailscale_ssh, "tailscale_ssh"),
@@ -1185,6 +1181,15 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
     # Only include trigger_rca when the user explicitly requested it via the UI button
     if state_context and getattr(state_context, 'trigger_rca_requested', False):
         tool_functions.append((trigger_rca, "trigger_rca"))
+
+    # Datadog↔Terraform drift tools only surface when Datadog is connected.
+    if user_id and is_datadog_connected(user_id):
+        tool_functions.extend([
+            (list_datadog_silence_drift, "list_datadog_silence_drift"),
+            (silence_datadog_monitor_via_terraform, "silence_datadog_monitor_via_terraform"),
+            (silence_all_drifted_monitors, "silence_all_drifted_monitors"),
+            (reindex_terraform_repo, "reindex_terraform_repo"),
+        ])
     
     # Process Aurora native tools
     for func, name in tool_functions:

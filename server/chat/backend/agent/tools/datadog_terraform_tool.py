@@ -210,9 +210,7 @@ def silence_datadog_monitor_via_terraform(
         )
 
     effective_scope = scope or "*"
-    resource_name = _sanitize_resource_name(
-        f"mute_{monitor.get('name') or monitor.get('id') or 'monitor'}"
-    )
+    resource_name = _unique_silence_label(monitor, effective_scope, message)
     block = _build_downtime_schedule_block(
         resource_name=resource_name,
         monitor_resource_address=matched.resource_address if matched else None,
@@ -280,6 +278,7 @@ def silence_all_drifted_monitors(
     try:
         report = compute_drift(user_id=user_id, repo_full_name=target_repo)
     except Exception as exc:  # noqa: BLE001
+        logger.exception("[DD_TF] compute_drift failed for user=%s repo=%s", user_id, target_repo)
         return build_error_response(f"Failed to compute drift: {exc}")
 
     drifted = report.drifted
@@ -307,12 +306,17 @@ def silence_all_drifted_monitors(
                 {"monitor": monitor_name, "status": "skipped", "reason": "no TF match"}
             )
             continue
-        resource_name = _sanitize_resource_name(f"mute_{monitor_name}")
+        silence_scope = drift_row.silence.scope or "*"
+        resource_name = _unique_silence_label(
+            {"name": drift_row.silence.monitor_name, "id": drift_row.silence.monitor_id},
+            silence_scope,
+            drift_row.silence.message,
+        )
         block = _build_downtime_schedule_block(
             resource_name=resource_name,
             monitor_resource_address=matched.resource_address if matched else None,
             monitor_id=drift_row.silence.monitor_id,
-            scope=drift_row.silence.scope or "*",
+            scope=silence_scope,
             original_message=drift_row.silence.message,
             source_label="Codified from UI mute",
         )
@@ -437,8 +441,6 @@ def _resolve_datadog_monitor(
             for m in payload:
                 if isinstance(m, dict) and (m.get("name") or "").strip().lower() == target:
                     return m
-            if payload:
-                return payload[0] if isinstance(payload[0], dict) else None
     return None
 
 
@@ -457,6 +459,21 @@ def _sanitize_resource_name(raw: str) -> str:
     if not cleaned[0].isalpha() and cleaned[0] != "_":
         cleaned = f"mute_{cleaned}"
     return cleaned.lower()[:MAX_RESOURCE_NAME_LEN]
+
+
+def _unique_silence_label(monitor: Dict[str, Any], scope: str, message: Optional[str]) -> str:
+    """Build a Terraform-safe `datadog_downtime_schedule` label unique per silence.
+
+    Two PRs silencing the same monitor at different scopes would otherwise
+    collide on the resource label and break `terraform apply`.
+    """
+    import hashlib
+
+    base = f"mute_{monitor.get('name') or monitor.get('id') or 'monitor'}"
+    digest = hashlib.sha1(
+        f"{monitor.get('id')}|{scope}|{message or ''}".encode("utf-8")
+    ).hexdigest()[:6]
+    return _sanitize_resource_name(f"{base}_{digest}")
 
 
 def _slugify(raw: str) -> str:

@@ -27,6 +27,7 @@ TF_DATADOG_RESOURCE_TYPES = (
 )
 
 FUZZY_MATCH_MIN_SCORE = 0.6
+_FUZZY_AMBIGUITY_DELTA = 0.05
 
 MatchConfidence = Literal["exact_query", "exact_name", "fuzzy_name", "none"]
 
@@ -103,6 +104,16 @@ def index_repo(user_id: str, repo_full_name: str, branch: Optional[str] = None) 
             summary.resources.append(res)
 
     summary.resources_indexed = len(summary.resources)
+    # An incomplete scan would shrink or blank out a previously-good index —
+    # keep the old index in place and surface the errors to the caller.
+    if summary.errors or summary.files_skipped:
+        logger.warning(
+            "[HCL_INDEXER] Skipping persist for %s: errors=%d skipped=%d",
+            repo_full_name,
+            len(summary.errors),
+            summary.files_skipped,
+        )
+        return summary
     _persist_index(user_id, repo_full_name, summary.resources)
     return summary
 
@@ -176,30 +187,44 @@ def match_resources_to_monitor(
     monitor_name: str,
     monitor_query: Optional[str],
 ) -> Tuple[Optional[IndexedResource], MatchConfidence]:
-    """Find best-matching datadog_monitor resource for a live monitor."""
+    """Find best-matching datadog_monitor resource for a live monitor.
+
+    Query-hash matches short-circuit since they're canonical. Name-based matches
+    fail closed on ambiguity (multiple exact hits, or fuzzy near-ties) to avoid
+    silently writing a downtime against the wrong monitor.
+    """
     monitors = [r for r in resources if r.resource_type == "datadog_monitor"]
     query_hash = _query_hash(monitor_query) if monitor_query else None
     if query_hash:
         for r in monitors:
             if r.query_hash and r.query_hash == query_hash:
                 return r, "exact_query"
-    if monitor_name:
-        target = monitor_name.strip().lower()
-        for r in monitors:
-            if (r.monitor_name or "").strip().lower() == target:
-                return r, "exact_name"
-        best = None
-        best_score = 0.0
-        for r in monitors:
-            candidate = (r.monitor_name or "").strip().lower()
-            if not candidate:
-                continue
-            score = _similarity(candidate, target)
-            if score > best_score:
-                best, best_score = r, score
-        if best is not None and best_score >= FUZZY_MATCH_MIN_SCORE:
-            return best, "fuzzy_name"
-    return None, "none"
+    if not monitor_name:
+        return None, "none"
+
+    target = monitor_name.strip().lower()
+    exact = [r for r in monitors if (r.monitor_name or "").strip().lower() == target]
+    if len(exact) == 1:
+        return exact[0], "exact_name"
+    if len(exact) > 1:
+        return None, "none"
+
+    scored: List[Tuple[float, IndexedResource]] = []
+    for r in monitors:
+        candidate = (r.monitor_name or "").strip().lower()
+        if not candidate:
+            continue
+        score = _similarity(candidate, target)
+        if score >= FUZZY_MATCH_MIN_SCORE:
+            scored.append((score, r))
+    if not scored:
+        return None, "none"
+    scored.sort(key=lambda pair: pair[0], reverse=True)
+    top_score, top_resource = scored[0]
+    # Fail closed when the runner-up is within a near-tie of the leader.
+    if len(scored) > 1 and (top_score - scored[1][0]) < _FUZZY_AMBIGUITY_DELTA:
+        return None, "none"
+    return top_resource, "fuzzy_name"
 
 
 def load_index(
@@ -435,8 +460,9 @@ def _persist_index(user_id: str, repo_full_name: str, resources: List[IndexedRes
                     rows,
                 )
             conn.commit()
-    except Exception as exc:  # noqa: BLE001
-        logger.error("[HCL_INDEXER] Persist failed: %s", exc)
+    except Exception:
+        logger.exception("[HCL_INDEXER] Persist failed for %s", repo_full_name)
+        raise
 
 
 # ---------------------------------------------------------------------------

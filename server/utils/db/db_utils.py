@@ -1164,7 +1164,7 @@ def initialize_tables():
                         tf_match_confidence VARCHAR(16),
                         original_message TEXT,
                         computed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        UNIQUE(user_id, monitor_id, scope, source)
+                        UNIQUE(user_id, monitor_id, scope, source, downtime_id)
                     );
 
                     CREATE INDEX IF NOT EXISTS idx_dd_drift_user ON datadog_silence_drift(user_id, computed_at DESC);
