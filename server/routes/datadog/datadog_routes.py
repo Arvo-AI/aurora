@@ -239,6 +239,23 @@ class DatadogClient:
         }
         return self._request("GET", "/api/v2/incidents", params=params).json()
 
+    def list_downtimes(self, current_only: bool = True, include_monitor: bool = True) -> Dict[str, Any]:
+        """List active downtimes via GET /api/v2/downtime. Read-only."""
+        params: Dict[str, Any] = {
+            "current_only": "true" if current_only else "false",
+        }
+        if include_monitor:
+            params["include"] = "monitor"
+        return self._request("GET", "/api/v2/downtime", params=params).json()
+
+    def list_monitor_downtime_matches(self, monitor_id: int) -> Dict[str, Any]:
+        """Fast per-monitor downtime lookup via GET /api/v2/monitor/{id}/downtime_matches."""
+        return self._request("GET", f"/api/v2/monitor/{monitor_id}/downtime_matches").json()
+
+    def get_monitor(self, monitor_id: int) -> Dict[str, Any]:
+        """Fetch a single monitor via GET /api/v1/monitor/{id}."""
+        return self._request("GET", f"/api/v1/monitor/{monitor_id}").json()
+
 
 def _get_stored_datadog_credentials(user_id: str) -> Optional[Dict[str, Any]]:
     try:
