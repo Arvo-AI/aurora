@@ -524,7 +524,8 @@ class SkillRegistry:
                 }
                 for r in rows
             ]
-        except Exception:
+        except Exception as e:
+            logger.warning(f"Failed to fetch recent deploys for provider={provider}: {e}")
             return []
 
     @staticmethod
