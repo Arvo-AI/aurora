@@ -64,6 +64,8 @@ class Workflow:
         self.app = self.get_compiled_workflow()
         self._last_state = None
         self._ui_state = None  # Store UI state to save with messages
+        self._stream_text_by_id: dict[str, str] = {}
+        self._history_prefix_len: int = 0
 
     async def _wait_for_ongoing_tool_calls(self):
         """Waits for any tool calls that are currently in progress to complete."""
@@ -851,6 +853,10 @@ class Workflow:
         # turn's new messages for the append-only UI save.
         new_turn_input_count = len(input_state.messages)
 
+        # Reset per-turn; recovers streamed AI text on cancellation when
+        # LangGraph hasn't committed the final AIMessage to state yet.
+        self._stream_text_by_id.clear()
+
         # Initialize tool context capture for this session
         tool_capture = None
         if input_state.session_id and input_state.user_id:
@@ -946,6 +952,7 @@ class Workflow:
         # Number of history messages prepended above; anything after this index
         # in _last_state.messages belongs to this turn.
         history_prefix_len = len(input_state.messages) - new_turn_input_count
+        self._history_prefix_len = history_prefix_len
 
         # Log initial state
         logger.info(f"Starting workflow with session_id={input_state.session_id}, user_id={input_state.user_id}")
@@ -1007,6 +1014,11 @@ class Workflow:
 
                         # Only yield if we have actual text content
                         if content:
+                            chunk_id = getattr(chunk_obj, 'id', None)
+                            if chunk_id:
+                                self._stream_text_by_id[chunk_id] = (
+                                    self._stream_text_by_id.get(chunk_id, "") + content
+                                )
                             _model_turn_tokens += 1
                             yield ("token", content)
                             if _token_count <= 5:
@@ -1321,6 +1333,19 @@ class Workflow:
         
         # Remove duplicates
         final_messages = self._deduplicate_messages(consolidated_messages)
+
+        # Recover text streamed to UI but missing from the final AIMessage
+        # (cancellation before LangGraph commits the complete response).
+        if self._stream_text_by_id:
+            for msg in final_messages:
+                if not isinstance(msg, AIMessage):
+                    continue
+                current = msg.content if isinstance(msg.content, str) else ""
+                if current:
+                    continue
+                recovered = self._stream_text_by_id.get(getattr(msg, "id", None), "")
+                if recovered:
+                    msg.content = recovered
         
         # DEBUG: Log all ToolMessage IDs after deduplication
         for i, msg in enumerate(final_messages):
@@ -1682,6 +1707,11 @@ class Workflow:
     def _associate_tool_calls_with_output(self, ui_messages, tool_messages):
         """Associate tool calls with output in the UI messages."""
 
+        # Track which ToolMessages weren't matched so we can positionally
+        # recover them — IDs can drift across the LangGraph state boundary,
+        # especially on cancellation before tool_call_id restoration runs.
+        unmatched_tool_messages: list = []
+
         for msg in tool_messages:
             tool_call_id = getattr(msg, 'tool_call_id', None)
             
@@ -1698,8 +1728,9 @@ class Workflow:
                 command_matching = None
             
             if not tool_call_id:
+                unmatched_tool_messages.append(msg)
                 continue
-                
+
             updated = False
 
             # Look through ALL UI messages and check if ANY tool call matches the tool_call_id
@@ -1734,6 +1765,32 @@ class Workflow:
                     
                     if updated:
                         break
-            
+
+            if not updated:
+                unmatched_tool_messages.append(msg)
+
+        # Positional fallback: associate any unmatched ToolMessages with the
+        # remaining 'running' tool calls in order. Covers cancellations where
+        # _consolidate_message_chunks' ID restoration was skipped due to
+        # count mismatch.
+        if unmatched_tool_messages:
+            running_tool_calls = [
+                tc
+                for ui_msg in ui_messages
+                if ui_msg.get('sender') == 'bot' and ui_msg.get('toolCalls')
+                for tc in ui_msg['toolCalls']
+                if tc.get('status') == 'running'
+            ]
+            if len(unmatched_tool_messages) != len(running_tool_calls):
+                logger.warning(
+                    f"Positional tool-output fallback: {len(unmatched_tool_messages)} unmatched "
+                    f"ToolMessages vs {len(running_tool_calls)} running UI toolCalls — "
+                    f"extras will be dropped"
+                )
+            for msg, tc in zip(unmatched_tool_messages, running_tool_calls):
+                tc['output'] = str(getattr(msg, 'content', ''))
+                tc['status'] = 'completed'
+                tc['timestamp'] = datetime.now().isoformat()
+
         return ui_messages
         

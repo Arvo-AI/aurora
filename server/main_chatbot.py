@@ -815,9 +815,14 @@ async def handle_connection(websocket) -> None:
                                             f"Failed to save context after cancellation for session {session_id}"
                                         )
                                     
-                                    # ALSO save UI messages after cancellation
-                                    ui_messages = wf._convert_to_ui_messages(messages, tool_capture)
-                                    ui_saved = wf._save_ui_messages(session_id, user_id, ui_messages, wf._ui_state)
+                                    # Append this turn's partial UI content so cancellation
+                                    # never overwrites history from prior turns.
+                                    history_prefix_len = getattr(wf, "_history_prefix_len", 0)
+                                    turn_langchain = messages[history_prefix_len:]
+                                    turn_ui_messages = wf._convert_to_ui_messages(turn_langchain, tool_capture)
+                                    ui_saved = wf._append_new_turn_ui_messages(
+                                        session_id, user_id, turn_ui_messages, wf._ui_state
+                                    )
                                     if ui_saved:
                                         logger.info(f"Successfully saved UI messages after cancellation for session {session_id}")
                                     else:
