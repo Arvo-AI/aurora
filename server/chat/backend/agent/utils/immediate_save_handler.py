@@ -4,36 +4,24 @@ import json
 import time
 import logging
 from datetime import datetime
-from typing import List, Dict, Any, Optional
-from chat.backend.agent.utils.llm_context_manager import LLMContextManager
+from typing import List, Dict, Any
 
 logger = logging.getLogger(__name__)
 
 
-def handle_immediate_save(session_id: str, user_id: str, question: str, messages_list: List[Any]) -> bool:
-    """Handle immediate saving of user messages when received.
-    
-    Args:
-        session_id: Chat session ID
-        user_id: User ID
-        question: User's question text
-        messages_list: LLM context messages
-        
-    Returns:
-        bool: True if save was successful
+def handle_immediate_save(session_id: str, user_id: str, question: str) -> bool:
+    """Persist the user's UI message immediately on receipt.
+
+    We intentionally do NOT write to llm_context_history here. That column is
+    fully replaced by the UPDATE in ContextManager._execute_actual_save, so
+    passing only the new HumanMessage would wipe the accumulated agent context
+    (RCA chat history loss bug). The end-of-stream save in workflow.stream()
+    is authoritative for llm_context_history and runs synchronously.
+
+    The UI-formatted message is still appended here so a websocket disconnect
+    mid-turn does not lose the user's prompt.
     """
     try:
-        # Save the user's message immediately to prevent loss
-        immediate_save_success = LLMContextManager.save_context_history(
-            session_id, user_id, messages_list
-        )
-        
-        if immediate_save_success:
-            logger.info(f"✓ Immediately saved user message for session {session_id}")
-        else:
-            logger.warning(f"️ Failed to immediately save user message for session {session_id}")
-            
-        # Also save UI-formatted message immediately
         ui_messages = [{
             'message_number': 1,
             'text': question,
@@ -41,12 +29,8 @@ def handle_immediate_save(session_id: str, user_id: str, question: str, messages
             'isCompleted': True,
             'timestamp': time.time()
         }]
-        
-        # Try to load existing UI messages and append
-        ui_save_success = _save_ui_message(session_id, user_id, ui_messages)
-        
-        return immediate_save_success and ui_save_success
-        
+        return _save_ui_message(session_id, user_id, ui_messages)
+
     except Exception as save_error:
         logger.error(f"Error in immediate save: {save_error}")
         return False
