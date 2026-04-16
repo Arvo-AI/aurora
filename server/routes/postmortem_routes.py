@@ -94,7 +94,8 @@ def get_postmortem(user_id, incident_id):
                 cursor.execute(
                     """SELECT id, incident_id, user_id, content, generated_at, updated_at,
                               confluence_page_id, confluence_page_url, confluence_exported_at,
-                              jira_issue_id, jira_issue_key, jira_issue_url, jira_exported_at
+                              jira_issue_id, jira_issue_key, jira_issue_url, jira_exported_at,
+                              notion_page_id, notion_page_url, notion_exported_at, notion_database_id
                        FROM postmortems
                        WHERE incident_id = %s AND org_id = %s""",
                     (incident_id, org_id),
@@ -118,6 +119,10 @@ def get_postmortem(user_id, incident_id):
             "jiraIssueKey": row[10],
             "jiraIssueUrl": row[11],
             "jiraExportedAt": _format_timestamp(row[12]),
+            "notionPageId": row[13],
+            "notionPageUrl": row[14],
+            "notionExportedAt": _format_timestamp(row[15]),
+            "notionDatabaseId": row[16],
         }
         return jsonify({"postmortem": postmortem})
 
@@ -336,6 +341,57 @@ def export_to_confluence(user_id, incident_id):
     return jsonify({"success": True, "pageUrl": page_url, "pageId": str(page_id)})
 
 
+@postmortem_bp.route(
+    "/api/incidents/<incident_id>/postmortem/export/notion", methods=["POST"]
+)
+@require_permission("postmortems", "update")
+def export_to_notion(user_id, incident_id):
+    """Export postmortem to a Notion database."""
+    if not _validate_uuid(incident_id):
+        return jsonify({"error": "Invalid incident ID"}), 400
+    try:
+        data = request.get_json(force=True, silent=True) or {}
+    except Exception:
+        data = {}
+
+    database_id = data.get("databaseId") or data.get("database_id")
+    if not database_id:
+        return jsonify({"error": "databaseId is required"}), 400
+
+    title_property = data.get("titleProperty") or data.get("title_property")
+    property_mapping = data.get("propertyMapping") or data.get("property_mapping")
+    action_items_db = (
+        data.get("actionItemsDatabaseId")
+        or data.get("action_items_database_id")
+    )
+
+    from chat.backend.agent.tools.notion import _export_postmortem_to_notion
+    from connectors.notion_connector.client import NotionAuthExpiredError
+
+    try:
+        result = _export_postmortem_to_notion(
+            user_id=user_id,
+            incident_id=incident_id,
+            database_id=database_id,
+            title_property=title_property,
+            property_mapping=property_mapping,
+            action_items_database_id=action_items_db,
+        )
+    except NotionAuthExpiredError:
+        return jsonify({
+            "code": "reauth_required",
+            "error": "Notion credentials expired — please reconnect",
+        }), 401
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except Exception as exc:
+        logger.exception(
+            "[POSTMORTEM] Notion export failed for user %s: %s", user_id, exc
+        )
+        return jsonify({"error": "Failed to export to Notion"}), 502
+
+    return jsonify(result)
+
 
 @postmortem_bp.route("/api/postmortems", methods=["GET"])
 @require_permission("postmortems", "read")
@@ -359,7 +415,8 @@ def list_postmortems(user_id):
                     """SELECT p.id, p.incident_id, p.user_id, p.content, p.generated_at, p.updated_at,
                               p.confluence_page_id, p.confluence_page_url, p.confluence_exported_at,
                               i.alert_title,
-                              p.jira_issue_id, p.jira_issue_key, p.jira_issue_url, p.jira_exported_at
+                              p.jira_issue_id, p.jira_issue_key, p.jira_issue_url, p.jira_exported_at,
+                              p.notion_page_id, p.notion_page_url, p.notion_exported_at, p.notion_database_id
                        FROM postmortems p
                        LEFT JOIN incidents i ON p.incident_id = i.id
                        WHERE p.org_id = %s
@@ -385,6 +442,10 @@ def list_postmortems(user_id):
                 "jiraIssueKey": row[11],
                 "jiraIssueUrl": row[12],
                 "jiraExportedAt": _format_timestamp(row[13]),
+                "notionPageId": row[14],
+                "notionPageUrl": row[15],
+                "notionExportedAt": _format_timestamp(row[16]),
+                "notionDatabaseId": row[17],
             }
             postmortems.append(postmortem)
 
