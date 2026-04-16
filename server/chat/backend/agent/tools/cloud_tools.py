@@ -1632,6 +1632,24 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
     except Exception as e:
         logging.warning(f"Failed to add Confluence search tools: {e}")
 
+    # Add Notion tools if connected
+    try:
+        from .notion import NOTION_TOOL_SPECS, is_notion_connected
+        if user_id and is_notion_connected(user_id):
+            for _func, _name, _schema, _desc in NOTION_TOOL_SPECS:
+                _ctx = with_user_context(_func)
+                _notif = with_completion_notification(_ctx)
+                _final = wrap_func_with_capture(_notif, _name) if tool_capture else _notif
+                tools.append(StructuredTool.from_function(
+                    func=_final,
+                    name=_name,
+                    description=_desc,
+                    args_schema=_schema,
+                ))
+            logging.info(f"Added {len(NOTION_TOOL_SPECS)} Notion tools for user {user_id}")
+    except Exception as e:
+        logging.warning(f"Failed to add Notion tools: {e}")
+
     # Add Jira tools if enabled
     try:
         from utils.flags.feature_flags import is_jira_enabled
