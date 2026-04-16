@@ -54,6 +54,7 @@ pydantic>=2.9.0  # Flexible for langchain compatibility
 pypdf>=4.0.0
 python-dateutil==2.9.0.post0
 python-dotenv==1.0.1
+python-hcl2>=4.3.2
 requests==2.32.5
 rsa==4.9
 six==1.17.0
