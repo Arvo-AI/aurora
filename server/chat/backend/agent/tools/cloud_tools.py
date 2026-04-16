@@ -33,6 +33,16 @@ from .jenkins_rca_tool import jenkins_rca, JenkinsRCAArgs
 from .cloudbees_rca_tool import cloudbees_rca, CloudBeesRCAArgs
 from .spinnaker_rca_tool import spinnaker_rca, SpinnakerRCAArgs
 from .trigger_rca_tool import trigger_rca, TriggerRCAArgs
+from .datadog_terraform_tool import (
+    list_datadog_silence_drift,
+    silence_datadog_monitor_via_terraform,
+    silence_all_drifted_monitors,
+    reindex_terraform_repo,
+    ListDatadogSilenceDriftArgs,
+    SilenceDatadogMonitorViaTerraformArgs,
+    SilenceAllDriftedMonitorsArgs,
+    ReindexTerraformRepoArgs,
+)
 
 # Visualization trigger caching
 from cachetools import TTLCache
@@ -1160,6 +1170,10 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
         (cloudbees_rca, "cloudbees_rca"),
         (spinnaker_rca, "spinnaker_rca"),
         (github_apply_fix, "github_apply_fix"),
+        (list_datadog_silence_drift, "list_datadog_silence_drift"),
+        (silence_datadog_monitor_via_terraform, "silence_datadog_monitor_via_terraform"),
+        (silence_all_drifted_monitors, "silence_all_drifted_monitors"),
+        (reindex_terraform_repo, "reindex_terraform_repo"),
         (cloud_exec_wrapper, "cloud_exec"),
         (terminal_exec, "terminal_exec"),
         (tailscale_ssh, "tailscale_ssh"),
@@ -1331,6 +1345,57 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                     "severity (optional: critical/high/medium/low)."
                 ),
                 args_schema=TriggerRCAArgs,
+            )
+        elif name == 'list_datadog_silence_drift':
+            tool = StructuredTool.from_function(
+                func=final_func,
+                name=name,
+                description=(
+                    "List Datadog UI mutes / active downtimes that are NOT codified in Terraform. "
+                    "Read-only: fetches downtimes and legacy monitor.silenced, cross-references the "
+                    "HCL index, and returns drift rows with matched_tf_file and tf_match_confidence. "
+                    "Optional filters: repo ('owner/repo'), monitor_name_pattern (substring), "
+                    "scope (e.g. 'env:prod')."
+                ),
+                args_schema=ListDatadogSilenceDriftArgs,
+            )
+        elif name == 'silence_datadog_monitor_via_terraform':
+            tool = StructuredTool.from_function(
+                func=final_func,
+                name=name,
+                description=(
+                    "Open a GitHub PR that adds a `datadog_downtime_schedule` Terraform resource "
+                    "silencing a monitor indefinitely. NEVER calls Datadog write APIs. "
+                    "Parameters: monitor_name OR monitor_id (required), scope (e.g. 'env:prod', "
+                    "defaults to '*'), repo ('owner/repo', required when multiple repos connected), "
+                    "target_file (override the sibling downtimes.tf location), message (optional "
+                    "override). Returns the PR URL."
+                ),
+                args_schema=SilenceDatadogMonitorViaTerraformArgs,
+            )
+        elif name == 'silence_all_drifted_monitors':
+            tool = StructuredTool.from_function(
+                func=final_func,
+                name=name,
+                description=(
+                    "Bundle every drifted Datadog silence into a single PR adding one "
+                    "`datadog_downtime_schedule` per monitor (one downtimes.tf per directory). "
+                    "Parameters: monitor_ids (optional subset), repo ('owner/repo'). Returns a "
+                    "single PR URL covering all selected silences."
+                ),
+                args_schema=SilenceAllDriftedMonitorsArgs,
+            )
+        elif name == 'reindex_terraform_repo':
+            tool = StructuredTool.from_function(
+                func=final_func,
+                name=name,
+                description=(
+                    "Re-run the Terraform HCL indexer on the repo's default branch. Call this "
+                    "after the user merges new `datadog_monitor` / `datadog_downtime*` blocks. "
+                    "Parameters: repo ('owner/repo'). Returns files scanned, resources indexed, "
+                    "and delta vs previous index."
+                ),
+                args_schema=ReindexTerraformRepoArgs,
             )
         else:
             tool = StructuredTool.from_function(final_func)
