@@ -847,6 +847,11 @@ class Workflow:
         from chat.backend.agent.utils.chat_context_manager import ChatContextManager
         from chat.backend.agent.utils.tool_context_capture import ToolContextCapture
 
+        # Record how many messages arrived as "fresh turn input" before we
+        # prepend any history / compressed prefix. Used at end-of-stream to
+        # slice out just this turn's new messages for the append-only UI save.
+        new_turn_input_count = len(input_state.messages)
+
         # Initialize tool context capture for this session
         tool_capture = None
         if input_state.session_id and input_state.user_id:
@@ -861,17 +866,21 @@ class Workflow:
             from chat.backend.agent.tools.cloud_tools import _set_ctx
             _set_ctx("workflow", self)
         
-        # Load existing context if session_id is provided
+        # Load existing context if session_id is provided. RCA compression
+        # can rewrite input_state.messages, but the UI lane is saved via
+        # _append_new_turn_ui_messages below (append-only, not reconstructed
+        # from LangChain state), so the UI column is unaffected regardless of
+        # what happens to the LLM-facing messages here.
         if input_state.session_id and input_state.user_id:
             import time as _time
             _ctx_start = _time.perf_counter()
             existing_context = LLMContextManager.load_context_history(
-                input_state.session_id, 
+                input_state.session_id,
                 input_state.user_id
             )
             _ctx_ms = (_time.perf_counter() - _ctx_start) * 1000.0
             logger.info(f"Context load took {_ctx_ms:.1f} ms for session {input_state.session_id}")
-            
+
             if existing_context:
                 rca_info = self._get_rca_context_for_session(
                     input_state.session_id, input_state.user_id
@@ -939,6 +948,11 @@ class Workflow:
                             input_state.messages = combined_messages
                             logger.info(f"Migrated and loaded {len(existing_context)} messages for legacy session {input_state.session_id}")
         
+        # Everything in input_state.messages up to this point is "history" —
+        # pre-existing messages we prepended (loaded or compressed context).
+        # Anything beyond is the new turn's fresh input (the user message).
+        history_prefix_len = len(input_state.messages) - new_turn_input_count
+
         # Log initial state
         logger.info(f"Starting workflow with session_id={input_state.session_id}, user_id={input_state.user_id}")
         
@@ -1128,7 +1142,8 @@ class Workflow:
             if session_id and user_id and messages and len(messages) > 1:
                 messages_full = messages
                 messages_for_context = messages_full
-                # Check if context compression is needed
+
+                # LLM-lane compression (shrinks what the agent sees next turn)
                 model = self._get_state_attr(self._last_state, 'model')
                 if model:
                     compressed_messages, was_compressed = ChatContextManager.compress_context_if_needed(
@@ -1137,18 +1152,26 @@ class Workflow:
                     if was_compressed:
                         messages_for_context = compressed_messages
                         logger.info(f"Context compression: {len(compressed_messages)} messages preserved for session {session_id}")
-                
-                # Save context history (complete conversation including AI responses and tool calls)
+
+                # Save LLM context (may be compressed)
                 success = LLMContextManager.save_context_history(session_id, user_id, messages_for_context, tool_capture)
                 if success:
                     logger.debug(f"[WORKFLOW FINAL] Successfully saved final context for session {session_id} ({len(messages_for_context)} messages)")
                 else:
                     logger.warning(f"[WORKFLOW FINAL] Failed to save final context for session {session_id}")
-                
-                # Save UI-formatted messages (complete conversation for UI display)
+
+                # UI lane — append THIS turn's new messages only. Slicing with
+                # history_prefix_len strips the history/compressed prefix that
+                # was prepended at stream entry, so we never re-serialize a
+                # synthetic RCA summary (or any prior-turn content) into the UI
+                # column. The append writer dedupes the leading user message
+                # against the one handle_immediate_save already wrote.
+                turn_langchain = messages[history_prefix_len:]
                 tool_capture = getattr(self.agent, 'tool_capture_instance', None)
-                ui_messages = self._convert_to_ui_messages(messages_full, tool_capture)
-                ui_success = self._save_ui_messages(session_id, user_id, ui_messages, self._ui_state)
+                turn_ui_messages = self._convert_to_ui_messages(turn_langchain, tool_capture)
+                ui_success = self._append_new_turn_ui_messages(
+                    session_id, user_id, turn_ui_messages, self._ui_state
+                )
                 logger.debug(f"[WORKFLOW FINAL] UI messages save success: {ui_success}")
             elif session_id and user_id and messages and len(messages) == 1:
                 logger.debug(f"[WORKFLOW FINAL] Skipping save - only user message present (already saved immediately)")
@@ -1578,6 +1601,98 @@ class Workflow:
                     
         except Exception as e:
             logger.error(f"Error saving UI messages: {e}")
+            return False
+
+    def _append_new_turn_ui_messages(
+        self,
+        session_id: str,
+        user_id: str,
+        turn_ui_messages: list,
+        ui_state: Optional[dict] = None,
+    ) -> bool:
+        """Append this turn's UI messages to chat_sessions.messages.
+
+        Defence-in-depth for the UI lane: load the existing column, append only
+        the messages produced by this turn (with renumbered message_number),
+        and write back. This prevents any caller from accidentally truncating
+        the UI history via a full-column overwrite — e.g. if a future
+        compression path rewrites the LangChain state it sees.
+
+        Dedupe: if the first new message is the user's prompt and matches the
+        last existing message (which handle_immediate_save already wrote), skip
+        it so we don't duplicate the prompt bubble.
+        """
+        try:
+            from utils.db.connection_pool import db_pool
+            from datetime import datetime
+
+            if not turn_ui_messages and ui_state is None:
+                return True
+
+            with db_pool.get_user_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
+                conn.commit()
+
+                cursor.execute(
+                    "SELECT messages FROM chat_sessions WHERE id = %s AND user_id = %s",
+                    (session_id, user_id),
+                )
+                row = cursor.fetchone()
+                if row is None:
+                    logger.info(
+                        f"Session {session_id} not found for UI append — frontend will create it"
+                    )
+                    return True
+
+                existing = row[0] if row[0] else []
+                if not isinstance(existing, list):
+                    existing = []
+
+                to_append = list(turn_ui_messages)
+                if (
+                    to_append
+                    and existing
+                    and to_append[0].get('sender') == 'user'
+                    and existing[-1].get('sender') == 'user'
+                    and (existing[-1].get('text') or '') == (to_append[0].get('text') or '')
+                ):
+                    to_append = to_append[1:]
+
+                next_num = len(existing) + 1
+                for m in to_append:
+                    m['message_number'] = next_num
+                    next_num += 1
+
+                merged = existing + to_append
+
+                if ui_state is not None:
+                    cursor.execute(
+                        """
+                        UPDATE chat_sessions
+                        SET messages = %s, ui_state = %s, updated_at = %s
+                        WHERE id = %s AND user_id = %s
+                        """,
+                        (json.dumps(merged), json.dumps(ui_state), datetime.now(), session_id, user_id),
+                    )
+                else:
+                    cursor.execute(
+                        """
+                        UPDATE chat_sessions
+                        SET messages = %s, updated_at = %s
+                        WHERE id = %s AND user_id = %s
+                        """,
+                        (json.dumps(merged), datetime.now(), session_id, user_id),
+                    )
+                conn.commit()
+                logger.info(
+                    f"Appended {len(to_append)} UI messages (total {len(merged)}) "
+                    f"for session {session_id}"
+                )
+                return True
+
+        except Exception as e:
+            logger.error(f"Error appending UI messages: {e}")
             return False
 
     def _associate_tool_calls_with_output(self, ui_messages, tool_messages):
