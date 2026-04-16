@@ -296,10 +296,13 @@ class SkillRegistry:
             "",
         ]
         for meta in sorted(connected, key=lambda m: m.name):
-            tools_str = ", ".join(meta.tools[:4])
-            if len(meta.tools) > 4:
-                tools_str += ", ..."
-            lines.append(f"- {meta.id}: {meta.index} [tools: {tools_str}]")
+            if meta.tools:
+                tools_str = ", ".join(meta.tools[:4])
+                if len(meta.tools) > 4:
+                    tools_str += ", ..."
+                lines.append(f"- {meta.id}: {meta.index} [tools: {tools_str}]")
+            else:
+                lines.append(f"- {meta.id}: {meta.index}")
 
         lines.append("")
         return "\n".join(lines)
@@ -313,12 +316,15 @@ class SkillRegistry:
         skill_id: str,
         user_id: str,
         extra_context: Optional[Dict[str, Any]] = None,
+        _prevalidated_context: Optional[Dict[str, Any]] = None,
     ) -> SkillLoadResult:
         """
         Load a skill's full content, resolving template variables.
 
         extra_context: additional template variables (e.g. service_name,
         recent_deploys_section) merged on top of connection data.
+        _prevalidated_context: if provided, skip the connection check (caller
+        already verified connectivity). Value is the connection context dict.
         """
         meta = self._skills.get(skill_id)
         body = self._bodies.get(skill_id)
@@ -333,7 +339,11 @@ class SkillRegistry:
                 is_connected=False,
             )
 
-        is_connected, context = self.check_connection(skill_id, user_id)
+        if _prevalidated_context is not None:
+            is_connected = True
+            context = _prevalidated_context
+        else:
+            is_connected, context = self.check_connection(skill_id, user_id)
 
         if not is_connected:
             return SkillLoadResult(
@@ -383,28 +393,34 @@ class SkillRegistry:
         )
 
         # 1. Load connected integration skills, ordered by rca_priority
-        connected = []
+        connected: List[Tuple[SkillMetadata, Dict[str, Any]]] = []
         for skill_id, meta in self._skills.items():
             if integrations.get(skill_id, False):
-                connected.append(meta)
+                # Already validated upstream — fetch context without re-checking
+                _, ctx_data = self.check_connection(skill_id, user_id)
+                connected.append((meta, ctx_data))
             elif skill_id not in integrations:
-                is_conn, _ = self.check_connection(skill_id, user_id)
+                is_conn, ctx_data = self.check_connection(skill_id, user_id)
                 if is_conn:
-                    connected.append(meta)
+                    connected.append((meta, ctx_data))
 
-        connected.sort(key=lambda m: m.rca_priority)
+        connected.sort(key=lambda pair: pair[0].rca_priority)
 
         loaded_ids: set = set()
-        for meta in connected:
+        for meta, ctx_data in connected:
             if tokens_used >= RCA_TOKEN_BUDGET:
-                remaining = [m.id for m in connected if m.id not in loaded_ids]
+                remaining = [m.id for m, _ in connected if m.id not in loaded_ids]
                 if remaining:
                     parts.append(
                         f"\n(Token budget reached. Additional integrations via load_skill: {', '.join(remaining)})"
                     )
                 break
 
-            result = self.load_skill(meta.id, user_id, extra_context=extra_ctx)
+            result = self.load_skill(
+                meta.id, user_id,
+                extra_context=extra_ctx,
+                _prevalidated_context=ctx_data,
+            )
             if result.is_connected and result.content:
                 parts.append(result.content)
                 tokens_used += result.token_estimate
@@ -486,11 +502,11 @@ class SkillRegistry:
                 with conn.cursor() as cur:
                     cur.execute(
                         """SELECT service, environment, result, build_number,
-                                  commit_sha, trace_id, webhook_received_at
-                           FROM deployment_events
+                                  commit_sha, trace_id, received_at
+                           FROM jenkins_deployment_events
                            WHERE user_id = %s AND provider = %s
-                                 AND webhook_received_at >= NOW() - INTERVAL '24 hours'
-                           ORDER BY webhook_received_at DESC
+                                 AND received_at >= NOW() - INTERVAL '24 hours'
+                           ORDER BY received_at DESC
                            LIMIT 10""",
                         (user_id, provider),
                     )
@@ -504,7 +520,7 @@ class SkillRegistry:
                     "build_number": r[3],
                     "commit_sha": r[4],
                     "trace_id": r[5],
-                    "webhook_received_at": str(r[6]) if r[6] else "?",
+                    "received_at": str(r[6]) if r[6] else "?",
                 }
                 for r in rows
             ]
@@ -522,7 +538,7 @@ class SkillRegistry:
             sha = (dep.get("commit_sha") or "?")[:8]
             lines.append(
                 f"- [{dep['result']}] {dep['service']} -> {dep.get('environment', '?')} "
-                f"at {dep['webhook_received_at']} (commit: {sha}, build: #{dep.get('build_number', '?')})"
+                f"at {dep['received_at']} (commit: {sha}, build: #{dep.get('build_number', '?')})"
             )
             if dep.get("trace_id"):
                 lines.append(f"  OTel Trace ID: {dep['trace_id']}")

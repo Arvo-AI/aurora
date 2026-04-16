@@ -30,7 +30,6 @@ from .prompt_builder import (
     build_regional_rules,
     build_system_invariant,
     build_terraform_validation_segment,
-    build_web_search_note,
     register_prompt_cache_breakpoints,
 )
 
@@ -53,6 +52,5 @@ __all__ = [
     "build_regional_rules",
     "build_system_invariant",
     "build_terraform_validation_segment",
-    "build_web_search_note",
     "register_prompt_cache_breakpoints",
 ]

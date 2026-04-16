@@ -34,7 +34,6 @@ from .provider_rules import (
     build_provider_context_segment,
     build_regional_rules,
     build_terraform_validation_segment,
-    build_web_search_note,
 )
 from .schema import PromptSegments
 
@@ -57,6 +56,5 @@ __all__ = [
     "build_regional_rules",
     "build_system_invariant",
     "build_terraform_validation_segment",
-    "build_web_search_note",
     "register_prompt_cache_breakpoints",
 ]

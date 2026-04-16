@@ -31,7 +31,8 @@ def build_manual_vm_access_segment(user_id: Optional[str]) -> str:
                     (user_id,),
                 )
                 rows = cur.fetchall()
-    except Exception:
+    except Exception as e:
+        logging.getLogger(__name__).warning(f"Failed to fetch manual VMs for user {user_id}: {e}")
         return ""
 
     if not rows:
@@ -45,8 +46,10 @@ def build_manual_vm_access_segment(user_id: Optional[str]) -> str:
                 parsed = json.loads(token_data) if isinstance(token_data, str) else token_data
                 if isinstance(parsed, dict):
                     label = parsed.get("label")
-            except Exception:
-                pass
+            except Exception as e:
+                logging.getLogger(__name__).debug(
+                    f"Failed to parse token_data for VM '{name}' (provider={provider}): {e}"
+                )
 
         provider_str = provider or "aurora_ssh"
         vm_key = provider_str.replace("_ssh_", "_")

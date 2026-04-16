@@ -108,20 +108,24 @@ def build_background_mode_segment(state: Optional[Any]) -> str:
     )
 
     # Load integration-specific RCA guidance from skill files
-    try:
-        from chat.backend.agent.skills.registry import SkillRegistry
-        user_id = rca_context.get('user_id', '')
-        registry = SkillRegistry.get_instance()
-        rca_skills_content = registry.load_skills_for_rca(
-            user_id=user_id,
-            source=source,
-            providers=providers,
-            integrations=integrations,
-        )
-        if rca_skills_content:
-            parts.extend(["", rca_skills_content])
-    except Exception as e:
-        logger.warning(f"Failed to load RCA skills: {e}")
+    user_id = rca_context.get('user_id', '')
+    if user_id:
+        try:
+            from chat.backend.agent.skills.registry import SkillRegistry
+            registry = SkillRegistry.get_instance()
+            rca_skills_content = registry.load_skills_for_rca(
+                user_id=user_id,
+                source=source,
+                providers=providers,
+                integrations=integrations,
+                alert_details=rca_context.get('trigger_metadata', {}),
+            )
+            if rca_skills_content:
+                parts.extend(["", rca_skills_content])
+        except Exception as e:
+            logger.warning(f"Failed to load RCA skills: {e}")
+    else:
+        logger.warning("Skipping RCA skill loading — user_id missing from rca_context")
 
     # Integration-specific guidance (Splunk, Datadog, GitHub, Jira, etc.)
     # now loaded from skill files above via SkillRegistry.load_skills_for_rca().

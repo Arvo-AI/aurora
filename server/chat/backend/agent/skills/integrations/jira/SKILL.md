@@ -96,7 +96,7 @@ If a ticket mentions a DB migration, focus on DB connectivity. If a ticket menti
 **You MUST call Jira tools BEFORE any infrastructure investigation.**
 
 ### Step 1 -- Find related recent work:
-- `jira_search_issues(jql='text ~ "{service_name}" AND updated >= -7d ORDER BY updated DESC')` -- Recent tickets
+- `jira_search_issues(jql='text ~ "{escaped_service}" AND updated >= -7d ORDER BY updated DESC')` -- Recent tickets
 - `jira_search_issues(jql='type in (Bug, Incident) AND status != Done AND updated >= -14d ORDER BY updated DESC')` -- Open bugs
 - `jira_search_issues(jql='type in (Story, Task) AND status = Done AND updated >= -3d ORDER BY updated DESC')` -- Recently completed
 

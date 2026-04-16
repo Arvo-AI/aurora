@@ -60,7 +60,7 @@ Recent deployments are a leading indicator of root cause. Always check if a depl
 - Use `trace_context` to correlate deployment events with distributed traces.
 
 ## Recent Deployments
-{recent_deploys_section}
+{cloudbees_deploys_section}
 
 ## Investigation Commands
 - `cloudbees_rca(action='recent_deployments', service='{service_name}')` -- Recent deploys

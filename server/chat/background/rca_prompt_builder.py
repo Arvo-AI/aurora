@@ -582,41 +582,10 @@ def build_rca_prompt(
         f"You have access to: {', '.join(_display_providers) if _display_providers else 'No cloud/monitoring providers connected'}",
     ])
 
-    # Check integration connectivity (used by both skill loading and persistence prompts)
-    has_jira = _has_jira_connected(user_id) if user_id else False
-    has_confluence = _has_confluence_connected(user_id) if user_id else False
-
     # All integration guidance (GitHub, Jira, Confluence, Jenkins, CloudBees,
-    # provider investigation commands) loaded from skill files via SkillRegistry.
-    try:
-        from chat.backend.agent.skills.registry import SkillRegistry
-        registry = SkillRegistry.get_instance()
-
-        # Build integrations map for the registry
-        _integrations = {}
-        if user_id:
-            _integrations['github'] = _get_github_connected(user_id)
-            _integrations['jira'] = has_jira
-            _integrations['confluence'] = has_confluence
-            _integrations['jenkins'] = _has_jenkins_connected(user_id)
-            _integrations['cloudbees'] = _has_cloudbees_connected(user_id)
-        # Merge with any integrations already passed in by caller
-        for k, v in (integrations or {}).items():
-            if k not in _integrations:
-                _integrations[k] = v
-
-        rca_skills_content = registry.load_skills_for_rca(
-            user_id=user_id or "",
-            source=source,
-            providers=providers or [],
-            integrations=_integrations,
-            alert_details=alert_details,
-        )
-        if rca_skills_content:
-            prompt_parts.extend(["", rca_skills_content])
-    except Exception as e:
-        logger.warning(f"Failed to load RCA skills: {e}")
-    # Inline integration blocks removed — loaded from skill files above
+    # provider investigation commands) loaded from skill files via SkillRegistry
+    # in the system prompt (background.py). No skill loading here — the user
+    # message should contain only alert details and investigation context.
 
     # Aurora Learn: Inject context from similar past incidents
     if user_id:
@@ -648,6 +617,8 @@ def build_rca_prompt(
     )
 
     has_infra_providers = bool({'gcp', 'aws', 'azure', 'ovh', 'scaleway'}.intersection(set(providers_lower)))
+    has_jira = bool((integrations or {}).get('jira'))
+    has_confluence = bool((integrations or {}).get('confluence'))
     after_context_label = 'Jira' if has_jira else 'Confluence' if has_confluence else 'change'
     
     # Add aggressive persistence prompts only if cost optimization is disabled

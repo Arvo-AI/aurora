@@ -32,7 +32,8 @@ def load_skill(skill_id: str, **kwargs) -> str:
     """
     user_id = kwargs.get("user_id")
     if not user_id:
-        return json.dumps({"error": "No user context available"})
+        logger.warning("load_skill called without user_id — with_user_context wrapper may have failed")
+        return json.dumps({"error": "No user context available — this indicates a system configuration issue."})
 
     try:
         from .registry import SkillRegistry
@@ -41,8 +42,14 @@ def load_skill(skill_id: str, **kwargs) -> str:
         result = registry.load_skill(skill_id, user_id)
 
         if not result.is_connected:
+            all_ids = registry.get_all_skill_ids()
+            if skill_id not in all_ids:
+                return json.dumps({
+                    "error": f"Unknown skill '{skill_id}'. Check the CONNECTED INTEGRATIONS index for valid skill IDs.",
+                    "available": registry.get_connected_skill_ids(user_id),
+                })
             return json.dumps({
-                "error": f"Integration '{skill_id}' is not connected.",
+                "error": f"Integration '{skill_id}' is not connected for this user.",
                 "hint": "Check the CONNECTED INTEGRATIONS index for available skills.",
                 "available": registry.get_connected_skill_ids(user_id),
             })

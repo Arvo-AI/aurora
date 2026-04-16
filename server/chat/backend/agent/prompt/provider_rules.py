@@ -65,7 +65,6 @@ def build_provider_context_segment(
     mode: Optional[str] = None,
 ) -> str:
     normalized = _normalize_providers(provider_preference)
-    normalized_mode = (mode or "agent").strip().lower()
 
     if not normalized and not selected_project_id:
         return ""

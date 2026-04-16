@@ -330,6 +330,7 @@ def _build_rca_context(
         'providers': providers or [],
         'integrations': integrations,
         'trigger_metadata': trigger_metadata,
+        'user_id': user_id,
     }
 
 

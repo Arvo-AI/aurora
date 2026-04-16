@@ -2,6 +2,8 @@
 Skill file loader — parses YAML frontmatter and markdown body from .md files.
 """
 
+from __future__ import annotations
+
 import logging
 import os
 import re
