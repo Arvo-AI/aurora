@@ -100,9 +100,10 @@ def _get_splunk_credentials(user_id: str) -> Optional[Dict[str, Any]]:
         creds = get_token_data(user_id, "splunk")
         if not creds:
             return None
-        api_token = creds.get("api_token")
-        base_url = creds.get("base_url")
+        api_token = creds.get("api_token") or creds.get("token") or creds.get("access_token")
+        base_url = creds.get("base_url") or creds.get("url") or creds.get("instance_url")
         if not api_token or not base_url:
+            logger.warning("[SPLUNK-TOOL] Credentials exist but missing expected fields. Keys: %s", list(creds.keys()))
             return None
         return {"base_url": base_url, "api_token": api_token}
     except Exception as exc:

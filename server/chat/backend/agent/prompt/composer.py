@@ -23,11 +23,15 @@ from .provider_rules import (
 from .schema import PromptSegments
 
 
-def build_system_invariant() -> str:
+def build_system_invariant(is_background: bool = False) -> str:
     """Load core system prompt from modular markdown files under skills/core/.
 
     Segments are loaded in a fixed order that mirrors the original monolithic
     prompt so that cached prefixes remain stable across deployments.
+
+    In background RCA mode, Terraform/IaC, SSH setup, and cloud CLI discovery
+    segments are omitted (~3,300 tokens) since background investigations are
+    read-only and the freed budget is better spent on integration skills.
     """
     from chat.backend.agent.skills.loader import load_core_prompt
 
@@ -36,8 +40,15 @@ def build_system_invariant() -> str:
     )
     core_dir = os.path.normpath(core_dir)
 
-    # Order matters for prefix-cache stability - do not reorder without
-    # invalidating existing caches.
+    if is_background:
+        return load_core_prompt(core_dir, segments=[
+            "identity",
+            "knowledge_base",
+            "error_handling",
+            "investigation",
+            "behavioral_rules",
+        ])
+
     return load_core_prompt(core_dir, segments=[
         "identity",
         "knowledge_base",
@@ -58,8 +69,9 @@ def build_prompt_segments(
 ) -> PromptSegments:
     _, _, provider_constraints = build_provider_constraints(provider_preference)
 
-    # Build system invariant
-    system_invariant = build_system_invariant()
+    # Build system invariant — trimmed in background mode to free tokens for skills
+    is_background = bool(state and getattr(state, 'is_background', False))
+    system_invariant = build_system_invariant(is_background=is_background)
 
     provider_context = build_provider_context_segment(
         provider_preference=provider_preference,
@@ -144,8 +156,8 @@ def assemble_system_prompt(segments: PromptSegments) -> str:  # main prompt buil
     parts.append(segments.regional_rules)
     if segments.long_documents_note:
         parts.append(segments.long_documents_note)
-    if segments.terraform_validation:
+    if segments.terraform_validation and not segments.background_mode:
         parts.append(segments.terraform_validation)
-    if segments.failure_recovery:
+    if segments.failure_recovery and not segments.background_mode:
         parts.append(segments.failure_recovery)
     return "\n".join(parts)

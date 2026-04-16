@@ -307,125 +307,22 @@ def is_background_chat_allowed(user_id: str) -> bool:
 
 
 def _get_connected_integrations(user_id: str) -> Dict[str, bool]:
-    """Check which integrations are connected for a user."""
-    integrations = {
-        'splunk': False,
-        'dynatrace': False,
-        'datadog': False,
-        'github': False,
-        'confluence': False,
-        'jira': False,
-        'sharepoint': False,
-        'coroot': False,
-        'jenkins': False,
-        'cloudbees': False,
-        'spinnaker': False,
-        'newrelic': False,
-        'opsgenie': False,
-    }
+    """Check which integrations are connected for a user.
 
+    Delegates to SkillRegistry as the single source of truth for connection
+    checks, avoiding drift between hardcoded checks here and SKILL.md
+    connection_check definitions.
+    """
     try:
-        # Check Splunk
-        from chat.backend.agent.tools.splunk_tool import is_splunk_connected
-        integrations['splunk'] = is_splunk_connected(user_id)
+        from chat.backend.agent.skills.registry import SkillRegistry
+        registry = SkillRegistry.get_instance()
+        connected_ids = registry.get_connected_skill_ids(user_id)
+        integrations = {skill_id: True for skill_id in connected_ids}
+        logger.info("[BackgroundChat] Connected integrations via SkillRegistry: %s", list(integrations.keys()))
+        return integrations
     except Exception as e:
-        logger.debug(f"[BackgroundChat] Error checking Splunk: {e}")
-
-    try:
-        from chat.backend.agent.tools.dynatrace_tool import is_dynatrace_connected
-        integrations['dynatrace'] = is_dynatrace_connected(user_id)
-    except Exception as e:
-        logger.debug(f"[BackgroundChat] Error checking Dynatrace: {e}")
-
-    try:
-        from chat.backend.agent.tools.datadog_tool import is_datadog_connected
-        integrations['datadog'] = is_datadog_connected(user_id)
-    except Exception as e:
-        logger.debug(f"[BackgroundChat] Error checking Datadog: {e}")
-
-    try:
-        # Check GitHub
-        github_creds = get_credentials_from_db(user_id, "github")
-        integrations['github'] = bool(github_creds and github_creds.get("access_token"))
-    except Exception as e:
-        logger.debug(f"[BackgroundChat] Error checking GitHub: {e}")
-
-    try:
-        from utils.auth.token_management import get_token_data
-        confluence_creds = get_token_data(user_id, "confluence")
-        integrations['confluence'] = bool(
-            confluence_creds and (confluence_creds.get("access_token") or confluence_creds.get("pat_token"))
-        )
-    except Exception as e:
-        logger.debug(f"[BackgroundChat] Error checking Confluence: {e}")
-
-    try:
-        from utils.flags.feature_flags import is_jira_enabled
-        if is_jira_enabled():
-            from utils.auth.token_management import get_token_data as _get_jira_creds
-            jira_creds = _get_jira_creds(user_id, "jira")
-            integrations['jira'] = bool(
-                jira_creds and (jira_creds.get("access_token") or jira_creds.get("pat_token"))
-            )
-            if integrations['jira']:
-                from utils.auth.stateless_auth import get_user_preference
-                integrations['jira_mode'] = get_user_preference(user_id, "jira_mode", default="comment_only") or "comment_only"
-    except Exception as e:
-        logger.debug(f"[BackgroundChat] Error checking Jira: {e}")
-
-    try:
-        from utils.flags.feature_flags import is_sharepoint_enabled
-        if is_sharepoint_enabled():
-            from utils.auth.token_management import get_token_data
-            sharepoint_creds = get_token_data(user_id, "sharepoint")
-            integrations['sharepoint'] = bool(
-                sharepoint_creds and sharepoint_creds.get("access_token")
-            )
-    except Exception as e:
-        logger.debug(f"[BackgroundChat] Error checking SharePoint: {e}")
-
-    try:
-        from chat.backend.agent.tools.coroot_tool import is_coroot_connected
-        integrations['coroot'] = is_coroot_connected(user_id)
-    except Exception as e:
-        logger.info("[BackgroundChat] Error checking Coroot: %s", e, exc_info=True)
-
-    try:
-        from utils.auth.token_management import get_token_data
-        jenkins_creds = get_token_data(user_id, "jenkins")
-        integrations['jenkins'] = bool(jenkins_creds and jenkins_creds.get("base_url"))
-    except Exception as e:
-        logger.debug(f"[BackgroundChat] Error checking Jenkins: {e}")
-
-    try:
-        from utils.auth.token_management import get_token_data
-        cloudbees_creds = get_token_data(user_id, "cloudbees")
-        integrations['cloudbees'] = bool(cloudbees_creds and cloudbees_creds.get("base_url"))
-    except Exception as e:
-        logger.debug(f"[BackgroundChat] Error checking CloudBees: {e}")
-
-    try:
-        from utils.flags.feature_flags import is_spinnaker_enabled
-        if is_spinnaker_enabled():
-            from chat.backend.agent.tools.spinnaker_rca_tool import is_spinnaker_connected
-            integrations['spinnaker'] = is_spinnaker_connected(user_id)
-    except Exception as e:
-        logger.debug(f"[BackgroundChat] Error checking Spinnaker: {e}")
-
-    try:
-        from chat.backend.agent.tools.newrelic_tool import is_newrelic_connected
-        integrations['newrelic'] = is_newrelic_connected(user_id)
-    except Exception as e:
-        logger.debug(f"[BackgroundChat] Error checking New Relic: {e}")
-
-    # OpsGenie
-    try:
-        from chat.backend.agent.tools.opsgenie_tool import is_opsgenie_connected
-        integrations['opsgenie'] = is_opsgenie_connected(user_id)
-    except Exception as e:
-        logger.debug(f"[BackgroundChat] Error checking OpsGenie: {e}")
-
-    return integrations
+        logger.warning("[BackgroundChat] SkillRegistry check failed, returning empty: %s", e)
+        return {}
 
 
 def _build_rca_context(
@@ -438,6 +335,10 @@ def _build_rca_context(
     This context is passed to State and used by prompt_builder to inject
     RCA instructions into the system prompt (not the user message).
 
+    Single source of truth: cloud providers come from user_connections
+    (role-based, always valid), integrations come from SkillRegistry
+    (credential-validated). The agent only sees providers that actually work.
+
     Returns:
         Dict with source, providers, integrations, etc. or None if not an RCA source.
     """
@@ -447,24 +348,30 @@ def _build_rca_context(
 
     logger.info(f"[BackgroundChat] Building RCA context for source: {source}")
 
-    # Get providers - prefer explicit preference, then fetch from DB
-    providers = provider_preference
-    if not providers:
-        try:
-            from chat.background.rca_prompt_builder import get_user_providers
-            providers = get_user_providers(user_id)
-        except Exception as e:
-            logger.warning(f"[BackgroundChat] Failed to fetch providers: {e}")
-            providers = []
-
-    # Get connected integrations
+    # Get verified integrations from SkillRegistry (single source of truth)
     integrations = _get_connected_integrations(user_id)
 
-    logger.info(f"[BackgroundChat] User {user_id} has providers: {providers}, integrations: {integrations}")
+    # Build verified providers list: cloud providers (role-based auth) +
+    # SkillRegistry-validated integrations. Never show unverified providers.
+    _cloud_providers = {'aws', 'gcp', 'azure', 'ovh', 'scaleway'}
+    verified_cloud = []
+    if not provider_preference:
+        try:
+            from utils.auth.stateless_auth import get_connected_providers
+            all_db_providers = get_connected_providers(user_id)
+            verified_cloud = [p for p in all_db_providers if p.lower() in _cloud_providers]
+        except Exception as e:
+            logger.warning(f"[BackgroundChat] Failed to fetch cloud providers: {e}")
+    else:
+        verified_cloud = [p for p in provider_preference if p.lower() in _cloud_providers]
+
+    providers = sorted(set(verified_cloud + list(integrations.keys())))
+
+    logger.info(f"[BackgroundChat] User {user_id} verified providers: {providers}, integrations: {list(integrations.keys())}")
 
     return {
         'source': source,
-        'providers': providers or [],
+        'providers': providers,
         'integrations': integrations,
         'trigger_metadata': trigger_metadata,
         'user_id': user_id,

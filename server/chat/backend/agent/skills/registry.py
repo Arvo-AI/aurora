@@ -32,7 +32,7 @@ def _get_rca_token_budget() -> int:
         or ""
     ).strip()
     if not raw:
-        return 4000
+        return 12000
 
     try:
         value = int(raw)
@@ -155,8 +155,7 @@ class SkillRegistry:
             required_field = check.get("required_field")
             if required_field:
                 if isinstance(required_field, str):
-                    if creds.get(required_field):
-                        return True
+                    return bool(creds.get(required_field))
                 else:
                     logger.warning(
                         f"Invalid required_field type for skill '{skill_id}': {type(required_field)}"
@@ -396,10 +395,9 @@ class SkillRegistry:
         connected: List[Tuple[SkillMetadata, Dict[str, Any]]] = []
         for skill_id, meta in self._skills.items():
             if integrations.get(skill_id, False):
-                # Already validated upstream — fetch context without re-checking
                 _, ctx_data = self.check_connection(skill_id, user_id)
                 connected.append((meta, ctx_data))
-            elif skill_id not in integrations:
+            else:
                 is_conn, ctx_data = self.check_connection(skill_id, user_id)
                 if is_conn:
                     connected.append((meta, ctx_data))

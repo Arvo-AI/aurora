@@ -306,22 +306,37 @@ def _get_prediscovery_context(user_id: str, alert_title: str, alert_service: str
 
 
 def get_user_providers(user_id: str) -> List[str]:
-    """Fetch connected cloud providers for a user from the database."""
+    """Return verified providers for a user.
+
+    Single source of truth: cloud providers (aws/gcp/azure/ovh/scaleway)
+    come from user_connections (role-based auth, always valid).
+    Integration providers come from SkillRegistry connection checks
+    (credential-validated). The agent never sees providers it can't use.
+    """
     if not user_id:
         return []
 
+    _cloud_providers = {'aws', 'gcp', 'azure', 'ovh', 'scaleway'}
+    verified = []
+
     try:
         from utils.auth.stateless_auth import get_connected_providers
-        providers = get_connected_providers(user_id)
-        if providers:
-            logger.info(f"Fetched connected providers for RCA: {providers}")
-            return providers
-        logger.info(f"No connected providers found for user {user_id}")
-
-        return []
+        all_db = get_connected_providers(user_id)
+        verified = [p for p in all_db if p.lower() in _cloud_providers]
     except Exception as e:
-        logger.warning(f"Error fetching connected providers for RCA: {e}")
-        return []
+        logger.warning(f"Error fetching cloud providers: {e}")
+
+    try:
+        from chat.backend.agent.skills.registry import SkillRegistry
+        registry = SkillRegistry.get_instance()
+        connected_skill_ids = registry.get_connected_skill_ids(user_id)
+        verified.extend(connected_skill_ids)
+    except Exception as e:
+        logger.warning(f"Error fetching connected skills: {e}")
+
+    result = sorted(set(verified))
+    logger.info(f"Verified providers for user {user_id}: {result}")
+    return result
 
 
 def _has_onprem_clusters(user_id: Optional[str]) -> bool:
@@ -572,14 +587,12 @@ def build_rca_prompt(
         if 'issueUrl' in alert_details:
             prompt_parts.append(f"- **Issue URL**: {alert_details['issueUrl']}")
 
-    # Connected providers section — only list infra/monitoring providers here;
-    # GitHub, Jira, Confluence, Jenkins, CloudBees get their own dedicated sections.
-    _dedicated_sections = {'github', 'jira', 'confluence', 'jenkins', 'cloudbees'}
-    _display_providers = [p for p in providers if p.lower() not in _dedicated_sections]
+    # providers list is already verified by get_user_providers() — only
+    # cloud providers with valid role-auth + SkillRegistry-validated integrations.
     prompt_parts.extend([
         "",
         "## CONNECTED INFRASTRUCTURE & MONITORING:",
-        f"You have access to: {', '.join(_display_providers) if _display_providers else 'No cloud/monitoring providers connected'}",
+        f"You have access to: {', '.join(providers) if providers else 'No cloud/monitoring providers connected'}",
     ])
 
     # All integration guidance (GitHub, Jira, Confluence, Jenkins, CloudBees,

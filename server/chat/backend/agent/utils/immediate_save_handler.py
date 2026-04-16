@@ -5,7 +5,6 @@ import time
 import logging
 from datetime import datetime
 from typing import List, Dict, Any, Optional
-from chat.backend.agent.utils.llm_context_manager import LLMContextManager
 
 logger = logging.getLogger(__name__)
 
@@ -23,17 +22,13 @@ def handle_immediate_save(session_id: str, user_id: str, question: str, messages
         bool: True if save was successful
     """
     try:
-        # Save the user's message immediately to prevent loss
-        immediate_save_success = LLMContextManager.save_context_history(
-            session_id, user_id, messages_list
-        )
-        
-        if immediate_save_success:
-            logger.info(f"✓ Immediately saved user message for session {session_id}")
-        else:
-            logger.warning(f"️ Failed to immediately save user message for session {session_id}")
-            
-        # Also save UI-formatted message immediately
+        # NOTE: We intentionally do NOT save to llm_context_history here.
+        # save_context_history overwrites the entire column, which would
+        # replace the full conversation history with just [HumanMessage],
+        # destroying all prior context. The workflow handles the full
+        # context save after processing.
+
+        # Save UI-formatted message immediately (append-based, safe)
         ui_messages = [{
             'message_number': 1,
             'text': question,
@@ -44,8 +39,8 @@ def handle_immediate_save(session_id: str, user_id: str, question: str, messages
         
         # Try to load existing UI messages and append
         ui_save_success = _save_ui_message(session_id, user_id, ui_messages)
-        
-        return immediate_save_success and ui_save_success
+
+        return ui_save_success
         
     except Exception as save_error:
         logger.error(f"Error in immediate save: {save_error}")
