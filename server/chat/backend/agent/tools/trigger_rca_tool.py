@@ -123,6 +123,8 @@ def trigger_rca(
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
+                cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
                 cursor.execute(
                     """INSERT INTO incidents
                        (user_id, org_id, source_type, source_alert_id, alert_title,

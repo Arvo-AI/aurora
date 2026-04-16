@@ -79,6 +79,10 @@ def store_tokens_in_db(user_id: str, token_data: Dict, provider: str,
         with db_pool.get_admin_connection() as conn:
             cursor = conn.cursor()
             
+            if request_org_id:
+                cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
+                cursor.execute("SET myapp.current_org_id = %s;", (request_org_id,))
+
             # Store only metadata and secret reference in database
             if provider == "azure":
                 cursor.execute(

@@ -43,7 +43,7 @@ export const MessageItem = React.memo(({ message, sendRaw, onUpdateMessage, sess
   }, [message.sender, allMessages, messageIndex]);
 
   const sortedToolCalls = React.useMemo(() => 
-    sortToolCalls(message.toolCalls),
+    sortToolCalls(message.toolCalls || []),
     [message.toolCalls, sortToolCalls]
   );
 

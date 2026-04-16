@@ -14,7 +14,9 @@ spec:
     metadata:
       annotations:
         checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- if not .Values.secrets.app.existingSecret }}
         checksum/secret-app: {{ include (print $.Template.BasePath "/secret-app.yaml") . | sha256sum }}
+        {{- end }}
       labels:
         app.kubernetes.io/name: {{ include "aurora.name" . }}-frontend
         app.kubernetes.io/instance: {{ .Release.Name }}
@@ -42,7 +44,7 @@ spec:
             - configMapRef:
                 name: {{ include "aurora.fullname" . }}-config
             - secretRef:
-                name: {{ include "aurora.fullname" . }}-secrets-app
+                name: {{ include "aurora.secretName.app" . }}
           env:
             - name: NODE_ENV
               value: "production"

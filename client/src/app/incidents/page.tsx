@@ -22,10 +22,12 @@ import { useToast } from '@/hooks/use-toast';
 
 const ALERT_CATEGORIES = new Set(['Monitoring', 'Incident Management']);
 
-const ALERT_PROVIDERS = new Set([
-  'grafana', 'datadog', 'netdata', 'splunk', 'dynatrace',
-  'coroot', 'newrelic', 'thousandeyes', 'pagerduty', 'bigpanda',
-]);
+const ALERT_PROVIDERS = new Set(
+  connectorRegistry
+    .getAll()
+    .filter(c => c.category && ALERT_CATEGORIES.has(c.category))
+    .map(c => c.id),
+);
 
 interface IncidentsResponse { incidents: any[] }
 

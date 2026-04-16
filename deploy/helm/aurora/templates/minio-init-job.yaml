@@ -30,11 +30,11 @@ spec:
             - name: ACCESS_KEY
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "aurora.fullname" . }}-secrets-backend
+                  name: {{ include "aurora.secretName.backend" . }}
                   key: STORAGE_ACCESS_KEY
             - name: SECRET_KEY
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "aurora.fullname" . }}-secrets-backend
+                  name: {{ include "aurora.secretName.backend" . }}
                   key: STORAGE_SECRET_KEY
 {{- end }}

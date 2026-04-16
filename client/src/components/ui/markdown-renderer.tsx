@@ -39,11 +39,12 @@ function JiraLinkChip({ href, issueKey, isComment }: { href: string; issueKey: s
 
 // Custom components for ReactMarkdown
 const components = {
+  // Always use <div> instead of <p> — react-markdown nests block-level elements
+  // (CodeBlock/pre/div) arbitrarily deep inside paragraphs, and no shallow
+  // children check can reliably detect it. <div> prevents hydration errors.
   p: ({ children, ...props }: any) => {
-    // Process paragraph text to highlight keywords inline
     const processChildren = (child: any): any => {
       if (typeof child === 'string') {
-        // Use language detection to determine if this should be treated as text with keywords
         const detectedLanguage = getLanguageFromCode(child);
         if (detectedLanguage === 'text') {
           return processTextWithKeywords(child);
@@ -66,7 +67,7 @@ const components = {
       ? children.map(processChildren)
       : processChildren(children);
 
-    return <p {...props}>{processedChildren}</p>;
+    return <div className="mb-4" {...props}>{processedChildren}</div>;
   },
   code: ({ node, inline, className, children, ...props }: any) => {
     const match = /language-(\w+)/.exec(className || "");

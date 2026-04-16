@@ -35,6 +35,7 @@ export interface WebSocketMessage {
 
 export interface WebSocketConfig {
   url: string;
+  userId?: string | null;
   reconnectInterval?: number;
   maxReconnectAttempts?: number;
   onMessage?: (message: WebSocketMessage) => void;
@@ -102,7 +103,7 @@ export const useWebSocket = (config: WebSocketConfig) => {
     }));
 
     // Send initialization message with user_id
-    const userId = user?.id;
+    const userId = user?.id || configRef.current.userId || undefined;
     if (userId && wsRef.current) {
       const initMessage: WebSocketMessage = {
         type: 'init',
@@ -114,8 +115,6 @@ export const useWebSocket = (config: WebSocketConfig) => {
         hasUser: !!user?.id,
         hasConfigUserId: !!configRef.current.userId,
         hasWebSocket: !!wsRef.current,
-        userId: user?.id,
-        configUserId: configRef.current.userId
       });
     }
 
@@ -335,7 +334,7 @@ export const useWebSocket = (config: WebSocketConfig) => {
     disconnect,
     send,
     sendRaw,
-    isReady: state.isConnected && (user?.id || configRef.current.userId),
+    isReady: state.isConnected && !!(user?.id || configRef.current.userId),
     wsRef // Expose wsRef for better state checking
   };
-}; 
+};

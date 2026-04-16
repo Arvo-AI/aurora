@@ -4,10 +4,12 @@ Handles the OAuth2 flow to authenticate users with their Google Cloud Platform a
 """
 
 import os
+import json
 import requests
 import logging
 from dotenv import load_dotenv
 from google.oauth2.credentials import Credentials
+from google.oauth2 import service_account
 from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 
@@ -127,7 +129,32 @@ def get_credentials(token_data=None):
     
     if not token_data:
         raise ValueError("No token data available for authentication.")
-    
+
+    # Service account branch: the uploaded key IS the working identity, so we
+    # do NOT need the OAuth refresh-token / DB fallback path below.
+    if token_data.get("auth_type") == "service_account":
+        try:
+            sa_info = json.loads(token_data["service_account_json"])
+            sa_creds = service_account.Credentials.from_service_account_info(
+                sa_info,
+                scopes=["https://www.googleapis.com/auth/cloud-platform"],
+            )
+            # google-auth caches the token until expiry; only hit the token
+            # endpoint when the cached token is actually stale.
+            if not sa_creds.valid:
+                sa_creds.refresh(Request())
+            return sa_creds
+        except Exception as e:
+            logger.error(
+                "Failed to load/refresh GCP service account credentials (error_type=%s)",
+                type(e).__name__,
+            )
+            # Wrap in a stable user-safe message so the raw google-auth error
+            # does not bubble into downstream UI/API surfaces.
+            raise ValueError(
+                "Failed to load GCP service account credentials. The key may be malformed, revoked, or the service account may have been disabled."
+            ) from e
+
     try:
         credentials = Credentials(
             token=token_data.get('access_token'),

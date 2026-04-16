@@ -1,0 +1,148 @@
+name: Publish Helm Chart
+
+# Trigger on:
+#   - Git tag v*.*.* → publishes chart to GitHub Pages AND GHCR OCI registry
+on:
+  push:
+    tags: ['v*.*.*']
+
+concurrency:
+  group: publish-helm-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write   # GitHub Pages release assets
+  packages: write   # GHCR OCI push
+  pages: write      # gh-pages branch
+
+env:
+  CHART_DIR: deploy/helm
+  OCI_REGISTRY: ghcr.io
+  OCI_REPO: ghcr.io/arvo-ai/charts
+
+jobs:
+  # ===========================================================================
+  # Validate tag ↔ Chart.yaml version (runs only on tag pushes)
+  # ===========================================================================
+  validate-version:
+    name: Validate chart version matches tag
+    runs-on: ubuntu-24.04
+    if: github.repository == 'Arvo-AI/aurora' && startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Check tag matches Chart.yaml
+        run: |
+          TAG_VERSION="${GITHUB_REF#refs/tags/v}"
+          CHART_VERSION=$(grep '^version:' ${{ env.CHART_DIR }}/aurora/Chart.yaml | awk '{print $2}')
+          echo "Git tag version:   $TAG_VERSION"
+          echo "Chart.yaml version: $CHART_VERSION"
+          if [ "$TAG_VERSION" != "$CHART_VERSION" ]; then
+            echo "::error::Tag v$TAG_VERSION does not match Chart.yaml version $CHART_VERSION"
+            exit 1
+          fi
+          echo "Versions match."
+
+  # ===========================================================================
+  # Method 1: GitHub Pages via chart-releaser
+  # Your Pages URL serves Docusaurus docs, so use the raw gh-pages branch URL:
+  #   helm repo add aurora https://raw.githubusercontent.com/Arvo-AI/aurora/gh-pages
+  #   helm install aurora-oss aurora/aurora-oss
+  # ===========================================================================
+  publish-ghpages:
+    name: Publish to GitHub Pages
+    runs-on: ubuntu-24.04
+    needs: [validate-version]
+    if: github.repository == 'Arvo-AI/aurora' && needs.validate-version.result == 'success'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Configure Git
+        run: |
+          git config user.name "$GITHUB_ACTOR"
+          git config user.email "$GITHUB_ACTOR@users.noreply.github.com"
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+
+      - name: Run chart-releaser
+        uses: helm/chart-releaser-action@v1.7.0
+        with:
+          charts_dir: ${{ env.CHART_DIR }}
+        env:
+          CR_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
+
+  # ===========================================================================
+  # Method 2: OCI push to GHCR
+  # Usage:
+  #   helm install aurora-oss oci://ghcr.io/arvo-ai/charts/aurora-oss
+  # ===========================================================================
+  publish-oci:
+    name: Publish to GHCR (OCI)
+    runs-on: ubuntu-24.04
+    needs: [validate-version]
+    if: github.repository == 'Arvo-AI/aurora' && needs.validate-version.result == 'success'
+    outputs:
+      chart_version: ${{ steps.package.outputs.chart_version }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.OCI_REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Package chart
+        id: package
+        run: |
+          CHART_VERSION=$(grep '^version:' ${{ env.CHART_DIR }}/aurora/Chart.yaml | awk '{print $2}')
+          helm package ${{ env.CHART_DIR }}/aurora --destination .helm-pkg
+          PKG=$(ls .helm-pkg/*.tgz)
+          echo "package=$PKG" >> "$GITHUB_OUTPUT"
+          echo "chart_version=$CHART_VERSION" >> "$GITHUB_OUTPUT"
+          echo "Packaged: $PKG (version $CHART_VERSION)"
+
+      - name: Push to GHCR
+        run: helm push ${{ steps.package.outputs.package }} oci://${{ env.OCI_REPO }}
+
+  # ===========================================================================
+  # Summary
+  # ===========================================================================
+  publish-summary:
+    name: Helm Publish Summary
+    runs-on: ubuntu-24.04
+    needs: [publish-ghpages, publish-oci]
+    if: always()
+    steps:
+      - name: Summary
+        run: |
+          echo "================================================"
+          echo "Helm Chart Publish Summary"
+          echo "================================================"
+          echo ""
+          echo "GitHub Pages: ${{ needs.publish-ghpages.result }}"
+          echo "GHCR OCI:     ${{ needs.publish-oci.result }}"
+          echo ""
+          echo "Install methods:"
+          echo "  helm repo add aurora https://raw.githubusercontent.com/Arvo-AI/aurora/gh-pages"
+          echo "  helm install aurora-oss aurora/aurora-oss"
+          echo ""
+          echo "  helm install aurora-oss oci://ghcr.io/arvo-ai/charts/aurora-oss --version ${{ needs.publish-oci.outputs.chart_version }}"
+          echo ""
+          if [ "${{ needs.publish-ghpages.result }}" != "success" ] || [ "${{ needs.publish-oci.result }}" != "success" ]; then
+            echo "One or more publishes failed!"
+            exit 1
+          fi
+          echo "All chart publishes successful"

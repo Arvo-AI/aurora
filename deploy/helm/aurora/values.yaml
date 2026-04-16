@@ -37,6 +37,22 @@ services:
 # Each service gets its own ServiceAccount for proper RBAC
 # On-prem: annotations can be left empty
 # Cloud: add workload identity annotations as needed (GKE, EKS IRSA, AKS, etc.)
+#
+# IRSA (EKS) — the annotated role must have ALL of the following permissions:
+#   1. S3 access on your storage bucket (if not using static STORAGE_ACCESS_KEY/SECRET_KEY)
+#   2. secretsmanager:* on aurora/users/* (if SECRETS_BACKEND=aws_secrets_manager)
+#   3. sts:AssumeRole on * (for the AWS connector — needs cross-account access, so resource must be *)
+#      Without this, the AWS connector cannot assume cross-account roles and will return
+#      "not authorized to perform: sts:AssumeRole" errors.
+#
+# The IRSA role's trust policy must use StringLike to cover ALL backend SAs:
+#   "StringLike": { "<oidc>:sub": "system:serviceaccount:<ns>:<release>-aurora-oss-*" }
+# Scoping to only the server SA causes AssumeRoleWithWebIdentity failures in
+# the chatbot and celery workers.
+#
+# Example EKS IRSA annotation:
+#   annotations:
+#     eks.amazonaws.com/role-arn: arn:aws:iam::<ACCOUNT_ID>:role/<your-aurora-irsa-role>
 serviceAccount:
   # Annotations applied to backend service accounts (server, chatbot, celery)
   annotations: {}
@@ -213,15 +229,27 @@ ssl:
 # ------------------------------------------------------------------------------
 secrets:
   # --- Database Credentials (secret-db.yaml) ---
-  db: # Mounted by: server, celery-worker, celery-beat, chatbot, postgres
+  # Mounted by: server, celery-worker, celery-beat, chatbot, postgres
+  db:
+    # Use a pre-existing Kubernetes Secret instead of chart-managed secrets.
+    # When set, the chart will not create secret-db and all pods will reference
+    # this secret directly. It must contain keys: POSTGRES_USER, POSTGRES_PASSWORD
+    # existingSecret: ""
     POSTGRES_USER: "aurora"
     POSTGRES_PASSWORD: ""        # REQUIRED - Generate with: openssl rand -base64 32
   
   # --- Backend Secrets (secret-backend.yaml) ---
-  backend:  # Mounted by: server, celery-worker, celery-beat, chatbot
-    VAULT_TOKEN: ""              # REQUIRED - Root token from Vault init - Set after running: kubectl exec -it statefulset/<release>-vault -- vault operator init
-    STORAGE_ACCESS_KEY: ""       # REQUIRED - Your S3 access key
-    STORAGE_SECRET_KEY: ""       # REQUIRED - Your S3 secret key
+  # Mounted by: server, celery-worker, celery-beat, chatbot
+  backend:
+    # Use a pre-existing Kubernetes Secret instead of chart-managed secrets.
+    # When set, the chart will not create secret-backend and all pods will reference
+    # this secret directly. It must contain VAULT_TOKEN (if using Vault), plus any
+    # optional integration keys you use. STORAGE_ACCESS_KEY/STORAGE_SECRET_KEY are
+    # optional when using IRSA or other pod-level credential injection.
+    # existingSecret: ""
+    VAULT_TOKEN: ""              # Required when SECRETS_BACKEND=vault. Not needed for aws_secrets_manager.
+    STORAGE_ACCESS_KEY: ""       # S3 access key (optional when using IRSA/pod identity)
+    STORAGE_SECRET_KEY: ""       # S3 secret key (optional when using IRSA/pod identity)
 
     # --- Optional: Slack Integration ---
     SLACK_CLIENT_ID: ""          # Get from: https://api.slack.com/apps
@@ -267,7 +295,13 @@ secrets:
     BB_OAUTH_CLIENT_SECRET: ""
 
   # --- Application Secrets (secret-app.yaml) ---
-  app:   # Mounted by: server, celery-worker, celery-beat, chatbot, frontend, searxng
+  # Mounted by: server, celery-worker, celery-beat, chatbot, frontend, searxng
+  app:
+    # Use a pre-existing Kubernetes Secret instead of chart-managed secrets.
+    # When set, the chart will not create secret-app and all pods will reference
+    # this secret directly. It must contain keys: FLASK_SECRET_KEY, AUTH_SECRET,
+    # SEARXNG_SECRET, plus any optional keys you use.
+    # existingSecret: ""
     FLASK_SECRET_KEY: ""         # REQUIRED - Generate with: openssl rand -base64 32
     AUTH_SECRET: ""              # REQUIRED - Generate with: openssl rand -base64 32
     SEARXNG_SECRET: ""           # REQUIRED - Generate with: openssl rand -base64 32
@@ -288,8 +322,13 @@ secrets:
     RATE_LIMIT_BYPASS_TOKEN: ""  # Custom token to bypass rate limits
   
   # --- LLM API Keys (secret-llm.yaml) ---
-  llm:  # Mounted by: chatbot, celery-worker, celery-beat
-    # At least one LLM API key is required
+  # Mounted by: chatbot, celery-worker, celery-beat
+  llm:
+    # Use a pre-existing Kubernetes Secret instead of chart-managed secrets.
+    # When set, the chart will not create secret-llm and all pods will reference
+    # this secret directly. It must contain at least one of: OPENROUTER_API_KEY,
+    # OPENAI_API_KEY, ANTHROPIC_API_KEY, GOOGLE_AI_API_KEY.
+    # existingSecret: ""
     OPENROUTER_API_KEY: ""       # Get from: https://openrouter.ai/keys
     OPENAI_API_KEY: ""           # Get from: https://platform.openai.com/api-keys
     ANTHROPIC_API_KEY: ""        # Get from: https://console.anthropic.com/
@@ -603,6 +642,28 @@ ingress:
     frontend: "aurora.example.com"
     api: "api.aurora.example.com"
     ws: "ws.aurora.example.com"
+
+  # Additional Ingress resources (e.g., external ingress for webhooks).
+  # Each entry creates a separate Kubernetes Ingress object.
+  # IMPORTANT: 'name' is required, must be unique across entries, and must not
+  # be 'ingress' (reserved for the primary ingress object).
+  # Service names are NOT auto-resolved. Use the full Kubernetes service name.
+  # Aurora services follow the pattern: <release-name>-<component>
+  # e.g., aurora-oss-server, aurora-oss-frontend, aurora-oss-chatbot
+  additional: []
+    # - name: external-webhooks
+    #   className: "nginx"
+    #   annotations: {}
+    #   tls: []
+    #   rules:
+    #     - host: "api-external.example.com"
+    #       http:
+    #         paths:
+    #           - path: /
+    #             pathType: Prefix
+    #             backend:
+    #               service: aurora-oss-server
+    #               port: 5080
 
 # ------------------------------------------------------------------------------
 # Vault Configuration

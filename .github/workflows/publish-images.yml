@@ -16,26 +16,47 @@ concurrency:
 
 env:
   REGISTRY: ghcr.io
-  SERVER_IMAGE: ghcr.io/arvo-ai/aurora-server
-  FRONTEND_IMAGE: ghcr.io/arvo-ai/aurora-frontend
 
 permissions:
   contents: read
   packages: write
 
 jobs:
-  publish-server:
-    name: Publish aurora-server
-    runs-on: ubuntu-24.04
-    # Only run on the main repository, not on forks
+  build:
+    name: Build ${{ matrix.image }} (${{ matrix.platform }})
     if: github.repository == 'Arvo-AI/aurora'
-
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: server
+            context: ./server
+            dockerfile: ./server/Dockerfile
+            platform: linux/amd64
+            arch: amd64
+            runner: ubuntu-24.04
+          - image: server
+            context: ./server
+            dockerfile: ./server/Dockerfile
+            platform: linux/arm64
+            arch: arm64
+            runner: ubuntu-24.04-arm
+          - image: frontend
+            context: ./client
+            dockerfile: ./client/Dockerfile
+            platform: linux/amd64
+            arch: amd64
+            runner: ubuntu-24.04
+          - image: frontend
+            context: ./client
+            dockerfile: ./client/Dockerfile
+            platform: linux/arm64
+            arch: arm64
+            runner: ubuntu-24.04-arm
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
-
-      - name: Set up QEMU (for multi-arch builds)
-        uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -47,74 +68,35 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract metadata (tags, labels)
+      - name: Extract metadata (labels)
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.SERVER_IMAGE }}
-          tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-') }}
-            type=edge,branch=main
-            type=sha,prefix=sha-,format=short
+          images: ghcr.io/arvo-ai/aurora-${{ matrix.image }}
 
-      - name: Build and push aurora-server
+      - name: Build and push by digest (server)
+        if: matrix.image == 'server'
+        id: build-server
         uses: docker/build-push-action@v6
         with:
-          context: ./server
-          file: ./server/Dockerfile
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
           target: prod
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
+          platforms: ${{ matrix.platform }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=server-publish
-          cache-to: type=gha,mode=max,scope=server-publish
+          outputs: type=image,name=ghcr.io/arvo-ai/aurora-${{ matrix.image }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=${{ matrix.image }}-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}-${{ matrix.arch }}
 
-  publish-frontend:
-    name: Publish aurora-frontend
-    runs-on: ubuntu-24.04
-    if: github.repository == 'Arvo-AI/aurora'
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v5
-
-      - name: Set up QEMU (for multi-arch builds)
-        uses: docker/setup-qemu-action@v3
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Extract metadata (tags, labels)
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.FRONTEND_IMAGE }}
-          tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-') }}
-            type=edge,branch=main
-            type=sha,prefix=sha-,format=short
-
-      - name: Build and push aurora-frontend
+      - name: Build and push by digest (frontend)
+        if: matrix.image == 'frontend'
+        id: build-frontend
         uses: docker/build-push-action@v6
         with:
-          context: ./client
-          file: ./client/Dockerfile
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
           target: prod
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
+          platforms: ${{ matrix.platform }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             NEXT_PUBLIC_BACKEND_URL=http://localhost:5080
@@ -123,13 +105,123 @@ jobs:
             NEXT_PUBLIC_ENABLE_PAGERDUTY_OAUTH=true
             NEXT_PUBLIC_ENABLE_SCALEWAY=true
             NEXT_PUBLIC_ENABLE_SHAREPOINT=true
-          cache-from: type=gha,scope=frontend-publish
-          cache-to: type=gha,mode=max,scope=frontend-publish
+          outputs: type=image,name=ghcr.io/arvo-ai/aurora-${{ matrix.image }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=${{ matrix.image }}-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}-${{ matrix.arch }}
+
+      - name: Export digest
+        env:
+          DIGEST: ${{ steps.build-server.outputs.digest || steps.build-frontend.outputs.digest }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DIGEST:-}" ]; then
+            echo "No digest produced by build step" >&2
+            exit 1
+          fi
+          mkdir -p /tmp/digests
+          # File name = arch, content = sha256:<hex>. Per-arch filenames let the
+          # merge job validate that every expected arch is present *before*
+          # calling `imagetools create`, so we never publish a half-populated
+          # manifest list to the registry.
+          printf '%s' "$DIGEST" > "/tmp/digests/${ARCH}"
+
+      - name: Upload digest artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: digests-${{ matrix.image }}-${{ matrix.arch }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  merge:
+    name: Merge ${{ matrix.image }} manifest
+    needs: build
+    if: github.repository == 'Arvo-AI/aurora'
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [server, frontend]
+    steps:
+      - name: Download digest artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: digests-${{ matrix.image }}-*
+          merge-multiple: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata (tags, labels)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/arvo-ai/aurora-${{ matrix.image }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-') }}
+            type=edge,branch=main
+            type=sha,prefix=sha-,format=short
+
+      - name: Create manifest list and push
+        working-directory: /tmp/digests
+        env:
+          IMAGE_NAME: ghcr.io/arvo-ai/aurora-${{ matrix.image }}
+        run: |
+          set -euo pipefail
+
+          # Fail fast if any expected arch's digest is missing, *before* we
+          # touch the registry. Keep this list in sync with the build matrix
+          # (currently amd64 + arm64).
+          expected_arches="amd64 arm64"
+          missing=""
+          for arch in $expected_arches; do
+            if [ ! -s "$arch" ]; then
+              missing="${missing} $arch"
+            fi
+          done
+          if [ -n "$missing" ]; then
+            echo "Missing digest file(s) for arch(es):$missing" >&2
+            echo "Contents of /tmp/digests:" >&2
+            ls -la >&2
+            exit 1
+          fi
+
+          tags=$(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON")
+          sources=""
+          for arch in $expected_arches; do
+            digest=$(cat "$arch")
+            sources="${sources} ${IMAGE_NAME}@${digest}"
+          done
+
+          # shellcheck disable=SC2086
+          docker buildx imagetools create $tags $sources
+
+      - name: Inspect and verify multi-arch manifest
+        run: |
+          set -euo pipefail
+          REF=$(jq -cr '.tags[0]' <<< "$DOCKER_METADATA_OUTPUT_JSON")
+          echo "Inspecting $REF"
+          docker buildx imagetools inspect "$REF"
+          PLATFORMS=$(docker buildx imagetools inspect "$REF" --format '{{range .Manifest.Manifests}}{{.Platform.OS}}/{{.Platform.Architecture}} {{end}}')
+          echo "Platforms: $PLATFORMS"
+          echo "$PLATFORMS" | grep -q 'linux/amd64' || { echo "Missing linux/amd64 in manifest list"; exit 1; }
+          echo "$PLATFORMS" | grep -q 'linux/arm64' || { echo "Missing linux/arm64 in manifest list"; exit 1; }
 
   publish-summary:
     name: Publish Summary
     runs-on: ubuntu-24.04
-    needs: [publish-server, publish-frontend]
+    needs: [build, merge]
     if: always()
     steps:
       - name: Summary
@@ -138,11 +230,11 @@ jobs:
           echo "Image Publish Summary"
           echo "================================================"
           echo ""
-          echo "Server:   ${{ needs.publish-server.result }}"
-          echo "Frontend: ${{ needs.publish-frontend.result }}"
+          echo "Build:  ${{ needs.build.result }}"
+          echo "Merge:  ${{ needs.merge.result }}"
           echo ""
-          if [ "${{ needs.publish-server.result }}" != "success" ] || [ "${{ needs.publish-frontend.result }}" != "success" ]; then
-            echo "One or more publishes failed!"
+          if [ "${{ needs.build.result }}" != "success" ] || [ "${{ needs.merge.result }}" != "success" ]; then
+            echo "One or more publish stages failed!"
             exit 1
           fi
-          echo "All images published successfully"
+          echo "All multi-arch images published successfully"

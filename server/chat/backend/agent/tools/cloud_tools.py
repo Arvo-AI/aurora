@@ -1163,7 +1163,6 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
         (cloud_exec_wrapper, "cloud_exec"),
         (terminal_exec, "terminal_exec"),
         (tailscale_ssh, "tailscale_ssh"),
-        (confluence_runbook_parse, "confluence_runbook_parse"),
         (on_prem_kubectl, "on_prem_kubectl"),
         (analyze_zip_file, "analyze_zip_file"),
         # (web_search, "web_search"),  # Moved to dedicated registration below with explicit args_schema
@@ -1318,13 +1317,6 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                     "target_branch (optional base branch for PR, defaults to main)."
                 ),
                 args_schema=GitHubApplyFixArgs
-            )
-        elif name == "confluence_runbook_parse":
-            tool = StructuredTool.from_function(
-                func=final_func,
-                name=name,
-                description="Fetch and parse a Confluence runbook into markdown and steps for LLM use. Parameter: page_url (string, required).",
-                args_schema=ConfluenceRunbookArgs,
             )
         elif name == 'trigger_rca':
             tool = StructuredTool.from_function(
@@ -1624,7 +1616,10 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
     except Exception as e:
         logging.warning(f"Failed to add Bitbucket tools: {e}")
 
-    # Add Confluence search tools if enabled
+    # Add Confluence tools if the user has a Confluence connection.
+    # confluence_runbook_parse was previously in the unconditional tool list,
+    # which caused the agent to call Confluence tools even when the user had
+    # no Confluence credentials, breaking RCAs that mention runbook URLs.
     try:
         from utils.auth.token_management import get_token_data
         if user_id and get_token_data(user_id, "confluence"):
@@ -1649,7 +1644,18 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                     description=_desc,
                     args_schema=_schema,
                 ))
-            logging.info(f"Added 3 Confluence search tools for user {user_id}")
+            # Also register the runbook parser inside the gate so the agent
+            # only sees it when Confluence credentials exist.
+            _rp_ctx = with_user_context(confluence_runbook_parse)
+            _rp_notif = with_completion_notification(_rp_ctx)
+            _rp_final = wrap_func_with_capture(_rp_notif, "confluence_runbook_parse") if tool_capture else _rp_notif
+            tools.append(StructuredTool.from_function(
+                func=_rp_final,
+                name="confluence_runbook_parse",
+                description="Fetch and parse a Confluence runbook into markdown and steps for LLM use. Parameter: page_url (string, required).",
+                args_schema=ConfluenceRunbookArgs,
+            ))
+            logging.info(f"Added 4 Confluence tools for user {user_id}")
     except Exception as e:
         logging.warning(f"Failed to add Confluence search tools: {e}")
 

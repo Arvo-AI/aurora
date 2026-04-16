@@ -603,6 +603,22 @@ def _check_credentials_only(creds: Dict[str, Any]) -> Dict[str, Any]:
     return {"connected": True}
 
 
+def _check_gcp_credentials(creds: Dict[str, Any]) -> Dict[str, Any]:
+    """GCP credential-existence check that also surfaces the auth mode
+    (OAuth vs service-account) so the frontend can label the connection.
+    """
+    from connectors.gcp_connector.auth import GCP_AUTH_TYPE_SA, get_gcp_auth_type
+
+    auth_type = get_gcp_auth_type(creds)
+    response: Dict[str, Any] = {"connected": True, "authType": auth_type}
+    if auth_type == GCP_AUTH_TYPE_SA:
+        if creds.get("client_email"):
+            response["clientEmail"] = creds["client_email"]
+        if creds.get("default_project_id"):
+            response["defaultProjectId"] = creds["default_project_id"]
+    return response
+
+
 def _check_newrelic(creds: Dict[str, Any]) -> Dict[str, Any]:
     """Validate New Relic credentials via NerdGraph user query."""
     api_key = creds.get("api_key")
@@ -664,7 +680,7 @@ PROVIDER_CHECKERS = {
     # Credential-existence checks (no live API endpoint to validate against)
     "netdata": _check_netdata,
     "newrelic": _check_newrelic,
-    "gcp": _check_credentials_only,
+    "gcp": _check_gcp_credentials,
     "aws": _check_credentials_only,
     "azure": _check_credentials_only,
 }

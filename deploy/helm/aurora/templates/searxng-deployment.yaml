@@ -14,7 +14,9 @@ spec:
     metadata:
       annotations:
         checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- if not .Values.secrets.app.existingSecret }}
         checksum/secret-app: {{ include (print $.Template.BasePath "/secret-app.yaml") . | sha256sum }}
+        {{- end }}
       labels:
         app.kubernetes.io/name: {{ include "aurora.name" . }}-searxng
         app.kubernetes.io/instance: {{ .Release.Name }}
@@ -37,12 +39,19 @@ spec:
             - configMapRef:
                 name: {{ include "aurora.fullname" . }}-config
             - secretRef:
-                name: {{ include "aurora.fullname" . }}-secrets-app
-          readinessProbe:
+                name: {{ include "aurora.secretName.app" . }}
+          startupProbe:
             httpGet:
               path: /healthz
               port: 8080
             initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 30
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
             periodSeconds: 10
             timeoutSeconds: 3
             failureThreshold: 3
@@ -50,7 +59,6 @@ spec:
             httpGet:
               path: /healthz
               port: 8080
-            initialDelaySeconds: 10
             periodSeconds: 30
             timeoutSeconds: 5
             failureThreshold: 3

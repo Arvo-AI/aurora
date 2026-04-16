@@ -34,7 +34,13 @@ Aurora base credentials (sts:AssumeRole only)
 Before users can onboard their accounts, the Aurora operator must configure
 Aurora's own AWS credentials. These are used solely to call `sts:AssumeRole`.
 
-### 1. Create an IAM User for Aurora
+Choose **one** of the two paths below depending on your deployment type.
+
+---
+
+### Path A: Static Credentials (Docker Compose / non-Kubernetes)
+
+#### 1. Create an IAM User for Aurora
 
 1. Go to [IAM > Users](https://console.aws.amazon.com/iam/home#/users) > **Create user**
 2. Name: `aurora-service-user` (or any name you prefer)
@@ -56,7 +62,7 @@ Aurora's own AWS credentials. These are used solely to call `sts:AssumeRole`.
 }
 ```
 
-### 2. Create Access Keys
+#### 2. Create Access Keys
 
 1. Go to the user you just created
 2. Click the **Security credentials** tab
@@ -64,7 +70,7 @@ Aurora's own AWS credentials. These are used solely to call `sts:AssumeRole`.
 4. Select **Application running outside AWS**
 5. Copy both the **Access key ID** and **Secret access key**
 
-### 3. Configure Aurora Environment
+#### 3. Configure Aurora Environment
 
 Add to your `.env`:
 
@@ -82,7 +88,131 @@ make dev-build  # or make prod-local for production
 make dev        # or make prod-prebuilt / make prod for production
 ```
 
-### 4. Host the CloudFormation Template
+---
+
+### Path B: IRSA / Pod Identity (Kubernetes on EKS)
+
+When running on EKS, use IAM Roles for Service Accounts (IRSA) instead of
+static credentials. The EKS pod identity webhook injects short-lived
+credentials automatically — no `AWS_ACCESS_KEY_ID` or `AWS_SECRET_ACCESS_KEY`
+needed.
+
+#### 1. Create an IAM Role for Aurora's Backend
+
+Create an IAM role trusted by your cluster's OIDC provider. The role needs
+**three sets of permissions** to fully support all Aurora features:
+
+| Permission | Why |
+|---|---|
+| `sts:AssumeRole` on `AuroraReadOnly-*` roles | AWS connector — assumes cross-account customer roles |
+| `s3:*` on your storage bucket | File storage (omit if using static `STORAGE_ACCESS_KEY`/`SECRET_KEY`) |
+| `secretsmanager:*` on `aurora/users/*` | Secrets backend (omit if using Vault) |
+
+> **The `sts:AssumeRole` permission is required for the AWS connector to work.**
+> Without it, Aurora's backend cannot assume cross-account roles and users will
+> see "not authorized to perform: sts:AssumeRole" errors when connecting AWS accounts.
+
+Example inline policy:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "AWSConnector",
+      "Effect": "Allow",
+      "Action": "sts:AssumeRole",
+      "Resource": "arn:aws:iam::*:role/AuroraReadOnly-*"
+    },
+    {
+      "Sid": "Storage",
+      "Effect": "Allow",
+      "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject",
+                 "s3:ListMultipartUploadParts", "s3:AbortMultipartUpload"],
+      "Resource": "arn:aws:s3:::<YOUR_BUCKET>/*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": ["s3:ListBucket", "s3:GetBucketLocation"],
+      "Resource": "arn:aws:s3:::<YOUR_BUCKET>"
+    },
+    {
+      "Sid": "SecretsManager",
+      "Effect": "Allow",
+      "Action": ["secretsmanager:GetSecretValue", "secretsmanager:CreateSecret",
+                 "secretsmanager:PutSecretValue", "secretsmanager:UpdateSecret",
+                 "secretsmanager:DeleteSecret", "secretsmanager:DescribeSecret"],
+      "Resource": "arn:aws:secretsmanager:<REGION>:<YOUR_ACCOUNT_ID>:secret:aurora/users/*"
+    },
+    {
+      "Sid": "SecretsManagerList",
+      "Effect": "Allow",
+      "Action": "secretsmanager:ListSecrets",
+      "Resource": "*"
+    }
+  ]
+}
+```
+
+The role's trust policy must allow your cluster's OIDC provider for **all
+backend service accounts** (server, chatbot, celery-worker, celery-beat).
+Use `StringLike` with a wildcard to cover all of them in one statement:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Effect": "Allow",
+    "Principal": {
+      "Federated": "arn:aws:iam::<ACCOUNT_ID>:oidc-provider/oidc.eks.<REGION>.amazonaws.com/id/<OIDC_ID>"
+    },
+    "Action": "sts:AssumeRoleWithWebIdentity",
+    "Condition": {
+      "StringEquals": {
+        "oidc.eks.<REGION>.amazonaws.com/id/<OIDC_ID>:aud": "sts.amazonaws.com"
+      },
+      "StringLike": {
+        "oidc.eks.<REGION>.amazonaws.com/id/<OIDC_ID>:sub": "system:serviceaccount:<NAMESPACE>:<RELEASE_NAME>-aurora-oss-*"
+      }
+    }
+  }]
+}
+```
+
+> **All four backend pods need IRSA access.** Scoping the trust policy to only
+> `aurora-oss-server` will cause `AssumeRoleWithWebIdentity` failures in the
+> chatbot and celery workers when they attempt AWS operations (storage, secrets,
+> AWS connector credential refresh).
+
+#### 2. Annotate the Service Accounts via Helm
+
+In your `values.yaml` override file:
+
+```yaml
+serviceAccount:
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::<ACCOUNT_ID>:role/<your-aurora-irsa-role>
+
+config:
+  STORAGE_BUCKET: "<your-bucket>"
+  STORAGE_ENDPOINT_URL: ""        # empty = real AWS S3
+  STORAGE_REGION: "<region>"
+  SECRETS_BACKEND: "aws_secrets_manager"   # if not using Vault
+  AWS_SM_REGION: "<region>"
+  AWS_SM_PREFIX: "aurora/users"
+
+secrets:
+  backend:
+    STORAGE_ACCESS_KEY: ""   # intentionally empty — IRSA provides credentials
+    STORAGE_SECRET_KEY: ""   # intentionally empty — IRSA provides credentials
+```
+
+Do **not** set `AWS_ACCESS_KEY_ID` or `AWS_SECRET_ACCESS_KEY` — their presence
+overrides the IRSA credential chain.
+
+---
+
+### Step 4. Host the CloudFormation Template
 
 Aurora hosts the CloudFormation template publicly on its own AWS account so
 that end-users never need to upload or host it themselves. The template URL
@@ -310,7 +440,8 @@ AWS accounts.
 | Quick-Create says role already exists | `AuroraReadOnlyRole` already in that account | Use the existing role (just register in Aurora), or delete the old stack first |
 | "Access denied" on bulk register | Role not created, or External ID mismatch | Verify the CFN stack deployed successfully with the correct External ID |
 | "Aurora cannot assume this role" | IAM propagation delay | Wait up to 5 minutes after role creation and retry |
-| "Unable to determine Aurora's AWS account ID" | Credentials not configured | Ensure `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` are set in `.env` |
+| "Unable to determine Aurora's AWS account ID" | Credentials not configured | **Static creds:** ensure `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` are set in `.env`. **IRSA:** verify the service account annotation (`eks.amazonaws.com/role-arn`) and that the OIDC trust policy matches the pod's service account. |
+| "not authorized to perform: sts:AssumeRole" on AWS connector | IRSA role missing `sts:AssumeRole` permission | Add `sts:AssumeRole` on `arn:aws:iam::<account>:role/AuroraReadOnly-*` to the IRSA role's inline policy (see Path B above). Static-credential deployments: add `sts:AssumeRole` to the IAM user policy. |
 | Some accounts fail, others succeed | IAM role propagation delay | Wait 5 minutes and retry the failed accounts |
 | Discovery finds no resources | Resource Explorer not enabled | Run `aws resource-explorer-2 create-index --type AGGREGATOR` in your primary region |
 | Template deploy fails | `CAPABILITY_NAMED_IAM` not specified | Add `--capabilities CAPABILITY_NAMED_IAM` to your deploy command |

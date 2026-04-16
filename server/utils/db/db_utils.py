@@ -1700,6 +1700,26 @@ def initialize_tables():
                 )
                 conn.rollback()
 
+            # Add execution-tracking columns to incident_suggestions
+            try:
+                cursor.execute(
+                    """
+                    ALTER TABLE incident_suggestions
+                    ADD COLUMN IF NOT EXISTS executed_at TIMESTAMP,
+                    ADD COLUMN IF NOT EXISTS execution_session_id UUID,
+                    ADD COLUMN IF NOT EXISTS execution_status VARCHAR(20);
+                    """
+                )
+                logging.info(
+                    "Added execution-tracking columns to incident_suggestions table (if not exists)."
+                )
+                conn.commit()
+            except Exception as e:
+                logging.warning(
+                    f"Error adding execution-tracking columns to incident_suggestions: {e}"
+                )
+                conn.rollback()
+
             # Migration: Create postmortems table if it doesn't exist
             # Note: 'resolved' is now a valid incident status value.
             # The incidents.status column is VARCHAR so no ALTER TABLE is needed.
@@ -1865,84 +1885,57 @@ def initialize_tables():
                 cursor.execute(f"ALTER TABLE {table_name} FORCE ROW LEVEL SECURITY;")
                 logging.info(f"RLS forced on table '{table_name}'.")
 
-                # Create org-based SELECT policy (DROP+CREATE to ensure latest definition)
-                policy_sql = f"""
-                    DO $$
-                    BEGIN
+                # RLS condition: enforce org scoping when session var is set,
+                # allow through when unset (prevents crashes from code paths that
+                # don't call SET myapp.current_org_id before writing)
+                _rls_using = f"""
+                    org_id IS NOT NULL
+                    AND (
+                        COALESCE(current_setting('myapp.current_org_id', true), '') = ''
+                        OR org_id = current_setting('myapp.current_org_id', true)::text
+                    )
+                """
+
+                # SELECT policy
+                cursor.execute(f"""
+                    DO $$ BEGIN
                         DROP POLICY IF EXISTS select_by_org ON {table_name};
                         CREATE POLICY select_by_org ON {table_name}
-                        FOR SELECT USING (
-                            org_id IS NOT NULL
-                            AND org_id = current_setting('myapp.current_org_id', true)::text
-                        );
+                        FOR SELECT USING ({_rls_using});
                     END $$;
-                    """
-                cursor.execute(policy_sql)
+                """)
 
                 # Drop legacy user-based policies if they exist
                 for old_policy in ['select_by_user', 'insert_by_user', 'update_by_user', 'delete_by_user']:
                     cursor.execute(f"""
-                        DO $$
-                        BEGIN
+                        DO $$ BEGIN
                             DROP POLICY IF EXISTS {old_policy} ON {table_name};
-                        EXCEPTION WHEN undefined_object THEN
-                            NULL;
+                        EXCEPTION WHEN undefined_object THEN NULL;
                         END $$;
                     """)
 
-                # For tables that need full CRUD policies, create INSERT, UPDATE, and DELETE policies
-                if table_name in [
-                    "chat_sessions",
-                    "user_preferences",
-                    "deployment_tasks",
-                    "user_tokens",
-                    "llm_usage_tracking",
-                    "kubectl_agent_tokens",
-                    "mcp_tokens",
-                    "user_manual_vms",
-                    "incident_alerts",
-                    "incident_feedback",
-                    "postmortems",
-                    "incident_lifecycle_events",
-                ]:
-                    insert_policy_sql = f"""
-                        DO $$
-                        BEGIN
-                            DROP POLICY IF EXISTS insert_by_org ON {table_name};
-                            CREATE POLICY insert_by_org ON {table_name}
-                            FOR INSERT WITH CHECK (
-                                org_id IS NOT NULL
-                                AND org_id = current_setting('myapp.current_org_id', true)::text
-                            );
-                        END $$;
-                        """
-                    cursor.execute(insert_policy_sql)
-
-                    update_policy_sql = f"""
-                        DO $$
-                        BEGIN
-                            DROP POLICY IF EXISTS update_by_org ON {table_name};
-                            CREATE POLICY update_by_org ON {table_name}
-                            FOR UPDATE USING (
-                                org_id IS NOT NULL
-                                AND org_id = current_setting('myapp.current_org_id', true)::text
-                            );
-                        END $$;
-                        """
-                    cursor.execute(update_policy_sql)
-
-                    delete_policy_sql = f"""
-                        DO $$
-                        BEGIN
-                            DROP POLICY IF EXISTS delete_by_org ON {table_name};
-                            CREATE POLICY delete_by_org ON {table_name}
-                            FOR DELETE USING (
-                                org_id IS NOT NULL
-                                AND org_id = current_setting('myapp.current_org_id', true)::text
-                            );
-                        END $$;
-                        """
-                    cursor.execute(delete_policy_sql)
+                # CRUD policies for ALL rls_tables (not just a subset)
+                cursor.execute(f"""
+                    DO $$ BEGIN
+                        DROP POLICY IF EXISTS insert_by_org ON {table_name};
+                        CREATE POLICY insert_by_org ON {table_name}
+                        FOR INSERT WITH CHECK ({_rls_using});
+                    END $$;
+                """)
+                cursor.execute(f"""
+                    DO $$ BEGIN
+                        DROP POLICY IF EXISTS update_by_org ON {table_name};
+                        CREATE POLICY update_by_org ON {table_name}
+                        FOR UPDATE USING ({_rls_using});
+                    END $$;
+                """)
+                cursor.execute(f"""
+                    DO $$ BEGIN
+                        DROP POLICY IF EXISTS delete_by_org ON {table_name};
+                        CREATE POLICY delete_by_org ON {table_name}
+                        FOR DELETE USING ({_rls_using});
+                    END $$;
+                """)
 
                 cursor.execute(
                     f"SELECT policyname, qual FROM pg_policies WHERE tablename = '{table_name}';"

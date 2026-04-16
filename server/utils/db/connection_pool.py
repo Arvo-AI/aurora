@@ -98,10 +98,18 @@ class DatabaseConnectionPool:
         finally:
             if connection:
                 try:
-                    pool.putconn(connection)
-                    logger.debug("Returned connection to pool")
+                    connection.rollback()
+                    with connection.cursor() as cur:
+                        cur.execute(
+                            "RESET myapp.current_user_id; RESET myapp.current_org_id;"
+                        )
+                    connection.commit()
                 except Exception as e:
-                    logger.error(f"Error returning connection to pool: {e}")
+                    logger.warning("Failed to reset session vars on pool return: %s", e)
+                try:
+                    pool.putconn(connection)
+                except Exception as e:
+                    logger.error("Error returning connection to pool: %s", e)
 
     # Backward compatibility aliases
     def get_user_connection(self):

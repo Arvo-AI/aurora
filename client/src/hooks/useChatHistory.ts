@@ -70,7 +70,7 @@ export interface UseChatHistoryReturn {
   lastRefreshTimestamp: number;
   refreshSessions: () => Promise<boolean>;
   createSession: (title?: string) => Promise<string | null>;
-  loadSession: (sessionId: string) => Promise<{ messages: ChatMessage[], uiState?: CompleteUiState, incidentId?: string | null } | null>;
+  loadSession: (sessionId: string) => Promise<{ messages: ChatMessage[], uiState?: CompleteUiState, incidentId?: string | null, status?: string } | null>;
   updateSession: (sessionId: string, title?: string, messages?: ChatMessage[], uiState?: CompleteUiState) => Promise<boolean>;
   deleteSession: (sessionId: string) => Promise<boolean>;
   switchToSession: (sessionId: string, onClearState: () => void, onApplyState: (uiState: CompleteUiState) => void) => Promise<{ messages: ChatMessage[], uiState?: CompleteUiState } | null>;
@@ -178,7 +178,7 @@ export function useChatHistory(): UseChatHistoryReturn {
     }
   }, [user?.id, refreshSessions]);
 
-  const loadSession = useCallback(async (sessionId: string): Promise<{ messages: ChatMessage[], uiState?: CompleteUiState, incidentId?: string | null } | null> => {
+  const loadSession = useCallback(async (sessionId: string): Promise<{ messages: ChatMessage[], uiState?: CompleteUiState, incidentId?: string | null, status?: string } | null> => {
     const effectiveUserId = user?.id;
     
     
@@ -224,7 +224,7 @@ export function useChatHistory(): UseChatHistoryReturn {
       const cleanedMessages = cleanupStaleToolCalls(rawMessages, data.updated_at);
       const cleanupTime = performance.now() - cleanupStart;
       // DON'T refresh sessions when just loading - this prevents sessions from moving to top
-      return { messages: cleanedMessages, uiState, incidentId: data.incident_id || null };
+      return { messages: cleanedMessages as ChatMessage[], uiState, incidentId: data.incident_id || null, status: data.status || null };
     } catch (err) {
       console.error('[useChatHistory] Error loading chat session:', err);
       setCrudError(err instanceof Error ? err.message : 'Failed to load chat session');
