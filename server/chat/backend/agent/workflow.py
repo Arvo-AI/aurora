@@ -1644,7 +1644,7 @@ class Workflow:
                 conn.commit()
 
                 cursor.execute(
-                    "SELECT messages FROM chat_sessions WHERE id = %s AND user_id = %s",
+                    "SELECT messages FROM chat_sessions WHERE id = %s AND user_id = %s FOR UPDATE",
                     (session_id, user_id),
                 )
                 row = cursor.fetchone()
@@ -1701,6 +1701,7 @@ class Workflow:
                 return True
 
         except Exception as e:
+            # Broad catch: DB/persistence errors must not abort the workflow.
             logger.error(f"Error appending UI messages: {e}")
             return False
 
