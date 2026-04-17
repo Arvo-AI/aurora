@@ -28,9 +28,9 @@ spec:
             pathType: {{ .pathType | default "Prefix" }}
             backend:
               service:
-                name: {{ .backend.service }}
+                name: {{ required ".backend.service is required" .backend.service }}
                 port:
-                  number: {{ .backend.port }}
+                  number: {{ required ".backend.port is required" .backend.port }}
           {{- end }}
     {{- end }}
 {{- end }}
