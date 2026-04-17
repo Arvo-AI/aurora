@@ -128,22 +128,18 @@ def is_kubectl_onprem_connected(user_id: str) -> bool:
     if not user_id:
         return False
     try:
-        from utils.db.db_adapters import connect_to_db_as_user
+        from utils.db.connection_pool import db_pool
 
-        conn = connect_to_db_as_user()
-        try:
-            cursor = conn.cursor()
-            cursor.execute(
-                """SELECT COUNT(*) FROM active_kubectl_connections c
-                   JOIN kubectl_agent_tokens t ON c.token = t.token
-                   WHERE t.user_id = %s AND c.status = 'active'""",
-                (user_id,),
-            )
-            count = cursor.fetchone()[0]
-            cursor.close()
-            return count > 0
-        finally:
-            conn.close()
+        with db_pool.get_user_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """SELECT COUNT(*) FROM active_kubectl_connections c
+                       JOIN kubectl_agent_tokens t ON c.token = t.token
+                       WHERE t.user_id = %s AND c.status = 'active'""",
+                    (user_id,),
+                )
+                count = cursor.fetchone()[0]
+                return count > 0
     except Exception:
         logger.debug("kubectl on-prem connection check failed for user %s", user_id)
         return False

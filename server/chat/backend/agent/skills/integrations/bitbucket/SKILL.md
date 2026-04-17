@@ -26,6 +26,9 @@ metadata:
 ## Overview
 Bitbucket code repository integration for managing repositories, branches, pull requests, issues, and CI/CD pipelines.
 Connected account: {display_name}
+Selected workspace: {workspace_slug}
+Selected repository: {repo_name}
+Selected branch: {branch_name}
 Workspace and repository auto-resolve from saved user selection if not passed explicitly.
 
 ## Instructions

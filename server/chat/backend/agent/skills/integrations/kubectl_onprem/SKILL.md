@@ -24,6 +24,9 @@ On-prem Kubernetes cluster integration for running kubectl commands on connected
 
 Connected clusters are listed by name and `cluster_id`. Use the `cluster_id` to target a specific cluster.
 
+### Connected Clusters
+{cluster_list}
+
 **Note:** For cloud-managed clusters (GCP GKE, AWS EKS, Azure AKS), use `terminal_exec` with kubectl commands instead.
 
 ## Instructions

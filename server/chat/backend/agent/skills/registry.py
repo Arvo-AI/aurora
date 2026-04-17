@@ -8,6 +8,7 @@ Content is cached for performance.
 import logging
 import os
 import threading
+import time
 from typing import Any, Dict, List, Optional, Tuple
 
 from .loader import (
@@ -63,12 +64,15 @@ class SkillRegistry:
     _instance: Optional["SkillRegistry"] = None
     _lock = threading.Lock()
 
+    _CONNECTION_CACHE_TTL = 30  # seconds
+
     def __init__(self) -> None:
         self._skills: Dict[str, SkillMetadata] = {}
         self._bodies: Dict[str, str] = {}  # skill_id -> raw body (pre-template)
         self._rca_skills: Dict[str, SkillMetadata] = {}
         self._rca_bodies: Dict[str, str] = {}
         self._tool_to_skill: Dict[str, str] = {}  # tool_name -> skill_id
+        self._connection_cache: Dict[Tuple[str, str], Tuple[float, bool, Dict[str, Any]]] = {}
         self._discover()
 
     @classmethod
@@ -119,7 +123,15 @@ class SkillRegistry:
 
         Returns (is_connected, context_data).
         context_data contains template variables (e.g. username).
+        Results are cached per (user_id, skill_id) for up to _CONNECTION_CACHE_TTL seconds.
         """
+        cache_key = (user_id, skill_id)
+        cached = self._connection_cache.get(cache_key)
+        if cached is not None:
+            ts, is_conn, ctx = cached
+            if time.monotonic() - ts < self._CONNECTION_CACHE_TTL:
+                return is_conn, ctx
+
         meta = self._skills.get(skill_id) or self._rca_skills.get(skill_id)
         if not meta:
             return False, {}
@@ -137,7 +149,9 @@ class SkillRegistry:
         method = check.get("method", "")
 
         try:
-            return self._dispatch_check(skill_id, method, check, user_id)
+            is_connected, ctx_data = self._dispatch_check(skill_id, method, check, user_id)
+            self._connection_cache[cache_key] = (time.monotonic(), is_connected, ctx_data)
+            return is_connected, ctx_data
         except Exception as e:
             logger.warning(f"Connection check failed for {skill_id}: {e}")
             return False, {}
@@ -178,6 +192,9 @@ class SkillRegistry:
 
             creds = get_credentials_from_db(user_id, provider_key)
             if _has_required_fields(creds):
+                # Enrich with extra context for specific skills
+                if skill_id == "bitbucket":
+                    creds.update(self._get_bitbucket_workspace_context(user_id))
                 return True, creds
             return False, {}
 
@@ -219,7 +236,13 @@ class SkillRegistry:
             mod = importlib.import_module(module_path)
             func = getattr(mod, func_name)
             connected = func(user_id)
-            return bool(connected), {}
+            ctx_data: Dict[str, Any] = {}
+
+            # Build extra context for specific skills
+            if bool(connected) and skill_id == "kubectl_onprem":
+                ctx_data = self._get_kubectl_onprem_context(user_id)
+
+            return bool(connected), ctx_data
 
         elif method == "provider_in_preference":
             # For provider-bound skills (e.g., ovh/scaleway/tailscale/grafana),
@@ -450,6 +473,61 @@ class SkillRegistry:
     # ------------------------------------------------------------------
 
     @staticmethod
+    def _get_kubectl_onprem_context(user_id: str) -> Dict[str, Any]:
+        """Fetch connected on-prem cluster names and IDs for template rendering."""
+        try:
+            from utils.db.connection_pool import db_pool
+
+            with db_pool.get_user_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """SELECT c.cluster_id, t.cluster_name
+                           FROM active_kubectl_connections c
+                           JOIN kubectl_agent_tokens t ON c.token = t.token
+                           WHERE t.user_id = %s AND c.status = 'active'
+                           ORDER BY t.cluster_name""",
+                        (user_id,),
+                    )
+                    rows = cur.fetchall()
+
+            if rows:
+                lines = [f"- {name} (cluster_id: `{cid}`)" for cid, name in rows]
+                return {"cluster_list": "\n".join(lines)}
+            return {"cluster_list": "(no active clusters)"}
+        except Exception as e:
+            logger.warning(f"Failed to fetch kubectl on-prem clusters: {e}")
+            return {"cluster_list": "(cluster data unavailable)"}
+
+    @staticmethod
+    def _get_bitbucket_workspace_context(user_id: str) -> Dict[str, Any]:
+        """Fetch the user's Bitbucket workspace selection for template rendering."""
+        try:
+            from utils.auth.stateless_auth import get_credentials_from_db
+
+            selection = get_credentials_from_db(user_id, "bitbucket_workspace_selection") or {}
+            ws = selection.get("workspace")
+            repo = selection.get("repository")
+            branch = selection.get("branch")
+
+            # workspace/repository may be dicts with slug/name keys or plain strings
+            ws_slug = ws.get("slug", ws) if isinstance(ws, dict) else (ws or "")
+            repo_name = repo.get("name", repo) if isinstance(repo, dict) else (repo or "")
+            branch_name = branch.get("name", branch) if isinstance(branch, dict) else (branch or "")
+
+            return {
+                "workspace_slug": ws_slug or "(not selected)",
+                "repo_name": repo_name or "(not selected)",
+                "branch_name": branch_name or "(not selected)",
+            }
+        except Exception as e:
+            logger.warning(f"Failed to fetch bitbucket workspace selection: {e}")
+            return {
+                "workspace_slug": "(unavailable)",
+                "repo_name": "(unavailable)",
+                "branch_name": "(unavailable)",
+            }
+
+    @staticmethod
     def _build_rca_context(
         user_id: str,
         source: str,
@@ -487,6 +565,14 @@ class SkillRegistry:
 
         # Jira mode
         ctx["jira_mode"] = integrations.get("jira_mode", "comment_only")
+
+        # Bitbucket workspace selection
+        if integrations.get("bitbucket"):
+            ctx.update(SkillRegistry._get_bitbucket_workspace_context(user_id))
+
+        # kubectl on-prem cluster list
+        if integrations.get("kubectl_onprem"):
+            ctx.update(SkillRegistry._get_kubectl_onprem_context(user_id))
 
         return ctx
 
