@@ -1,26 +1,25 @@
-# Prompt + Skills Architecture (Modular)
+# Prompt + Skills Architecture
 
-This document explains the new modular prompt architecture for the Aurora agent.
+Architecture documentation for the Aurora agent prompt system.
 
 It covers:
-- what moved out of the old monolithic prompt builder
-- where each responsibility now lives
+- where each responsibility lives
 - how interactive chat and background RCA prompts are assembled
 - how to extend the system safely
 
-## 1) High-level goals
+## 1) Design principles
 
-The refactor separates:
+The architecture separates:
 - prompt content (Markdown files)
 - prompt orchestration (Python modules)
 - skill metadata and connection logic (YAML frontmatter + registry)
 - runtime loading policy (connected integrations, RCA budget, on-demand load)
 
-This gives:
-- faster prompt iteration (edit `.md`, not Python string blocks)
-- lower risk changes (small focused modules)
-- better context discipline (load only relevant skills)
-- clearer ownership boundaries
+Benefits:
+- fast prompt iteration (edit `.md`, not Python string blocks)
+- low-risk changes (small focused modules)
+- context discipline (load only relevant skills)
+- clear ownership boundaries
 
 ## 2) Directory layout
 
@@ -253,10 +252,10 @@ If editing prompt content only:
 - `skills/rca/background/*.md`
 - `skills/integrations/*/SKILL.md`
 
-## 12) Current tradeoff
+## 12) Design tradeoffs
 
-Total lines across modules may be similar or slightly higher than the old single file.
-The benefit is not line-count reduction alone, but local reasoning:
+Total lines across modules may be higher than a single-file approach.
+The benefit is local reasoning:
 - each file has one concern
 - content changes happen in markdown
 - orchestration changes happen in focused Python modules

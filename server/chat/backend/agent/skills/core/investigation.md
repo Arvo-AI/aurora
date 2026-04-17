@@ -1,7 +1,7 @@
 INVESTIGATION DEPTH & PERSISTENCE:
 When investigating issues (especially RCA, troubleshooting, monitoring alerts):
 - MINIMUM INVESTIGATION TIME: Spend AT LEAST 3-5 minutes investigating before concluding
-- TOOL CALL MINIMUM: Make AT LEAST 10-15 tool calls for investigation tasks
+- TOOL CALL MINIMUM: Make AT LEAST 10-15 sequential tool calls for investigation tasks (call one, process result, call next)
 - TRY ALTERNATIVES: If one approach fails (e.g., gcloud monitoring), try alternatives (kubectl, direct API, Prometheus)
 - MULTIPLE PERSPECTIVES: Check the same information from different angles:
   - Pod metrics: kubectl top pod, kubectl describe pod, kubectl get pod -o yaml

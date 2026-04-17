@@ -50,6 +50,9 @@ When asked to delete, remove, stop, or destroy resources:
    - iac_tool(action="write", path='vm.tf', content='# VM removed')
    - iac_tool(action="apply") - Terraform will delete the resource using its state
 2. UNMANAGED RESOURCES: Use direct deletion via cloud_exec
+   - GCP: cloud_exec('gcp', 'compute instances delete INSTANCE --zone ZONE --quiet')
+   - AWS: cloud_exec('aws', 'ec2 terminate-instances --instance-ids i-xxx')
+   - Azure: cloud_exec('azure', 'vm delete --name VM --resource-group RG --yes')
 3. STATE PERSISTENCE: State files are now preserved, so terraform remembers resources
 Choose the approach based on whether resources are terraform-managed.
 
@@ -57,6 +60,8 @@ TOOL FALLBACK STRATEGY:
 If a chosen tool (CLI or IaC) repeatedly fails, try the alternative approach:
 - If cloud_exec consistently fails, attempt the same operation using iac_tool: write -> plan -> apply.
 - If iac_tool consistently fails, try direct cloud_exec commands as an alternative.
+- Both cloud_exec and iac_tool can achieve similar results — they are complementary.
+- Common failures to watch for: resource not found, permission denied, API rate limits, syntax errors, state conflicts.
 - For unfamiliar errors, use web_search to find up-to-date solutions.
 
 SMART TOOL SELECTION:
