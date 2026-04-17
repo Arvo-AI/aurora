@@ -4,10 +4,7 @@ import secrets
 import re
 from datetime import datetime, timedelta
 from flask import Blueprint, request, jsonify
-from utils.auth.stateless_auth import (
-    get_user_email,
-)
-from utils.web.cors_utils import create_cors_response
+from utils.auth.stateless_auth import get_user_email
 from utils.auth.rbac_decorators import require_permission
 from utils.db.connection_pool import db_pool
 from utils.notifications.email_service import get_email_service
