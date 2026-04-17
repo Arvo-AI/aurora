@@ -217,10 +217,10 @@ def tailscale_ssh(
         })
 
     # Org command policy check (shared allow/deny firewall across all tools)
-    from utils.auth.command_policy import evaluate_command
+    from utils.auth.command_policy import evaluate_compound_command
     from utils.auth.stateless_auth import get_org_id_for_user
     org_id = get_org_id_for_user(user_id) if user_id else None
-    verdict = evaluate_command(org_id, command)
+    verdict = evaluate_compound_command(org_id, command)
     if not verdict.allowed:
         logger.warning("Policy denied tailscale_ssh command for user %s: %s (%s)",
                         user_id, command[:100], verdict.rule_description)

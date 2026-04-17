@@ -66,7 +66,7 @@ def _scan_tf_for_exec_provisioners(
     if not org_id:
         return []
 
-    from utils.auth.command_policy import evaluate_command
+    from utils.auth.command_policy import evaluate_compound_command
     from utils.terminal.terminal_run import terminal_run
 
     list_cmd = f"cat {terraform_dir}/*.tf 2>/dev/null || true"
@@ -80,7 +80,7 @@ def _scan_tf_for_exec_provisioners(
     for match in _LOCAL_EXEC_RE.finditer(content):
         cmd = match.group(1).strip()
         if cmd:
-            verdict = evaluate_command(org_id, cmd)
+            verdict = evaluate_compound_command(org_id, cmd)
             if not verdict.allowed:
                 denied.append((cmd, verdict))
 
@@ -89,7 +89,7 @@ def _scan_tf_for_exec_provisioners(
         parts = [p.strip().strip('"').strip("'") for p in raw.split(",")]
         cmd = " ".join(parts)
         if cmd:
-            verdict = evaluate_command(org_id, cmd)
+            verdict = evaluate_compound_command(org_id, cmd)
             if not verdict.allowed:
                 denied.append((cmd, verdict))
 

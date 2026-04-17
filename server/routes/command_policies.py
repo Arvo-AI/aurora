@@ -17,7 +17,7 @@ from utils.auth.stateless_auth import (
     store_user_preference,
 )
 from utils.auth.command_policy import (
-    evaluate_command,
+    evaluate_compound_command,
     get_seed_rules,
     invalidate_cache,
     validate_pattern,
@@ -208,7 +208,7 @@ def test_command(user_id):
     if not command:
         return jsonify({"error": "command is required"}), 400
 
-    verdict = evaluate_command(org_id, command)
+    verdict = evaluate_compound_command(org_id, command)
     return jsonify({
         "allowed": verdict.allowed,
         "rule_description": verdict.rule_description,

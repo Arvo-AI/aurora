@@ -7,6 +7,10 @@ Two independent lists, each independently togglable:
   2. Allowlist (if enabled) - checked second. Match -> ALLOWED, no match -> DENIED.
   3. Both off -> ALLOWED.
 
+Compound shell expressions (;, &&, ||, |, subshells) are decomposed and each
+atomic command is evaluated independently. One denied sub-command blocks the
+entire expression.
+
 Default for new orgs: allowlist ON, denylist OFF.
 Fail-closed: any error fetching policy -> deny all.
 """
@@ -146,6 +150,118 @@ def evaluate_command(org_id: Optional[str], command: str) -> CommandVerdict:
     return CommandVerdict(allowed=True)
 
 
+def _split_compound_command(compound: str) -> List[str]:
+    """Quote-aware split of a shell expression into atomic commands.
+
+    Splits on ; && || | while respecting single/double quotes and backslash
+    escapes.  Recursively extracts commands from $(...) and backtick subshells
+    so they are evaluated independently.
+    """
+    commands: List[str] = []
+    buf: List[str] = []
+    sq = dq = False
+    i, n = 0, len(compound)
+
+    def _flush() -> None:
+        s = "".join(buf).strip()
+        if s:
+            commands.append(s)
+        buf.clear()
+
+    while i < n:
+        c = compound[i]
+
+        # Backslash escape (not inside single quotes)
+        if c == "\\" and not sq and i + 1 < n:
+            buf += [c, compound[i + 1]]
+            i += 2
+            continue
+
+        # Quote toggling
+        if c == "'" and not dq:
+            sq = not sq
+            buf.append(c)
+            i += 1
+            continue
+        if c == '"' and not sq:
+            dq = not dq
+            buf.append(c)
+            i += 1
+            continue
+
+        # Everything inside quotes is literal
+        if sq or dq:
+            buf.append(c)
+            i += 1
+            continue
+
+        # -- Outside quotes: detect operators and subshells --
+        two = compound[i : i + 2]
+
+        if two in ("&&", "||"):
+            _flush()
+            i += 2
+            continue
+
+        if c in (";", "|"):
+            _flush()
+            i += 1
+            continue
+
+        # $(...) subshell - extract inner commands for separate evaluation
+        if c == "$" and i + 1 < n and compound[i + 1] == "(":
+            j, depth = i + 2, 1
+            while j < n and depth:
+                if compound[j] == "(":
+                    depth += 1
+                elif compound[j] == ")":
+                    depth -= 1
+                j += 1
+            commands.extend(_split_compound_command(compound[i + 2 : j - 1]))
+            buf.append(compound[i:j])
+            i = j
+            continue
+
+        # Backtick subshell
+        if c == "`":
+            j = compound.find("`", i + 1)
+            if j != -1:
+                commands.extend(_split_compound_command(compound[i + 1 : j]))
+                buf.append(compound[i : j + 1])
+                i = j + 1
+                continue
+
+        buf.append(c)
+        i += 1
+
+    _flush()
+    return commands
+
+
+def evaluate_compound_command(
+    org_id: Optional[str], command: str
+) -> CommandVerdict:
+    """Evaluate a potentially compound shell command.
+
+    Decomposes the expression into atomic commands and evaluates each one
+    independently.  ALL sub-commands must pass policy; the first denial is
+    returned immediately.
+    """
+    if not org_id:
+        return CommandVerdict(allowed=True)
+
+    parts = _split_compound_command(command)
+    if not parts:
+        return evaluate_command(org_id, command)
+
+    for part in parts:
+        verdict = evaluate_command(org_id, part)
+        if not verdict.allowed:
+            return verdict
+
+    return CommandVerdict(allowed=True)
+
+
 def validate_pattern(pattern: str) -> Optional[str]:
     """Return an error string if *pattern* is not valid regex, else None."""
     try:
@@ -206,10 +322,16 @@ def get_seed_rules() -> Dict[str, list]:
              "description": "Recursive root deletion"},
             {"priority": 95, "pattern": r"\b(gcc|g\+\+|cc|make|as|ld)\b",
              "description": "Native code compilation"},
+            {"priority": 92, "pattern": r"\beval\b|\bexec\b",
+             "description": "Dynamic code evaluation"},
             {"priority": 90, "pattern": r"\bLD_PRELOAD\b",
              "description": "Shared library injection"},
+            {"priority": 88, "pattern": r"\bbase64\b.*\|\s*(sh|bash|python)",
+             "description": "Encoded payload execution"},
             {"priority": 85, "pattern": r"\b(ssh-keygen|ssh-copy-id)\b",
              "description": "SSH key generation on host"},
+            {"priority": 83, "pattern": r"\b(bash|sh|dash|zsh)\s+-c\b",
+             "description": "Inline shell interpreter"},
             {"priority": 80, "pattern": r"\b(useradd|usermod|adduser|visudo|passwd)\b",
              "description": "User/privilege management"},
             {"priority": 75, "pattern": r"\bcurl\b.*\|\s*(sh|bash)\b",

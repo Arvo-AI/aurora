@@ -43,11 +43,11 @@ def on_prem_kubectl(
         command = command[8:].strip()
 
     # Org command policy check against full kubectl command
-    from utils.auth.command_policy import evaluate_command
+    from utils.auth.command_policy import evaluate_compound_command
     from utils.auth.stateless_auth import get_org_id_for_user
     full_command = f"kubectl {command}"
     org_id = get_org_id_for_user(user_id) if user_id else None
-    verdict = evaluate_command(org_id, full_command)
+    verdict = evaluate_compound_command(org_id, full_command)
     if not verdict.allowed:
         logger.warning("Policy denied kubectl_onprem command for user %s: %s (%s)",
                         user_id, full_command[:100], verdict.rule_description)
