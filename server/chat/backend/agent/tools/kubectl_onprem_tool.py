@@ -121,3 +121,25 @@ def on_prem_kubectl(
         response_data['chat_output'] = f"$ {full_command}\nError: {error}"
     
     return json.dumps(response_data)
+
+
+def is_kubectl_onprem_connected(user_id: str) -> bool:
+    """Check if user has active on-prem kubectl connections."""
+    if not user_id:
+        return False
+    try:
+        from utils.db.connection_pool import db_pool
+
+        with db_pool.get_user_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """SELECT COUNT(*) FROM active_kubectl_connections c
+                       JOIN kubectl_agent_tokens t ON c.token = t.token
+                       WHERE t.user_id = %s AND c.status = 'active'""",
+                    (user_id,),
+                )
+                count = cursor.fetchone()[0]
+                return count > 0
+    except Exception:
+        logger.debug("kubectl on-prem connection check failed for user %s", user_id)
+        return False

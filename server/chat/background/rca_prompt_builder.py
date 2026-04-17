@@ -9,11 +9,77 @@ Aurora Learn Integration:
 - Injects context from helpful RCAs to improve new investigations
 """
 
+from functools import lru_cache
 from typing import Any, Dict, List, Optional
 import logging
 import os
 
 logger = logging.getLogger(__name__)
+
+RCA_SEGMENTS_DIR = os.path.normpath(
+    os.path.join(
+        os.path.dirname(__file__),
+        os.pardir,
+        "backend",
+        "agent",
+        "skills",
+        "rca",
+        "segments",
+    )
+)
+
+
+@lru_cache(maxsize=32)
+def _load_rca_segment_template(segment_name: str) -> str:
+    """
+    Load an RCA markdown segment by name (filename without .md).
+
+    Segment content is cached in-process for performance.
+    """
+    try:
+        from chat.backend.agent.skills.loader import load_core_prompt
+
+        return load_core_prompt(RCA_SEGMENTS_DIR, segments=[segment_name]).strip()
+    except Exception as e:
+        logger.warning(f"Failed to load RCA segment '{segment_name}': {e}")
+        return ""
+
+
+def _render_rca_segment(segment_name: str, context: Optional[Dict[str, Any]] = None) -> str:
+    """Render an RCA segment with optional {variable} template substitutions."""
+    template = _load_rca_segment_template(segment_name)
+    if not template:
+        return ""
+
+    if not context:
+        return template
+
+    try:
+        from chat.backend.agent.skills.loader import resolve_template
+
+        return resolve_template(template, context)
+    except Exception as e:
+        logger.warning(f"Failed to render RCA segment '{segment_name}': {e}")
+        return template
+
+
+def _append_rca_segment(
+    prompt_parts: List[str],
+    segment_name: str,
+    context: Optional[Dict[str, Any]] = None,
+    leading_blank: bool = False,
+    trailing_blank: bool = False,
+) -> None:
+    """Append rendered segment to prompt_parts with optional surrounding blank lines."""
+    content = _render_rca_segment(segment_name, context=context)
+    if not content:
+        return
+
+    if leading_blank:
+        prompt_parts.append("")
+    prompt_parts.append(content)
+    if trailing_blank:
+        prompt_parts.append("")
 
 
 # ============================================================================
@@ -240,22 +306,37 @@ def _get_prediscovery_context(user_id: str, alert_title: str, alert_service: str
 
 
 def get_user_providers(user_id: str) -> List[str]:
-    """Fetch connected cloud providers for a user from the database."""
+    """Return verified providers for a user.
+
+    Single source of truth: cloud providers (aws/gcp/azure/ovh/scaleway)
+    come from user_connections (role-based auth, always valid).
+    Integration providers come from SkillRegistry connection checks
+    (credential-validated). The agent never sees providers it can't use.
+    """
     if not user_id:
         return []
 
+    _cloud_providers = {'aws', 'gcp', 'azure', 'ovh', 'scaleway'}
+    verified = []
+
     try:
         from utils.auth.stateless_auth import get_connected_providers
-        providers = get_connected_providers(user_id)
-        if providers:
-            logger.info(f"Fetched connected providers for RCA: {providers}")
-            return providers
-        logger.info(f"No connected providers found for user {user_id}")
-
-        return []
+        all_db = get_connected_providers(user_id)
+        verified = [p for p in all_db if p.lower() in _cloud_providers]
     except Exception as e:
-        logger.warning(f"Error fetching connected providers for RCA: {e}")
-        return []
+        logger.warning(f"Error fetching cloud providers: {e}")
+
+    try:
+        from chat.backend.agent.skills.registry import SkillRegistry
+        registry = SkillRegistry.get_instance()
+        connected_skill_ids = registry.get_connected_skill_ids(user_id)
+        verified.extend(connected_skill_ids)
+    except Exception as e:
+        logger.warning(f"Error fetching connected skills: {e}")
+
+    result = sorted(set(verified))
+    logger.info(f"Verified providers for user {user_id}: {result}")
+    return result
 
 
 def _has_onprem_clusters(user_id: Optional[str]) -> bool:
@@ -282,6 +363,9 @@ def _has_onprem_clusters(user_id: Optional[str]) -> bool:
         return False
 
 
+def _build_provider_investigation_section(providers: List[str], user_id: Optional[str] = None) -> str:
+    """Provider investigation now loaded from skills/rca/ files."""
+    return ""
 
 def _get_github_connected(user_id: str) -> bool:
     """Check if user has GitHub connected."""
@@ -396,6 +480,7 @@ def build_rca_prompt(
     alert_details: Dict[str, Any],
     providers: Optional[List[str]] = None,
     user_id: Optional[str] = None,
+    integrations: Optional[Dict[str, bool]] = None,
 ) -> str:
     """Build a comprehensive, provider-aware RCA prompt."""
     # Fetch providers if not provided
@@ -404,6 +489,16 @@ def build_rca_prompt(
 
     providers = providers or []
     providers_lower = [p.lower() for p in providers]
+
+    # Derive integrations from skill registry when not passed by caller
+    if integrations is None and user_id:
+        try:
+            from chat.backend.agent.skills.registry import SkillRegistry
+            registry = SkillRegistry.get_instance()
+            connected_ids = registry.get_connected_skill_ids(user_id)
+            integrations = {sid: True for sid in connected_ids}
+        except Exception:
+            integrations = {}
 
     # Extract alert service name early — used by multiple sections below.
     # Start with the explicit service label, then try richer fallbacks from
@@ -502,173 +597,18 @@ def build_rca_prompt(
         if 'issueUrl' in alert_details:
             prompt_parts.append(f"- **Issue URL**: {alert_details['issueUrl']}")
 
-    # Connected providers section — only list infra/monitoring providers here;
-    # GitHub, Jira, Confluence, Jenkins, CloudBees get their own dedicated sections.
-    _dedicated_sections = {'github', 'jira', 'confluence', 'jenkins', 'cloudbees'}
-    _display_providers = [p for p in providers if p.lower() not in _dedicated_sections]
+    # providers list is already verified by get_user_providers() — only
+    # cloud providers with valid role-auth + SkillRegistry-validated integrations.
     prompt_parts.extend([
         "",
         "## CONNECTED INFRASTRUCTURE & MONITORING:",
-        f"You have access to: {', '.join(_display_providers) if _display_providers else 'No cloud/monitoring providers connected'}",
+        f"You have access to: {', '.join(providers) if providers else 'No cloud/monitoring providers connected'}",
     ])
 
-    # Jira/Confluence investigation context — placed FIRST so agent searches before infra
-    has_jira = False
-    has_confluence = False
-    if user_id:
-        has_jira = _has_jira_connected(user_id)
-        has_confluence = _has_confluence_connected(user_id)
-
-        if has_jira or has_confluence:
-            prompt_parts.extend([
-                "",
-                "## ⚠️  MANDATORY FIRST STEP — CHANGE CONTEXT & KNOWLEDGE BASE:",
-                "**You MUST call the Jira/Confluence tools below BEFORE any infrastructure or CI/CD investigation.**",
-                "Skipping this step is a failure of the investigation.",
-            ])
-
-        if has_jira:
-            # Use the enriched alert_service for Jira search (already has message fallbacks)
-            _jira_search_term = alert_service or title
-            escaped_service = _jira_search_term.replace('\\', '\\\\').replace('"', '\\"')
-            prompt_parts.extend([
-                "",
-                "### Jira — Recent Development Context (SEARCH FIRST):",
-                "Jira is connected. Your FIRST tool calls MUST be jira_search_issues.",
-                "",
-                "**Step 1 — Find related recent work (DO THIS IMMEDIATELY):**",
-                f"- `jira_search_issues(jql='text ~ \"{escaped_service}\" AND updated >= -7d ORDER BY updated DESC')` — Recent tickets for this service",
-                "- `jira_search_issues(jql='type in (Bug, Incident) AND status != Done AND updated >= -14d ORDER BY updated DESC')` — Open bugs/incidents",
-                "- `jira_search_issues(jql='type in (Story, Task) AND status = Done AND updated >= -3d ORDER BY updated DESC')` — Recently completed work (likely deployed)",
-                "",
-                "**Step 2 — For each relevant ticket, check details:**",
-                "- `jira_get_issue(issue_key='PROJ-123')` — Read the description, linked PRs, comments for context on what changed",
-                "",
-                "**What to look for:**",
-                "- Recently completed stories/tasks → code that was just deployed",
-                "- Open bugs with similar symptoms → known issues",
-                "- Config change tickets → infrastructure or config drift",
-                "- Linked PRs/commits → exact code changes to correlate with the failure",
-                "",
-                "**Use Jira findings to NARROW your infrastructure investigation.** If a ticket mentions a DB migration, focus on DB connectivity. If a ticket mentions a config change, check configs first.",
-                "",
-                "**CRITICAL: During this investigation phase, ONLY use jira_search_issues and jira_get_issue.**",
-                "Do NOT use jira_create_issue, jira_add_comment, jira_update_issue, or jira_link_issues.",
-                "Jira filing happens automatically in a separate step after your investigation completes.",
-            ])
-
-        if has_confluence:
-            prompt_parts.extend([
-                "",
-                "### Confluence — Runbooks & Past Incidents:",
-                "Search Confluence for runbooks and prior postmortems BEFORE deep-diving into infrastructure:",
-                "- `confluence_search_similar(keywords=['error keywords'], service_name='SERVICE')` — Find past incidents with similar symptoms",
-                "- `confluence_search_runbooks(service_name='SERVICE')` — Find operational runbooks/SOPs",
-                "- `confluence_fetch_page(page_id='ID')` — Read full page content",
-                "",
-                "**Why this matters:** A runbook may give you the exact diagnostic steps. A past postmortem may reveal this is a recurring issue with a known fix.",
-            ])
-
-    # GitHub Integration — emphasize github_fix since system prompt has investigation commands
-    if user_id and _get_github_connected(user_id):
-        prompt_parts.extend([
-            "",
-            "## GITHUB:",
-            "GitHub is connected. Use `github_rca` and `get_connected_repos` to investigate code changes.",
-            "",
-            "**IMPORTANT — Code Fix Suggestions:**",
-            "If you identify a code defect as the root cause, you **MUST** call `github_fix` to propose a fix.",
-            "`github_fix` saves a suggestion for user review — it does NOT modify the repo. This is expected output.",
-        ])
-
-    # Provider-specific investigation commands are in the system prompt (build_background_mode_segment).
-    # Only inject on-prem cluster info here since it requires runtime DB lookup.
-    if user_id:
-        _onprem = _has_onprem_clusters(user_id)
-        if _onprem:
-            prompt_parts.extend([
-                "",
-                "## ON-PREM KUBERNETES:",
-                "You have active on-prem kubectl connections. Use `on_prem_kubectl` tool with cluster_id.",
-            ])
-
-    # Jenkins CI/CD context: inject recent deployments + investigation instructions
-    if user_id and _has_jenkins_connected(user_id):
-        recent_deploys = _get_recent_jenkins_deployments(user_id, alert_service, provider="jenkins")
-        prompt_parts.extend([
-            "",
-            "## JENKINS CI/CD INTEGRATION:",
-            "Jenkins is connected. Use the `jenkins_rca` tool to investigate CI/CD activity.",
-            "",
-        ])
-
-        if recent_deploys:
-            prompt_parts.append("### RECENT DEPLOYMENTS (potential change correlation):")
-            for dep in recent_deploys:
-                ts = dep.get("webhook_received_at", "?")
-                commit_sha = dep.get('commit_sha') or '?'
-                prompt_parts.append(
-                    f"- [{dep['result']}] {dep['service']} → {dep.get('environment', '?')} "
-                    f"received {ts} (commit: {commit_sha[:8]}, "
-                    f"build: #{dep.get('build_number', '?')})"
-                )
-                if dep.get("trace_id"):
-                    prompt_parts.append(f"  OTel Trace ID: {dep['trace_id']}")
-            prompt_parts.append("")
-
-        prompt_parts.extend([
-            "### Jenkins Investigation Commands:",
-            "- Check recent deployments: `jenkins_rca(action='recent_deployments', service='SERVICE')`",
-            "- Get build details with commits: `jenkins_rca(action='build_detail', job_path='JOB', build_number=N)`",
-            "- Get pipeline stage breakdown: `jenkins_rca(action='pipeline_stages', job_path='JOB', build_number=N)`",
-            "- Get stage-specific logs: `jenkins_rca(action='stage_log', job_path='JOB', build_number=N, node_id='NODE')`",
-            "- Get build console output: `jenkins_rca(action='build_logs', job_path='JOB', build_number=N)`",
-            "- Get test failures: `jenkins_rca(action='test_results', job_path='JOB', build_number=N)`",
-            "- Blue Ocean run data: `jenkins_rca(action='blue_ocean_run', pipeline_name='PIPELINE', run_number=N)`",
-            "- Check OTel trace context: `jenkins_rca(action='trace_context', deployment_event_id=ID)`",
-            "",
-            "**IMPORTANT**: Recent deployments are a leading indicator of root cause.",
-            "Always check if a deployment occurred shortly before the alert fired.",
-        ])
-
-    # CloudBees CI/CD context (same API as Jenkins, separate credentials)
-    if user_id and _has_cloudbees_connected(user_id):
-        recent_deploys = _get_recent_jenkins_deployments(user_id, alert_service, provider="cloudbees")
-        prompt_parts.extend([
-            "",
-            "## CLOUDBEES CI/CD INTEGRATION:",
-            "CloudBees CI is connected. Use the `cloudbees_rca` tool to investigate CI/CD activity.",
-            "",
-        ])
-
-        if recent_deploys:
-            prompt_parts.append("### RECENT DEPLOYMENTS (potential change correlation):")
-            for dep in recent_deploys:
-                ts = dep.get("webhook_received_at", "?")
-                commit_sha = dep.get('commit_sha') or '?'
-                prompt_parts.append(
-                    f"- [{dep['result']}] {dep['service']} → {dep.get('environment', '?')} "
-                    f"received {ts} (commit: {commit_sha[:8]}, "
-                    f"build: #{dep.get('build_number', '?')})"
-                )
-                if dep.get("trace_id"):
-                    prompt_parts.append(f"  OTel Trace ID: {dep['trace_id']}")
-            prompt_parts.append("")
-
-        prompt_parts.extend([
-            "### CloudBees Investigation Commands:",
-            "- Check recent deployments: `cloudbees_rca(action='recent_deployments', service='SERVICE')`",
-            "- Get build details with commits: `cloudbees_rca(action='build_detail', job_path='JOB', build_number=N)`",
-            "- Get pipeline stage breakdown: `cloudbees_rca(action='pipeline_stages', job_path='JOB', build_number=N)`",
-            "- Get stage-specific logs: `cloudbees_rca(action='stage_log', job_path='JOB', build_number=N, node_id='NODE')`",
-            "- Get build console output: `cloudbees_rca(action='build_logs', job_path='JOB', build_number=N)`",
-            "- Get test failures: `cloudbees_rca(action='test_results', job_path='JOB', build_number=N)`",
-            "- Blue Ocean run data: `cloudbees_rca(action='blue_ocean_run', pipeline_name='PIPELINE', run_number=N)`",
-            "- Check OTel trace context: `cloudbees_rca(action='trace_context', deployment_event_id=ID)`",
-            "",
-            "**IMPORTANT**: Recent deployments are a leading indicator of root cause.",
-            "Always check if a deployment occurred shortly before the alert fired.",
-        ])
+    # All integration guidance (GitHub, Jira, Confluence, Jenkins, CloudBees,
+    # provider investigation commands) loaded from skill files via SkillRegistry
+    # in the system prompt (background.py). No skill loading here — the user
+    # message should contain only alert details and investigation context.
 
     # Aurora Learn: Inject context from similar past incidents
     if user_id:
@@ -691,35 +631,28 @@ def build_rca_prompt(
         if prediscovery_context:
             prompt_parts.append(prediscovery_context)
 
-    # Critical persistence instructions
-    prompt_parts.extend([
-        "",
-        "## CRITICAL INVESTIGATION REQUIREMENTS:",
-        "",
-    ])
+    # Critical investigation requirements (modular markdown segments)
+    _append_rca_segment(
+        prompt_parts,
+        "critical_requirements_header",
+        leading_blank=True,
+        trailing_blank=True,
+    )
 
     has_infra_providers = bool({'gcp', 'aws', 'azure', 'ovh', 'scaleway'}.intersection(set(providers_lower)))
+    has_jira = bool((integrations or {}).get('jira'))
+    has_confluence = bool((integrations or {}).get('confluence'))
+    after_context_label = 'Jira' if has_jira else 'Confluence' if has_confluence else 'change'
     
     # Add aggressive persistence prompts only if cost optimization is disabled
     # The immediate action required due to the AgentExecutor which assumes agent is done when it sends a text chunk without a tool call.
     if os.getenv("RCA_OPTIMIZE_COSTS", "").lower() != "true":
-        prompt_parts.extend([
-            "### PERSISTENCE IS MANDATORY:",
-            "- **MINIMUM**: Make AT LEAST 15-20 tool calls before concluding",
-            "- **DO NOT STOP** after 2-3 commands - keep investigating until you find the EXACT root cause",
-            "- **SPEND TIME**: Investigation should take AT LEAST 3-5 minutes of active tool usage",
-            "- **IF BLOCKED**: Try 3-5 alternative approaches before giving up on any single avenue",
-            "- **COMMAND FAILURES ARE NOT STOPPING POINTS**: When a command fails, try alternatives immediately",
-            "",
-            "### IMMEDIATE ACTION REQUIRED:",
-            "- **DO NOT** output a plan or text explanation first.",
-            "- **DO NOT** say 'I will start by...'",
-            "- **If Jira is connected, your FIRST tool call MUST be jira_search_issues.**",
-            f"- After {'Jira' if has_jira else 'Confluence' if has_confluence else 'change'} context, proceed to infrastructure/CI tools.",
-            "- UNLESS YOU ARE DONE, your response MUST contain a tool call.",
-            "- NOT PROVIDING A TOOL CALL WILL END THE INVESTIGATION AUTOMATICALLY",
-            "",
-        ])
+        _append_rca_segment(
+            prompt_parts,
+            "persistence_and_immediate_action",
+            context={"after_context_label": after_context_label},
+            trailing_blank=True,
+        )
     
     depth_steps = []
     if has_jira or has_confluence:
@@ -743,52 +676,13 @@ def build_rca_prompt(
     for i, step in enumerate(depth_steps, 1):
         prompt_parts.append(f"{i}. {step}")
 
-    prompt_parts.extend([
-        "",
-        "### ERROR RESILIENCE:",
-        "- If one tool or data source fails, try an alternative immediately",
-    ])
+    _append_rca_segment(prompt_parts, "error_resilience_intro", leading_blank=True)
     if has_infra_providers:
-        prompt_parts.extend([
-            "- If cloud monitoring/metrics commands fail -> use kubectl directly",
-            "- If kubectl fails -> check cloud provider CLI alternatives",
-            "- If one log source fails -> try another (kubectl logs, cloud logging, container logs)",
-            "- If a resource isn't found -> check other namespaces, regions, or projects",
-        ])
-    prompt_parts.extend([
-        "- **ALWAYS have 3-4 backup approaches ready**",
-        "",
-        "### WHAT TO INVESTIGATE:",
-        "- Resource STATUS and HEALTH (running, pending, failed, etc.)",
-        "- LOGS for error messages, warnings, stack traces",
-        "- METRICS for CPU, memory, disk, network anomalies",
-        "- CONFIGURATIONS for misconfigurations or invalid values",
-        "- EVENTS for recent state changes",
-        "- DEPENDENCIES for cascading failures",
-        "- RECENT CHANGES or deployments that correlate with the issue",
-        "",
-        "## OUTPUT REQUIREMENTS:",
-        "",
-        "### Your analysis MUST include:",
-        "1. **Summary**: Brief description of the incident",
-        "2. **Investigation Steps**: Document EVERY tool call and what it revealed",
-        "3. **Evidence**: Show specific log entries, metric values, config snippets",
-        "4. **Root Cause**: Clearly state the EXACT root cause with supporting evidence",
-        "5. **Impact**: Describe what was affected and how",
-        "6. **Remediation**: Specific, actionable steps to fix the issue",
-        "7. **Code Fix** (if applicable): If the root cause is a code defect and GitHub is connected, "
-        "you MUST call `github_fix` to propose the fix. This creates a review-only suggestion — it is safe and expected.",
-        "",
-        "### Remember:",
-        "- You are in investigation mode — do NOT make direct infrastructure changes (no scaling, restarts, config writes)",
-        "- `github_fix` is the exception: it creates a *suggestion* for user review, not a direct change. Always use it when you find a code defect.",
-        "- The user expects you to find the EXACT root cause, not surface-level symptoms",
-        "- Keep digging until you have definitive answers",
-        "- Never conclude with 'unable to determine' without exhausting all investigation avenues",
-        "",
-        "## BEGIN INVESTIGATION NOW",
-        "Start by understanding the scope of the issue, then systematically investigate using the tools and approaches above.",
-    ])
+        _append_rca_segment(prompt_parts, "error_resilience_infra")
+    _append_rca_segment(prompt_parts, "error_resilience_outro")
+
+    _append_rca_segment(prompt_parts, "what_to_investigate", leading_blank=True)
+    _append_rca_segment(prompt_parts, "output_requirements", leading_blank=True)
 
     return "\n".join(prompt_parts)
 
