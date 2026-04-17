@@ -30,8 +30,8 @@ CODEFRESH_PROVIDER = "codefresh"
 def _get_stored_codefresh_credentials(user_id: str) -> Optional[Dict[str, Any]]:
     try:
         return get_token_data(user_id, CODEFRESH_PROVIDER)
-    except Exception as exc:
-        logger.error("Failed to retrieve Codefresh credentials for user %s: %s", user_id, exc)
+    except Exception:
+        logger.error("Failed to retrieve Codefresh credentials for user %s", user_id)
         return None
 
 
@@ -65,7 +65,7 @@ def connect(user_id):
     client = CodefreshClient(base_url=base_url, api_token=api_token)
     success, data_resp, error = client.validate_credentials()
     if not success:
-        logger.warning("[CODEFRESH] Credential validation failed for user %s: %s", user_id, error)
+        logger.warning("[CODEFRESH] Credential validation failed for user %s", user_id)
         safe_errors = {
             "Invalid API key. Check your Codefresh API token.",
             "Forbidden. Insufficient permissions.",
@@ -111,7 +111,7 @@ def status(user_id):
 
     success, _, error = client.validate_credentials()
     if not success:
-        logger.warning("[CODEFRESH] Status check failed for user %s: %s", user_id, error)
+        logger.warning("[CODEFRESH] Status check failed for user %s", user_id)
         return jsonify({"connected": False, "error": "Failed to validate stored Codefresh credentials"})
 
     pipeline_count = 0
