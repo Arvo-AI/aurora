@@ -316,6 +316,17 @@ def _has_cloudbees_connected(user_id: str) -> bool:
         return False
 
 
+def _has_codefresh_connected(user_id: str) -> bool:
+    """Check if user has Codefresh connected."""
+    try:
+        from utils.auth.token_management import get_token_data
+        creds = get_token_data(user_id, "codefresh")
+        return bool(creds and creds.get("base_url"))
+    except Exception as e:
+        logger.warning(f"Error checking Codefresh context: {e}")
+        return False
+
+
 def _has_jira_connected(user_id: str) -> bool:
     """Check if user has Jira connected and the feature flag is enabled."""
     try:
@@ -345,7 +356,7 @@ def _has_confluence_connected(user_id: str) -> bool:
 
 
 def _get_recent_jenkins_deployments(user_id: str, service: str = "", lookback_minutes: int = 60, provider: str = "") -> List[Dict[str, Any]]:
-    """Query jenkins_deployment_events for recent deployments matching a service.
+    """Query ci_deployment_events for recent deployments matching a service.
 
     Used to inject deployment context into ANY RCA prompt (not just Jenkins-sourced).
     """
@@ -371,7 +382,7 @@ def _get_recent_jenkins_deployments(user_id: str, service: str = "", lookback_mi
                 cursor.execute(
                     f"""SELECT service, environment, result, build_number, build_url,
                               commit_sha, branch, deployer, trace_id, received_at
-                       FROM jenkins_deployment_events
+                       FROM ci_deployment_events
                        WHERE {where}
                        ORDER BY received_at DESC LIMIT 5""",
                     tuple(params),
@@ -504,7 +515,7 @@ def build_rca_prompt(
 
     # Connected providers section — only list infra/monitoring providers here;
     # GitHub, Jira, Confluence, Jenkins, CloudBees get their own dedicated sections.
-    _dedicated_sections = {'github', 'jira', 'confluence', 'jenkins', 'cloudbees'}
+    _dedicated_sections = {'github', 'jira', 'confluence', 'jenkins', 'cloudbees', 'codefresh'}
     _display_providers = [p for p in providers if p.lower() not in _dedicated_sections]
     prompt_parts.extend([
         "",
@@ -665,6 +676,43 @@ def build_rca_prompt(
             "- Get test failures: `cloudbees_rca(action='test_results', job_path='JOB', build_number=N)`",
             "- Blue Ocean run data: `cloudbees_rca(action='blue_ocean_run', pipeline_name='PIPELINE', run_number=N)`",
             "- Check OTel trace context: `cloudbees_rca(action='trace_context', deployment_event_id=ID)`",
+            "",
+            "**IMPORTANT**: Recent deployments are a leading indicator of root cause.",
+            "Always check if a deployment occurred shortly before the alert fired.",
+        ])
+
+    # Codefresh CI/CD context
+    if user_id and _has_codefresh_connected(user_id):
+        recent_deploys = _get_recent_jenkins_deployments(user_id, alert_service, provider="codefresh")
+        prompt_parts.extend([
+            "",
+            "## CODEFRESH CI/CD INTEGRATION:",
+            "Codefresh is connected. Use the `codefresh_rca` tool to investigate CI/CD activity.",
+            "",
+        ])
+
+        if recent_deploys:
+            prompt_parts.append("### RECENT DEPLOYMENTS (potential change correlation):")
+            for dep in recent_deploys:
+                ts = dep.get("webhook_received_at", "?")
+                commit_sha = dep.get('commit_sha') or '?'
+                prompt_parts.append(
+                    f"- [{dep['result']}] {dep['service']} → {dep.get('environment', '?')} "
+                    f"received {ts} (commit: {commit_sha[:8]}, "
+                    f"build: #{dep.get('build_number', '?')})"
+                )
+                if dep.get("trace_id"):
+                    prompt_parts.append(f"  OTel Trace ID: {dep['trace_id']}")
+            prompt_parts.append("")
+
+        prompt_parts.extend([
+            "### Codefresh Investigation Commands:",
+            "- Check recent deployments: `codefresh_rca(action='recent_deployments', service='SERVICE')`",
+            "- Get build details: `codefresh_rca(action='build_detail', build_id='BUILD_ID')`",
+            "- Get pipeline info: `codefresh_rca(action='pipeline_info', pipeline_id='PIPELINE_ID')`",
+            "- Get build logs: `codefresh_rca(action='build_logs', build_id='BUILD_ID')`",
+            "- List recent builds: `codefresh_rca(action='list_builds', pipeline_id='PIPELINE_ID')`",
+            "- Check OTel trace context: `codefresh_rca(action='trace_context', deployment_event_id=ID)`",
             "",
             "**IMPORTANT**: Recent deployments are a leading indicator of root cause.",
             "Always check if a deployment occurred shortly before the alert fired.",
@@ -1066,6 +1114,38 @@ def build_cloudbees_rca_prompt(
         alert_details['labels']['trace_id'] = payload['trace_id']
 
     return build_rca_prompt('cloudbees', alert_details, providers, user_id)
+
+
+def build_codefresh_rca_prompt(
+    payload: Dict[str, Any],
+    providers: Optional[List[str]] = None,
+    user_id: Optional[str] = None,
+) -> str:
+    """Build RCA prompt from a Codefresh deployment failure event."""
+    service = payload.get("service") or payload.get("job_name") or "Unknown Service"
+    result = payload.get("result", "FAILURE")
+    environment = payload.get("environment", "unknown")
+    git = payload.get("git", {})
+
+    alert_details = {
+        'title': f"Codefresh Deployment {result}: {service}",
+        'status': result,
+        'message': f"Build #{payload.get('build_number', '?')} deployed to {environment}",
+        'labels': {
+            'service': service,
+            'environment': environment,
+            'deployer': payload.get('deployer', ''),
+        },
+    }
+
+    if git.get("commit_sha"):
+        alert_details['labels']['commit'] = git['commit_sha']
+    if git.get("branch"):
+        alert_details['labels']['branch'] = git['branch']
+    if payload.get("trace_id"):
+        alert_details['labels']['trace_id'] = payload['trace_id']
+
+    return build_rca_prompt('codefresh', alert_details, providers, user_id)
 
 
 def build_spinnaker_rca_prompt(

@@ -516,7 +516,7 @@ def get_incident(user_id, incident_id: str):
                     try:
                         alert_id_int = int(source_alert_id)
                         cursor.execute(
-                            "SELECT payload FROM jenkins_deployment_events WHERE id = %s AND user_id = %s",
+                            "SELECT payload FROM ci_deployment_events WHERE id = %s AND user_id = %s",
                             (alert_id_int, user_id),
                         )
                         alert_row = cursor.fetchone()

@@ -140,6 +140,14 @@ const logos = {
       onError={(e) => console.error('Failed to load CloudBees logo:', e)}
     />
   ),
+  codefresh: (
+    <img
+      src="/codefresh.svg"
+      className="w-4 h-4 min-w-4 min-h-4 object-contain"
+      alt="Codefresh"
+      onError={(e) => console.error('Failed to load Codefresh logo:', e)}
+    />
+  ),
   spinnaker: (
     <img
       src="/spinnaker.svg"
@@ -328,6 +336,11 @@ const getLogoForCommand = (command: string | any, toolName: string, provider?: s
   // CloudBees tools
   if (tool.includes('cloudbees')) {
     return 'cloudbees'
+  }
+
+  // Codefresh tools
+  if (tool.includes('codefresh')) {
+    return 'codefresh'
   }
 
   // Spinnaker tools

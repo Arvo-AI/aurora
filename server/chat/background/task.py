@@ -267,7 +267,7 @@ _RATE_LIMIT_WINDOW_SECONDS = 300  # 5 minute window
 _RATE_LIMIT_MAX_REQUESTS = 5  # Max 5 background chats per window
 
 # RCA sources that use rca_context in system prompt
-_RCA_SOURCES = {'grafana', 'datadog', 'netdata', 'splunk', 'slack', 'google_chat', 'pagerduty', 'dynatrace', 'jenkins', 'cloudbees', 'spinnaker', 'newrelic', 'chat', 'opsgenie'}
+_RCA_SOURCES = {'grafana', 'datadog', 'netdata', 'splunk', 'slack', 'google_chat', 'pagerduty', 'dynatrace', 'jenkins', 'cloudbees', 'codefresh', 'spinnaker', 'newrelic', 'chat', 'opsgenie'}
 
 # Initialize Redis client at module load time - fails if Redis is unavailable
 _redis_client = get_redis_client()
@@ -319,6 +319,7 @@ def _get_connected_integrations(user_id: str) -> Dict[str, bool]:
         'coroot': False,
         'jenkins': False,
         'cloudbees': False,
+        'codefresh': False,
         'spinnaker': False,
         'newrelic': False,
         'opsgenie': False,
@@ -403,6 +404,13 @@ def _get_connected_integrations(user_id: str) -> Dict[str, bool]:
         integrations['cloudbees'] = bool(cloudbees_creds and cloudbees_creds.get("base_url"))
     except Exception as e:
         logger.debug(f"[BackgroundChat] Error checking CloudBees: {e}")
+
+    try:
+        from utils.auth.token_management import get_token_data
+        codefresh_creds = get_token_data(user_id, "codefresh")
+        integrations['codefresh'] = bool(codefresh_creds and codefresh_creds.get("base_url"))
+    except Exception as e:
+        logger.debug(f"[BackgroundChat] Error checking Codefresh: {e}")
 
     try:
         from utils.flags.feature_flags import is_spinnaker_enabled

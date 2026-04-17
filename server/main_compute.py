@@ -302,6 +302,10 @@ app.register_blueprint(jenkins_bp, url_prefix="/jenkins")
 from routes.cloudbees import bp as cloudbees_bp  # noqa: F401
 app.register_blueprint(cloudbees_bp, url_prefix="/cloudbees")
 
+# --- Codefresh Integration Routes ---
+from routes.codefresh import bp as codefresh_bp  # noqa: F401
+app.register_blueprint(codefresh_bp, url_prefix="/codefresh")
+
 # --- Spinnaker Integration Routes ---
 from utils.flags.feature_flags import is_spinnaker_enabled
 if is_spinnaker_enabled():

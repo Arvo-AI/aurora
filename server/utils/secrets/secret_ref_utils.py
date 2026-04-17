@@ -60,6 +60,7 @@ SUPPORTED_SECRET_PROVIDERS: Set[str] = {
     "aurora",   # Aurora-managed SSH keys
     "jenkins",  # Jenkins CI/CD connector tokens
     "cloudbees", # CloudBees CI connector tokens
+    "codefresh", # Codefresh CI/CD connector tokens
     "spinnaker", # Spinnaker CD connector tokens
     "newrelic",  # New Relic connector tokens
     "google",   # Google Chat — provider is "google_chat", split('_')[0] matches this

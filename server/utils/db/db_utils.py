@@ -823,8 +823,8 @@ def initialize_tables():
                     CREATE INDEX IF NOT EXISTS idx_splunk_alerts_state ON splunk_alerts(alert_state);
                     CREATE INDEX IF NOT EXISTS idx_splunk_alerts_received_at ON splunk_alerts(received_at DESC);
                 """,
-                "jenkins_deployment_events": """
-                    CREATE TABLE IF NOT EXISTS jenkins_deployment_events (
+                "ci_deployment_events": """
+                    CREATE TABLE IF NOT EXISTS ci_deployment_events (
                         id SERIAL PRIMARY KEY,
                         user_id VARCHAR(255) NOT NULL,
                         org_id VARCHAR(255),
@@ -832,7 +832,7 @@ def initialize_tables():
                         service VARCHAR(255),
                         environment VARCHAR(100),
                         result VARCHAR(50),
-                        build_number INTEGER,
+                        build_number VARCHAR(255),
                         build_url TEXT,
                         commit_sha VARCHAR(64),
                         branch VARCHAR(255),
@@ -848,11 +848,11 @@ def initialize_tables():
                         provider VARCHAR(50) DEFAULT 'jenkins'
                     );
 
-                    CREATE INDEX IF NOT EXISTS idx_jenkins_deploy_user ON jenkins_deployment_events(user_id, received_at DESC);
-                    CREATE INDEX IF NOT EXISTS idx_jenkins_deploy_service ON jenkins_deployment_events(service, received_at DESC);
-                    CREATE INDEX IF NOT EXISTS idx_jenkins_deploy_commit ON jenkins_deployment_events(commit_sha);
-                    CREATE INDEX IF NOT EXISTS idx_jenkins_deploy_trace ON jenkins_deployment_events(trace_id) WHERE trace_id IS NOT NULL;
-                    CREATE UNIQUE INDEX IF NOT EXISTS idx_jenkins_deploy_dedup ON jenkins_deployment_events(user_id, COALESCE(job_name, ''), COALESCE(build_number, -1));
+                    CREATE INDEX IF NOT EXISTS idx_jenkins_deploy_user ON ci_deployment_events(user_id, received_at DESC);
+                    CREATE INDEX IF NOT EXISTS idx_jenkins_deploy_service ON ci_deployment_events(service, received_at DESC);
+                    CREATE INDEX IF NOT EXISTS idx_jenkins_deploy_commit ON ci_deployment_events(commit_sha);
+                    CREATE INDEX IF NOT EXISTS idx_jenkins_deploy_trace ON ci_deployment_events(trace_id) WHERE trace_id IS NOT NULL;
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_jenkins_deploy_dedup ON ci_deployment_events(user_id, COALESCE(job_name, ''), COALESCE(build_number, ''));
                 """,
                 "spinnaker_deployment_events": """
                     CREATE TABLE IF NOT EXISTS spinnaker_deployment_events (
@@ -1157,7 +1157,7 @@ def initialize_tables():
             rls_tables.append("netdata_verification_tokens")
             rls_tables.append("splunk_alerts")
             rls_tables.append("bigpanda_events")
-            rls_tables.append("jenkins_deployment_events")
+            rls_tables.append("ci_deployment_events")
             rls_tables.append("spinnaker_deployment_events")
             rls_tables.append("dynatrace_problems")
             rls_tables.append("opsgenie_events")
@@ -1174,19 +1174,6 @@ def initialize_tables():
             rls_tables.append("execution_steps")
 
 
-            # Migration: Add rca_celery_task_id column to incidents table if it doesn't exist
-            try:
-                cursor.execute("""
-                    ALTER TABLE incidents
-                    ADD COLUMN IF NOT EXISTS rca_celery_task_id VARCHAR(255);
-                """)
-                conn.commit()
-                logging.info(
-                    "Added rca_celery_task_id column to incidents table (if not exists)."
-                )
-            except Exception as e:
-                logging.warning(f"Error adding rca_celery_task_id column to incidents: {e}")
-                conn.rollback()
 
             # Migration: Add merged_into_incident_id column to incidents table if it exists
             # This must run BEFORE table creation scripts because the incidents creation
@@ -1211,6 +1198,20 @@ def initialize_tables():
             for table_name, create_script in create_tables.items():
                 cursor.execute(create_script)
                 logging.info(f"Table '{table_name}' initialized successfully.")
+
+            # Migration: Add rca_celery_task_id column to incidents table if it doesn't exist
+            try:
+                cursor.execute("""
+                    ALTER TABLE incidents
+                    ADD COLUMN IF NOT EXISTS rca_celery_task_id VARCHAR(255);
+                """)
+                conn.commit()
+                logging.info(
+                    "Added rca_celery_task_id column to incidents table (if not exists)."
+                )
+            except Exception as e:
+                logging.warning(f"Error adding rca_celery_task_id column to incidents: {e}")
+                conn.rollback()
 
             # Migration: ensure incident_alerts.user_id exists and is backfilled
             try:
@@ -1534,18 +1535,56 @@ def initialize_tables():
                 logging.warning(f"Error adding alert_metadata column to incidents: {e}")
                 conn.rollback()
 
-            # Migration: Add provider column to jenkins_deployment_events for multi-CI support
+            # Migration: Rename jenkins_deployment_events -> ci_deployment_events
+            try:
+                cursor.execute("""
+                    ALTER TABLE IF EXISTS jenkins_deployment_events
+                    RENAME TO ci_deployment_events;
+                """)
+                conn.commit()
+                logging.info("Renamed jenkins_deployment_events to ci_deployment_events.")
+            except Exception as e:
+                logging.debug(f"Table rename skipped (already migrated or table missing): {e}")
+                conn.rollback()
+
+            # Migration: Add provider column to ci_deployment_events for multi-CI support
             try:
                 cursor.execute(
                     """
-                    ALTER TABLE jenkins_deployment_events
+                    ALTER TABLE ci_deployment_events
                     ADD COLUMN IF NOT EXISTS provider VARCHAR(50) DEFAULT 'jenkins';
                     """
                 )
-                logging.info("Added provider column to jenkins_deployment_events table (if not exists).")
+                logging.info("Added provider column to ci_deployment_events table (if not exists).")
                 conn.commit()
             except Exception as e:
-                logging.warning(f"Error adding provider column to jenkins_deployment_events: {e}")
+                logging.warning(f"Error adding provider column to ci_deployment_events: {e}")
+                conn.rollback()
+
+            # Migration: Change build_number from INTEGER to TEXT for Codefresh string IDs
+            try:
+                cursor.execute("""
+                    ALTER TABLE ci_deployment_events
+                    ALTER COLUMN build_number TYPE VARCHAR(255)
+                    USING build_number::VARCHAR(255);
+                """)
+                conn.commit()
+                logging.info("Migrated ci_deployment_events.build_number to TEXT.")
+            except Exception as e:
+                logging.debug(f"build_number migration skipped (already TEXT or table missing): {e}")
+                conn.rollback()
+
+            # Recreate dedup index to use TEXT coalesce
+            try:
+                cursor.execute("""
+                    DROP INDEX IF EXISTS idx_jenkins_deploy_dedup;
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_jenkins_deploy_dedup
+                    ON ci_deployment_events(user_id, COALESCE(job_name, ''), COALESCE(build_number, ''));
+                """)
+                conn.commit()
+                logging.info("Recreated ci_deployment_events dedup index for TEXT build_number.")
+            except Exception as e:
+                logging.debug(f"Dedup index recreation skipped: {e}")
                 conn.rollback()
 
             try:
@@ -1982,7 +2021,7 @@ def initialize_tables():
                 "grafana_alerts", "datadog_events", "netdata_alerts",
                 "pagerduty_events", "opsgenie_events", "incidents", "incident_alerts",
                 "rca_notification_emails", "splunk_alerts",
-                "jenkins_deployment_events", "dynatrace_problems",
+                "ci_deployment_events", "dynatrace_problems",
                 "bigpanda_events", "kubectl_agent_tokens",
                 "mcp_tokens",
                 "k8s_pods", "k8s_nodes", "k8s_node_conditions",
