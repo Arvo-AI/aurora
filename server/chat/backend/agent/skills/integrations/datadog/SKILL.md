@@ -4,9 +4,9 @@ id: datadog
 description: "Datadog monitoring integration for querying logs, metrics, monitors, events, traces, hosts, and incidents during RCA investigations"
 category: observability
 connection_check:
-  method: is_connected_function
-  module: chat.backend.agent.tools.datadog_tool
-  function: is_datadog_connected
+  method: get_token_data
+  provider_key: datadog
+  required_any_fields: [api_key, apiKey]
 tools:
   - query_datadog
 index: "Full-stack monitoring -- query logs, metrics, monitors, events, traces, hosts, incidents"

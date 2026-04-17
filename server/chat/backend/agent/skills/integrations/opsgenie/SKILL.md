@@ -4,9 +4,9 @@ id: opsgenie
 description: "OpsGenie / JSM Operations integration for querying alerts, incidents, services, on-call schedules, and teams during RCA investigations"
 category: incident_management
 connection_check:
-  method: is_connected_function
-  module: chat.backend.agent.tools.opsgenie_tool
-  function: is_opsgenie_connected
+  method: get_token_data
+  provider_key: opsgenie
+  required_field: api_key
 tools:
   - query_opsgenie
 index: "Incident management -- query alerts, incidents, services, on-call schedules, teams"

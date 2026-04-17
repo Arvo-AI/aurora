@@ -4,9 +4,9 @@ id: newrelic
 description: "New Relic observability integration for running NRQL queries, checking alert issues, and searching entities via NerdGraph during RCA investigations"
 category: observability
 connection_check:
-  method: is_connected_function
-  module: chat.backend.agent.tools.newrelic_tool
-  function: is_newrelic_connected
+  method: get_token_data
+  provider_key: newrelic
+  required_field: api_key
 tools:
   - query_newrelic
 index: "Observability platform -- NRQL queries, alert issues, entity search via NerdGraph"

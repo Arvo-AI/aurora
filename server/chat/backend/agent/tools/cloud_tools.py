@@ -1374,6 +1374,7 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                     "MANDATORY: Load integration guidance BEFORE using any integration tool. "
                     "You MUST call this first to get the correct workflow, syntax, and constraints. "
                     "Without loading the skill, you will miss critical instructions. "
+                    "Only call ONCE per integration per conversation — the guidance stays in your context after loading. "
                     "Check your CONNECTED INTEGRATIONS index for available IDs. "
                     "Example: load_skill('github') before using github_rca, load_skill('datadog') before using query_datadog."
                 ),

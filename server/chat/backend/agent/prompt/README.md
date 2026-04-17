@@ -138,7 +138,7 @@ Supported field requirements:
 RCA preloading:
 - connected skills are sorted by `rca_priority`
 - loaded until token budget reached
-- defaults to `4000` tokens
+- defaults to `12000` tokens
 - overridable by env:
   - `RCA_SKILLS_TOKEN_BUDGET`
   - `RCA_TOKEN_BUDGET` (fallback)

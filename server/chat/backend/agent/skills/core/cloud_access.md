@@ -60,5 +60,13 @@ IMPORTANT VM CREATION RULES:
 IMPORTANT: When writing custom Terraform code:
 - DO NOT just add comments saying to adjust regions
 - ACTUALLY USE the correct zone in your code
-- Example: If user says 'NOT US', then zone = 'northamerica-northeast1-a', NOT 'us-central1-b'
 - The zone in your terraform MUST match the user's geographic requirements
+
+REGION MAPPING (use when user specifies a geography):
+- Canada: GCP northamerica-northeast1-a / northamerica-northeast2-a, AWS ca-central-1, Azure canadacentral
+- Belgium/EU: GCP europe-west1-a, AWS eu-west-1, Azure westeurope
+- London/UK: GCP europe-west2-a, AWS eu-west-2, Azure uksouth
+- Singapore/SEA: GCP asia-southeast1-a, AWS ap-southeast-1, Azure southeastasia
+- Tokyo/Japan: GCP asia-northeast1-a, AWS ap-northeast-1, Azure japaneast
+- US (default): GCP us-central1-b, AWS us-east-1, Azure eastus
+- If user says 'NOT US', prefer Canada (northamerica-northeast1-a / ca-central-1)
