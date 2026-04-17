@@ -43,6 +43,7 @@ def build_system_invariant(is_background: bool = False) -> str:
     if is_background:
         return load_core_prompt(core_dir, segments=[
             "identity",
+            "security",
             "knowledge_base",
             "error_handling",
             "investigation",
@@ -51,6 +52,7 @@ def build_system_invariant(is_background: bool = False) -> str:
 
     return load_core_prompt(core_dir, segments=[
         "identity",
+        "security",
         "knowledge_base",
         "tool_selection",
         "ssh_access",
