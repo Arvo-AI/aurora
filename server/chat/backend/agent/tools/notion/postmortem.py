@@ -107,21 +107,32 @@ def _merge_property_mapping(
     properties: Dict[str, Any],
     db_schema: Dict[str, Any],
     mapping: Dict[str, Any],
+    incident_columns: Dict[str, Any],
 ) -> None:
-    """Mutate ``properties`` in place with coerced values from ``mapping``."""
+    """Mutate ``properties`` in place with coerced incident values.
+
+    ``mapping`` is ``{notion_property_name: preset_label}`` where the preset
+    names a column on the ``incidents`` table (see ``_PROPERTY_PRESETS``).
+    """
     if not mapping or not isinstance(mapping, dict):
         return
     schema_props = (db_schema or {}).get("properties") or {}
-    for key, raw_value in mapping.items():
-        prop_meta = schema_props.get(key)
+    for notion_key, preset in mapping.items():
+        if not preset or preset == "Skip":
+            continue
+        prop_meta = schema_props.get(notion_key)
         if not isinstance(prop_meta, dict):
             logger.info(
-                "Skipping mapping key '%s' — not present in target Notion DB", key
+                "Skipping mapping for '%s' — not present in target Notion DB",
+                notion_key,
             )
             continue
-        payload = _coerce_property_value(prop_meta, raw_value)
+        value = _resolve_preset_value(preset, incident_columns)
+        if value is None:
+            continue
+        payload = _coerce_property_value(prop_meta, value)
         if payload is not None:
-            properties[key] = payload
+            properties[notion_key] = payload
 
 
 def _fetch_postmortem(
@@ -141,6 +152,54 @@ def _fetch_postmortem(
     if not row:
         return None
     return {"id": row[0], "content": row[1]}
+
+
+# Frontend preset label → column on the ``incidents`` table. Narrow on purpose:
+# only fields that make sense as Notion property values.
+_PROPERTY_PRESETS: Dict[str, str] = {
+    "IncidentId": "id",
+    "Severity": "severity",
+    "Status": "status",
+    "Service": "alert_service",
+    "ResolvedAt": "resolved_at",
+}
+
+
+def _fetch_incident_properties(
+    user_id: str, org_id: str, incident_id: str
+) -> Dict[str, Any]:
+    """Return a dict of incident columns referenced by the preset mapping."""
+    cols = sorted(set(_PROPERTY_PRESETS.values()))
+    col_sql = ", ".join(cols)
+    with db_pool.get_admin_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("SET myapp.current_user_id = %s", (user_id,))
+            cursor.execute("SET myapp.current_org_id = %s", (org_id,))
+            conn.commit()
+            cursor.execute(
+                f"SELECT {col_sql} FROM incidents WHERE id = %s AND org_id = %s",
+                (incident_id, org_id),
+            )
+            row = cursor.fetchone()
+    if not row:
+        return {}
+    return {col: value for col, value in zip(cols, row)}
+
+
+def _resolve_preset_value(preset: str, incident_columns: Dict[str, Any]) -> Any:
+    """Resolve a preset label like ``"Severity"`` to the incident's value."""
+    column = _PROPERTY_PRESETS.get(preset)
+    if not column:
+        return None
+    value = incident_columns.get(column)
+    # Datetime → ISO string for Notion's date / rich_text properties.
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    if value is None:
+        return None
+    if isinstance(value, (list, tuple)):
+        return list(value)
+    return value
 
 
 def _update_postmortem_notion_metadata(
@@ -319,7 +378,10 @@ def _export_postmortem_to_notion(
     }
 
     if property_mapping:
-        _merge_property_mapping(properties, db_schema, property_mapping)
+        incident_cols = _fetch_incident_properties(user_id, org_id, incident_id)
+        _merge_property_mapping(
+            properties, db_schema, property_mapping, incident_cols
+        )
 
     page = client.create_page(
         parent={"database_id": database_id}, properties=properties

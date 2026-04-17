@@ -322,13 +322,24 @@ class NotionClient:
     def update_page_markdown(
         self, page_id: str, markdown: str, mode: str = "append"
     ) -> Dict[str, Any]:
+        """Insert or replace a page's body via Notion's markdown endpoint.
+
+        ``mode="append"`` appends to the bottom of the page. ``mode="replace"``
+        maps to the same insert_content call — Notion's replace_content_range
+        requires range coordinates we don't have; for freshly created pages
+        this is equivalent since the body starts empty. Callers that need a
+        true wipe-and-rewrite on an existing page should delete the page's
+        block children first.
+        """
         if mode not in ("append", "replace"):
             raise ValueError("mode must be 'append' or 'replace'")
+        body = {
+            "type": "insert_content",
+            "insert_content": {"content": markdown},
+        }
         return self._retry_with_refresh(
             lambda: self._request(
-                "PATCH",
-                f"/pages/{page_id}/markdown",
-                json={"markdown": markdown, "mode": mode},
+                "PATCH", f"/pages/{page_id}/markdown", json=body
             )
         )
 
