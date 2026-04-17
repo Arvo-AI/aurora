@@ -29,7 +29,8 @@ interface RenderOutputProps {
 // Helper to detect tool type for appropriate rendering
 const isCliTool = (toolName: string) => {
   return toolName.includes('cloud_exec') || toolName.includes('kubectl') || 
-         toolName.includes('gcloud') || toolName.includes('aws') || toolName.includes('azure')
+         toolName.includes('gcloud') || toolName.includes('aws') || toolName.includes('azure') ||
+         toolName.includes('terminal_exec') || toolName.includes('tailscale_ssh')
 }
 
 const isIacTool = (toolName: string) => {
