@@ -115,7 +115,7 @@ def get_metrics_summary(user_id):
             cursor.execute("""
                 WITH deploys AS (
                     SELECT id, service, received_at
-                    FROM jenkins_deployment_events
+                    FROM ci_deployment_events
                     WHERE received_at >= NOW() - %s::interval
                 ),
                 deploy_failures AS (
@@ -456,7 +456,7 @@ def get_change_failure_rate(user_id):
             cursor.execute("""
                 WITH deploys AS (
                     SELECT id, service, received_at
-                    FROM jenkins_deployment_events
+                    FROM ci_deployment_events
                     WHERE received_at >= NOW() - %s::interval
                 ),
                 deploy_failures AS (

@@ -132,7 +132,7 @@ def _action_recent_deployments(user_id: str, service: Optional[str], hours: int,
                     f"""SELECT id, service, environment, result, build_number, build_url,
                               commit_sha, branch, repository, deployer, duration_ms,
                               job_name, trace_id, received_at
-                       FROM jenkins_deployment_events
+                       FROM ci_deployment_events
                        WHERE {base_where}
                        ORDER BY received_at DESC LIMIT 20""",
                     tuple(params),
@@ -282,7 +282,7 @@ def _action_trace_context(user_id: str, event_id: Optional[int], job_path: Optio
                 with conn.cursor() as cursor:
                     cursor.execute(
                         """SELECT trace_id, span_id, build_url, service, commit_sha
-                           FROM jenkins_deployment_events
+                           FROM ci_deployment_events
                            WHERE id = %s AND user_id = %s""",
                         (event_id, user_id),
                     )

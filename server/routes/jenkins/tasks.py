@@ -61,6 +61,9 @@ def _build_rca_prompt(payload: Dict[str, Any], user_id: Optional[str] = None, so
     if source == "cloudbees":
         from chat.background.rca_prompt_builder import build_cloudbees_rca_prompt
         return build_cloudbees_rca_prompt(payload, user_id=user_id)
+    if source == "codefresh":
+        from chat.background.rca_prompt_builder import build_codefresh_rca_prompt
+        return build_codefresh_rca_prompt(payload, user_id=user_id)
     from chat.background.rca_prompt_builder import build_jenkins_rca_prompt
     return build_jenkins_rca_prompt(payload, user_id=user_id)
 
@@ -115,12 +118,12 @@ def process_jenkins_deployment(
 
                     # Upsert the deployment event with dedup on (user_id, job_name, build_number)
                     cursor.execute(
-                        """INSERT INTO jenkins_deployment_events
+                        """INSERT INTO ci_deployment_events
                            (user_id, org_id, event_type, service, environment, result, build_number,
                             build_url, commit_sha, branch, repository, deployer, duration_ms,
                             job_name, trace_id, span_id, payload, received_at, provider)
                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                           ON CONFLICT (user_id, COALESCE(job_name, ''), COALESCE(build_number, -1)) DO UPDATE
+                           ON CONFLICT (user_id, COALESCE(job_name, ''), COALESCE(build_number, '')) DO UPDATE
                            SET result = EXCLUDED.result,
                                payload = EXCLUDED.payload,
                                received_at = EXCLUDED.received_at

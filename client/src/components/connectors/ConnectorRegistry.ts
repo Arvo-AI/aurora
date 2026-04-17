@@ -356,6 +356,17 @@ class ConnectorRegistry {
       storageKey: "isCloudBeesConnected",
     });
 
+    this.register({
+      id: "codefresh",
+      name: "Codefresh",
+      description: "Connect to Codefresh to view pipelines, builds, projects, and logs. Read-only access to your CI/CD platform.",
+      iconPath: "/codefresh.svg",
+      iconBgColor: "bg-white dark:bg-white",
+      category: "CI/CD",
+      path: "/codefresh/auth",
+      storageKey: "isCodefreshConnected",
+    });
+
     if (isSpinnakerEnabled()) {
       this.register({
         id: "spinnaker",

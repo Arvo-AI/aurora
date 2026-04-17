@@ -401,7 +401,7 @@ def list_deployments(user_id):
                         """SELECT id, service, environment, result, build_number, build_url,
                                   commit_sha, branch, repository, deployer, duration_ms,
                                   job_name, trace_id, received_at
-                           FROM jenkins_deployment_events
+                           FROM ci_deployment_events
                            WHERE org_id = %s AND service = %s
                            ORDER BY received_at DESC
                            LIMIT %s OFFSET %s""",
@@ -412,7 +412,7 @@ def list_deployments(user_id):
                         """SELECT id, service, environment, result, build_number, build_url,
                                   commit_sha, branch, repository, deployer, duration_ms,
                                   job_name, trace_id, received_at
-                           FROM jenkins_deployment_events
+                           FROM ci_deployment_events
                            WHERE org_id = %s
                            ORDER BY received_at DESC
                            LIMIT %s OFFSET %s""",
@@ -421,7 +421,7 @@ def list_deployments(user_id):
                 rows = cursor.fetchall()
 
                 cursor.execute(
-                    "SELECT COUNT(*) FROM jenkins_deployment_events WHERE org_id = %s"
+                    "SELECT COUNT(*) FROM ci_deployment_events WHERE org_id = %s"
                     + (" AND service = %s" if service_filter else ""),
                     (org_id, service_filter) if service_filter else (org_id,),
                 )

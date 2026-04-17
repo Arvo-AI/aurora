@@ -102,6 +102,25 @@ def _check_ci_provider(creds: Dict[str, Any]) -> Dict[str, Any]:
         return {"connected": False}
 
 
+def _check_codefresh(creds: Dict[str, Any]) -> Dict[str, Any]:
+    """Codefresh uses API key in Authorization header against /api/pipelines."""
+    base_url = creds.get("base_url")
+    api_token = creds.get("api_token")
+    if not base_url or not api_token:
+        return {"connected": False}
+    try:
+        r = requests.get(
+            f"{base_url}/api/pipelines",
+            params={"limit": "1"},
+            headers={"Authorization": api_token},
+            timeout=HTTP_TIMEOUT,
+        )
+        r.raise_for_status()
+        return {"connected": True, "baseUrl": base_url}
+    except Exception:
+        return {"connected": False}
+
+
 def _check_splunk(creds: Dict[str, Any]) -> Dict[str, Any]:
     api_token = creds.get("api_token")
     base_url = creds.get("base_url")
@@ -659,6 +678,7 @@ PROVIDER_CHECKERS = {
     "datadog": _check_datadog,
     "jenkins": _check_ci_provider,
     "cloudbees": _check_ci_provider,
+    "codefresh": _check_codefresh,
     "splunk": _check_splunk,
     "coroot": _check_coroot,
     "confluence": _check_confluence,

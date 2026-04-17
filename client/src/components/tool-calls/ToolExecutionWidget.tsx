@@ -22,6 +22,7 @@ import {
   parseGitHubRcaCommand,
   parseJenkinsRcaCommand,
   parseCloudbeesRcaCommand,
+  parseCodefreshRcaCommand,
   parseIacToolCommand,
   parseWebSearchCommand,
   parseAwsMcpCommand,
@@ -240,6 +241,10 @@ const ToolExecutionWidget = ({ tool, className, sendMessage, sendRaw, onToolUpda
   // CloudBees RCA tool parsing
   else if (tool.tool_name === "cloudbees_rca" && typeof command === "string" && command.trim().startsWith("{")) {
     command = parseCloudbeesRcaCommand(normalizedInput)
+  }
+  // Codefresh RCA tool parsing
+  else if (tool.tool_name === "codefresh_rca" && typeof command === "string" && command.trim().startsWith("{")) {
+    command = parseCodefreshRcaCommand(normalizedInput)
   }
   // IAC tool parsing
   else if (tool.tool_name === "iac_tool" || tool.tool_name === "iac_write" || tool.tool_name === "iac_plan" || tool.tool_name === "iac_apply") {

@@ -1,6 +1,6 @@
 import { apiRequest } from '@/lib/services/api-client';
 
-export type CIProviderSlug = "jenkins" | "cloudbees";
+export type CIProviderSlug = "jenkins" | "cloudbees" | "codefresh";
 
 interface CIServer {
   version?: string;
@@ -37,7 +37,7 @@ export interface CIProviderStatus {
 
 export interface CIConnectPayload {
   baseUrl: string;
-  username: string;
+  username?: string;
   apiToken: string;
 }
 
@@ -163,6 +163,7 @@ export function createCIProviderService(slug: CIProviderSlug): CIProviderService
 
 export const jenkinsService = createCIProviderService("jenkins");
 export const cloudbeesService = createCIProviderService("cloudbees");
+export const codefreshService = createCIProviderService("codefresh");
 
 export interface CIProviderConfig {
   slug: CIProviderSlug;
@@ -177,6 +178,7 @@ export interface CIProviderConfig {
   urlPlaceholder: string;
   urlHelpText: string;
   usernamePlaceholder: string;
+  hideUsername?: boolean;
   setupStepTitle: string;
   setupStepNavPath: string;
   setupStepInstructions: React.ReactNode[];

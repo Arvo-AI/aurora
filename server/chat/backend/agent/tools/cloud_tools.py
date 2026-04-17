@@ -31,6 +31,7 @@ from .github_fix_tool import github_fix, GitHubFixArgs
 from .github_repos_tool import get_connected_repos, GetConnectedReposArgs
 from .jenkins_rca_tool import jenkins_rca, JenkinsRCAArgs
 from .cloudbees_rca_tool import cloudbees_rca, CloudBeesRCAArgs
+from .codefresh_rca_tool import codefresh_rca, CodefreshRCAArgs
 from .spinnaker_rca_tool import spinnaker_rca, SpinnakerRCAArgs
 from .trigger_rca_tool import trigger_rca, TriggerRCAArgs
 
@@ -1158,6 +1159,7 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
         (github_fix, "github_fix"),
         (jenkins_rca, "jenkins_rca"),
         (cloudbees_rca, "cloudbees_rca"),
+        (codefresh_rca, "codefresh_rca"),
         (spinnaker_rca, "spinnaker_rca"),
         (github_apply_fix, "github_apply_fix"),
         (cloud_exec_wrapper, "cloud_exec"),
@@ -1287,6 +1289,23 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                     "pipeline_name+run_number for Blue Ocean. service is optional for recent_deployments."
                 ),
                 args_schema=CloudBeesRCAArgs
+            )
+        elif name == 'codefresh_rca':
+            tool = StructuredTool.from_function(
+                func=final_func,
+                name=name,
+                description=(
+                    "Codefresh CI/CD investigation tool for Root Cause Analysis. "
+                    "Actions: "
+                    "'recent_deployments' (query stored deployment events; optional service filter and time_window_hours), "
+                    "'build_detail' (fetch full build details from Codefresh API; requires build_id), "
+                    "'pipeline_info' (fetch pipeline configuration; requires pipeline_id), "
+                    "'build_logs' (fetch build log output; requires build_id), "
+                    "'list_builds' (list recent builds; optional pipeline_id filter), "
+                    "'trace_context' (look up OTel trace ID from stored event; requires deployment_event_id). "
+                    "Use during RCA to check if Codefresh deployments correlate with incidents."
+                ),
+                args_schema=CodefreshRCAArgs
             )
         elif name == 'spinnaker_rca':
             tool = StructuredTool.from_function(

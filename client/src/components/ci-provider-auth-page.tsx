@@ -303,30 +303,46 @@ function ConnectedView({
           {status?.summary && (
             <>
               <div className="border-t" />
-              <div className="grid grid-cols-4 gap-2 text-center">
-                <div>
-                  <p className="text-2xl font-semibold tabular-nums">{status.summary.jobCount}</p>
-                  <p className="text-[11px] text-muted-foreground mt-0.5">Jobs</p>
-                </div>
-                <div>
-                  <p className="text-2xl font-semibold tabular-nums">
-                    {status.summary.nodesOnline}
-                    <span className="text-sm font-normal text-muted-foreground">/{status.summary.nodesOnline + status.summary.nodesOffline}</span>
-                  </p>
-                  <p className="text-[11px] text-muted-foreground mt-0.5">Nodes</p>
-                </div>
-                <div>
-                  <p className="text-2xl font-semibold tabular-nums">
-                    {status.summary.busyExecutors}
-                    <span className="text-sm font-normal text-muted-foreground">/{status.summary.totalExecutors}</span>
-                  </p>
-                  <p className="text-[11px] text-muted-foreground mt-0.5">Executors</p>
-                </div>
-                <div>
-                  <p className="text-2xl font-semibold tabular-nums">{status.summary.queueSize}</p>
-                  <p className="text-[11px] text-muted-foreground mt-0.5">Queued</p>
-                </div>
-              </div>
+              {(() => {
+                const s = status.summary;
+                const hasInfraMetrics = s.nodesOnline + s.nodesOffline > 0 || s.totalExecutors > 0 || s.queueSize > 0;
+                if (hasInfraMetrics) {
+                  return (
+                    <div className="grid grid-cols-4 gap-2 text-center">
+                      <div>
+                        <p className="text-2xl font-semibold tabular-nums">{s.jobCount}</p>
+                        <p className="text-[11px] text-muted-foreground mt-0.5">Jobs</p>
+                      </div>
+                      <div>
+                        <p className="text-2xl font-semibold tabular-nums">
+                          {s.nodesOnline}
+                          <span className="text-sm font-normal text-muted-foreground">/{s.nodesOnline + s.nodesOffline}</span>
+                        </p>
+                        <p className="text-[11px] text-muted-foreground mt-0.5">Nodes</p>
+                      </div>
+                      <div>
+                        <p className="text-2xl font-semibold tabular-nums">
+                          {s.busyExecutors}
+                          <span className="text-sm font-normal text-muted-foreground">/{s.totalExecutors}</span>
+                        </p>
+                        <p className="text-[11px] text-muted-foreground mt-0.5">Executors</p>
+                      </div>
+                      <div>
+                        <p className="text-2xl font-semibold tabular-nums">{s.queueSize}</p>
+                        <p className="text-[11px] text-muted-foreground mt-0.5">Queued</p>
+                      </div>
+                    </div>
+                  );
+                }
+                return (
+                  <div className="grid grid-cols-1 gap-2 text-center">
+                    <div>
+                      <p className="text-2xl font-semibold tabular-nums">{s.jobCount}</p>
+                      <p className="text-[11px] text-muted-foreground mt-0.5">Pipelines</p>
+                    </div>
+                  </div>
+                );
+              })()}
             </>
           )}
 
@@ -417,7 +433,7 @@ function WebhookCard({
   copied: boolean;
   onCopy: (text: string) => void;
 }) {
-  const iconColor = config.slug === "jenkins" ? "text-orange-600" : "text-violet-600";
+  const iconColor = config.slug === "jenkins" ? "text-orange-600" : config.slug === "cloudbees" ? "text-violet-600" : "text-cyan-600";
   return (
     <Card>
       <CardHeader className="pb-3">
@@ -426,7 +442,7 @@ function WebhookCard({
           <CardTitle className="text-lg">Send Deployment Events to Aurora</CardTitle>
         </div>
         <CardDescription>
-          Add this to your {config.slug === "jenkins" ? "Jenkinsfile" : `${config.displayName} pipeline`} to notify Aurora when builds complete
+          Add this to your {config.slug === "jenkins" ? "Jenkinsfile" : config.slug === "codefresh" ? "codefresh.yml" : `${config.displayName} pipeline`} to notify Aurora when builds complete
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
@@ -441,6 +457,7 @@ function WebhookCard({
           </Button>
         </div>
 
+        {config.slug !== "codefresh" && (
         <details className="text-xs group">
           <summary className="cursor-pointer text-muted-foreground hover:text-foreground flex items-center gap-1">
             <svg className="h-3 w-3 transition-transform group-open:rotate-90" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -480,13 +497,14 @@ function WebhookCard({
             </div>
           </div>
         </details>
+        )}
       </CardContent>
     </Card>
   );
 }
 
 function DeploymentsCard({ config, deployments }: { config: CIProviderConfig; deployments: CIDeploymentEvent[] }) {
-  const iconColor = config.slug === "jenkins" ? "text-orange-600" : "text-violet-600";
+  const iconColor = config.slug === "jenkins" ? "text-orange-600" : config.slug === "cloudbees" ? "text-violet-600" : "text-cyan-600";
   return (
     <Card>
       <CardHeader className="pb-3">
@@ -550,7 +568,7 @@ function SetupView({
   loading: boolean;
   onConnect: (e: React.FormEvent<HTMLFormElement>) => void;
 }) {
-  const stepColor = config.slug === "jenkins" ? "bg-orange-600" : "bg-violet-600";
+  const stepColor = config.slug === "jenkins" ? "bg-orange-600" : config.slug === "cloudbees" ? "bg-violet-600" : "bg-cyan-600";
   return (
     <div className="space-y-6">
       <Card>
@@ -621,11 +639,13 @@ function SetupView({
                       placeholder={config.urlPlaceholder} required disabled={loading} className="h-10" />
                     <p className="text-xs text-muted-foreground">{config.urlHelpText}</p>
                   </div>
+                  {!config.hideUsername && (
                   <div className="grid gap-1.5">
                     <Label htmlFor={`${config.slug}-username`} className="text-sm font-medium">Username</Label>
                     <Input id={`${config.slug}-username`} value={username} onChange={(e) => setUsername(e.target.value)}
                       placeholder={config.usernamePlaceholder} required disabled={loading} className="h-10" />
                   </div>
+                  )}
                   <div className="grid gap-1.5">
                     <Label htmlFor={`${config.slug}-token`} className="text-sm font-medium">API Token</Label>
                     <div className="relative">
@@ -648,7 +668,7 @@ function SetupView({
                       </p>
                     </div>
                   </div>
-                  <Button type="submit" disabled={loading || !baseUrl || !username || !apiToken} className="w-full h-10">
+                  <Button type="submit" disabled={loading || !baseUrl || (!config.hideUsername && !username) || !apiToken} className="w-full h-10">
                     {loading ? (<><Loader2 className="h-4 w-4 mr-2 animate-spin" />Connecting...</>) : `Connect ${config.displayName}`}
                   </Button>
                 </form>

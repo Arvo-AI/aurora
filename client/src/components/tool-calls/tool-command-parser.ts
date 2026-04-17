@@ -434,6 +434,41 @@ export function parseCloudbeesRcaCommand(toolInput: string): string {
   return parseCIRcaCommand(toolInput, "CloudBees")
 }
 
+export function parseCodefreshRcaCommand(toolInput: string): string {
+  try {
+    let parsed: Record<string, unknown> | null = null
+    try {
+      parsed = JSON.parse(toolInput)
+    } catch {
+      parsed = JSON.parse(toolInput.replace(/'/g, '"'))
+    }
+    const args = ((parsed as Record<string, unknown>)?.kwargs || parsed || {}) as Record<string, unknown>
+    const action = (args.action as string) || "investigate"
+    const buildId = (args.build_id as string) || ""
+    const pipelineId = (args.pipeline_id as string) || ""
+    const service = (args.service as string) || ""
+
+    switch (action) {
+      case "recent_deployments":
+        return `Codefresh: Recent deployments${service ? ` for ${service}` : ""}`
+      case "build_detail":
+        return `Codefresh: Build details${buildId ? ` for ${buildId}` : ""}`
+      case "pipeline_info":
+        return `Codefresh: Pipeline info${pipelineId ? ` for ${pipelineId}` : ""}`
+      case "build_logs":
+        return `Codefresh: Build logs${buildId ? ` for ${buildId}` : ""}`
+      case "list_builds":
+        return `Codefresh: List builds${pipelineId ? ` for ${pipelineId}` : ""}`
+      case "trace_context":
+        return `Codefresh: Trace context`
+      default:
+        return `Codefresh: ${action.replace(/_/g, " ")}`
+    }
+  } catch {
+    return "Codefresh: investigate"
+  }
+}
+
 export function parseNewRelicCommand(toolInput: string): string {
   try {
     let parsed: Record<string, unknown> | null = null

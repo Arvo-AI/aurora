@@ -22,10 +22,12 @@ import { useToast } from '@/hooks/use-toast';
 
 const ALERT_CATEGORIES = new Set(['Monitoring', 'Incident Management']);
 
+const INCIDENT_SOURCE_CATEGORIES = new Set(['Monitoring', 'Incident Management', 'CI/CD']);
+
 const ALERT_PROVIDERS = new Set(
   connectorRegistry
     .getAll()
-    .filter(c => c.category && ALERT_CATEGORIES.has(c.category))
+    .filter(c => c.category && INCIDENT_SOURCE_CATEGORIES.has(c.category))
     .map(c => c.id),
 );
 

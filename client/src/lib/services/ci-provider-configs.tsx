@@ -5,6 +5,7 @@ import {
   type CIProviderConfig,
   jenkinsService,
   cloudbeesService,
+  codefreshService,
 } from "@/lib/services/ci-provider";
 
 export const jenkinsConfig: CIProviderConfig = {
@@ -96,7 +97,44 @@ export const cloudbeesConfig: CIProviderConfig = {
   service: cloudbeesService,
 };
 
+export const codefreshConfig: CIProviderConfig = {
+  slug: "codefresh",
+  displayName: "Codefresh",
+  description: "Read-only access to pipelines, builds, projects, and logs",
+  logoPath: "/codefresh.svg",
+  logoAlt: "Codefresh",
+  accentColor: "cyan-600",
+  accentTextColor: "cyan",
+  cacheKey: "codefresh_connection_status",
+  localStorageConnectedKey: "isCodefreshConnected",
+  urlPlaceholder: "https://g.codefresh.io",
+  urlHelpText: "Full URL to your Codefresh instance (e.g. https://g.codefresh.io)",
+  usernamePlaceholder: "",
+  hideUsername: true,
+  setupStepTitle: "Generate an API Key in Codefresh",
+  setupStepNavPath:
+    "User Settings → API Keys → Generate",
+  setupStepInstructions: [
+    "Sign in to your Codefresh account",
+    <>
+      Go to your user settings:
+      <code className="block px-3 py-2 bg-muted rounded text-xs mt-1.5 font-mono">
+        User Avatar &rarr; User Settings &rarr; API Keys
+      </code>
+    </>,
+    <>Click <strong>Generate</strong> to create a new API key</>,
+    <span className="text-cyan-700 dark:text-cyan-400 font-medium">
+      Copy the key immediately &mdash; it won&apos;t be shown again
+    </span>,
+  ],
+  docsUrl:
+    "https://codefresh.io/docs/docs/integrations/codefresh-api/#authentication-instructions",
+  docsLabel: "Codefresh API Authentication Docs",
+  service: codefreshService,
+};
+
 export const ciProviderConfigs: Record<string, CIProviderConfig> = {
   jenkins: jenkinsConfig,
   cloudbees: cloudbeesConfig,
+  codefresh: codefreshConfig,
 };
