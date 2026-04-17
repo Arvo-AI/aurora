@@ -50,6 +50,7 @@
     "cmdk": "1.0.4",
     "dagre": "^0.8.5",
     "date-fns": "latest",
+    "dompurify": "3.4.0",
     "dotenv": "^16.4.7",
     "embla-carousel-react": "8.5.1",
     "framer-motion": "^12.12.2",

@@ -148,7 +148,6 @@ services:
       - "${FLASK_PORT}:${FLASK_PORT}"
     volumes:
       - terraform-workdir:/app/terraform_workdir
-      - /var/run/docker.sock:/var/run/docker.sock
     command: ["python", "main_compute.py"]
     environment:
       <<: *common-env
@@ -211,7 +210,6 @@ services:
       - "host.docker.internal:host-gateway"
     volumes:
       - terraform-workdir:/app/terraform_workdir
-      - /var/run/docker.sock:/var/run/docker.sock
     command: >
       celery -A celery_config worker
         --loglevel=info
@@ -344,7 +342,6 @@ services:
     command: ["python", "main_chatbot.py"]
     volumes:
       - terraform-workdir:/app/terraform_workdir
-      - /var/run/docker.sock:/var/run/docker.sock
     environment:
       <<: *common-env
       OTEL_SERVICE_NAME: chatbot

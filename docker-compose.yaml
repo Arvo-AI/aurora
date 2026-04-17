@@ -155,7 +155,6 @@ services:
     volumes:
       - ./server:/app
       - terraform-workdir:/app/terraform_workdir
-      - /var/run/docker.sock:/var/run/docker.sock
     command: ["python", "main_compute.py"]
     environment:
       <<: *common-env
@@ -239,7 +238,6 @@ services:
     volumes:
       - ./server:/app
       - terraform-workdir:/app/terraform_workdir
-      - /var/run/docker.sock:/var/run/docker.sock
     command: >
       celery -A celery_config worker
         --loglevel=info
@@ -369,7 +367,6 @@ services:
     volumes:
       - ./server:/app
       - terraform-workdir:/app/terraform_workdir
-      - /var/run/docker.sock:/var/run/docker.sock
     environment:
       <<: *common-env
 

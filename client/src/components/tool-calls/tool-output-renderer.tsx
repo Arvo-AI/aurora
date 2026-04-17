@@ -6,6 +6,7 @@
 
 import * as React from "react"
 import Convert from 'ansi-to-html'
+import DOMPurify from 'dompurify'
 import { Button } from "@/components/ui/button"
 import { IaCEditorPanel } from "./iac-editor-panel"
 
@@ -163,7 +164,7 @@ export function RenderOutput({
 
     // CLI tools - use ANSI to HTML for terminal colors
     if (isCliTool(toolName)) {
-      const htmlOutput = ansiConverter.toHtml(output)
+      const htmlOutput = DOMPurify.sanitize(ansiConverter.toHtml(output))
       return (
         <div 
           className="text-xs leading-relaxed whitespace-pre-wrap font-mono"
@@ -475,7 +476,7 @@ export function RenderOutput({
     }
 
     if (isCliTool(toolName)) {
-      const htmlOutput = ansiConverter.toHtml(chatOutput)
+      const htmlOutput = DOMPurify.sanitize(ansiConverter.toHtml(chatOutput))
       return (
         <div 
           className="text-xs leading-relaxed whitespace-pre-wrap font-mono"

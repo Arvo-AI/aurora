@@ -178,7 +178,7 @@ config:
   AURORA_VERIFY_CLI_IDENTITY: "false"
   
   # --- Optional Features (enable as needed) ---
-  ENABLE_POD_ISOLATION: "false"              # Isolate terminal commands in separate pods
+  ENABLE_POD_ISOLATION: "true"               # Isolate terminal commands in separate pods
   # NEXT_PUBLIC_* feature flags — written to window.__ENV by docker-entrypoint.sh at startup, no image rebuild needed
   NEXT_PUBLIC_ENABLE_OVH: "false"            # OVH Cloud integration
   NEXT_PUBLIC_ENABLE_PAGERDUTY_OAUTH: "false" # PagerDuty integration

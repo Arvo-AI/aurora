@@ -1885,15 +1885,12 @@ def initialize_tables():
                 cursor.execute(f"ALTER TABLE {table_name} FORCE ROW LEVEL SECURITY;")
                 logging.info(f"RLS forced on table '{table_name}'.")
 
-                # RLS condition: enforce org scoping when session var is set,
-                # allow through when unset (prevents crashes from code paths that
-                # don't call SET myapp.current_org_id before writing)
+                # RLS condition: deny access when org_id context is not set (default-deny).
+                # All code paths must SET myapp.current_org_id before querying.
                 _rls_using = f"""
                     org_id IS NOT NULL
-                    AND (
-                        COALESCE(current_setting('myapp.current_org_id', true), '') = ''
-                        OR org_id = current_setting('myapp.current_org_id', true)::text
-                    )
+                    AND COALESCE(current_setting('myapp.current_org_id', true), '') != ''
+                    AND org_id = current_setting('myapp.current_org_id', true)::text
                 """
 
                 # SELECT policy
