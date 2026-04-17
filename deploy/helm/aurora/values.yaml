@@ -173,7 +173,7 @@ config:
   GEMINI_DISABLE_THINKING: "false"
   
   # --- Security ---
-  RATE_LIMITING_ENABLED: "false"
+  RATE_LIMITING_ENABLED: "true"
   RATE_LIMIT_HEADERS_ENABLED: "true"
   AURORA_VERIFY_CLI_IDENTITY: "false"
   
