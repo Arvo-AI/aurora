@@ -374,7 +374,7 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [handleChatSessionSelect, handleNewChat, currentSessionId]);
 
-  // Auto-send initial message from URL
+  // Auto-send initial message from URL or sessionStorage (e.g., Next Steps execution)
   useEffect(() => {
     if (initialMessage && chatWebSocket.isReady && userId && !isLoadingSessionMessages && !isSending && !initialMessageSentRef.current) {
       initialMessageSentRef.current = true;
@@ -384,6 +384,9 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
             sessionStorage.removeItem('pendingChatMessage');
             const sessionIdToUse = currentSessionId;
             window.history.replaceState({}, '', `/chat${sessionIdToUse ? `?sessionId=${sessionIdToUse}` : ''}`);
+          } else {
+            // Reset so the effect can retry when conditions are met again
+            initialMessageSentRef.current = false;
           }
         });
       }, 500);
