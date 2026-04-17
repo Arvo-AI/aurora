@@ -55,17 +55,18 @@ export async function POST(
           signal: controller.signal,
         },
       );
+      const text = await response.text();
+      return new NextResponse(text, {
+        status: response.status,
+        headers: {
+          'Content-Type': response.headers.get('content-type') || 'application/json',
+        },
+      });
     } finally {
+      // Clear only after body read; fetch can return with headers flushed but
+      // body still streaming, so the abort signal must stay live through text().
       clearTimeout(timeoutId);
     }
-
-    const text = await response.text();
-    return new NextResponse(text, {
-      status: response.status,
-      headers: {
-        'Content-Type': response.headers.get('content-type') || 'application/json',
-      },
-    });
   } catch (error) {
     if (error instanceof Error && error.name === 'AbortError') {
       console.error('[api/incidents/[id]/postmortem/export/notion] Request timeout');

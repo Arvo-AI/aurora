@@ -10,6 +10,32 @@ from connectors.notion_connector.client import extract_title
 logger = logging.getLogger(__name__)
 
 
+def _resolve_database_title_key(client: Any, database_id: str) -> str:
+    """Return the property name whose ``type == "title"`` on the target DB.
+
+    Notion lets users rename the required title property to anything; hardcoding
+    ``"Name"`` breaks duplication into renamed DBs. Fall back to ``"Name"`` only
+    if the schema lookup fails so the old behaviour still applies on error.
+    """
+    try:
+        schema = client.get_database(database_id)
+    except Exception as exc:
+        logger.warning(
+            "get_database(%s) failed while duplicating: %s — falling back to 'Name'",
+            database_id,
+            type(exc).__name__,
+        )
+        return "Name"
+    for key, meta in (schema.get("properties") or {}).items():
+        if isinstance(meta, dict) and meta.get("type") == "title":
+            return key
+    logger.warning(
+        "database %s exposes no title property; falling back to 'Name'",
+        database_id,
+    )
+    return "Name"
+
+
 def _extract_markdown(raw: Any) -> str:
     """Pull the markdown string out of whatever shape Notion returns."""
     if isinstance(raw, str):
@@ -69,13 +95,14 @@ def duplicate_page(
         )
 
     title = extract_title(source_page).strip() or "Untitled"
-    # Minimal properties: title prop. When parent is a page, Notion expects a
-    # single "title" property.  When it's a database, the caller should ideally
-    # supply properties directly, but we fall back to a "title" / "Name" key.
+    # Minimal properties: just the title prop. Pages under a page parent use
+    # ``title``. Databases let users rename the title column to anything, so
+    # look up the actual title property key from the target DB schema.
     properties: Dict[str, Any]
     title_payload = [{"type": "text", "text": {"content": title}}]
     if "database_id" in new_parent:
-        properties = {"Name": {"title": title_payload}}
+        title_key = _resolve_database_title_key(client, new_parent["database_id"])
+        properties = {title_key: {"title": title_payload}}
     else:
         properties = {"title": {"title": title_payload}}
 

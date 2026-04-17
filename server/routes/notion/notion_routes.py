@@ -119,7 +119,7 @@ def connect():
     if data.get("token_type") == "iit":
         token = data.get("token")
         if not token:
-            return jsonify({"error": "Missing Notion integration token"}), 401
+            return jsonify({"error": "Missing Notion integration token"}), 400
 
         if not (
             (token.startswith("secret_") or token.startswith("ntn_"))

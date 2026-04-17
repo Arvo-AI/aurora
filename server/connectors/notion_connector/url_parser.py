@@ -54,7 +54,15 @@ def parse_notion_url(url_or_id: str) -> Dict[str, str]:
     # Add scheme if missing so urlparse works consistently
     working = value
     if not re.match(r"^https?://", working):
-        if working.startswith("notion.so") or working.startswith("www.notion.so"):
+        # Accept schemeless notion.so, www.notion.so, and workspace-hosted
+        # custom domains like ``<team>.notion.site``.
+        host_head = working.split("/", 1)[0].lower()
+        if (
+            host_head == "notion.so"
+            or host_head == "www.notion.so"
+            or host_head.endswith(".notion.so")
+            or host_head.endswith(".notion.site")
+        ):
             working = "https://" + working
         else:
             # Not a URL and not a raw UUID — try to extract a 32-hex

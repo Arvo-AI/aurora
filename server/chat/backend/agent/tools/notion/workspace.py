@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import ipaddress
 import logging
 import mimetypes
 import os
+import socket
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
@@ -375,14 +377,52 @@ def _guess_content_type(filename: str) -> str:
     return mt or "application/octet-stream"
 
 
+def _assert_public_url(url: str) -> None:
+    """Reject URLs whose host resolves to loopback/private/link-local IPs.
+
+    The file-upload tool fetches arbitrary URLs server-side on behalf of a
+    chat user, so without this check it's an SSRF vector into the Aurora
+    deployment's internal network (e.g. cloud metadata endpoints at
+    ``169.254.169.254``).
+    """
+    parsed = urlparse(url)
+    host = parsed.hostname
+    if not host:
+        raise ValueError(f"URL has no hostname: {url!r}")
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except socket.gaierror as exc:
+        raise ValueError(f"DNS lookup failed for {host!r}: {exc}") from exc
+    for info in infos:
+        addr = info[4][0]
+        try:
+            ip = ipaddress.ip_address(addr)
+        except ValueError:
+            continue
+        if (
+            ip.is_private
+            or ip.is_loopback
+            or ip.is_link_local
+            or ip.is_reserved
+            or ip.is_multicast
+            or ip.is_unspecified
+        ):
+            raise ValueError(
+                f"Refusing to fetch URL pointing at non-public address {addr}"
+            )
+
+
 def _fetch_bytes(source: str) -> tuple[bytes, str]:
     """Return (bytes, effective_filename) for a URL or local path."""
     if _looks_like_url(source):
+        # SSRF guard: reject URLs that resolve to internal/private ranges.
+        _assert_public_url(source)
         # Best-effort HEAD: many CDNs reject HEAD, so only trust the
         # Content-Length on a 2xx response. Streaming cap below is the
-        # authoritative guard.
+        # authoritative guard. ``allow_redirects=False`` prevents a 3xx
+        # away from the DNS-validated host to an internal one.
         try:
-            head = requests.head(source, allow_redirects=True, timeout=30)
+            head = requests.head(source, allow_redirects=False, timeout=30)
             if head.ok:
                 length_header = head.headers.get("Content-Length")
                 if length_header and length_header.isdigit():
@@ -393,7 +433,9 @@ def _fetch_bytes(source: str) -> tuple[bytes, str]:
         except requests.RequestException as exc:
             # HEAD is advisory; the streaming cap below is the real guard.
             logger.debug("HEAD pre-check failed for %s: %s", source, exc)
-        resp = requests.get(source, stream=True, timeout=120)
+        resp = requests.get(
+            source, stream=True, timeout=120, allow_redirects=False
+        )
         resp.raise_for_status()
         buf = bytearray()
         for chunk in resp.iter_content(chunk_size=1024 * 1024):

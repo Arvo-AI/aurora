@@ -35,6 +35,10 @@ class TokenBucket:
     """
 
     def __init__(self, rate_per_sec: float, capacity: int):
+        if rate_per_sec <= 0:
+            raise ValueError("rate_per_sec must be > 0")
+        if capacity <= 0:
+            raise ValueError("capacity must be > 0")
         self.rate = float(rate_per_sec)
         self.capacity = float(capacity)
         self.tokens = float(capacity)

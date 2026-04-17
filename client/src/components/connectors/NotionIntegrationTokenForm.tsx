@@ -221,18 +221,23 @@ export function NotionIntegrationTokenForm({
           id="notion-iit"
           value={displayValue}
           onChange={(event) => {
-            // When masked, the visible value is dots — we shouldn't let edits
-            // through the masked view corrupt the underlying token. Only
-            // accept input when revealed, OR when the user is clearing/typing
-            // from empty.
             const next = event.target.value;
             if (revealed) {
               setToken(next);
             } else if (next.length < token.length) {
-              // allow deletion via backspace while masked
+              // Backspace/clear while masked — operate on underlying token.
               setToken(token.slice(0, next.length));
             } else if (token.length === 0) {
               setToken(next);
+            } else {
+              // Additive edit while masked: flip to revealed so the user
+              // sees what they're typing instead of keystrokes disappearing.
+              // The new character was appended to the masked display, so the
+              // token grows by (next.length - token.length) chars from the
+              // end of the visible value.
+              setRevealed(true);
+              const appended = next.slice(token.length);
+              setToken(token + appended);
             }
             if (submitError) setSubmitError(null);
           }}

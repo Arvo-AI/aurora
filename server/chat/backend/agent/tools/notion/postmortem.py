@@ -503,7 +503,11 @@ def notion_export_postmortem(
             code="reauth_required",
         )
     except ValueError as exc:
-        return notion_tool_error(str(exc), code="bad_input")
+        # NotionClient(user_id) raises ValueError on missing creds; surface that
+        # as ``not_connected`` so the UI can route to /notion/connect.
+        msg = str(exc)
+        code = "not_connected" if "No Notion credentials" in msg else "bad_input"
+        return notion_tool_error(msg, code=code)
     except Exception as exc:
         logger.exception("Postmortem export to Notion failed: %s", exc)
         return notion_tool_error(f"Export failed: {exc}", code="tool_failure")
@@ -590,7 +594,11 @@ def notion_create_action_items(
             code="reauth_required",
         )
     except ValueError as exc:
-        return notion_tool_error(str(exc), code="bad_input")
+        # NotionClient(user_id) raises ValueError on missing creds; surface that
+        # as ``not_connected`` so the UI can route to /notion/connect.
+        msg = str(exc)
+        code = "not_connected" if "No Notion credentials" in msg else "bad_input"
+        return notion_tool_error(msg, code=code)
     except Exception as exc:
         logger.exception("Notion action-item creation failed: %s", exc)
         return notion_tool_error(
