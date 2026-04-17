@@ -170,7 +170,7 @@ def disconnect(user_id):
             logger.warning("[CODEFRESH] Failed to clean up secrets during disconnect")
             return jsonify({"success": False, "error": "Failed to delete stored credentials"}), 500
 
-        logger.info("[CODEFRESH] Disconnected provider (deleted %d token rows)", deleted)
+        logger.info("[CODEFRESH] Disconnected provider successfully")
         return jsonify({"success": True, "message": "Codefresh disconnected successfully", "deleted": deleted})
     except Exception:
         logger.exception("[CODEFRESH] Failed to disconnect provider")
