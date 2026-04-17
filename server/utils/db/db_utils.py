@@ -316,6 +316,29 @@ def initialize_tables():
                         UNIQUE(user_id, provider)
                     );
                 """,
+                "gchat_team_space_mappings": """
+                    CREATE TABLE IF NOT EXISTS gchat_team_space_mappings (
+                        id SERIAL PRIMARY KEY,
+                        org_id VARCHAR(255) NOT NULL,
+                        team_name VARCHAR(255) NOT NULL,
+                        space_name VARCHAR(255) NOT NULL,
+                        space_display_name VARCHAR(255),
+                        description TEXT,
+                        created_by VARCHAR(255) NOT NULL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE(org_id, team_name)
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_gchat_team_space_org ON gchat_team_space_mappings(org_id);
+                """,
+                "gchat_routing_config": """
+                    CREATE TABLE IF NOT EXISTS gchat_routing_config (
+                        org_id VARCHAR(255) PRIMARY KEY,
+                        routing_instructions TEXT NOT NULL DEFAULT '',
+                        updated_by VARCHAR(255),
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+                """,
                 "github_connected_repos": """
                     CREATE TABLE IF NOT EXISTS github_connected_repos (
                         id SERIAL PRIMARY KEY,
@@ -671,6 +694,9 @@ def initialize_tables():
                          analyzed_at TIMESTAMP,
                          slack_message_ts VARCHAR(50),
                          google_chat_message_name VARCHAR(255),
+                         notification_refs JSONB,
+                         notified_teams JSONB,
+                         routing_reason TEXT,
                          active_tab VARCHAR(10) DEFAULT 'thoughts',
                          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -1607,6 +1633,36 @@ def initialize_tables():
                 logging.error(
                     f"Failed to add google_chat_message_name column to incidents: {e}"
                 )
+                conn.rollback()
+
+            # Migration: Add notification_refs JSONB column to incidents
+            try:
+                cursor.execute(
+                    """
+                    ALTER TABLE incidents
+                    ADD COLUMN IF NOT EXISTS notification_refs JSONB;
+                    """
+                )
+                conn.commit()
+            except Exception as e:
+                logging.error(
+                    f"Failed to add notification_refs column to incidents: {e}"
+                )
+                conn.rollback()
+
+            # Migration: Add notified_teams and routing_reason columns to incidents
+            try:
+                cursor.execute(
+                    """
+                    ALTER TABLE incidents
+                    ADD COLUMN IF NOT EXISTS notified_teams JSONB;
+                    ALTER TABLE incidents
+                    ADD COLUMN IF NOT EXISTS routing_reason TEXT;
+                    """
+                )
+                conn.commit()
+            except Exception as e:
+                logging.error(f"Failed to add notified_teams/routing_reason columns to incidents: {e}")
                 conn.rollback()
 
             # Migration: Add active_tab column to incidents for UI state persistence

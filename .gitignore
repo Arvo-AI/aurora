@@ -97,3 +97,6 @@ aurora-*.tar.gz.sha256
 
 # Vault init credentials (written by k8s-deploy.sh)
 vault-init-*.txt
+
+# Cursor IDE
+.cursor/rules/

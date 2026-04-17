@@ -211,7 +211,16 @@ export interface Incident {
   createdAt?: string;
   updatedAt?: string;
   chatSessionId?: string; // RCA chat session ID
-  activeTab?: 'thoughts' | 'chat'; // Currently active tab in the UI
+  activeTab?: 'thoughts' | 'chat';
+  notifiedTeams?: {
+    initial?: string[];
+    initial_reason?: string;
+    final?: string[];
+    final_reason?: string;
+    dropped?: string[];
+    added?: string[];
+  };
+  routingReason?: string;
   tokenUsage?: {
     requestCount: number;
     totalInputTokens: number;
@@ -359,6 +368,8 @@ export const incidentsService = {
         updatedAt: inc.updatedAt,
         chatSessionId: inc.chatSessionId,
         activeTab: inc.activeTab || 'thoughts',
+        notifiedTeams: inc.notifiedTeams || undefined,
+        routingReason: inc.routingReason || undefined,
         tokenUsage: inc.tokenUsage || null,
       };
     } catch (error) {

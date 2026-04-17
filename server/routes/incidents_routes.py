@@ -140,6 +140,8 @@ def _format_incident_response(
             affected_services,
             merged_into_incident_id,
             merged_into_title,
+            notified_teams,
+            routing_reason,
         ) = row
     elif include_correlation:
         (
@@ -168,6 +170,8 @@ def _format_incident_response(
         ) = row
         merged_into_incident_id = None
         merged_into_title = None
+        notified_teams = None
+        routing_reason = None
     elif include_metadata:
         (
             incident_id,
@@ -195,6 +199,8 @@ def _format_incident_response(
         affected_services = None
         merged_into_incident_id = None
         merged_into_title = None
+        notified_teams = None
+        routing_reason = None
     else:
         (
             incident_id,
@@ -222,6 +228,8 @@ def _format_incident_response(
         affected_services = None
         merged_into_incident_id = None
         merged_into_title = None
+        notified_teams = None
+        routing_reason = None
 
     result = {
         "id": str(incident_id),
@@ -265,6 +273,12 @@ def _format_incident_response(
     if merged_into_incident_id is not None:
         result["mergedIntoIncidentId"] = str(merged_into_incident_id)
         result["mergedIntoTitle"] = merged_into_title
+
+    # Add routing info if available
+    if notified_teams:
+        result["notifiedTeams"] = notified_teams if isinstance(notified_teams, list) else []
+    if routing_reason:
+        result["routingReason"] = routing_reason
 
     return result
 
@@ -360,7 +374,8 @@ def get_incident(user_id, incident_id: str):
                         i.aurora_chat_session_id, i.started_at, i.analyzed_at, i.active_tab, i.created_at, i.updated_at,
                         i.resolved_at, i.alert_fired_at,
                         i.alert_metadata, i.correlated_alert_count, i.affected_services,
-                        i.merged_into_incident_id, target.alert_title as merged_into_title
+                        i.merged_into_incident_id, target.alert_title as merged_into_title,
+                        i.notified_teams, i.routing_reason
                     FROM incidents i
                     LEFT JOIN incidents target ON i.merged_into_incident_id = target.id
                     WHERE i.id = %s AND i.org_id = %s

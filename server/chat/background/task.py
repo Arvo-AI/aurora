@@ -1612,7 +1612,8 @@ def _get_incident_data(incident_id: str) -> Optional[Dict[str, Any]]:
                     """
                     SELECT id, user_id, source_type, status, severity, alert_title, 
                            alert_service, aurora_status, aurora_summary, started_at, 
-                           analyzed_at, created_at, slack_message_ts, google_chat_message_name
+                           analyzed_at, created_at, slack_message_ts, google_chat_message_name,
+                           alert_environment, notification_refs
                     FROM incidents 
                     WHERE id = %s
                     """,
@@ -1635,6 +1636,8 @@ def _get_incident_data(incident_id: str) -> Optional[Dict[str, Any]]:
                         'created_at': result[11],
                         'slack_message_ts': result[12] if len(result) > 12 else None,
                         'google_chat_message_name': result[13] if len(result) > 13 else None,
+                        'environment': result[14] or 'unknown',
+                        'notification_refs': result[15] if len(result) > 15 else None,
                     }
         
         return None

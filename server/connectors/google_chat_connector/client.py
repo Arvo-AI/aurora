@@ -171,6 +171,25 @@ class GoogleChatClient:
                 return space
         return None
 
+    def list_bot_spaces_summary(self) -> List[Dict[str, str]]:
+        """Return a lightweight list of summaries of spaces the bot is a member of.
+
+        Each entry contains ``name`` (resource ID like ``spaces/XXXXX``),
+        ``displayName``, and ``description`` (from spaceDetails).
+        Only includes GROUP_CHAT and SPACE types (filters out DMs).
+        """
+        summaries = []
+        for space in self.list_spaces():
+            space_type = space.get("spaceType", "")
+            if space_type in ("SPACE", "GROUP_CHAT"):
+                details = space.get("spaceDetails", {})
+                summaries.append({
+                    "name": space.get("name", ""),
+                    "displayName": space.get("displayName", ""),
+                    "description": details.get("description", ""),
+                })
+        return summaries
+
     # ── Members ─────────────────────────────────────────────────────
 
     def add_member(self, space_name: str, user_email: str) -> Optional[Dict[str, Any]]:

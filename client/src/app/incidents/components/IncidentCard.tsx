@@ -502,6 +502,53 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
         )}
       </div>
 
+      {/* Teams notified */}
+      {incident.notifiedTeams && (incident.notifiedTeams.final || incident.notifiedTeams.initial) && (() => {
+        const routing = incident.notifiedTeams!;
+        const currentTeams = routing.final || routing.initial || [];
+        const currentReason = routing.final_reason || routing.initial_reason;
+        const hasRoutingChanges = (routing.dropped && routing.dropped.length > 0) || (routing.added && routing.added.length > 0);
+
+        return (
+          <div className="px-1 py-2">
+            <div className="flex flex-wrap items-center gap-2 text-sm">
+              <span className="text-zinc-500">Teams notified:</span>
+              {currentTeams.map((team) => (
+                <Badge key={team} variant="outline" className="bg-blue-500/10 border-blue-500/30 text-blue-300 text-xs">
+                  {team}
+                </Badge>
+              ))}
+            </div>
+            {currentReason && (
+              <p className="mt-1.5 text-xs text-zinc-500 italic">
+                {currentReason}
+              </p>
+            )}
+            {hasRoutingChanges && (
+              <details className="mt-2">
+                <summary className="text-xs text-zinc-600 cursor-pointer hover:text-zinc-400 transition-colors">
+                  Routing updated after investigation
+                </summary>
+                <div className="mt-1.5 pl-3 border-l border-zinc-800 text-xs text-zinc-500 space-y-1">
+                  {routing.initial && (
+                    <p>Initially notified: {routing.initial.join(', ')}</p>
+                  )}
+                  {routing.dropped && routing.dropped.length > 0 && (
+                    <p>Re-routed away: <span className="text-yellow-500">{routing.dropped.join(', ')}</span></p>
+                  )}
+                  {routing.added && routing.added.length > 0 && (
+                    <p>Added after RCA: <span className="text-green-400">{routing.added.join(', ')}</span></p>
+                  )}
+                  {routing.initial_reason && routing.final_reason && routing.initial_reason !== routing.final_reason && (
+                    <p>Initial reasoning: {routing.initial_reason}</p>
+                  )}
+                </div>
+              </details>
+            )}
+          </div>
+        );
+      })()}
+
       {/* Separator */}
       <div className="border-t border-zinc-800" />
 

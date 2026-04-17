@@ -215,3 +215,211 @@ def _get_org_space_config(user_id: str):
     except Exception as e:
         logger.debug("Failed to retrieve Google Chat space config for user %s: %s", user_id, e)
         return None
+
+
+def _get_user_org_id(user_id: str) -> str | None:
+    """Return the org_id for a user, or None."""
+    try:
+        from utils.db.connection_pool import db_pool
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT org_id FROM users WHERE id = %s", (user_id,))
+                row = cur.fetchone()
+                return row[0] if row else None
+    except Exception as e:
+        logger.warning("Error fetching org_id for user %s: %s", user_id, e)
+        return None
+
+
+# ── Team ↔ Space mappings ──────────────────────────────────────────────
+
+
+@google_chat_bp.route("/spaces/bot", methods=["GET"])
+@require_permission("connectors", "read")
+def list_bot_spaces(user_id):
+    """GET /google-chat/spaces/bot — spaces the Aurora Chat app is a member of."""
+    client = get_chat_app_client()
+    if not client:
+        return jsonify({"error": "Service account not configured"}), 400
+    try:
+        spaces = client.list_bot_spaces_summary()
+        return jsonify({"spaces": spaces})
+    except Exception as e:
+        logger.error("Error listing bot spaces", exc_info=True)
+        return jsonify({"error": "Failed to list spaces"}), 500
+
+
+@google_chat_bp.route("/team-mappings", methods=["GET"])
+@require_permission("connectors", "read")
+def get_team_mappings(user_id):
+    """GET /google-chat/team-mappings — all team→space mappings for the org."""
+    from utils.db.connection_pool import db_pool
+
+    org_id = _get_user_org_id(user_id)
+    if not org_id:
+        return jsonify({"error": "No org found for user"}), 400
+
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """SELECT id, team_name, space_name, space_display_name,
+                              description, created_by, created_at
+                       FROM gchat_team_space_mappings
+                       WHERE org_id = %s ORDER BY team_name""",
+                    (org_id,),
+                )
+                rows = cur.fetchall()
+
+        mappings = [
+            {
+                "id": r[0],
+                "team_name": r[1],
+                "space_name": r[2],
+                "space_display_name": r[3],
+                "description": r[4],
+                "created_by": r[5],
+                "created_at": r[6].isoformat() if r[6] else None,
+            }
+            for r in rows
+        ]
+        return jsonify({"mappings": mappings})
+    except Exception as e:
+        logger.error("Error getting team mappings", exc_info=True)
+        return jsonify({"error": "Failed to get team mappings"}), 500
+
+
+@google_chat_bp.route("/team-mappings", methods=["POST"])
+@require_permission("connectors", "write")
+def upsert_team_mapping(user_id):
+    """POST /google-chat/team-mappings — create or update a team→space mapping."""
+    from utils.db.connection_pool import db_pool
+
+    data = request.get_json(silent=True)
+    if not data:
+        return jsonify({"error": "JSON body required"}), 400
+
+    team_name = (data.get("team_name") or "").strip()
+    space_name = (data.get("space_name") or "").strip()
+    space_display_name = (data.get("space_display_name") or "").strip() or None
+    description = (data.get("description") or "").strip() or None
+
+    if not team_name or not space_name:
+        return jsonify({"error": "team_name and space_name are required"}), 400
+
+    org_id = _get_user_org_id(user_id)
+    if not org_id:
+        return jsonify({"error": "No org found for user"}), 400
+
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """INSERT INTO gchat_team_space_mappings
+                           (org_id, team_name, space_name, space_display_name,
+                            description, created_by)
+                       VALUES (%s, %s, %s, %s, %s, %s)
+                       ON CONFLICT (org_id, team_name) DO UPDATE SET
+                           space_name = EXCLUDED.space_name,
+                           space_display_name = EXCLUDED.space_display_name,
+                           description = EXCLUDED.description,
+                           updated_at = NOW()
+                       RETURNING id""",
+                    (org_id, team_name, space_name, space_display_name,
+                     description, user_id),
+                )
+                row = cur.fetchone()
+                conn.commit()
+
+        return jsonify({"id": row[0], "message": f"Mapped '{team_name}' → {space_name}"})
+    except Exception as e:
+        logger.error("Error upserting team mapping", exc_info=True)
+        return jsonify({"error": "Failed to save team mapping"}), 500
+
+
+@google_chat_bp.route("/team-mappings/<int:mapping_id>", methods=["DELETE"])
+@require_permission("connectors", "write")
+def delete_team_mapping(user_id, mapping_id):
+    """DELETE /google-chat/team-mappings/<id> — remove a mapping."""
+    from utils.db.connection_pool import db_pool
+
+    org_id = _get_user_org_id(user_id)
+    if not org_id:
+        return jsonify({"error": "No org found for user"}), 400
+
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM gchat_team_space_mappings WHERE id = %s AND org_id = %s",
+                    (mapping_id, org_id),
+                )
+                if cur.rowcount == 0:
+                    return jsonify({"error": "Mapping not found"}), 404
+                conn.commit()
+        return jsonify({"message": "Mapping deleted"})
+    except Exception as e:
+        logger.error("Error deleting team mapping", exc_info=True)
+        return jsonify({"error": "Failed to delete mapping"}), 500
+
+
+# ── Routing instructions ───────────────────────────────────────────────
+
+
+@google_chat_bp.route("/routing-instructions", methods=["GET"])
+@require_permission("connectors", "read")
+def get_routing_instructions(user_id):
+    """GET /google-chat/routing-instructions — org-level routing instructions."""
+    from utils.db.connection_pool import db_pool
+
+    org_id = _get_user_org_id(user_id)
+    if not org_id:
+        return jsonify({"error": "No org found for user"}), 400
+
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT routing_instructions FROM gchat_routing_config WHERE org_id = %s",
+                    (org_id,),
+                )
+                row = cur.fetchone()
+        return jsonify({"routing_instructions": row[0] if row else ""})
+    except Exception as e:
+        logger.error("Error getting routing instructions", exc_info=True)
+        return jsonify({"error": "Failed to get routing instructions"}), 500
+
+
+@google_chat_bp.route("/routing-instructions", methods=["PUT"])
+@require_permission("connectors", "write")
+def update_routing_instructions(user_id):
+    """PUT /google-chat/routing-instructions — save org-level routing instructions."""
+    from utils.db.connection_pool import db_pool
+
+    data = request.get_json(silent=True)
+    if data is None:
+        return jsonify({"error": "JSON body required"}), 400
+
+    instructions = (data.get("routing_instructions") or "").strip()
+
+    org_id = _get_user_org_id(user_id)
+    if not org_id:
+        return jsonify({"error": "No org found for user"}), 400
+
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """INSERT INTO gchat_routing_config (org_id, routing_instructions, updated_by)
+                       VALUES (%s, %s, %s)
+                       ON CONFLICT (org_id) DO UPDATE SET
+                           routing_instructions = EXCLUDED.routing_instructions,
+                           updated_by = EXCLUDED.updated_by,
+                           updated_at = NOW()""",
+                    (org_id, instructions, user_id),
+                )
+                conn.commit()
+        return jsonify({"message": "Routing instructions saved"})
+    except Exception as e:
+        logger.error("Error saving routing instructions", exc_info=True)
+        return jsonify({"error": "Failed to save routing instructions"}), 500

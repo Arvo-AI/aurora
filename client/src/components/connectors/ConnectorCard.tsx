@@ -41,6 +41,7 @@ export default function ConnectorCard({ connector, connectedOverride }: Connecto
   const [showOvhDialog, setShowOvhDialog] = useState(false);
   const [showScalewayDialog, setShowScalewayDialog] = useState(false);
   const [showAzureDialog, setShowAzureDialog] = useState(false);
+  const [showGoogleChatDialog, setShowGoogleChatDialog] = useState(false);
   const [isConnectingOAuth, setIsConnectingOAuth] = useState(false);
   const [showDisconnectDialog, setShowDisconnectDialog] = useState(false);
   
@@ -168,7 +169,7 @@ export default function ConnectorCard({ connector, connectedOverride }: Connecto
       if (!isConnected) {
         router.push("/google-chat/setup");
       } else {
-        setShowDisconnectDialog(true);
+        setShowGoogleChatDialog(true);
       }
       return;
     }
@@ -417,7 +418,7 @@ export default function ConnectorCard({ connector, connectedOverride }: Connecto
                         {isConnecting ? (
                           <>
                             <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                            {connector.id === "slack" && isConnected ? "Disconnecting..." : connector.id === "google_chat" && isConnected ? "Disconnecting..." : "Connecting..."}
+                            {connector.id === "slack" && isConnected ? "Disconnecting..." : "Connecting..."}
                           </>
                         ) : connector.id === "slack" && isConnected ? (
                           <>
@@ -426,8 +427,8 @@ export default function ConnectorCard({ connector, connectedOverride }: Connecto
                           </>
                         ) : connector.id === "google_chat" && isConnected ? (
                           <>
-                            <LogOut className="h-4 w-4 mr-2" />
-                            Disconnect
+                            <ExternalLink className="h-4 w-4 mr-2" />
+                            Manage
                           </>
                         ) : isConnected ? (
                           !canWrite ? (
@@ -507,6 +508,7 @@ export default function ConnectorCard({ connector, connectedOverride }: Connecto
         showAzureDialog={showAzureDialog}
         showOvhDialog={showOvhDialog}
         showScalewayDialog={showScalewayDialog}
+        showGoogleChatDialog={showGoogleChatDialog}
         onGitHubDialogChange={(open) => {
           if (!open && githubStatus.isAuthenticated && !githubStatus.isConnected) {
             toast({ title: "Select at least one repository", description: "GitHub requires at least one connected repo to be useful during investigations.", variant: "destructive" });
@@ -532,6 +534,7 @@ export default function ConnectorCard({ connector, connectedOverride }: Connecto
         onAzureDialogChange={setShowAzureDialog}
         onOvhDialogChange={setShowOvhDialog}
         onScalewayDialogChange={setShowScalewayDialog}
+        onGoogleChatDialogChange={setShowGoogleChatDialog}
         onGitHubDialogClose={() => setShowGitHubDialog(false)}
       />
 

@@ -11,6 +11,7 @@ import GcpProviderIntegration from "@/components/gcp-provider-integration";
 import OvhProviderIntegration from "@/components/ovh-provider-integration";
 import ScalewayProviderIntegration from "@/components/scaleway-provider-integration";
 import AzureProviderIntegration from "@/components/azure-provider-integration";
+import GoogleChatTeamMappings from "@/components/google-chat-team-mappings";
 
 interface ConnectorDialogsProps {
   connectorId: string;
@@ -20,12 +21,14 @@ interface ConnectorDialogsProps {
   showAzureDialog: boolean;
   showOvhDialog: boolean;
   showScalewayDialog: boolean;
+  showGoogleChatDialog?: boolean;
   onGitHubDialogChange: (open: boolean) => void;
   onBitbucketDialogChange: (open: boolean) => void;
   onGcpDialogChange: (open: boolean) => void;
   onAzureDialogChange: (open: boolean) => void;
   onOvhDialogChange: (open: boolean) => void;
   onScalewayDialogChange: (open: boolean) => void;
+  onGoogleChatDialogChange?: (open: boolean) => void;
   onGitHubDialogClose: () => void;
 }
 
@@ -37,12 +40,14 @@ export function ConnectorDialogs({
   showAzureDialog,
   showOvhDialog,
   showScalewayDialog,
+  showGoogleChatDialog,
   onGitHubDialogChange,
   onBitbucketDialogChange,
   onGcpDialogChange,
   onAzureDialogChange,
   onOvhDialogChange,
   onScalewayDialogChange,
+  onGoogleChatDialogChange,
   onGitHubDialogClose,
 }: ConnectorDialogsProps) {
   return (
@@ -111,6 +116,17 @@ export function ConnectorDialogs({
               <DialogTitle>Scaleway Project Management</DialogTitle>
             </DialogHeader>
             <ScalewayProviderIntegration onDisconnect={() => onScalewayDialogChange(false)} />
+          </DialogContent>
+        </Dialog>
+      )}
+
+      {connectorId === "google_chat" && onGoogleChatDialogChange && (
+        <Dialog open={!!showGoogleChatDialog} onOpenChange={onGoogleChatDialogChange}>
+          <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle>Google Chat — Team Routing</DialogTitle>
+            </DialogHeader>
+            <GoogleChatTeamMappings />
           </DialogContent>
         </Dialog>
       )}

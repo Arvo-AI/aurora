@@ -14,6 +14,22 @@ export interface GoogleChatConnectResponse {
   error_code?: string;
 }
 
+export interface BotSpace {
+  name: string;
+  displayName: string;
+  description: string;
+}
+
+export interface TeamMapping {
+  id: number;
+  team_name: string;
+  space_name: string;
+  space_display_name: string | null;
+  description: string | null;
+  created_by: string;
+  created_at: string | null;
+}
+
 const API_BASE = '/api/google-chat';
 
 export const googleChatService = {
@@ -46,6 +62,57 @@ export const googleChatService = {
   async disconnect(): Promise<void> {
     await apiRequest(`${API_BASE}`, {
       method: 'DELETE',
+      cache: 'no-store',
+    });
+  },
+
+  async listBotSpaces(): Promise<BotSpace[]> {
+    const data = await apiRequest<{ spaces: BotSpace[] }>(`${API_BASE}/spaces/bot`, {
+      cache: 'no-store',
+    });
+    return data.spaces ?? [];
+  },
+
+  async getTeamMappings(): Promise<TeamMapping[]> {
+    const data = await apiRequest<{ mappings: TeamMapping[] }>(`${API_BASE}/team-mappings`, {
+      cache: 'no-store',
+    });
+    return data.mappings ?? [];
+  },
+
+  async upsertTeamMapping(mapping: {
+    team_name: string;
+    space_name: string;
+    space_display_name?: string;
+    description?: string;
+  }): Promise<{ id: number; message: string }> {
+    return apiRequest(`${API_BASE}/team-mappings`, {
+      method: 'POST',
+      body: JSON.stringify(mapping),
+      headers: { 'Content-Type': 'application/json' },
+      cache: 'no-store',
+    });
+  },
+
+  async deleteTeamMapping(id: number): Promise<void> {
+    await apiRequest(`${API_BASE}/team-mappings/${id}`, {
+      method: 'DELETE',
+      cache: 'no-store',
+    });
+  },
+
+  async getRoutingInstructions(): Promise<string> {
+    const data = await apiRequest<{ routing_instructions: string }>(`${API_BASE}/routing-instructions`, {
+      cache: 'no-store',
+    });
+    return data.routing_instructions ?? '';
+  },
+
+  async updateRoutingInstructions(instructions: string): Promise<void> {
+    await apiRequest(`${API_BASE}/routing-instructions`, {
+      method: 'PUT',
+      body: JSON.stringify({ routing_instructions: instructions }),
+      headers: { 'Content-Type': 'application/json' },
       cache: 'no-store',
     });
   },

@@ -37,6 +37,7 @@ class PromptSegments:
     kubectl_onprem: str = ""
     background_mode: str = ""  # Background chat autonomous operation instructions
     knowledge_base_memory: str = ""  # User's knowledge base memory context
+    gchat_routing_context: str = ""  # GChat team routing mappings and instructions
 
 
 def _normalize_providers(provider_preference: Optional[Any]) -> List[str]:
@@ -586,6 +587,61 @@ def build_github_context_segment(user_id: Optional[str]) -> str:
     except Exception as e:
         import logging
         logging.warning(f"Error building GitHub context segment: {e}")
+        return ""
+
+
+def build_gchat_routing_context_segment(user_id: Optional[str]) -> str:
+    """Build GChat routing context so the agent knows which teams can be paged.
+
+    Uses the same effective-teams logic as the notification service:
+    auto-detected bot spaces merged with any DB overrides.
+    """
+    if not user_id:
+        return ""
+    try:
+        from utils.db.connection_pool import db_pool
+        from utils.notifications.google_chat_notification_service import (
+            _get_effective_teams,
+            _get_routing_instructions,
+        )
+
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT org_id FROM users WHERE id = %s", (user_id,))
+                row = cur.fetchone()
+                org_id = row[0] if row else None
+
+        if not org_id:
+            return ""
+
+        teams = _get_effective_teams(org_id)
+        instructions = _get_routing_instructions(org_id)
+
+        if not teams:
+            return ""
+
+        parts: list[str] = ["GOOGLE CHAT INCIDENT ROUTING:\n"]
+        parts.append("The following teams are configured for incident notifications via Google Chat:\n")
+        for t in teams:
+            line = f"- {t['team_name']}"
+            if t.get("description"):
+                line += f": {t['description']}"
+            elif t.get("space_display_name"):
+                line += f" (space: {t['space_display_name']})"
+            parts.append(line + "\n")
+
+        if instructions:
+            parts.append(f"\nRouting instructions from the user:\n{instructions}\n")
+
+        parts.append(
+            "\nWhen incidents occur, Aurora routes notifications to the correct team(s) "
+            "based on these mappings and instructions.\n"
+        )
+        return "".join(parts)
+
+    except Exception as e:
+        import logging
+        logging.warning(f"Error building GChat routing context segment: {e}")
         return ""
 
 
@@ -1863,6 +1919,11 @@ def build_prompt_segments(provider_preference: Optional[Any], mode: Optional[str
     if state and hasattr(state, 'user_id'):
         knowledge_base_memory = build_knowledge_base_memory_segment(state.user_id)
 
+    # Build GChat routing context for authenticated users with team mappings
+    gchat_routing_context = ""
+    if state and hasattr(state, 'user_id'):
+        gchat_routing_context = build_gchat_routing_context_segment(state.user_id)
+
     return PromptSegments(
         system_invariant=system_invariant,
         provider_constraints=provider_constraints,
@@ -1880,6 +1941,7 @@ def build_prompt_segments(provider_preference: Optional[Any], mode: Optional[str
         manual_vm_access=manual_vm_access,
         kubectl_onprem=kubectl_onprem,
         knowledge_base_memory=knowledge_base_memory,
+        gchat_routing_context=gchat_routing_context,
     )
 
 
@@ -1903,6 +1965,8 @@ def assemble_system_prompt(segments: PromptSegments) -> str: #main prompt builde
         parts.append(segments.github_context)
     if segments.bitbucket_context:
         parts.append(segments.bitbucket_context)
+    if segments.gchat_routing_context:
+        parts.append(segments.gchat_routing_context)
     if segments.kubectl_onprem:
         parts.append(segments.kubectl_onprem)
     if segments.prerequisite_checks:
