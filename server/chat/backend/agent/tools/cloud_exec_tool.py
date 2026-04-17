@@ -2008,6 +2008,22 @@ Security & Compliance
                 "provider": provider.lower(),
             })
 
+        # Org command policy check (shared allow/deny firewall across all tools)
+        from utils.auth.command_policy import evaluate_command
+        from utils.auth.stateless_auth import get_org_id_for_user
+        org_id = get_org_id_for_user(user_id) if user_id else None
+        verdict = evaluate_command(org_id, command)
+        if not verdict.allowed:
+            logger.warning("Policy denied cloud command for user %s: %s (%s)",
+                            user_id, command[:100], verdict.rule_description)
+            return json.dumps({
+                "success": False,
+                "error": f"Command blocked by organization policy: {verdict.rule_description}",
+                "code": "POLICY_DENIED",
+                "final_command": command,
+                "provider": provider.lower(),
+            })
+
         # If command is potentially action, ask for confirmation first (after command processing)
         if not is_read_only_command(command):
             summary_msg = summarize_cloud_command(command)

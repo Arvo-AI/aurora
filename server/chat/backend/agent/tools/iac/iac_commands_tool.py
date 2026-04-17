@@ -5,8 +5,9 @@ Orchestrates Terraform operations using execution core and user flow modules.
 
 import json
 import logging
+import re
 import shlex
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from utils.cloud.infrastructure_confirmation import wait_for_user_confirmation
 
@@ -42,6 +43,57 @@ from .iac_state_commands import (
 )
 
 logger = logging.getLogger(__name__)
+
+_LOCAL_EXEC_RE = re.compile(
+    r'provisioner\s+"local-exec"\s*\{[^}]*command\s*=\s*"([^"]+)"',
+    re.DOTALL,
+)
+_EXTERNAL_RE = re.compile(
+    r'data\s+"external"\s*\{[^}]*program\s*=\s*\[([^\]]+)\]',
+    re.DOTALL,
+)
+
+
+def _scan_tf_for_exec_provisioners(
+    terraform_dir: str,
+    org_id: Optional[str],
+) -> List[Tuple[str, Any]]:
+    """Scan .tf files for local-exec / data-external commands and evaluate against policy.
+
+    Returns list of (command, verdict) tuples for denied commands only.
+    Best-effort regex extraction; primary protection is the tool-level gates.
+    """
+    if not org_id:
+        return []
+
+    from utils.auth.command_policy import evaluate_command
+    from utils.terminal.terminal_run import terminal_run
+
+    list_cmd = f"cat {terraform_dir}/*.tf 2>/dev/null || true"
+    result = terminal_run(list_cmd, shell=True, capture_output=True, text=True, timeout=15)
+    if result.returncode != 0 or not result.stdout.strip():
+        return []
+
+    content = result.stdout
+    denied: List[Tuple[str, Any]] = []
+
+    for match in _LOCAL_EXEC_RE.finditer(content):
+        cmd = match.group(1).strip()
+        if cmd:
+            verdict = evaluate_command(org_id, cmd)
+            if not verdict.allowed:
+                denied.append((cmd, verdict))
+
+    for match in _EXTERNAL_RE.finditer(content):
+        raw = match.group(1).strip()
+        parts = [p.strip().strip('"').strip("'") for p in raw.split(",")]
+        cmd = " ".join(parts)
+        if cmd:
+            verdict = evaluate_command(org_id, cmd)
+            if not verdict.allowed:
+                denied.append((cmd, verdict))
+
+    return denied
 
 
 # Simple commands and state commands are now imported from separate modules
@@ -182,6 +234,19 @@ def iac_apply(
 
         if dir_error:
             return json.dumps({"error": dir_error, "action": "apply"})
+
+        # Scan .tf files for provisioner commands blocked by org policy
+        from utils.auth.stateless_auth import get_org_id_for_user
+        org_id = get_org_id_for_user(user_id) if user_id else None
+        denied = _scan_tf_for_exec_provisioners(str(terraform_dir), org_id)
+        if denied:
+            blocked = "; ".join(f"'{cmd}' ({v.rule_description})" for cmd, v in denied)
+            return json.dumps({
+                "status": "blocked",
+                "action": "apply",
+                "error": f"Terraform files contain provisioner commands blocked by policy: {blocked}",
+                "code": "POLICY_DENIED",
+            })
 
         results = []
 
@@ -487,6 +552,19 @@ def iac_destroy(
 
         if dir_error:
             return json.dumps({"error": dir_error, "action": "destroy"})
+
+        # Scan .tf files for provisioner commands blocked by org policy
+        from utils.auth.stateless_auth import get_org_id_for_user
+        org_id = get_org_id_for_user(user_id) if user_id else None
+        denied = _scan_tf_for_exec_provisioners(str(terraform_dir), org_id)
+        if denied:
+            blocked = "; ".join(f"'{cmd}' ({v.rule_description})" for cmd, v in denied)
+            return json.dumps({
+                "status": "blocked",
+                "action": "destroy",
+                "error": f"Terraform files contain provisioner commands blocked by policy: {blocked}",
+                "code": "POLICY_DENIED",
+            })
 
         results = []
 

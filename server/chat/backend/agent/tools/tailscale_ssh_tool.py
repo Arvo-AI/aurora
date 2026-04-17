@@ -216,6 +216,21 @@ def tailscale_ssh(
             "error": "Command cannot be empty"
         })
 
+    # Org command policy check (shared allow/deny firewall across all tools)
+    from utils.auth.command_policy import evaluate_command
+    from utils.auth.stateless_auth import get_org_id_for_user
+    org_id = get_org_id_for_user(user_id) if user_id else None
+    verdict = evaluate_command(org_id, command)
+    if not verdict.allowed:
+        logger.warning("Policy denied tailscale_ssh command for user %s: %s (%s)",
+                        user_id, command[:100], verdict.rule_description)
+        return json.dumps({
+            "success": False,
+            "error": f"Command blocked by organization policy: {verdict.rule_description}",
+            "code": "POLICY_DENIED",
+            "provider": "tailscale_ssh",
+        })
+
     # Validate SSH user (basic sanitization)
     if not ssh_user or (not ssh_user.isalnum() and ssh_user not in ["root"]):
         ssh_user = "root"
