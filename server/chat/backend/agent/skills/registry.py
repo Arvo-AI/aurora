@@ -313,7 +313,8 @@ class SkillRegistry:
             return ""
 
         lines = [
-            "CONNECTED INTEGRATIONS:",
+            "CONNECTED INTEGRATIONS (MANDATORY: call load_skill('id') BEFORE using ANY integration tool below):",
+            "You MUST call load_skill first to get the workflow, syntax, and constraints. Using tools without loading the skill first will produce wrong results.",
             "",
         ]
         for meta in sorted(connected, key=lambda m: m.name):

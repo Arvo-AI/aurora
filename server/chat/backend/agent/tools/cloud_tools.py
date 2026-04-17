@@ -1371,11 +1371,11 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                 func=final_skill_func,
                 name="load_skill",
                 description=(
-                    "Load detailed guidance for a connected integration. "
-                    "Call this when you need to use an integration's tools and want the full "
-                    "reference (commands, workflows, investigation steps). "
-                    "The CONNECTED INTEGRATIONS index in your context lists available skill IDs. "
-                    "Example: load_skill('github') or load_skill('splunk')."
+                    "MANDATORY: Load integration guidance BEFORE using any integration tool. "
+                    "You MUST call this first to get the correct workflow, syntax, and constraints. "
+                    "Without loading the skill, you will miss critical instructions. "
+                    "Check your CONNECTED INTEGRATIONS index for available IDs. "
+                    "Example: load_skill('github') before using github_rca, load_skill('datadog') before using query_datadog."
                 ),
                 args_schema=LoadSkillArgs,
             ))

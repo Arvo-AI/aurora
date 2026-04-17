@@ -19,6 +19,7 @@ CRITICAL TOOL CALLING RULES:
 - Use ONLY the provided function calling mechanism
 - When you need tools, call them directly - do not describe them as text
 - Call only ONE tool at a time, wait for results, then decide next action
+- BEFORE using any integration tool (query_datadog, github_rca, query_newrelic, search_splunk, etc.), you MUST call load_skill('integration_id') first. The skill contains required workflows and constraints you need.
 
 MCP TOOLS: Follow the detailed parameter requirements and descriptions provided for each MCP tool. NEVER pass empty required parameters - use appropriate list/get tools instead of search tools when you don't have specific search criteria.
 
