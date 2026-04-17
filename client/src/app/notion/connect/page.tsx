@@ -357,9 +357,9 @@ export default function NotionConnectPage() {
         </Alert>
       )}
 
-      {connected && !statusLoading && (
-        <Card className="mb-4 border-green-600/40 dark:border-green-500/40">
-          <CardContent className="flex items-start gap-3 py-4">
+      {connected && !statusLoading ? (
+        <Card className="border-green-600/40 dark:border-green-500/40">
+          <CardContent className="flex items-start gap-3 py-5">
             <CheckCircle2 className="h-5 w-5 text-green-600 dark:text-green-500 mt-0.5 shrink-0" />
             <div className="flex-1 space-y-1">
               <p className="text-sm font-medium">
@@ -367,8 +367,8 @@ export default function NotionConnectPage() {
                 {status?.workspaceName?.trim() || "your Notion workspace"}
               </p>
               <p className="text-xs text-muted-foreground">
-                Manage or disconnect from the connectors page. Reconnecting
-                below will replace the existing connection.
+                Manage or disconnect from the connectors page. Disconnect first
+                if you want to reconnect with a different token or workspace.
               </p>
             </div>
             <Button
@@ -380,47 +380,47 @@ export default function NotionConnectPage() {
             </Button>
           </CardContent>
         </Card>
-      )}
+      ) : (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-lg">Connect Your Notion Workspace</CardTitle>
+            <CardDescription>
+              {showTabs
+                ? "Choose how Aurora should authenticate with Notion. You can always switch later by disconnecting and reconnecting."
+                : "Aurora authenticates with your Notion workspace via an Internal Integration Token."}
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {showTabs ? (
+              <Tabs
+                value={activeTab}
+                onValueChange={(value) => setActiveTab(value as "oauth" | "iit")}
+                className="w-full"
+              >
+                <TabsList className="grid w-full grid-cols-2">
+                  <TabsTrigger value="iit">Use an Integration Token</TabsTrigger>
+                  <TabsTrigger value="oauth" disabled={statusLoading}>
+                    Sign in with Notion
+                  </TabsTrigger>
+                </TabsList>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-lg">Connect Your Notion Workspace</CardTitle>
-          <CardDescription>
-            {showTabs
-              ? "Choose how Aurora should authenticate with Notion. You can always switch later by disconnecting and reconnecting."
-              : "Aurora authenticates with your Notion workspace via an Internal Integration Token."}
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          {showTabs ? (
-            <Tabs
-              value={activeTab}
-              onValueChange={(value) => setActiveTab(value as "oauth" | "iit")}
-              className="w-full"
-            >
-              <TabsList className="grid w-full grid-cols-2">
-                <TabsTrigger value="iit">Use an Integration Token</TabsTrigger>
-                <TabsTrigger value="oauth" disabled={statusLoading}>
-                  Sign in with Notion
-                </TabsTrigger>
-              </TabsList>
+                <TabsContent value="iit" className="mt-6">
+                  <NotionIntegrationTokenForm onSuccess={handleIitSuccess} />
+                </TabsContent>
 
-              <TabsContent value="iit" className="mt-6">
+                <TabsContent value="oauth" className="mt-6">
+                  {renderOAuthPanel()}
+                </TabsContent>
+              </Tabs>
+            ) : (
+              <div className="space-y-4">
+                <h3 className="text-sm font-medium">Integration Token</h3>
                 <NotionIntegrationTokenForm onSuccess={handleIitSuccess} />
-              </TabsContent>
-
-              <TabsContent value="oauth" className="mt-6">
-                {renderOAuthPanel()}
-              </TabsContent>
-            </Tabs>
-          ) : (
-            <div className="space-y-4">
-              <h3 className="text-sm font-medium">Integration Token</h3>
-              <NotionIntegrationTokenForm onSuccess={handleIitSuccess} />
-            </div>
-          )}
-        </CardContent>
-      </Card>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }

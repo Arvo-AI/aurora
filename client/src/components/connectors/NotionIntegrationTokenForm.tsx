@@ -266,7 +266,7 @@ export function NotionIntegrationTokenForm({
             if (submitError) setSubmitError(null);
           }}
           onBlur={() => setTouched(true)}
-          placeholder="secret_XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+          placeholder="ntn_XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
           rows={3}
           className="font-mono text-xs"
           disabled={loading}
