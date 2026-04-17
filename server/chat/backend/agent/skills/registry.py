@@ -314,7 +314,6 @@ class SkillRegistry:
 
         lines = [
             "CONNECTED INTEGRATIONS:",
-            "Call load_skill('id') for detailed guidance before using an integration's tools.",
             "",
         ]
         for meta in sorted(connected, key=lambda m: m.name):
@@ -328,6 +327,24 @@ class SkillRegistry:
 
         lines.append("")
         return "\n".join(lines)
+
+    def load_skills_for_chat(self, user_id: str) -> str:
+        """Auto-load full skill content for all connected integrations.
+
+        Used in interactive chat so the agent has detailed guidance
+        without needing to call load_skill explicitly.
+        """
+        connected = self.get_connected_skills(user_id)
+        if not connected:
+            return ""
+
+        parts: List[str] = ["CONNECTED INTEGRATIONS:"]
+        for meta in sorted(connected, key=lambda m: m.name):
+            result = self.load_skill(meta.id, user_id)
+            if result.is_connected and result.content:
+                parts.append(result.content)
+
+        return "\n\n".join(parts) if len(parts) > 1 else ""
 
     # ------------------------------------------------------------------
     # Skill loading

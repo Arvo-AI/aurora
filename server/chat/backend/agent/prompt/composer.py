@@ -97,15 +97,15 @@ def build_prompt_segments(
     # Build background mode segment if applicable (for RCA background chats)
     background_mode = build_background_mode_segment(state)
 
-    # Build skills-based integration index (agent loads details via load_skill tool)
+    # Auto-load full skill content for connected integrations
     integration_index = ""
-    if state and hasattr(state, 'user_id'):
+    if state and hasattr(state, 'user_id') and not is_background:
         try:
             from chat.backend.agent.skills.registry import SkillRegistry
             registry = SkillRegistry.get_instance()
-            integration_index = registry.build_index(state.user_id)
+            integration_index = registry.load_skills_for_chat(state.user_id)
         except Exception as e:
-            logging.warning(f"Failed to build skills index: {e}")
+            logging.warning(f"Failed to load skills for chat: {e}")
 
     # Build knowledge base memory context for authenticated users
     knowledge_base_memory = ""
