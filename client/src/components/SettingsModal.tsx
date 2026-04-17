@@ -3,13 +3,14 @@
 import React, { useState } from 'react';
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog";
-import { Settings, User, BookOpen, FileText, Building2 } from "lucide-react";
+import { Settings, User, BookOpen, FileText, Building2, Shield } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { GeneralSettings } from "@/components/GeneralSettings";
 import { ProfileSettings } from "@/components/ProfileSettings";
 import { KnowledgeBaseSettings } from "@/components/KnowledgeBaseSettings";
 import { PostmortemsSettings } from "@/components/PostmortemsSettings";
 import { OrgSettings } from "@/components/OrgSettings";
+import { SecuritySettings } from "@/components/SecuritySettings";
 import { useUser } from "@/hooks/useAuthHooks";
 
 
@@ -18,7 +19,7 @@ interface SettingsModalProps {
   onClose: () => void;
 }
 
-type SettingsTab = 'organization' | 'general' | 'profile' | 'knowledge-base' | 'postmortems';
+type SettingsTab = 'organization' | 'general' | 'profile' | 'knowledge-base' | 'postmortems' | 'security';
 
 export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
   const [activeTab, setActiveTab] = useState<SettingsTab>('organization');
@@ -54,6 +55,12 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
       label: 'Postmortems',
       icon: FileText,
       description: 'View generated postmortems'
+    },
+    {
+      id: 'security' as SettingsTab,
+      label: 'Security',
+      icon: Shield,
+      description: 'Agent command policies'
     },
   ];
 
@@ -105,6 +112,13 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
           </div>
         );
 
+      case 'security':
+        return (
+          <div className="p-6 h-full overflow-y-auto">
+            <SecuritySettings />
+          </div>
+        );
+
       default:
         return null;
     }
@@ -151,7 +165,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
           </div>
           
                                 {/* Right Content Area */}
-                      <div className="flex-1 overflow-y-auto h-full max-h-full min-h-0 pr-8">
+                      <div className="flex-1 w-0 overflow-y-auto h-full max-h-full min-h-0">
                         <div className="h-full min-h-0">
                           {renderContent()}
                         </div>
