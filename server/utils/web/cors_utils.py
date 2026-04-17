@@ -9,7 +9,7 @@ FRONTEND_URL = os.getenv("FRONTEND_URL")
 _ALLOWED_ORIGINS = set()
 if FRONTEND_URL:
     _ALLOWED_ORIGINS.add(FRONTEND_URL.rstrip("/"))
-if os.getenv("ALLOW_LOCALHOST_CORS", "").lower() in ("1", "true"):
+if os.getenv("AURORA_ENV", "dev").lower() == "dev":
     _ALLOWED_ORIGINS.add("http://localhost:3000")
 
 def create_cors_response(success=True):
