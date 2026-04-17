@@ -1,0 +1,1 @@
+- **ALWAYS have 3-4 backup approaches ready**
