@@ -27,6 +27,10 @@ logger = logging.getLogger("aurora.mcp")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 
 API_BASE = os.environ.get("BACKEND_URL", "http://aurora-server:5080")
+_INTERNAL_SECRET = os.environ.get("INTERNAL_API_SECRET", "")
+
+if not _INTERNAL_SECRET:
+    logger.warning("INTERNAL_API_SECRET not set — requests to Flask will fail if the server requires it")
 
 _current_bearer_token: contextvars.ContextVar[str] = contextvars.ContextVar("_current_bearer_token")
 
@@ -131,6 +135,8 @@ async def _api(method: str, path: str, *, params: dict | None = None,
     token = _get_token()
     user_id, org_id = _resolve_token(token)
     headers = {"X-User-ID": user_id, "X-Org-ID": org_id}
+    if _INTERNAL_SECRET:
+        headers["X-Internal-Secret"] = _INTERNAL_SECRET
     async with httpx.AsyncClient(base_url=API_BASE, timeout=timeout) as client:
         resp = await client.request(method, path, params=params, json=body, headers=headers)
         try:

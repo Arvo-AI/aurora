@@ -159,6 +159,7 @@ services:
     environment:
       <<: *common-env
       FLASK_PORT: ${FLASK_PORT:-5080}
+      INTERNAL_API_SECRET: ${INTERNAL_API_SECRET}
 
       # Frontend/Backend URLs
       FRONTEND_URL: ${FRONTEND_URL}
@@ -464,6 +465,7 @@ services:
     command: ["python", "mcp_server.py"]
     environment:
       <<: *common-env
+      INTERNAL_API_SECRET: ${INTERNAL_API_SECRET}
     depends_on:
       - aurora-server
       - postgres
@@ -510,6 +512,7 @@ services:
       # Auth.js configuration (required)
       AUTH_SECRET: ${AUTH_SECRET}
       AUTH_URL: ${FRONTEND_URL}
+      INTERNAL_API_SECRET: ${INTERNAL_API_SECRET}
     ports:
       - "3000:3000"
     volumes:

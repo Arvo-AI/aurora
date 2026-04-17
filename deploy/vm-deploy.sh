@@ -297,6 +297,7 @@ cd "$REPO_ROOT"
 POSTGRES_PW=$(generate_secret)
 FLASK_SECRET=$(generate_secret)
 AUTH_SECRET=$(generate_secret)
+INTERNAL_API_SECRET=$(generate_secret)
 SEARXNG_SECRET=$(generate_secret)
 MEMGRAPH_PW=$(generate_secret | head -c 32)
 
@@ -317,6 +318,7 @@ sed -i.bak "s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=$POSTGRES_PW|" .env
 # Secrets
 sed -i.bak "s|^FLASK_SECRET_KEY=.*|FLASK_SECRET_KEY=$FLASK_SECRET|" .env
 sed -i.bak "s|^AUTH_SECRET=.*|AUTH_SECRET=$AUTH_SECRET|" .env
+sed -i.bak "s|^INTERNAL_API_SECRET=.*|INTERNAL_API_SECRET=$INTERNAL_API_SECRET|" .env
 sed -i.bak "s|^SEARXNG_SECRET=.*|SEARXNG_SECRET=$SEARXNG_SECRET|" .env
 
 # Memgraph

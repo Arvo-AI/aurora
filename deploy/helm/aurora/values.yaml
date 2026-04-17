@@ -305,6 +305,7 @@ secrets:
     FLASK_SECRET_KEY: ""         # REQUIRED - Generate with: openssl rand -base64 32
     AUTH_SECRET: ""              # REQUIRED - Generate with: openssl rand -base64 32
     SEARXNG_SECRET: ""           # REQUIRED - Generate with: openssl rand -base64 32
+    INTERNAL_API_SECRET: ""      # REQUIRED - Generate with: openssl rand -base64 32
 
     # --- Optional: AWS Integration ---
     AWS_ACCESS_KEY_ID: ""

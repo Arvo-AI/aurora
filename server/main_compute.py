@@ -207,24 +207,58 @@ CORS(app, origins=FRONTEND_URL, supports_credentials=True,
                                  "methods": ["GET", "POST", "OPTIONS"]},
         r"/*": {"origins": FRONTEND_URL, "supports_credentials": True,
                 "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID", 
-                                "Authorization", "X-Provider-Preference"], 
+                                "Authorization", "X-Provider-Preference", "X-Org-ID", "X-Internal-Secret"], 
                 "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"]}
      }
 )
 
 # ============================================================================
+# Internal API Secret Verification
+# ============================================================================
+# Ensures requests originate from the Next.js frontend (or another trusted
+# internal service) rather than from an unauthenticated external caller.
+
+_INTERNAL_API_SECRET = os.getenv("INTERNAL_API_SECRET", "")
+_OPEN_PATHS = frozenset(("/api/auth/login", "/api/auth/register", "/health"))
+
+@app.before_request
+def verify_internal_api_secret():
+    """Reject requests that don't carry a valid INTERNAL_API_SECRET header.
+
+    Skipped when the secret is not configured (backward-compatible default)
+    and for open endpoints (login, register, health).
+    """
+    if not _INTERNAL_API_SECRET:
+        return None
+
+    # Skip verification for OPTIONS requests (CORS preflight)
+    if request.method == "OPTIONS":
+        return None
+
+    # Check if one of our internal API paths is being accessed
+    if request.path in _OPEN_PATHS:
+        return None
+
+    provided = request.headers.get("X-Internal-Secret", "")
+    if not provided or provided != _INTERNAL_API_SECRET:
+        return jsonify({"error": "Forbidden: invalid or missing X-Internal-Secret header"}), 403
+
+    return None
+
+# ============================================================================
 # Tenant Isolation Middleware - Validates X-User-ID / X-Org-ID Pairing
 # ============================================================================
-
-_OPEN_PREFIXES = ("/api/auth/login", "/api/auth/register", "/health")
 
 @app.before_request
 def enforce_user_org_binding():
     """Reject requests where X-Org-ID doesn't match the user's actual org."""
+
+    # Skip verification for OPTIONS requests (CORS preflight)
     if request.method == "OPTIONS":
         return None
 
-    if any(request.path.startswith(p) for p in _OPEN_PREFIXES):
+    # Check if one of our internal API paths is being accessed
+    if request.path in _OPEN_PATHS:
         return None
 
     user_id = request.headers.get("X-User-ID")

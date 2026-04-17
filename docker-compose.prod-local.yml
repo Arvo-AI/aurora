@@ -160,6 +160,7 @@ services:
       <<: *common-env
       OTEL_SERVICE_NAME: aurora-server
       FLASK_PORT: ${FLASK_PORT}
+      INTERNAL_API_SECRET: ${INTERNAL_API_SECRET}
 
       # Frontend/Backend URLs
       FRONTEND_URL: ${FRONTEND_URL}
@@ -486,6 +487,7 @@ services:
     command: ["python", "mcp_server.py"]
     environment:
       <<: *common-env
+      INTERNAL_API_SECRET: ${INTERNAL_API_SECRET}
       OTEL_SERVICE_NAME: aurora-mcp
     depends_on:
       aurora-server:
@@ -546,6 +548,7 @@ services:
       # Auth.js configuration (required)
       AUTH_SECRET: ${AUTH_SECRET}
       AUTH_URL: ${FRONTEND_URL}
+      INTERNAL_API_SECRET: ${INTERNAL_API_SECRET}
     ports:
       - "3000:3000"
     depends_on:

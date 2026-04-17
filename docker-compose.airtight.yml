@@ -153,6 +153,7 @@ services:
       <<: *common-env
       OTEL_SERVICE_NAME: aurora-server
       FLASK_PORT: ${FLASK_PORT}
+      INTERNAL_API_SECRET: ${INTERNAL_API_SECRET}
       FRONTEND_URL: ${FRONTEND_URL}
       BACKEND_URL: ${BACKEND_URL}
       NEXT_PUBLIC_BACKEND_URL: ${NEXT_PUBLIC_BACKEND_URL}
@@ -445,6 +446,7 @@ services:
       BACKEND_URL: ${BACKEND_URL}
       FRONTEND_URL: ${FRONTEND_URL}
       AUTH_SECRET: ${AUTH_SECRET}
+      INTERNAL_API_SECRET: ${INTERNAL_API_SECRET}
     ports:
       - "3000:3000"
     depends_on:

@@ -249,6 +249,7 @@ fi
 POSTGRES_PW=$(openssl rand -base64 32)
 FLASK_SECRET=$(openssl rand -base64 32)
 AUTH_SECRET=$(openssl rand -base64 32)
+INTERNAL_API_SECRET=$(openssl rand -base64 32)
 SEARXNG_SECRET=$(openssl rand -base64 32)
 
 info "Generating $VALUES_FILE ..."
@@ -320,6 +321,7 @@ fi
 yq -i ".secrets.db.POSTGRES_PASSWORD = \"$POSTGRES_PW\"" "$VALUES_FILE"
 yq -i ".secrets.app.FLASK_SECRET_KEY = \"$FLASK_SECRET\"" "$VALUES_FILE"
 yq -i ".secrets.app.AUTH_SECRET = \"$AUTH_SECRET\"" "$VALUES_FILE"
+yq -i ".secrets.app.INTERNAL_API_SECRET = \"$INTERNAL_API_SECRET\"" "$VALUES_FILE"
 yq -i ".secrets.app.SEARXNG_SECRET = \"$SEARXNG_SECRET\"" "$VALUES_FILE"
 
 # LLM
