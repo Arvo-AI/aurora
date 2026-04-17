@@ -889,6 +889,199 @@ BB_OAUTH_CLIENT_SECRET=your-bitbucket-secret
 
 ---
 
+## CI/CD
+
+Aurora integrates with CI/CD platforms to track deployments, correlate them with incidents, and trigger automatic Root Cause Analysis when builds fail.
+
+All three connectors share the same deployment events table and webhook security model (HMAC-SHA256 via `X-Aurora-Signature`). See also [Spinnaker](/docs/integrations/spinnaker) for the Spinnaker connector.
+
+### Jenkins
+
+API Token authentication for Jenkins instances.
+
+#### 1. Get Your API Token
+
+1. Log in to your Jenkins instance
+2. Click your username > **Configure** > **API Token**
+3. Click **Add new Token**, give it a name, and copy the token
+
+#### 2. Connect via Aurora UI
+
+1. Navigate to **Connectors** > **Jenkins**
+2. Enter:
+   - **Jenkins URL**: Full URL to your instance (e.g., `https://jenkins.example.com`)
+   - **Username**: Your Jenkins username
+   - **API Token**: The token from step 1
+3. Click **Connect**
+
+Aurora validates the credentials against the Jenkins API and stores them in Vault.
+
+#### 3. Webhook Configuration
+
+After connecting, Aurora displays a webhook URL and Jenkinsfile snippets. Add the post-build hook to your `Jenkinsfile` to send deployment events to Aurora:
+
+```groovy
+post {
+    always {
+        script {
+            def payload = groovy.json.JsonOutput.toJson([
+                service    : env.JOB_NAME,
+                environment: params.ENVIRONMENT ?: 'production',
+                result     : currentBuild.currentResult,
+                build_number: currentBuild.number,
+                build_url  : env.BUILD_URL,
+                git: [
+                    commit_sha: env.GIT_COMMIT,
+                    branch    : env.GIT_BRANCH
+                ]
+            ])
+            def sig = payload.digest('HmacSHA256', 'YOUR_WEBHOOK_SECRET')
+            httpRequest(
+                url: 'https://your-aurora-domain/jenkins/webhook/YOUR_USER_ID',
+                httpMode: 'POST',
+                contentType: 'APPLICATION_JSON',
+                customHeaders: [
+                    [name: 'X-Aurora-Signature', value: sig]
+                ],
+                requestBody: payload
+            )
+        }
+    }
+}
+```
+
+The Aurora UI provides ready-to-paste snippets with your webhook URL and secret pre-filled. Three variants are available: basic, with OpenTelemetry trace context, and curl-based.
+
+#### What Aurora Does With Jenkins Events
+
+1. Stores the deployment event in the database
+2. Correlates the event with existing incidents
+3. For failed builds, creates an incident and (optionally) triggers automatic RCA
+
+#### Using Jenkins in Aurora Chat
+
+Once connected, ask Aurora about your deployments:
+
+- *"Show me recent Jenkins deployments"*
+- *"What happened with build #42 of my-pipeline?"*
+- *"Get the test results for the last api-service build"*
+
+The agent can fetch build details, pipeline stages, console logs, test results, and Blue Ocean data.
+
+---
+
+### CloudBees CI
+
+API Token authentication for CloudBees CI (Operations Center or managed controllers).
+
+CloudBees CI exposes the same REST API as Jenkins, so the setup is nearly identical.
+
+#### 1. Get Your API Token
+
+1. Log in to your CloudBees Operations Center (CJOC)
+2. Click your username > **Security** > **API Token**
+3. Click **Add new Token** and copy it
+
+:::tip Operations Center
+For managed controllers, generate the token at the **Operations Center** level so it works across all controllers.
+:::
+
+#### 2. Connect via Aurora UI
+
+1. Navigate to **Connectors** > **CloudBees CI**
+2. Enter:
+   - **CloudBees URL**: Full URL to your Operations Center (e.g., `https://cloudbees.example.com/cjoc`)
+   - **Username**: Your CloudBees username
+   - **API Token**: The token from step 1
+3. Click **Connect**
+
+#### 3. Webhook Configuration
+
+Same as Jenkins — add the post-build hook to your `Jenkinsfile` using the CloudBees webhook URL shown in the Aurora UI:
+
+```
+https://your-aurora-domain/cloudbees/webhook/YOUR_USER_ID
+```
+
+The payload format and HMAC signing are identical to Jenkins.
+
+#### Using CloudBees in Aurora Chat
+
+The same RCA actions available for Jenkins work for CloudBees: build details, pipeline stages, console logs, test results, and Blue Ocean data — all scoped to your CloudBees instance.
+
+---
+
+### Codefresh
+
+API Key authentication for Codefresh Classic instances.
+
+#### 1. Get Your API Key
+
+1. Log in to [Codefresh](https://g.codefresh.io)
+2. Click your avatar > **User Settings** > **API Keys**
+3. Click **Generate** and copy the key
+
+#### 2. Connect via Aurora UI
+
+1. Navigate to **Connectors** > **Codefresh**
+2. Enter:
+   - **Codefresh URL**: Full URL to your instance (e.g., `https://g.codefresh.io`)
+   - **API Key**: The key from step 1
+3. Click **Connect**
+
+Aurora validates the key against the Codefresh API (`/api/pipelines`) and stores it in Vault.
+
+#### 3. Webhook Configuration
+
+Add a `freestyle` step to your `codefresh.yml` to notify Aurora after every build:
+
+```yaml
+deploy_notify:
+  title: Notify Aurora
+  type: freestyle
+  stage: deploy
+  arguments:
+    image: curlimages/curl:latest
+    commands:
+      - |
+        PAYLOAD='{"service":"${{CF_PIPELINE_NAME}}","environment":"${{CF_STEP_NAME}}","result":"${{CF_BUILD_STATUS}}","build_number":"${{CF_BUILD_ID}}","build_url":"${{CF_BUILD_URL}}","git":{"commit_sha":"${{CF_REVISION}}","branch":"${{CF_BRANCH}}","repository":"${{CF_REPO_NAME}}"}}'
+        SIG=$(echo -n "$PAYLOAD" | openssl dgst -sha256 -hmac "YOUR_WEBHOOK_SECRET" | awk '{print $2}')
+        curl -sS -X POST "https://your-aurora-domain/codefresh/webhook/YOUR_USER_ID" \
+          -H "Content-Type: application/json" \
+          -H "X-Aurora-Signature: $SIG" \
+          -d "$PAYLOAD"
+  when:
+    condition:
+      all:
+        always: "true"
+```
+
+The Aurora UI provides a ready-to-paste snippet with your webhook URL and secret pre-filled.
+
+#### Using Codefresh in Aurora Chat
+
+Once connected, ask Aurora about your pipelines and builds:
+
+- *"Show me recent Codefresh deployments"*
+- *"Get build details for build-abc123"*
+- *"What are the logs for the last failed build?"*
+
+The agent can fetch build details, pipeline configurations, build logs, and recent builds from the Codefresh API.
+
+---
+
+### CI/CD Troubleshooting
+
+| Error | Solution |
+|-------|----------|
+| "Invalid credentials" | Verify your API token/key is correct and not expired |
+| Webhook events not arriving | Ensure Aurora is reachable from your CI platform. For local dev, use ngrok: `ngrok http 5080` |
+| HMAC signature mismatch | The webhook secret must match exactly. Re-copy it from the Aurora connector page |
+| Incidents not created for failed builds | Confirm the `result` field in the webhook payload reflects the failure status |
+| RCA not triggering | Check that **Automatic RCA on Deployment Failures** is enabled on the connector page |
+
+---
+
 ## Credential Storage
 
 All connector credentials are stored securely in HashiCorp Vault:
