@@ -35,6 +35,10 @@ const isIacTool = (toolName: string) => {
   return toolName.includes('iac') || toolName.includes('terraform')
 }
 
+const isLoadSkillTool = (toolName: string) => {
+  return toolName === 'load_skill'
+}
+
 const isWebSearchTool = (toolName: string) => {
   return toolName.includes('web_search')
 }
@@ -97,6 +101,19 @@ export function RenderOutput({
 
   // If not JSON, check tool type for appropriate rendering
   if (!parsed) {
+    // load_skill - compact one-liner, no raw content
+    if (isLoadSkillTool(toolName)) {
+      const alreadyLoaded = output.includes('already loaded')
+      return (
+        <div className="flex items-center gap-2 py-1">
+          <span className={`inline-block w-1.5 h-1.5 rounded-full ${alreadyLoaded ? 'bg-gray-400 dark:bg-gray-500' : 'bg-teal-500 dark:bg-teal-400'}`} />
+          <span className="text-xs text-gray-500 dark:text-gray-400">
+            {alreadyLoaded ? 'Already in context' : 'Integration guidance ready'}
+          </span>
+        </div>
+      )
+    }
+
     // IAC tools with HCL content - use Monaco Editor
     if (isIacTool(toolName) && isHclContent(output)) {
       const trimmedOutput = output.trim()

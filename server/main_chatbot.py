@@ -890,10 +890,10 @@ async def handle_connection(websocket) -> None:
                 except Exception as e:
                     logger.error("Error checking incident session RBAC: %s", e)
             
-            # Get connected providers from database instead of relying on frontend preferences
-            from utils.auth.stateless_auth import get_connected_providers
+            # Get verified providers (cloud + SkillRegistry-validated integrations)
+            from chat.background.rca_prompt_builder import get_user_providers
             if user_id:
-                provider_preference = get_connected_providers(user_id)
+                provider_preference = get_user_providers(user_id)
             else:
                 provider_preference = None
 
