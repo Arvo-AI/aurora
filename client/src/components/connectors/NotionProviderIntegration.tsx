@@ -7,16 +7,6 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Skeleton } from "@/components/ui/skeleton";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
 import { AlertCircle, Loader2, LogOut } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { fetchConnectedAccounts } from "@/lib/connected-accounts-cache";
@@ -81,7 +71,6 @@ export default function NotionProviderIntegration({
   const [status, setStatus] = useState<NotionStatus | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [confirmOpen, setConfirmOpen] = useState(false);
   const [isDisconnecting, setIsDisconnecting] = useState(false);
 
   useEffect(() => {
@@ -154,7 +143,6 @@ export default function NotionProviderIntegration({
         window.dispatchEvent(new CustomEvent("providerStateChanged"));
       }
 
-      setConfirmOpen(false);
       onDisconnect();
     } catch (error) {
       const message =
@@ -241,11 +229,22 @@ export default function NotionProviderIntegration({
         <Button
           variant="destructive"
           size="sm"
-          onClick={() => setConfirmOpen(true)}
+          onClick={() => {
+            void handleDisconnect();
+          }}
           disabled={isDisconnecting}
         >
-          <LogOut className="h-4 w-4 mr-2" />
-          Disconnect
+          {isDisconnecting ? (
+            <>
+              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+              Disconnecting...
+            </>
+          ) : (
+            <>
+              <LogOut className="h-4 w-4 mr-2" />
+              Disconnect
+            </>
+          )}
         </Button>
       </div>
 
@@ -281,39 +280,6 @@ export default function NotionProviderIntegration({
         )}
       </div>
 
-      <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Disconnect Notion?</AlertDialogTitle>
-            <AlertDialogDescription>
-              You can reconnect anytime. Aurora will stop searching and writing
-              to this workspace until it&apos;s reconnected.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={isDisconnecting}>
-              Cancel
-            </AlertDialogCancel>
-            <AlertDialogAction
-              onClick={(event) => {
-                event.preventDefault();
-                void handleDisconnect();
-              }}
-              disabled={isDisconnecting}
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-            >
-              {isDisconnecting ? (
-                <>
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  Disconnecting...
-                </>
-              ) : (
-                "Disconnect"
-              )}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
     </div>
   );
 }

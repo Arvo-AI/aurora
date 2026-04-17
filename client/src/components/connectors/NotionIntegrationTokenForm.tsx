@@ -7,7 +7,6 @@ import { Textarea } from "@/components/ui/textarea";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import {
   AlertCircle,
-  CheckCircle2,
   Eye,
   EyeOff,
   Loader2,
@@ -70,10 +69,6 @@ export function NotionIntegrationTokenForm({
   const [loading, setLoading] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [touched, setTouched] = useState(false);
-  const [submitted, setSubmitted] = useState(false);
-  const [submittedWorkspace, setSubmittedWorkspace] = useState<string | null>(
-    null,
-  );
 
   const validation = useMemo(() => validateNotionToken(token), [token]);
 
@@ -136,13 +131,12 @@ export function NotionIntegrationTokenForm({
 
       setToken("");
       setRevealed(false);
-      setSubmittedWorkspace(workspaceName);
-      setSubmitted(true);
 
       void fetchConnectedAccounts(true).catch(() => {});
       if (typeof window !== "undefined") {
         window.dispatchEvent(new CustomEvent("providerStateChanged"));
       }
+      onSuccess();
     } catch (error: unknown) {
       const message =
         error instanceof Error && error.message
@@ -159,29 +153,6 @@ export function NotionIntegrationTokenForm({
     }
   };
 
-  if (submitted) {
-    return (
-      <div className="rounded-lg border border-green-600/40 dark:border-green-500/40 bg-green-50 dark:bg-green-950/20 p-6 flex flex-col items-center text-center space-y-3">
-        <CheckCircle2 className="h-10 w-10 text-green-600 dark:text-green-500" />
-        <div className="space-y-1">
-          <h3 className="text-base font-semibold">Notion connected</h3>
-          <p className="text-sm text-muted-foreground">
-            {submittedWorkspace
-              ? `Aurora is connected to ${submittedWorkspace}.`
-              : "Aurora is connected to your Notion workspace."}
-          </p>
-        </div>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          onClick={onSuccess}
-        >
-          Return to connectors
-        </Button>
-      </div>
-    );
-  }
 
   const isDirty = token.trim().length > 0;
   const meetsRevealThreshold = token.trim().length >= VALIDATION_REVEAL_CHARS;

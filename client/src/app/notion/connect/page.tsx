@@ -13,7 +13,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { AlertCircle, CheckCircle2, Loader2, ShieldCheck } from "lucide-react";
+import { AlertCircle, Loader2, ShieldCheck } from "lucide-react";
 import { fetchConnectedAccounts } from "@/lib/connected-accounts-cache";
 import { NotionIntegrationTokenForm } from "@/components/connectors/NotionIntegrationTokenForm";
 
@@ -58,16 +58,14 @@ export default function NotionConnectPage() {
           authType: (data.authType as NotionStatus["authType"]) ?? null,
         };
         setStatus(next);
-        // Default tab: prefer IIT (lower friction first-run). If OAuth is
-        // configured AND the user is already connected via OAuth, show
-        // OAuth tab (defensive default — they rarely land here in that
-        // state since the connectors page routes them to the management
-        // view instead).
-        if (next.oauthConfigured && next.connected && next.authType === "oauth") {
-          setActiveTab("oauth");
-        } else {
-          setActiveTab("iit");
+        // If already connected, the connectors page is the place to manage or
+        // disconnect — bounce there instead of showing a dead-end "already
+        // connected" card.
+        if (next.connected) {
+          router.replace("/connectors");
+          return;
         }
+        setActiveTab("iit");
       } catch (error) {
         if (cancelled) return;
         console.error("Failed to fetch Notion status", error);
@@ -357,29 +355,11 @@ export default function NotionConnectPage() {
         </Alert>
       )}
 
-      {connected && !statusLoading ? (
-        <Card className="border-green-600/40 dark:border-green-500/40">
-          <CardContent className="flex items-start gap-3 py-5">
-            <CheckCircle2 className="h-5 w-5 text-green-600 dark:text-green-500 mt-0.5 shrink-0" />
-            <div className="flex-1 space-y-1">
-              <p className="text-sm font-medium">
-                Already connected to{" "}
-                {status?.workspaceName?.trim() || "your Notion workspace"}
-              </p>
-              <p className="text-xs text-muted-foreground">
-                Manage or disconnect from the connectors page. Disconnect first
-                if you want to reconnect with a different token or workspace.
-              </p>
-            </div>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => router.push("/connectors")}
-            >
-              Go to connectors
-            </Button>
-          </CardContent>
-        </Card>
+      {statusLoading || connected ? (
+        <div className="flex items-center justify-center py-16 text-sm text-muted-foreground">
+          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+          {connected ? "Already connected — redirecting…" : "Loading Notion status…"}
+        </div>
       ) : (
         <Card>
           <CardHeader>
