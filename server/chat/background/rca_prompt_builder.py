@@ -490,6 +490,16 @@ def build_rca_prompt(
     providers = providers or []
     providers_lower = [p.lower() for p in providers]
 
+    # Derive integrations from skill registry when not passed by caller
+    if integrations is None and user_id:
+        try:
+            from chat.backend.agent.skills.registry import SkillRegistry
+            registry = SkillRegistry.get_instance()
+            connected_ids = registry.get_connected_skill_ids(user_id)
+            integrations = {sid: True for sid in connected_ids}
+        except Exception:
+            integrations = {}
+
     # Extract alert service name early — used by multiple sections below.
     # Start with the explicit service label, then try richer fallbacks from
     # the alert message (Condition/Policy/Targets fields) so downstream

@@ -39,9 +39,9 @@ def _get_rca_token_budget() -> int:
         value = int(raw)
     except ValueError:
         logger.warning(
-            f"Invalid RCA token budget '{raw}' — using default (4000)"
+            f"Invalid RCA token budget '{raw}' — using default (12000)"
         )
-        return 4000
+        return 12000
 
     if value < 500:
         logger.warning(
@@ -481,8 +481,9 @@ class SkillRegistry:
                 if general_id in self._rca_skills and tokens_used < RCA_TOKEN_BUDGET:
                     body = self._rca_bodies.get(general_id, "")
                     if body:
-                        parts.append(body)
-                        tokens_used += estimate_tokens(body)
+                        rendered = resolve_template(body, extra_ctx)
+                        parts.append(rendered)
+                        tokens_used += estimate_tokens(rendered)
 
         return "\n\n".join(parts) if parts else ""
 
@@ -522,6 +523,10 @@ class SkillRegistry:
         try:
             from utils.auth.stateless_auth import get_credentials_from_db
 
+            # Fetch display_name from bitbucket credentials
+            bb_creds = get_credentials_from_db(user_id, "bitbucket") or {}
+            display_name = bb_creds.get("display_name", "")
+
             selection = get_credentials_from_db(user_id, "bitbucket_workspace_selection") or {}
             ws = selection.get("workspace")
             repo = selection.get("repository")
@@ -533,6 +538,7 @@ class SkillRegistry:
             branch_name = branch.get("name", branch) if isinstance(branch, dict) else (branch or "")
 
             return {
+                "display_name": display_name or "(unknown)",
                 "workspace_slug": ws_slug or "(not selected)",
                 "repo_name": repo_name or "(not selected)",
                 "branch_name": branch_name or "(not selected)",
@@ -540,6 +546,7 @@ class SkillRegistry:
         except Exception as e:
             logger.warning(f"Failed to fetch bitbucket workspace selection: {e}")
             return {
+                "display_name": "(unavailable)",
                 "workspace_slug": "(unavailable)",
                 "repo_name": "(unavailable)",
                 "branch_name": "(unavailable)",
