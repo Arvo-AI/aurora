@@ -344,7 +344,7 @@ def export_to_confluence(user_id, incident_id):
 @postmortem_bp.route(
     "/api/incidents/<incident_id>/postmortem/export/notion", methods=["POST"]
 )
-@require_permission("postmortems", "update")
+@require_permission("postmortems", "write")
 def export_to_notion(user_id, incident_id):
     """Export postmortem to a Notion database."""
     if not _validate_uuid(incident_id):
