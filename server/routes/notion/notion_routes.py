@@ -16,7 +16,6 @@ from connectors.notion_connector.client import (
 from utils.auth.oauth2_state_cache import retrieve_oauth2_state, store_oauth2_state
 from utils.auth.stateless_auth import get_user_id_from_request
 from utils.auth.token_management import get_token_data, store_tokens_in_db
-from utils.db.connection_pool import db_pool
 from utils.secrets.secret_ref_utils import delete_user_secret
 from utils.web.cors_utils import create_cors_response
 

@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import threading
 import time
-from typing import Optional
 
 __all__ = ["TokenBucket"]
 

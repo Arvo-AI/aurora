@@ -383,7 +383,18 @@ def export_to_notion(user_id, incident_id):
             "error": "Notion credentials expired — please reconnect",
         }), 401
     except ValueError as exc:
-        return jsonify({"error": str(exc)}), 400
+        logger.warning(
+            "[POSTMORTEM] Notion export rejected for user %s: %s", user_id, exc
+        )
+        # Surface only the explicit message arg we raise in the helper; never
+        # echo the exception object directly so stack-trace-bearing values
+        # (from any downstream library) can't flow to the client.
+        safe_msg = (
+            exc.args[0]
+            if exc.args and isinstance(exc.args[0], str)
+            else "Invalid export request"
+        )
+        return jsonify({"error": safe_msg}), 400
     except Exception as exc:
         logger.exception(
             "[POSTMORTEM] Notion export failed for user %s: %s", user_id, exc

@@ -390,8 +390,9 @@ def _fetch_bytes(source: str) -> tuple[bytes, str]:
                         raise ValueError(
                             f"File exceeds 500 MB cap ({int(length_header)} bytes)"
                         )
-        except requests.RequestException:
-            pass
+        except requests.RequestException as exc:
+            # HEAD is advisory; the streaming cap below is the real guard.
+            logger.debug("HEAD pre-check failed for %s: %s", source, exc)
         resp = requests.get(source, stream=True, timeout=120)
         resp.raise_for_status()
         buf = bytearray()
