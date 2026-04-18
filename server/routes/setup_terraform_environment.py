@@ -149,7 +149,7 @@ def setup_aws_terraform_environment_isolated(user_id: str):
             from chat.backend.agent.tools.auth import setup_aws_credentials_cached
             ok_cached, cached_region, auth_method, isolated_env = setup_aws_credentials_cached(user_id)
             if ok_cached and cached_region and isolated_env:
-                logger.info(f"(cached) AWS credentials configured for Terraform in region: {cached_region} (isolated)")
+                logger.info("(cached) AWS credentials configured for Terraform (isolated)")
                 return True, cached_region, isolated_env
         except Exception as e:
             logger.debug(f"Cached AWS setup unavailable; falling back to direct setup: {e}")
