@@ -17,6 +17,7 @@ export interface PoliciesResponse {
   deny_rules: CommandPolicyRule[];
   allowlist_enabled: boolean;
   denylist_enabled: boolean;
+  active_template_id: string | null;
 }
 
 export interface TestResult {
@@ -64,7 +65,10 @@ export const commandPolicyService = {
   getTemplates: () => apiGet<PolicyTemplate[]>("/api/org/command-policy-templates"),
 
   applyTemplate: (templateId: string) =>
-    apiPost<{ status: string; template_id: string; allowlist_enabled: boolean; denylist_enabled: boolean }>(
+    apiPost<{ status: string; template_id: string; allowlist_enabled: boolean; denylist_enabled: boolean; active_template_id: string | null }>(
       "/api/org/command-policy-templates/apply", { template_id: templateId }
     ),
+
+  clearActiveTemplate: () =>
+    apiDelete<{ status: string; active_template_id: null }>("/api/org/command-policy-templates/active"),
 };

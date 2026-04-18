@@ -112,11 +112,15 @@ function AddRuleForm({
 function TemplatePicker({
   templates,
   applying,
+  activeId,
   onApply,
+  onRemove,
 }: {
   templates: PolicyTemplate[];
   applying: string | null;
+  activeId: string | null;
   onApply: (id: string) => void;
+  onRemove: () => void;
 }) {
   const [confirmId, setConfirmId] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -137,17 +141,29 @@ function TemplatePicker({
       <div className="grid grid-cols-1 gap-px bg-border">
         {templates.map((tpl) => {
           const expanded = expandedId === tpl.id;
+          const active = activeId === tpl.id;
           return (
             <div key={tpl.id} className="bg-card px-3.5 py-3 space-y-2">
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0 flex-1">
-                  <p className="text-xs font-medium">{tpl.name}</p>
+                  <p className="text-xs font-medium">
+                    {tpl.name}
+                  </p>
                   <p className="text-[11px] text-muted-foreground leading-relaxed mt-0.5">
                     {tpl.description}
                   </p>
                 </div>
                 <div className="shrink-0">
-                  {confirmId === tpl.id ? (
+                  {active ? (
+                    <div className="flex items-center gap-1.5">
+                      <span className="inline-flex items-center gap-1 h-6 px-2 text-xs text-green-500">
+                        <CheckCircle2 className="h-3.5 w-3.5" /> Active
+                      </span>
+                      <button type="button" className="text-[11px] text-muted-foreground hover:text-destructive" onClick={() => onRemove()}>
+                        Remove
+                      </button>
+                    </div>
+                  ) : confirmId === tpl.id ? (
                     <div className="flex items-center gap-1.5">
                       <Button
                         size="sm"
@@ -258,6 +274,7 @@ export function SecuritySettings() {
 
   const [templates, setTemplates] = useState<PolicyTemplate[]>([]);
   const [applyingTemplate, setApplyingTemplate] = useState<string | null>(null);
+  const [activeTemplateId, setActiveTemplateId] = useState<string | null>(null);
 
   const fetchPolicies = useCallback(async () => {
     try {
@@ -266,6 +283,7 @@ export function SecuritySettings() {
       setDenyRules(data.deny_rules);
       setAllowlistEnabled(data.allowlist_enabled);
       setDenylistEnabled(data.denylist_enabled);
+      setActiveTemplateId(data.active_template_id ?? null);
     } catch {
       toast({ title: "Failed to load policies", variant: "destructive" });
     } finally {
@@ -354,6 +372,17 @@ export function SecuritySettings() {
     }
   };
 
+  const handleRemoveTemplate = async () => {
+    setActiveTemplateId(null);
+    try {
+      await commandPolicyService.clearActiveTemplate();
+      await fetchPolicies();
+      toast({ title: "Template removed" });
+    } catch {
+      toast({ title: "Failed to remove template", variant: "destructive" });
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center py-16">
@@ -418,7 +447,9 @@ export function SecuritySettings() {
         <TemplatePicker
           templates={templates}
           applying={applyingTemplate}
+          activeId={activeTemplateId}
           onApply={handleApplyTemplate}
+          onRemove={handleRemoveTemplate}
         />
       )}
 

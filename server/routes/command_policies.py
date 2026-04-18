@@ -34,9 +34,11 @@ def _list_states(org_id: str) -> dict:
     org_key = f"__org__{org_id}"
     al = get_user_preference(org_key, "command_policy_allowlist") or "off"
     dl = get_user_preference(org_key, "command_policy_denylist") or "off"
+    at = get_user_preference(org_key, "command_policy_active_template")
     return {
         "allowlist_enabled": str(al).lower() == "on",
         "denylist_enabled": str(dl).lower() == "on",
+        "active_template_id": at or None,
     }
 
 
@@ -169,6 +171,7 @@ def update_policy(user_id, rule_id):
         conn.commit()
 
     invalidate_cache(org_id)
+    store_user_preference(f"__org__{org_id}", "command_policy_active_template", None)
     return jsonify({"status": "updated"})
 
 
@@ -191,6 +194,7 @@ def delete_policy(user_id, rule_id):
         conn.commit()
 
     invalidate_cache(org_id)
+    store_user_preference(f"__org__{org_id}", "command_policy_active_template", None)
     return jsonify({"status": "deleted"})
 
 
@@ -335,6 +339,32 @@ def apply_template(user_id):
     org_key = f"__org__{org_id}"
     store_user_preference(org_key, "command_policy_allowlist", json.dumps("on"))
     store_user_preference(org_key, "command_policy_denylist", json.dumps("on"))
+    store_user_preference(org_key, "command_policy_active_template", template_id)
 
     invalidate_cache(org_id)
     return jsonify({"status": "applied", "template_id": template_id, **_list_states(org_id)})
+
+
+@command_policies_bp.route("/command-policy-templates/active", methods=["DELETE", "OPTIONS"])
+@require_permission("admin", "access")
+def clear_active_template(user_id):
+    if request.method == "OPTIONS":
+        return jsonify({}), 200
+
+    org_id = get_org_id_from_request()
+    if not org_id:
+        return jsonify({"error": "No organization context"}), 403
+
+    from utils.db.connection_pool import db_pool
+    with db_pool.get_admin_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM org_command_policies WHERE org_id = %s", (org_id,))
+        conn.commit()
+
+    org_key = f"__org__{org_id}"
+    store_user_preference(org_key, "command_policy_active_template", None)
+    store_user_preference(org_key, "command_policy_allowlist", json.dumps("off"))
+    store_user_preference(org_key, "command_policy_denylist", json.dumps("off"))
+
+    invalidate_cache(org_id)
+    return jsonify({"status": "cleared", **_list_states(org_id)})

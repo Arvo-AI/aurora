@@ -134,7 +134,7 @@ def evaluate_command(org_id: Optional[str], command: str) -> CommandVerdict:
     allow_rules, deny_rules, states = _get_cached(org_id)
 
     if not states.denylist_enabled and not states.allowlist_enabled:
-        return CommandVerdict(allowed=True)
+        return CommandVerdict(allowed=True, rule_description="Policy lists are disabled")
 
     if states.denylist_enabled:
         for rule in deny_rules:
@@ -254,12 +254,14 @@ def evaluate_compound_command(
     if not parts:
         return evaluate_command(org_id, command)
 
+    last_verdict = CommandVerdict(allowed=True)
     for part in parts:
         verdict = evaluate_command(org_id, part)
         if not verdict.allowed:
             return verdict
+        last_verdict = verdict
 
-    return CommandVerdict(allowed=True)
+    return last_verdict
 
 
 def validate_pattern(pattern: str) -> Optional[str]:
