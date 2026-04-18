@@ -10,8 +10,8 @@ import { Label } from "@/components/ui/label";
 import { useToast } from "@/components/ui/use-toast";
 import { useUser } from "@/hooks/useAuthHooks";
 import { isAdmin } from "@/lib/roles";
-import { Trash2, Plus, Terminal, ChevronRight, Loader2, Lock, CheckCircle2, XCircle, Shield, ShieldCheck, ShieldX } from "lucide-react";
-import { commandPolicyService, type CommandPolicyRule } from "@/lib/services/command-policies";
+import { Trash2, Plus, Terminal, ChevronRight, ChevronDown, Loader2, Lock, CheckCircle2, XCircle, Shield, ShieldCheck, ShieldX, BookOpen } from "lucide-react";
+import { commandPolicyService, type CommandPolicyRule, type PolicyTemplate } from "@/lib/services/command-policies";
 
 function RuleList({
   rules,
@@ -41,7 +41,7 @@ function RuleList({
             onCheckedChange={() => onToggle(rule)}
             className="shrink-0 scale-90"
           />
-          <code className="rounded bg-muted px-1.5 py-0.5 text-[11px] font-mono truncate min-w-0">
+          <code className="rounded bg-muted px-1.5 py-0.5 text-[11px] font-mono min-w-0 overflow-x-auto whitespace-nowrap scrollbar-thin">
             {rule.pattern}
           </code>
           <span className="text-xs text-muted-foreground truncate min-w-0 flex-1">
@@ -109,6 +109,135 @@ function AddRuleForm({
   );
 }
 
+function TemplatePicker({
+  templates,
+  applying,
+  onApply,
+}: {
+  templates: PolicyTemplate[];
+  applying: string | null;
+  onApply: (id: string) => void;
+}) {
+  const [confirmId, setConfirmId] = useState<string | null>(null);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+
+  if (templates.length === 0) return null;
+
+  return (
+    <div className="rounded-lg border bg-card overflow-hidden">
+      <div className="flex items-center gap-2.5 px-3.5 py-2.5 border-b">
+        <div className="flex h-7 w-7 items-center justify-center rounded-md bg-primary/10 text-primary">
+          <BookOpen className="h-3.5 w-3.5" />
+        </div>
+        <div>
+          <h3 className="text-sm font-medium">Policy Templates</h3>
+          <p className="text-[11px] text-muted-foreground">Pre-built security profiles for common use cases</p>
+        </div>
+      </div>
+      <div className="grid grid-cols-1 gap-px bg-border">
+        {templates.map((tpl) => {
+          const expanded = expandedId === tpl.id;
+          return (
+            <div key={tpl.id} className="bg-card px-3.5 py-3 space-y-2">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0 flex-1">
+                  <p className="text-xs font-medium">{tpl.name}</p>
+                  <p className="text-[11px] text-muted-foreground leading-relaxed mt-0.5">
+                    {tpl.description}
+                  </p>
+                </div>
+                <div className="shrink-0">
+                  {confirmId === tpl.id ? (
+                    <div className="flex items-center gap-1.5">
+                      <Button
+                        size="sm"
+                        className="h-6 text-xs"
+                        disabled={applying !== null}
+                        onClick={() => { onApply(tpl.id); setConfirmId(null); }}
+                      >
+                        {applying === tpl.id ? (
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                        ) : (
+                          "Confirm"
+                        )}
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-6 text-xs"
+                        onClick={() => setConfirmId(null)}
+                      >
+                        Cancel
+                      </Button>
+                    </div>
+                  ) : (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-6 text-xs"
+                      disabled={applying !== null}
+                      onClick={() => setConfirmId(tpl.id)}
+                    >
+                      Apply
+                    </Button>
+                  )}
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground transition-colors"
+                  onClick={() => setExpandedId(expanded ? null : tpl.id)}
+                >
+                  {expanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+                  Preview rules
+                </button>
+                <Badge variant="secondary" className="text-[10px] font-normal">
+                  <ShieldCheck className="h-2.5 w-2.5 mr-1" />
+                  {tpl.allow_count} allow
+                </Badge>
+                <Badge variant="secondary" className="text-[10px] font-normal">
+                  <ShieldX className="h-2.5 w-2.5 mr-1" />
+                  {tpl.deny_count} deny
+                </Badge>
+              </div>
+              {expanded && (
+                <div className="mt-1 space-y-1.5 text-[11px]">
+                  {tpl.allow.length > 0 && (
+                    <div>
+                      <p className="text-muted-foreground font-medium mb-1">Allow</p>
+                      {tpl.allow.map((r, i) => (
+                        <div key={i} className="flex items-baseline gap-2 py-0.5">
+                          <code className="shrink-0 rounded bg-primary/10 text-primary px-1 py-px font-mono text-[10px] max-w-[50%] overflow-x-auto whitespace-nowrap scrollbar-thin">
+                            {r.pattern}
+                          </code>
+                          <span className="text-muted-foreground truncate">{r.description}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {tpl.deny.length > 0 && (
+                    <div>
+                      <p className="text-muted-foreground font-medium mb-1">Deny</p>
+                      {tpl.deny.map((r, i) => (
+                        <div key={i} className="flex items-baseline gap-2 py-0.5">
+                          <code className="shrink-0 rounded bg-destructive/10 text-destructive px-1 py-px font-mono text-[10px] max-w-[50%] overflow-x-auto whitespace-nowrap scrollbar-thin">
+                            {r.pattern}
+                          </code>
+                          <span className="text-muted-foreground truncate">{r.description}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 export function SecuritySettings() {
   const { user } = useUser();
   const { toast } = useToast();
@@ -127,6 +256,9 @@ export function SecuritySettings() {
   const [testResult, setTestResult] = useState<{ allowed: boolean; rule_description: string | null } | null>(null);
   const [testLoading, setTestLoading] = useState(false);
 
+  const [templates, setTemplates] = useState<PolicyTemplate[]>([]);
+  const [applyingTemplate, setApplyingTemplate] = useState<string | null>(null);
+
   const fetchPolicies = useCallback(async () => {
     try {
       const data = await commandPolicyService.getPolicies();
@@ -141,7 +273,16 @@ export function SecuritySettings() {
     }
   }, [toast]);
 
-  useEffect(() => { fetchPolicies(); }, [fetchPolicies]);
+  const fetchTemplates = useCallback(async () => {
+    try {
+      const data = await commandPolicyService.getTemplates();
+      setTemplates(data);
+    } catch {
+      // Templates are optional; don't block the UI
+    }
+  }, []);
+
+  useEffect(() => { fetchPolicies(); fetchTemplates(); }, [fetchPolicies, fetchTemplates]);
 
   const handleToggleList = async (list: "allowlist" | "denylist", enabled: boolean) => {
     try {
@@ -194,6 +335,22 @@ export function SecuritySettings() {
       toast({ title: "Test failed", variant: "destructive" });
     } finally {
       setTestLoading(false);
+    }
+  };
+
+  const handleApplyTemplate = async (templateId: string) => {
+    setApplyingTemplate(templateId);
+    try {
+      const res = await commandPolicyService.applyTemplate(templateId);
+      setAllowlistEnabled(res.allowlist_enabled);
+      setDenylistEnabled(res.denylist_enabled);
+      await fetchPolicies();
+      const tpl = templates.find(t => t.id === templateId);
+      toast({ title: `Applied "${tpl?.name ?? templateId}" template` });
+    } catch {
+      toast({ title: "Failed to apply template", variant: "destructive" });
+    } finally {
+      setApplyingTemplate(null);
     }
   };
 
@@ -250,11 +407,20 @@ export function SecuritySettings() {
       </div>
 
       <p className="text-xs text-muted-foreground leading-relaxed">
-        Both lists are checked for every command.
-        If the denylist is on and a command matches, it is blocked.
-        If the allowlist is on and a command does not match, it is blocked.
-        Enable both for maximum control.
+        Command policies audit what the agent can execute — they do not change your connector
+        permissions or read-only mode settings. A command allowed here can still fail if the
+        underlying credentials lack access. If the denylist is on, matching commands are blocked.
+        If the allowlist is on, non-matching commands are blocked. Enable both for maximum control.
       </p>
+
+      {/* Policy Templates */}
+      {templates.length > 0 && (
+        <TemplatePicker
+          templates={templates}
+          applying={applyingTemplate}
+          onApply={handleApplyTemplate}
+        />
+      )}
 
       {/* Denylist */}
       <div className="rounded-lg border bg-card overflow-hidden">

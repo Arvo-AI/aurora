@@ -301,53 +301,277 @@ def get_policy_prompt_text(org_id: str) -> str:
 
 
 def get_seed_rules() -> Dict[str, list]:
-    """Default seed templates, inserted on first enable of each list."""
-    return {
-        "allow": [
-            {"priority": 100, "pattern": r"^(ls|cat|head|tail|wc|grep|find|stat|file|du|df)\b",
-             "description": "Read-only filesystem inspection"},
-            {"priority": 90, "pattern": r"^(kubectl|oc)\s+(get|describe|logs|top|explain)\b",
-             "description": "Read-only Kubernetes queries"},
-            {"priority": 80, "pattern": r"^(gcloud|aws|az)\s+.*\b(list|describe|get|show)\b",
-             "description": "Read-only cloud CLI queries"},
-            {"priority": 70, "pattern": r"^(terraform|tofu)\s+(init|plan|validate|fmt|output|state\s+(list|show|pull))\b",
-             "description": "Non-destructive Terraform operations"},
-            {"priority": 60, "pattern": r"^(ping|dig|nslookup|traceroute|curl|wget)\b",
-             "description": "Network diagnostics"},
-            {"priority": 50, "pattern": r"^git\s+(status|log|diff|show|branch)\b",
-             "description": "Read-only git operations"},
-        ],
-        "deny": [
-            {"priority": 100, "pattern": r"\brm\s+-rf\s+/",
-             "description": "Recursive root deletion"},
-            {"priority": 95, "pattern": r"\b(gcc|g\+\+|cc|make|as|ld)\b",
-             "description": "Native code compilation"},
-            {"priority": 92, "pattern": r"\beval\b|\bexec\b",
-             "description": "Dynamic code evaluation"},
-            {"priority": 90, "pattern": r"\bLD_PRELOAD\b",
-             "description": "Shared library injection"},
-            {"priority": 88, "pattern": r"\bbase64\b.*\|\s*(sh|bash|python)",
-             "description": "Encoded payload execution"},
-            {"priority": 85, "pattern": r"\b(ssh-keygen|ssh-copy-id)\b",
-             "description": "SSH key generation on host"},
-            {"priority": 83, "pattern": r"\b(bash|sh|dash|zsh)\s+-c\b",
-             "description": "Inline shell interpreter"},
-            {"priority": 80, "pattern": r"\b(useradd|usermod|adduser|visudo|passwd)\b",
-             "description": "User/privilege management"},
-            {"priority": 75, "pattern": r"\bcurl\b.*\|\s*(sh|bash)\b",
-             "description": "Remote script execution"},
-            {"priority": 70, "pattern": r"\b(nc|ncat|netcat|socat)\b.*(-l|-e|-c)\b",
-             "description": "Network listener / reverse shell"},
-            {"priority": 65, "pattern": r"\bchmod\b.*(\+s|u\+s|4[0-7]{3})\b",
-             "description": "SUID bit manipulation"},
-            {"priority": 60, "pattern": r"\bnsenter\b|\bunshare\b|\bchroot\b",
-             "description": "Namespace/container escape"},
-            {"priority": 55, "pattern": r"\biptables\b|\bnft\b|\bip\s+route\b",
-             "description": "Network configuration changes"},
-            {"priority": 50, "pattern": r"\bkubectl\s+(exec|cp|run|attach|port-forward)\b",
-             "description": "Interactive kubectl operations"},
-        ],
-    }
+    """Default seed templates, inserted on first enable of each list.
+
+    Returns the 'observability_only' template for backward compatibility.
+    """
+    tpl = get_policy_templates()[0]
+    return {"allow": tpl["allow"], "deny": tpl["deny"]}
+
+
+# ---------------------------------------------------------------------------
+# Deny rules shared across ALL templates (dangerous regardless of access level)
+# ---------------------------------------------------------------------------
+_UNIVERSAL_DENY_RULES: list = [
+    {"priority": 100, "pattern": r"\brm\s+-rf\s+/",
+     "description": "Recursive root deletion"},
+    {"priority": 95, "pattern": r"\b(gcc|g\+\+|cc|make|as|ld)\b",
+     "description": "Native code compilation"},
+    {"priority": 92, "pattern": r"(?<!\bkubectl\s)(?<!\boc\s)(?<!\bdocker\s)\b(eval|exec)\b",
+     "description": "Dynamic code evaluation"},
+    {"priority": 90, "pattern": r"\bLD_PRELOAD\b",
+     "description": "Shared library injection"},
+    {"priority": 88, "pattern": r"\bbase64\b.*\|\s*(sh|bash|python)",
+     "description": "Encoded payload execution"},
+    {"priority": 85, "pattern": r"\b(ssh-keygen|ssh-copy-id)\b",
+     "description": "SSH key generation on host"},
+    {"priority": 83, "pattern": r"\b(bash|sh|dash|zsh)\s+-c\b",
+     "description": "Inline shell interpreter"},
+    {"priority": 80, "pattern": r"\b(useradd|usermod|adduser|visudo|passwd)\b",
+     "description": "User/privilege management"},
+    {"priority": 75, "pattern": r"\bcurl\b.*\|\s*(sh|bash)\b",
+     "description": "Remote script execution"},
+    {"priority": 70, "pattern": r"\b(nc|ncat|netcat|socat)\b.*(-l|-e|-c)\b",
+     "description": "Network listener / reverse shell"},
+    {"priority": 65, "pattern": r"\bchmod\b.*(\+s|u\+s|4[0-7]{3})\b",
+     "description": "SUID bit manipulation"},
+    {"priority": 60, "pattern": r"\bnsenter\b|\bunshare\b|\bchroot\b",
+     "description": "Namespace/container escape"},
+    {"priority": 55, "pattern": r"\biptables\b|\bnft\b|\bip\s+route\b",
+     "description": "Network configuration changes"},
+]
+
+
+def get_policy_templates() -> List[dict]:
+    """Return the library of pre-built policy templates.
+
+    Each template is a dict with keys: id, name, description, allow, deny.
+    Templates are ordered from most restrictive to most permissive.
+    """
+    return [
+        # -- 1. Observability Only ----------------------------------------
+        {
+            "id": "observability_only",
+            "name": "Observability Only",
+            "description": (
+                "Read-only access aligned with cloud provider read-only "
+                "credentials (AWS ReadOnlyAccess session policy, GCP "
+                "roles/viewer, Azure Reader). Blocks all write, SSH, and "
+                "interactive operations."
+            ),
+            "allow": [
+                # Filesystem inspection
+                {"priority": 200, "pattern": r"^(ls|cat|head|tail|wc|grep|find|stat|file|du|df|sort|uniq|awk|sed|tr|cut|tee|less|more|xargs|realpath|readlink|basename|dirname)\b",
+                 "description": "Read-only filesystem inspection"},
+                # Kubernetes read-only
+                {"priority": 190, "pattern": r"^(kubectl|oc)\s+(get|describe|logs|top|explain|api-resources|api-versions|cluster-info|config\s+(view|get-contexts|current-context|use-context))\b",
+                 "description": "Read-only Kubernetes queries"},
+                # AWS CLI -- matches all read-only verbs and subcommands that the session policy permits
+                {"priority": 180, "pattern": r"^aws\s+.+\b(ls|list|describe|get|show|head|filter|start-query|stop-query|test-metric-filter|update-kubeconfig|wait)\b",
+                 "description": "AWS read-only operations (EC2, EKS, S3, RDS, Lambda, IAM, CloudWatch, Logs, ECS, CloudFormation)"},
+                {"priority": 179, "pattern": r"^aws\s+s3\s+(ls|cp\s+s3://|presign|sync\s+s3://)",
+                 "description": "AWS S3 read operations (ls, download, presign)"},
+                {"priority": 178, "pattern": r"^aws\s+sts\s+get-caller-identity\b",
+                 "description": "AWS STS identity check"},
+                {"priority": 177, "pattern": r"^aws\s+logs\s+(describe-log-groups|describe-log-streams|get-log-events|get-query-results|filter-log-events|start-query|stop-query|tail)\b",
+                 "description": "AWS CloudWatch Logs read operations"},
+                # GCP / gcloud -- roles/viewer, logging.viewer, monitoring.viewer, container.viewer, storage.objectViewer
+                {"priority": 170, "pattern": r"^gcloud\s+.+\b(list|describe|get|show|read|get-credentials|get-server-config)\b",
+                 "description": "GCP read-only operations (Compute, GKE, Cloud SQL, Cloud Run, IAM, DNS)"},
+                {"priority": 169, "pattern": r"^gcloud\s+(logging|monitoring|asset|projects|organizations|config)\s",
+                 "description": "GCP logging, monitoring, asset inventory, and config"},
+                {"priority": 168, "pattern": r"^gsutil\s+(ls|cat|stat|du|cp\s+gs://|rsync\s+-n)\b",
+                 "description": "GCP Storage read operations (ls, cat, stat, download)"},
+                {"priority": 167, "pattern": r"^bq\s+(ls|show|head|query\s+--dry_run|mk\s+--dry_run)\b",
+                 "description": "BigQuery read-only operations"},
+                # Azure -- Reader role + Log Analytics Reader + Monitoring Reader
+                {"priority": 160, "pattern": r"^az\s+.+\b(list|show|get|describe|display|query|download)\b",
+                 "description": "Azure read-only operations (VMs, AKS, Storage, SQL, Key Vault, NSGs)"},
+                {"priority": 159, "pattern": r"^az\s+(monitor|advisor|security|consumption|costmanagement|account)\s",
+                 "description": "Azure monitoring, cost, security, and account queries"},
+                {"priority": 158, "pattern": r"^az\s+aks\s+get-credentials\b",
+                 "description": "Azure AKS kubeconfig retrieval"},
+                # OVH / Scaleway
+                {"priority": 150, "pattern": r"^ovhcloud\s+.+\b(list|show|get|describe)\b",
+                 "description": "OVH read-only operations"},
+                {"priority": 149, "pattern": r"^scw\s+.+\b(list|get|describe|inspect)\b",
+                 "description": "Scaleway read-only operations"},
+                # Tailscale
+                {"priority": 140, "pattern": r"^tailscale\s+(status|device\s+(list|get)|dns|acl\s+(get|show)|routes|settings|auth-key\s+list)\b",
+                 "description": "Tailscale read-only operations"},
+                # Terraform / IaC read-only
+                {"priority": 130, "pattern": r"^(terraform|tofu)\s+(init|plan|validate|fmt|output|show|state\s+(list|show|pull)|version)\b",
+                 "description": "Non-destructive Terraform operations"},
+                {"priority": 129, "pattern": r"^(helm)\s+(list|get|show|status|history|search|version)\b",
+                 "description": "Helm read-only operations"},
+                # Network diagnostics
+                {"priority": 120, "pattern": r"^(ping|dig|nslookup|traceroute|tracepath|mtr|curl|wget|host|whois|nmap)\b",
+                 "description": "Network diagnostics"},
+                # Git read-only
+                {"priority": 110, "pattern": r"^git\s+(status|log|diff|show|branch|tag|remote|stash\s+list|rev-parse|config\s+--get|ls-files|ls-remote|blame|shortlog)\b",
+                 "description": "Read-only git operations"},
+                # Docker/container inspection
+                {"priority": 100, "pattern": r"^(docker|podman)\s+(ps|images|inspect|logs|stats|top|port|diff|history|version|info|network\s+(ls|inspect)|volume\s+(ls|inspect))\b",
+                 "description": "Container inspection (read-only)"},
+                # System diagnostics
+                {"priority": 90, "pattern": r"^(uptime|whoami|hostname|uname|env|printenv|id|date|cal|free|vmstat|iostat|mpstat|sar|lsof|ss|netstat|ps|top|htop|lscpu|lsmem|lsblk|mount|dmesg|journalctl|systemctl\s+(status|is-active|is-enabled|list-units|list-timers))\b",
+                 "description": "System diagnostics and status"},
+                # Process / text utilities
+                {"priority": 80, "pattern": r"^(jq|yq|column|printf|echo|test|true|false|which|type|command|whereis|file|xxd|hexdump|sha256sum|md5sum|base64)\b",
+                 "description": "Text processing and utility commands"},
+            ],
+            "deny": [
+                *_UNIVERSAL_DENY_RULES,
+                {"priority": 50, "pattern": r"\bkubectl\s+(exec|cp|run|attach|port-forward|apply|delete|create|edit|patch|replace|scale|rollout|drain|cordon|uncordon|taint)\b",
+                 "description": "Mutating kubectl operations"},
+                {"priority": 48, "pattern": r"^(ssh|scp|sftp)\s",
+                 "description": "SSH access (use Standard Operations template to enable)"},
+            ],
+        },
+
+        # -- 2. Standard Operations ----------------------------------------
+        {
+            "id": "standard_ops",
+            "name": "Standard Operations",
+            "description": (
+                "Allows SSH, kubectl exec, cloud CLI config commands, and "
+                "container inspection on top of full read-only access. "
+                "Suitable for incident response and debugging. Still blocks "
+                "infrastructure mutations and dangerous patterns."
+            ),
+            "allow": [
+                # Filesystem
+                {"priority": 200, "pattern": r"^(ls|cat|head|tail|wc|grep|find|stat|file|du|df|sort|uniq|awk|sed|tr|cut|tee|less|more|xargs|realpath|readlink|basename|dirname)\b",
+                 "description": "Filesystem inspection"},
+                # Kubernetes read + interactive
+                {"priority": 190, "pattern": r"^(kubectl|oc)\s+(get|describe|logs|top|explain|api-resources|api-versions|cluster-info|config\s+(view|get-contexts|current-context|use-context)|exec|cp|attach|port-forward|run\s+.*--rm\b.*--restart=Never)\b",
+                 "description": "Kubernetes read and interactive debug operations"},
+                # AWS full read + config
+                {"priority": 180, "pattern": r"^aws\s+.+\b(ls|list|describe|get|show|head|filter|start-query|stop-query|test-metric-filter|update-kubeconfig|configure|wait)\b",
+                 "description": "AWS read and config operations"},
+                {"priority": 179, "pattern": r"^aws\s+s3\s+(ls|cp\s+s3://|presign|sync\s+s3://)",
+                 "description": "AWS S3 read operations"},
+                {"priority": 178, "pattern": r"^aws\s+sts\s+(get-caller-identity|assume-role|get-session-token)\b",
+                 "description": "AWS STS operations"},
+                {"priority": 177, "pattern": r"^aws\s+logs\s+(describe-log-groups|describe-log-streams|get-log-events|get-query-results|filter-log-events|start-query|stop-query|tail)\b",
+                 "description": "AWS CloudWatch Logs operations"},
+                # GCP full read + credentials
+                {"priority": 170, "pattern": r"^gcloud\s+.+\b(list|describe|get|show|read|get-credentials|get-server-config)\b",
+                 "description": "GCP read and credential operations"},
+                {"priority": 169, "pattern": r"^gcloud\s+(logging|monitoring|asset|projects|organizations|config|auth)\s",
+                 "description": "GCP logging, monitoring, asset inventory, auth, and config"},
+                {"priority": 168, "pattern": r"^gsutil\s+(ls|cat|stat|du|cp\s+gs://|rsync\s+-n)\b",
+                 "description": "GCP Storage read operations"},
+                {"priority": 167, "pattern": r"^bq\s+(ls|show|head|query|mk\s+--dry_run)\b",
+                 "description": "BigQuery operations"},
+                # Azure full read + credentials
+                {"priority": 160, "pattern": r"^az\s+.+\b(list|show|get|describe|display|query|download|browse)\b",
+                 "description": "Azure read operations"},
+                {"priority": 159, "pattern": r"^az\s+(monitor|advisor|security|consumption|costmanagement|account|aks\s+get-credentials)\s",
+                 "description": "Azure monitoring, cost, security, and AKS credentials"},
+                # OVH / Scaleway
+                {"priority": 150, "pattern": r"^ovhcloud\s+.+\b(list|show|get|describe)\b",
+                 "description": "OVH read-only operations"},
+                {"priority": 149, "pattern": r"^scw\s+.+\b(list|get|describe|inspect)\b",
+                 "description": "Scaleway read-only operations"},
+                # Tailscale
+                {"priority": 140, "pattern": r"^tailscale\s+(status|device\s+(list|get)|dns|acl\s+(get|show)|routes|settings|auth-key\s+list)\b",
+                 "description": "Tailscale read-only operations"},
+                # SSH access
+                {"priority": 135, "pattern": r"^(ssh|scp|sftp)\s",
+                 "description": "SSH, SCP, and SFTP access"},
+                # Terraform / IaC read-only
+                {"priority": 130, "pattern": r"^(terraform|tofu)\s+(init|plan|validate|fmt|output|show|state\s+(list|show|pull)|version)\b",
+                 "description": "Non-destructive Terraform operations"},
+                {"priority": 129, "pattern": r"^(helm)\s+(list|get|show|status|history|search|version|template)\b",
+                 "description": "Helm read-only operations"},
+                # Network diagnostics
+                {"priority": 120, "pattern": r"^(ping|dig|nslookup|traceroute|tracepath|mtr|curl|wget|host|whois|nmap)\b",
+                 "description": "Network diagnostics"},
+                # Git read-only
+                {"priority": 110, "pattern": r"^git\s+(status|log|diff|show|branch|tag|remote|stash\s+list|rev-parse|config\s+--get|ls-files|ls-remote|blame|shortlog)\b",
+                 "description": "Read-only git operations"},
+                # Docker/container inspection + exec
+                {"priority": 100, "pattern": r"^(docker|podman)\s+(ps|images|inspect|logs|stats|top|port|diff|history|version|info|exec|network\s+(ls|inspect)|volume\s+(ls|inspect))\b",
+                 "description": "Container inspection and exec"},
+                # System diagnostics
+                {"priority": 90, "pattern": r"^(uptime|whoami|hostname|uname|env|printenv|id|date|cal|free|vmstat|iostat|mpstat|sar|lsof|ss|netstat|ps|top|htop|lscpu|lsmem|lsblk|mount|dmesg|journalctl|systemctl\s+(status|is-active|is-enabled|list-units|list-timers))\b",
+                 "description": "System diagnostics and status"},
+                # Text utilities
+                {"priority": 80, "pattern": r"^(jq|yq|column|printf|echo|test|true|false|which|type|command|whereis|file|xxd|hexdump|sha256sum|md5sum|base64)\b",
+                 "description": "Text processing and utility commands"},
+            ],
+            "deny": [
+                *_UNIVERSAL_DENY_RULES,
+                {"priority": 50, "pattern": r"\bkubectl\s+(apply|delete|create|edit|patch|replace|scale|rollout|drain|cordon|uncordon|taint)\b",
+                 "description": "Mutating kubectl operations (use Full Cloud Access to enable)"},
+            ],
+        },
+
+        # -- 3. Full Cloud Access ------------------------------------------
+        {
+            "id": "full_cloud_access",
+            "name": "Full Cloud Access",
+            "description": (
+                "Broad command access for orgs with admin-level cloud "
+                "credentials. Allows cloud write operations, Terraform "
+                "apply, kubectl mutations, SSH, and Docker management. "
+                "Only blocks universally dangerous patterns."
+            ),
+            "allow": [
+                # Filesystem -- broad
+                {"priority": 200, "pattern": r"^(ls|cat|head|tail|wc|grep|find|stat|file|du|df|sort|uniq|awk|sed|tr|cut|tee|less|more|xargs|realpath|readlink|basename|dirname|mkdir|cp|mv|touch|ln|chmod|chown|rm)\b",
+                 "description": "Filesystem operations"},
+                # Kubernetes -- full
+                {"priority": 190, "pattern": r"^(kubectl|oc)\s+\w",
+                 "description": "All kubectl/oc operations"},
+                # AWS -- broad
+                {"priority": 180, "pattern": r"^aws\s+\w",
+                 "description": "All AWS CLI operations"},
+                # GCP -- broad
+                {"priority": 170, "pattern": r"^(gcloud|gsutil|bq)\s+\w",
+                 "description": "All GCP CLI operations"},
+                # Azure -- broad
+                {"priority": 160, "pattern": r"^az\s+\w",
+                 "description": "All Azure CLI operations"},
+                # OVH / Scaleway -- broad
+                {"priority": 150, "pattern": r"^(ovhcloud|scw)\s+\w",
+                 "description": "All OVH and Scaleway CLI operations"},
+                # Tailscale
+                {"priority": 140, "pattern": r"^tailscale\s+\w",
+                 "description": "All Tailscale operations"},
+                # SSH
+                {"priority": 135, "pattern": r"^(ssh|scp|sftp)\s",
+                 "description": "SSH, SCP, and SFTP access"},
+                # Terraform -- full
+                {"priority": 130, "pattern": r"^(terraform|tofu|pulumi)\s+\w",
+                 "description": "All Terraform/Tofu/Pulumi operations"},
+                {"priority": 129, "pattern": r"^(helm|helmfile)\s+\w",
+                 "description": "All Helm operations"},
+                {"priority": 128, "pattern": r"^(ansible|ansible-playbook|ansible-galaxy)\s",
+                 "description": "All Ansible operations"},
+                # Network diagnostics
+                {"priority": 120, "pattern": r"^(ping|dig|nslookup|traceroute|tracepath|mtr|curl|wget|host|whois|nmap)\b",
+                 "description": "Network diagnostics"},
+                # Git -- full
+                {"priority": 110, "pattern": r"^git\s+\w",
+                 "description": "All git operations"},
+                # Docker/container -- full
+                {"priority": 100, "pattern": r"^(docker|podman|docker-compose|ctr|crictl)\s+\w",
+                 "description": "All container operations"},
+                # System diagnostics + management
+                {"priority": 90, "pattern": r"^(uptime|whoami|hostname|uname|env|printenv|id|date|cal|free|vmstat|iostat|mpstat|sar|lsof|ss|netstat|ps|top|htop|lscpu|lsmem|lsblk|mount|dmesg|journalctl|systemctl)\b",
+                 "description": "System diagnostics and service management"},
+                # Text/utility
+                {"priority": 80, "pattern": r"^(jq|yq|column|printf|echo|test|true|false|which|type|command|whereis|file|xxd|hexdump|sha256sum|md5sum|base64|tar|gzip|gunzip|zip|unzip|xz)\b",
+                 "description": "Text processing and archive utilities"},
+                # Package managers (read)
+                {"priority": 70, "pattern": r"^(pip|npm|yarn|go|cargo|apt|yum|dnf|brew)\s+(list|show|info|search|outdated|version|--version)\b",
+                 "description": "Package manager queries"},
+            ],
+            "deny": list(_UNIVERSAL_DENY_RULES),
+        },
+    ]
 
 
 def invalidate_cache(org_id: str) -> None:

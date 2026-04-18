@@ -25,6 +25,22 @@ export interface TestResult {
   command: string;
 }
 
+export interface PolicyTemplateRule {
+  pattern: string;
+  description: string;
+  priority: number;
+}
+
+export interface PolicyTemplate {
+  id: string;
+  name: string;
+  description: string;
+  allow_count: number;
+  deny_count: number;
+  allow: PolicyTemplateRule[];
+  deny: PolicyTemplateRule[];
+}
+
 export const commandPolicyService = {
   getPolicies: () => apiGet<PoliciesResponse>("/api/org/command-policies"),
 
@@ -43,5 +59,12 @@ export const commandPolicyService = {
   toggleList: (list: "allowlist" | "denylist", enabled: boolean) =>
     apiPut<{ ok: boolean; allowlist_enabled: boolean; denylist_enabled: boolean }>(
       "/api/org/command-policy-toggle", { list, enabled }
+    ),
+
+  getTemplates: () => apiGet<PolicyTemplate[]>("/api/org/command-policy-templates"),
+
+  applyTemplate: (templateId: string) =>
+    apiPost<{ status: string; template_id: string; allowlist_enabled: boolean; denylist_enabled: boolean }>(
+      "/api/org/command-policy-templates/apply", { template_id: templateId }
     ),
 };

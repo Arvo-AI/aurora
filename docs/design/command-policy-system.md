@@ -115,25 +115,45 @@ A reminder is also placed at the end of the prompt to reinforce compliance.
 
 ---
 
-## 3. Templated Seed Rules
+## 3. Policy Template Library
 
-When an organization enables a list for the first time, Aurora seeds it with a curated set of default rules. These templates represent Aurora's security recommendations based on the operational patterns of the agent. The customer can modify, disable, or delete any rule.
+Aurora provides a library of pre-built policy templates (named rulesets) at different security levels. Admins can browse these on the Settings > Security page and apply one with a single click. Applying a template replaces all existing rules and auto-enables both lists.
 
-The exact default denylist and allowlist templates are being finalized. The general approach:
+### 3.1 Available Templates
 
-- **Denylist template**: patterns that block known-dangerous operations (code compilation, library injection, privilege escalation, lateral movement).
-- **Allowlist template**: patterns that permit safe read-only diagnostic commands (log retrieval, resource inspection, cloud read operations).
+| Template | Allow Rules | Deny Rules | Use Case |
+|---|---|---|---|
+| **Observability Only** | Read-only filesystem, cloud CLI reads (all verbs matching AWS session policy, GCP `roles/viewer`, Azure Reader), read-only kubectl, Terraform plan, network diagnostics, Docker inspection, system diagnostics | Universal dangerous patterns + mutating kubectl + SSH | Default for new orgs. Aligned with cloud provider read-only credentials. |
+| **Standard Operations** | Everything in Observability + SSH/SCP, kubectl exec/port-forward, cloud config commands (update-kubeconfig, get-credentials), Docker exec, BigQuery queries | Universal dangerous patterns + mutating kubectl (apply, delete, create, etc.) | Incident response and debugging. Allows interactive access without infrastructure mutations. |
+| **Full Cloud Access** | Broad patterns for all cloud CLIs, all kubectl, Terraform apply/destroy, all Helm, Docker management, git writes, Ansible, system management | Universal dangerous patterns only (rm -rf, code compilation, LD_PRELOAD, reverse shells, SUID, namespace escape, etc.) | Orgs with admin-level cloud credentials that want minimal guardrails. |
 
-### 3.1 Customization
+The "universal" deny rules (present in all templates) block patterns that are dangerous regardless of IAM access level: recursive root deletion, native code compilation, dynamic eval/exec, shared library injection, encoded payload execution, SSH key generation, inline shell interpreters, user/privilege management, remote script piping, reverse shells, SUID manipulation, namespace/container escape, and network configuration changes.
+
+### 3.2 Template Design Philosophy
+
+Templates are aligned with the actual permissions granted by each cloud provider's read-only credentials:
+
+- **AWS**: The session policy allows `ec2:Describe*`, `eks:Describe*`, `s3:Get*/List*`, `rds:Describe*`, `lambda:Get*/List*`, `iam:Get*/List*`, `cloudformation:Describe*/List*/Get*`, `cloudwatch:*`, `logs:*`, `ecs:Describe*/List*`. The Observability Only template's allowlist patterns match all CLI commands that map to these IAM actions, including `aws s3 ls`, `aws eks update-kubeconfig`, and `aws logs filter-log-events`.
+- **GCP**: The read-only SA has `roles/viewer`, `roles/logging.viewer`, `roles/monitoring.viewer`, `roles/container.viewer`, `roles/storage.objectViewer`, etc. Templates allow `gcloud ... list/describe/get/read/get-credentials`, `gsutil ls/cat/stat/cp` (download), and `gcloud logging read`.
+- **Azure**: The read-only SP has `Reader`, `Log Analytics Reader`, `Monitoring Reader`, `AKS Cluster User Role`, and data readers. Templates allow `az ... list/show/get/query/download` and `az aks get-credentials`.
+
+### 3.3 Applying Templates
+
+- Applying a template **replaces** all existing rules (both allow and deny)
+- Both allowlist and denylist are auto-enabled after applying
+- Admins can fine-tune individual rules after applying a template
+- Seed rules (from `get_seed_rules()`) remain backward-compatible and return the Observability Only template
+
+### 3.4 Customization
 
 Customers can:
 
+- **Apply a template** as a starting point, then add/remove/modify individual rules
 - **Add rules** to either list (e.g., allow `docker ps` or deny `kubectl exec`)
 - **Disable rules** without deleting them (preserves the rule for re-enabling later)
-- **Delete rules** entirely, including seed rules
+- **Delete rules** entirely, including template-provided rules
 - **Modify patterns** to adjust scope (e.g., narrow an allow rule to specific namespaces)
-
-Seed rules are only inserted once (when the list is first enabled and the list is empty). If a customer deletes a seed rule, it will not be re-created.
+- **Re-apply a template** at any time to reset to a known baseline
 
 ---
 
@@ -231,14 +251,16 @@ flowchart TD
 ## 6. API Reference
 
 
-| Method   | Endpoint                         | Auth  | Description                              |
-| -------- | -------------------------------- | ----- | ---------------------------------------- |
-| `GET`    | `/api/org/command-policies`      | Read  | List all rules and list states           |
-| `POST`   | `/api/org/command-policies`      | Admin | Create a new rule                        |
-| `PUT`    | `/api/org/command-policies/:id`  | Admin | Update a rule                            |
-| `DELETE` | `/api/org/command-policies/:id`  | Admin | Delete a rule                            |
-| `POST`   | `/api/org/command-policies/test` | Read  | Dry-run a command against current policy |
-| `PUT`    | `/api/org/command-policy-toggle` | Admin | Enable/disable a list                    |
+| Method   | Endpoint                                  | Auth  | Description                              |
+| -------- | ----------------------------------------- | ----- | ---------------------------------------- |
+| `GET`    | `/api/org/command-policies`               | Read  | List all rules and list states           |
+| `POST`   | `/api/org/command-policies`               | Admin | Create a new rule                        |
+| `PUT`    | `/api/org/command-policies/:id`           | Admin | Update a rule                            |
+| `DELETE` | `/api/org/command-policies/:id`           | Admin | Delete a rule                            |
+| `POST`   | `/api/org/command-policies/test`          | Read  | Dry-run a command against current policy |
+| `PUT`    | `/api/org/command-policy-toggle`          | Admin | Enable/disable a list                    |
+| `GET`    | `/api/org/command-policy-templates`       | Read  | List available policy templates          |
+| `POST`   | `/api/org/command-policy-templates/apply` | Admin | Apply a template (replaces all rules)    |
 
 
 ---

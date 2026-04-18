@@ -18,6 +18,7 @@ from utils.auth.stateless_auth import (
 )
 from utils.auth.command_policy import (
     evaluate_compound_command,
+    get_policy_templates,
     get_seed_rules,
     invalidate_cache,
     validate_pattern,
@@ -266,3 +267,74 @@ def toggle_list(user_id):
 
     invalidate_cache(org_id)
     return jsonify({"status": "updated", **_list_states(org_id)})
+
+
+# ---------------------------------------------------------------------------
+# Template library endpoints
+# ---------------------------------------------------------------------------
+
+@command_policies_bp.route("/command-policy-templates", methods=["GET", "OPTIONS"])
+@require_auth_only
+def list_templates(user_id):
+    if request.method == "OPTIONS":
+        return jsonify({}), 200
+
+    templates = get_policy_templates()
+    result = []
+    for tpl in templates:
+        result.append({
+            "id": tpl["id"],
+            "name": tpl["name"],
+            "description": tpl["description"],
+            "allow_count": len(tpl["allow"]),
+            "deny_count": len(tpl["deny"]),
+            "allow": tpl["allow"],
+            "deny": tpl["deny"],
+        })
+    return jsonify(result)
+
+
+@command_policies_bp.route("/command-policy-templates/apply", methods=["POST", "OPTIONS"])
+@require_permission("admin", "access")
+def apply_template(user_id):
+    if request.method == "OPTIONS":
+        return jsonify({}), 200
+
+    org_id = get_org_id_from_request()
+    if not org_id:
+        return jsonify({"error": "No organization context"}), 403
+
+    data = request.get_json() or {}
+    template_id = data.get("template_id")
+    if not template_id:
+        return jsonify({"error": "template_id is required"}), 400
+
+    templates = {t["id"]: t for t in get_policy_templates()}
+    tpl = templates.get(template_id)
+    if not tpl:
+        return jsonify({"error": f"Unknown template: {template_id}"}), 400
+
+    from utils.db.connection_pool import db_pool
+    with db_pool.get_admin_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM org_command_policies WHERE org_id = %s",
+                (org_id,),
+            )
+            for mode_key in ("allow", "deny"):
+                for rule in tpl[mode_key]:
+                    cur.execute(
+                        "INSERT INTO org_command_policies "
+                        "(org_id, mode, pattern, description, priority, updated_by) "
+                        "VALUES (%s, %s, %s, %s, %s, %s)",
+                        (org_id, mode_key, rule["pattern"],
+                         rule["description"], rule["priority"], user_id),
+                    )
+        conn.commit()
+
+    org_key = f"__org__{org_id}"
+    store_user_preference(org_key, "command_policy_allowlist", json.dumps("on"))
+    store_user_preference(org_key, "command_policy_denylist", json.dumps("on"))
+
+    invalidate_cache(org_id)
+    return jsonify({"status": "applied", "template_id": template_id, **_list_states(org_id)})
