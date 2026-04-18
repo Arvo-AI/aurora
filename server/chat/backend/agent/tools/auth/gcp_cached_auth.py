@@ -1,10 +1,8 @@
 import json
 import logging
 import os
-import subprocess
-from utils.terminal.terminal_run import terminal_run
 import time
-from typing import Literal, Optional, Tuple
+from typing import Dict, Literal, Optional, Tuple
 
 from utils.auth.cloud_auth import generate_contextual_access_token
 from utils.cloud.cloud_utils import get_mode_from_context
@@ -120,20 +118,17 @@ def clear_gcp_cache_for_user(user_id: str) -> None:
         except Exception as e:
             logger.warning(f"Error clearing Redis GCP cache for user {user_id}: {e}")
     
-    # Clear environment variables if they were set for this user
-    env_vars_to_clear = [
+    # Environment variables are no longer mutated by this module, but clean up
+    # any that may have been set by prior code versions.
+    for var in [
         "GOOGLE_OAUTH_ACCESS_TOKEN",
         "CLOUDSDK_AUTH_ACCESS_TOKEN",
         "GOOGLE_CLOUD_PROJECT",
         "CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT",
         "CLOUDSDK_IMPERSONATE_SERVICE_ACCOUNT",
-        "GOOGLE_APPLICATION_CREDENTIALS"
-    ]
-    
-    for var in env_vars_to_clear:
-        if var in os.environ:
-            os.environ.pop(var, None)
-            logger.debug(f"Cleared environment variable: {var}")
+        "GOOGLE_APPLICATION_CREDENTIALS",
+    ]:
+        os.environ.pop(var, None)
     
     # Also drop any cached SA ADC file for this user from cloud_exec_tool's
     # in-memory cache so the next tool call rewrites it from the fresh Vault
@@ -185,44 +180,46 @@ def clear_gcp_cache_for_user(user_id: str) -> None:
     logger.info(f"Successfully cleared all GCP caches for user {user_id}")
 
 
-def _apply_gcp_env(
+def _build_gcp_env(
     access_token: Optional[str],
     project_id: Optional[str],
     sa_email: Optional[str],
     is_sa_mode: bool,
-) -> None:
-    """Apply the GCP auth env vars for the current process.
+) -> Dict[str, str]:
+    """Build an isolated GCP env dict.
 
-    In SA mode, `CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT` and its alias are
-    explicitly cleared: the uploaded SA IS the working identity, and telling
-    gcloud to impersonate it against itself requires a non-default
-    `iam.serviceAccounts.getAccessToken` binding on self — fails in the
-    common case. The access token alone is sufficient for gcloud to
-    authenticate.
+    In SA mode, impersonation vars are NOT set: the uploaded SA IS the working
+    identity, and telling gcloud to impersonate it against itself requires a
+    non-default iam.serviceAccounts.getAccessToken binding on self -- fails in
+    the common case. The access token alone is sufficient.
     """
+    env: Dict[str, str] = {
+        "PATH": os.environ.get("PATH", ""),
+        "HOME": os.environ.get("HOME", ""),
+        "USER": os.environ.get("USER", ""),
+    }
     if access_token:
-        os.environ["GOOGLE_OAUTH_ACCESS_TOKEN"] = access_token
-        os.environ["CLOUDSDK_AUTH_ACCESS_TOKEN"] = access_token
+        env["GOOGLE_OAUTH_ACCESS_TOKEN"] = access_token
+        env["CLOUDSDK_AUTH_ACCESS_TOKEN"] = access_token
     if project_id:
-        os.environ["GOOGLE_CLOUD_PROJECT"] = project_id
-    if is_sa_mode:
-        os.environ.pop("CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT", None)
-        os.environ.pop("CLOUDSDK_IMPERSONATE_SERVICE_ACCOUNT", None)
-    elif sa_email:
-        os.environ["CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT"] = sa_email
-        os.environ["CLOUDSDK_IMPERSONATE_SERVICE_ACCOUNT"] = sa_email
+        env["GOOGLE_CLOUD_PROJECT"] = project_id
+    if not is_sa_mode and sa_email:
+        env["CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT"] = sa_email
+        env["CLOUDSDK_IMPERSONATE_SERVICE_ACCOUNT"] = sa_email
+    return env
 
 
 def setup_gcp_impersonation_cached(
     user_id: str,
     selected_project_id: Optional[str] = None,
     provider_preference: Optional[str] = None,
-) -> Tuple[bool, Optional[str], Optional[GcpAuthMethod]]:
+) -> Tuple[bool, Optional[str], Optional[GcpAuthMethod], Optional[Dict[str, str]]]:
     """Set up GCP auth with caching.
 
-    Returns (success, project_id, auth_method) where auth_method is
-    'impersonated' for OAuth users (Aurora's per-user SA impersonation chain)
-    or 'service_account' for users who uploaded their own SA key directly.
+    Returns (success, project_id, auth_method, isolated_env) where auth_method is
+    'impersonated' for OAuth users or 'service_account' for uploaded SA keys.
+    The isolated_env dict should be passed to subprocess/terminal_run via env=
+    to avoid cross-tenant credential leaks in the shared process environment.
     """
     try:
         fn_start = time.perf_counter()
@@ -234,13 +231,13 @@ def setup_gcp_impersonation_cached(
         if cached:
             logger.info("GCP setup cache HIT")
             cached_is_sa = cached.get("auth_type") == GCP_AUTH_TYPE_SA
-            _apply_gcp_env(
+            isolated_env = _build_gcp_env(
                 cached.get("access_token"),
                 cached.get("project_id"),
                 cached.get("sa_email"),
                 is_sa_mode=cached_is_sa,
             )
-            return True, cached.get("project_id"), ("service_account" if cached_is_sa else "impersonated")
+            return True, cached.get("project_id"), ("service_account" if cached_is_sa else "impersonated"), isolated_env
 
         token_start = time.perf_counter()
         token_resp = generate_contextual_access_token(
@@ -256,54 +253,7 @@ def setup_gcp_impersonation_cached(
         is_sa_mode = token_resp.get("auth_type") == GCP_AUTH_TYPE_SA
         auth_method: GcpAuthMethod = "service_account" if is_sa_mode else "impersonated"
 
-        _apply_gcp_env(access_token, project_id, sa_email, is_sa_mode=is_sa_mode)
-
-        # Configure gcloud (best-effort). Always set the default project; the
-        # impersonation config is set in OAuth mode and explicitly unset in SA
-        # mode so gcloud's persistent config (via $CLOUDSDK_CONFIG) can't
-        # carry stale impersonation state across processes.
-        try:
-            config_start = time.perf_counter()
-            proj_result = terminal_run(
-                ["gcloud", "config", "set", "project", project_id],
-                capture_output=True,
-                text=True,
-                timeout=10,
-            )
-            logger.info(f"TIME: gcloud config set project took {time.perf_counter() - config_start:.2f}s")
-            if proj_result.returncode == 0:
-                logger.info(f"Successfully set default project: {project_id}")
-            else:
-                logger.warning(f"Failed to set default project: {proj_result.stderr}")
-
-            imp_start = time.perf_counter()
-            if is_sa_mode:
-                imp_result = terminal_run(
-                    ["gcloud", "config", "unset", "auth/impersonate_service_account"],
-                    capture_output=True,
-                    text=True,
-                    timeout=10,
-                )
-                logger.info(f"TIME: gcloud config unset impersonate_sa took {time.perf_counter() - imp_start:.2f}s")
-                if imp_result.returncode == 0:
-                    logger.info("Cleared gcloud auth/impersonate_service_account (SA mode)")
-                else:
-                    # Non-fatal: the config key may simply not be set.
-                    logger.debug(f"gcloud config unset impersonate_sa returned non-zero: {imp_result.stderr}")
-            else:
-                imp_result = terminal_run(
-                    ["gcloud", "config", "set", "auth/impersonate_service_account", sa_email],
-                    capture_output=True,
-                    text=True,
-                    timeout=10,
-                )
-                logger.info("TIME: gcloud config set impersonate_sa took %.2fs", time.perf_counter() - imp_start)
-                if imp_result.returncode == 0:
-                    logger.info("Configured gcloud to impersonate the per-user Aurora service account")
-                else:
-                    logger.warning("Failed to configure gcloud SA impersonation (returncode=%s)", imp_result.returncode)
-        except Exception as e:
-            logger.warning("Failed to configure gcloud settings (error_type=%s)", type(e).__name__)
+        isolated_env = _build_gcp_env(access_token, project_id, sa_email, is_sa_mode=is_sa_mode)
 
         try:
             _cache_set(key, {
@@ -319,8 +269,9 @@ def setup_gcp_impersonation_cached(
 
         logger.info("Successfully set up GCP access (%s)", auth_method)
         logger.info("TIME: setup_gcp_impersonation (cached helper) completed in %.2fs", time.perf_counter() - fn_start)
-        return True, project_id, auth_method
+        return True, project_id, auth_method, isolated_env
 
     except Exception as e:
         logger.error(f"Failed to generate GCP access token (cached helper): {e}")
-        return False, None, None
+        return False, None, None, None
+
