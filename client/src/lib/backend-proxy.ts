@@ -1,10 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getAuthenticatedUser } from '@/lib/auth-helper';
-
-const API_BASE_URL = process.env.BACKEND_URL;
+import { env } from '@/lib/server-env';
 
 function buildUrl(backendPath: string, qs?: string): string {
-  return qs ? `${API_BASE_URL}${backendPath}?${qs}` : `${API_BASE_URL}${backendPath}`;
+  return qs ? `${env.BACKEND_URL}${backendPath}?${qs}` : `${env.BACKEND_URL}${backendPath}`;
 }
 
 export async function forwardRequest(
@@ -17,10 +16,6 @@ export async function forwardRequest(
   const { timeoutMs = 10_000, passBody = method !== 'GET' } = options;
 
   try {
-    if (!API_BASE_URL) {
-      return NextResponse.json({ error: 'BACKEND_URL not configured' }, { status: 500 });
-    }
-
     const authResult = await getAuthenticatedUser();
     if (authResult instanceof NextResponse) return authResult;
     const { headers: authHeaders } = authResult;
@@ -30,6 +25,10 @@ export async function forwardRequest(
     const url = buildUrl(backendPath, qs);
 
     const headers: Record<string, string> = { ...authHeaders };
+
+    if (env.INTERNAL_API_SECRET) {
+      headers['X-Internal-Secret'] = env.INTERNAL_API_SECRET;
+    }
 
     let body: BodyInit | undefined;
     if (passBody) {
@@ -44,9 +43,12 @@ export async function forwardRequest(
         headers['Content-Type'] = ct;
         body = await request.text();
       } else {
-        headers['Content-Type'] = 'application/json';
         try {
-          body = await request.text();
+          const text = await request.text();
+          if (text.length > 0) {
+            headers['Content-Type'] = 'application/json';
+            body = text;
+          }
         } catch {
           // no body
         }
@@ -87,9 +89,15 @@ export async function forwardRequest(
     }
 
     const ct = response.headers.get('content-type') || '';
+
+    // 204/304 have no body — reading it would throw
+    if (response.status === 204 || response.status === 304) {
+      return new NextResponse(null, { status: response.status });
+    }
+
     if (ct.includes('application/json')) {
       const data = await response.json();
-      return NextResponse.json(data);
+      return NextResponse.json(data, { status: response.status });
     }
 
     const text = await response.text();
@@ -105,5 +113,3 @@ export async function forwardRequest(
     );
   }
 }
-
-export { API_BASE_URL };

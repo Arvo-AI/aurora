@@ -183,9 +183,14 @@ export default function GoogleChatSetupPage() {
 GOOGLE_CHAT_CLIENT_SECRET=your-client-secret
 GOOGLE_CHAT_SERVICE_ACCOUNT_KEY='{"type":"service_account",...}'`;
 
-  const baseUrl = envCheck?.baseUrl ?? '';
-  const redirectUri = `${baseUrl}/google-chat/callback`;
-  const eventsUrl = `${baseUrl}/google-chat/events`;
+  // Show explicit error instead of rendering invalid relative OAuth URLs
+  const baseUrl = envCheck?.baseUrl?.trim() ?? '';
+  const redirectUri = baseUrl
+    ? `${baseUrl}/google-chat/callback`
+    : 'Missing NEXT_PUBLIC_BACKEND_URL or NGROK_URL';
+  const eventsUrl = baseUrl
+    ? `${baseUrl}/google-chat/events`
+    : 'Missing NEXT_PUBLIC_BACKEND_URL or NGROK_URL';
 
   return (
     <ConnectorAuthGuard connectorName="Google Chat">

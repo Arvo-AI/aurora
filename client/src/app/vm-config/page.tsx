@@ -188,7 +188,7 @@ export default function VMConfig() {
     }
   };
 
-  const fetchAutoVms = async (effectiveUserId: string) => {
+  const fetchAutoVms = async () => {
     const all: VM[] = [];
     
     // OVH (only if feature flag is enabled)
@@ -292,9 +292,8 @@ export default function VMConfig() {
       setIsLoading(true);
     }
     try {
-      const effectiveUserId = await getEffectiveUserId();
       const [autoRes, manualRes, keysRes] = await Promise.allSettled([
-        fetchAutoVms(effectiveUserId),
+        fetchAutoVms(),
         fetchManualVms(),
         refreshKeys(),
       ]);

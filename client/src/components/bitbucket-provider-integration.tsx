@@ -274,7 +274,7 @@ export default function BitbucketProviderIntegration() {
       )}
 
       {isAuthenticated && userId && (
-        <BitbucketWorkspaceBrowser userId={userId} />
+        <BitbucketWorkspaceBrowser />
       )}
     </div>
   );

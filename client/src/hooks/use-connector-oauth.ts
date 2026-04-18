@@ -43,15 +43,6 @@ export function useConnectorOAuth(connector: ConnectorConfig, userId: string | n
   };
 
   const handleGitHubOAuth = async (onStatusChange: () => void) => {
-    if (!userId) {
-      toast({
-        title: "Error",
-        description: "User ID is required",
-        variant: "destructive",
-      });
-      return;
-    }
-
     setIsConnecting(true);
 
     try {
@@ -115,15 +106,6 @@ export function useConnectorOAuth(connector: ConnectorConfig, userId: string | n
   };
 
   const handleBitbucketOAuth = async (onStatusChange: () => void) => {
-    if (!userId) {
-      toast({
-        title: "Error",
-        description: "User ID is required",
-        variant: "destructive",
-      });
-      return;
-    }
-
     setIsConnecting(true);
 
     try {

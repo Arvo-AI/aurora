@@ -78,7 +78,8 @@ export class GitHubIntegrationService {
   }
 
   static async disconnect(): Promise<void> {
-    await fetch('/api/proxy/github/disconnect', { method: 'POST' });
+    const response = await fetch('/api/proxy/github/disconnect', { method: 'POST' });
+    if (!response.ok) throw new Error('Failed to disconnect GitHub');
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -107,7 +108,8 @@ export class GitHubIntegrationService {
   }
 
   static async clearRepoSelections(): Promise<void> {
-    await fetch('/api/proxy/github/repo-selections', { method: 'DELETE' });
+    const response = await fetch('/api/proxy/github/repo-selections', { method: 'DELETE' });
+    if (!response.ok) throw new Error('Failed to clear repository selections');
   }
 
   static async updateRepoMetadata(repoFullName: string, summary: string): Promise<void> {

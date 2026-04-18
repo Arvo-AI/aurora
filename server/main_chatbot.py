@@ -702,25 +702,37 @@ async def handle_connection(websocket) -> None:
     # Validate JWT token from handshake query string
     token_payload = _validate_ws_token(websocket)
     token_user_id = None
-    token_org_id = None
     if token_payload:
         token_user_id = token_payload.get("userId")
-        token_org_id = token_payload.get("orgId")
         logger.info(f"WebSocket authenticated via token: user={token_user_id}")
 
+        if not token_user_id:
+            logger.warning("WebSocket token missing required userId claim")
+            await websocket.send(json.dumps({
+                "type": "error",
+                "data": {"text": "Authentication failed: invalid token."}
+            }))
+            await websocket.close(code=1008, reason="Invalid authentication token")
+            return
+
         # Eagerly warm caches for token-authenticated users
-        if token_user_id:
-            asyncio.get_event_loop().call_soon(
-                lambda uid=token_user_id: asyncio.ensure_future(update_api_cost_cache_async(uid))
-            )
-            try:
-                from chat.backend.agent.tools.mcp_preloader import preload_user_tools, update_user_activity
-                preload_user_tools(token_user_id)
-                update_user_activity(token_user_id)
-            except Exception as e:
-                logger.debug(f"Token preload failed: {e}")
+        asyncio.get_event_loop().call_soon(
+            lambda uid=token_user_id: asyncio.ensure_future(update_api_cost_cache_async(uid))
+        )
+        try:
+            from chat.backend.agent.tools.mcp_preloader import preload_user_tools, update_user_activity
+            preload_user_tools(token_user_id)
+            update_user_activity(token_user_id)
+        except Exception as e:
+            logger.debug(f"Token preload failed: {e}")
     elif _INTERNAL_API_SECRET:
         logger.warning(f"WebSocket connection {client_id} has no valid token (INTERNAL_API_SECRET is set)")
+        await websocket.send(json.dumps({
+            "type": "error",
+            "data": {"text": "Authentication failed: missing or invalid token."}
+        }))
+        await websocket.close(code=1008, reason="Missing or invalid authentication token")
+        return
 
     weaviate_client = None
     deployment_listener_task = None
@@ -921,8 +933,21 @@ async def handle_connection(websocket) -> None:
             user_id = data.get('user_id')  # Extract user_id from the incoming data
             session_id = data.get('session_id')  # Extract session_id from the incoming data
 
-            # Server-side validation: reject unverified user_ids
-            if user_id and user_id != current_user_id:
+            # Server-side validation: token identity is authoritative when present.
+            if current_user_id:
+                if user_id and user_id != current_user_id:
+                    logger.warning(
+                        "Message rejected: token user %r does not match message user_id %r",
+                        current_user_id,
+                        user_id,
+                    )
+                    await websocket.send(json.dumps({
+                        "type": "error",
+                        "data": {"text": "Authentication failed: user identity mismatch."}
+                    }))
+                    continue
+                user_id = current_user_id
+            elif user_id:
                 if not validate_user_exists(user_id):
                     logger.warning(f"Message rejected: unverified user_id {user_id!r}")
                     await websocket.send(json.dumps({

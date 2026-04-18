@@ -685,21 +685,14 @@ export class ProviderPolling {
       let method = 'POST';
       let body: any = {};
 
-      // Get userId for API calls
-      const userResponse = await fetch('/api/getUserId');
-      if (!userResponse.ok) return;
-      const userData = await userResponse.json();
-      const userId = userData.userId;
-      if (!userId) return;
-
       switch (providerId) {
         case 'gcp':
           endpoint = `/api/proxy/billing`;
-          body = { userId };
+          body = {};
           break;
         case 'aws':
           endpoint = `/api/proxy/aws-api/get-credentials`;
-          body = { userId };
+          body = {};
           break;
         case 'azure':
           // Azure uses token validation
@@ -709,7 +702,7 @@ export class ProviderPolling {
             return;
           }
           endpoint = `/api/proxy/azure/subscriptions`;
-          body = { userId };
+          body = {};
           break;
       }
 

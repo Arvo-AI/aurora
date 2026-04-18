@@ -65,7 +65,7 @@ export function RCASettings() {
       
       try {
         const keys = ['rca_email_notifications', 'rca_email_start_notifications'];
-        const newPreferences = { ...preferences };
+        const loaded: Record<string, boolean> = {};
 
         await Promise.all(keys.map(async (key) => {
           const response = await fetch(
@@ -76,13 +76,12 @@ export function RCASettings() {
             const data = await response.json();
             if (data.value !== null && data.value !== undefined) {
               const value = typeof data.value === 'boolean' ? data.value : data.value === 'true' || data.value === true;
-              // @ts-ignore
-              newPreferences[key] = value;
+              loaded[key] = value;
             }
           }
         }));
 
-        setPreferences(newPreferences);
+        setPreferences(prev => ({ ...prev, ...loaded }));
       } catch (error) {
         console.error("Error loading notification preferences:", error);
       } finally {

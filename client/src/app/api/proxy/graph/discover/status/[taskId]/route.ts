@@ -6,7 +6,7 @@ async function handler(
   { params }: { params: Promise<{ taskId: string }> },
 ) {
   const { taskId } = await params;
-  const backendPath = `/api/graph/discover/status/${taskId}`;
+  const backendPath = `/api/graph/discover/status/${encodeURIComponent(taskId)}`;
   return forwardRequest(request, request.method, backendPath, 'graph-discover-status');
 }
 

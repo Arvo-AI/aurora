@@ -57,31 +57,6 @@ export default function GlobalProjectSelectionMonitor() {
 
   const handleProjectSelection = async (selectedProjectIds: string[]) => {
     try {
-      const response = await fetch("/api/getUserId");
-      
-      if (!response.ok) {
-        console.error("Failed to fetch user ID:", response.statusText);
-        toast({
-          title: "Error",
-          description: "Failed to retrieve user information. Please try again.",
-          variant: "destructive",
-        });
-        return;
-      }
-      
-      const { userId } = await response.json();
-
-      if (!userId) {
-        console.error("No user ID found");
-        toast({
-          title: "Error",
-          description: "No user ID found. Please log in again.",
-          variant: "destructive",
-        });
-        return;
-      }
-
-      // Call the retry endpoint with selected projects
       const retryResponse = await fetch(`/api/proxy/gcp/post-auth-retry`, {
         method: "POST",
         headers: { 

@@ -72,7 +72,14 @@ export class BitbucketIntegrationService {
     if (!response.ok) {
       if (errorMessage === null) return null as T;
       const errorText = await response.text();
-      throw new Error(errorText || errorMessage || 'Request failed');
+      let message = errorText;
+      try {
+        const json = JSON.parse(errorText);
+        message = json.message || json.error || errorText;
+      } catch {
+        // plain text error, use as-is
+      }
+      throw new Error(message || errorMessage || 'Request failed');
     }
 
     const contentType = response.headers.get('content-type');

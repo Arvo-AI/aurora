@@ -11,6 +11,7 @@ load_dotenv()
 
 import logging
 import os
+import hmac
 import secrets
 from flask import Flask
 from flask_cors import CORS
@@ -219,10 +220,11 @@ CORS(app, origins=FRONTEND_URL, supports_credentials=True,
 # internal service) rather than from an unauthenticated external caller.
 
 _INTERNAL_API_SECRET = os.getenv("INTERNAL_API_SECRET", "")
-_OPEN_PATHS = frozenset(("/api/auth/login", "/api/auth/register", "/health"))
+_OPEN_PATHS = frozenset(("/api/auth/login", "/api/auth/register"))
 
 _OPEN_PREFIXES = (
-    "/callback",
+    "/health",
+    "/gcp/callback",
     "/github/callback",
     "/bitbucket/callback",
     "/slack/callback",
@@ -272,7 +274,11 @@ def verify_internal_api_secret():
         return None
 
     provided = request.headers.get("X-Internal-Secret", "")
-    if not provided or provided != _INTERNAL_API_SECRET:
+    if not provided or not hmac.compare_digest(provided, _INTERNAL_API_SECRET):
+        logger.warning(
+            "Rejected request missing/invalid X-Internal-Secret: %s %s from %s",
+            request.method, request.path, request.remote_addr,
+        )
         return jsonify({"error": "Forbidden: invalid or missing X-Internal-Secret header"}), 403
 
     return None

@@ -6,7 +6,7 @@ async function handler(
   { params }: { params: Promise<{ taskId: string }> },
 ) {
   const { taskId } = await params;
-  const backendPath = `/gcp/setup/status/${taskId}`;
+  const backendPath = `/gcp/setup/status/${encodeURIComponent(taskId)}`;
   return forwardRequest(request, request.method, backendPath, 'gcp-setup-status');
 }
 

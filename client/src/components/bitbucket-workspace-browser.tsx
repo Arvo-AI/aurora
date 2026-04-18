@@ -10,10 +10,9 @@ import { BitbucketIntegrationService } from '@/services/bitbucket-integration-se
 import type { Workspace, Repo, Branch } from '@/services/bitbucket-integration-service';
 
 interface BitbucketWorkspaceBrowserProps {
-  userId: string;
 }
 
-export default function BitbucketWorkspaceBrowser({ userId }: BitbucketWorkspaceBrowserProps) {
+export default function BitbucketWorkspaceBrowser({}: BitbucketWorkspaceBrowserProps) {
   const { toast } = useToast();
 
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
@@ -33,7 +32,7 @@ export default function BitbucketWorkspaceBrowser({ userId }: BitbucketWorkspace
   useEffect(() => {
     fetchWorkspaces();
     loadStoredSelection();
-  }, [userId]);
+  }, []);
 
   // Fetch repos when workspace changes (skip during selection restore)
   useEffect(() => {
@@ -41,7 +40,7 @@ export default function BitbucketWorkspaceBrowser({ userId }: BitbucketWorkspace
     if (selectedWorkspace) {
       fetchRepos(selectedWorkspace);
     }
-  }, [selectedWorkspace, userId]);
+  }, [selectedWorkspace]);
 
   const fetchWorkspaces = async () => {
     setIsLoadingWorkspaces(true);

@@ -6,7 +6,7 @@ async function handler(
   { params }: { params: Promise<{ path: string[] }> },
 ) {
   const { path } = await params;
-  const backendPath = '/api/gcp/cloud-graph/' + path.join('/');
+  const backendPath = `/api/gcp/cloud-graph/${path.map(encodeURIComponent).join('/')}`;
   return forwardRequest(request, request.method, backendPath, 'gcp-cloud-graph');
 }
 

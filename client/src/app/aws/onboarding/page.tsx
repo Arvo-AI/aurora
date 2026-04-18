@@ -370,7 +370,7 @@ export default function AWSOnboardingPage() {
   };
 
   const fetchConnectedAccounts = useCallback(async () => {
-    if (!workspaceId || !userId) return;
+    if (!workspaceId) return;
     try {
       const res = await fetch(`/api/proxy/workspaces/${workspaceId}/aws/accounts`, {
       });
@@ -384,7 +384,7 @@ export default function AWSOnboardingPage() {
   }, [workspaceId]);
 
   const fetchQuickCreateData = useCallback(async (rt: 'ReadOnly' | 'Admin' = 'ReadOnly') => {
-    if (!workspaceId || !userId) return;
+    if (!workspaceId) return;
     try {
       const res = await fetch(`/api/proxy/workspaces/${workspaceId}/aws/cfn-quickcreate?roleType=${rt}&_t=${Date.now()}`, {
       });
@@ -404,7 +404,7 @@ export default function AWSOnboardingPage() {
   }, [workspaceId]);
 
   const fetchInactiveAccounts = useCallback(async () => {
-    if (!workspaceId || !userId) return;
+    if (!workspaceId) return;
     try {
       const res = await fetch(`/api/proxy/workspaces/${workspaceId}/aws/accounts/inactive`, {
       });

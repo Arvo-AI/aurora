@@ -6,7 +6,7 @@ async function handler(
   { params }: { params: Promise<{ path: string[] }> },
 ) {
   const { path } = await params;
-  const backendPath = '/azure/' + path.join('/');
+  const backendPath = `/azure/${path.map(encodeURIComponent).join('/')}`;
   return forwardRequest(request, request.method, backendPath, 'azure');
 }
 

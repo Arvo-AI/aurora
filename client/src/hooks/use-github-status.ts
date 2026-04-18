@@ -22,7 +22,7 @@ export function useGitHubStatus(userId: string | null) {
   const inFlightRef = useRef(false);
 
   const checkStatus = useCallback(async () => {
-    if (!userId || inFlightRef.current) return;
+    if (inFlightRef.current) return;
     inFlightRef.current = true;
 
     try {
@@ -49,7 +49,7 @@ export function useGitHubStatus(userId: string | null) {
     } finally {
       inFlightRef.current = false;
     }
-  }, [userId]);
+  }, []);
 
   useEffect(() => { checkStatus(); }, [checkStatus]);
 

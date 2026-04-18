@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getAuthenticatedUser } from '@/lib/auth-helper'
-
-const API_BASE_URL = process.env.BACKEND_URL
+import { env } from '@/lib/server-env'
 
 export async function POST(request: NextRequest) {
   try {
@@ -14,7 +13,7 @@ export async function POST(request: NextRequest) {
     const { headers: authHeaders } = authResult
     const body = await request.json()
 
-    const backendResp = await fetch(`${API_BASE_URL}/api/vms/check-connection`, {
+    const backendResp = await fetch(`${env.BACKEND_URL}/api/vms/check-connection`, {
       method: 'POST',
       headers: {
         ...authHeaders,
@@ -36,4 +35,3 @@ export async function POST(request: NextRequest) {
     )
   }
 }
-

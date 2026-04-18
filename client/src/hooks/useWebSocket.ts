@@ -226,10 +226,22 @@ export const useWebSocket = (config: WebSocketConfig) => {
             wsUrl = `${wsUrl}${separator}token=${encodeURIComponent(token)}`;
           }
         } else {
-          console.warn('Failed to fetch WS token, connecting without handshake auth');
+          console.error('Failed to fetch WS token, aborting connection');
+          setState(prev => ({
+            ...prev,
+            isConnecting: false,
+            error: 'Authentication failed: unable to obtain WebSocket token'
+          }));
+          return;
         }
       } catch (tokenErr) {
-        console.warn('Error fetching WS token:', tokenErr);
+        console.error('Error fetching WS token:', tokenErr);
+        setState(prev => ({
+          ...prev,
+          isConnecting: false,
+          error: 'Authentication failed: unable to obtain WebSocket token'
+        }));
+        return;
       }
 
       const ws = new WebSocket(wsUrl);

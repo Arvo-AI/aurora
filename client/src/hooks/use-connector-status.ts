@@ -77,7 +77,6 @@ export function useConnectorStatus(
 
 
   const checkGitHubStatus = async () => {
-    if (!userId) return;
     try {
       const data = await GitHubIntegrationService.checkStatus();
       setIsConnected(data.connected || false);
@@ -89,7 +88,6 @@ export function useConnectorStatus(
   };
 
   const checkBitbucketStatus = async () => {
-    if (!userId) return;
     try {
       const data = await BitbucketIntegrationService.checkStatus();
       setIsConnected(data.connected || false);
