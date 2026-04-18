@@ -67,7 +67,7 @@ const components = {
       ? children.map(processChildren)
       : processChildren(children);
 
-    return <div className="mb-4" {...props}>{processedChildren}</div>;
+    return <div className="mb-4 last:mb-0" {...props}>{processedChildren}</div>;
   },
   code: ({ node, inline, className, children, ...props }: any) => {
     const match = /language-(\w+)/.exec(className || "");

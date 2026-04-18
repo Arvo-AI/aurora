@@ -9,17 +9,13 @@ from typing import List, Dict, Any, Optional
 logger = logging.getLogger(__name__)
 
 
-def handle_immediate_save(session_id: str, user_id: str, question: str, messages_list: List[Any]) -> bool:
-    """Handle immediate saving of user messages when received.
-    
-    Args:
-        session_id: Chat session ID
-        user_id: User ID
-        question: User's question text
-        messages_list: LLM context messages
-        
-    Returns:
-        bool: True if save was successful
+def handle_immediate_save(session_id: str, user_id: str, question: str) -> bool:
+    """Append the user's UI message on receipt so a mid-turn websocket drop doesn't lose it.
+
+    Does NOT touch llm_context_history: ContextManager._execute_actual_save
+    fully replaces that column, so writing only the new HumanMessage here
+    would wipe the accumulated agent context. The end-of-stream save in
+    workflow.stream() is authoritative for llm_context_history.
     """
     try:
         # NOTE: We intentionally do NOT save to llm_context_history here.
@@ -36,12 +32,11 @@ def handle_immediate_save(session_id: str, user_id: str, question: str, messages
             'isCompleted': True,
             'timestamp': time.time()
         }]
-        
+
         # Try to load existing UI messages and append
         ui_save_success = _save_ui_message(session_id, user_id, ui_messages)
 
         return ui_save_success
-        
     except Exception as save_error:
         logger.error(f"Error in immediate save: {save_error}")
         return False
