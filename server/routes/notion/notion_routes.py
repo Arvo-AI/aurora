@@ -238,6 +238,13 @@ def status():
 
     try:
         NotionClient(user_id).get_self()
+    except NotionAuthExpiredError:
+        return jsonify({
+            "connected": False,
+            "oauthConfigured": oauth_configured,
+            "code": "reauth_required",
+            "error": "Notion credentials expired — please reconnect",
+        })
     except Exception as exc:
         logger.info(
             "[NOTION] Status validation failed for user %s: %s", user_id, exc

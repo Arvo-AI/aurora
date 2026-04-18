@@ -38,6 +38,7 @@ export default function NotionConnectPage() {
   const [activeTab, setActiveTab] = useState<"oauth" | "iit">("iit");
   const popupRef = useRef<Window | null>(null);
   const popupPollRef = useRef<number | null>(null);
+  const oauthExchangingRef = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -101,6 +102,8 @@ export default function NotionConnectPage() {
 
   const finishOAuth = useCallback(
     async (code: string, state: string) => {
+      if (oauthExchangingRef.current) return;
+      oauthExchangingRef.current = true;
       try {
         const response = await fetch("/api/notion/oauth/callback", {
           method: "POST",
@@ -159,6 +162,7 @@ export default function NotionConnectPage() {
           variant: "destructive",
         });
       } finally {
+        oauthExchangingRef.current = false;
         setOauthLoading(false);
       }
     },

@@ -257,12 +257,9 @@ def _create_action_items(
     try:
         db_schema = client.get_database(action_items_database_id)
     except Exception as exc:
-        logger.warning(
-            "[NOTION] Failed to fetch action-items DB schema %s: %s",
-            action_items_database_id,
-            exc,
-        )
-        return 0
+        raise ValueError(
+            f"Cannot access action-items database {action_items_database_id}: {exc}"
+        ) from exc
 
     title_key = _find_property_by_type(db_schema, "title")
     if not title_key:
@@ -284,6 +281,7 @@ def _create_action_items(
             logger.info("[NOTION] Workspace user prefetch failed: %s", exc)
 
     created = 0
+    failed = 0
     for item in items:
         if item.get("checked"):
             continue
@@ -321,12 +319,13 @@ def _create_action_items(
             )
             created += 1
         except Exception as exc:
+            failed += 1
             logger.warning(
                 "[NOTION] Failed to create action-item page for '%s': %s",
                 text[:80],
                 exc,
             )
-    return created
+    return {"created": created, "failed": failed}
 
 
 def _export_postmortem_to_notion(
@@ -394,11 +393,9 @@ def _export_postmortem_to_notion(
     try:
         client.update_page_markdown(page_id, content, mode="replace")
     except Exception as exc:
-        logger.warning(
-            "[NOTION] update_page_markdown failed for page %s: %s",
-            page_id,
-            exc,
-        )
+        raise RuntimeError(
+            f"Notion page created but body write failed: {exc}"
+        ) from exc
 
     _update_postmortem_notion_metadata(
         user_id,
@@ -409,10 +406,10 @@ def _export_postmortem_to_notion(
         database_id=database_id,
     )
 
-    action_item_count = 0
+    action_items_result: Dict[str, Any] = {"created": 0, "failed": 0}
     if action_items_database_id:
         try:
-            action_item_count = _create_action_items(
+            action_items_result = _create_action_items(
                 client,
                 content,
                 action_items_database_id,
@@ -423,6 +420,7 @@ def _export_postmortem_to_notion(
                 incident_id,
                 exc,
             )
+            action_items_result = {"created": 0, "failed": 0, "error": str(exc)}
 
     # Best-effort audit log — never fail the export if audit write breaks.
     try:
@@ -436,7 +434,7 @@ def _export_postmortem_to_notion(
                 "page_url": page_url,
                 "page_id": page_id,
                 "database_id": database_id,
-                "action_item_count": action_item_count,
+                "action_items": action_items_result,
             },
             None,
         )
@@ -447,7 +445,8 @@ def _export_postmortem_to_notion(
         "success": True,
         "pageId": page_id,
         "pageUrl": page_url,
-        "actionItemCount": action_item_count,
+        "actionItemsCreated": action_items_result.get("created", 0),
+        "actionItemsFailed": action_items_result.get("failed", 0),
     }
 
 
@@ -582,12 +581,15 @@ def notion_create_action_items(
         content = _apply_assignee_overrides(content, assignee_hints)
 
         client = NotionClient(user_id)
-        count = _create_action_items(
+        result = _create_action_items(
             client,
             content,
             action_items_database_id,
         )
-        return notion_tool_success({"actionItemCount": count})
+        return notion_tool_success({
+            "actionItemsCreated": result.get("created", 0),
+            "actionItemsFailed": result.get("failed", 0),
+        })
     except NotionAuthExpiredError:
         return notion_tool_error(
             "Notion credentials expired — reconnect and retry.",

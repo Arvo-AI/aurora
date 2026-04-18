@@ -302,25 +302,20 @@ These endpoints require specific Notion plans. All return `{"supported": false}`
 
 ## RCA Investigation Workflow
 
-Notion is primarily used at the END of an RCA to document findings and search for historical context:
+**IMPORTANT: You MUST search Notion early in every RCA investigation.** The workspace contains past postmortems, runbooks, and action items that provide critical historical context. Do NOT skip this step.
 
-**Step 1 -- Search for historical incidents:**
+**IMPORTANT: During RCA, Notion is READ-ONLY.** Do NOT create pages, export postmortems, create action items, or write to Notion. The engineer reviews your findings and exports via the UI after approving.
+
+**Step 1 (EARLY -- do this within your first 3 tool calls) -- Search Notion for historical context:**
 `notion_search(query='<service_name>', types=['page'])` to find past postmortems or runbooks related to the affected service.
+Also try: `notion_search(query='<alert_type_or_keyword>')` for broader matches.
 
-**Step 2 -- Query a postmortem database for patterns:**
+**Step 2 -- Query postmortem databases for patterns:**
+`notion_search(query='postmortem', types=['database'])` to find postmortem databases, then:
 `notion_query_database(database_id='...', filter={"property": "Service", "select": {"equals": "<service_name>"}}, sorts=[{"timestamp": "created_time", "direction": "descending"}])`
 
 **Step 3 -- Read relevant past postmortems:**
-`notion_fetch(url_or_id='<page_id>', max_length=10000)` to get full postmortem content.
-
-**Step 4 -- Find the target postmortem database:**
-`notion_search(query='postmortem', types=['database'])` or `notion_search(query='incident', types=['database'])`
-
-**Step 5 -- Export the postmortem:**
-`notion_export_postmortem(incident_id='...', database_id='...', action_items_database_id='...')`
-
-**Step 6 -- Create action items:**
-`notion_create_action_items(incident_id='...', action_items_database_id='...')`
+`notion_fetch(url_or_id='<page_id>', max_length=10000)` to get full postmortem content. Past incidents on the same service often reveal recurring root causes.
 
 ## Important Rules
 - Notion is a REMOTE service. Use ONLY the Notion tools listed above -- never local commands.

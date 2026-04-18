@@ -293,7 +293,7 @@ export function useQuery<T>(
     if (!active) return;
     const evts = optsRef.current.revalidateOnEvents;
     if (!evts.length) return;
-    const h = () => { queryClient.fetch(active, fetcherRef.current, optsRef.current).catch(() => {}); };
+    const h = () => { queryClient.invalidate(active, fetcherRef.current, optsRef.current).catch(() => {}); };
     evts.forEach(e => window.addEventListener(e, h));
     return () => { evts.forEach(e => window.removeEventListener(e, h)); };
   }, [active, opts.revalidateOnEvents.join(',')]);

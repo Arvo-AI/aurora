@@ -395,6 +395,11 @@ def export_to_notion(user_id, incident_id):
             else "Invalid export request"
         )
         return jsonify({"error": safe_msg}), 400
+    except RuntimeError as exc:
+        logger.exception(
+            "[POSTMORTEM] Notion export partially failed for user %s: %s", user_id, exc
+        )
+        return jsonify({"error": "Notion page created but content write failed — check Notion and retry"}), 502
     except Exception as exc:
         logger.exception(
             "[POSTMORTEM] Notion export failed for user %s: %s", user_id, exc

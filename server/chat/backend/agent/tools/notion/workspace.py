@@ -446,13 +446,9 @@ def _fetch_bytes(source: str) -> tuple[bytes, str]:
                 raise ValueError("Download exceeded 500 MB cap during streaming")
         return bytes(buf), _guess_filename(source)
 
-    if not os.path.isfile(source):
-        raise FileNotFoundError(f"Local file not found: {source}")
-    size = os.path.getsize(source)
-    if size > _MAX_DOWNLOAD_BYTES:
-        raise ValueError(f"File exceeds 500 MB cap ({size} bytes)")
-    with open(source, "rb") as fh:
-        return fh.read(), _guess_filename(source)
+    raise ValueError(
+        "Only public https:// URLs are accepted — local file paths are not allowed."
+    )
 
 
 def notion_upload_file(

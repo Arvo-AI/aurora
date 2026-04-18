@@ -266,6 +266,23 @@ class NotionClient:
                     feature,
                 )
                 return {"error": f"{feature}_not_available"}
+            # Some endpoints return 400 when the API version is too old or the
+            # feature is not available for this workspace/plan.  Treat these
+            # the same as 404 for optional-feature guards.
+            if status == 400:
+                body = {}
+                try:
+                    body = exc.response.json() if exc.response is not None else {}
+                except Exception:
+                    pass
+                code = body.get("code", "")
+                if code in ("validation_error", "invalid_request", "invalid_request_url"):
+                    logger.info(
+                        "Notion %s endpoint returned 400/%s (feature not available for this API version or plan)",
+                        feature,
+                        code,
+                    )
+                    return {"error": f"{feature}_not_available"}
             raise
 
     # ==================================================================
