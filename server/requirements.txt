@@ -104,3 +104,6 @@ pytest>=7.0
 
 # MCP Server (Model Context Protocol)
 mcp[cli]>=1.27.0
+
+# Metrics
+prometheus-client>=0.20.0
