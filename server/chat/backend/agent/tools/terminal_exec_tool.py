@@ -269,8 +269,8 @@ def terminal_exec(
     org_id = get_org_id_for_user(user_id) if user_id else None
     verdict = evaluate_compound_command(org_id, command)
     if not verdict.allowed:
-        logger.warning("Policy denied terminal command for user %s: %s (%s)",
-                        user_id, command[:100], verdict.rule_description)
+        logger.warning("Policy denied terminal command for user %s (%s)",
+                        user_id, verdict.rule_description)
         return json.dumps({
             "success": False,
             "error": f"Command blocked by organization policy: {verdict.rule_description}",
