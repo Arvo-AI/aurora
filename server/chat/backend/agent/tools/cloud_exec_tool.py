@@ -1607,6 +1607,24 @@ Security & Compliance
 
         normalized_provider = _normalize_cloud_exec_provider(provider)
         provider = normalized_provider
+
+        # Org command policy check -- must run before any execution path branches
+        from utils.auth.command_policy import evaluate_compound_command
+        from utils.auth.stateless_auth import get_org_id_for_user
+        org_id = get_org_id_for_user(user_id) if user_id else None
+        verdict = evaluate_compound_command(org_id, command)
+        if not verdict.allowed:
+            reason = (verdict.rule_description or "Matched organization policy")[:200]
+            logger.warning("Policy denied cloud command for user %s (%s)",
+                            user_id, reason)
+            return json.dumps({
+                "success": False,
+                "error": f"Command blocked by organization policy: {reason}",
+                "code": "POLICY_DENIED",
+                "final_command": command,
+                "provider": provider.lower(),
+            })
+
         # Set up ISOLATED environment based on provider - NO GLOBAL STATE!
         isolated_env = None
         auth_command = None
@@ -2008,22 +2026,6 @@ Security & Compliance
                 "provider": provider.lower(),
             })
 
-        # Org command policy check (shared allow/deny firewall across all tools)
-        from utils.auth.command_policy import evaluate_compound_command
-        from utils.auth.stateless_auth import get_org_id_for_user
-        org_id = get_org_id_for_user(user_id) if user_id else None
-        verdict = evaluate_compound_command(org_id, command)
-        if not verdict.allowed:
-            reason = (verdict.rule_description or "Matched organization policy")[:200]
-            logger.warning("Policy denied cloud command for user %s (%s)",
-                            user_id, reason)
-            return json.dumps({
-                "success": False,
-                "error": f"Command blocked by organization policy: {reason}",
-                "code": "POLICY_DENIED",
-                "final_command": command,
-                "provider": provider.lower(),
-            })
 
         # If command is potentially action, ask for confirmation first (after command processing)
         if not is_read_only_command(command):
