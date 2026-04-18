@@ -146,7 +146,6 @@ config:
   CHATBOT_INTERNAL_URL: ""    # Auto-generated if empty: http://<release>-chatbot:5007
   VAULT_ADDR: ""              # Default applied by chart when empty: http://<release>-vault:8200
   SEARXNG_URL: ""             # Auto-generated if empty: http://<release>-searxng:8080
-  SEARXNG_BASE_URL: ""        #Example: https://aurora.example.com
   
   # --- Secrets Backend ---
   # "vault" (default) or "aws_secrets_manager"

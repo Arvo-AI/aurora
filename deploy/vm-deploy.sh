@@ -329,13 +329,6 @@ sed -i.bak "s|^FRONTEND_URL=.*|FRONTEND_URL=$FRONTEND_URL|" .env
 sed -i.bak "s|^NEXT_PUBLIC_BACKEND_URL=.*|NEXT_PUBLIC_BACKEND_URL=$BACKEND_URL_PUBLIC|" .env
 sed -i.bak "s|^NEXT_PUBLIC_WEBSOCKET_URL=.*|NEXT_PUBLIC_WEBSOCKET_URL=$WEBSOCKET_URL|" .env
 
-# SearXNG base URL (public-facing)
-if $IS_IP; then
-  sed -i.bak "s|^SEARXNG_BASE_URL=.*|SEARXNG_BASE_URL=http://${VM_HOSTNAME}:8082|" .env
-else
-  sed -i.bak "s|^SEARXNG_BASE_URL=.*|SEARXNG_BASE_URL=http://${VM_HOSTNAME}:8082|" .env
-fi
-
 # LLM provider
 sed -i.bak "s|^LLM_PROVIDER_MODE=.*|LLM_PROVIDER_MODE=$LLM_PROVIDER_MODE|" .env
 case "$LLM_PROVIDER_INPUT" in

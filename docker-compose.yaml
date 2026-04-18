@@ -308,7 +308,6 @@ services:
     volumes:
       - ./config/searxng:/etc/searxng
     environment:
-      - SEARXNG_BASE_URL=${SEARXNG_BASE_URL}
       - SEARXNG_SECRET=${SEARXNG_SECRET}
     restart: unless-stopped
     
