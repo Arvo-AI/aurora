@@ -691,8 +691,6 @@ def create_local_credentials_file(token_data, project_id: str) -> str:
                 file.write(sa_json_str)
 
             logger.info("Created SA credentials file for local GCP tooling")
-            os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = credentials_path
-            os.environ["GOOGLE_CLOUD_PROJECT"] = project_id
             return credentials_path
         except Exception as e:
             error_msg = "Failed to create SA credentials file"
@@ -733,10 +731,6 @@ def create_local_credentials_file(token_data, project_id: str) -> str:
             json.dump(credentials, file)
 
         logger.info("Created OAuth credentials file for local GCP tooling")
-
-        # Set environment variables for GCP tools
-        os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = credentials_path
-        os.environ["GOOGLE_CLOUD_PROJECT"] = project_id
 
         return credentials_path
 
