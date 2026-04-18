@@ -812,12 +812,15 @@ def build_suggestions_blocks(incident_id: str, suggestions: list, max_suggestion
     for i, suggestion in enumerate(suggestions[:max_suggestions]):
         if not suggestion.get('command'):
             continue  # Skip suggestions without commands
-        
+
+        if suggestion.get('risk') == 'high':
+            continue  # Skip dangerous commands — not safe for one-click execution
+
         # Validate required fields
         title = suggestion.get('title', 'Action')
         if not title:
             title = 'Action'
-        
+
         command = suggestion.get('command', '')
         
         # Truncate command for display (Slack has limits)
