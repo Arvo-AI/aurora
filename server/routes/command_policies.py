@@ -32,7 +32,7 @@ command_policies_bp = Blueprint("command_policies", __name__, url_prefix="/api/o
 def _list_states(org_id: str) -> dict:
     """Read allowlist/denylist toggle states from user_preferences."""
     org_key = f"__org__{org_id}"
-    al = get_user_preference(org_key, "command_policy_allowlist") or "on"
+    al = get_user_preference(org_key, "command_policy_allowlist") or "off"
     dl = get_user_preference(org_key, "command_policy_denylist") or "off"
     return {
         "allowlist_enabled": str(al).lower() == "on",

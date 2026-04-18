@@ -72,7 +72,7 @@ def _fetch(org_id: str) -> Tuple[List[PolicyRule], List[PolicyRule], ListStates]
     """
     allow_rules: List[PolicyRule] = []
     deny_rules: List[PolicyRule] = []
-    states = ListStates(allowlist_enabled=True, denylist_enabled=False)
+    states = ListStates(allowlist_enabled=False, denylist_enabled=False)
 
     try:
         from utils.db.connection_pool import db_pool
@@ -102,7 +102,7 @@ def _fetch(org_id: str) -> Tuple[List[PolicyRule], List[PolicyRule], ListStates]
                         deny_rules.append(rule)
 
         org_pref_key = f"__org__{org_id}"
-        al_raw = get_user_preference(org_pref_key, "command_policy_allowlist") or "on"
+        al_raw = get_user_preference(org_pref_key, "command_policy_allowlist") or "off"
         dl_raw = get_user_preference(org_pref_key, "command_policy_denylist") or "off"
         states = ListStates(
             allowlist_enabled=(str(al_raw).lower() == "on"),
