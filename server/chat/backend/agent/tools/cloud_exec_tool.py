@@ -2014,11 +2014,12 @@ Security & Compliance
         org_id = get_org_id_for_user(user_id) if user_id else None
         verdict = evaluate_compound_command(org_id, command)
         if not verdict.allowed:
+            reason = (verdict.rule_description or "Matched organization policy")[:200]
             logger.warning("Policy denied cloud command for user %s (%s)",
-                            user_id, verdict.rule_description)
+                            user_id, reason)
             return json.dumps({
                 "success": False,
-                "error": f"Command blocked by organization policy: {verdict.rule_description[:200]}",
+                "error": f"Command blocked by organization policy: {reason}",
                 "code": "POLICY_DENIED",
                 "final_command": command,
                 "provider": provider.lower(),

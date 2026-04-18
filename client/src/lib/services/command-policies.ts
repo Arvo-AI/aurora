@@ -70,5 +70,5 @@ export const commandPolicyService = {
     ),
 
   clearActiveTemplate: () =>
-    apiDelete<{ status: string; active_template_id: null }>("/api/org/command-policy-templates/active"),
+    apiDelete<{ status: string; allowlist_enabled: boolean; denylist_enabled: boolean; active_template_id: null }>("/api/org/command-policy-templates/active"),
 };

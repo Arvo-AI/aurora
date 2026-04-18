@@ -177,5 +177,5 @@ def assemble_system_prompt(segments: PromptSegments) -> str:  # main prompt buil
     if segments.failure_recovery and not segments.background_mode:
         parts.append(segments.failure_recovery)
     if segments.security_policy:
-        parts.append("REMINDER: Commands outside the organization policy will be rejected. Do not attempt workarounds.")
+        parts.append("REMINDER: Commands that violate the organization policy will be rejected. Do not attempt workarounds.")
     return "\n".join(parts)
