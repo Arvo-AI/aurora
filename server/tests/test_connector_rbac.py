@@ -13,7 +13,7 @@ import ast
 import os
 import re
 from pathlib import Path
-from typing import Dict, List, Set, Tuple
+from typing import List, Set, Tuple
 
 import pytest
 
