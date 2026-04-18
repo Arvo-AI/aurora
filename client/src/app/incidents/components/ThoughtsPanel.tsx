@@ -68,7 +68,9 @@ export default function ThoughtsPanel({ thoughts, incident, isVisible, canIntera
 
   // 'thoughts' or session ID
   const [activeTab, setActiveTab] = useState<string>('thoughts');
-  const [chatSessions, setChatSessions] = useState<ChatSession[]>(incident.chatSessions || []);
+  const [chatSessions, setChatSessions] = useState<ChatSession[]>(
+    (incident.chatSessions || []).filter((s: ChatSession) => s.id !== incident.chatSessionId)
+  );
   const [currentMessages, setCurrentMessages] = useState<ChatMessage[]>([]);
   const [inputValue, setInputValue] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -119,8 +121,11 @@ export default function ThoughtsPanel({ thoughts, incident, isVisible, canIntera
     // Don't reset if we're creating a session
     if (creatingSessionIds.current.size > 0) return;
     
-    if (incident.activeTab === 'chat' && chatSessions.length > 0) {
-      setActiveTab(chatSessions[chatSessions.length - 1].id);
+    const filteredSessions = (incident.chatSessions || []).filter(
+      (s: ChatSession) => s.id !== incident.chatSessionId
+    );
+    if (incident.activeTab === 'chat' && filteredSessions.length > 0) {
+      setActiveTab(filteredSessions[filteredSessions.length - 1].id);
     } else {
       setActiveTab('thoughts');
     }

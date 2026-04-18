@@ -312,6 +312,10 @@ async def process_workflow_async(wf, state, websocket, user_id, incident_id=None
             accumulated_chat_msg.append(content)
 
         accumulated_text = "".join(accumulated_chat_msg)
+
+        if not accumulated_text:
+            return
+
         current_time = time.time()
         time_since_last = current_time - last_chat_save_time[0]
 
@@ -361,6 +365,44 @@ async def process_workflow_async(wf, state, websocket, user_id, incident_id=None
                 logger.debug(f"[BackgroundChat] Saved streaming message for session {session_id}: {len(accumulated_text)} chars")
         except Exception as e:
             logger.error(f"[BackgroundChat] Failed to save streaming chat message: {e}")
+
+    def finalize_streaming_chat_message():
+        """Clear the _streaming flag from the last bot message in chat_sessions.messages."""
+        if not is_background or not session_id or session_id == 'unknown':
+            return
+
+        try:
+            from utils.db.connection_pool import db_pool
+
+            with db_pool.get_admin_connection() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        "SELECT messages FROM chat_sessions WHERE id = %s FOR UPDATE",
+                        (session_id,),
+                    )
+                    row = cursor.fetchone()
+                    if not row:
+                        return
+
+                    messages = row[0] if row[0] else []
+                    if isinstance(messages, str):
+                        messages = json.loads(messages)
+
+                    modified = False
+                    for msg in messages:
+                        if msg.get("_streaming"):
+                            del msg["_streaming"]
+                            modified = True
+
+                    if modified:
+                        cursor.execute(
+                            "UPDATE chat_sessions SET messages = %s, updated_at = %s WHERE id = %s",
+                            (json.dumps(messages), datetime.now(), session_id),
+                        )
+                        conn.commit()
+                        logger.debug(f"[BackgroundChat] Finalized streaming flags for session {session_id}")
+        except Exception as e:
+            logger.error(f"[BackgroundChat] Failed to finalize streaming chat message: {e}")
 
     # Helper function to send messages via the appropriate sender
     async def send_via_appropriate_sender(message_data):
@@ -603,7 +645,10 @@ async def process_workflow_async(wf, state, websocket, user_id, incident_id=None
                                             # Force save accumulated thought before starting new message
                                             save_incident_thought("", force=True)
                                             save_incident_thought(message.content, force=False)
+                                            # Finalize current streaming message and start fresh
                                             save_streaming_chat_message("", force=True)
+                                            finalize_streaming_chat_message()
+                                            accumulated_chat_msg.clear()
                                             save_streaming_chat_message(message.content, force=False)
                                 sent_message_count = current_message_count
 
@@ -650,6 +695,9 @@ async def process_workflow_async(wf, state, websocket, user_id, incident_id=None
         
         # Force save any remaining accumulated thought
         save_incident_thought("", force=True)
+
+        # Finalize streaming: clear _streaming flags from chat messages
+        finalize_streaming_chat_message()
         
         await send_end_status("completed")
         
