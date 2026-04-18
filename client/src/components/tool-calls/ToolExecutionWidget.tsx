@@ -196,6 +196,16 @@ const ToolExecutionWidget = ({ tool, className, sendMessage, sendRaw, onToolUpda
     command = "Knowledge Base"
   }
 
+  if (tool.tool_name === "load_skill") {
+    try {
+      const parsed = JSON.parse(normalizedInput)
+      const skillId = parsed.skill_id || parsed.kwargs?.skill_id || ''
+      command = skillId ? `Loading ${skillId} skill` : "Loading integration skill"
+    } catch {
+      command = "Loading integration skill"
+    }
+  }
+
   // terminal_exec parsing - extract command from input or output
   if (tool.tool_name === "terminal_exec") {
     try {

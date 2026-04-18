@@ -1033,6 +1033,7 @@ def initialize_tables():
                     );
 
                     CREATE INDEX IF NOT EXISTS idx_kb_memory_user_id ON knowledge_base_memory(user_id);
+                    CREATE INDEX IF NOT EXISTS idx_kb_memory_org_id ON knowledge_base_memory(org_id, updated_at DESC);
                 """,
                 "knowledge_base_documents": """
                     CREATE TABLE IF NOT EXISTS knowledge_base_documents (

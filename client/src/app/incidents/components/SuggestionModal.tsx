@@ -89,6 +89,7 @@ export default function SuggestionModal({
     if (!suggestion.command || isExecuting) return;
     setIsExecuting(true);
 
+    // Mark suggestion as executed (non-blocking — don't let this prevent navigation)
     try {
       const res = await fetch(`/api/incidents/suggestions/${suggestion.id}/mark-executed`, {
         method: 'POST',
@@ -97,13 +98,9 @@ export default function SuggestionModal({
       });
       if (!res.ok) {
         console.error('Failed to mark suggestion as executed:', res.status);
-        setIsExecuting(false);
-        return;
       }
     } catch (err) {
       console.error('Failed to mark suggestion as executed:', err);
-      setIsExecuting(false);
-      return;
     }
 
     const message = `Execute this command and report the output:\n\n\`\`\`\n${suggestion.command}\n\`\`\`\n\nRun ONLY this command. Report the output, then stop. Do not run follow-up commands or investigate further.`;
