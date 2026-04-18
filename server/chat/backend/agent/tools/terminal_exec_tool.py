@@ -5,14 +5,39 @@ Provides direct terminal pod access for operations not covered by specialized to
 
 import json
 import logging
+import os
 import re
 import shlex
-from typing import Optional
+from typing import Optional, Dict
 from utils.terminal.terminal_run import terminal_run
 from .cloud_exec_tool import cloud_exec
 from .iac_tool import run_iac_tool
 
 logger = logging.getLogger(__name__)
+
+
+# Keys that are safe to pass through to child processes.
+# Everything else (VAULT_TOKEN, DATABASE_URL, SECRET_KEY, etc.) is stripped.
+_SAFE_ENV_KEYS = {
+    "PATH", "HOME", "USER", "SHELL", "TERM", "LANG", "LC_ALL", "LC_CTYPE",
+    "TZ", "HOSTNAME", "PWD", "LOGNAME",
+    "ENABLE_POD_ISOLATION",
+}
+
+
+def _build_sanitized_env() -> Dict[str, str]:
+    """Build a minimal environment dict from the current process env.
+
+    Only passes through safe, non-secret variables so that commands
+    executed via terminal_exec cannot inspect server secrets like
+    VAULT_TOKEN, DATABASE_URL, or cloud credentials.
+    """
+    sanitized = {}
+    for key in _SAFE_ENV_KEYS:
+        value = os.environ.get(key)
+        if value is not None:
+            sanitized[key] = value
+    return sanitized
 
 
 def _has_shell_metacharacters(command: str) -> bool:
@@ -331,6 +356,15 @@ def terminal_exec(
         "stratum+tcp",
     ]
     
+    # Commands that attempt to dump the process environment.
+    # The sanitized env already strips secrets, but blocking these outright
+    # prevents accidental leakage if the allow-list is ever expanded.
+    _ENV_DUMP_PATTERNS = [
+        "printenv",
+        "/proc/self/environ",
+        "cat /proc/",
+    ]
+    
     for pattern in dangerous_patterns:
         if pattern in command:
             logger.warning(f"Blocked dangerous command for user {user_id}: {command}")
@@ -338,6 +372,22 @@ def terminal_exec(
                 "success": False,
                 "error": f"Command blocked for safety: contains dangerous pattern"
             })
+
+    for pattern in _ENV_DUMP_PATTERNS:
+        if pattern in cmd_lower:
+            logger.warning(f"Blocked environment inspection command for user {user_id}: {command}")
+            return json.dumps({
+                "success": False,
+                "error": "Command blocked: inspecting the server environment is not permitted"
+            })
+
+    # Block bare "env" command (must be the entire command or start of a pipeline)
+    if re.match(r'^\s*env\s*$', cmd_lower) or re.match(r'^\s*env\s*[|;>&]', cmd_lower):
+        logger.warning(f"Blocked environment inspection command for user {user_id}: {command}")
+        return json.dumps({
+            "success": False,
+            "error": "Command blocked: inspecting the server environment is not permitted"
+        })
 
     if _contains_forbidden_elevation(command):
         logger.warning(f"Blocked privilege escalation attempt for user {user_id}: {command}")
@@ -349,13 +399,16 @@ def terminal_exec(
     try:
         logger.info(f"Executing terminal command for user {user_id}: {command[:100]}")
         
+        sanitized_env = _build_sanitized_env()
+        
         result = terminal_run(
             command,
             shell=True,
             capture_output=True,
             text=True,
             timeout=timeout or 60,  # 60s default timeout
-            cwd=working_dir  # None uses current directory (works for both local & K8s)
+            cwd=working_dir,  # None uses current directory (works for both local & K8s)
+            env=sanitized_env
         )
         
         success = result.returncode == 0
