@@ -360,6 +360,7 @@ if [[ "$BUILD_MODE" == "prebuilt" ]]; then
   docker tag ghcr.io/arvo-ai/aurora-server:$VERSION aurora_celery-worker:latest
   docker tag ghcr.io/arvo-ai/aurora-server:$VERSION aurora_celery-beat:latest
   docker tag ghcr.io/arvo-ai/aurora-server:$VERSION aurora_chatbot:latest
+  docker tag ghcr.io/arvo-ai/aurora-server:$VERSION aurora_mcp:latest
   docker tag ghcr.io/arvo-ai/aurora-frontend:$VERSION aurora_frontend:latest
   ok "Prebuilt images ready"
 else

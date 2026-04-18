@@ -177,6 +177,7 @@ prod-prebuilt:
 	docker tag ghcr.io/arvo-ai/aurora-server:$$TAG aurora_celery-worker:latest; \
 	docker tag ghcr.io/arvo-ai/aurora-server:$$TAG aurora_celery-beat:latest; \
 	docker tag ghcr.io/arvo-ai/aurora-server:$$TAG aurora_chatbot:latest; \
+	docker tag ghcr.io/arvo-ai/aurora-server:$$TAG aurora_mcp:latest; \
 	docker tag ghcr.io/arvo-ai/aurora-frontend:$$TAG aurora_frontend:latest
 	@echo "Starting Aurora in production mode (prebuilt images)..."
 	@docker compose -f docker-compose.prod-local.yml down --remove-orphans 2>/dev/null || true

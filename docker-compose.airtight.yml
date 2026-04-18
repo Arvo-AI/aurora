@@ -425,6 +425,30 @@ services:
       timeout: 5s
       retries: 3
 
+  aurora-mcp:
+    image: aurora_mcp:latest
+    pull_policy: never
+    container_name: aurora-mcp
+    logging: *default-logging
+    ports:
+      - "${MCP_PORT:-8811}:8811"
+    command: ["python", "mcp_server.py"]
+    environment:
+      <<: *common-env
+      OTEL_SERVICE_NAME: aurora-mcp
+    depends_on:
+      aurora-server:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import socket; s=socket.socket(); s.settimeout(2); s.connect(('localhost',8811)); s.close()"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
   t2v-transformers:
     image: cr.weaviate.io/semitechnologies/transformers-inference:sentence-transformers-all-MiniLM-L6-v2
     pull_policy: never

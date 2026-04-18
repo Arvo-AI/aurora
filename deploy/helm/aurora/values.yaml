@@ -81,6 +81,7 @@ image:
 replicaCounts:
   # Scalable services (can increase for load balancing)
   server: 1          # API server (Flask) - stateless, can scale
+  mcp: 1             # MCP server (streamable-http on 8811)
   celeryWorker: 1    # Background task workers - stateless, can scale
   chatbot: 1         # WebSocket chatbot - stateless, can scale (session affinity enabled by default)
   frontend: 1        # Next.js frontend - stateless, can scale
@@ -383,6 +384,13 @@ resources:
     limits:
       cpu: "2000m"
       memory: "2Gi"
+  mcp:
+    requests:
+      cpu: "100m"
+      memory: "256Mi"
+    limits:
+      cpu: "500m"
+      memory: "1Gi"
   celeryWorker:
     requests:
       cpu: "100m"
