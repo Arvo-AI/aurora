@@ -399,8 +399,8 @@ def setup_aws_environment_isolated(user_id: str, selected_region: str | None = N
             # Stash account ID in isolated env for downstream display without extra calls
             try:
                 isolated_env["AURORA_AWS_ACCOUNT_ID"] = str(account_id)
-            except Exception:
-                pass
+            except Exception as env_err:
+                logger.debug(f"Could not store AWS account ID in isolated_env: {env_err}")
 
             # Also attempt to resolve a friendly account alias (optional)
             try:
