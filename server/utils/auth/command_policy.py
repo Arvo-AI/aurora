@@ -282,7 +282,7 @@ def get_policy_prompt_text(org_id: str) -> str:
 
     lines = [
         "## Organization Command Policy",
-        "The following command policy is enforced. Commands violating this policy "
+        "The following command policy is enforced. Commands violating this policy " +
         "will be rejected at execution time. Do not attempt blocked commands.",
         "",
     ]

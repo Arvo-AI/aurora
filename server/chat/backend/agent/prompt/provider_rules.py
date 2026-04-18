@@ -249,9 +249,7 @@ def build_regional_rules() -> str:
 
 
 def build_ephemeral_rules(mode: Optional[str]) -> str:
-    normalized_mode = (mode or "agent").strip().lower()
-
-    if normalized_mode == "ask":
+    if (mode or "agent").strip().lower() == "ask":
         return (
             "━━━ CRITICAL: CURRENT MODE ━━━\n"
             "MODE: ASK (READ-ONLY)\n\n"

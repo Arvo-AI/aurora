@@ -104,7 +104,7 @@ def create_policy(user_id):
 
     err = validate_pattern(pattern)
     if err:
-        return jsonify({"error": f"Invalid regex: {err}"}), 400
+        return jsonify({"error": "Invalid regex pattern"}), 400
 
     from utils.db.connection_pool import db_pool
     with db_pool.get_admin_connection() as conn:
@@ -145,7 +145,7 @@ def update_policy(user_id, rule_id):
             if field == "pattern":
                 err = validate_pattern(data[field])
                 if err:
-                    return jsonify({"error": f"Invalid regex: {err}"}), 400
+                    return jsonify({"error": "Invalid regex pattern"}), 400
             updates.append(f"{col} = %s")
             params.append(data[field])
 
