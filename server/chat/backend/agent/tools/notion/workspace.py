@@ -177,6 +177,8 @@ def notion_list_teamspaces(
         raw = client.search(query="", filter_types=["team_space"])
         results = []
         for item in raw.get("results") or []:
+            if item.get("object") != "team_space":
+                continue
             results.append(
                 {
                     "id": item.get("id"),
@@ -340,7 +342,7 @@ _MAX_DOWNLOAD_BYTES = 500 * 1024 * 1024  # 500 MB hard cap
 
 class NotionUploadFileArgs(BaseModel):
     file_path_or_url: str = Field(
-        description="Local filesystem path OR a publicly reachable http(s) URL to the file."
+        description="Publicly reachable http(s) URL to the file."
     )
     filename: Optional[str] = Field(
         default=None,
@@ -447,7 +449,7 @@ def _fetch_bytes(source: str) -> tuple[bytes, str]:
         return bytes(buf), _guess_filename(source)
 
     raise ValueError(
-        "Only public https:// URLs are accepted — local file paths are not allowed."
+        "Only public http(s) URLs are accepted — local file paths are not allowed."
     )
 
 
@@ -464,16 +466,18 @@ def notion_upload_file(
     if not file_path_or_url or not file_path_or_url.strip():
         return notion_tool_error("file_path_or_url is required", code="bad_input")
 
-    try:
-        data, src_filename = _fetch_bytes(file_path_or_url.strip())
-    except Exception as exc:
-        return notion_tool_error(f"Failed to read source: {exc}", code="fetch_failed")
-
-    effective_filename = filename or src_filename
-    effective_ct = content_type or _guess_content_type(effective_filename)
-    total_size = len(data)
+    src_url = file_path_or_url.strip()
 
     def _do(client: Any) -> Dict[str, Any]:
+        try:
+            data, src_filename = _fetch_bytes(src_url)
+        except Exception as exc:
+            return {"error": f"Failed to read source: {exc}", "code": "fetch_failed"}
+
+        effective_filename = filename or src_filename
+        effective_ct = content_type or _guess_content_type(effective_filename)
+        total_size = len(data)
+
         if total_size <= _SINGLE_PART_LIMIT:
             created = client.create_file_upload(
                 mode="single_part",

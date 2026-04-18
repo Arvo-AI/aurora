@@ -38,6 +38,7 @@ interface Entry<T = unknown> {
   fetchedAt: number;
   validating: boolean;
   inflight: Promise<T> | null;
+  abortController: AbortController | null;
   retryTimer: ReturnType<typeof setTimeout> | null;
   listeners: Set<() => void>;
   version: number;
@@ -84,7 +85,7 @@ function entry<T>(key: string): Entry<T> {
     evictStale();
     store.set(key, {
       data: undefined, error: null, fetchedAt: 0, validating: false,
-      inflight: null, retryTimer: null, listeners: new Set(), version: 0,
+      inflight: null, abortController: null, retryTimer: null, listeners: new Set(), version: 0,
     });
   }
   return store.get(key) as Entry<T>;
@@ -125,6 +126,7 @@ async function doFetch<T>(
   if (e.inflight && attempt === 0) return e.inflight;
 
   const ac = new AbortController();
+  e.abortController = ac;
   const t = setTimeout(() => ac.abort(), opts.timeout);
 
   const p = (async (): Promise<T> => {
@@ -133,16 +135,18 @@ async function doFetch<T>(
     try {
       const data = await fetcher(key, ac.signal);
       clearTimeout(t);
+      if (e.abortController !== ac) return data;
       e.data = data; e.error = null; e.fetchedAt = Date.now();
-      e.validating = false; e.inflight = null;
+      e.validating = false; e.inflight = null; e.abortController = null;
       emit(e);
       opts.onSuccess(data);
       return data;
     } catch (err) {
       clearTimeout(t);
       const error = err instanceof Error ? err : new Error(String(err));
+      if (e.abortController !== ac) throw error;
       if (error.name === 'AbortError') {
-        e.validating = false; e.inflight = null; emit(e);
+        e.validating = false; e.inflight = null; e.abortController = null; emit(e);
         throw error;
       }
       if (attempt < opts.retryCount) {
@@ -156,7 +160,7 @@ async function doFetch<T>(
         });
       }
       e.error = error; e.fetchedAt = Date.now();
-      e.validating = false; e.inflight = null;
+      e.validating = false; e.inflight = null; e.abortController = null;
       emit(e);
       opts.onError(error);
       throw error;
@@ -198,6 +202,8 @@ export const queryClient = {
   invalidate<T>(key: string, fetcher: Fetcher<T>, opts?: Partial<QueryOptions<T>>): Promise<T> {
     const e = entry<T>(key);
     if (e.retryTimer) { clearTimeout(e.retryTimer); e.retryTimer = null; }
+    e.abortController?.abort();
+    e.abortController = null;
     e.inflight = null;
     return doFetch(key, fetcher, resolveOpts(opts));
   },

@@ -913,23 +913,24 @@ class NotionClient:
             data["part_number"] = str(part_number)
 
         # For multipart we must NOT set Content-Type ourselves — requests sets
-        # it with the boundary. Build minimal headers manually.
-        headers = {
-            "Authorization": f"Bearer {self.access_token}",
-            "Notion-Version": NOTION_VERSION,
-            "User-Agent": USER_AGENT,
-            "Accept": "application/json",
-        }
-
-        return self._retry_with_refresh(
-            lambda: self._request(
+        # it with the boundary. Build headers inside the callable so a token
+        # refresh produces fresh Authorization on retry.
+        def _do() -> Dict[str, Any]:
+            headers = {
+                "Authorization": f"Bearer {self.access_token}",
+                "Notion-Version": NOTION_VERSION,
+                "User-Agent": USER_AGENT,
+                "Accept": "application/json",
+            }
+            return self._request(
                 "POST",
                 f"/file_uploads/{upload_id}/send",
                 _headers_override=headers,
                 _files=files,
                 _data=data,
             )
-        )
+
+        return self._retry_with_refresh(_do)
 
     def complete_file_upload(self, upload_id: str) -> Dict[str, Any]:
         return self._retry_with_refresh(
