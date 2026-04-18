@@ -1124,6 +1124,53 @@ def initialize_tables():
                     CREATE INDEX IF NOT EXISTS idx_audit_log_org_created ON audit_log(org_id, created_at DESC);
                     CREATE INDEX IF NOT EXISTS idx_audit_log_action ON audit_log(org_id, action);
                 """,
+                "terraform_datadog_resources": """
+                    CREATE TABLE IF NOT EXISTS terraform_datadog_resources (
+                        id SERIAL PRIMARY KEY,
+                        user_id VARCHAR(255) NOT NULL,
+                        org_id VARCHAR(255),
+                        repo_full_name VARCHAR(512) NOT NULL,
+                        commit_sha VARCHAR(64),
+                        resource_type VARCHAR(64) NOT NULL,
+                        resource_address VARCHAR(512) NOT NULL,
+                        file_path VARCHAR(1024) NOT NULL,
+                        line_start INTEGER,
+                        line_end INTEGER,
+                        monitor_name TEXT,
+                        query_hash VARCHAR(64),
+                        scope TEXT,
+                        silenced_inline JSONB,
+                        raw_block TEXT,
+                        indexed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE(user_id, repo_full_name, resource_address, file_path)
+                    );
+
+                    CREATE INDEX IF NOT EXISTS idx_tf_dd_user_repo ON terraform_datadog_resources(user_id, repo_full_name);
+                    CREATE INDEX IF NOT EXISTS idx_tf_dd_query_hash ON terraform_datadog_resources(user_id, query_hash);
+                    CREATE INDEX IF NOT EXISTS idx_tf_dd_monitor_name ON terraform_datadog_resources(user_id, monitor_name);
+                    CREATE INDEX IF NOT EXISTS idx_tf_dd_type ON terraform_datadog_resources(user_id, resource_type);
+                """,
+                "datadog_silence_drift": """
+                    CREATE TABLE IF NOT EXISTS datadog_silence_drift (
+                        id SERIAL PRIMARY KEY,
+                        user_id VARCHAR(255) NOT NULL,
+                        org_id VARCHAR(255),
+                        monitor_id BIGINT,
+                        monitor_name TEXT,
+                        scope TEXT,
+                        downtime_id VARCHAR(128),
+                        muted_since TIMESTAMP,
+                        source VARCHAR(32),
+                        matched_tf_file VARCHAR(1024),
+                        tf_match_confidence VARCHAR(16),
+                        original_message TEXT,
+                        computed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE(user_id, monitor_id, scope, source, downtime_id)
+                    );
+
+                    CREATE INDEX IF NOT EXISTS idx_dd_drift_user ON datadog_silence_drift(user_id, computed_at DESC);
+                    CREATE INDEX IF NOT EXISTS idx_dd_drift_monitor ON datadog_silence_drift(user_id, monitor_id);
+                """,
             }
 
             # List of tables that should have RLS enabled and a policy applied.
@@ -1173,6 +1220,8 @@ def initialize_tables():
             rls_tables.append("incident_lifecycle_events")
             rls_tables.append("github_connected_repos")
             rls_tables.append("execution_steps")
+            rls_tables.append("terraform_datadog_resources")
+            rls_tables.append("datadog_silence_drift")
 
 
             # Migration: Add rca_celery_task_id column to incidents table if it doesn't exist
