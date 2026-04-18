@@ -28,7 +28,7 @@ DANGEROUS_PATTERNS = [
     # Dangerous flags
     r"--force",
     r"--hard",
-    r"--all\b",
+    r"--all(?!-)\b",
     r"-rf\b",
     r"--no-preserve-root",
     # Shell injection risks
@@ -267,19 +267,20 @@ Return ONLY a valid JSON array, no markdown formatting, no explanation:
 
             command = item.get("command")
 
-            # Filter out dangerous commands
+            risk = item.get("risk", "safe")
+
             if command and not is_command_safe(command):
                 logger.warning(
-                    f"[SuggestionExtractor] Blocked dangerous command: {command[:100]}"
+                    f"[SuggestionExtractor] Flagged dangerous command as high risk: {command[:100]}"
                 )
-                continue
+                risk = "high"
 
             suggestions.append(
                 Suggestion(
                     title=title,
                     description=item.get("description", "").strip(),
                     type=item.get("type", "diagnostic"),
-                    risk=item.get("risk", "safe"),
+                    risk=risk,
                     command=command,
                 )
             )

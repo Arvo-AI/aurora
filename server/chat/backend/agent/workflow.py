@@ -64,6 +64,8 @@ class Workflow:
         self.app = self.get_compiled_workflow()
         self._last_state = None
         self._ui_state = None  # Store UI state to save with messages
+        self._stream_text_by_id: dict[str, str] = {}
+        self._history_prefix_len: int = 0
 
     async def _wait_for_ongoing_tool_calls(self):
         """Waits for any tool calls that are currently in progress to complete."""
@@ -847,6 +849,14 @@ class Workflow:
         from chat.backend.agent.utils.chat_context_manager import ChatContextManager
         from chat.backend.agent.utils.tool_context_capture import ToolContextCapture
 
+        # Snapshot before any history is prepended; used to slice out this
+        # turn's new messages for the append-only UI save.
+        new_turn_input_count = len(input_state.messages)
+
+        # Reset per-turn; recovers streamed AI text on cancellation when
+        # LangGraph hasn't committed the final AIMessage to state yet.
+        self._stream_text_by_id.clear()
+
         # Initialize tool context capture for this session
         tool_capture = None
         if input_state.session_id and input_state.user_id:
@@ -866,12 +876,12 @@ class Workflow:
             import time as _time
             _ctx_start = _time.perf_counter()
             existing_context = LLMContextManager.load_context_history(
-                input_state.session_id, 
+                input_state.session_id,
                 input_state.user_id
             )
             _ctx_ms = (_time.perf_counter() - _ctx_start) * 1000.0
             logger.info(f"Context load took {_ctx_ms:.1f} ms for session {input_state.session_id}")
-            
+
             if existing_context:
                 rca_info = self._get_rca_context_for_session(
                     input_state.session_id, input_state.user_id
@@ -939,6 +949,11 @@ class Workflow:
                             input_state.messages = combined_messages
                             logger.info(f"Migrated and loaded {len(existing_context)} messages for legacy session {input_state.session_id}")
         
+        # Number of history messages prepended above; anything after this index
+        # in _last_state.messages belongs to this turn.
+        history_prefix_len = len(input_state.messages) - new_turn_input_count
+        self._history_prefix_len = history_prefix_len
+
         # Log initial state
         logger.info(f"Starting workflow with session_id={input_state.session_id}, user_id={input_state.user_id}")
         
@@ -999,6 +1014,11 @@ class Workflow:
 
                         # Only yield if we have actual text content
                         if content:
+                            chunk_id = getattr(chunk_obj, 'id', None)
+                            if chunk_id:
+                                self._stream_text_by_id[chunk_id] = (
+                                    self._stream_text_by_id.get(chunk_id, "") + content
+                                )
                             _model_turn_tokens += 1
                             yield ("token", content)
                             if _token_count <= 5:
@@ -1047,6 +1067,11 @@ class Workflow:
                                 content = output.additional_kwargs.get("reasoning_content", "")
                             if content:
                                 logger.info(f"[STREAM FALLBACK] Extracted {len(content)} chars from on_chat_model_end (streaming didn't fire)")
+                                msg_id = getattr(output, 'id', None)
+                                if msg_id:
+                                    self._stream_text_by_id[msg_id] = (
+                                        self._stream_text_by_id.get(msg_id, "") + content
+                                    )
                                 yield ("token", content)
 
                         # Extract provider-reported usage_metadata for accurate tracking
@@ -1128,6 +1153,7 @@ class Workflow:
             if session_id and user_id and messages and len(messages) > 1:
                 messages_full = messages
                 messages_for_context = messages_full
+
                 # Check if context compression is needed
                 model = self._get_state_attr(self._last_state, 'model')
                 if model:
@@ -1137,18 +1163,23 @@ class Workflow:
                     if was_compressed:
                         messages_for_context = compressed_messages
                         logger.info(f"Context compression: {len(compressed_messages)} messages preserved for session {session_id}")
-                
+
                 # Save context history (complete conversation including AI responses and tool calls)
                 success = LLMContextManager.save_context_history(session_id, user_id, messages_for_context, tool_capture)
                 if success:
                     logger.debug(f"[WORKFLOW FINAL] Successfully saved final context for session {session_id} ({len(messages_for_context)} messages)")
                 else:
                     logger.warning(f"[WORKFLOW FINAL] Failed to save final context for session {session_id}")
-                
-                # Save UI-formatted messages (complete conversation for UI display)
+
+                # Append only this turn's new messages to the UI column so RCA
+                # compression (or any future state rewrite) can't truncate the
+                # persisted chat history.
+                turn_langchain = messages[history_prefix_len:]
                 tool_capture = getattr(self.agent, 'tool_capture_instance', None)
-                ui_messages = self._convert_to_ui_messages(messages_full, tool_capture)
-                ui_success = self._save_ui_messages(session_id, user_id, ui_messages, self._ui_state)
+                turn_ui_messages = self._convert_to_ui_messages(turn_langchain, tool_capture)
+                ui_success = self._append_new_turn_ui_messages(
+                    session_id, user_id, turn_ui_messages, self._ui_state
+                )
                 logger.debug(f"[WORKFLOW FINAL] UI messages save success: {ui_success}")
             elif session_id and user_id and messages and len(messages) == 1:
                 logger.debug(f"[WORKFLOW FINAL] Skipping save - only user message present (already saved immediately)")
@@ -1307,6 +1338,19 @@ class Workflow:
         
         # Remove duplicates
         final_messages = self._deduplicate_messages(consolidated_messages)
+
+        # Recover text streamed to UI but missing from the final AIMessage
+        # (cancellation before LangGraph commits the complete response).
+        if self._stream_text_by_id:
+            for msg in final_messages:
+                if not isinstance(msg, AIMessage):
+                    continue
+                current = msg.content if isinstance(msg.content, str) else ""
+                if current:
+                    continue
+                recovered = self._stream_text_by_id.get(getattr(msg, "id", None), "")
+                if recovered:
+                    msg.content = recovered
         
         # DEBUG: Log all ToolMessage IDs after deduplication
         for i, msg in enumerate(final_messages):
@@ -1580,8 +1624,99 @@ class Workflow:
             logger.error(f"Error saving UI messages: {e}")
             return False
 
+    def _append_new_turn_ui_messages(
+        self,
+        session_id: str,
+        user_id: str,
+        turn_ui_messages: list,
+        ui_state: Optional[dict] = None,
+    ) -> bool:
+        """Append this turn's UI messages to chat_sessions.messages (never overwrite).
+
+        Dedupes the leading user bubble against the last existing message,
+        since handle_immediate_save already wrote it on receipt.
+        """
+        try:
+            from utils.db.connection_pool import db_pool
+            from datetime import datetime
+
+            if not turn_ui_messages and ui_state is None:
+                return True
+
+            with db_pool.get_user_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
+                conn.commit()
+
+                cursor.execute(
+                    "SELECT messages FROM chat_sessions WHERE id = %s AND user_id = %s FOR UPDATE",
+                    (session_id, user_id),
+                )
+                row = cursor.fetchone()
+                if row is None:
+                    logger.info(
+                        f"Session {session_id} not found for UI append — frontend will create it"
+                    )
+                    return True
+
+                existing = row[0] if row[0] else []
+                if not isinstance(existing, list):
+                    existing = []
+
+                to_append = list(turn_ui_messages)
+                if (
+                    to_append
+                    and existing
+                    and to_append[0].get('sender') == 'user'
+                    and existing[-1].get('sender') == 'user'
+                    and (existing[-1].get('text') or '') == (to_append[0].get('text') or '')
+                ):
+                    to_append = to_append[1:]
+
+                next_num = len(existing) + 1
+                for m in to_append:
+                    m['message_number'] = next_num
+                    next_num += 1
+
+                merged = existing + to_append
+
+                if ui_state is not None:
+                    cursor.execute(
+                        """
+                        UPDATE chat_sessions
+                        SET messages = %s, ui_state = %s, updated_at = %s
+                        WHERE id = %s AND user_id = %s
+                        """,
+                        (json.dumps(merged), json.dumps(ui_state), datetime.now(), session_id, user_id),
+                    )
+                else:
+                    cursor.execute(
+                        """
+                        UPDATE chat_sessions
+                        SET messages = %s, updated_at = %s
+                        WHERE id = %s AND user_id = %s
+                        """,
+                        (json.dumps(merged), datetime.now(), session_id, user_id),
+                    )
+                conn.commit()
+                logger.info(
+                    f"Appended {len(to_append)} UI messages (total {len(merged)}) "
+                    f"for session {session_id}"
+                )
+                return True
+
+        except Exception as e:
+            # Broad catch: DB/persistence errors must not abort the workflow.
+            logger.error(f"Error appending UI messages: {e}")
+            return False
+
     def _associate_tool_calls_with_output(self, ui_messages, tool_messages):
         """Associate tool calls with output in the UI messages."""
+
+        # Track which ToolMessages weren't matched so we can positionally
+        # recover them — IDs can drift across the LangGraph state boundary,
+        # especially on cancellation before tool_call_id restoration runs.
+        unmatched_tool_messages: list = []
 
         for msg in tool_messages:
             tool_call_id = getattr(msg, 'tool_call_id', None)
@@ -1599,8 +1734,9 @@ class Workflow:
                 command_matching = None
             
             if not tool_call_id:
+                unmatched_tool_messages.append(msg)
                 continue
-                
+
             updated = False
 
             # Look through ALL UI messages and check if ANY tool call matches the tool_call_id
@@ -1635,6 +1771,32 @@ class Workflow:
                     
                     if updated:
                         break
-            
+
+            if not updated:
+                unmatched_tool_messages.append(msg)
+
+        # Positional fallback: associate any unmatched ToolMessages with the
+        # remaining 'running' tool calls in order. Covers cancellations where
+        # _consolidate_message_chunks' ID restoration was skipped due to
+        # count mismatch.
+        if unmatched_tool_messages:
+            running_tool_calls = [
+                tc
+                for ui_msg in ui_messages
+                if ui_msg.get('sender') == 'bot' and ui_msg.get('toolCalls')
+                for tc in ui_msg['toolCalls']
+                if tc.get('status') == 'running'
+            ]
+            if len(unmatched_tool_messages) != len(running_tool_calls):
+                logger.warning(
+                    f"Positional tool-output fallback: {len(unmatched_tool_messages)} unmatched "
+                    f"ToolMessages vs {len(running_tool_calls)} running UI toolCalls — "
+                    f"extras will be dropped"
+                )
+            for msg, tc in zip(unmatched_tool_messages, running_tool_calls):
+                tc['output'] = str(getattr(msg, 'content', ''))
+                tc['status'] = 'completed'
+                tc['timestamp'] = datetime.now().isoformat()
+
         return ui_messages
         
