@@ -796,9 +796,16 @@ def build_suggestions_blocks(incident_id: str, suggestions: list, max_suggestion
     """
     if not suggestions:
         return []
-    
+
+    eligible = [
+        s for s in suggestions
+        if s.get('command') and s.get('risk') != 'high'
+    ][:max_suggestions]
+    if not eligible:
+        return []
+
     blocks = []
-    
+
     # Header
     blocks.append({
         "type": "header",
@@ -807,15 +814,8 @@ def build_suggestions_blocks(incident_id: str, suggestions: list, max_suggestion
             "text": "Suggested Next Steps"
         }
     })
-    
-    # Show up to max_suggestions
-    for i, suggestion in enumerate(suggestions[:max_suggestions]):
-        if not suggestion.get('command'):
-            continue  # Skip suggestions without commands
 
-        if suggestion.get('risk') == 'high':
-            continue  # Skip dangerous commands — not safe for one-click execution
-
+    for suggestion in eligible:
         # Validate required fields
         title = suggestion.get('title', 'Action')
         if not title:

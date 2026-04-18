@@ -757,9 +757,7 @@ async def handle_connection(websocket) -> None:
                         logger.info(f"Cancelled {cancelled_count} pending confirmation(s) for session {session_id}")
 
                     # Retrieve the running task and its workflow for this session
-                    task_entry = session_tasks.get(session_id)
-                    running = task_entry[0] if task_entry else None
-                    cancel_wf = task_entry[1] if task_entry else None
+                    running, cancel_wf = session_tasks.get(session_id, (None, None))
 
                     logger.debug(f"Attempting to cancel running workflow task for session {session_id}")
 
@@ -1254,6 +1252,7 @@ async def handle_connection(websocket) -> None:
             
             task = asyncio.create_task(process_workflow_async(wf, state, websocket, user_id))
             session_tasks[effective_session_id] = (task, wf)
+            task.add_done_callback(lambda _t, _sid=effective_session_id: session_tasks.pop(_sid, None))
 
             continue  # Immediately return to listening for next message
 
