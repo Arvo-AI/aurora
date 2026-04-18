@@ -756,8 +756,10 @@ async def handle_connection(websocket) -> None:
                     if cancelled_count > 0:
                         logger.info(f"Cancelled {cancelled_count} pending confirmation(s) for session {session_id}")
 
-                    # Retrieve the running task for this session
-                    running = session_tasks.get(session_id)
+                    # Retrieve the running task and its workflow for this session
+                    task_entry = session_tasks.get(session_id)
+                    running = task_entry[0] if task_entry else None
+                    cancel_wf = task_entry[1] if task_entry else None
 
                     logger.debug(f"Attempting to cancel running workflow task for session {session_id}")
 
@@ -772,22 +774,22 @@ async def handle_connection(websocket) -> None:
                             logger.info(f"Workflow task for session {session_id} acknowledged cancellation")
 
                         # Consolidate any remaining message chunks into full messages
-                        if wf:
+                        if cancel_wf:
                             # Wait for any tool calls to complete before consolidating
-                            await wf._wait_for_ongoing_tool_calls()
+                            await cancel_wf._wait_for_ongoing_tool_calls()
 
                             # Collect any remaining tool messages before consolidation
                             # This adds them to the state so they are not lost
-                            wf._collect_remaining_tool_messages()
+                            cancel_wf._collect_remaining_tool_messages()
 
-                            wf._consolidate_message_chunks()
+                            cancel_wf._consolidate_message_chunks()
 
                             # Persist the consolidated context so the chat can be resumed later
-                            if wf._last_state:
+                            if cancel_wf._last_state:
                                 messages = (
-                                    wf._last_state.get('messages', [])
-                                    if hasattr(wf._last_state, 'get')
-                                    else getattr(wf._last_state, 'messages', [])
+                                    cancel_wf._last_state.get('messages', [])
+                                    if hasattr(cancel_wf._last_state, 'get')
+                                    else getattr(cancel_wf._last_state, 'messages', [])
                                 )
 
                                 if messages and session_id and user_id:
@@ -799,7 +801,7 @@ async def handle_connection(websocket) -> None:
                                     )
                                     messages.append(interrupt_message)
 
-                                    tool_capture = getattr(wf.agent, 'tool_capture_instance', None)
+                                    tool_capture = getattr(cancel_wf.agent, 'tool_capture_instance', None)
                                     saved = LLMContextManager.save_context_history(
                                         session_id,
                                         user_id,
@@ -817,11 +819,11 @@ async def handle_connection(websocket) -> None:
                                     
                                     # Append this turn's partial UI content so cancellation
                                     # never overwrites history from prior turns.
-                                    history_prefix_len = getattr(wf, "_history_prefix_len", 0)
+                                    history_prefix_len = getattr(cancel_wf, "_history_prefix_len", 0)
                                     turn_langchain = messages[history_prefix_len:]
-                                    turn_ui_messages = wf._convert_to_ui_messages(turn_langchain, tool_capture)
-                                    ui_saved = wf._append_new_turn_ui_messages(
-                                        session_id, user_id, turn_ui_messages, wf._ui_state
+                                    turn_ui_messages = cancel_wf._convert_to_ui_messages(turn_langchain, tool_capture)
+                                    ui_saved = cancel_wf._append_new_turn_ui_messages(
+                                        session_id, user_id, turn_ui_messages, cancel_wf._ui_state
                                     )
                                     if ui_saved:
                                         logger.info(f"Successfully saved UI messages after cancellation for session {session_id}")
@@ -1251,7 +1253,7 @@ async def handle_connection(websocket) -> None:
             wf._ui_state = ui_state
             
             task = asyncio.create_task(process_workflow_async(wf, state, websocket, user_id))
-            session_tasks[effective_session_id] = task
+            session_tasks[effective_session_id] = (task, wf)
 
             continue  # Immediately return to listening for next message
 
