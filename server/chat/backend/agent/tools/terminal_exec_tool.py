@@ -22,6 +22,8 @@ _SAFE_ENV_KEYS = {
     "PATH", "HOME", "USER", "SHELL", "TERM", "LANG", "LC_ALL", "LC_CTYPE",
     "TZ", "HOSTNAME", "PWD", "LOGNAME",
     "ENABLE_POD_ISOLATION",
+    "TMPDIR", "TEMP", "TMP",
+    "SSL_CERT_FILE", "REQUESTS_CA_BUNDLE",
 }
 
 

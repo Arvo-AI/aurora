@@ -14,8 +14,12 @@ def _resolve_org_id(user_id: str) -> Optional[str]:
     """Resolve org_id for org-aware queries."""
     try:
         from utils.auth.stateless_auth import resolve_org_id
-        return resolve_org_id(user_id)
-    except Exception:
+        org = resolve_org_id(user_id)
+        if not org:
+            logger.warning("[CONN-META] Could not resolve org_id for user %s — RLS context will not be set", user_id)
+        return org
+    except Exception as e:
+        logger.warning("[CONN-META] Failed to resolve org_id for user %s: %s — RLS context will not be set", user_id, e)
         return None
 
 

@@ -12,6 +12,7 @@ load_dotenv()
 import logging
 import os
 import secrets
+import hmac
 from flask import Flask
 from flask_cors import CORS
 from werkzeug.middleware.proxy_fix import ProxyFix
@@ -221,6 +222,13 @@ CORS(app, origins=FRONTEND_URL, supports_credentials=True,
 _INTERNAL_API_SECRET = os.getenv("INTERNAL_API_SECRET", "")
 _OPEN_PATHS = frozenset(("/api/auth/login", "/api/auth/register", "/health"))
 
+if not _INTERNAL_API_SECRET:
+    logging.getLogger(__name__).warning(
+        "INTERNAL_API_SECRET is not set — internal secret verification is DISABLED. "
+        "All requests will be accepted without X-Internal-Secret header validation. "
+        "Set INTERNAL_API_SECRET in .env to enable this security layer."
+    )
+
 @app.before_request
 def verify_internal_api_secret():
     """Reject requests that don't carry a valid INTERNAL_API_SECRET header.
@@ -240,7 +248,7 @@ def verify_internal_api_secret():
         return None
 
     provided = request.headers.get("X-Internal-Secret", "")
-    if not provided or provided != _INTERNAL_API_SECRET:
+    if not provided or not hmac.compare_digest(provided, _INTERNAL_API_SECRET):
         return jsonify({"error": "Forbidden: invalid or missing X-Internal-Secret header"}), 403
 
     return None

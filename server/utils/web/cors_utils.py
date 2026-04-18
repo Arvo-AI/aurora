@@ -24,7 +24,7 @@ def create_cors_response(success=True):
         logger.info("CORS: rejected origin %s, falling back to FRONTEND_URL", origin or "(empty)")
         resp.headers.add('Access-Control-Allow-Origin', FRONTEND_URL)
     resp.headers.add('Vary', 'Origin')
-    resp.headers.add('Access-Control-Allow-Headers', 'Content-Type, X-Provider, X-Requested-With, X-User-ID, X-Org-ID, Authorization')
+    resp.headers.add('Access-Control-Allow-Headers', 'Content-Type, X-Provider, X-Requested-With, X-User-ID, X-Org-ID, Authorization, X-Internal-Secret')
     resp.headers.add('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS')
     resp.headers.add('Access-Control-Allow-Credentials', 'true')
     resp.headers.add('Content-Type', 'application/json')
