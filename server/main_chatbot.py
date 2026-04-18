@@ -791,9 +791,6 @@ async def handle_connection(websocket) -> None:
                                 )
 
                                 if messages and session_id and user_id:
-                                    # Add a strong cancellation message directly to the context
-                                    # Using message with strong formatting to create a powerful interrupt signal
-                                    # This is marked as a human message so it appears as if the user is cancelling the request. It is not saved to the UI (messages) field only in the context (llm_context_history) field.
                                     interrupt_message = HumanMessage(
                                         content="[URGENT CANCELLATION] The previous request has been cancelled. **CRITICAL INSTRUCTION:** You MUST abandon the previous plan entirely. Acknowledge the cancellation internally and respond to the user's very latest message."
                                     )
@@ -814,7 +811,7 @@ async def handle_connection(websocket) -> None:
                                         logger.warning(
                                             f"Failed to save context after cancellation for session {session_id}"
                                         )
-                                    
+
                                     # Append this turn's partial UI content so cancellation
                                     # never overwrites history from prior turns.
                                     history_prefix_len = getattr(cancel_wf, "_history_prefix_len", 0)
@@ -827,6 +824,26 @@ async def handle_connection(websocket) -> None:
                                         logger.info(f"Successfully saved UI messages after cancellation for session {session_id}")
                                     else:
                                         logger.warning(f"Failed to save UI messages after cancellation for session {session_id}")
+
+                            elif cancel_wf._stream_text_by_id and session_id and user_id:
+                                # _last_state is None (cancelled before LangGraph committed
+                                # any state) but we streamed partial text to the frontend.
+                                # Save a partial bot message so it survives a refresh.
+                                partial_text = "".join(cancel_wf._stream_text_by_id.values())
+                                if partial_text.strip():
+                                    partial_ui = [{
+                                        'message_number': 1,
+                                        'text': partial_text,
+                                        'sender': 'bot',
+                                        'isCompleted': True,
+                                    }]
+                                    ui_saved = cancel_wf._append_new_turn_ui_messages(
+                                        session_id, user_id, partial_ui, cancel_wf._ui_state
+                                    )
+                                    if ui_saved:
+                                        logger.info(f"Saved partial streamed text ({len(partial_text)} chars) after early cancellation for session {session_id}")
+                                    else:
+                                        logger.warning(f"Failed to save partial streamed text after early cancellation for session {session_id}")
                 
                 # Send END status to frontend after cancellation cleanup
                 try:
