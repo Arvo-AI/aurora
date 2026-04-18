@@ -187,7 +187,7 @@ def azure_callback():
 
         # Store the access token in session
         azure_access_token = azure_result.get("access_token")
-        logging.debug(f"Access token: {azure_access_token}");
+        logging.debug("Access token received (length=%d)", len(azure_access_token) if azure_access_token else 0)
         if not azure_access_token:
             raise ValueError("Azure access token is missing in response.")
 
