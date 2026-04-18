@@ -1,3 +1,7 @@
+"""
+AWS Security Hub route handlers.
+Provides webhooks for EventBridge and API endpoints for fetching processed findings.
+"""
 import logging
 import uuid
 import hmac

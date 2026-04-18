@@ -1,3 +1,7 @@
+"""
+Test logic for AWS Security Hub.
+Provides end-to-end testing for routes and Celery background tasks.
+"""
 import os
 import sys
 import json

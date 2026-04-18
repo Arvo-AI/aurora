@@ -1,3 +1,6 @@
+"""
+Background tasks for processing AWS Security Hub findings.
+"""
 import logging
 from celery import shared_task
 from psycopg2.extras import Json
