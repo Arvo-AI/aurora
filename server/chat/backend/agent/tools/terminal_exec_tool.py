@@ -356,15 +356,6 @@ def terminal_exec(
         "stratum+tcp",
     ]
     
-    # Commands that attempt to dump the process environment.
-    # The sanitized env already strips secrets, but blocking these outright
-    # prevents accidental leakage if the allow-list is ever expanded.
-    _ENV_DUMP_PATTERNS = [
-        "printenv",
-        "/proc/self/environ",
-        "cat /proc/",
-    ]
-    
     for pattern in dangerous_patterns:
         if pattern in command:
             logger.warning(f"Blocked dangerous command for user {user_id}: {command}")
@@ -373,21 +364,6 @@ def terminal_exec(
                 "error": f"Command blocked for safety: contains dangerous pattern"
             })
 
-    for pattern in _ENV_DUMP_PATTERNS:
-        if pattern in cmd_lower:
-            logger.warning(f"Blocked environment inspection command for user {user_id}: {command}")
-            return json.dumps({
-                "success": False,
-                "error": "Command blocked: inspecting the server environment is not permitted"
-            })
-
-    # Block bare "env" command (must be the entire command or start of a pipeline)
-    if re.match(r'^\s*env\s*$', cmd_lower) or re.match(r'^\s*env\s*[|;>&]', cmd_lower):
-        logger.warning(f"Blocked environment inspection command for user {user_id}: {command}")
-        return json.dumps({
-            "success": False,
-            "error": "Command blocked: inspecting the server environment is not permitted"
-        })
 
     if _contains_forbidden_elevation(command):
         logger.warning(f"Blocked privilege escalation attempt for user {user_id}: {command}")
