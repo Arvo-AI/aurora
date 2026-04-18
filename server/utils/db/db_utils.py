@@ -1192,6 +1192,7 @@ def initialize_tables():
             rls_tables.append("incident_lifecycle_events")
             rls_tables.append("github_connected_repos")
             rls_tables.append("execution_steps")
+            rls_tables.append("aws_security_findings")
 
 
             # Migration: Add rca_celery_task_id column to incidents table if it doesn't exist

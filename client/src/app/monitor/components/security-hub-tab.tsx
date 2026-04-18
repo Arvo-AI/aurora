@@ -2,7 +2,7 @@ import { useState, useCallback } from 'react';
 import { useQuery, jsonFetcher } from '@/lib/query';
 import { ShieldAlert, AlertTriangle, AlertCircle, Info, CheckCircle2, ChevronRight, ChevronDown, Clock, Activity, Zap } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
-import { StatCard, StatCardSkeleton, ChartSkeleton, EmptyState, ChartPanel } from './charts';
+import { StatCard, StatCardSkeleton, ChartSkeleton, EmptyState, ChartPanel } from '@/app/monitor/components/charts';
 
 interface SecurityFinding {
   finding_id: string;
@@ -16,6 +16,9 @@ interface SecurityFinding {
   updated_at: string;
 }
 
+/**
+ * Renders a color-coded severity badge for a given risk level.
+ */
 function severityBadge(severity: string | null) {
   if (!severity) return null;
   const s = severity.toLowerCase();
@@ -32,6 +35,10 @@ function severityBadge(severity: string | null) {
   );
 }
 
+/**
+ * Main dashboard tab component for displaying AWS Security Hub findings.
+ * Includes summary statistics and a list of expandable threat cards.
+ */
 export default function SecurityHubTab({ }: { period?: string }) {
   const { data: findings = [], isLoading } = useQuery<SecurityFinding[]>(
     '/api/aws/securityhub/findings?limit=50',
@@ -87,6 +94,10 @@ export default function SecurityHubTab({ }: { period?: string }) {
   );
 }
 
+/**
+ * Individual expandable card component representing a single security finding.
+ * Shows finding details and AI-generated agentic summaries when expanded.
+ */
 function FindingCard({ finding, expanded, onToggle }: { finding: SecurityFinding; expanded: boolean; onToggle: () => void }) {
   return (
     <div className={`rounded-lg border transition-all duration-200 ${

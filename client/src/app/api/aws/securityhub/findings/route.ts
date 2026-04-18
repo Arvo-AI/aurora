@@ -3,6 +3,10 @@ import { getAuthenticatedUser } from '@/lib/auth-helper';
 
 const API_BASE_URL = process.env.BACKEND_URL;
 
+/**
+ * GET API route to fetch Security Hub findings for the authenticated user.
+ * Proxies the request to the backend while forwarding query parameters.
+ */
 export async function GET(request: NextRequest) {
   try {
     if (!API_BASE_URL) {
@@ -19,8 +23,9 @@ export async function GET(request: NextRequest) {
     }
 
     const { headers: authHeaders } = authResult;
+    const query = new URL(request.url).search;
 
-    const response = await fetch(`${API_BASE_URL}/securityhub/findings`, {
+    const response = await fetch(`${API_BASE_URL}/securityhub/findings${query}`, {
       method: 'GET',
       headers: authHeaders,
       credentials: 'include',

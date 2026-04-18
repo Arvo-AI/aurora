@@ -17,13 +17,12 @@ securityhub_bp = Blueprint("securityhub", __name__)
 
 EVENTBRIDGE_EVENTS_RECEIVED = Counter(
     "aws_securityhub_events_received_total", 
-    "Total EventBridge Security Hub events received",
-    ["org_id"]
+    "Total EventBridge Security Hub events received"
 )
 EVENTBRIDGE_EVENTS_FAILED = Counter(
     "aws_securityhub_events_failed_total", 
     "Total EventBridge Security Hub events failed",
-    ["org_id", "reason"]
+    ["reason"]
 )
 EVENTBRIDGE_PROCESSING_LATENCY = Histogram(
     "aws_securityhub_processing_latency_seconds",
@@ -65,45 +64,64 @@ def _validate_api_key(org_id: str, api_key: str) -> bool:
 @securityhub_bp.route("/webhook/<org_id>", methods=["POST", "OPTIONS"])
 @EVENTBRIDGE_PROCESSING_LATENCY.time()
 def webhook(org_id: str):
+    """
+    Handle POST requests for AWS Security Hub EventBridge webhooks.
+    Includes API key validation and enqueues background processing.
+    """
     if request.method == "OPTIONS":
         return create_cors_response()
 
     api_key = request.headers.get("x-api-key")
     if not api_key:
-        EVENTBRIDGE_EVENTS_FAILED.labels(org_id=org_id, reason="missing_api_key").inc()
-        return jsonify({"error": "Missing x-api-keyheader"}), 401
+        EVENTBRIDGE_EVENTS_FAILED.labels(reason="missing_api_key").inc()
+        logger.warning(f"[SECURITY_HUB] Missing x-api-key header for org {org_id}")
+        return jsonify({"error": "Missing x-api-key header"}), 401
 
     if not _validate_api_key(org_id, api_key):
-        EVENTBRIDGE_EVENTS_FAILED.labels(org_id=org_id, reason="invalid_api_key").inc()
+        EVENTBRIDGE_EVENTS_FAILED.labels(reason="invalid_api_key").inc()
+        logger.warning(f"[SECURITY_HUB] Invalid API Key for org {org_id}")
         return jsonify({"error": "Invalid API Key"}), 403
 
     payload = request.get_json(silent=True)
     if not payload:
-        EVENTBRIDGE_EVENTS_FAILED.labels(org_id=org_id, reason="invalid_json").inc()
+        EVENTBRIDGE_EVENTS_FAILED.labels(reason="invalid_json").inc()
+        logger.warning(f"[SECURITY_HUB] Invalid JSON payload for org {org_id}")
         return jsonify({"error": "Invalid JSON payload"}), 400
 
     source = payload.get("source")
     if source != "aws.securityhub":
-        EVENTBRIDGE_EVENTS_FAILED.labels(org_id=org_id, reason="invalid_source").inc()
+        EVENTBRIDGE_EVENTS_FAILED.labels(reason="invalid_source").inc()
+        logger.warning(f"[SECURITY_HUB] Invalid source {source} for org {org_id}")
         return jsonify({"error": "Invalid event source. Must be aws.securityhub"}), 400
 
-    EVENTBRIDGE_EVENTS_RECEIVED.labels(org_id=org_id).inc()
+    EVENTBRIDGE_EVENTS_RECEIVED.inc()
     logger.info(f"[SECURITY_HUB] Received valid EventBridge webhook for org {org_id}")
 
-    # Enqueue background task to process and parse the findings
-    process_securityhub_finding.delay(payload, org_id)
+    try:
+        # Enqueue background task to process and parse the findings
+        process_securityhub_finding.delay(payload, org_id)
+    except Exception as e:
+        logger.error(f"[SECURITY_HUB] Enqueue failure for org {org_id}, payload {payload}: {e}")
+        EVENTBRIDGE_EVENTS_FAILED.labels(reason="enqueue_failure").inc()
+        return jsonify({"error": "Failed to enqueue processing task"}), 500
 
     return jsonify({"received": True}), 200
 
 @securityhub_bp.route("/findings", methods=["OPTIONS"])
 def get_findings_options():
+    """Handle CORS preflight OPTIONS requests for findings endpoint."""
     return create_cors_response()
 
 @securityhub_bp.route("/findings", methods=["GET"])
 @require_auth_only
 def get_findings(user_id):
+    """
+    Fetch AWS Security Hub findings for the authenticated user's organization.
+    Supports a limit parameter bounded between 1 and 200.
+    """
     org_id = get_org_id_from_request()
     limit = request.args.get('limit', 50, type=int)
+    limit = max(1, min(limit, 200))
     
     try:
         with db_pool.get_admin_connection() as conn:
