@@ -151,7 +151,7 @@ def setup_aws_credentials_cached(user_id: str, selected_region: Optional[str] = 
         # Cache the successful validation
         _cache_set(key, {"success": True})
         
-        logger.info(f"AWS credentials configured (isolated mode) for region: {region}")
+        logger.info("AWS credentials configured (isolated mode)")
         logger.info(f"TIME: setup_aws_credentials (cached helper) completed in {time.perf_counter() - fn_start:.2f}s")
         return True, region, "access_key", isolated_env
 
