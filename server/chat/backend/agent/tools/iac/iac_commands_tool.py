@@ -69,7 +69,8 @@ def _scan_tf_for_exec_provisioners(
     from utils.auth.command_policy import evaluate_compound_command
     from utils.terminal.terminal_run import terminal_run
 
-    list_cmd = f"cat {terraform_dir}/*.tf 2>/dev/null || true"
+    safe_dir = shlex.quote(terraform_dir)
+    list_cmd = f"cat {safe_dir}/*.tf 2>/dev/null || true"
     result = terminal_run(list_cmd, shell=True, capture_output=True, text=True, timeout=15)
     if result.returncode != 0 or not result.stdout.strip():
         return []

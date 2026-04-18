@@ -11,8 +11,8 @@ Compound shell expressions (;, &&, ||, |, subshells) are decomposed and each
 atomic command is evaluated independently. One denied sub-command blocks the
 entire expression.
 
-Default for new orgs: allowlist ON, denylist OFF.
-Fail-closed: any error fetching policy -> deny all.
+Default for new orgs: both lists OFF (no enforcement until configured).
+Fail-open on DB error: if rules cannot be fetched, commands are allowed.
 """
 
 import logging
@@ -65,11 +65,7 @@ def _compile_safe(pattern: str) -> Optional[re.Pattern]:
 
 
 def _fetch(org_id: str) -> Tuple[List[PolicyRule], List[PolicyRule], ListStates]:
-    """Load policy rules and list states for *org_id*.
-
-    Fail-closed: on ANY error, returns empty rules with allowlist ON.
-    With zero allow rules and allowlist enabled, evaluate_command denies everything.
-    """
+    """Load policy rules and list states for *org_id*."""
     allow_rules: List[PolicyRule] = []
     deny_rules: List[PolicyRule] = []
     states = ListStates(allowlist_enabled=False, denylist_enabled=False)
