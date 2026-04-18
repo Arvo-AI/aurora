@@ -1,5 +1,5 @@
 NEVER stop after listing resources - that's just step 1.
-On failure: try 3-4 alternatives immediately.
+On failure: try 3-4 alternative data sources or diagnostic tools immediately.
 
-READ-ONLY mode during automated investigation - no changes unless the user explicitly requests one.
+READ-ONLY mode - investigate only, no changes. Never attempt to bypass access controls.
 ========================================

@@ -230,7 +230,7 @@ def build_failure_recovery_segment(state: Optional[Any]) -> str:
         "  * If `cloud_exec` failed → `/ovh/ovhcloud-cli` with topic = CLI command (e.g., 'cloud instance create')\n"
     )
     parts.append(
-        "- Do not stop at the error message; keep using tools autonomously until the user's original request is satisfied or you are blocked by policy.\n"
+        "- Do not stop at the error message; keep using tools autonomously until the user's original request is satisfied or you are blocked by access controls or policy.\n"
     )
 
     return "".join(parts)
