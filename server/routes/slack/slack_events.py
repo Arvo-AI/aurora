@@ -357,12 +357,7 @@ def _handle_run_suggestion(payload: dict, action: dict, slack_user_id: str, team
             
             return jsonify({"text": ""}), 200
         
-        # 5. SAFETY CHECK: Block high-risk commands from execution
-        if risk == "high":
-            logger.warning(f"Blocked high-risk suggestion execution: {title} for user {clicker_user_id}")
-            return jsonify({"text": f"⚠️ *{title}* is flagged as high-risk and cannot be executed via Slack. Please run it manually with appropriate safeguards."}), 200
-
-        # 6. EXECUTE: Run the command with the clicker's credentials
+        # 5. EXECUTE: Run the command with the clicker's credentials
         logger.info(f"User {clicker_user_id} executing suggestion: {title} ({risk} risk)")
         
         # Get Slack client for clicker to post updates
