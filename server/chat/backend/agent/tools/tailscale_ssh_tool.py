@@ -15,6 +15,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -210,6 +211,12 @@ def tailscale_ssh(
             "error": "Device hostname is required"
         })
 
+    if not re.match(r'^[A-Za-z0-9._:\-]+$', device_hostname):
+        return json.dumps({
+            "success": False,
+            "error": "Invalid device hostname"
+        })
+
     if not command or not command.strip():
         return json.dumps({
             "success": False,
@@ -226,7 +233,7 @@ def tailscale_ssh(
                         user_id, verdict.rule_description)
         return json.dumps({
             "success": False,
-            "error": f"Command blocked by organization policy: {verdict.rule_description}",
+            "error": f"Command blocked by organization policy: {verdict.rule_description[:200]}",
             "code": "POLICY_DENIED",
             "provider": "tailscale_ssh",
         })

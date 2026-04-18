@@ -4,7 +4,6 @@ Blueprint: command_policies_bp
 Prefix: /api/org
 """
 
-import json
 import logging
 from datetime import datetime
 
@@ -95,7 +94,10 @@ def create_policy(user_id):
     mode = data.get("mode")
     pattern = data.get("pattern", "").strip()
     description = data.get("description", "").strip()
-    priority = int(data.get("priority", 0))
+    try:
+        priority = int(data.get("priority", 0))
+    except (TypeError, ValueError):
+        return jsonify({"error": "priority must be an integer"}), 400
 
     if mode not in ("allow", "deny"):
         return jsonify({"error": "mode must be 'allow' or 'deny'"}), 400
@@ -242,7 +244,7 @@ def toggle_list(user_id):
 
     pref_key = f"command_policy_{list_name}"
     org_key = f"__org__{org_id}"
-    store_user_preference(org_key, pref_key, json.dumps("on" if enabled else "off"))
+    store_user_preference(org_key, pref_key, "on" if enabled else "off")
 
     # Auto-seed rules on first enable if list is empty
     if enabled:
@@ -337,8 +339,8 @@ def apply_template(user_id):
         conn.commit()
 
     org_key = f"__org__{org_id}"
-    store_user_preference(org_key, "command_policy_allowlist", json.dumps("on"))
-    store_user_preference(org_key, "command_policy_denylist", json.dumps("on"))
+    store_user_preference(org_key, "command_policy_allowlist", "on")
+    store_user_preference(org_key, "command_policy_denylist", "on")
     store_user_preference(org_key, "command_policy_active_template", template_id)
 
     invalidate_cache(org_id)
@@ -363,8 +365,8 @@ def clear_active_template(user_id):
 
     org_key = f"__org__{org_id}"
     store_user_preference(org_key, "command_policy_active_template", None)
-    store_user_preference(org_key, "command_policy_allowlist", json.dumps("off"))
-    store_user_preference(org_key, "command_policy_denylist", json.dumps("off"))
+    store_user_preference(org_key, "command_policy_allowlist", "off")
+    store_user_preference(org_key, "command_policy_denylist", "off")
 
     invalidate_cache(org_id)
     return jsonify({"status": "cleared", **_list_states(org_id)})

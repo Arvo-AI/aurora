@@ -2018,7 +2018,7 @@ Security & Compliance
                             user_id, verdict.rule_description)
             return json.dumps({
                 "success": False,
-                "error": f"Command blocked by organization policy: {verdict.rule_description}",
+                "error": f"Command blocked by organization policy: {verdict.rule_description[:200]}",
                 "code": "POLICY_DENIED",
                 "final_command": command,
                 "provider": provider.lower(),

@@ -49,16 +49,16 @@ export const commandPolicyService = {
     apiPost<{ id: number }>("/api/org/command-policies", rule),
 
   updatePolicy: (id: number, fields: Partial<CommandPolicyRule>) =>
-    apiPut<{ ok: boolean }>(`/api/org/command-policies/${id}`, fields),
+    apiPut<{ status: string }>(`/api/org/command-policies/${id}`, fields),
 
   deletePolicy: (id: number) =>
-    apiDelete<{ ok: boolean }>(`/api/org/command-policies/${id}`),
+    apiDelete<{ status: string }>(`/api/org/command-policies/${id}`),
 
   testCommand: (command: string) =>
     apiPost<TestResult>("/api/org/command-policies/test", { command }),
 
   toggleList: (list: "allowlist" | "denylist", enabled: boolean) =>
-    apiPut<{ ok: boolean; allowlist_enabled: boolean; denylist_enabled: boolean }>(
+    apiPut<{ status: string; allowlist_enabled: boolean; denylist_enabled: boolean }>(
       "/api/org/command-policy-toggle", { list, enabled }
     ),
 

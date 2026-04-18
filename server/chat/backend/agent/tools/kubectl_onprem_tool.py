@@ -53,9 +53,9 @@ def on_prem_kubectl(
                         user_id, verdict.rule_description)
         return json.dumps({
             'success': False,
-            'error': f"Command blocked by organization policy: {verdict.rule_description}",
+            'error': f"Command blocked by organization policy: {verdict.rule_description[:200]}",
             'code': 'POLICY_DENIED',
-            'chat_output': f"$ {full_command}\nBlocked by organization policy: {verdict.rule_description}",
+            'chat_output': f"$ {full_command}\nBlocked by organization policy: {verdict.rule_description[:200]}",
             'command': full_command,
             'return_code': 1,
             'provider': 'onprem_kubectl',

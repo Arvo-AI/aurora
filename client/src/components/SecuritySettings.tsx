@@ -373,7 +373,6 @@ export function SecuritySettings() {
   };
 
   const handleRemoveTemplate = async () => {
-    setActiveTemplateId(null);
     try {
       await commandPolicyService.clearActiveTemplate();
       await fetchPolicies();

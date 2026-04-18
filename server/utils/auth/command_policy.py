@@ -105,7 +105,7 @@ def _fetch(org_id: str) -> Tuple[List[PolicyRule], List[PolicyRule], ListStates]
             denylist_enabled=(str(dl_raw).lower() == "on"),
         )
     except Exception:
-        logger.exception("Failed to fetch command policies for org %s, fail-closed", org_id)
+        logger.exception("Failed to fetch command policies for org %s, fail-open", org_id)
 
     return allow_rules, deny_rules, states
 

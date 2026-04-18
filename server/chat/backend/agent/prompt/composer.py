@@ -145,7 +145,7 @@ def build_prompt_segments(
 
 def assemble_system_prompt(segments: PromptSegments) -> str:  # main prompt builder
     parts: List[str] = []
-    # Security policy comes first (highest priority, overrides all other instructions)
+    # Security policy included early for visibility
     if segments.security_policy:
         parts.append(segments.security_policy)
     # Background mode comes first if present (important RCA context)
