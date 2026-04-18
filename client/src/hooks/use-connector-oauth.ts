@@ -55,7 +55,7 @@ export function useConnectorOAuth(connector: ConnectorConfig, userId: string | n
     setIsConnecting(true);
 
     try {
-      const oauthUrl = await GitHubIntegrationService.initiateOAuth(userId);
+      const oauthUrl = await GitHubIntegrationService.initiateOAuth();
       const popup = window.open(
         oauthUrl,
         'github-oauth',
@@ -127,7 +127,7 @@ export function useConnectorOAuth(connector: ConnectorConfig, userId: string | n
     setIsConnecting(true);
 
     try {
-      const oauthUrl = await BitbucketIntegrationService.initiateOAuth(userId);
+      const oauthUrl = await BitbucketIntegrationService.initiateOAuth();
       const popup = window.open(
         oauthUrl,
         'bitbucket-oauth',

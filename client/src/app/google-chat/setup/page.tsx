@@ -20,7 +20,6 @@ import {
 import ConnectorAuthGuard from "@/components/connectors/ConnectorAuthGuard";
 import { googleChatService } from "@/lib/services/google-chat";
 import { copyToClipboard } from "@/lib/utils";
-import { getEnv } from "@/lib/env";
 import { useToast } from "@/hooks/use-toast";
 
 interface EnvCheckResult {
@@ -31,7 +30,6 @@ interface EnvCheckResult {
   baseUrl: string;
 }
 
-const BACKEND_URL = getEnv('NEXT_PUBLIC_BACKEND_URL');
 const DOCS_URL = "https://arvo-ai.github.io/aurora/docs/integrations/connectors#google-chat";
 
 export default function GoogleChatSetupPage() {
@@ -185,7 +183,7 @@ export default function GoogleChatSetupPage() {
 GOOGLE_CHAT_CLIENT_SECRET=your-client-secret
 GOOGLE_CHAT_SERVICE_ACCOUNT_KEY='{"type":"service_account",...}'`;
 
-  const baseUrl = envCheck?.baseUrl ?? BACKEND_URL;
+  const baseUrl = envCheck?.baseUrl ?? '';
   const redirectUri = `${baseUrl}/google-chat/callback`;
   const eventsUrl = `${baseUrl}/google-chat/events`;
 

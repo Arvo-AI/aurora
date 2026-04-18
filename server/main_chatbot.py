@@ -18,11 +18,12 @@ import json
 import time
 import uuid
 import os
+import jwt as pyjwt
 from utils.kubectl.agent_ws_handler import handle_kubectl_agent
-import psycopg2
 from datetime import datetime
 from dotenv import load_dotenv
-from typing import List, Optional
+from typing import Optional
+from urllib.parse import parse_qs, urlparse
 
 # Load environment variables
 load_dotenv()
@@ -44,7 +45,6 @@ from chat.backend.agent.utils.immediate_save_handler import handle_immediate_sav
 from utils.db.connection_pool import db_pool
 from utils.billing.billing_cache import update_api_cost_cache_async, get_cached_api_cost
 from utils.billing.billing_utils import get_api_cost
-from utils.billing.billing_cache import is_cache_fresh
 from utils.terraform.terraform_cleanup import cleanup_terraform_directory
 from utils.cloud.infrastructure_confirmation import handle_websocket_confirmation_response
 from chat.backend.agent.tools.cloud_tools import register_websocket_connection, set_user_context
@@ -75,13 +75,49 @@ class RateLimiter:
             return True
         return False
     
-class _NoopAsyncContextManager:
-    async def __aenter__(self):
-        return None
-    async def __aexit__(self, exc_type, exc, tb):
-        return False
 
 rate_limiter = RateLimiter(rate=5, per=60)
+
+_INTERNAL_API_SECRET = os.getenv("INTERNAL_API_SECRET", "")
+
+
+def _validate_ws_token(websocket) -> dict | None:
+    """Extract and validate a JWT from the WebSocket handshake query string.
+
+    Returns the decoded payload dict on success, or None if no token is present or validation fails.
+    """
+    if not _INTERNAL_API_SECRET:
+        return None
+
+    try:
+        qs = parse_qs(urlparse(str(websocket.request.path)).query)
+        if not qs.get("token"):
+            raw_path = str(websocket.request.path)
+            if "?" in raw_path:
+                qs = parse_qs(raw_path.split("?", 1)[1])
+
+        # Also check the full request URI (websockets lib stores path + query)
+        if not qs.get("token"):
+            request_path = getattr(websocket, "path", "")
+            if "?" in request_path:
+                qs = parse_qs(request_path.split("?", 1)[1])
+
+        token_list = qs.get("token")
+        if not token_list:
+            return None
+
+        token = token_list[0]
+        payload = pyjwt.decode(token, _INTERNAL_API_SECRET, algorithms=["HS256"])
+        return payload
+    except pyjwt.ExpiredSignatureError:
+        logger.warning("WebSocket token expired")
+        return None
+    except pyjwt.InvalidTokenError as e:
+        logger.warning("WebSocket token invalid: %s", e)
+        return None
+    except Exception as e:
+        logger.warning("Unexpected error validating WS token: %s", e)
+        return None
 
 
 def _normalize_mode(mode: Optional[str]) -> str:
@@ -93,11 +129,26 @@ def _normalize_mode(mode: Optional[str]) -> str:
 # Deployment update listener removed
 
 async def handle_init(data, websocket, current_user_id, deployment_listener_task):
-    """Handle connection initialization message and return updated state."""
+    """Handle connection initialization message and return updated state.
+
+    If the connection was already authenticated via a handshake token,
+    current_user_id is pre-set and we skip the DB validation step.
+    """
 
     user_id = data.get('user_id')
 
-    if user_id and current_user_id != user_id:
+    if user_id and current_user_id and current_user_id != user_id:
+        logger.warning(
+            f"WebSocket init rejected: token user {current_user_id!r} "
+            f"does not match init user_id {user_id!r}"
+        )
+        await websocket.send(json.dumps({
+            "type": "error",
+            "data": {"text": "Authentication failed: user identity mismatch."}
+        }))
+        return current_user_id, deployment_listener_task
+
+    if user_id and not current_user_id:
         if not validate_user_exists(user_id):
             logger.warning(f"WebSocket init rejected: invalid user_id {user_id!r}")
             await websocket.send(json.dumps({
@@ -648,9 +699,32 @@ async def handle_connection(websocket) -> None:
     client_id = id(websocket)
     logger.info(f"New client connected. ID: {client_id}")
 
+    # Validate JWT token from handshake query string
+    token_payload = _validate_ws_token(websocket)
+    token_user_id = None
+    token_org_id = None
+    if token_payload:
+        token_user_id = token_payload.get("userId")
+        token_org_id = token_payload.get("orgId")
+        logger.info(f"WebSocket authenticated via token: user={token_user_id}")
+
+        # Eagerly warm caches for token-authenticated users
+        if token_user_id:
+            asyncio.get_event_loop().call_soon(
+                lambda uid=token_user_id: asyncio.ensure_future(update_api_cost_cache_async(uid))
+            )
+            try:
+                from chat.backend.agent.tools.mcp_preloader import preload_user_tools, update_user_activity
+                preload_user_tools(token_user_id)
+                update_user_activity(token_user_id)
+            except Exception as e:
+                logger.debug(f"Token preload failed: {e}")
+    elif _INTERNAL_API_SECRET:
+        logger.warning(f"WebSocket connection {client_id} has no valid token (INTERNAL_API_SECRET is set)")
+
     weaviate_client = None
     deployment_listener_task = None
-    current_user_id = None
+    current_user_id = token_user_id
     session_id = None       # Initialize to avoid UnboundLocalError in exception handler
     session_tasks = {}      # Track running workflow asyncio.Tasks per session
 

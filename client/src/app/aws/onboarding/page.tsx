@@ -29,12 +29,9 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
-import { getEnv } from '@/lib/env';
 import ConnectorAuthGuard from "@/components/connectors/ConnectorAuthGuard";
 import { copyToClipboard } from '@/lib/utils';
 import { useToast } from '@/hooks/use-toast';
-
-const BACKEND_URL = getEnv('NEXT_PUBLIC_BACKEND_URL');
 
 interface OnboardingData {
   workspaceId: string;
@@ -163,9 +160,8 @@ export default function AWSOnboardingPage() {
   useEffect(() => {
     const checkCredentials = async () => {
       try {
-        const response = await fetch(`${BACKEND_URL}/aws/env/check`, {
+        const response = await fetch(`/api/proxy/aws/env/check`, {
           method: 'GET',
-          credentials: 'include',
         });
         if (response.ok) {
           const data = await response.json();
@@ -206,13 +202,11 @@ export default function AWSOnboardingPage() {
     try {
       // First, get or create workspace for the user
       const workspaceResponse = await fetch(
-        `${BACKEND_URL}/users/${userId}/workspaces`,
+        `/api/proxy/users/${userId}/workspaces`,
         {
           method: 'GET',
-          credentials: 'include',
           headers: {
             'Content-Type': 'application/json',
-            'X-User-ID': userId,
           },
         }
       );
@@ -228,13 +222,11 @@ export default function AWSOnboardingPage() {
       // If no workspace exists, create one
       if (!workspace) {
         const createResponse = await fetch(
-          `${BACKEND_URL}/users/${userId}/workspaces`,
+          `/api/proxy/users/${userId}/workspaces`,
           {
             method: 'POST',
-            credentials: 'include',
             headers: {
               'Content-Type': 'application/json',
-              'X-User-ID': userId,
             },
             body: JSON.stringify({ name: 'default' }),
           }
@@ -252,13 +244,11 @@ export default function AWSOnboardingPage() {
 
       // Fetch onboarding info for this workspace
       const response = await fetch(
-        `${BACKEND_URL}/workspaces/${workspace.id}/aws/links`,
+        `/api/proxy/workspaces/${workspace.id}/aws/links`,
         {
           method: 'GET',
-          credentials: 'include',
           headers: {
             'Content-Type': 'application/json',
-            'X-User-ID': userId,
           },
         }
       );
@@ -303,14 +293,12 @@ export default function AWSOnboardingPage() {
 
     try {
       const response = await fetch(
-        `${BACKEND_URL}/workspaces/${workspaceId}/aws/role`,
+        `/api/proxy/workspaces/${workspaceId}/aws/role`,
         {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'X-User-ID': userId,
           },
-          credentials: 'include',
           body: JSON.stringify({ roleArn }),
         }
       );
@@ -348,14 +336,12 @@ export default function AWSOnboardingPage() {
     setIsDisconnecting(true);
     try {
       const response = await fetch(
-        `${BACKEND_URL}/workspaces/${workspaceId}/aws/cleanup`,
+        `/api/proxy/workspaces/${workspaceId}/aws/cleanup`,
         {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'X-User-ID': userId,
           },
-          credentials: 'include',
         }
       );
       if (!response.ok) throw new Error('Failed to disconnect AWS');
@@ -386,9 +372,7 @@ export default function AWSOnboardingPage() {
   const fetchConnectedAccounts = useCallback(async () => {
     if (!workspaceId || !userId) return;
     try {
-      const res = await fetch(`${BACKEND_URL}/workspaces/${workspaceId}/aws/accounts`, {
-        credentials: 'include',
-        headers: { 'X-User-ID': userId },
+      const res = await fetch(`/api/proxy/workspaces/${workspaceId}/aws/accounts`, {
       });
       if (res.ok) {
         const data = await res.json();
@@ -397,14 +381,12 @@ export default function AWSOnboardingPage() {
     } catch (err) {
       console.error('Failed to fetch connected accounts:', err);
     }
-  }, [workspaceId, userId]);
+  }, [workspaceId]);
 
   const fetchQuickCreateData = useCallback(async (rt: 'ReadOnly' | 'Admin' = 'ReadOnly') => {
     if (!workspaceId || !userId) return;
     try {
-      const res = await fetch(`${BACKEND_URL}/workspaces/${workspaceId}/aws/cfn-quickcreate?roleType=${rt}&_t=${Date.now()}`, {
-        credentials: 'include',
-        headers: { 'X-User-ID': userId },
+      const res = await fetch(`/api/proxy/workspaces/${workspaceId}/aws/cfn-quickcreate?roleType=${rt}&_t=${Date.now()}`, {
       });
       if (res.ok) {
         const data = await res.json();
@@ -419,14 +401,12 @@ export default function AWSOnboardingPage() {
     } catch (err) {
       console.error('Failed to fetch quick-create data:', err);
     }
-  }, [workspaceId, userId]);
+  }, [workspaceId]);
 
   const fetchInactiveAccounts = useCallback(async () => {
     if (!workspaceId || !userId) return;
     try {
-      const res = await fetch(`${BACKEND_URL}/workspaces/${workspaceId}/aws/accounts/inactive`, {
-        credentials: 'include',
-        headers: { 'X-User-ID': userId },
+      const res = await fetch(`/api/proxy/workspaces/${workspaceId}/aws/accounts/inactive`, {
       });
       if (res.ok) {
         const data = await res.json();
@@ -435,7 +415,7 @@ export default function AWSOnboardingPage() {
     } catch (err) {
       console.error('Failed to fetch inactive accounts:', err);
     }
-  }, [workspaceId, userId]);
+  }, [workspaceId]);
 
   const buildQuickCreateUrl = useCallback(() => {
     if (!cfnBaseData) return null;
@@ -467,19 +447,16 @@ export default function AWSOnboardingPage() {
     setReconnectingId(accountId);
     setError(null);
     try {
-      const res = await fetch(`${BACKEND_URL}/workspaces/${workspaceId}/aws/accounts/${accountId}/reconnect`, {
+      const res = await fetch(`/api/proxy/workspaces/${workspaceId}/aws/accounts/${accountId}/reconnect`, {
         method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json', 'X-User-ID': userId },
+        headers: { 'Content-Type': 'application/json' },
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
         const isRoleGone = res.status === 400 && /role.*deleted|trust policy/i.test(data.error || '');
         if (isRoleGone) {
-          await fetch(`${BACKEND_URL}/workspaces/${workspaceId}/aws/accounts/${accountId}`, {
+          await fetch(`/api/proxy/workspaces/${workspaceId}/aws/accounts/${accountId}`, {
             method: 'DELETE',
-            credentials: 'include',
-            headers: { 'X-User-ID': userId },
           }).catch(() => {});
           setInactiveAccounts(prev => prev.filter(a => a.account_id !== accountId));
           toast({
@@ -514,9 +491,7 @@ export default function AWSOnboardingPage() {
     if (!workspaceId || !userId) return;
     setIsDownloadingCfn(true);
     try {
-      const res = await fetch(`${BACKEND_URL}/workspaces/${workspaceId}/aws/cfn-template?format=raw&roleType=${roleType}`, {
-        credentials: 'include',
-        headers: { 'X-User-ID': userId },
+      const res = await fetch(`/api/proxy/workspaces/${workspaceId}/aws/cfn-template?format=raw&roleType=${roleType}`, {
       });
       if (!res.ok) throw new Error('Failed to download template');
       const blob = await res.blob();
@@ -556,12 +531,10 @@ export default function AWSOnboardingPage() {
         };
       });
 
-      const res = await fetch(`${BACKEND_URL}/workspaces/${workspaceId}/aws/accounts/bulk`, {
+      const res = await fetch(`/api/proxy/workspaces/${workspaceId}/aws/accounts/bulk`, {
         method: 'POST',
-        credentials: 'include',
         headers: {
           'Content-Type': 'application/json',
-          'X-User-ID': userId,
         },
         body: JSON.stringify({ accounts }),
       });
@@ -592,10 +565,8 @@ export default function AWSOnboardingPage() {
   const handleDeleteAccount = async (accountId: string) => {
     if (!workspaceId || !userId) return;
     try {
-      const res = await fetch(`${BACKEND_URL}/workspaces/${workspaceId}/aws/accounts/${accountId}`, {
+      const res = await fetch(`/api/proxy/workspaces/${workspaceId}/aws/accounts/${accountId}`, {
         method: 'DELETE',
-        credentials: 'include',
-        headers: { 'X-User-ID': userId },
       });
       if (!res.ok) throw new Error('Delete failed');
       await Promise.all([fetchConnectedAccounts(), fetchInactiveAccounts()]);
@@ -626,10 +597,9 @@ export default function AWSOnboardingPage() {
         toast({ title: 'Already connected', description: `Account ${accountId} is already connected.`, variant: 'destructive' });
         return;
       }
-      const res = await fetch(`${BACKEND_URL}/workspaces/${workspaceId}/aws/accounts/bulk`, {
+      const res = await fetch(`/api/proxy/workspaces/${workspaceId}/aws/accounts/bulk`, {
         method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json', 'X-User-ID': userId },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ accounts: [{ accountId, roleArn: arn, region: 'us-east-1' }] }),
       });
       if (!res.ok) {
@@ -747,9 +717,8 @@ make dev`}</pre>
             <div className="flex flex-col sm:flex-row gap-3">
               <Button
                 onClick={() => {
-                  fetch(`${BACKEND_URL}/aws/env/check`, {
+                  fetch(`/api/proxy/aws/env/check`, {
                     method: 'GET',
-                    credentials: 'include',
                   })
                     .then(res => res.json())
                     .then(data => {

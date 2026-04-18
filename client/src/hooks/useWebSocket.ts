@@ -102,24 +102,8 @@ export const useWebSocket = (config: WebSocketConfig) => {
       reconnectAttempts: 0
     }));
 
-    // Send initialization message with user_id
-    const userId = user?.id || configRef.current.userId || undefined;
-    if (userId && wsRef.current) {
-      const initMessage: WebSocketMessage = {
-        type: 'init',
-        user_id: userId
-      };
-      wsRef.current.send(JSON.stringify(initMessage));
-    } else {
-      console.warn('Cannot send init message - user not loaded or websocket not ready:', {
-        hasUser: !!user?.id,
-        hasConfigUserId: !!configRef.current.userId,
-        hasWebSocket: !!wsRef.current,
-      });
-    }
-
     configRef.current.onConnect?.();
-  }, [user?.id]);
+  }, []);
 
   const handleMessage = useCallback((event: MessageEvent) => {
     if (!mountedRef.current) return;
@@ -230,7 +214,25 @@ export const useWebSocket = (config: WebSocketConfig) => {
     }));
 
     try {
-      const ws = new WebSocket(configRef.current.url);
+      let wsUrl = configRef.current.url;
+
+      // Fetch a short-lived token from the Next.js API route for handshake auth
+      try {
+        const tokenRes = await fetch('/api/ws-token');
+        if (tokenRes.ok) {
+          const { token } = await tokenRes.json();
+          if (token) {
+            const separator = wsUrl.includes('?') ? '&' : '?';
+            wsUrl = `${wsUrl}${separator}token=${encodeURIComponent(token)}`;
+          }
+        } else {
+          console.warn('Failed to fetch WS token, connecting without handshake auth');
+        }
+      } catch (tokenErr) {
+        console.warn('Error fetching WS token:', tokenErr);
+      }
+
+      const ws = new WebSocket(wsUrl);
       
       // Set binary type to handle different frame types
       ws.binaryType = 'arraybuffer';

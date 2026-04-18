@@ -46,7 +46,7 @@ export default function BitbucketWorkspaceBrowser({ userId }: BitbucketWorkspace
   const fetchWorkspaces = async () => {
     setIsLoadingWorkspaces(true);
     try {
-      const data = await BitbucketIntegrationService.getWorkspaces(userId);
+      const data = await BitbucketIntegrationService.getWorkspaces();
       const workspaceList = Array.isArray(data) ? data : data?.workspaces || [];
       setWorkspaces(workspaceList);
     } catch (error) {
@@ -63,7 +63,7 @@ export default function BitbucketWorkspaceBrowser({ userId }: BitbucketWorkspace
     setBranches([]);
     setSelectedBranch('');
     try {
-      const data = await BitbucketIntegrationService.getRepos(userId, workspace);
+      const data = await BitbucketIntegrationService.getRepos(workspace);
       const repoList = Array.isArray(data) ? data : data?.repositories || [];
       setRepos(repoList);
     } catch (error) {
@@ -77,7 +77,7 @@ export default function BitbucketWorkspaceBrowser({ userId }: BitbucketWorkspace
   const fetchBranches = async (workspace: string, repoSlug: string) => {
     setIsLoadingBranches(true);
     try {
-      const data = await BitbucketIntegrationService.getBranches(userId, workspace, repoSlug);
+      const data = await BitbucketIntegrationService.getBranches(workspace, repoSlug);
       const branchList = Array.isArray(data) ? data : data?.branches || [];
       setBranches(branchList);
       if (branchList.length > 0) {
@@ -103,13 +103,13 @@ export default function BitbucketWorkspaceBrowser({ userId }: BitbucketWorkspace
 
   const loadStoredSelection = async () => {
     try {
-      const data = await BitbucketIntegrationService.loadWorkspaceSelection(userId);
+      const data = await BitbucketIntegrationService.loadWorkspaceSelection();
       if (!data?.workspace) return;
 
       isRestoringSelectionRef.current = true;
       setSelectedWorkspace(data.workspace);
 
-      const repoData = await BitbucketIntegrationService.getRepos(userId, data.workspace);
+      const repoData = await BitbucketIntegrationService.getRepos(data.workspace);
       const repoList = Array.isArray(repoData) ? repoData : repoData?.repositories || [];
       setRepos(repoList);
 
@@ -119,7 +119,7 @@ export default function BitbucketWorkspaceBrowser({ userId }: BitbucketWorkspace
         if (matchedRepo) {
           setSelectedRepo(matchedRepo);
 
-          const branchData = await BitbucketIntegrationService.getBranches(userId, data.workspace, matchedRepo.slug);
+          const branchData = await BitbucketIntegrationService.getBranches(data.workspace, matchedRepo.slug);
           const branchList = Array.isArray(branchData) ? branchData : branchData?.branches || [];
           setBranches(branchList);
 
@@ -144,7 +144,7 @@ export default function BitbucketWorkspaceBrowser({ userId }: BitbucketWorkspace
       return;
     }
     try {
-      await BitbucketIntegrationService.saveWorkspaceSelection(userId, {
+      await BitbucketIntegrationService.saveWorkspaceSelection({
         workspace: selectedWorkspace,
         repository: selectedRepo,
         branch: selectedBranch,
@@ -160,7 +160,7 @@ export default function BitbucketWorkspaceBrowser({ userId }: BitbucketWorkspace
 
   const handleClearSelection = async () => {
     try {
-      await BitbucketIntegrationService.clearWorkspaceSelection(userId);
+      await BitbucketIntegrationService.clearWorkspaceSelection();
       setSelectedWorkspace('');
       setSelectedRepo(null);
       setBranches([]);

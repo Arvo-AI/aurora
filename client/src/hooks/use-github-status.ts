@@ -27,8 +27,8 @@ export function useGitHubStatus(userId: string | null) {
 
     try {
       const [credentials, repos] = await Promise.all([
-        GitHubIntegrationService.checkStatus(userId),
-        GitHubIntegrationService.fetchRepoSelections(userId).catch(() => []),
+        GitHubIntegrationService.checkStatus(),
+        GitHubIntegrationService.fetchRepoSelections().catch(() => []),
       ]);
 
       const isAuthenticated = credentials.connected || false;

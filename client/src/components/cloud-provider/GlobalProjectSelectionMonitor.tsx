@@ -3,9 +3,6 @@
 import { useState, useEffect } from "react";
 import { ProjectSelectionModal } from "@/components/ProjectSelectionModal";
 import { useToast } from "@/hooks/use-toast";
-import { getEnv } from '@/lib/env';
-
-const BACKEND_URL = getEnv('NEXT_PUBLIC_BACKEND_URL');
 
 /**
  * Global component that monitors for GCP project selection needs
@@ -85,13 +82,11 @@ export default function GlobalProjectSelectionMonitor() {
       }
 
       // Call the retry endpoint with selected projects
-      const retryResponse = await fetch(`${BACKEND_URL}/gcp/post-auth-retry`, {
+      const retryResponse = await fetch(`/api/proxy/gcp/post-auth-retry`, {
         method: "POST",
         headers: { 
           "Content-Type": "application/json",
-          "X-User-ID": userId, // Send user ID for backend authentication
         },
-        credentials: "include", // Include session cookie for authentication
         body: JSON.stringify({
           selected_project_ids: selectedProjectIds,
         }),

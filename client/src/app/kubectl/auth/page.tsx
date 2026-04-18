@@ -14,9 +14,8 @@ import { KUBECTL_AGENT } from "@/lib/kubectl-constants";
 import { getEnv } from '@/lib/env';
 import ConnectorAuthGuard from "@/components/connectors/ConnectorAuthGuard";
 
-const backendUrl = getEnv('NEXT_PUBLIC_BACKEND_URL') || '';
 const wsUrl = getEnv('NEXT_PUBLIC_WEBSOCKET_URL') || '';
-const wsEndpoint = wsUrl || backendUrl.replace(/^https?:\/\//, 'wss://').replace(/^http:\/\//, 'ws://');
+const backendUrl = getEnv('NEXT_PUBLIC_BACKEND_URL') || '';
 
 const getHelmInstallCommand = (token: string) => `helm install ${KUBECTL_AGENT.RELEASE_NAME} ${KUBECTL_AGENT.CHART_OCI_URL} \\
   --version ${KUBECTL_AGENT.CHART_VERSION} \\
@@ -24,10 +23,10 @@ const getHelmInstallCommand = (token: string) => `helm install ${KUBECTL_AGENT.R
   --namespace ${KUBECTL_AGENT.DEFAULT_NAMESPACE} \\
   --set aurora.agentToken="${token}" \\
   --set aurora.backendUrl="${backendUrl}" \\
-  --set aurora.wsEndpoint="${wsEndpoint}"`;
+  --set aurora.wsEndpoint="${wsUrl}"`;
 
 const connectivityCommand = `kubectl run aurora-egress-check --rm -i --tty --image=${KUBECTL_AGENT.EGRESS_CHECK_IMAGE} --restart=Never -- \\
-  sh -c "wget -qO- ${backendUrl}/healthz"`;
+  sh -c "wget -qO- ${backendUrl}/health"`;
 
 const statusCommand = `kubectl get pods -n ${KUBECTL_AGENT.DEFAULT_NAMESPACE} -l ${KUBECTL_AGENT.POD_LABEL_SELECTOR}`;
 

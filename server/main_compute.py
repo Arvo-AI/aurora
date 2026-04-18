@@ -213,10 +213,75 @@ CORS(app, origins=FRONTEND_URL, supports_credentials=True,
 )
 
 # ============================================================================
+# Internal API Secret Verification
+# ============================================================================
+# Ensures requests originate from the Next.js frontend (or another trusted
+# internal service) rather than from an unauthenticated external caller.
+
+_INTERNAL_API_SECRET = os.getenv("INTERNAL_API_SECRET", "")
+_OPEN_PATHS = frozenset(("/api/auth/login", "/api/auth/register", "/health"))
+
+_OPEN_PREFIXES = (
+    "/callback",
+    "/github/callback",
+    "/bitbucket/callback",
+    "/slack/callback",
+    "/slack/events",
+    "/pagerduty/oauth/callback",
+    "/google-chat/callback",
+    "/google-chat/events",
+    "/datadog/webhook/",
+    "/grafana/alerts/webhook/",
+    "/splunk/alerts/webhook/",
+    "/netdata/alerts/webhook/",
+    "/bigpanda/webhook/",
+    "/dynatrace/webhook/",
+    "/newrelic/webhook/",
+    "/pagerduty/webhook/",
+    "/opsgenie/webhook/",
+    "/jenkins/webhook/",
+    "/cloudbees/webhook/",
+    "/spinnaker/webhook/",
+    "/ovh_api/ovh/oauth2/callback",
+    "/azure/setup-script",
+    "/azure/setup-script-ps1",
+    "/aws/setup-script",
+    "/aws/setup-role",
+    "/aws/setup-script-ps1",
+    "/aws/setup-role-ps1",
+)
+
+@app.before_request
+def verify_internal_api_secret():
+    """Reject requests that don't carry a valid INTERNAL_API_SECRET header.
+
+    Skipped when the secret is not configured (backward-compatible default)
+    and for open endpoints (login, register, health) and external-facing
+    webhook/callback/event endpoints called by third-party services.
+    """
+    if not _INTERNAL_API_SECRET:
+        return None
+
+    if request.method == "OPTIONS":
+        return None
+
+    if request.path in _OPEN_PATHS:
+        return None
+
+    if any(request.path.startswith(prefix) for prefix in _OPEN_PREFIXES):
+        return None
+
+    provided = request.headers.get("X-Internal-Secret", "")
+    if not provided or provided != _INTERNAL_API_SECRET:
+        return jsonify({"error": "Forbidden: invalid or missing X-Internal-Secret header"}), 403
+
+    return None
+
+# ============================================================================
 # Tenant Isolation Middleware - Validates X-User-ID / X-Org-ID Pairing
 # ============================================================================
 
-_OPEN_PREFIXES = ("/api/auth/login", "/api/auth/register", "/health")
+_TENANT_OPEN_PREFIXES = ("/api/auth/login", "/api/auth/register", "/health")
 
 @app.before_request
 def enforce_user_org_binding():
@@ -224,7 +289,7 @@ def enforce_user_org_binding():
     if request.method == "OPTIONS":
         return None
 
-    if any(request.path.startswith(p) for p in _OPEN_PREFIXES):
+    if any(request.path.startswith(p) for p in _TENANT_OPEN_PREFIXES):
         return None
 
     user_id = request.headers.get("X-User-ID")

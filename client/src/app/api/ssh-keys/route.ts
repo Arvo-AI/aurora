@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getAuthenticatedUser } from '@/lib/auth-helper'
 
-// BACKEND_URL for server-side API calls; fallback to public URL for local dev
-const API_BASE_URL = process.env.BACKEND_URL || process.env.NEXT_PUBLIC_BACKEND_URL
+const API_BASE_URL = process.env.BACKEND_URL
 
 export async function GET() {
   try {
