@@ -193,7 +193,11 @@ export default function ThoughtsPanel({ thoughts, incident, isVisible, canIntera
 
           // Server has new assistant content but hasn't persisted all our user messages yet.
           // Keep server order and append only the optimistic user messages the server is missing.
-          const optimisticTail = localUserMessages.slice(serverUserMessages.length);
+          // Re-key with "optimistic-" prefix to avoid React key collisions with server-indexed IDs.
+          const optimisticTail = localUserMessages.slice(serverUserMessages.length).map((m) => ({
+            ...m,
+            id: `optimistic-${m.id}`,
+          }));
           return [...messages, ...optimisticTail];
         }
         return messages;
