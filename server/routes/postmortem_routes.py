@@ -319,6 +319,18 @@ def export_to_confluence(user_id, incident_id):
                 cursor.execute("SET myapp.current_user_id = %s", (user_id,))
                 cursor.execute("SET myapp.current_org_id = %s", (org_id,))
                 conn.commit()
+                # Write to normalized exports table
+                cursor.execute(
+                    """INSERT INTO postmortem_exports
+                           (postmortem_id, org_id, destination, external_id, external_url, exported_at)
+                       VALUES (%s, %s, 'confluence', %s, %s, CURRENT_TIMESTAMP)
+                       ON CONFLICT (postmortem_id, destination)
+                       DO UPDATE SET external_id = EXCLUDED.external_id,
+                                     external_url = EXCLUDED.external_url,
+                                     exported_at = EXCLUDED.exported_at""",
+                    (str(postmortem_id), org_id, str(page_id), page_url),
+                )
+                # Keep legacy columns in sync
                 cursor.execute(
                     """UPDATE postmortems
                        SET confluence_page_id = %s,
@@ -611,6 +623,19 @@ def export_to_jira(user_id, incident_id):
                 cursor.execute("SET myapp.current_user_id = %s", (user_id,))
                 cursor.execute("SET myapp.current_org_id = %s", (org_id,))
                 conn.commit()
+                # Write to normalized exports table
+                cursor.execute(
+                    """INSERT INTO postmortem_exports
+                           (postmortem_id, org_id, destination, external_id, external_key, external_url, exported_at)
+                       VALUES (%s, %s, 'jira', %s, %s, %s, CURRENT_TIMESTAMP)
+                       ON CONFLICT (postmortem_id, destination)
+                       DO UPDATE SET external_id = EXCLUDED.external_id,
+                                     external_key = EXCLUDED.external_key,
+                                     external_url = EXCLUDED.external_url,
+                                     exported_at = EXCLUDED.exported_at""",
+                    (str(postmortem_id), org_id, str(parent_id), parent_key, parent_url),
+                )
+                # Keep legacy columns in sync
                 cursor.execute(
                     """UPDATE postmortems
                        SET jira_issue_id = %s,
