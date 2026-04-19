@@ -57,7 +57,7 @@ def list_policies(user_id):
         with conn.cursor() as cur:
             cur.execute(
                 "SELECT id, mode, pattern, description, priority, enabled, "
-                "created_at, updated_at, updated_by "
+                "created_at, updated_at, updated_by, source "
                 "FROM org_command_policies WHERE org_id = %s ORDER BY priority DESC",
                 (org_id,),
             )
@@ -73,6 +73,7 @@ def list_policies(user_id):
             "created_at": r[6].isoformat() if r[6] else None,
             "updated_at": r[7].isoformat() if r[7] else None,
             "updated_by": r[8],
+            "source": r[9] or "custom",
         }
         (allow_rules if r[1] == "allow" else deny_rules).append(rule)
 
@@ -337,15 +338,15 @@ def apply_template(user_id):
     with db_pool.get_admin_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "DELETE FROM org_command_policies WHERE org_id = %s",
+                "DELETE FROM org_command_policies WHERE org_id = %s AND source = 'template'",
                 (org_id,),
             )
             for mode_key in ("allow", "deny"):
                 for rule in tpl[mode_key]:
                     cur.execute(
                         "INSERT INTO org_command_policies "
-                        "(org_id, mode, pattern, description, priority, updated_by) "
-                        "VALUES (%s, %s, %s, %s, %s, %s)",
+                        "(org_id, mode, pattern, description, priority, updated_by, source) "
+                        "VALUES (%s, %s, %s, %s, %s, %s, 'template')",
                         (org_id, mode_key, rule["pattern"],
                          rule["description"], rule["priority"], user_id),
                     )
@@ -378,7 +379,7 @@ def clear_active_template(user_id):
     from utils.db.connection_pool import db_pool
     with db_pool.get_admin_connection() as conn:
         with conn.cursor() as cur:
-            cur.execute("DELETE FROM org_command_policies WHERE org_id = %s", (org_id,))
+            cur.execute("DELETE FROM org_command_policies WHERE org_id = %s AND source = 'template'", (org_id,))
             cur.execute(pref_upsert, (org_key, org_id, "command_policy_active_template", json.dumps(None)))
             cur.execute(pref_upsert, (org_key, org_id, "command_policy_allowlist", json.dumps("off")))
             cur.execute(pref_upsert, (org_key, org_id, "command_policy_denylist", json.dumps("off")))

@@ -10,6 +10,7 @@ export interface CommandPolicyRule {
   created_at?: string;
   updated_at?: string;
   updated_by?: string;
+  source?: "template" | "custom";
 }
 
 export interface PoliciesResponse {

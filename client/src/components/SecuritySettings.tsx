@@ -47,6 +47,9 @@ function RuleList({
           <span className="text-xs text-muted-foreground truncate min-w-0 flex-1">
             {rule.description}
           </span>
+          {rule.source === "template" && (
+            <span className="text-[10px] text-muted-foreground/60 shrink-0">tpl</span>
+          )}
           <Button
             variant="ghost"
             size="sm"

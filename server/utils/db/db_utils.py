@@ -390,7 +390,8 @@ def initialize_tables():
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         updated_by VARCHAR(255),
-                        UNIQUE(org_id, mode, pattern)
+                        source VARCHAR(20) DEFAULT 'custom' NOT NULL,
+                        UNIQUE(org_id, mode, pattern, source)
                     );
                     CREATE INDEX IF NOT EXISTS idx_ocp_org
                         ON org_command_policies(org_id);
