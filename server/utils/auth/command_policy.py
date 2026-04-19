@@ -125,6 +125,7 @@ def _get_cached(org_id: str) -> Tuple[List[PolicyRule], List[PolicyRule], ListSt
 def evaluate_command(org_id: Optional[str], command: str) -> CommandVerdict:
     """Core gate. Returns whether *command* is allowed for *org_id*."""
     if not org_id:
+        logger.info("policy_check_skipped reason=no_org_context func=evaluate_command")
         return CommandVerdict(allowed=True)
 
     allow_rules, deny_rules, states = _get_cached(org_id)
@@ -146,13 +147,23 @@ def evaluate_command(org_id: Optional[str], command: str) -> CommandVerdict:
     return CommandVerdict(allowed=True)
 
 
+_UNSPLITTABLE_SHELL_RE = re.compile(r"<<-?\s*\w+|<\(|>\(")
+
+
 def _split_compound_command(compound: str) -> List[str]:
     """Quote-aware split of a shell expression into atomic commands.
 
     Splits on ; && || | while respecting single/double quotes and backslash
     escapes.  Recursively extracts commands from $(...) and backtick subshells
     so they are evaluated independently.
+
+    Falls back to evaluating the full string when heredocs or process
+    substitution are detected, since these constructs hide arbitrary content
+    from a naive splitter.
     """
+    if _UNSPLITTABLE_SHELL_RE.search(compound):
+        return [compound]
+
     commands: List[str] = []
     buf: List[str] = []
     sq = dq = False
@@ -244,6 +255,7 @@ def evaluate_compound_command(
     returned immediately.
     """
     if not org_id:
+        logger.info("policy_check_skipped reason=no_org_context func=evaluate_compound_command")
         return CommandVerdict(allowed=True)
 
     parts = _split_compound_command(command)
@@ -365,7 +377,7 @@ def get_policy_templates() -> List[dict]:
                 {"priority": 190, "pattern": r"^(kubectl|oc)\s+(get|describe|logs|top|explain|api-resources|api-versions|cluster-info|config\s+(view|get-contexts|current-context|use-context))\b",
                  "description": "Read-only Kubernetes queries"},
                 # AWS CLI -- matches all read-only verbs and subcommands that the session policy permits
-                {"priority": 180, "pattern": r"^aws\s+.+\b(ls|list|describe|get|show|head|filter|start-query|stop-query|test-metric-filter|update-kubeconfig|wait)\b",
+                {"priority": 180, "pattern": r"^aws\s+\S+\s+(ls|list|describe[-\w]*|get[-\w]*|show[-\w]*|head[-\w]*|filter[-\w]*|start-query|stop-query|test-metric-filter|update-kubeconfig|wait)\b",
                  "description": "AWS read-only operations (EC2, EKS, S3, RDS, Lambda, IAM, CloudWatch, Logs, ECS, CloudFormation)"},
                 {"priority": 179, "pattern": r"^aws\s+s3\s+(ls|cp\s+s3://|presign|sync\s+s3://)",
                  "description": "AWS S3 read operations (ls, download, presign)"},
@@ -435,7 +447,9 @@ def get_policy_templates() -> List[dict]:
                 "Allows SSH, kubectl exec, cloud CLI config commands, and "
                 "container inspection on top of full read-only access. "
                 "Suitable for incident response and debugging. Still blocks "
-                "infrastructure mutations and dangerous patterns."
+                "infrastructure mutations and dangerous patterns. "
+                "Note: kubectl run is allowed for ad-hoc pods; image constraints "
+                "should be enforced by cluster admission controllers."
             ),
             "allow": [
                 # Filesystem
@@ -445,7 +459,7 @@ def get_policy_templates() -> List[dict]:
                 {"priority": 190, "pattern": r"^(kubectl|oc)\s+(get|describe|logs|top|explain|api-resources|api-versions|cluster-info|config\s+(view|get-contexts|current-context|use-context)|exec|cp|attach|port-forward|run\s+.*--rm\b.*--restart=Never)\b",
                  "description": "Kubernetes read and interactive debug operations"},
                 # AWS full read + config
-                {"priority": 180, "pattern": r"^aws\s+.+\b(ls|list|describe|get|show|head|filter|start-query|stop-query|test-metric-filter|update-kubeconfig|configure|wait)\b",
+                {"priority": 180, "pattern": r"^aws\s+\S+\s+(ls|list|describe[-\w]*|get[-\w]*|show[-\w]*|head[-\w]*|filter[-\w]*|start-query|stop-query|test-metric-filter|update-kubeconfig|configure|wait)\b",
                  "description": "AWS read and config operations"},
                 {"priority": 179, "pattern": r"^aws\s+s3\s+(ls|cp\s+s3://|presign|sync\s+s3://)",
                  "description": "AWS S3 read operations"},

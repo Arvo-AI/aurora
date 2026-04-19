@@ -4,6 +4,7 @@ Blueprint: command_policies_bp
 Prefix: /api/org
 """
 
+import json
 import logging
 from datetime import datetime
 
@@ -109,16 +110,21 @@ def create_policy(user_id):
         return jsonify({"error": "Invalid regex pattern"}), 400
 
     from utils.db.connection_pool import db_pool
-    with db_pool.get_admin_connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                "INSERT INTO org_command_policies "
-                "(org_id, mode, pattern, description, priority, updated_by) "
-                "VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
-                (org_id, mode, pattern, description, priority, user_id),
-            )
-            new_id = cur.fetchone()[0]
-        conn.commit()
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO org_command_policies "
+                    "(org_id, mode, pattern, description, priority, updated_by) "
+                    "VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
+                    (org_id, mode, pattern, description, priority, user_id),
+                )
+                new_id = cur.fetchone()[0]
+            conn.commit()
+    except Exception as e:
+        if "unique" in str(e).lower() or "duplicate" in str(e).lower():
+            return jsonify({"error": "A rule with this mode and pattern already exists"}), 409
+        raise
 
     invalidate_cache(org_id)
     return jsonify({"id": new_id, "status": "created"}), 201
@@ -320,6 +326,13 @@ def apply_template(user_id):
     if not tpl:
         return jsonify({"error": f"Unknown template: {template_id}"}), 400
 
+    org_key = f"__org__{org_id}"
+    pref_upsert = (
+        "INSERT INTO user_preferences (user_id, org_id, preference_key, preference_value) "
+        "VALUES (%s, %s, %s, %s) "
+        "ON CONFLICT (user_id, org_id, preference_key) DO UPDATE "
+        "SET preference_value = EXCLUDED.preference_value, updated_at = CURRENT_TIMESTAMP"
+    )
     from utils.db.connection_pool import db_pool
     with db_pool.get_admin_connection() as conn:
         with conn.cursor() as cur:
@@ -336,12 +349,10 @@ def apply_template(user_id):
                         (org_id, mode_key, rule["pattern"],
                          rule["description"], rule["priority"], user_id),
                     )
+            cur.execute(pref_upsert, (org_key, org_id, "command_policy_allowlist", json.dumps("on")))
+            cur.execute(pref_upsert, (org_key, org_id, "command_policy_denylist", json.dumps("on")))
+            cur.execute(pref_upsert, (org_key, org_id, "command_policy_active_template", json.dumps(template_id)))
         conn.commit()
-
-    org_key = f"__org__{org_id}"
-    store_user_preference(org_key, "command_policy_allowlist", "on")
-    store_user_preference(org_key, "command_policy_denylist", "on")
-    store_user_preference(org_key, "command_policy_active_template", template_id)
 
     invalidate_cache(org_id)
     return jsonify({"status": "applied", "template_id": template_id, **_list_states(org_id)})
@@ -357,16 +368,21 @@ def clear_active_template(user_id):
     if not org_id:
         return jsonify({"error": "No organization context"}), 403
 
+    org_key = f"__org__{org_id}"
+    pref_upsert = (
+        "INSERT INTO user_preferences (user_id, org_id, preference_key, preference_value) "
+        "VALUES (%s, %s, %s, %s) "
+        "ON CONFLICT (user_id, org_id, preference_key) DO UPDATE "
+        "SET preference_value = EXCLUDED.preference_value, updated_at = CURRENT_TIMESTAMP"
+    )
     from utils.db.connection_pool import db_pool
     with db_pool.get_admin_connection() as conn:
         with conn.cursor() as cur:
             cur.execute("DELETE FROM org_command_policies WHERE org_id = %s", (org_id,))
+            cur.execute(pref_upsert, (org_key, org_id, "command_policy_active_template", json.dumps(None)))
+            cur.execute(pref_upsert, (org_key, org_id, "command_policy_allowlist", json.dumps("off")))
+            cur.execute(pref_upsert, (org_key, org_id, "command_policy_denylist", json.dumps("off")))
         conn.commit()
-
-    org_key = f"__org__{org_id}"
-    store_user_preference(org_key, "command_policy_active_template", None)
-    store_user_preference(org_key, "command_policy_allowlist", "off")
-    store_user_preference(org_key, "command_policy_denylist", "off")
 
     invalidate_cache(org_id)
     return jsonify({"status": "cleared", **_list_states(org_id)})

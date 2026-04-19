@@ -122,7 +122,11 @@ def build_prompt_segments(
             if org_id:
                 security_policy = get_policy_prompt_text(org_id)
         except Exception as e:
-            logging.warning("Failed to build security policy segment: %s", e)
+            logging.error("Failed to build security policy segment: %s", e)
+            security_policy = (
+                "IMPORTANT: This organization has command policies but they could not be loaded. "
+                "Warn the user before running commands, as they may be denied by policy enforcement."
+            )
 
     return PromptSegments(
         system_invariant=system_invariant,

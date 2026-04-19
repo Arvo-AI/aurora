@@ -381,7 +381,7 @@ def initialize_tables():
                 "org_command_policies": """
                     CREATE TABLE IF NOT EXISTS org_command_policies (
                         id SERIAL PRIMARY KEY,
-                        org_id VARCHAR(255) NOT NULL,
+                        org_id VARCHAR(255) NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
                         mode VARCHAR(20) NOT NULL CHECK (mode IN ('allow', 'deny')),
                         pattern TEXT NOT NULL,
                         description TEXT,
@@ -389,7 +389,8 @@ def initialize_tables():
                         enabled BOOLEAN DEFAULT true,
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        updated_by VARCHAR(255)
+                        updated_by VARCHAR(255),
+                        UNIQUE(org_id, mode, pattern)
                     );
                     CREATE INDEX IF NOT EXISTS idx_ocp_org
                         ON org_command_policies(org_id);
