@@ -209,6 +209,15 @@ export default function ConnectorCard({ connector, connectedOverride }: Connecto
       return;
     }
 
+    if (connector.id === "tailscale") {
+      if (!isConnected) {
+        router.push("/tailscale/onboarding");
+      } else {
+        router.push("/tailscale/manage");
+      }
+      return;
+    }
+
     if (connector.id === "onprem") {
       if (!isConnected) {
         router.push("/settings/ssh-keys");
