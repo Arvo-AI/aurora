@@ -381,8 +381,6 @@ def clear_active_template(user_id):
         with conn.cursor() as cur:
             cur.execute("DELETE FROM org_command_policies WHERE org_id = %s AND source = 'template'", (org_id,))
             cur.execute(pref_upsert, (org_key, org_id, "command_policy_active_template", json.dumps(None)))
-            cur.execute(pref_upsert, (org_key, org_id, "command_policy_allowlist", json.dumps("off")))
-            cur.execute(pref_upsert, (org_key, org_id, "command_policy_denylist", json.dumps("off")))
         conn.commit()
 
     invalidate_cache(org_id)
