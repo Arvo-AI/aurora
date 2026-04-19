@@ -1406,6 +1406,30 @@ Security & Compliance
 
         normalized_provider = _normalize_cloud_exec_provider(provider)
         provider = normalized_provider
+
+        # Org command policy check -- must run before any execution path branches
+        # Prepend CLI prefix so patterns like ^aws\s+ match (cloud_exec receives
+        # the subcommand without the provider prefix, e.g. "ecs list-clusters").
+        _CLI_PREFIX = {"aws": "aws", "gcp": "gcloud", "azure": "az",
+                       "scaleway": "scw", "ovh": "ovhcloud"}
+        from utils.auth.command_policy import evaluate_compound_command
+        from utils.auth.stateless_auth import get_org_id_for_user
+        org_id = get_org_id_for_user(user_id) if user_id else None
+        prefix = _CLI_PREFIX.get(provider.lower(), "")
+        policy_cmd = f"{prefix} {command}" if prefix and not command.strip().startswith(prefix) else command
+        verdict = evaluate_compound_command(org_id, policy_cmd)
+        if not verdict.allowed:
+            reason = (verdict.rule_description or "Matched organization policy")[:200]
+            logger.warning("Policy denied cloud command for user %s (%s)",
+                            user_id, reason)
+            return json.dumps({
+                "success": False,
+                "error": f"Command blocked by organization policy: {reason}",
+                "code": "POLICY_DENIED",
+                "final_command": command,
+                "provider": provider.lower(),
+            })
+
         # Set up ISOLATED environment based on provider - NO GLOBAL STATE!
         isolated_env = None
         auth_command = None
@@ -1806,6 +1830,7 @@ Security & Compliance
                 "final_command": command,
                 "provider": provider.lower(),
             })
+
 
         # If command is potentially action, ask for confirmation first (after command processing)
         if not is_read_only_command(command):

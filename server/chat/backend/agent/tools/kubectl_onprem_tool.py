@@ -41,7 +41,27 @@ def on_prem_kubectl(
     command = command.strip()
     if command.lower().startswith('kubectl '):
         command = command[8:].strip()
-    
+
+    # Org command policy check against full kubectl command
+    from utils.auth.command_policy import evaluate_compound_command
+    from utils.auth.stateless_auth import get_org_id_for_user
+    full_command = f"kubectl {command}"
+    org_id = get_org_id_for_user(user_id) if user_id else None
+    verdict = evaluate_compound_command(org_id, full_command)
+    if not verdict.allowed:
+        reason = (verdict.rule_description or "Matched organization policy")[:200]
+        logger.warning("Policy denied kubectl_onprem command for user %s (%s)",
+                        user_id, reason)
+        return json.dumps({
+            'success': False,
+            'error': f"Command blocked by organization policy: {reason}",
+            'code': 'POLICY_DENIED',
+            'chat_output': f"$ {full_command}\nBlocked by organization policy: {reason}",
+            'command': full_command,
+            'return_code': 1,
+            'provider': 'onprem_kubectl',
+        })
+
     # Call internal API on chatbot service
     try:
         chatbot_url = os.getenv('CHATBOT_INTERNAL_URL')

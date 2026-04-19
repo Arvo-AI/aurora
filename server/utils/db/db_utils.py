@@ -378,6 +378,24 @@ def initialize_tables():
                         UNIQUE(user_id, org_id, preference_key)
                     );
                 """,
+                "org_command_policies": """
+                    CREATE TABLE IF NOT EXISTS org_command_policies (
+                        id SERIAL PRIMARY KEY,
+                        org_id VARCHAR(255) NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+                        mode VARCHAR(20) NOT NULL CHECK (mode IN ('allow', 'deny')),
+                        pattern TEXT NOT NULL,
+                        description TEXT,
+                        priority INT DEFAULT 0,
+                        enabled BOOLEAN DEFAULT true,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_by VARCHAR(255),
+                        source VARCHAR(20) DEFAULT 'custom' NOT NULL,
+                        UNIQUE(org_id, mode, pattern, source)
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_ocp_org
+                        ON org_command_policies(org_id);
+                """,
                 "workspaces": """
                     CREATE TABLE IF NOT EXISTS workspaces (
                         id VARCHAR(50) PRIMARY KEY,
@@ -1173,6 +1191,7 @@ def initialize_tables():
             rls_tables.append("incident_lifecycle_events")
             rls_tables.append("github_connected_repos")
             rls_tables.append("execution_steps")
+            rls_tables.append("org_command_policies")
 
 
             # Migration: Add rca_celery_task_id column to incidents table if it doesn't exist

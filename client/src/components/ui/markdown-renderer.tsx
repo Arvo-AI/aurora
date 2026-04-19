@@ -67,7 +67,7 @@ const components = {
       ? children.map(processChildren)
       : processChildren(children);
 
-    return <div className="mb-4" {...props}>{processedChildren}</div>;
+    return <div className="mb-4 last:mb-0" {...props}>{processedChildren}</div>;
   },
   code: ({ node, inline, className, children, ...props }: any) => {
     const match = /language-(\w+)/.exec(className || "");
@@ -165,6 +165,11 @@ const components = {
       </pre>
     );
   },
+  table: ({ children, ...props }: any) => (
+    <div className="overflow-x-auto max-w-full my-4">
+      <table className="min-w-full text-sm" {...props}>{children}</table>
+    </div>
+  ),
   a: ({ href, children, ...props }: any) => {
     if (href) {
       const jiraMatch = jiraUrlRe.exec(href);
