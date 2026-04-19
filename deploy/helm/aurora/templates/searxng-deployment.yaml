@@ -35,6 +35,11 @@ spec:
           ports:
             - name: http
               containerPort: 8080
+          env:
+            - name: UWSGI_WORKERS
+              value: "2"
+            - name: UWSGI_THREADS
+              value: "2"
           envFrom:
             - configMapRef:
                 name: {{ include "aurora.fullname" . }}-config
