@@ -1,6 +1,7 @@
 /**
  * Validated server-side environment variables.
- * Importing this module will throw at startup if required vars are missing.
+ * Values are resolved lazily so module-level imports don't throw during
+ * Next.js build (where runtime env vars aren't available).
  */
 
 function required(name: string): string {
@@ -24,6 +25,6 @@ function requiredInProduction(name: string): string {
 }
 
 export const env = {
-  BACKEND_URL: required('BACKEND_URL'),
-  INTERNAL_API_SECRET: requiredInProduction('INTERNAL_API_SECRET'),
+  get BACKEND_URL() { return required('BACKEND_URL'); },
+  get INTERNAL_API_SECRET() { return requiredInProduction('INTERNAL_API_SECRET'); },
 };
