@@ -57,10 +57,11 @@ When asked to delete, remove, stop, or destroy resources:
 Choose the approach based on whether resources are terraform-managed.
 
 TOOL FALLBACK STRATEGY:
-If a chosen tool (CLI or IaC) repeatedly fails, try the alternative approach:
+If a chosen tool (CLI or IaC) repeatedly fails, try the alternative authorized approach:
 - If cloud_exec consistently fails, attempt the same operation using iac_tool: write -> plan -> apply.
 - If iac_tool consistently fails, try direct cloud_exec commands as an alternative.
 - Both cloud_exec and iac_tool can achieve similar results — they are complementary.
+- If access is denied or authentication fails, do NOT attempt workarounds - report the access issue.
 - Common failures to watch for: resource not found, permission denied, API rate limits, syntax errors, state conflicts.
 - For unfamiliar errors, use web_search to find up-to-date solutions.
 

@@ -43,6 +43,7 @@ def build_system_invariant(is_background: bool = False) -> str:
     if is_background:
         return load_core_prompt(core_dir, segments=[
             "identity",
+            "security",
             "knowledge_base",
             "error_handling",
             "investigation",
@@ -51,6 +52,7 @@ def build_system_invariant(is_background: bool = False) -> str:
 
     return load_core_prompt(core_dir, segments=[
         "identity",
+        "security",
         "knowledge_base",
         "tool_selection",
         "ssh_access",
@@ -112,6 +114,22 @@ def build_prompt_segments(
     if state and hasattr(state, 'user_id'):
         knowledge_base_memory = build_knowledge_base_memory_segment(state.user_id)
 
+    # Build org-level command policy segment
+    security_policy = ""
+    if state and hasattr(state, 'user_id'):
+        try:
+            from utils.auth.stateless_auth import get_org_id_for_user
+            from utils.auth.command_policy import get_policy_prompt_text
+            org_id = get_org_id_for_user(state.user_id)
+            if org_id:
+                security_policy = get_policy_prompt_text(org_id)
+        except Exception as e:
+            logging.error("Failed to build security policy segment: %s", e)
+            security_policy = (
+                "IMPORTANT: This organization has command policies but they could not be loaded. "
+                "Warn the user before running commands, as they may be denied by policy enforcement."
+            )
+
     return PromptSegments(
         system_invariant=system_invariant,
         provider_constraints=provider_constraints,
@@ -127,11 +145,15 @@ def build_prompt_segments(
         manual_vm_access=manual_vm_access,
         knowledge_base_memory=knowledge_base_memory,
         integration_index=integration_index,
+        security_policy=security_policy,
     )
 
 
 def assemble_system_prompt(segments: PromptSegments) -> str:  # main prompt builder
     parts: List[str] = []
+    # Security policy included early for visibility
+    if segments.security_policy:
+        parts.append(segments.security_policy)
     # Background mode comes first if present (important RCA context)
     if segments.background_mode:
         parts.append(segments.background_mode)
@@ -160,4 +182,6 @@ def assemble_system_prompt(segments: PromptSegments) -> str:  # main prompt buil
         parts.append(segments.terraform_validation)
     if segments.failure_recovery and not segments.background_mode:
         parts.append(segments.failure_recovery)
+    if segments.security_policy:
+        parts.append("REMINDER: Commands that violate the organization policy will be rejected. Do not attempt workarounds.")
     return "\n".join(parts)

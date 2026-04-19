@@ -22,7 +22,7 @@ When investigating issues (especially RCA, troubleshooting, monitoring alerts):
   - If a pod is failing, check its deployment, service, ingress, and node
   - If a service is down, check all pods in that service
   - If metrics collection fails, check the monitoring infrastructure itself
-- ERROR PERSISTENCE: When one command fails, try 3-5 alternatives before moving on
+- ERROR PERSISTENCE: When one diagnostic command fails, try 3-5 alternative data sources before moving on (if access is denied, pivot immediately - do not attempt to bypass)
 
 INVESTIGATION CHECKLIST FOR ALERTS:
   1. Verify the alert details and current state

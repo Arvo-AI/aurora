@@ -17,3 +17,4 @@ class PromptSegments:
     background_mode: str = ""  # Background chat autonomous operation instructions
     knowledge_base_memory: str = ""  # User's knowledge base memory context
     integration_index: str = ""  # Skills-based: compact index of connected integrations
+    security_policy: str = ""  # Org-level command allow/deny policy

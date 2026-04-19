@@ -296,6 +296,114 @@ async def process_workflow_async(wf, state, websocket, user_id, incident_id=None
                     except Exception as e:
                         logger.error(f"[BackgroundChat] Failed to save thought: {e}")
     
+    # Helper to incrementally save streaming chat messages for background chats.
+    # Same pattern as save_incident_thought but writes to chat_sessions.messages
+    # so the frontend's 2s polling can show partial responses.
+    is_background = getattr(state, 'is_background', False)
+    accumulated_chat_msg = []
+    last_chat_save_time = [time.time()]
+
+    def save_streaming_chat_message(content: str, force: bool = False):
+        """Incrementally save the assistant's streaming response to chat_sessions.messages."""
+        if not is_background or not session_id or session_id == 'unknown':
+            return
+
+        if content:
+            accumulated_chat_msg.append(content)
+
+        accumulated_text = "".join(accumulated_chat_msg)
+
+        if not accumulated_text:
+            return
+
+        current_time = time.time()
+        time_since_last = current_time - last_chat_save_time[0]
+
+        should_flush = force or time_since_last >= 1.5 or len(accumulated_text) >= 200
+        if not should_flush or (not force and len(accumulated_text) < 30):
+            return
+
+        try:
+            from utils.db.connection_pool import db_pool
+
+            with db_pool.get_admin_connection() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        "SELECT messages FROM chat_sessions WHERE id = %s FOR UPDATE",
+                        (session_id,),
+                    )
+                    row = cursor.fetchone()
+                    if not row:
+                        return
+
+                    messages = row[0] if row[0] else []
+                    if isinstance(messages, str):
+                        messages = json.loads(messages)
+
+                    # Update existing streaming bot message or append a new one
+                    bot_msg = None
+                    for msg in reversed(messages):
+                        if msg.get("sender") == "bot" and msg.get("_streaming"):
+                            bot_msg = msg
+                            break
+
+                    if bot_msg:
+                        bot_msg["text"] = accumulated_text
+                    else:
+                        messages.append({
+                            "sender": "bot",
+                            "text": accumulated_text,
+                            "_streaming": True,
+                        })
+
+                    cursor.execute(
+                        "UPDATE chat_sessions SET messages = %s, updated_at = %s WHERE id = %s",
+                        (json.dumps(messages), datetime.now(), session_id),
+                    )
+                conn.commit()
+                last_chat_save_time[0] = current_time
+                logger.debug(f"[BackgroundChat] Saved streaming message for session {session_id}: {len(accumulated_text)} chars")
+        except Exception as e:
+            logger.error(f"[BackgroundChat] Failed to save streaming chat message: {e}")
+
+    def finalize_streaming_chat_message():
+        """Clear the _streaming flag from the last bot message in chat_sessions.messages."""
+        if not is_background or not session_id or session_id == 'unknown':
+            return
+
+        try:
+            from utils.db.connection_pool import db_pool
+
+            with db_pool.get_admin_connection() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        "SELECT messages FROM chat_sessions WHERE id = %s FOR UPDATE",
+                        (session_id,),
+                    )
+                    row = cursor.fetchone()
+                    if not row:
+                        return
+
+                    messages = row[0] if row[0] else []
+                    if isinstance(messages, str):
+                        messages = json.loads(messages)
+
+                    modified = False
+                    for msg in messages:
+                        if msg.get("_streaming"):
+                            del msg["_streaming"]
+                            modified = True
+
+                    if modified:
+                        cursor.execute(
+                            "UPDATE chat_sessions SET messages = %s, updated_at = %s WHERE id = %s",
+                            (json.dumps(messages), datetime.now(), session_id),
+                        )
+                        conn.commit()
+                        logger.debug(f"[BackgroundChat] Finalized streaming flags for session {session_id}")
+        except Exception as e:
+            logger.error(f"[BackgroundChat] Failed to finalize streaming chat message: {e}")
+
     # Helper function to send messages via the appropriate sender
     async def send_via_appropriate_sender(message_data):
         nonlocal websocket_connected
@@ -369,6 +477,7 @@ async def process_workflow_async(wf, state, websocket, user_id, incident_id=None
                                 await send_via_appropriate_sender(msg_response)
                                 # Save tokens incrementally to incident thoughts
                                 save_incident_thought(token_text, force=False)
+                                save_streaming_chat_message(token_text, force=False)
                     
                     elif event_type == "values":
                         # Final state update
@@ -461,6 +570,7 @@ async def process_workflow_async(wf, state, websocket, user_id, incident_id=None
                                                 await send_via_appropriate_sender(msg_response)
                                                 # Save to incident thoughts incrementally
                                                 save_incident_thought(current_chunk, force=False)
+                                                save_streaming_chat_message(current_chunk, force=False)
                                                 current_chunk = ""
                                     
                                     # Send any remaining content
@@ -479,6 +589,7 @@ async def process_workflow_async(wf, state, websocket, user_id, incident_id=None
                                         logger.debug(f"[STREAM SEND] Sending final split chunk ({len(current_chunk)} chars)")
                                         await send_via_appropriate_sender(msg_response)
                                         save_incident_thought(current_chunk, force=False)
+                                        save_streaming_chat_message(current_chunk, force=False)
                     elif event_type == "values":
                         # Handle "values" events - complete messages from state updates
                         if hasattr(event_data, 'messages') and event_data.messages and websocket_connected:
@@ -534,6 +645,11 @@ async def process_workflow_async(wf, state, websocket, user_id, incident_id=None
                                             # Force save accumulated thought before starting new message
                                             save_incident_thought("", force=True)
                                             save_incident_thought(message.content, force=False)
+                                            # Finalize current streaming message and start fresh
+                                            save_streaming_chat_message("", force=True)
+                                            finalize_streaming_chat_message()
+                                            accumulated_chat_msg.clear()
+                                            save_streaming_chat_message(message.content, force=False)
                                 sent_message_count = current_message_count
 
                     elif event_type == "usage_update":
@@ -579,6 +695,9 @@ async def process_workflow_async(wf, state, websocket, user_id, incident_id=None
         
         # Force save any remaining accumulated thought
         save_incident_thought("", force=True)
+
+        # Finalize streaming: clear _streaming flags from chat messages
+        finalize_streaming_chat_message()
         
         await send_end_status("completed")
         

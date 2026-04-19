@@ -9,10 +9,15 @@ from chat.backend.agent.utils.state import State
 import logging
 import json
 import asyncio
+import re
 from datetime import datetime
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
+
+RCA_SUMMARY_PREFIX = "[RCA Investigation Summary"
+
+_USER_MESSAGE_RE = re.compile(r'<user_message>\s*([\s\S]*?)\s*</user_message>')
 
 
 def _extract_text_from_content(content: Any, include_thinking: bool = False) -> str:
@@ -814,7 +819,7 @@ class Workflow:
 
         # 3. Take the recent tail (last N messages for conversational flow),
         #    excluding any previously injected synthetic RCA summaries to avoid duplication.
-        synthetic_prefix = "[RCA Investigation Summary"
+        synthetic_prefix = RCA_SUMMARY_PREFIX
         tail_source = [
             msg for msg in existing_context
             if not (
@@ -1429,6 +1434,12 @@ class Workflow:
                 # Do not include our special cancellation message in the UI
                 if '[URGENT CANCELLATION]' in content:
                     continue
+
+                # Strip context wrapper — backend wraps user questions in
+                # <user_message> tags for the LLM; store only the raw question.
+                match = _USER_MESSAGE_RE.search(content)
+                if match:
+                    content = match.group(1).strip()
                     
                 ui_messages.append({
                     'message_number': message_id,
@@ -1440,6 +1451,9 @@ class Workflow:
                 
             elif 'AI' in msg_type:
                 raw_content = getattr(msg, 'content', '')
+                # Skip synthetic RCA summary injected by _compress_rca_context
+                if isinstance(raw_content, str) and raw_content.startswith(RCA_SUMMARY_PREFIX):
+                    continue
                 # Extract text content (handles Gemini thinking model list format).
                 # Include thinking when text is empty and message has tool calls,
                 # so Gemini's reasoning appears in chat alongside tool cards.

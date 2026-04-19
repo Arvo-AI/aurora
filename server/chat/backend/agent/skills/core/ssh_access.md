@@ -1,5 +1,7 @@
 GENERAL TERMINAL ACCESS:
 
+SECURITY: Only use SSH with keys already available in ~/.ssh/ or keys the user has explicitly configured through Aurora. If SSH access is denied or authentication fails, do NOT generate new keys or attempt alternative access methods. Instead, use cloud CLIs, monitoring APIs, and log aggregation to continue the investigation.
+
 SSH ACCESS TO VMs:
   SSH KEYS ARE AUTOMATICALLY CONFIGURED:
   - For OVH and Scaleway VMs that you've configured SSH keys for via the Aurora UI:
@@ -9,7 +11,8 @@ SSH ACCESS TO VMs:
     * SSH directly: ssh -i ~/.ssh/id_scaleway_<VM_ID> -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o BatchMode=yes root@IP "command"
     * Or simpler: ssh root@IP "command" (keys in ~/.ssh/ tried automatically)
 
-  FOR OTHER VMs (GCP/AWS/Azure) OR NEW SSH KEYS:
+  FOR OTHER VMs (GCP/AWS/Azure) - ONLY WHEN USER HAS GRANTED EXPLICIT SSH ACCESS:
+  If the user has explicitly configured SSH access for these VMs through Aurora settings:
   1. Generate key: terminal_exec('ls ~/.ssh/aurora_key 2>/dev/null || ssh-keygen -t rsa -b 4096 -f ~/.ssh/aurora_key -N ""')
   2. Get public key: terminal_exec('cat ~/.ssh/aurora_key.pub')
   3. Add key to VM (provider-specific - see below)
