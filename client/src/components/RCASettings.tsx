@@ -3,7 +3,6 @@
 import { useState, useEffect } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { getEnv } from '@/lib/env';
 import { Switch } from "@/components/ui/switch";
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
@@ -66,30 +65,23 @@ export function RCASettings() {
       
       try {
         const keys = ['rca_email_notifications', 'rca_email_start_notifications'];
-        const newPreferences = { ...preferences };
+        const loaded: Record<string, boolean> = {};
 
         await Promise.all(keys.map(async (key) => {
           const response = await fetch(
-            `${getEnv('NEXT_PUBLIC_BACKEND_URL')}/api/user-preferences?key=${key}`,
-            {
-              headers: {
-                'Content-Type': 'application/json',
-                'X-User-ID': userId,
-              },
-            }
+            `/api/proxy/user-preferences?key=${key}`,
           );
 
           if (response.ok) {
             const data = await response.json();
             if (data.value !== null && data.value !== undefined) {
               const value = typeof data.value === 'boolean' ? data.value : data.value === 'true' || data.value === true;
-              // @ts-ignore
-              newPreferences[key] = value;
+              loaded[key] = value;
             }
           }
         }));
 
-        setPreferences(newPreferences);
+        setPreferences(prev => ({ ...prev, ...loaded }));
       } catch (error) {
         console.error("Error loading notification preferences:", error);
       } finally {
@@ -125,7 +117,7 @@ export function RCASettings() {
     
     try {
       setIsLoadingEmails(true);
-      const data = await listRCAEmails(userId);
+      const data = await listRCAEmails();
       setPrimaryEmail(data.primary_email || "");
       setAdditionalEmails(data.additional_emails);
     } catch (error) {
@@ -149,12 +141,11 @@ export function RCASettings() {
 
     try {
       const response = await fetch(
-        `${getEnv('NEXT_PUBLIC_BACKEND_URL')}/api/user-preferences`,
+        `/api/proxy/user-preferences`,
         {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'X-User-ID': userId,
           },
           body: JSON.stringify({
             key,
@@ -204,7 +195,7 @@ export function RCASettings() {
 
     try {
       setIsAddingEmail(true);
-      await addRCAEmail(userId, newEmail.trim().toLowerCase());
+      await addRCAEmail(newEmail.trim().toLowerCase());
       
       toast({
         title: "Verification Code Sent",
@@ -245,7 +236,7 @@ export function RCASettings() {
 
     try {
       setIsVerifying(true);
-      await verifyRCAEmail(userId, verifyingEmail, verificationCode.trim());
+      await verifyRCAEmail(verifyingEmail, verificationCode.trim());
       
       toast({
         title: "Email Verified",
@@ -277,7 +268,7 @@ export function RCASettings() {
 
     try {
       setIsResending(true);
-      await resendVerificationCode(userId, verifyingEmail);
+      await resendVerificationCode(verifyingEmail);
       
       toast({
         title: "Code Resent",
@@ -302,7 +293,7 @@ export function RCASettings() {
     if (!userId) return;
 
     try {
-      await toggleRCAEmail(userId, emailId, !currentStatus);
+      await toggleRCAEmail(emailId, !currentStatus);
       
       toast({
         title: !currentStatus ? "Email Enabled" : "Email Disabled",
@@ -330,7 +321,7 @@ export function RCASettings() {
     }
 
     try {
-      await removeRCAEmail(userId, emailId);
+      await removeRCAEmail(emailId);
       
       toast({
         title: "Email Removed",

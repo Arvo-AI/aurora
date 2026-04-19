@@ -102,24 +102,8 @@ export const useWebSocket = (config: WebSocketConfig) => {
       reconnectAttempts: 0
     }));
 
-    // Send initialization message with user_id
-    const userId = user?.id || configRef.current.userId || undefined;
-    if (userId && wsRef.current) {
-      const initMessage: WebSocketMessage = {
-        type: 'init',
-        user_id: userId
-      };
-      wsRef.current.send(JSON.stringify(initMessage));
-    } else {
-      console.warn('Cannot send init message - user not loaded or websocket not ready:', {
-        hasUser: !!user?.id,
-        hasConfigUserId: !!configRef.current.userId,
-        hasWebSocket: !!wsRef.current,
-      });
-    }
-
     configRef.current.onConnect?.();
-  }, [user?.id]);
+  }, []);
 
   const handleMessage = useCallback((event: MessageEvent) => {
     if (!mountedRef.current) return;
@@ -230,7 +214,51 @@ export const useWebSocket = (config: WebSocketConfig) => {
     }));
 
     try {
-      const ws = new WebSocket(configRef.current.url);
+      let wsUrl = configRef.current.url;
+
+      // Fetch a fresh token per connection (tokens are single-use via jti enforcement)
+      let token: string | null = null;
+      try {
+        const tokenRes = await fetch('/api/ws-token');
+        if (tokenRes.ok) {
+          const data = await tokenRes.json();
+          token = data.token || null;
+        } else if (tokenRes.status === 401 || tokenRes.status === 403) {
+          console.error('WS token auth failed (session expired), stopping reconnect');
+          shouldReconnectRef.current = false;
+          setState(prev => ({
+            ...prev,
+            isConnecting: false,
+            error: 'Session expired — please log in again'
+          }));
+          return;
+        } else {
+          console.error(`WS token fetch failed (status ${tokenRes.status}), will retry on next reconnect`);
+          setState(prev => ({
+            ...prev,
+            isConnecting: false,
+            error: 'Unable to obtain WebSocket token, retrying...'
+          }));
+          return;
+        }
+      } catch (tokenErr) {
+        console.error('Network error fetching WS token, will retry on next reconnect:', tokenErr);
+        setState(prev => ({
+          ...prev,
+          isConnecting: false,
+          error: 'Network error obtaining WebSocket token, retrying...'
+        }));
+        return;
+      }
+
+      // Build URL with token, replacing any existing token param
+      if (token) {
+        const parsed = new URL(wsUrl, window.location.origin);
+        parsed.searchParams.set('token', token);
+        wsUrl = parsed.toString();
+      }
+
+      const ws = new WebSocket(wsUrl);
       
       // Set binary type to handle different frame types
       ws.binaryType = 'arraybuffer';

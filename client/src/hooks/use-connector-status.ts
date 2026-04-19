@@ -2,7 +2,6 @@ import { useState, useEffect } from "react";
 import { GitHubIntegrationService } from "@/components/github-provider-integration";
 import { BitbucketIntegrationService } from "@/components/bitbucket-provider-integration";
 import { isOvhEnabled, isScalewayEnabled } from "@/lib/feature-flags";
-import { getEnv } from '@/lib/env';
 import type { ConnectorConfig } from "@/components/connectors/types";
 import { slackService } from "@/lib/services/slack";
 import { googleChatService } from "@/lib/services/google-chat";
@@ -78,9 +77,8 @@ export function useConnectorStatus(
 
 
   const checkGitHubStatus = async () => {
-    if (!userId) return;
     try {
-      const data = await GitHubIntegrationService.checkStatus(userId);
+      const data = await GitHubIntegrationService.checkStatus();
       setIsConnected(data.connected || false);
     } catch {
       setIsConnected(false);
@@ -90,9 +88,8 @@ export function useConnectorStatus(
   };
 
   const checkBitbucketStatus = async () => {
-    if (!userId) return;
     try {
-      const data = await BitbucketIntegrationService.checkStatus(userId);
+      const data = await BitbucketIntegrationService.checkStatus();
       setIsConnected(data.connected || false);
     } catch {
       setIsConnected(false);
@@ -156,13 +153,12 @@ export function useConnectorStatus(
         }
       }
 
-      const backendUrl = getEnv('NEXT_PUBLIC_BACKEND_URL');
-      if (!backendUrl || !userId) { setIsConnected(false); return; }
+      if (!userId) { setIsConnected(false); return; }
 
       if (isOvhEnabled()) {
         try {
-          const r = await fetchR(`${backendUrl}/ovh_api/ovh/instances`, {
-            headers: { "X-User-ID": userId }, credentials: "include",
+          const r = await fetchR(`/api/proxy/ovh/instances`, {
+            credentials: "include",
           });
           if (r.ok) {
             const d = await r.json();
@@ -173,8 +169,8 @@ export function useConnectorStatus(
 
       if (isScalewayEnabled()) {
         try {
-          const r = await fetchR(`${backendUrl}/scaleway_api/scaleway/instances`, {
-            headers: { "X-User-ID": userId }, credentials: "include",
+          const r = await fetchR(`/api/proxy/scaleway/instances`, {
+            credentials: "include",
           });
           if (r.ok) {
             const d = await r.json();

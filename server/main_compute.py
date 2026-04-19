@@ -11,6 +11,7 @@ load_dotenv()
 
 import logging
 import os
+import hmac
 import secrets
 import hmac
 from flask import Flask
@@ -220,35 +221,77 @@ CORS(app, origins=FRONTEND_URL, supports_credentials=True,
 # internal service) rather than from an unauthenticated external caller.
 
 _INTERNAL_API_SECRET = os.getenv("INTERNAL_API_SECRET", "")
-_OPEN_PATHS = frozenset(("/api/auth/login", "/api/auth/register", "/health"))
+_AURORA_ENV = os.getenv("AURORA_ENV", "production")
 
-if not _INTERNAL_API_SECRET:
-    logging.getLogger(__name__).warning(
-        "INTERNAL_API_SECRET is not set — internal secret verification is DISABLED. "
-        "All requests will be accepted without X-Internal-Secret header validation. "
-        "Set INTERNAL_API_SECRET in .env to enable this security layer."
+if _AURORA_ENV != "dev" and not _INTERNAL_API_SECRET:
+    raise RuntimeError(
+        "FATAL: INTERNAL_API_SECRET is not set and AURORA_ENV='%s' (non-dev). "
+        "Refusing to start without authentication secrets in production." % _AURORA_ENV
     )
+
+_OPEN_PATHS = frozenset(("/api/auth/login", "/api/auth/register"))
+
+_OPEN_PREFIXES = (
+    "/health",
+    "/gcp/callback",
+    "/github/callback",
+    "/bitbucket/callback",
+    "/slack/callback",
+    "/slack/events",
+    "/pagerduty/oauth/callback",
+    "/google-chat/callback",
+    "/google-chat/events",
+    "/datadog/webhook/",
+    "/grafana/alerts/webhook/",
+    "/splunk/alerts/webhook/",
+    "/netdata/alerts/webhook/",
+    "/bigpanda/webhook/",
+    "/dynatrace/webhook/",
+    "/newrelic/webhook/",
+    "/pagerduty/webhook/",
+    "/opsgenie/webhook/",
+    "/jenkins/webhook/",
+    "/cloudbees/webhook/",
+    "/spinnaker/webhook/",
+    "/ovh_api/ovh/oauth2/callback",
+    "/azure/setup-script",
+    "/azure/setup-script-ps1",
+    "/aws/setup-script",
+    "/aws/setup-role",
+    "/aws/setup-script-ps1",
+    "/aws/setup-role-ps1",
+)
 
 @app.before_request
 def verify_internal_api_secret():
     """Reject requests that don't carry a valid INTERNAL_API_SECRET header.
 
     Skipped when the secret is not configured (backward-compatible default)
-    and for open endpoints (login, register, health).
+    and for open endpoints (login, register, health) and external-facing
+    webhook/callback/event endpoints called by third-party services.
     """
     if not _INTERNAL_API_SECRET:
         return None
 
-    # Skip verification for OPTIONS requests (CORS preflight)
     if request.method == "OPTIONS":
         return None
 
-    # Check if one of our internal API paths is being accessed
     if request.path in _OPEN_PATHS:
+        return None
+
+    path = request.path
+    if any(
+        path == prefix or path.startswith(prefix + '/') or (prefix.endswith('/') and path.startswith(prefix))
+        for prefix in _OPEN_PREFIXES
+    ):
         return None
 
     provided = request.headers.get("X-Internal-Secret", "")
     if not provided or not hmac.compare_digest(provided, _INTERNAL_API_SECRET):
+        logger.warning(
+            "Rejected request missing/invalid X-Internal-Secret: %s %s from %s",
+            request.method, request.path, request.remote_addr,
+        )
         return jsonify({"error": "Forbidden: invalid or missing X-Internal-Secret header"}), 403
 
     return None
@@ -256,6 +299,9 @@ def verify_internal_api_secret():
 # ============================================================================
 # Tenant Isolation Middleware - Validates X-User-ID / X-Org-ID Pairing
 # ============================================================================
+
+# Separate from _OPEN_PREFIXES: this only skips routes that carry identity headers before auth completes (login/register); webhook routes don't need listing here because they lack X-User-ID/X-Org-ID and the check below short-circuits on missing headers.
+_TENANT_OPEN_PREFIXES = ("/api/auth/login", "/api/auth/register", "/health")
 
 @app.before_request
 def enforce_user_org_binding():
@@ -265,8 +311,7 @@ def enforce_user_org_binding():
     if request.method == "OPTIONS":
         return None
 
-    # Check if one of our internal API paths is being accessed
-    if request.path in _OPEN_PATHS:
+    if any(request.path.startswith(p) for p in _TENANT_OPEN_PREFIXES):
         return None
 
     user_id = request.headers.get("X-User-ID")
