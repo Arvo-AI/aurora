@@ -23,7 +23,7 @@ from utils.kubectl.agent_ws_handler import handle_kubectl_agent
 from datetime import datetime
 from dotenv import load_dotenv
 from typing import Optional
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs
 
 # Load environment variables
 load_dotenv()
@@ -122,7 +122,10 @@ def _validate_ws_token(websocket) -> dict | None:
 
         from utils.cache.redis_client import get_redis_client
         r = get_redis_client()
-        if r and not r.set(f"ws:jti:{jti}", "1", nx=True, ex=120):
+        if not r:
+            logger.error("Redis unavailable for jti replay check, rejecting token jti=%s", jti)
+            return None
+        if not r.set(f"ws:jti:{jti}", "1", nx=True, ex=120):
             logger.warning("WebSocket token replay detected: jti=%s", jti)
             return None
 

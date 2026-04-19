@@ -220,7 +220,7 @@ CORS(app, origins=FRONTEND_URL, supports_credentials=True,
 # internal service) rather than from an unauthenticated external caller.
 
 _INTERNAL_API_SECRET = os.getenv("INTERNAL_API_SECRET", "")
-_AURORA_ENV = os.getenv("AURORA_ENV", "dev")
+_AURORA_ENV = os.getenv("AURORA_ENV", "production")
 
 if _AURORA_ENV != "dev" and not _INTERNAL_API_SECRET:
     raise RuntimeError(
