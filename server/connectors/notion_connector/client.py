@@ -123,7 +123,9 @@ class NotionClient:
           - 5xx: exponential-backoff retry once.
         """
         if not _NOTION_BUCKET.acquire(timeout=10.0):
-            logger.warning("Notion rate-limit bucket timeout for %s %s", method, path)
+            raise RuntimeError(
+                f"Notion rate limit exceeded — please retry in a few seconds (path={path})"
+            )
 
         url = f"{NOTION_API_BASE}{path}"
         headers = _headers_override if _headers_override is not None else self._headers(
