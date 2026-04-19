@@ -220,6 +220,14 @@ CORS(app, origins=FRONTEND_URL, supports_credentials=True,
 # internal service) rather than from an unauthenticated external caller.
 
 _INTERNAL_API_SECRET = os.getenv("INTERNAL_API_SECRET", "")
+_AURORA_ENV = os.getenv("AURORA_ENV", "dev")
+
+if _AURORA_ENV != "dev" and not _INTERNAL_API_SECRET:
+    raise RuntimeError(
+        "FATAL: INTERNAL_API_SECRET is not set and AURORA_ENV='%s' (non-dev). "
+        "Refusing to start without authentication secrets in production." % _AURORA_ENV
+    )
+
 _OPEN_PATHS = frozenset(("/api/auth/login", "/api/auth/register"))
 
 _OPEN_PREFIXES = (
@@ -270,7 +278,11 @@ def verify_internal_api_secret():
     if request.path in _OPEN_PATHS:
         return None
 
-    if any(request.path.startswith(prefix) for prefix in _OPEN_PREFIXES):
+    path = request.path
+    if any(
+        path == prefix or path.startswith(prefix + '/') or (prefix.endswith('/') and path.startswith(prefix))
+        for prefix in _OPEN_PREFIXES
+    ):
         return None
 
     provided = request.headers.get("X-Internal-Secret", "")
@@ -287,6 +299,7 @@ def verify_internal_api_secret():
 # Tenant Isolation Middleware - Validates X-User-ID / X-Org-ID Pairing
 # ============================================================================
 
+# Separate from _OPEN_PREFIXES: this only skips routes that carry identity headers before auth completes (login/register); webhook routes don't need listing here because they lack X-User-ID/X-Org-ID and the check below short-circuits on missing headers.
 _TENANT_OPEN_PREFIXES = ("/api/auth/login", "/api/auth/register", "/health")
 
 @app.before_request

@@ -216,32 +216,46 @@ export const useWebSocket = (config: WebSocketConfig) => {
     try {
       let wsUrl = configRef.current.url;
 
-      // Fetch a short-lived token from the Next.js API route for handshake auth
+      // Fetch a fresh token per connection (tokens are single-use via jti enforcement)
+      let token: string | null = null;
       try {
         const tokenRes = await fetch('/api/ws-token');
         if (tokenRes.ok) {
-          const { token } = await tokenRes.json();
-          if (token) {
-            const separator = wsUrl.includes('?') ? '&' : '?';
-            wsUrl = `${wsUrl}${separator}token=${encodeURIComponent(token)}`;
-          }
-        } else {
-          console.error('Failed to fetch WS token, aborting connection');
+          const data = await tokenRes.json();
+          token = data.token || null;
+        } else if (tokenRes.status === 401 || tokenRes.status === 403) {
+          console.error('WS token auth failed (session expired), stopping reconnect');
+          shouldReconnectRef.current = false;
           setState(prev => ({
             ...prev,
             isConnecting: false,
-            error: 'Authentication failed: unable to obtain WebSocket token'
+            error: 'Session expired — please log in again'
+          }));
+          return;
+        } else {
+          console.error(`WS token fetch failed (status ${tokenRes.status}), will retry on next reconnect`);
+          setState(prev => ({
+            ...prev,
+            isConnecting: false,
+            error: 'Unable to obtain WebSocket token, retrying...'
           }));
           return;
         }
       } catch (tokenErr) {
-        console.error('Error fetching WS token:', tokenErr);
+        console.error('Network error fetching WS token, will retry on next reconnect:', tokenErr);
         setState(prev => ({
           ...prev,
           isConnecting: false,
-          error: 'Authentication failed: unable to obtain WebSocket token'
+          error: 'Network error obtaining WebSocket token, retrying...'
         }));
         return;
+      }
+
+      // Build URL with token, replacing any existing token param
+      if (token) {
+        const parsed = new URL(wsUrl, window.location.origin);
+        parsed.searchParams.set('token', token);
+        wsUrl = parsed.toString();
       }
 
       const ws = new WebSocket(wsUrl);

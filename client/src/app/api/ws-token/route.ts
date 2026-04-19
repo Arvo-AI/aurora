@@ -18,17 +18,19 @@ export async function GET() {
     );
   }
 
-  const secret = new TextEncoder().encode(INTERNAL_API_SECRET);
+  const encoder = new TextEncoder();
+  const wsKey = new Uint8Array([...encoder.encode(INTERNAL_API_SECRET), ...encoder.encode('aurora:ws-token-signing')]);
 
   const token = await new SignJWT({
     userId: session.userId,
     orgId: session.orgId ?? null,
+    aud: 'chatbot-ws',
     jti: crypto.randomUUID(),
   })
     .setProtectedHeader({ alg: 'HS256' })
     .setIssuedAt()
-    .setExpirationTime('60s')
-    .sign(secret);
+    .setExpirationTime('120s')
+    .sign(wsKey);
 
   return NextResponse.json({ token });
 }

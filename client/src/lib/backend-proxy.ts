@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getAuthenticatedUser } from '@/lib/auth-helper';
 import { env } from '@/lib/server-env';
 
+const METHODS_WITHOUT_BODY = new Set(['GET', 'HEAD', 'OPTIONS']);
+
 function buildUrl(backendPath: string, qs?: string): string {
   return qs ? `${env.BACKEND_URL}${backendPath}?${qs}` : `${env.BACKEND_URL}${backendPath}`;
 }
@@ -13,7 +15,7 @@ export async function forwardRequest(
   errorLabel: string,
   options: { timeoutMs?: number; passBody?: boolean } = {},
 ): Promise<NextResponse> {
-  const { timeoutMs = 10_000, passBody = method !== 'GET' } = options;
+  const { timeoutMs = 30_000, passBody = !METHODS_WITHOUT_BODY.has(method.toUpperCase()) } = options;
 
   try {
     const authResult = await getAuthenticatedUser();
@@ -33,12 +35,12 @@ export async function forwardRequest(
     let body: BodyInit | undefined;
     if (passBody) {
       const ct = request.headers.get('content-type') || '';
-      if (ct.includes('application/json')) {
+      if (ct.includes('multipart/form-data')) {
+        body = request.body as unknown as BodyInit;
+        headers['Content-Type'] = ct;
+      } else if (ct.includes('application/json')) {
         headers['Content-Type'] = 'application/json';
         body = await request.text();
-      } else if (ct.includes('multipart/form-data')) {
-        body = await request.arrayBuffer() as unknown as BodyInit;
-        headers['Content-Type'] = ct;
       } else if (ct.includes('application/x-www-form-urlencoded')) {
         headers['Content-Type'] = ct;
         body = await request.text();
@@ -100,13 +102,22 @@ export async function forwardRequest(
       return NextResponse.json(data, { status: response.status });
     }
 
+    // Redact non-JSON responses (e.g. werkzeug debug pages) to prevent info leakage
+    if (ct.includes('text/html')) {
+      return NextResponse.json(
+        { error: `Unexpected HTML response from ${errorLabel}` },
+        { status: 502 },
+      );
+    }
+
     const text = await response.text();
     return new NextResponse(text, {
       status: response.status,
       headers: { 'Content-Type': ct || 'text/plain' },
     });
   } catch (error) {
-    console.error(`[api/${errorLabel}] Error:`, error);
+    const safeError = error instanceof Error ? { message: error.message, name: error.name } : {};
+    console.error(`[api/${errorLabel}] Error:`, safeError);
     return NextResponse.json(
       { error: `Failed to load ${errorLabel}` },
       { status: 500 },

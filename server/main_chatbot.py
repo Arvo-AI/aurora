@@ -79,7 +79,13 @@ class RateLimiter:
 rate_limiter = RateLimiter(rate=5, per=60)
 
 _INTERNAL_API_SECRET = os.getenv("INTERNAL_API_SECRET", "")
+_AURORA_ENV = os.getenv("AURORA_ENV", "production")
 
+if _AURORA_ENV != "dev" and not _INTERNAL_API_SECRET:
+    raise RuntimeError(
+        "FATAL: INTERNAL_API_SECRET is not set and AURORA_ENV='%s' (non-dev). "
+        "Refusing to start without authentication secrets in production." % _AURORA_ENV
+    )
 
 def _validate_ws_token(websocket) -> dict | None:
     """Extract and validate a JWT from the WebSocket handshake query string.
@@ -90,24 +96,36 @@ def _validate_ws_token(websocket) -> dict | None:
         return None
 
     try:
-        qs = parse_qs(urlparse(str(websocket.request.path)).query)
-        if not qs.get("token"):
-            raw_path = str(websocket.request.path)
-            if "?" in raw_path:
-                qs = parse_qs(raw_path.split("?", 1)[1])
+        raw_path = str(websocket.request.path)
+        if "?" not in raw_path:
+            return None
 
-        # Also check the full request URI (websockets lib stores path + query)
-        if not qs.get("token"):
-            request_path = getattr(websocket, "path", "")
-            if "?" in request_path:
-                qs = parse_qs(request_path.split("?", 1)[1])
-
+        qs = parse_qs(raw_path.split("?", 1)[1])
         token_list = qs.get("token")
         if not token_list:
             return None
 
         token = token_list[0]
-        payload = pyjwt.decode(token, _INTERNAL_API_SECRET, algorithms=["HS256"])
+        ws_key = _INTERNAL_API_SECRET + "aurora:ws-token-signing"
+        payload = pyjwt.decode(
+            token,
+            ws_key,
+            algorithms=["HS256"],
+            audience="chatbot-ws",
+            options={"require": ["exp", "aud"]},
+        )
+
+        jti = payload.get("jti")
+        if not jti:
+            logger.warning("WebSocket token missing required jti claim")
+            return None
+
+        from utils.cache.redis_client import get_redis_client
+        r = get_redis_client()
+        if r and not r.set(f"ws:jti:{jti}", "1", nx=True, ex=120):
+            logger.warning("WebSocket token replay detected: jti=%s", jti)
+            return None
+
         return payload
     except pyjwt.ExpiredSignatureError:
         logger.warning("WebSocket token expired")
@@ -146,9 +164,21 @@ async def handle_init(data, websocket, current_user_id, deployment_listener_task
             "type": "error",
             "data": {"text": "Authentication failed: user identity mismatch."}
         }))
+        await websocket.close(code=1008, reason="User identity mismatch")
         return current_user_id, deployment_listener_task
 
     if user_id and not current_user_id:
+        if _INTERNAL_API_SECRET:
+            logger.warning(
+                f"WebSocket init rejected: legacy auth attempted while INTERNAL_API_SECRET is configured (user_id={user_id!r})"
+            )
+            await websocket.send(json.dumps({
+                "type": "error",
+                "data": {"text": "Authentication failed: token-based auth required."}
+            }))
+            await websocket.close(code=1008, reason="Token-based auth required")
+            return current_user_id, deployment_listener_task
+
         if not validate_user_exists(user_id):
             logger.warning(f"WebSocket init rejected: invalid user_id {user_id!r}")
             await websocket.send(json.dumps({
