@@ -21,8 +21,11 @@ _LUA_SCRIPT = """
 local key = KEYS[1]
 local rate = tonumber(ARGV[1])
 local capacity = tonumber(ARGV[2])
-local now = tonumber(ARGV[3])
-local requested = tonumber(ARGV[4])
+local requested = tonumber(ARGV[3])
+
+-- Use Redis server time to avoid clock skew between pods
+local time_result = redis.call('TIME')
+local now = tonumber(time_result[1]) + tonumber(time_result[2]) / 1000000
 
 local data = redis.call('HMGET', key, 'tokens', 'last_refill')
 local tokens = tonumber(data[1])
@@ -75,6 +78,11 @@ class RedisTokenBucket:
         Returns True if tokens were granted, False on timeout.
         Returns True immediately if Redis is unavailable (fail-open).
         """
+        if tokens <= 0:
+            raise ValueError("tokens must be > 0")
+        if tokens > self.capacity:
+            raise ValueError(f"tokens ({tokens}) must be <= capacity ({self.capacity})")
+
         global _script_sha
         deadline = time.monotonic() + timeout
 
@@ -92,7 +100,6 @@ class RedisTokenBucket:
                     self.key,
                     str(self.rate),
                     str(self.capacity),
-                    str(time.time()),
                     str(tokens),
                 )
                 if result == 1:

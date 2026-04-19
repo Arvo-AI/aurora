@@ -1174,6 +1174,7 @@ def initialize_tables():
             rls_tables.append("incident_alerts")
             rls_tables.append("incident_feedback")
             rls_tables.append("postmortems")
+            rls_tables.append("postmortem_exports")
             rls_tables.append("incident_lifecycle_events")
             rls_tables.append("github_connected_repos")
             rls_tables.append("execution_steps")
@@ -1854,19 +1855,19 @@ def initialize_tables():
                     INSERT INTO postmortem_exports (postmortem_id, org_id, destination, external_id, external_url, exported_at)
                     SELECT id, org_id, 'confluence', confluence_page_id, confluence_page_url, confluence_exported_at
                     FROM postmortems
-                    WHERE confluence_page_id IS NOT NULL
+                    WHERE confluence_page_id IS NOT NULL AND org_id IS NOT NULL
                     ON CONFLICT (postmortem_id, destination) DO NOTHING;
 
                     INSERT INTO postmortem_exports (postmortem_id, org_id, destination, external_id, external_key, external_url, exported_at)
                     SELECT id, org_id, 'jira', jira_issue_id, jira_issue_key, jira_issue_url, jira_exported_at
                     FROM postmortems
-                    WHERE jira_issue_id IS NOT NULL
+                    WHERE jira_issue_id IS NOT NULL AND org_id IS NOT NULL
                     ON CONFLICT (postmortem_id, destination) DO NOTHING;
 
                     INSERT INTO postmortem_exports (postmortem_id, org_id, destination, external_id, external_url, external_database_id, exported_at)
                     SELECT id, org_id, 'notion', notion_page_id, notion_page_url, notion_database_id, notion_exported_at
                     FROM postmortems
-                    WHERE notion_page_id IS NOT NULL
+                    WHERE notion_page_id IS NOT NULL AND org_id IS NOT NULL
                     ON CONFLICT (postmortem_id, destination) DO NOTHING;
                 """)
                 logging.info("Backfilled postmortem_exports from legacy columns.")

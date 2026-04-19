@@ -235,6 +235,40 @@ class NotionClient:
 
             try:
                 new_token_data = notion_auth.refresh_access_token(refresh_token)
+
+                new_access = new_token_data.get("access_token")
+                if not new_access:
+                    raise NotionAuthExpiredError(
+                        "Notion OAuth refresh returned no access_token"
+                    )
+
+                updated = dict(self.creds)
+                updated["access_token"] = new_access
+                if new_token_data.get("refresh_token"):
+                    updated["refresh_token"] = new_token_data["refresh_token"]
+                if new_token_data.get("expires_in"):
+                    updated["expires_in"] = new_token_data["expires_in"]
+                    updated["expires_at"] = new_token_data.get("expires_at") or (
+                        int(time.time()) + int(new_token_data["expires_in"])
+                    )
+
+                try:
+                    store_tokens_in_db(self.user_id, updated, "notion")
+                except Exception as store_exc:
+                    logger.error(
+                        "[Notion] Failed to persist refreshed token for user %s: %s",
+                        self.user_id,
+                        store_exc,
+                    )
+                    raise NotionAuthExpiredError(
+                        "Notion token refreshed but failed to persist — "
+                        "re-authenticate to restore access"
+                    ) from store_exc
+
+                self.creds = updated
+                self.access_token = new_access
+            except NotionAuthExpiredError:
+                raise
             except Exception as refresh_exc:
                 logger.warning(
                     "[Notion] Token refresh failed for user %s: %s",
@@ -248,37 +282,6 @@ class NotionClient:
                 if rc and acquired:
                     rc.delete(lock_key)
 
-            new_access = new_token_data.get("access_token")
-            if not new_access:
-                raise NotionAuthExpiredError(
-                    "Notion OAuth refresh returned no access_token"
-                )
-
-            updated = dict(self.creds)
-            updated["access_token"] = new_access
-            if new_token_data.get("refresh_token"):
-                updated["refresh_token"] = new_token_data["refresh_token"]
-            if new_token_data.get("expires_in"):
-                updated["expires_in"] = new_token_data["expires_in"]
-                updated["expires_at"] = new_token_data.get("expires_at") or (
-                    int(time.time()) + int(new_token_data["expires_in"])
-                )
-
-            try:
-                store_tokens_in_db(self.user_id, updated, "notion")
-            except Exception as store_exc:
-                logger.error(
-                    "[Notion] Failed to persist refreshed token for user %s: %s",
-                    self.user_id,
-                    store_exc,
-                )
-                raise NotionAuthExpiredError(
-                    "Notion token refreshed but failed to persist — "
-                    "re-authenticate to restore access"
-                ) from store_exc
-
-            self.creds = updated
-            self.access_token = new_access
             return fn()
 
     # ------------------------------------------------------------------
@@ -309,7 +312,14 @@ class NotionClient:
                 except Exception:
                     pass  # Malformed JSON in error response — use empty body
                 code = body.get("code", "")
-                if code in ("validation_error", "invalid_request", "invalid_request_url"):
+                message = (body.get("message") or "").lower()
+                is_feature_gate = (
+                    code == "invalid_request_url"
+                    or (code in ("validation_error", "invalid_request")
+                        and ("not available" in message or "not supported" in message
+                             or "does not exist" in message))
+                )
+                if is_feature_gate:
                     logger.info(
                         "Notion %s endpoint returned 400/%s (feature not available for this API version or plan)",
                         feature,
@@ -413,6 +423,8 @@ class NotionClient:
         for block_id in block_ids:
             try:
                 self.delete_block(block_id)
+            except NotionAuthExpiredError:
+                raise
             except Exception as exc:
                 logger.warning(
                     "Failed to delete block %s while clearing page %s: %s",
