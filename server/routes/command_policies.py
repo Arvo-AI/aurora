@@ -331,7 +331,7 @@ def apply_template(user_id):
     pref_upsert = (
         "INSERT INTO user_preferences (user_id, org_id, preference_key, preference_value) "
         "VALUES (%s, %s, %s, %s) "
-        "ON CONFLICT (user_id, org_id, preference_key) DO UPDATE "
+        "ON CONFLICT (user_id, org_id, preference_key) WHERE org_id IS NOT NULL DO UPDATE "
         "SET preference_value = EXCLUDED.preference_value, updated_at = CURRENT_TIMESTAMP"
     )
     from utils.db.connection_pool import db_pool
@@ -373,7 +373,7 @@ def clear_active_template(user_id):
     pref_upsert = (
         "INSERT INTO user_preferences (user_id, org_id, preference_key, preference_value) "
         "VALUES (%s, %s, %s, %s) "
-        "ON CONFLICT (user_id, org_id, preference_key) DO UPDATE "
+        "ON CONFLICT (user_id, org_id, preference_key) WHERE org_id IS NOT NULL DO UPDATE "
         "SET preference_value = EXCLUDED.preference_value, updated_at = CURRENT_TIMESTAMP"
     )
     from utils.db.connection_pool import db_pool

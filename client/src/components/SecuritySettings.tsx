@@ -40,6 +40,7 @@ function RuleList({
             checked={rule.enabled}
             onCheckedChange={() => onToggle(rule)}
             className="shrink-0 scale-90"
+            aria-label={`Toggle rule: ${rule.pattern}`}
           />
           <code className="rounded bg-muted px-1.5 py-0.5 text-[11px] font-mono min-w-0 overflow-x-auto whitespace-nowrap scrollbar-thin">
             {rule.pattern}
@@ -55,6 +56,7 @@ function RuleList({
             size="sm"
             className="h-6 w-6 p-0 shrink-0 text-muted-foreground hover:text-destructive"
             onClick={() => onDelete(rule.id)}
+            aria-label={`Delete rule: ${rule.pattern}`}
           >
             <Trash2 className="h-3.5 w-3.5" />
           </Button>
@@ -481,6 +483,7 @@ export function SecuritySettings() {
               checked={denylistEnabled}
               onCheckedChange={(v) => handleToggleList("denylist", v)}
               className="scale-90"
+              aria-label="Toggle denylist"
             />
           </div>
         </div>
@@ -524,6 +527,7 @@ export function SecuritySettings() {
               checked={allowlistEnabled}
               onCheckedChange={(v) => handleToggleList("allowlist", v)}
               className="scale-90"
+              aria-label="Toggle allowlist"
             />
           </div>
         </div>
