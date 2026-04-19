@@ -94,6 +94,9 @@ class ToolContextCapture:
             input_json = json.dumps(tool_input) if isinstance(tool_input, dict) else json.dumps(str(tool_input))
             with db_pool.get_admin_connection() as conn:
                 with conn.cursor() as cur:
+                    cur.execute("SET myapp.current_user_id = %s;", (self.user_id,))
+                    cur.execute("SET myapp.current_org_id = %s;", (self.org_id,))
+                    conn.commit()
                     cur.execute(
                         """INSERT INTO execution_steps
                            (incident_id, session_id, org_id, step_index, tool_name,
@@ -156,6 +159,9 @@ class ToolContextCapture:
 
             with db_pool.get_admin_connection() as conn:
                 with conn.cursor() as cur:
+                    cur.execute("SET myapp.current_user_id = %s;", (self.user_id,))
+                    cur.execute("SET myapp.current_org_id = %s;", (self.org_id,))
+                    conn.commit()
                     cur.execute(
                         """UPDATE execution_steps
                            SET status = %s,

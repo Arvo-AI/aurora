@@ -2029,7 +2029,7 @@ def cleanup_stale_background_chats() -> Dict[str, Any]:
                 with conn.cursor() as cursor:
                     for session_id, user_id, incident_id in stale_sessions:
                         if incident_id and str(session_id) in actually_failed_ids:
-                            org_id = set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat:Cleanup]") if user_id else None
+                            set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat:Cleanup]") if user_id else None
                             cursor.execute(
                                 "UPDATE incidents SET aurora_status = 'error', status = 'analyzed', updated_at = %s WHERE id = %s",
                                 (datetime.now(), incident_id)

@@ -107,8 +107,8 @@ def _serialize_key_row(user_id: str, row: tuple) -> Dict[str, Any]:
 def _get_single_key(user_id: str, key_id: int) -> Optional[Dict[str, Any]]:
     with db_pool.get_user_connection() as conn:
         with conn.cursor() as cur:
-            cur.execute("SET myapp.current_user_id = %s;", (user_id,))
-            conn.commit()
+            from utils.auth.stateless_auth import set_rls_context
+            set_rls_context(cur, conn, user_id, log_prefix="[SSHKeyUtils]")
             cur.execute(
                 """
                 SELECT id, provider, token_data, secret_ref, timestamp

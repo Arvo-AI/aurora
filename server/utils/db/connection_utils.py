@@ -385,8 +385,8 @@ def get_inactive_aws_connections(user_id: str) -> List[Dict]:
     try:
         conn = connect_to_db_as_user()
         with conn.cursor() as cur:
-            cur.execute("SET myapp.current_user_id = %s;", (user_id,))
-            conn.commit()
+            from utils.auth.stateless_auth import set_rls_context
+            set_rls_context(cur, conn, user_id, log_prefix="[ConnUtils]")
             cur.execute(sql, (user_id,))
             rows = cur.fetchall()
         return [
@@ -418,8 +418,8 @@ def get_inactive_aws_connection(user_id: str, account_id: str) -> Optional[Dict]
     try:
         conn = connect_to_db_as_user()
         with conn.cursor() as cur:
-            cur.execute("SET myapp.current_user_id = %s;", (user_id,))
-            conn.commit()
+            from utils.auth.stateless_auth import set_rls_context
+            set_rls_context(cur, conn, user_id, log_prefix="[ConnUtils]")
             cur.execute(sql, (user_id, account_id))
             row = cur.fetchone()
         if row:

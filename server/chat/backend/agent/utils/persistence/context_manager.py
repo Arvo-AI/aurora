@@ -146,7 +146,9 @@ class ContextManager:
             
             with db_pool.get_user_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
+                from utils.auth.stateless_auth import set_rls_context
+                if not set_rls_context(cursor, conn, user_id, log_prefix="[ContextManager]"):
+                    return
                 
                 # Try to update existing session first
                 cursor.execute("""

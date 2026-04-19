@@ -176,10 +176,7 @@ def get_credentials_from_db(user_id: str, provider: str) -> Optional[Dict[str, A
 
                 conn = connect_to_db_as_user()
                 cur = conn.cursor()
-                cur.execute("SET myapp.current_user_id = %s;", (user_id,))
-                conn.commit()
-
-                org_id = resolve_org_id(user_id)
+                set_rls_context(cur, conn, user_id, log_prefix="[Creds:AWS]")
 
                 cur.execute(
                     """
@@ -236,10 +233,8 @@ def get_credentials_from_db(user_id: str, provider: str) -> Optional[Dict[str, A
                 try:
                     conn = connect_to_db_as_user()
                     cursor = conn.cursor()
-                    cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
-                    conn.commit()
+                    org_id = set_rls_context(cursor, conn, user_id, log_prefix="[Creds:Azure]")
                     
-                    org_id = resolve_org_id(user_id)
                     cursor.execute(
                         """SELECT subscription_id, subscription_name
                            FROM user_tokens
@@ -279,8 +274,7 @@ def store_deployment_task(user_id: str, task_id: str, deployment_id: str = None,
     try:
         conn = connect_to_db_as_user()
         cursor = conn.cursor()
-        cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
-        conn.commit()
+        set_rls_context(cursor, conn, user_id, log_prefix="[StoreDeployTask]")
         
         cursor.execute("""
             INSERT INTO deployment_tasks (user_id, task_id, deployment_id, status, task_data)
@@ -306,8 +300,7 @@ def get_deployment_task(user_id: str, task_id: str = None) -> Optional[Dict]:
     try:
         conn = connect_to_db_as_user()
         cursor = conn.cursor()
-        cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
-        conn.commit()
+        set_rls_context(cursor, conn, user_id, log_prefix="[GetDeployTask]")
         
         if task_id:
             cursor.execute(
@@ -345,18 +338,9 @@ def get_deployment_task(user_id: str, task_id: str = None) -> Optional[Dict]:
 def store_user_preference(user_id: str, key: str, value: Any):
     """Store user preference in database."""
     try:
-        org_id = None
-        try:
-            org_id = get_org_id_from_request()
-        except Exception:
-            logger.debug("No request context for org_id in store_user_preference")
-
         conn = connect_to_db_as_user()
         cursor = conn.cursor()
-        cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
-        if org_id:
-            cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
-        conn.commit()
+        org_id = set_rls_context(cursor, conn, user_id, log_prefix="[StoreUserPref]")
         
         if org_id:
             cursor.execute("""
@@ -391,6 +375,9 @@ def get_user_preference(user_id: str, key: str, default=None):
         conn = connect_to_db_as_user()
         cursor = conn.cursor()
         cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
+        org_id = resolve_org_id(user_id)
+        if org_id:
+            cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
         conn.commit()
         
         cursor.execute(
@@ -444,8 +431,7 @@ def get_connected_providers(user_id: str) -> List[str]:
     try:
         conn = connect_to_db_as_user()
         cursor = conn.cursor()
-        cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
-        conn.commit()
+        set_rls_context(cursor, conn, user_id, log_prefix="[ConnectedProviders]")
         
         # Check user_tokens table (OAuth/secret-based providers)
         cursor.execute(

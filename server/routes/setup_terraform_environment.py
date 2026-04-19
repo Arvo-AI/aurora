@@ -317,8 +317,8 @@ def setup_ovh_terraform_environment_isolated(user_id: str):
         try:
             conn = connect_to_db_as_user()
             with conn.cursor() as cur:
-                cur.execute("SET myapp.current_user_id = %s;", (user_id,))
-                conn.commit()
+                from utils.auth.stateless_auth import set_rls_context
+                set_rls_context(cur, conn, user_id, log_prefix="[Terraform]")
                 cur.execute(
                     "SELECT preference_value FROM user_preferences WHERE user_id = %s AND preference_key = 'ovh_root_project';",
                     (user_id,)
@@ -391,10 +391,9 @@ def setup_scaleway_terraform_environment_isolated(user_id: str):
         try:
             conn = connect_to_db_as_user()
             with conn.cursor() as cur:
-                cur.execute("SET myapp.current_user_id = %s;", (user_id,))
-                conn.commit()
+                from utils.auth.stateless_auth import set_rls_context
+                set_rls_context(cur, conn, user_id, log_prefix="[Terraform]")
                 
-                # Get access_key (stored as client_id) and organization_id (subscription_id)
                 cur.execute(
                     "SELECT client_id, subscription_id, subscription_name FROM user_tokens WHERE user_id = %s AND provider = 'scaleway';",
                     (user_id,)
