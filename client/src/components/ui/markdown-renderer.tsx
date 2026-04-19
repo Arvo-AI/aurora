@@ -165,6 +165,11 @@ const components = {
       </pre>
     );
   },
+  table: ({ children, ...props }: any) => (
+    <div className="overflow-x-auto max-w-full my-4">
+      <table className="min-w-full text-sm" {...props}>{children}</table>
+    </div>
+  ),
   a: ({ href, children, ...props }: any) => {
     if (href) {
       const jiraMatch = jiraUrlRe.exec(href);

@@ -35,7 +35,7 @@ class LLMContextManager:
         # Remove other control characters that might cause issues
         # Remove control characters except newlines and tabs
         sanitized = re.sub(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]', '[CTRL_CHAR]', sanitized)
-
+        
         return sanitized
 
     @staticmethod

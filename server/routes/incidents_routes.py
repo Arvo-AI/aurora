@@ -1314,7 +1314,8 @@ KEY: Do NOT automatically start a full investigation unless explicitly asked. De
                 user_id=user_id,
                 title=title,
                 trigger_metadata=trigger_metadata,
-                incident_id=incident_id,  # Link session to incident for retrieval
+                incident_id=incident_id,
+                question=question,
             )
             is_new_session = True
             logger.info(
