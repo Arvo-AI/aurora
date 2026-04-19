@@ -82,6 +82,8 @@ def store_tokens_in_db(user_id: str, token_data: Dict, provider: str,
             if request_org_id:
                 cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
                 cursor.execute("SET myapp.current_org_id = %s;", (request_org_id,))
+            else:
+                logger.warning("[STORE-TOKENS] request_org_id is None/empty, NOT setting session vars")
 
             # Store only metadata and secret reference in database
             if provider == "azure":

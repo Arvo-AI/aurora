@@ -6,6 +6,7 @@ import threading
 from dotenv import load_dotenv
 from contextlib import contextmanager
 from typing import Optional
+from flask import has_request_context, request
 
 load_dotenv()
 
@@ -51,6 +52,9 @@ class DatabaseConnectionPool:
         # Single connection pool
         self._pool: Optional[psycopg2.pool.ThreadedConnectionPool] = None
 
+        # Track which PID created the pool so we can detect post-fork reuse
+        self._pool_pid: Optional[int] = None
+
         # Initialize pool on first access
         self._pool_lock = threading.Lock()
         self._initialized = True
@@ -58,7 +62,23 @@ class DatabaseConnectionPool:
         logger.info("DatabaseConnectionPool initialized")
     
     def _get_pool(self) -> psycopg2.pool.ThreadedConnectionPool:
-        """Get or create the connection pool."""
+        """Get or create the connection pool.
+        
+        Detects process forks (e.g. Gunicorn with --preload) and recreates
+        the pool in child workers. psycopg2 connections are not fork-safe.
+        """
+        current_pid = os.getpid()
+
+        if self._pool is not None and self._pool_pid != current_pid:
+            logger.warning(
+                "Connection pool was created in PID %s but current PID is %s "
+                "(post-fork). Discarding inherited pool and creating a new one.",
+                self._pool_pid, current_pid,
+            )
+            with self._pool_lock:
+                self._pool = None
+                self._pool_pid = None
+
         if self._pool is None:
             with self._pool_lock:
                 if self._pool is None:
@@ -68,7 +88,11 @@ class DatabaseConnectionPool:
                             self.max_connections,
                             **self.db_params
                         )
-                        logger.info(f"Connection pool created: {self.min_connections}-{self.max_connections} connections")
+                        self._pool_pid = current_pid
+                        logger.info(
+                            "Connection pool created (PID %s): %s-%s connections",
+                            current_pid, self.min_connections, self.max_connections,
+                        )
                     except Exception as e:
                         logger.error(f"Failed to create connection pool: {e}")
                         raise
@@ -76,13 +100,20 @@ class DatabaseConnectionPool:
     
     @contextmanager
     def get_connection(self):
-        """Get a connection from the pool with automatic cleanup."""
+        """Get a connection from the pool with automatic cleanup.
+        
+        Automatically sets RLS session variables (myapp.current_user_id,
+        myapp.current_org_id) from the Flask request context when available.
+        This ensures all queries on RLS-protected tables work correctly
+        without callers needing to SET them manually.
+        """
         pool = self._get_pool()
         connection = None
         try:
             connection = pool.getconn()
             if connection:
                 connection.autocommit = False
+                self._set_rls_vars(connection)
                 logger.debug("Retrieved connection from pool")
                 yield connection
             else:
@@ -110,6 +141,29 @@ class DatabaseConnectionPool:
                     pool.putconn(connection)
                 except Exception as e:
                     logger.error("Error returning connection to pool: %s", e)
+
+    @staticmethod
+    def _set_rls_vars(connection):
+        """Set RLS session variables from Flask request context if available."""
+        try:
+            if not has_request_context():
+                return
+            from utils.auth.stateless_auth import get_user_id_from_request, get_org_id_from_request
+            user_id = get_user_id_from_request()
+            org_id = get_org_id_from_request()
+            if user_id or org_id:
+                with connection.cursor() as cur:
+                    if user_id:
+                        cur.execute("SET myapp.current_user_id = %s", (user_id,))
+                    if org_id:
+                        cur.execute("SET myapp.current_org_id = %s", (org_id,))
+            elif not request.path.startswith("/health"):
+                logger.warning(
+                    "No user_id or org_id available in request context for %s %s ",
+                    request.method, request.path,
+                )
+        except Exception:
+            pass
 
     # Backward compatibility aliases
     def get_user_connection(self):

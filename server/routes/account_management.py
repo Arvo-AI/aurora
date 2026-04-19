@@ -53,6 +53,10 @@ def get_connected_accounts(user_id, target_user_id):
 
         conn = connect_to_db_as_admin()
         cursor = conn.cursor()
+
+        if org_id:
+            cursor.execute("SET myapp.current_user_id = %s", (user_id,))
+            cursor.execute("SET myapp.current_org_id = %s", (org_id,))
         
         # ------------------------------
         # 1) OAuth / secret-based providers (user_tokens)

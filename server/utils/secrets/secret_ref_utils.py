@@ -191,6 +191,9 @@ class SecretRefManager:
         try:
             conn = connect_to_db_as_admin()
             cursor = conn.cursor()
+            if org_id:
+                cursor.execute("SET myapp.current_user_id = %s", (user_id,))
+                cursor.execute("SET myapp.current_org_id = %s", (org_id,))
             cursor.execute(
                 """SELECT 1 FROM user_tokens
                    WHERE (user_id = %s OR org_id = %s)
@@ -223,6 +226,9 @@ class SecretRefManager:
         try:
             conn = connect_to_db_as_admin()
             cursor = conn.cursor()
+            if org_id:
+                cursor.execute("SET myapp.current_user_id = %s", (user_id,))
+                cursor.execute("SET myapp.current_org_id = %s", (org_id,))
             cursor.execute(
                 """SELECT secret_ref, client_id, client_secret
                    FROM user_tokens
@@ -383,6 +389,8 @@ class SecretRefManager:
             cursor = conn.cursor()
 
             if org_id:
+                cursor.execute("SET myapp.current_user_id = %s", (user_id,))
+                cursor.execute("SET myapp.current_org_id = %s", (org_id,))
                 scope_where = "(user_id = %s OR org_id = %s)"
                 scope_params: Tuple = (user_id, org_id)
             else:

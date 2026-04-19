@@ -4,7 +4,7 @@ These functions allow existing code to work with the new connection pool without
 """
 
 import logging
-from utils.db.connection_pool import db_pool
+from utils.db.connection_pool import db_pool, DatabaseConnectionPool
 from contextlib import contextmanager
 import psycopg2
 
@@ -64,16 +64,8 @@ def connect_to_db_as_admin():
         connection = pool.getconn()
         if connection:
             connection.autocommit = False
-            # Set default user context - admin connections typically don't need RLS context
-            try:
-                cursor = connection.cursor()
-                cursor.execute("SET myapp.current_user_id = 'admin_user';")
-                cursor.close()
-            except Exception:
-                # If setting fails, continue - admin connections may not need this
-                pass
+            DatabaseConnectionPool._set_rls_vars(connection)
             logger.debug("Retrieved admin connection from pool (backward compatibility mode)")
-            # Return wrapped connection that will return to pool on close()
             return PooledConnectionWrapper(connection, pool, is_admin=True)
         else:
             raise Exception("connection pool exhausted")
@@ -100,16 +92,8 @@ def connect_to_db_as_user():
         connection = pool.getconn()
         if connection:
             connection.autocommit = False
-            # Set default user context for RLS
-            try:
-                cursor = connection.cursor()
-                cursor.execute("SET myapp.current_user_id = 'default_user';")
-                cursor.close()
-            except Exception:
-                # If setting fails, continue - connection may still work for some queries
-                pass
+            DatabaseConnectionPool._set_rls_vars(connection)
             logger.debug("Retrieved user connection from pool (backward compatibility mode)")
-            # Return wrapped connection that will return to pool on close()
             return PooledConnectionWrapper(connection, pool, is_admin=False)
         else:
             raise Exception("connection pool exhausted")

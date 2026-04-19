@@ -354,6 +354,8 @@ def store_user_preference(user_id: str, key: str, value: Any):
         conn = connect_to_db_as_user()
         cursor = conn.cursor()
         cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
+        if org_id:
+            cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
         conn.commit()
         
         if org_id:
