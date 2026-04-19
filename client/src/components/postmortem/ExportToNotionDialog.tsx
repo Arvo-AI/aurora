@@ -132,6 +132,7 @@ function DatabasePicker({
   React.useEffect(() => {
     if (!open) return;
     let cancelled = false;
+    const controller = new AbortController();
     const run = async () => {
       setLoading(true);
       setError(null);
@@ -141,6 +142,7 @@ function DatabasePicker({
           : '';
         const res = await fetch(`/api/notion/databases${params}`, {
           credentials: 'include',
+          signal: controller.signal,
         });
         const text = await res.text();
         let data: { databases?: NotionDatabaseSummary[]; error?: string } = {};
@@ -168,6 +170,7 @@ function DatabasePicker({
     run();
     return () => {
       cancelled = true;
+      controller.abort();
     };
   }, [open, debouncedQuery]);
 

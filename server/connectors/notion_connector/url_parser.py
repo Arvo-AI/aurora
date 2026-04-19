@@ -65,10 +65,9 @@ def parse_notion_url(url_or_id: str) -> Dict[str, str]:
         ):
             working = "https://" + working
         else:
-            # Not a URL and not a raw UUID — try to extract a 32-hex
-            match = _HEX32_RE.search(value)
-            if match:
-                return {"page_id": _to_dashed_uuid(match.group(1))}
+            # Not a recognised Notion domain and no https:// scheme —
+            # reject instead of blindly matching hex in arbitrary strings
+            # (e.g. "evil.com/something/abc123def456…").
             raise ValueError(f"Unrecognised Notion URL or ID: {url_or_id!r}")
 
     parsed = urlparse(working)

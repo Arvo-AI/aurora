@@ -158,6 +158,7 @@ def _fetch_postmortem(
 # only fields that make sense as Notion property values.
 _PROPERTY_PRESETS: Dict[str, str] = {
     "IncidentId": "id",
+    "AlertTitle": "alert_title",
     "Severity": "severity",
     "Status": "status",
     "Service": "alert_service",
@@ -371,13 +372,16 @@ def _export_postmortem_to_notion(
                 f"Notion database {database_id} has no title property"
             )
 
-    page_title = f"Postmortem – Incident {incident_id[:8]}"
+    # Prefer alert_title for a human-readable page name; fall back to
+    # the truncated incident UUID.
+    incident_cols = _fetch_incident_properties(user_id, org_id, incident_id)
+    alert_title = incident_cols.get("alert_title") or None
+    page_title = f"Postmortem \u2013 {alert_title or incident_id[:8]}"
     properties: Dict[str, Any] = {
         title_key: {"title": build_rich_text(page_title)}
     }
 
     if property_mapping:
-        incident_cols = _fetch_incident_properties(user_id, org_id, incident_id)
         _merge_property_mapping(
             properties, db_schema, property_mapping, incident_cols
         )
@@ -393,6 +397,21 @@ def _export_postmortem_to_notion(
     try:
         client.update_page_markdown(page_id, content, mode="replace")
     except Exception as exc:
+        # Attempt to clean up the empty page so it doesn't linger in Notion.
+        try:
+            client.trash_page(page_id)
+            logger.info(
+                "[NOTION] Trashed orphan page %s after markdown write failure",
+                page_id,
+            )
+        except Exception as cleanup_exc:
+            logger.warning(
+                "[NOTION] Failed to trash orphan page %s after markdown write "
+                "failure: %s (original error: %s)",
+                page_id,
+                cleanup_exc,
+                exc,
+            )
         raise RuntimeError(
             f"Notion page created but body write failed: {exc}"
         ) from exc

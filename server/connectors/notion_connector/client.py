@@ -238,11 +238,15 @@ class NotionClient:
             try:
                 store_tokens_in_db(self.user_id, updated, "notion")
             except Exception as store_exc:
-                logger.warning(
+                logger.error(
                     "[Notion] Failed to persist refreshed token for user %s: %s",
                     self.user_id,
                     store_exc,
                 )
+                raise NotionAuthExpiredError(
+                    "Notion token refreshed but failed to persist — "
+                    "re-authenticate to restore access"
+                ) from store_exc
 
             self.creds = updated
             self.access_token = new_access
@@ -274,7 +278,7 @@ class NotionClient:
                 try:
                     body = exc.response.json() if exc.response is not None else {}
                 except Exception:
-                    pass
+                    pass  # Malformed JSON in error response — use empty body
                 code = body.get("code", "")
                 if code in ("validation_error", "invalid_request", "invalid_request_url"):
                     logger.info(
@@ -295,6 +299,7 @@ class NotionClient:
         *,
         filter_types: Optional[List[str]] = None,
         max_results: int = 25,
+        start_cursor: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Run a Notion global search.
 
@@ -311,15 +316,17 @@ class NotionClient:
                 value = filter_types[0]
                 if value in ("page", "database"):
                     body["filter"] = {"value": value, "property": "object"}
+            if start_cursor is not None:
+                body["start_cursor"] = start_cursor
             return self._request("POST", "/search", json=body)
 
         return self._retry_with_refresh(_do)
 
-    def search_pages(self, query: str, max_results: int = 25) -> Dict[str, Any]:
-        return self.search(query, filter_types=["page"], max_results=max_results)
+    def search_pages(self, query: str, max_results: int = 25, start_cursor: Optional[str] = None) -> Dict[str, Any]:
+        return self.search(query, filter_types=["page"], max_results=max_results, start_cursor=start_cursor)
 
-    def search_databases(self, query: str, max_results: int = 25) -> Dict[str, Any]:
-        return self.search(query, filter_types=["database"], max_results=max_results)
+    def search_databases(self, query: str, max_results: int = 25, start_cursor: Optional[str] = None) -> Dict[str, Any]:
+        return self.search(query, filter_types=["database"], max_results=max_results, start_cursor=start_cursor)
 
     # ==================================================================
     # Pages
@@ -342,14 +349,15 @@ class NotionClient:
         """Insert or replace a page's body via Notion's markdown endpoint.
 
         ``mode="append"`` appends to the bottom of the page. ``mode="replace"``
-        maps to the same insert_content call — Notion's replace_content_range
-        requires range coordinates we don't have; for freshly created pages
-        this is equivalent since the body starts empty. Callers that need a
-        true wipe-and-rewrite on an existing page should delete the page's
-        block children first.
+        deletes all existing block children on the page first, then inserts the
+        new content so the page body is fully replaced.
         """
         if mode not in ("append", "replace"):
             raise ValueError("mode must be 'append' or 'replace'")
+
+        if mode == "replace":
+            self._delete_all_block_children(page_id)
+
         body = {
             "type": "insert_content",
             "insert_content": {"content": markdown},
@@ -359,6 +367,29 @@ class NotionClient:
                 "PATCH", f"/pages/{page_id}/markdown", json=body
             )
         )
+
+    def _delete_all_block_children(self, page_id: str) -> None:
+        """Delete every top-level block child of a page.
+
+        Iterates through all children (handling pagination) and issues a
+        DELETE for each block. Used by :meth:`update_page_markdown` with
+        ``mode="replace"`` to clear existing content before inserting new.
+        """
+        block_ids = [
+            block["id"]
+            for block in self.iter_block_children(page_id)
+            if block.get("id")
+        ]
+        for block_id in block_ids:
+            try:
+                self.delete_block(block_id)
+            except Exception as exc:
+                logger.warning(
+                    "Failed to delete block %s while clearing page %s: %s",
+                    block_id,
+                    page_id,
+                    exc,
+                )
 
     def trash_page(self, page_id: str) -> Dict[str, Any]:
         """Archive (soft-delete) a page."""
@@ -757,15 +788,16 @@ class NotionClient:
         )
 
     def _walk_users(self, *, early_exit_email: Optional[str] = None) -> Optional[Dict[str, Any]]:
-        """Paginate /users (up to 20 pages), populate the email cache, and
-        optionally short-circuit on a target email match.
+        """Paginate /users (up to 500 pages / ~50k users), populate the email
+        cache, and optionally short-circuit on a target email match.
 
         Sets ``_users_fully_cached=True`` when the walk reaches the end of
         results. Returns the matched user when ``early_exit_email`` is given
         and found; otherwise returns None.
         """
         cursor: Optional[str] = None
-        for _ in range(20):
+        max_pages = 500
+        for page_idx in range(max_pages):
             page = self.list_users(start_cursor=cursor)
             for user in page.get("results", []):
                 person = user.get("person") or {}
@@ -781,6 +813,14 @@ class NotionClient:
             if not cursor:
                 self._users_fully_cached = True
                 return None
+        logger.warning(
+            "[Notion] _walk_users reached page limit (%s pages, ~%s users) "
+            "without exhausting results for user %s%s",
+            max_pages,
+            max_pages * 100,
+            self.user_id,
+            f"; target email not found: {early_exit_email}" if early_exit_email else "",
+        )
         return None
 
     def prime_user_cache(self) -> None:

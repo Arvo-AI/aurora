@@ -289,6 +289,12 @@ def disconnect(user_id):
 def list_databases(user_id):
     """List Notion databases matching an optional search query (for DB picker)."""
     query = (request.args.get("query") or "").strip()
+    start_cursor = request.args.get("start_cursor") or None
+    try:
+        page_size = int(request.args.get("page_size", 100))
+    except (TypeError, ValueError):
+        page_size = 100
+    page_size = max(1, min(page_size, 100))
 
     try:
         client = NotionClient(user_id)
@@ -301,7 +307,7 @@ def list_databases(user_id):
         return jsonify({"error": "Failed to initialize Notion client"}), 500
 
     try:
-        response = client.search_databases(query, max_results=25)
+        response = client.search_databases(query, max_results=page_size, start_cursor=start_cursor)
     except NotionAuthExpiredError:
         return jsonify(
             {
@@ -334,7 +340,11 @@ def list_databases(user_id):
             entry["description"] = description
         results.append(entry)
 
-    return jsonify({"databases": results})
+    payload: Dict[str, Any] = {"databases": results}
+    next_cursor = response.get("next_cursor")
+    if next_cursor:
+        payload["next_cursor"] = next_cursor
+    return jsonify(payload)
 
 
 @notion_bp.route("/databases/<db_id>", methods=["GET", "OPTIONS"])
