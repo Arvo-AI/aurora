@@ -380,6 +380,7 @@ class NotionClient:
             for block in self.iter_block_children(page_id)
             if block.get("id")
         ]
+        failed: List[str] = []
         for block_id in block_ids:
             try:
                 self.delete_block(block_id)
@@ -390,6 +391,12 @@ class NotionClient:
                     page_id,
                     exc,
                 )
+                failed.append(block_id)
+        if failed:
+            raise RuntimeError(
+                f"Failed to delete {len(failed)}/{len(block_ids)} blocks "
+                f"from page {page_id}"
+            )
 
     def trash_page(self, page_id: str) -> Dict[str, Any]:
         """Archive (soft-delete) a page."""

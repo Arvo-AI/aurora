@@ -469,10 +469,7 @@ def notion_upload_file(
     src_url = file_path_or_url.strip()
 
     def _do(client: Any) -> Dict[str, Any]:
-        try:
-            data, src_filename = _fetch_bytes(src_url)
-        except Exception as exc:
-            return {"error": f"Failed to read source: {exc}", "code": "fetch_failed"}
+        data, src_filename = _fetch_bytes(src_url)
 
         effective_filename = filename or src_filename
         effective_ct = content_type or _guess_content_type(effective_filename)
@@ -486,7 +483,7 @@ def notion_upload_file(
             )
             upload_id = created.get("id")
             if not upload_id:
-                return {"error": "No upload id returned by Notion"}
+                raise RuntimeError("No upload id returned by Notion (single_part)")
             client.send_file_upload(
                 upload_id,
                 data,
@@ -512,7 +509,7 @@ def notion_upload_file(
         )
         upload_id = created.get("id")
         if not upload_id:
-            return {"error": "No upload id returned by Notion"}
+            raise RuntimeError("No upload id returned by Notion (multi_part)")
 
         for i in range(parts):
             start = i * _MULTI_PART_CHUNK

@@ -240,6 +240,9 @@ def _update_postmortem_notion_metadata(
             postmortem_id,
             exc,
         )
+        raise RuntimeError(
+            "Notion page created but failed to persist export metadata"
+        ) from exc
 
 
 def _create_action_items(

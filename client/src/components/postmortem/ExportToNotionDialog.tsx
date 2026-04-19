@@ -667,6 +667,7 @@ export default function ExportToNotionDialog({
               disabled={
                 !selectedDatabaseId ||
                 !databaseDetail?.titleProperty ||
+                (useActionItems && !actionItemsDatabaseId) ||
                 submitting
               }
               onClick={handleSubmit}
