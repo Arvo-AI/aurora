@@ -91,7 +91,7 @@ class DatabaseConnectionPool:
             if connection:
                 try:
                     connection.rollback()
-                except:
+                except Exception:
                     pass
             logger.error(f"Error with connection: {e}")
             raise
