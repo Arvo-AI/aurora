@@ -15,26 +15,38 @@ logger = logging.getLogger(__name__)
 
 
 def _get_users_with_integrations() -> List[Dict[str, Any]]:
-    """Get all users who have at least one connected integration."""
+    """Get all users who have at least one connected integration.
+
+    Iterates per-org to satisfy RLS on user_tokens / user_connections.
+    """
     from utils.db.connection_pool import db_pool
 
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
-                cur.execute("""
-                    SELECT DISTINCT u.id, u.org_id
-                    FROM users u
-                    WHERE u.org_id IS NOT NULL
-                      AND EXISTS (
-                          SELECT 1 FROM user_tokens ut
-                          WHERE ut.user_id = u.id AND ut.is_active = true
-                          UNION
-                          SELECT 1 FROM user_connections uc
-                          WHERE uc.user_id = u.id AND uc.status = 'active'
-                      )
-                    ORDER BY u.id
-                """)
-                return [{"user_id": row[0], "org_id": row[1]} for row in cur.fetchall()]
+                # users table is not RLS-protected; iterate per-user to set RLS before querying protected tables
+                cur.execute("SELECT DISTINCT ON (org_id) id, org_id FROM users WHERE org_id IS NOT NULL ORDER BY org_id, id")
+                all_users = cur.fetchall()
+
+                results = []
+                for user_id, org_id in all_users:
+                    cur.execute("SET myapp.current_user_id = %s;", (user_id,))
+                    cur.execute("SET myapp.current_org_id = %s;", (org_id,))
+                    conn.commit()
+
+                    cur.execute("""
+                        SELECT EXISTS (
+                            SELECT 1 FROM user_tokens ut
+                            WHERE ut.user_id = %s AND ut.is_active = true
+                            UNION
+                            SELECT 1 FROM user_connections uc
+                            WHERE uc.user_id = %s AND uc.status = 'active'
+                        )
+                    """, (user_id, user_id))
+                    row = cur.fetchone()
+                    if row and row[0]:
+                        results.append({"user_id": user_id, "org_id": org_id})
+                return results
     except Exception as e:
         logger.error(f"[Prediscovery] Failed to get users: {e}")
         return []
@@ -201,7 +213,7 @@ def run_prediscovery(
         ))
 
         from chat.background.task import _update_session_status
-        _update_session_status(session_id, "completed")
+        _update_session_status(session_id, "completed", user_id=user_id)
 
         if org_id:
             _cleanup_old_discovery_chunks(org_id, before=run_started_at)
@@ -233,6 +245,8 @@ def _should_run_for_user(user_id: str) -> bool:
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
+                from utils.auth.stateless_auth import set_rls_context
+                set_rls_context(cur, conn, user_id, log_prefix="[Prediscovery]")
                 cur.execute("""
                     SELECT created_at FROM chat_sessions
                     WHERE user_id = %s

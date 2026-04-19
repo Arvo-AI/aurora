@@ -10,6 +10,7 @@ from langchain_core.messages import HumanMessage
 from chat.backend.agent.providers import create_chat_model
 from chat.backend.agent.llm import ModelConfig
 from chat.backend.agent.utils.llm_usage_tracker import tracked_invoke
+from utils.auth.stateless_auth import set_rls_context
 
 logger = logging.getLogger(__name__)
 
@@ -47,8 +48,8 @@ def _fetch_incident_for_postmortem(incident_id: str, user_id: str) -> Optional[D
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
-                cursor.execute("SET myapp.current_user_id = %s", (user_id,))
-                conn.commit()
+                if not set_rls_context(cursor, conn, user_id, log_prefix="[Postmortem]"):
+                    return None
                 cursor.execute(
                     """
                     SELECT alert_title, alert_service, severity, aurora_summary,
@@ -85,7 +86,7 @@ def _fetch_incident_for_postmortem(incident_id: str, user_id: str) -> Optional[D
         return None
 
 
-def _fetch_rca_chat_messages(incident_id: str) -> List[Dict[str, Any]]:
+def _fetch_rca_chat_messages(incident_id: str, user_id: str) -> List[Dict[str, Any]]:
     """Fetch the RCA chat messages for the incident.
 
     The chat session contains the full investigation conversation including
@@ -97,6 +98,8 @@ def _fetch_rca_chat_messages(incident_id: str) -> List[Dict[str, Any]]:
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                if not set_rls_context(cursor, conn, user_id, log_prefix="[Postmortem]"):
+                    return []
                 cursor.execute(
                     """
                     SELECT messages FROM chat_sessions
@@ -432,7 +435,7 @@ def generate_postmortem(self, incident_id: str, user_id: str, org_id: str) -> Di
         # Fetch investigation context
         thoughts = _fetch_incident_thoughts(incident_id)
         suggestions = _fetch_incident_suggestions(incident_id)
-        chat_messages = _fetch_rca_chat_messages(incident_id)
+        chat_messages = _fetch_rca_chat_messages(incident_id, user_id)
         chat_text = _format_chat_for_prompt(chat_messages)
 
         logger.info(

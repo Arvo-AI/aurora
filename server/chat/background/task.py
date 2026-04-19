@@ -17,7 +17,7 @@ from celery_config import celery_app
 from langchain_core.messages import HumanMessage
 from utils.cache.redis_client import get_redis_client
 from utils.notifications.email_service import get_email_service
-from utils.auth.stateless_auth import get_user_email, get_credentials_from_db
+from utils.auth.stateless_auth import get_user_email, get_credentials_from_db, set_rls_context
 from utils.notifications.slack_notification_service import (
     send_slack_investigation_started_notification,
     send_slack_investigation_completed_notification,
@@ -428,6 +428,10 @@ def run_background_chat(
         if incident_id:
             try:
                 with db_pool.get_admin_connection() as conn:
+                    with conn.cursor() as cursor:
+                        if not set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat]"):
+                            logger.error("[BackgroundChat] Cannot resolve org_id for user %s, skipping incident linking", user_id)
+                            raise ValueError(f"Missing org_id for user {user_id}")
                     # Ensure chat_sessions.incident_id is set (single source of truth)
                     with conn.cursor() as cursor:
                         cursor.execute(
@@ -543,7 +547,7 @@ def run_background_chat(
         logger.info(f"[BackgroundChat] Workflow execution completed for session {session_id}")
         
         # Update session status to completed
-        _update_session_status(session_id, "completed")
+        _update_session_status(session_id, "completed", user_id=user_id)
         
         # Update incident status to analyzed if incident_id provided
         if incident_id:
@@ -647,7 +651,7 @@ def run_background_chat(
     
     except SoftTimeLimitExceeded:
         logger.error(f"[BackgroundChat] Timeout after 30 minutes for session {session_id}")
-        _update_session_status(session_id, "failed")
+        _update_session_status(session_id, "failed", user_id=user_id)
         if incident_id:
             _update_incident_aurora_status(incident_id, "error", user_id=user_id)
         return {
@@ -658,7 +662,7 @@ def run_background_chat(
 
     except Exception as e:
         logger.exception(f"[BackgroundChat] Failed for session {session_id}: {e}")
-        _update_session_status(session_id, "failed")
+        _update_session_status(session_id, "failed", user_id=user_id)
         if incident_id:
             _update_incident_aurora_status(incident_id, "error", user_id=user_id)
         return {
@@ -697,7 +701,6 @@ def _session_has_successful_jira_action(session_id: str) -> bool:
 
     Used after _run_jira_action to confirm the agent actually filed.
     """
-    from utils.db.connection_pool import db_pool
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
@@ -832,7 +835,6 @@ def _build_jira_followup_prompt(jira_mode: str, service_name: str = "") -> str:
 
 def _snapshot_session_messages(session_id: str) -> list:
     """Return the current UI messages list for the session."""
-    from utils.db.connection_pool import db_pool
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
@@ -857,7 +859,6 @@ def _merge_investigation_messages(session_id: str, investigation_messages: list,
     """
     if not investigation_messages:
         return
-    from utils.db.connection_pool import db_pool
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
@@ -919,8 +920,6 @@ async def _run_jira_action(
     service_name = ""
     if incident_id:
         try:
-            from utils.db.connection_pool import db_pool
-            from utils.auth.stateless_auth import set_rls_context
             with db_pool.get_admin_connection() as conn:
                 with conn.cursor() as cur:
                     set_rls_context(cur, conn, user_id, log_prefix="[JiraAction]")
@@ -1148,17 +1147,20 @@ async def _execute_background_chat(
                 logger.error(f"[BackgroundChat] Failed to close weaviate client - potential connection leak: {e}")
 
 
-def _update_session_status(session_id: str, status: str) -> None:
+def _update_session_status(session_id: str, status: str, user_id: str) -> None:
     """Update the status of a chat session.
     
     Args:
         session_id: The chat session ID
         status: New status ('in_progress', 'completed', 'failed', 'active')
+        user_id: User ID for RLS context (required from Celery workers)
     """
     rows_updated = 0
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                if not set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat]"):
+                    return
                 cursor.execute(
                     "UPDATE chat_sessions SET status = %s, updated_at = %s WHERE id = %s",
                     (status, datetime.now(), session_id)
@@ -1198,14 +1200,13 @@ def _propagate_suggestion_status(session_id: str, status: str) -> None:
         logger.warning(f"[BackgroundChat] Failed to update suggestion execution_status for session {session_id}: {e}")
 
 
-def _update_incident_aurora_status(incident_id: str, aurora_status: str, user_id: Optional[str] = None, org_id: Optional[str] = None) -> None:
+def _update_incident_aurora_status(incident_id: str, aurora_status: str, user_id: str) -> None:
     """Update incident aurora_status (running/complete/error).
 
     Args:
         incident_id: The incident ID
         aurora_status: New status ('running', 'complete', 'error', 'summarizing')
-        user_id: The user ID for lifecycle event recording
-        org_id: The org ID for lifecycle event recording (optional)
+        user_id: The user ID for RLS context and lifecycle event recording
     """
     # Map aurora_status values to lifecycle event types
     _STATUS_EVENT_MAP = {
@@ -1216,6 +1217,8 @@ def _update_incident_aurora_status(incident_id: str, aurora_status: str, user_id
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                if not set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat]"):
+                    return
                 now = datetime.now()
                 if aurora_status == 'complete':
                     cursor.execute(
@@ -1264,6 +1267,8 @@ def _determine_severity_from_rca(incident_id: str, session_id: str, user_id: str
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                if not set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat:Severity]"):
+                    return
                 cursor.execute("SELECT severity FROM incidents WHERE id = %s", (incident_id,))
                 row = cursor.fetchone()
                 if not row or row[0] not in (None, 'unknown'):
@@ -1573,7 +1578,6 @@ def _send_rca_notification(user_id: str, incident_id: str, event_type: str, emai
     # For completed notifications, extract the summary section from last message if not already present
     if event_type == 'completed' and session_id and not incident_data.get('aurora_summary'):
         try:
-            from utils.db.connection_pool import db_pool
             from routes.slack.slack_events_helpers import extract_summary_section
             with db_pool.get_admin_connection() as conn:
                 with conn.cursor() as cursor:
@@ -1976,31 +1980,44 @@ def cleanup_stale_background_chats() -> Dict[str, Any]:
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
-                # Find stale sessions with their incident IDs
-                cursor.execute("""
-                    SELECT cs.id, cs.user_id, i.id as incident_id
-                    FROM chat_sessions cs
-                    LEFT JOIN incidents i ON i.aurora_chat_session_id = cs.id::uuid
-                    WHERE cs.status = 'in_progress' AND cs.updated_at < %s
-                """, (stale_threshold,))
-                
-                stale_sessions = cursor.fetchall()
+                # users table is not RLS-protected; iterate per-user to set RLS before querying protected tables
+                cursor.execute("SELECT DISTINCT id, org_id FROM users WHERE org_id IS NOT NULL")
+                all_users = cursor.fetchall()
+
+                stale_sessions = []
+                for uid, org_id in all_users:
+                    cursor.execute("SET myapp.current_user_id = %s;", (uid,))
+                    cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
+                    conn.commit()
+                    cursor.execute("""
+                        SELECT cs.id, cs.user_id, i.id as incident_id
+                        FROM chat_sessions cs
+                        LEFT JOIN incidents i ON i.aurora_chat_session_id = cs.id::uuid
+                        WHERE cs.status = 'in_progress' AND cs.updated_at < %s
+                          AND cs.user_id = %s
+                    """, (stale_threshold, uid))
+                    stale_sessions.extend(cursor.fetchall())
                 
                 if not stale_sessions:
                     logger.info("[BackgroundChat:Cleanup] No stale sessions found")
                     return {"cleaned": 0}
                 
-                # Mark sessions as failed, returning IDs actually updated
-                cursor.execute("""
-                    UPDATE chat_sessions 
-                    SET status = 'failed', updated_at = %s 
-                    WHERE status = 'in_progress' AND updated_at < %s
-                    RETURNING id
-                """, (datetime.now(), stale_threshold))
+                # Mark sessions as failed per-user (respecting RLS)
+                actually_failed_ids = set()
+                for session_id, user_id, incident_id in stale_sessions:
+                    set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat:Cleanup]")
+                    cursor.execute("""
+                        UPDATE chat_sessions 
+                        SET status = 'failed', updated_at = %s 
+                        WHERE id = %s AND status = 'in_progress'
+                        RETURNING id
+                    """, (datetime.now(), session_id))
+                    row = cursor.fetchone()
+                    if row:
+                        actually_failed_ids.add(str(row[0]))
+                    conn.commit()
                 
-                actually_failed_ids = {str(r[0]) for r in cursor.fetchall()}
                 cleaned_count = len(actually_failed_ids)
-            conn.commit()
             
             # Propagate failed status only for sessions that were actually updated
             for session_id, user_id, incident_id in stale_sessions:
@@ -2012,6 +2029,7 @@ def cleanup_stale_background_chats() -> Dict[str, Any]:
                 with conn.cursor() as cursor:
                     for session_id, user_id, incident_id in stale_sessions:
                         if incident_id and str(session_id) in actually_failed_ids:
+                            org_id = set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat:Cleanup]") if user_id else None
                             cursor.execute(
                                 "UPDATE incidents SET aurora_status = 'error', status = 'analyzed', updated_at = %s WHERE id = %s",
                                 (datetime.now(), incident_id)

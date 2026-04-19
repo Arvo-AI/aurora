@@ -6,6 +6,7 @@ import os
 import re
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Union
+from uuid import UUID
 
 from celery_config import celery_app
 from langchain_core.messages import HumanMessage
@@ -13,6 +14,8 @@ from langchain_core.messages import HumanMessage
 from chat.backend.agent.providers import create_chat_model
 from chat.backend.agent.llm import ModelConfig
 from chat.backend.agent.utils.llm_usage_tracker import tracked_invoke
+from utils.auth.stateless_auth import set_rls_context
+from utils.db.connection_pool import db_pool
 
 
 def _extract_text_from_response(content: Union[str, List[Any]]) -> str:
@@ -315,13 +318,15 @@ After the summary, add a separate paragraph titled "## Suggested Next Steps" tha
     return prompt
 
 
-def _fetch_incident_basics(incident_id: str) -> Optional[Dict[str, Any]]:
+def _fetch_incident_basics(incident_id: str, user_id: str) -> Optional[Dict[str, Any]]:
     """Fetch minimal incident fields needed for chat-based summarization."""
-    from utils.db.connection_pool import db_pool
 
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                if not set_rls_context(cursor, conn, user_id, log_prefix="[IncidentSummary]"):
+                    return None
+
                 cursor.execute(
                     """
                     SELECT source_type, alert_title, severity, alert_service, started_at, correlated_alert_count
@@ -360,11 +365,13 @@ def _fetch_chat_transcript(
     user_id: str, session_id: str, max_chars: int = 12000
 ) -> str:
     """Fetch a chat session and format a compact transcript."""
-    from utils.db.connection_pool import db_pool
 
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                if not set_rls_context(cursor, conn, user_id, log_prefix="[IncidentSummary]"):
+                    return "[Transcript unavailable]"
+
                 cursor.execute(
                     """
                     SELECT messages
@@ -502,7 +509,7 @@ def generate_incident_summary(
         # Update the incident with the summary
         # CRITICAL: Don't set aurora_status to 'complete' if RCA is running or pending
         # Only update the summary, preserve the current aurora_status
-        _update_incident_summary(incident_id, summary, status=None)
+        _update_incident_summary(incident_id, summary, status=None, user_id=user_id)
 
         return {
             "incident_id": incident_id,
@@ -518,6 +525,7 @@ def generate_incident_summary(
             incident_id,
             "Summary generation timed out. View raw alert for details.",
             status="error",
+            user_id=user_id,
         )
         return {
             "incident_id": incident_id,
@@ -541,6 +549,7 @@ def generate_incident_summary(
             incident_id,
             "Summary generation failed. View raw alert for details.",
             status="error",
+            user_id=user_id,
         )
         return {
             "incident_id": incident_id,
@@ -571,7 +580,7 @@ def generate_incident_summary_from_chat(
     )
 
     try:
-        basics = _fetch_incident_basics(incident_id)
+        basics = _fetch_incident_basics(incident_id, user_id=user_id)
         if not basics:
             logger.warning(
                 f"[IncidentSummary] Incident {incident_id} not found; skipping chat-based summary"
@@ -670,7 +679,7 @@ def generate_incident_summary_from_chat(
                 f"[IncidentSummary] Failed to extract suggestions for incident {incident_id}: {e}"
             )
 
-        _update_incident_summary(incident_id, summary)
+        _update_incident_summary(incident_id, summary, user_id=user_id)
 
         # Send completion notifications now that summary is generated
         from chat.background.task import (
@@ -710,6 +719,7 @@ def generate_incident_summary_from_chat(
             incident_id,
             "Summary generation timed out. View investigation chat for details.",
             status="error",
+            user_id=user_id,
         )
         return {
             "incident_id": incident_id,
@@ -731,6 +741,7 @@ def generate_incident_summary_from_chat(
             incident_id,
             "Summary generation failed. View investigation chat for details.",
             status="error",
+            user_id=user_id,
         )
         return {
             "incident_id": incident_id,
@@ -740,7 +751,8 @@ def generate_incident_summary_from_chat(
 
 
 def _update_incident_summary(
-    incident_id: str, summary: str, status: Optional[str] = "complete"
+    incident_id: str, summary: str, status: Optional[str] = "complete",
+    user_id: Optional[str] = None,
 ) -> None:
     """Update the aurora_summary field for an incident.
 
@@ -748,22 +760,17 @@ def _update_incident_summary(
         incident_id: The incident ID (UUID format)
         summary: The generated summary text
         status: The aurora_status to set ('complete', 'error', etc.). If None, preserve current status.
+        user_id: User ID to resolve org_id for RLS context (required from Celery workers).
     """
-    from utils.db.connection_pool import db_pool
-    from uuid import UUID
-    from typing import Optional
 
     try:
         UUID(incident_id)  # Validate UUID format
         
-        # Check current status before updating
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
-                cursor.execute("SELECT status, aurora_status FROM incidents WHERE id = %s", (incident_id,))
-                row = cursor.fetchone()
-                current_aurora_status = None
-                if row:
-                    current_aurora_status = row[1]
+                if user_id:
+                    if not set_rls_context(cursor, conn, user_id, log_prefix="[IncidentSummary]"):
+                        return
                 
                 # If status is None, only update summary and preserve current aurora_status
                 if status is None:
