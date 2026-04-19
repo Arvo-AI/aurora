@@ -1,40 +1,56 @@
 # ============================================
-# Base Stage - Common dependencies
+# Builder Stage
 # ============================================
-FROM python:3.12-slim AS base
+FROM python:3.12 AS builder
 
-ENV PYTHONPATH="/app"
-# Set uv cache directory to a writable location for non-root users
-ENV UV_CACHE_DIR="/tmp/.cache/uv"
+ENV UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy \
+    UV_CACHE_DIR=/root/.cache/uv
 
-# Set the working directory
-WORKDIR /app 
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        gcc \
+        g++ \
+        python3-dev \
+        curl \
+        ca-certificates \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Disable HTTP pipelining to prevent CDN hash mismatches
-RUN echo 'Acquire::http::Pipeline-Depth "0";' > /etc/apt/apt.conf.d/99fixhash && \
-    apt-get update && apt-get install -y \
-    libpq-dev \
-    gcc \
-    g++ \
-    python3-dev \
-    postgresql \
-    postgresql-client \
-    wget \
-    unzip \
-    ca-certificates \
-    curl \
-    gnupg \
-    lsb-release \
-    openssh-client \
-    dnsutils \
-    --no-install-recommends && \
-    apt-get clean && rm -rf /var/lib/apt/lists/*
-
-# Download and install uv to a system-wide location (accessible by non-root users)
 ADD https://astral.sh/uv/0.8.22/install.sh /uv-installer.sh
 RUN sh /uv-installer.sh && rm /uv-installer.sh && \
     mv /root/.local/bin/uv /usr/local/bin/uv && \
     mv /root/.local/bin/uvx /usr/local/bin/uvx 2>/dev/null || true
+
+RUN uv venv /opt/venv
+COPY requirements.txt /tmp/requirements.txt
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install -r /tmp/requirements.txt --python /opt/venv/bin/python
+
+# ============================================
+# Production Stage
+# ============================================
+FROM python:3.12-slim AS prod
+
+ENV PYTHONPATH="/app" \
+    PATH="/opt/venv/bin:$PATH" \
+    UV_CACHE_DIR="/tmp/.cache/uv"
+
+WORKDIR /app
+
+# psycopg2-binary statically links libpq, so libpq-dev / libpq5 are unneeded;
+# Postgres server runs in its own container so the server pkg is dropped;
+# postgresql-client kept because runbook tools shell out to psql.
+RUN echo 'Acquire::http::Pipeline-Depth "0";' > /etc/apt/apt.conf.d/99fixhash && \
+    apt-get update && apt-get install -y --no-install-recommends \
+        postgresql-client \
+        ca-certificates \
+        curl \
+        gnupg \
+        lsb-release \
+        wget \
+        unzip \
+        openssh-client \
+        dnsutils \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Add Docker GPG key and repository
 RUN install -m 0755 -d /etc/apt/keyrings && \
@@ -43,15 +59,14 @@ RUN install -m 0755 -d /etc/apt/keyrings && \
     echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian $(. /etc/os-release && echo \"$VERSION_CODENAME\") stable" \
         | tee /etc/apt/sources.list.d/docker.list > /dev/null
 
-# Install Docker CLI, Buildx **and** Compose plugin in one shot
-RUN apt-get update && apt-get install -y \
+# Docker CLI + Buildx + Compose plugin
+RUN apt-get update && apt-get install -y --no-install-recommends \
         docker-ce-cli \
         docker-buildx-plugin \
         docker-compose-plugin \
-        --no-install-recommends && \
-    apt-get clean && rm -rf /var/lib/apt/lists/*
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Install Terraform (multi-arch support)
+# Terraform (multi-arch)
 RUN ARCH=$(uname -m) && \
     if [ "$ARCH" = "x86_64" ]; then \
         TERRAFORM_ARCH="amd64"; \
@@ -65,14 +80,16 @@ RUN ARCH=$(uname -m) && \
     mv terraform /usr/local/bin/ && \
     rm terraform_1.7.5_linux_${TERRAFORM_ARCH}.zip
 
-# Install Google Cloud SDK
+# Google Cloud SDK + GKE auth plugin
 RUN curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg | gpg --dearmor -o /usr/share/keyrings/cloud.google.gpg && \
     echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" \
         | tee -a /etc/apt/sources.list.d/google-cloud-sdk.list && \
-    apt-get update && apt-get install -y google-cloud-sdk google-cloud-sdk-gke-gcloud-auth-plugin && \
-    apt-get clean && rm -rf /var/lib/apt/lists/*
+    apt-get update && apt-get install -y --no-install-recommends \
+        google-cloud-sdk \
+        google-cloud-sdk-gke-gcloud-auth-plugin \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Install AWS CLI v2 (multi-arch support)
+# AWS CLI v2 (multi-arch)
 RUN ARCH=$(uname -m) && \
     if [ "$ARCH" = "x86_64" ]; then \
         AWS_CLI_ARCH="x86_64"; \
@@ -86,7 +103,7 @@ RUN ARCH=$(uname -m) && \
     ./aws/install > /dev/null 2>&1 && \
     rm -rf awscliv2.zip aws/
 
-# Install Azure CLI (manual download method)
+# Azure CLI (manual download)
 RUN ARCH=$(uname -m) && \
     if [ "$ARCH" = "x86_64" ]; then \
         AZURE_CLI_ARCH="x64"; \
@@ -100,7 +117,7 @@ RUN ARCH=$(uname -m) && \
     ./azure-cli-install.sh && \
     rm azure-cli-install.sh
 
-# Install OVHcloud CLI (multi-arch support)
+# OVHcloud CLI (multi-arch)
 RUN ARCH=$(uname -m) && \
     if [ "$ARCH" = "x86_64" ]; then \
         OVH_CLI_ARCH="x86_64"; \
@@ -115,7 +132,7 @@ RUN ARCH=$(uname -m) && \
     chmod +x /usr/local/bin/ovhcloud && \
     rm ovhcloud.tar.gz
 
-# Install Scaleway CLI (multi-arch support)
+# Scaleway CLI (multi-arch)
 RUN ARCH=$(uname -m) && \
     if [ "$ARCH" = "x86_64" ]; then \
         SCW_CLI_ARCH="amd64"; \
@@ -127,15 +144,15 @@ RUN ARCH=$(uname -m) && \
     curl -fsSL "https://github.com/scaleway/scaleway-cli/releases/download/v2.48.0/scaleway-cli_2.48.0_linux_${SCW_CLI_ARCH}" -o /usr/local/bin/scw && \
     chmod +x /usr/local/bin/scw
 
-# Install Tailscale CLI (for local dev SSH to tailnet devices)
+# Tailscale CLI (used by tailscale_ssh tool to join the tailnet)
 RUN curl -fsSL https://tailscale.com/install.sh | sh
 
-# Install Node.js for MCP servers
+# Node.js 20.x (for MCP servers)
 RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
-    apt-get install -y nodejs && \
+    apt-get install -y --no-install-recommends nodejs && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Install kubectl for orchestrator to manage terminal pods
+# kubectl (orchestrator manages terminal pods)
 RUN ARCH=$(uname -m) && \
     if [ "$ARCH" = "x86_64" ]; then \
         KUBECTL_ARCH="amd64"; \
@@ -150,32 +167,8 @@ RUN ARCH=$(uname -m) && \
       -o /usr/local/bin/kubectl && \
     chmod +x /usr/local/bin/kubectl
 
-# Upgrade pip & install base deps
-RUN --mount=type=cache,target=/root/.cache/pip \
-    uv pip install --upgrade pip setuptools wheel --system
+COPY --from=builder /opt/venv /opt/venv
 
-# Copy dependency files first for caching
-COPY requirements.txt /app/requirements.txt
-RUN --mount=type=cache,target=/root/.cache/pip \
-    --mount=type=cache,target=/root/.cache/uv \
-    uv pip install -r requirements.txt --system
-
-# ============================================
-# Development Stage
-# ============================================
-FROM base AS dev
-
-# In development, code is mounted as volume
-# No need to copy source code here
-EXPOSE 5006
-CMD ["python", "main_chatbot.py"]
-
-# ============================================
-# Production Stage
-# ============================================
-FROM base AS prod
-
-# Copy the project sources directly to /app (not /app/server)
 COPY ./chat /app/chat/
 COPY ./config /app/config/
 COPY ./connectors /app/connectors/
@@ -189,5 +182,12 @@ COPY ./mcp_server.py /app/mcp_server.py
 COPY ./rbac_model.conf /app/rbac_model.conf
 
 EXPOSE 5006
-# Entrypoint for chat container:
+CMD ["python", "main_chatbot.py"]
+
+# ============================================
+# Development Stage
+# ============================================
+FROM prod AS dev
+
+EXPOSE 5006
 CMD ["python", "main_chatbot.py"]
