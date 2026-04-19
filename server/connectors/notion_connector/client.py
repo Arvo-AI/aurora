@@ -952,7 +952,7 @@ class NotionClient:
     def list_emojis(self) -> Dict[str, Any]:
         return self._retry_with_refresh(
             lambda: self._graceful_404(
-                lambda: self._request("GET", "/emojis"), "emojis"
+                lambda: self._request("GET", "/custom_emojis"), "custom_emojis"
             )
         )
 
