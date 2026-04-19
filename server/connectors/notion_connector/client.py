@@ -10,7 +10,8 @@ import requests
 
 from connectors.notion_connector import auth as notion_auth
 from utils.auth.token_management import get_token_data, store_tokens_in_db
-from utils.web.rate_limiter import TokenBucket
+from utils.cache.redis_client import get_redis_client
+from utils.web.redis_rate_limiter import RedisTokenBucket
 
 logger = logging.getLogger(__name__)
 
@@ -18,8 +19,11 @@ NOTION_API_BASE = "https://api.notion.com/v1"
 NOTION_VERSION = "2022-06-28"
 USER_AGENT = "Aurora/NotionConnector"
 
-# Notion's public rate limit is ~3 req/s averaged. Process-local bucket.
-_NOTION_BUCKET = TokenBucket(rate_per_sec=3.0, capacity=3)
+# Redis-backed global rate limiter — coordinates across all workers/pods.
+# Notion's rate limit is ~3 req/s per integration.
+_NOTION_BUCKET = RedisTokenBucket(
+    key="notion:ratelimit:global", rate_per_sec=3.0, capacity=3
+)
 
 
 class NotionAuthExpiredError(Exception):
@@ -178,7 +182,8 @@ class NotionClient:
     def _retry_with_refresh(self, fn: Callable[[], Any]) -> Any:
         """Invoke ``fn()``; on 401 refresh OAuth token and retry once.
 
-        For IIT-type tokens or when refresh fails, raises
+        Uses a Redis lock per user to prevent concurrent refresh races
+        across workers. For IIT-type tokens or when refresh fails, raises
         :class:`NotionAuthExpiredError`.
         """
         try:
@@ -207,6 +212,25 @@ class NotionClient:
                     "Notion OAuth session expired and no refresh token available"
                 ) from exc
 
+            # Distributed lock prevents two pods from refreshing the same
+            # user's token simultaneously (loser would overwrite with stale).
+            lock_key = f"notion:refresh_lock:{self.user_id}"
+            rc = get_redis_client()
+            acquired = False
+            if rc:
+                acquired = rc.set(lock_key, "1", nx=True, ex=30)
+                if not acquired:
+                    # Another worker is refreshing — wait briefly then reload
+                    time.sleep(2)
+                    reloaded = get_token_data(self.user_id, "notion")
+                    if reloaded and reloaded.get("access_token") != self.access_token:
+                        self.creds = reloaded
+                        self.access_token = reloaded["access_token"]
+                        return fn()
+                    raise NotionAuthExpiredError(
+                        "Concurrent refresh in progress — retry"
+                    ) from exc
+
             try:
                 new_token_data = notion_auth.refresh_access_token(refresh_token)
             except Exception as refresh_exc:
@@ -218,6 +242,9 @@ class NotionClient:
                 raise NotionAuthExpiredError(
                     "Notion OAuth refresh failed"
                 ) from refresh_exc
+            finally:
+                if rc and acquired:
+                    rc.delete(lock_key)
 
             new_access = new_token_data.get("access_token")
             if not new_access:

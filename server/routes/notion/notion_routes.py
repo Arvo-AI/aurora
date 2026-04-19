@@ -156,6 +156,12 @@ def connect(user_id):
             )
             return jsonify({"error": "Failed to persist Notion credentials"}), 500
 
+        # Invalidate cached status so the UI picks up the new connection
+        from utils.cache.redis_client import get_redis_client
+        rc = get_redis_client()
+        if rc:
+            rc.delete(f"notion:status:{user_id}")
+
         return jsonify(
             {
                 "success": True,
@@ -199,12 +205,27 @@ def oauth_callback(user_id):
 @notion_bp.route("/status", methods=["GET", "OPTIONS"])
 @require_permission("connectors", "read")
 def status(user_id):
-    """Check Notion connection status."""
+    """Check Notion connection status.
+
+    Caches a successful result in Redis for 30s to avoid burning Notion
+    API calls on frontend polling.
+    """
+    from utils.cache.redis_client import get_redis_client
+    import json as _json
+
     oauth_configured = False
     try:
         oauth_configured = auth.is_oauth_configured()
     except Exception as exc:
         logger.debug("[NOTION] is_oauth_configured probe failed: %s", exc)
+
+    # Check cache first
+    cache_key = f"notion:status:{user_id}"
+    rc = get_redis_client()
+    if rc:
+        cached = rc.get(cache_key)
+        if cached:
+            return jsonify(_json.loads(cached))
 
     try:
         creds = get_token_data(user_id, "notion")
@@ -220,6 +241,7 @@ def status(user_id):
     try:
         NotionClient(user_id).get_self()
     except NotionAuthExpiredError:
+        # Don't cache auth failures — user might reconnect immediately
         return jsonify({
             "connected": False,
             "oauthConfigured": oauth_configured,
@@ -232,14 +254,21 @@ def status(user_id):
         )
         return jsonify({"connected": False, "oauthConfigured": oauth_configured})
 
-    return jsonify(
-        {
-            "connected": True,
-            "oauthConfigured": oauth_configured,
-            "workspaceName": creds.get("workspace_name"),
-            "authType": creds.get("type", "oauth"),
-        }
-    )
+    result = {
+        "connected": True,
+        "oauthConfigured": oauth_configured,
+        "workspaceName": creds.get("workspace_name"),
+        "authType": creds.get("type", "oauth"),
+    }
+
+    # Cache successful status for 30s
+    if rc:
+        try:
+            rc.setex(cache_key, 30, _json.dumps(result))
+        except Exception:
+            pass
+
+    return jsonify(result)
 
 
 @notion_bp.route("/disconnect", methods=["POST", "DELETE", "OPTIONS"])
@@ -277,6 +306,12 @@ def disconnect(user_id):
             exc,
         )
         return jsonify({"error": "Failed to disconnect Notion"}), 500
+
+    # Invalidate cached status so the UI reflects disconnect immediately
+    from utils.cache.redis_client import get_redis_client
+    rc = get_redis_client()
+    if rc:
+        rc.delete(f"notion:status:{user_id}")
 
     logger.info("[NOTION] Disconnected user %s", user_id)
     return jsonify(

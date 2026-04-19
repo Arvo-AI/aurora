@@ -415,14 +415,15 @@ def _assert_public_url(url: str) -> None:
 
 
 def _fetch_bytes(source: str) -> tuple[bytes, str]:
-    """Return (bytes, effective_filename) for a URL or local path."""
+    """Return (bytes, effective_filename) for a URL.
+
+    Streams to a SpooledTemporaryFile (stays in memory up to 10 MB, spills
+    to disk above that) to avoid OOMing pods on large uploads.
+    """
+    import tempfile
+
     if _looks_like_url(source):
-        # SSRF guard: reject URLs that resolve to internal/private ranges.
         _assert_public_url(source)
-        # Best-effort HEAD: many CDNs reject HEAD, so only trust the
-        # Content-Length on a 2xx response. Streaming cap below is the
-        # authoritative guard. ``allow_redirects=False`` prevents a 3xx
-        # away from the DNS-validated host to an internal one.
         try:
             head = requests.head(source, allow_redirects=False, timeout=30)
             if head.ok:
@@ -433,20 +434,27 @@ def _fetch_bytes(source: str) -> tuple[bytes, str]:
                             f"File exceeds 500 MB cap ({int(length_header)} bytes)"
                         )
         except requests.RequestException as exc:
-            # HEAD is advisory; the streaming cap below is the real guard.
             logger.debug("HEAD pre-check failed for %s: %s", source, exc)
+
         resp = requests.get(
             source, stream=True, timeout=120, allow_redirects=False
         )
         resp.raise_for_status()
-        buf = bytearray()
-        for chunk in resp.iter_content(chunk_size=1024 * 1024):
-            if not chunk:
-                continue
-            buf.extend(chunk)
-            if len(buf) > _MAX_DOWNLOAD_BYTES:
-                raise ValueError("Download exceeded 500 MB cap during streaming")
-        return bytes(buf), _guess_filename(source)
+
+        # Spool to disk beyond 10 MB to bound memory usage per upload
+        with tempfile.SpooledTemporaryFile(
+            max_size=10 * 1024 * 1024
+        ) as tmp:
+            total = 0
+            for chunk in resp.iter_content(chunk_size=1024 * 1024):
+                if not chunk:
+                    continue
+                total += len(chunk)
+                if total > _MAX_DOWNLOAD_BYTES:
+                    raise ValueError("Download exceeded 500 MB cap during streaming")
+                tmp.write(chunk)
+            tmp.seek(0)
+            return tmp.read(), _guess_filename(source)
 
     raise ValueError(
         "Only public http(s) URLs are accepted — local file paths are not allowed."
