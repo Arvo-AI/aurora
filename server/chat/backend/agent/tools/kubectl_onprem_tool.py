@@ -58,7 +58,7 @@ def on_prem_kubectl(
         response = requests.post(
             f'{chatbot_url}/internal/kubectl/execute',
             json={'user_id': user_id, 'cluster_id': cluster_id, 'command': command, 'timeout': timeout},
-            headers={'X-Internal-Secret': os.getenv('FLASK_SECRET_KEY')},
+            headers={'X-Internal-Secret': os.getenv('INTERNAL_API_SECRET')},
             timeout=timeout
         )
         

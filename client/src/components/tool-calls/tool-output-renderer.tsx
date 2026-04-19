@@ -1,3 +1,5 @@
+"use client"
+
 /**
  * Output rendering utilities for different tool types.
  * Handles syntax highlighting, formatting, and special displays.

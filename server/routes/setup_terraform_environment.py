@@ -99,7 +99,7 @@ def setup_azure_terraform_environment_isolated(user_id: str):
         from chat.backend.agent.tools.auth import setup_azure_environment_cached
 
         selected_subscription_id = get_selected_project_id()
-        ok, subscription_id, auth_method, cached_env = setup_azure_environment_cached(
+        ok, subscription_id, _auth_method, cached_env = setup_azure_environment_cached(
             user_id, selected_subscription_id
         )
         if not ok or not subscription_id or not cached_env:
@@ -147,8 +147,10 @@ def setup_aws_terraform_environment_isolated(user_id: str):
         # Try cached AWS setup first with isolated environment for concurrency safety
         try:
             from chat.backend.agent.tools.auth import setup_aws_credentials_cached
-            ok_cached, cached_region, auth_method, isolated_env = setup_aws_credentials_cached(user_id)
+            ok_cached, cached_region, _auth_method, isolated_env = setup_aws_credentials_cached(user_id)
             if ok_cached and cached_region and isolated_env:
+                isolated_env["TF_VAR_region"] = cached_region
+                isolated_env["TF_VAR_access_key"] = isolated_env.get("AWS_ACCESS_KEY_ID", "")
                 logger.info("(cached) AWS credentials configured for Terraform (isolated)")
                 return True, cached_region, isolated_env
         except Exception as e:

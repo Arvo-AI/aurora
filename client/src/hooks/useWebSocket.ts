@@ -148,6 +148,33 @@ export const useWebSocket = (config: WebSocketConfig) => {
     }
   }, []);
 
+  // Create a ref for connect function to avoid circular dependency
+  const connectRef = useRef<() => void>(() => {});
+
+  const scheduleReconnect = useCallback(() => {
+    const maxAttempts = configRef.current.maxReconnectAttempts || 3;
+    if (!shouldReconnectRef.current || state.reconnectAttempts >= maxAttempts) {
+      if (state.reconnectAttempts >= maxAttempts) {
+        setState(prev => ({
+          ...prev,
+          error: `Connection failed after ${maxAttempts} attempts`
+        }));
+      }
+      return;
+    }
+    setState(prev => ({
+      ...prev,
+      reconnectAttempts: prev.reconnectAttempts + 1
+    }));
+    const baseDelay = Math.min(1000 * Math.pow(2, state.reconnectAttempts), 30000);
+    const jitter = Math.random() * 1000;
+    reconnectTimeoutRef.current = setTimeout(() => {
+      if (mountedRef.current && shouldReconnectRef.current) {
+        connectRef.current();
+      }
+    }, baseDelay + jitter);
+  }, [state.reconnectAttempts]);
+
   const handleClose = useCallback(() => {
     if (!mountedRef.current) return;
 
@@ -159,39 +186,8 @@ export const useWebSocket = (config: WebSocketConfig) => {
 
     configRef.current.onDisconnect?.();
 
-    const maxAttempts = configRef.current.maxReconnectAttempts || 10;
-
-    if (shouldReconnectRef.current && 
-        state.reconnectAttempts < maxAttempts) {
-      
-      setState(prev => ({
-        ...prev,
-        reconnectAttempts: prev.reconnectAttempts + 1
-      }));
-
-      // Exponential backoff with jitter
-      const baseDelay = Math.min(1000 * Math.pow(2, state.reconnectAttempts), 30000);
-      const jitter = Math.random() * 1000; // Add up to 1 second of jitter
-      const reconnectDelay = baseDelay + jitter;
-      
-      
-      reconnectTimeoutRef.current = setTimeout(() => {
-        if (mountedRef.current && shouldReconnectRef.current) {
-          // Call connect through a ref to avoid circular dependency
-          connectRef.current();
-        }
-      }, reconnectDelay);
-    } else if (state.reconnectAttempts >= maxAttempts) {
-      console.error(`WebSocket reconnection failed after ${maxAttempts} attempts`);
-      setState(prev => ({
-        ...prev,
-        error: `Connection failed after ${maxAttempts} attempts`
-      }));
-    }
-  }, [state.reconnectAttempts]);
-
-  // Create a ref for connect function to avoid circular dependency
-  const connectRef = useRef<() => void>(() => {});
+    scheduleReconnect();
+  }, [scheduleReconnect]);
 
   const connect = useCallback(async () => {
     if (!mountedRef.current) return;
@@ -239,6 +235,7 @@ export const useWebSocket = (config: WebSocketConfig) => {
             isConnecting: false,
             error: 'Unable to obtain WebSocket token, retrying...'
           }));
+          scheduleReconnect();
           return;
         }
       } catch (tokenErr) {
@@ -248,6 +245,7 @@ export const useWebSocket = (config: WebSocketConfig) => {
           isConnecting: false,
           error: 'Network error obtaining WebSocket token, retrying...'
         }));
+        scheduleReconnect();
         return;
       }
 

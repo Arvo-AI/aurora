@@ -103,11 +103,11 @@ const nextConfig: NextConfig = {
             key: 'Content-Security-Policy',
             value: [
               "default-src 'self'",
-              "script-src 'self' 'unsafe-eval' 'unsafe-inline'",
+              "script-src 'self' 'unsafe-inline'",
               "style-src 'self' 'unsafe-inline'",
               "img-src 'self' data: blob: https:",
               "font-src 'self' data:",
-              "connect-src 'self' ws: wss: http: https:",
+              `connect-src 'self' ws: wss: ${process.env.NEXT_PUBLIC_BACKEND_URL || ''}`,
               "frame-ancestors 'none'",
             ].join('; '),
           },

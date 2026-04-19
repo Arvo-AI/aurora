@@ -15,9 +15,10 @@ export async function PUT(
 
     const { headers: authHeaders } = authResult
     const { id } = await params
+    const encodedId = encodeURIComponent(id)
     const body = await request.json()
 
-    const backendResp = await fetch(`${env.BACKEND_URL}/api/vms/manual/${id}`, {
+    const backendResp = await fetch(`${env.BACKEND_URL}/api/vms/manual/${encodedId}`, {
       method: 'PUT',
       headers: {
         ...authHeaders,
@@ -50,8 +51,9 @@ export async function DELETE(
 
     const { headers: authHeaders } = authResult
     const { id } = await params
+    const encodedId = encodeURIComponent(id)
 
-    const backendResp = await fetch(`${env.BACKEND_URL}/api/vms/manual/${id}`, {
+    const backendResp = await fetch(`${env.BACKEND_URL}/api/vms/manual/${encodedId}`, {
       method: 'DELETE',
       headers: authHeaders,
     })

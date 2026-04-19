@@ -33,11 +33,13 @@ export async function forwardRequest(
     }
 
     let body: BodyInit | undefined;
+    let useDuplex = false;
     if (passBody) {
       const ct = request.headers.get('content-type') || '';
       if (ct.includes('multipart/form-data')) {
         body = request.body as unknown as BodyInit;
         headers['Content-Type'] = ct;
+        useDuplex = true;
       } else if (ct.includes('application/json')) {
         headers['Content-Type'] = 'application/json';
         body = await request.text();
@@ -48,7 +50,7 @@ export async function forwardRequest(
         try {
           const text = await request.text();
           if (text.length > 0) {
-            headers['Content-Type'] = 'application/json';
+            if (ct) headers['Content-Type'] = ct;
             body = text;
           }
         } catch {
@@ -69,7 +71,8 @@ export async function forwardRequest(
         credentials: 'include',
         cache: 'no-store',
         signal: controller.signal,
-      });
+        ...(useDuplex ? { duplex: 'half' as const } : {}),
+      } as RequestInit);
       clearTimeout(timeoutId);
     } catch (fetchErr: unknown) {
       clearTimeout(timeoutId);

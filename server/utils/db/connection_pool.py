@@ -148,9 +148,9 @@ class DatabaseConnectionPool:
         try:
             if not has_request_context():
                 return
-            from utils.auth.stateless_auth import get_user_id_from_request, get_org_id_from_request
-            user_id = get_user_id_from_request()
-            org_id = get_org_id_from_request()
+            from flask import g
+            user_id = request.headers.get('X-User-ID')
+            org_id = request.headers.get('X-Org-ID') or getattr(g, '_org_id_resolved', None) or None
             if user_id or org_id:
                 with connection.cursor() as cur:
                     if user_id:
@@ -162,8 +162,8 @@ class DatabaseConnectionPool:
                     "No user_id or org_id available in request context for %s %s ",
                     request.method, request.path,
                 )
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("_set_rls_vars failed, continuing without RLS context: %s", exc)
 
     # Backward compatibility aliases
     def get_user_connection(self):

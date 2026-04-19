@@ -217,6 +217,7 @@ services:
     environment:
       <<: *common-env
       OTEL_SERVICE_NAME: celery-worker
+      INTERNAL_API_SECRET: ${INTERNAL_API_SECRET}
       CHATBOT_INTERNAL_URL: ${CHATBOT_INTERNAL_URL}
       FRONTEND_URL: ${FRONTEND_URL}
       BACKEND_URL: ${BACKEND_URL}
@@ -345,6 +346,7 @@ services:
     environment:
       <<: *common-env
       OTEL_SERVICE_NAME: chatbot
+      INTERNAL_API_SECRET: ${INTERNAL_API_SECRET}
       FRONTEND_URL: ${FRONTEND_URL}
       CHATBOT_INTERNAL_URL: ${CHATBOT_INTERNAL_URL}
       CHATBOT_POD_TTL: ${CHATBOT_POD_TTL}

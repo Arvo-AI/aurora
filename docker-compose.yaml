@@ -244,6 +244,7 @@ services:
         --loglevel=info
     environment:
       <<: *common-env
+      INTERNAL_API_SECRET: ${INTERNAL_API_SECRET}
       CHATBOT_INTERNAL_URL: ${CHATBOT_INTERNAL_URL}
 
       # Frontend/Backend URLs
@@ -369,6 +370,7 @@ services:
       - terraform-workdir:/app/terraform_workdir
     environment:
       <<: *common-env
+      INTERNAL_API_SECRET: ${INTERNAL_API_SECRET}
 
       # Frontend URL
       FRONTEND_URL: ${FRONTEND_URL}
