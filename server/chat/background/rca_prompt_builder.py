@@ -1202,3 +1202,62 @@ def build_opsgenie_rca_prompt(
         alert_details['entity'] = entity
 
     return build_rca_prompt('opsgenie', alert_details, providers, user_id)
+
+
+def build_incidentio_rca_prompt(
+    payload: Dict[str, Any],
+    providers: Optional[List[str]] = None,
+    user_id: Optional[str] = None,
+) -> str:
+    """Build RCA prompt from incident.io webhook event payload."""
+    event = payload.get("event", {}) or {}
+    incident = event.get("incident") or payload.get("incident") or {}
+
+    name = incident.get("name") or incident.get("title") or "Unknown Incident"
+    status = incident.get("status") or "unknown"
+    summary = incident.get("summary") or ""
+    permalink = incident.get("permalink") or ""
+
+    severity_obj = incident.get("severity") or {}
+    severity = severity_obj.get("name", "unknown") if isinstance(severity_obj, dict) else str(severity_obj)
+
+    inc_type_obj = incident.get("incident_type") or {}
+    inc_type = inc_type_obj.get("name", "") if isinstance(inc_type_obj, dict) else str(inc_type_obj)
+
+    roles = incident.get("incident_role_assignments") or []
+    role_str = ", ".join(
+        f"{r.get('role', {}).get('name', '?')}: {r.get('assignee', {}).get('name', 'unassigned')}"
+        for r in roles[:5]
+    )
+
+    custom_fields = incident.get("custom_field_entries") or []
+    cf_str = ", ".join(
+        f"{cf.get('custom_field', {}).get('name', '?')}="
+        f"{(cf.get('values') or [{}])[0].get('label', '?')}"
+        for cf in custom_fields[:5]
+        if cf.get("values")
+    )
+
+    message_parts = [f"Incident: {name}"]
+    if summary:
+        message_parts.append(f"Summary: {summary}")
+    if role_str:
+        message_parts.append(f"Roles: {role_str}")
+    if cf_str:
+        message_parts.append(f"Fields: {cf_str}")
+    if permalink:
+        message_parts.append(f"Link: {permalink}")
+
+    alert_details = {
+        'title': name,
+        'status': f"{status} (severity: {severity})",
+        'message': ". ".join(message_parts),
+        'labels': {},
+    }
+
+    if severity:
+        alert_details['labels']['severity'] = severity
+    if inc_type:
+        alert_details['labels']['incident_type'] = inc_type
+
+    return build_rca_prompt('incidentio', alert_details, providers, user_id)

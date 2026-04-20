@@ -63,6 +63,7 @@ SUPPORTED_SECRET_PROVIDERS: Set[str] = {
     "spinnaker", # Spinnaker CD connector tokens
     "newrelic",  # New Relic connector tokens
     "google",   # Google Chat — provider is "google_chat", split('_')[0] matches this
+    "incidentio",  # incident.io connector tokens
 }
 
 
