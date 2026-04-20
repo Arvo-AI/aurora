@@ -185,6 +185,7 @@ def _build_summary_prompt_with_chat(
     investigation_transcript: Optional[str] = None,
     citations: Optional[List[Citation]] = None,
     correlated_alert_count: int = 0,
+    fix_suggestions: Optional[List[Dict[str, Any]]] = None,
 ) -> str:
     """Build a concise summary prompt that incorporates RCA chat context.
 
@@ -192,6 +193,21 @@ def _build_summary_prompt_with_chat(
     Otherwise falls back to transcript-based summarization.
     """
     triggered_line = f"- Triggered at: {triggered_at}" if triggered_at else ""
+
+    # Build fix suggestions block if any exist from github_fix during RCA
+    fix_suggestions_block = ""
+    if fix_suggestions:
+        fix_lines = []
+        for fs in fix_suggestions:
+            repo_info = f" ({fs['repository']})" if fs['repository'] else ""
+            file_info = f" in `{fs['file_path']}`" if fs['file_path'] else ""
+            fix_lines.append(f"- [S:{fs['id']}] {fs['title']}{repo_info}{file_info}")
+        fix_suggestions_block = f"""
+CODE FIX SUGGESTIONS (reference using [S:id] markers):
+The investigation produced these code fix suggestions that are available for the user to apply:
+{chr(10).join(fix_lines)}
+
+When writing the Suggested Next Steps, include the [S:id] marker inline next to the relevant step so the user can apply the fix directly. For example: "Revert the config change [S:4]" — place the marker at the end of the bullet point."""
 
     # If we have citations, use citation-based prompt
     if citations:
@@ -277,7 +293,7 @@ After the summary, add a separate paragraph titled "## Suggested Next Steps" tha
 - Provides actionable guidance for further troubleshooting
 - References specific metrics, logs, or infrastructure components mentioned in the investigation
 - Keep it concise and targeted
-"""
+{fix_suggestions_block}"""
     else:
         # Fallback to transcript-based prompt
         transcript = investigation_transcript or "[No transcript available]"
@@ -311,8 +327,42 @@ After the summary, add a separate paragraph titled "## Suggested Next Steps" tha
 - Provides actionable guidance for further troubleshooting
 - References specific metrics, logs, or infrastructure components mentioned in the investigation
 - Keep it concise and targeted
-"""
+{fix_suggestions_block}"""
     return prompt
+
+
+def _fetch_fix_suggestions(incident_id: str) -> List[Dict[str, Any]]:
+    """Fetch pre-existing fix suggestions (created by github_fix during RCA)."""
+    from utils.db.connection_pool import db_pool
+
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT id, title, description, file_path, repository
+                    FROM incident_suggestions
+                    WHERE incident_id = %s AND type = 'fix'
+                    ORDER BY created_at
+                    """,
+                    (incident_id,),
+                )
+                rows = cursor.fetchall()
+                return [
+                    {
+                        "id": row[0],
+                        "title": row[1],
+                        "description": row[2] or "",
+                        "file_path": row[3] or "",
+                        "repository": row[4] or "",
+                    }
+                    for row in rows
+                ]
+    except Exception as e:
+        logger.warning(
+            f"[IncidentSummary] Failed to fetch fix suggestions for {incident_id}: {e}"
+        )
+        return []
 
 
 def _fetch_incident_basics(incident_id: str) -> Optional[Dict[str, Any]]:
@@ -591,6 +641,13 @@ def generate_incident_summary_from_chat(
         if not all_citations:
             transcript = _fetch_chat_transcript(user_id=user_id, session_id=session_id)
 
+        # Fetch pre-existing fix suggestions (created by github_fix during RCA)
+        fix_suggestions = _fetch_fix_suggestions(incident_id)
+        if fix_suggestions:
+            logger.info(
+                f"[IncidentSummary] Found {len(fix_suggestions)} fix suggestions for incident {incident_id}"
+            )
+
         # Build prompt - uses citations if available, otherwise falls back to transcript
         prompt = _build_summary_prompt_with_chat(
             source_type=basics["source_type"],
@@ -601,6 +658,7 @@ def generate_incident_summary_from_chat(
             investigation_transcript=transcript,
             citations=all_citations if all_citations else None,
             correlated_alert_count=basics.get("correlated_alert_count", 0),
+            fix_suggestions=fix_suggestions if fix_suggestions else None,
         )
 
         # Use centralized model config for email report generation
