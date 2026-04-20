@@ -483,6 +483,7 @@ services:
       context: ./server
       dockerfile: Dockerfile
       target: prod
+    image: aurora_mcp:latest
     container_name: aurora-mcp
     logging: *default-logging
     ports:
