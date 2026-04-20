@@ -159,6 +159,8 @@ config:
   # --- AWS Secrets Manager (only when SECRETS_BACKEND=aws_secrets_manager) ---
   AWS_SM_REGION: ""
   AWS_SM_PREFIX: "aurora/users"
+  AWS_SM_ACCESS_KEY_ID: ""      # Dedicated IAM key for Secrets Manager access (avoids collision with AWS connector creds)
+  AWS_SM_SECRET_ACCESS_KEY: ""  # Falls back to default boto3 chain if both are empty
   
   # --- LLM Configuration ---
   LLM_PROVIDER_MODE: "openrouter"  #Provider: openrouter, openai, anthropic, google
@@ -306,7 +308,9 @@ secrets:
     SEARXNG_SECRET: ""           # REQUIRED - Generate with: openssl rand -base64 32
     INTERNAL_API_SECRET: ""      # REQUIRED - Generate with: openssl rand -base64 32
 
-    # --- Optional: AWS Integration ---
+    # --- Optional: AWS Connector ---
+    # IAM identity for cross-account STS AssumeRole into user AWS accounts.
+    # Not related to AWS_SM_* credentials used for the secrets backend.
     AWS_ACCESS_KEY_ID: ""
     AWS_SECRET_ACCESS_KEY: ""
     
