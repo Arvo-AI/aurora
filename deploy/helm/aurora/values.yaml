@@ -650,6 +650,7 @@ ingress:
     frontend: "aurora.example.com"
     api: "api.aurora.example.com"
     ws: "ws.aurora.example.com"
+    mcp: ""  # MCP server (optional) - e.g., mcp.aurora.example.com
 
   # Additional Ingress resources (e.g., external ingress for webhooks).
   # Each entry creates a separate Kubernetes Ingress object.

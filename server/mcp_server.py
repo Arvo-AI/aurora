@@ -156,6 +156,7 @@ mcp = FastMCP(
         "Use the curated tools for incidents and infrastructure. "
         "For anything else, use aurora_api -- read aurora://api-catalog first to discover endpoints."
     ),
+    host="0.0.0.0",
     stateless_http=True,
     json_response=True,
 )
@@ -282,7 +283,6 @@ def blast_radius_analysis(service_name: str) -> str:
 
 if __name__ == "__main__":
     port = int(os.environ.get("MCP_PORT", "8811"))
-    mcp.settings.host = "0.0.0.0"
     mcp.settings.port = port
 
     _original_app_factory = mcp.streamable_http_app
