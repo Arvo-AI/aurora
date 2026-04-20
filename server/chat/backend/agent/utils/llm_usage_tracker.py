@@ -289,7 +289,7 @@ class LLMUsageTracker:
                 resolved_org_id = set_rls_context(cursor, conn, usage.user_id, log_prefix="[LLMUsage:store]")
                 if not resolved_org_id:
                     logger.error("[LLMUsage:store] Cannot store usage — org_id unresolvable for user %s", usage.user_id)
-                    return
+                    return False
                 usage.org_id = resolved_org_id
 
                 # Insert usage record

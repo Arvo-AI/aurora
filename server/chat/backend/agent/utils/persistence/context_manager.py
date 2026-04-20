@@ -148,7 +148,7 @@ class ContextManager:
                 cursor = conn.cursor()
                 from utils.auth.stateless_auth import set_rls_context
                 if not set_rls_context(cursor, conn, user_id, log_prefix="[ContextManager]"):
-                    return
+                    return False
                 
                 # Try to update existing session first
                 cursor.execute("""

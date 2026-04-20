@@ -84,7 +84,7 @@ def _append_context_update_to_completed_session(
         with db_pool.get_user_connection() as conn:
             with conn.cursor() as cursor:
                 if not set_rls_context(cursor, conn, user_id, log_prefix="[ContextUpdates]"):
-                    return None
+                    return False
                 
                 # Lock the row and get current messages to prevent race conditions
                 cursor.execute(

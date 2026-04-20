@@ -42,6 +42,7 @@ def refresh_aws_credentials():
     expiring_role_arns = {k.split(":")[0] for k in expiring_cache_keys}
 
     from utils.db.connection_pool import db_pool
+    from utils.auth.stateless_auth import set_rls_context
 
     try:
         with db_pool.get_admin_connection() as conn:
@@ -53,9 +54,7 @@ def refresh_aws_credentials():
                 all_users = cur.fetchall()
                 rows = []
                 for uid, org_id in all_users:
-                    cur.execute("SET myapp.current_user_id = %s;", (uid,))
-                    cur.execute("SET myapp.current_org_id = %s;", (org_id,))
-                    conn.commit()
+                    set_rls_context(cur, conn, uid, log_prefix="[AWSCredRefresh]")
                     cur.execute(
                         "SELECT uc.user_id, uc.role_arn, uc.region, "
                         "       uc.workspace_id, w.aws_external_id "

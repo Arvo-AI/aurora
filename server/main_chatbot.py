@@ -81,11 +81,17 @@ rate_limiter = RateLimiter(rate=5, per=60)
 _INTERNAL_API_SECRET = os.getenv("INTERNAL_API_SECRET", "")
 _AURORA_ENV = os.getenv("AURORA_ENV", "production")
 
-if _AURORA_ENV != "dev" and not _INTERNAL_API_SECRET:
-    raise RuntimeError(
-        "FATAL: INTERNAL_API_SECRET is not set and AURORA_ENV='%s' (non-dev). "
-        "Refusing to start without authentication secrets in production." % _AURORA_ENV
-    )
+if not _INTERNAL_API_SECRET:
+    if _AURORA_ENV == "dev":
+        logger.warning(
+            "INTERNAL_API_SECRET is not set (AURORA_ENV='dev'). "
+            "WebSocket token authentication is disabled — acceptable for local development only."
+        )
+    else:
+        raise RuntimeError(
+            "FATAL: INTERNAL_API_SECRET is not set and AURORA_ENV='%s' (non-dev). "
+            "Refusing to start without authentication secrets in production." % _AURORA_ENV
+        )
 
 def _validate_ws_token(websocket) -> dict | None:
     """Extract and validate a JWT from the WebSocket handshake query string.

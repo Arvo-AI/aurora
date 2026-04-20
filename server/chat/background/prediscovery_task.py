@@ -20,6 +20,7 @@ def _get_users_with_integrations() -> List[Dict[str, Any]]:
     Iterates per-org to satisfy RLS on user_tokens / user_connections.
     """
     from utils.db.connection_pool import db_pool
+    from utils.auth.stateless_auth import set_rls_context
 
     try:
         with db_pool.get_admin_connection() as conn:
@@ -30,19 +31,17 @@ def _get_users_with_integrations() -> List[Dict[str, Any]]:
 
                 results = []
                 for user_id, org_id in all_users:
-                    cur.execute("SET myapp.current_user_id = %s;", (user_id,))
-                    cur.execute("SET myapp.current_org_id = %s;", (org_id,))
-                    conn.commit()
+                    set_rls_context(cur, conn, user_id, log_prefix="[Prediscovery]")
 
                     cur.execute("""
                         SELECT EXISTS (
                             SELECT 1 FROM user_tokens ut
-                            WHERE ut.user_id = %s AND ut.is_active = true
+                            WHERE ut.is_active = true
                             UNION
                             SELECT 1 FROM user_connections uc
-                            WHERE uc.user_id = %s AND uc.status = 'active'
+                            WHERE uc.status = 'active'
                         )
-                    """, (user_id, user_id))
+                    """)
                     row = cur.fetchone()
                     if row and row[0]:
                         results.append({"user_id": user_id, "org_id": org_id})
@@ -246,7 +245,8 @@ def _should_run_for_user(user_id: str) -> bool:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
                 from utils.auth.stateless_auth import set_rls_context
-                set_rls_context(cur, conn, user_id, log_prefix="[Prediscovery]")
+                if not set_rls_context(cur, conn, user_id, log_prefix="[Prediscovery]"):
+                    return False
                 cur.execute("""
                     SELECT created_at FROM chat_sessions
                     WHERE user_id = %s

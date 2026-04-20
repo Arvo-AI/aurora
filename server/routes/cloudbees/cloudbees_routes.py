@@ -243,7 +243,8 @@ def _verify_webhook_user(user_id: str) -> bool:
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
-                set_rls_context(cursor, conn, user_id, log_prefix="[CLOUDBEES:verify_webhook]")
+                if not set_rls_context(cursor, conn, user_id, log_prefix="[CLOUDBEES:verify_webhook]"):
+                    return False
                 cursor.execute(
                     "SELECT 1 FROM user_tokens WHERE user_id = %s AND provider = %s LIMIT 1",
                     (user_id, CLOUDBEES_PROVIDER),

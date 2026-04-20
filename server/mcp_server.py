@@ -27,10 +27,17 @@ logger = logging.getLogger("aurora.mcp")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 
 API_BASE = os.environ.get("BACKEND_URL", "http://aurora-server:5080")
+_AURORA_ENV = os.environ.get("AURORA_ENV", "production")
 _INTERNAL_SECRET = os.environ.get("INTERNAL_API_SECRET", "")
 
 if not _INTERNAL_SECRET:
-    logger.warning("INTERNAL_API_SECRET not set — requests to Flask will fail if the server requires it")
+    if _AURORA_ENV == "dev":
+        logger.warning("INTERNAL_API_SECRET not set (AURORA_ENV='dev') — MCP proxy auth disabled for local development")
+    else:
+        raise RuntimeError(
+            "FATAL: INTERNAL_API_SECRET is not set and AURORA_ENV='%s'. "
+            "Refusing to start MCP proxy without authentication secrets." % _AURORA_ENV
+        )
 
 _current_bearer_token: contextvars.ContextVar[str] = contextvars.ContextVar("_current_bearer_token")
 

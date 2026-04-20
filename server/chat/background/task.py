@@ -1952,8 +1952,10 @@ def create_background_chat_session(
 
                 if not org_id:
                     logger.warning("No org_id found for user %s in background task session creation", user_id)
+                    raise ValueError(f"Missing org_id for user {user_id}")
                 
-                set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat:session]")
+                if not set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat:session]"):
+                    raise ValueError(f"Failed to set RLS context for user {user_id}")
                 
                 # Create the session with initial metadata and in_progress status
                 ui_state = {
@@ -2029,7 +2031,8 @@ def cleanup_stale_background_chats() -> Dict[str, Any]:
                 # Mark sessions as failed per-user (respecting RLS)
                 actually_failed_ids = set()
                 for session_id, user_id, incident_id in stale_sessions:
-                    set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat:Cleanup]")
+                    if not set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat:Cleanup]"):
+                        continue
                     cursor.execute("""
                         UPDATE chat_sessions 
                         SET status = 'failed', updated_at = %s 
@@ -2053,7 +2056,8 @@ def cleanup_stale_background_chats() -> Dict[str, Any]:
                 with conn.cursor() as cursor:
                     for session_id, user_id, incident_id in stale_sessions:
                         if incident_id and str(session_id) in actually_failed_ids:
-                            set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat:Cleanup]") if user_id else None
+                            if not user_id or not set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat:Cleanup]"):
+                                continue
                             cursor.execute(
                                 "UPDATE incidents SET aurora_status = 'error', status = 'analyzed', updated_at = %s WHERE id = %s",
                                 (datetime.now(), incident_id)

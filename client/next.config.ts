@@ -101,15 +101,26 @@ const nextConfig: NextConfig = {
           { key: 'Strict-Transport-Security', value: 'max-age=63072000; includeSubDomains' },
           {
             key: 'Content-Security-Policy',
-            value: [
-              "default-src 'self'",
-              "script-src 'self' 'unsafe-inline'",
-              "style-src 'self' 'unsafe-inline'",
-              "img-src 'self' data: blob: https:",
-              "font-src 'self' data:",
-              `connect-src 'self' ws: wss: ${process.env.NEXT_PUBLIC_BACKEND_URL || ''}`,
-              "frame-ancestors 'none'",
-            ].join('; '),
+            value: (() => {
+              const backendOrigin = process.env.NEXT_PUBLIC_BACKEND_URL || '';
+              const wsOrigin = process.env.NEXT_PUBLIC_WEBSOCKET_URL || '';
+              const connectSrc = [
+                "'self'",
+                backendOrigin,
+                wsOrigin,
+                wsOrigin ? wsOrigin.replace(/^http/, 'ws') : '',
+                backendOrigin ? backendOrigin.replace(/^http/, 'ws') : '',
+              ].filter(Boolean).join(' ');
+              return [
+                "default-src 'self'",
+                "script-src 'self' 'unsafe-inline'",
+                "style-src 'self' 'unsafe-inline'",
+                "img-src 'self' data: blob: https:",
+                "font-src 'self' data:",
+                `connect-src ${connectSrc}`,
+                "frame-ancestors 'none'",
+              ].join('; ');
+            })(),
           },
         ],
       },
