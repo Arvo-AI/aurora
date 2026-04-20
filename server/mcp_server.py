@@ -100,26 +100,32 @@ def _resolve_token(token: str) -> tuple[str, str]:
 
     Uses a direct superuser pool intentionally -- token resolution is a
     bootstrap step that precedes org context, so RLS does not apply.
+    Sets myapp.mcp_token_resolve to activate the permissive RLS policy that
+    allows point-lookups by token value without an org_id context.
     """
     pool = _get_pool()
     conn = pool.getconn()
     ok = False
     try:
         with conn.cursor() as cur:
-            # No RLS needed — token bootstrap, no user_id yet
-            cur.execute(
-                "SELECT user_id, org_id FROM mcp_tokens "
-                "WHERE token = %s AND status = 'active' "
-                "AND (expires_at IS NULL OR expires_at > NOW())",
-                (token,),
-            )
-            row = cur.fetchone()
-            if not row:
-                raise ValueError("Invalid, expired, or revoked MCP token")
-            now = time.monotonic()
-            if now - _last_used_cache.get(token, 0) > 60:
-                cur.execute("UPDATE mcp_tokens SET last_used_at = NOW() WHERE token = %s", (token,))
-                _last_used_cache[token] = now
+            cur.execute("SET myapp.mcp_token_resolve = 'true'")
+            try:
+                cur.execute(
+                    "SELECT user_id, org_id FROM mcp_tokens "
+                    "WHERE token = %s AND status = 'active' "
+                    "AND (expires_at IS NULL OR expires_at > NOW())",
+                    (token,),
+                )
+
+                row = cur.fetchone()
+                if not row:
+                    raise ValueError("Invalid, expired, or revoked MCP token")
+                now = time.monotonic()
+                if now - _last_used_cache.get(token, 0) > 60:
+                    cur.execute("UPDATE mcp_tokens SET last_used_at = NOW() WHERE token = %s", (token,))
+                    _last_used_cache[token] = now
+            finally:
+                cur.execute("RESET myapp.mcp_token_resolve")
             conn.commit()
             ok = True
             return row[0], row[1]

@@ -1963,6 +1963,31 @@ def initialize_tables():
             # Commit table creation and RLS before running migrations
             conn.commit()
 
+            # The MCP server must resolve a bearer token to (user_id, org_id) before
+            # it knows which org the request belongs to. This policy permits SELECT
+            # when the session explicitly opts in via myapp.mcp_token_resolve='true'.
+            cursor.execute("""
+                DO $$ BEGIN
+                    DROP POLICY IF EXISTS select_by_token_resolve ON mcp_tokens;
+                    CREATE POLICY select_by_token_resolve ON mcp_tokens
+                    FOR SELECT USING (
+                        current_setting('myapp.mcp_token_resolve', true) = 'true'
+                    );
+                END $$;
+            """)
+            cursor.execute("""
+                DO $$ BEGIN
+                    DROP POLICY IF EXISTS update_by_token_resolve ON mcp_tokens;
+                    CREATE POLICY update_by_token_resolve ON mcp_tokens
+                    FOR UPDATE USING (
+                        current_setting('myapp.mcp_token_resolve', true) = 'true'
+                    );
+                END $$;
+            """)
+            logging.info("Added MCP token resolve RLS policies on mcp_tokens.")
+
+            conn.commit()
+
             # Migration: Add role column to users table for RBAC
             try:
                 cursor.execute("SAVEPOINT sp_role_col")
