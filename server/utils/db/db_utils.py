@@ -1102,7 +1102,11 @@ def initialize_tables():
                         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         confluence_page_id TEXT,
                         confluence_page_url TEXT,
-                        confluence_exported_at TIMESTAMP
+                        confluence_exported_at TIMESTAMP,
+                        notion_page_id TEXT,
+                        notion_page_url TEXT,
+                        notion_exported_at TIMESTAMP,
+                        notion_database_id TEXT
                     );
 
                     CREATE UNIQUE INDEX IF NOT EXISTS idx_postmortems_incident_id ON postmortems(incident_id);
@@ -1188,6 +1192,7 @@ def initialize_tables():
             rls_tables.append("incident_alerts")
             rls_tables.append("incident_feedback")
             rls_tables.append("postmortems")
+            rls_tables.append("postmortem_exports")
             rls_tables.append("incident_lifecycle_events")
             rls_tables.append("github_connected_repos")
             rls_tables.append("execution_steps")
@@ -1754,7 +1759,11 @@ def initialize_tables():
                         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         confluence_page_id TEXT,
                         confluence_page_url TEXT,
-                        confluence_exported_at TIMESTAMP
+                        confluence_exported_at TIMESTAMP,
+                        notion_page_id TEXT,
+                        notion_page_url TEXT,
+                        notion_exported_at TIMESTAMP,
+                        notion_database_id TEXT
                     );
                     CREATE UNIQUE INDEX IF NOT EXISTS idx_postmortems_incident_id ON postmortems(incident_id);
                     CREATE INDEX IF NOT EXISTS idx_postmortems_user_id ON postmortems(user_id);
@@ -1813,6 +1822,77 @@ def initialize_tables():
                 conn.commit()
             except Exception as e:
                 logging.warning(f"Error adding Jira columns to postmortems: {e}")
+                conn.rollback()
+
+            # Migration: Add Notion columns to postmortems table
+            try:
+                cursor.execute("""
+                    ALTER TABLE postmortems
+                        ADD COLUMN IF NOT EXISTS notion_page_id TEXT,
+                        ADD COLUMN IF NOT EXISTS notion_page_url TEXT,
+                        ADD COLUMN IF NOT EXISTS notion_exported_at TIMESTAMP,
+                        ADD COLUMN IF NOT EXISTS notion_database_id TEXT;
+                """)
+                logging.info("Added Notion columns to postmortems table (if not exist).")
+                conn.commit()
+            except Exception as e:
+                logging.warning(f"Error adding Notion columns to postmortems: {e}")
+                conn.rollback()
+
+            # Migration: Normalized postmortem_exports table — one row per
+            # (postmortem, destination) instead of per-destination columns.
+            # Future destinations (Linear, Slack Canvas, GDocs) are inserts,
+            # not ALTER TABLEs.
+            try:
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS postmortem_exports (
+                        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                        postmortem_id UUID NOT NULL REFERENCES postmortems(id) ON DELETE CASCADE,
+                        org_id VARCHAR(255) NOT NULL,
+                        destination VARCHAR(50) NOT NULL,
+                        external_id TEXT,
+                        external_key TEXT,
+                        external_url TEXT,
+                        external_database_id TEXT,
+                        exported_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE (postmortem_id, destination)
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_postmortem_exports_postmortem
+                        ON postmortem_exports(postmortem_id);
+                    CREATE INDEX IF NOT EXISTS idx_postmortem_exports_org_dest
+                        ON postmortem_exports(org_id, destination);
+                """)
+                logging.info("Created postmortem_exports table (if not exists).")
+                conn.commit()
+            except Exception as e:
+                logging.warning(f"Error creating postmortem_exports table: {e}")
+                conn.rollback()
+
+            # Backfill postmortem_exports from legacy columns (idempotent)
+            try:
+                cursor.execute("""
+                    INSERT INTO postmortem_exports (postmortem_id, org_id, destination, external_id, external_url, exported_at)
+                    SELECT id, org_id, 'confluence', confluence_page_id, confluence_page_url, confluence_exported_at
+                    FROM postmortems
+                    WHERE confluence_page_id IS NOT NULL AND org_id IS NOT NULL
+                    ON CONFLICT (postmortem_id, destination) DO NOTHING;
+
+                    INSERT INTO postmortem_exports (postmortem_id, org_id, destination, external_id, external_key, external_url, exported_at)
+                    SELECT id, org_id, 'jira', jira_issue_id, jira_issue_key, jira_issue_url, jira_exported_at
+                    FROM postmortems
+                    WHERE jira_issue_id IS NOT NULL AND org_id IS NOT NULL
+                    ON CONFLICT (postmortem_id, destination) DO NOTHING;
+
+                    INSERT INTO postmortem_exports (postmortem_id, org_id, destination, external_id, external_url, external_database_id, exported_at)
+                    SELECT id, org_id, 'notion', notion_page_id, notion_page_url, notion_database_id, notion_exported_at
+                    FROM postmortems
+                    WHERE notion_page_id IS NOT NULL AND org_id IS NOT NULL
+                    ON CONFLICT (postmortem_id, destination) DO NOTHING;
+                """)
+                logging.info("Backfilled postmortem_exports from legacy columns.")
+                conn.commit()
+            except Exception as e:
+                logging.warning(f"Error backfilling postmortem_exports: {e}")
                 conn.rollback()
 
             # Migration: Add resolved_at, alert_fired_at, and investigation_started_at
