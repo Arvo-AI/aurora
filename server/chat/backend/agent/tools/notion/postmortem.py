@@ -513,9 +513,20 @@ def notion_export_postmortem(
     session_id: Optional[str] = None,
 ) -> str:
     """Export an incident's postmortem to a Notion database."""
-    _ = session_id
     if not user_id:
         return notion_tool_error("user_id is required", code="missing_user")
+
+    from chat.backend.agent.tools.cloud_tools import get_state_context
+    from utils.cloud.infrastructure_confirmation import wait_for_user_confirmation
+
+    sid = session_id or getattr(get_state_context(), "session_id", None)
+    if not wait_for_user_confirmation(
+        user_id=user_id,
+        message=f"Export postmortem for incident {incident_id} to Notion database {database_id}?",
+        tool_name="notion_export_postmortem",
+        session_id=sid,
+    ):
+        return notion_tool_error("Operation cancelled by user.", code="cancelled")
 
     try:
         result = _export_postmortem_to_notion(

@@ -9,6 +9,7 @@ from .common import (
     build_icon,
     build_rich_text,
     extract_title,
+    notion_tool_error,
     run_notion_tool,
     wrap_optional_feature,
 )
@@ -160,7 +161,20 @@ def notion_update_database_properties(
     session_id: Optional[str] = None,
 ) -> str:
     """Update a database's schema (add, rename, change, or remove columns)."""
-    _ = session_id
+    has_deletions = any(v is None for v in properties.values())
+    if has_deletions:
+        from chat.backend.agent.tools.cloud_tools import get_state_context
+        from utils.cloud.infrastructure_confirmation import wait_for_user_confirmation
+
+        sid = session_id or getattr(get_state_context(), "session_id", None)
+        cols = [k for k, v in properties.items() if v is None]
+        if not wait_for_user_confirmation(
+            user_id=user_id or "",
+            message=f"This will permanently delete column(s): {', '.join(cols)}. Proceed?",
+            tool_name="notion_update_database_properties",
+            session_id=sid,
+        ):
+            return notion_tool_error("Operation cancelled by user.", code="cancelled")
 
     def _do(client: Any) -> Dict[str, Any]:
         result = client.update_database_properties(database_id, properties)

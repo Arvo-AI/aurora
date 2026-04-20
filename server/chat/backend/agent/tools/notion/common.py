@@ -82,7 +82,7 @@ def run_notion_tool(
     except Exception as exc:
         logger.exception("Notion tool failed for user %s: %s", user_id, exc)
         return notion_tool_error(
-            f"Notion operation failed: {exc}", code="tool_failure"
+            "Notion operation failed. Check logs for details.", code="tool_failure"
         )
 
 
