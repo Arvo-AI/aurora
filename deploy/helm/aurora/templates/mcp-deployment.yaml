@@ -1,0 +1,86 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "aurora.fullname" . }}-mcp
+  labels:
+    {{- include "aurora.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCounts.mcp }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "aurora.name" . }}-mcp
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- if not .Values.secrets.db.existingSecret }}
+        checksum/secret-db: {{ include (print $.Template.BasePath "/secret-db.yaml") . | sha256sum }}
+        {{- end }}
+        {{- if not .Values.secrets.backend.existingSecret }}
+        checksum/secret-backend: {{ include (print $.Template.BasePath "/secret-backend.yaml") . | sha256sum }}
+        {{- end }}
+      labels:
+        app.kubernetes.io/name: {{ include "aurora.name" . }}-mcp
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/part-of: aurora
+    spec:
+      serviceAccountName: {{ include "aurora.fullname" . }}-mcp
+      automountServiceAccountToken: false
+      securityContext:
+        {{- include "aurora.podSecurityContext" (dict "service" "mcp" "global" $ "defaults" (dict "runAsUser" 1000 "runAsGroup" 1000 "fsGroup" 1000)) | nindent 8 }}
+      {{- if .Values.image.pullSecrets }}
+      imagePullSecrets:
+        {{- toYaml .Values.image.pullSecrets | nindent 8 }}
+      {{- end }}
+      {{- include "aurora.scheduling" (dict "service" "mcp" "global" $) | nindent 6 }}
+      containers:
+        - name: aurora-mcp
+          image: "{{ .Values.image.registry }}/aurora-server:{{ .Values.image.tag }}"
+          imagePullPolicy: IfNotPresent
+          command: ["python", "mcp_server.py"]
+          securityContext:
+            {{- include "aurora.containerSecurityContext" (dict "service" "mcp" "global" $ "defaults" (dict)) | nindent 12 }}
+          ports:
+            - name: mcp
+              containerPort: 8811
+          envFrom:
+            - configMapRef:
+                name: {{ include "aurora.fullname" . }}-config
+            - secretRef:
+                name: {{ include "aurora.secretName.db" . }}
+            - secretRef:
+                name: {{ include "aurora.secretName.backend" . }}
+          {{- if .Values.ssl.caCertSecret }}
+          volumeMounts:
+            - name: ssl-ca-cert
+              mountPath: {{ .Values.ssl.caCertMountPath }}
+              readOnly: true
+          {{- end }}
+          startupProbe:
+            tcpSocket:
+              port: 8811
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 30
+          readinessProbe:
+            tcpSocket:
+              port: 8811
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            tcpSocket:
+              port: 8811
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.resources.mcp | nindent 12 }}
+      {{- if .Values.ssl.caCertSecret }}
+      volumes:
+        - name: ssl-ca-cert
+          secret:
+            secretName: {{ .Values.ssl.caCertSecret }}
+      {{- end }}
