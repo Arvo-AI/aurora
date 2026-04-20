@@ -260,6 +260,19 @@ OLLAMA_BASE_URL=http://host.docker.internal:11434
 | `RCA_OPTIMIZE_COSTS` | `true` | Only used when `RCA_MODEL` is not set. `true` = `anthropic/claude-3-haiku`, `false` = `anthropic/claude-opus-4.5` |
 | `GEMINI_DISABLE_THINKING` | - | Disable Gemini thinking mode |
 
+### AI Safety Guardrails
+
+LLM-based alignment check that verifies agent actions match user intent before execution. See [Alignment Check](./alignment-check.md) for detailed configuration.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ALIGNMENT_CHECK_ENABLED` | `false` | Enable the LLM alignment check |
+| `ALIGNMENT_CHECK_MODEL` | _(MAIN_MODEL)_ | Provider/model for safety check (e.g., `openai/gpt-4o-mini`) |
+| `ALIGNMENT_CHECK_FAIL_MODE` | `open` | Behavior on LLM error: `open` (allow) or `closed` (block) |
+| `ALIGNMENT_CHECK_TIMEOUT` | `10` | Max seconds to wait for alignment check LLM |
+| `ALIGNMENT_CHECK_BASE_URL` | - | Custom API endpoint for self-hosted models |
+| `ALIGNMENT_CHECK_API_KEY` | - | API key for custom endpoint (only when BASE_URL is set) |
+
 ## Cloud Providers
 
 ### GCP (Google Cloud Platform)

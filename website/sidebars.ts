@@ -24,6 +24,7 @@ const sidebars: SidebarsConfig = {
         'configuration/environment',
         'configuration/vault',
         'configuration/storage',
+        'configuration/alignment-check',
       ],
     },
     {

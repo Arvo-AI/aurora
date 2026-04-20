@@ -239,6 +239,16 @@ def tailscale_ssh(
             "provider": "tailscale_ssh",
         })
 
+    from utils.security.alignment_check import check_alignment
+    alignment = check_alignment(command, tool_name="tailscale_ssh", user_id=user_id, session_id=session_id)
+    if alignment.conclusion:
+        return json.dumps({
+            "success": False,
+            "error": f"Command blocked by safety guardrail: {alignment.thought}",
+            "code": "ALIGNMENT_BLOCKED",
+            "provider": "tailscale_ssh",
+        })
+
     # Validate SSH user (basic sanitization)
     if not ssh_user or (not ssh_user.isalnum() and ssh_user not in ["root"]):
         ssh_user = "root"

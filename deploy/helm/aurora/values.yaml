@@ -175,7 +175,22 @@ config:
   # --- LLM Configuration ---
   LLM_PROVIDER_MODE: "openrouter"  #Provider: openrouter, openai, anthropic, google
   AGENT_RECURSION_LIMIT: "240" #Maximum number of steps an agent can take
-  
+
+  # --- AI Safety Guardrails ---
+  # LLM-based alignment check that verifies agent actions match user intent before execution.
+  # Uses Meta's AlignmentCheck prompt (MIT licensed). Only fires after deterministic checks pass.
+  # Every command is checked independently -- no caching, no skipping.
+  ALIGNMENT_CHECK_ENABLED: "false"
+  # Model for the safety check (provider/model format). Empty = use MAIN_MODEL.
+  # Examples: openai/gpt-4o-mini, anthropic/claude-haiku-4.5, google/gemini-2.5-flash-lite
+  ALIGNMENT_CHECK_MODEL: ""
+  # Behavior on LLM error: "open" (allow command) or "closed" (block command)
+  ALIGNMENT_CHECK_FAIL_MODE: "open"
+  # Max seconds to wait for the alignment check LLM response
+  ALIGNMENT_CHECK_TIMEOUT: "10"
+  # Optional: custom API endpoint (for Together AI, self-hosted vLLM, etc.)
+  ALIGNMENT_CHECK_BASE_URL: ""
+
   # --- Performance & Caching ---
   AURORA_SETUP_CACHE_ENABLED: "true"
   AURORA_SETUP_CACHE_TTL: "3600"
@@ -356,6 +371,8 @@ secrets:
     OPENAI_API_KEY: ""           # Get from: https://platform.openai.com/api-keys
     ANTHROPIC_API_KEY: ""        # Get from: https://console.anthropic.com/
     GOOGLE_AI_API_KEY: ""        # Get from: https://makersuite.google.com/app/apikey
+    # API key for custom alignment check endpoint (only needed if ALIGNMENT_CHECK_BASE_URL is set)
+    ALIGNMENT_CHECK_API_KEY: ""
 
 # ------------------------------------------------------------------------------
 # Security contexts
