@@ -8,7 +8,7 @@ import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { CheckCircle2, Copy, ExternalLink, Loader2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
-import { incidentIoService, IncidentIoWebhookUrlResponse, IncidentIoRcaSettings } from "@/lib/services/incident-io";
+import { incidentIoService, IncidentIoWebhookUrlResponse } from "@/lib/services/incident-io";
 import { copyToClipboard } from "@/lib/utils";
 
 interface IncidentIoWebhookStepProps {
@@ -68,13 +68,15 @@ export function IncidentIoWebhookStep({ onDisconnect, loading }: IncidentIoWebho
       if (result) {
         setRcaEnabled(result.rcaEnabled);
         setPostbackEnabled(result.postbackEnabled);
+        toast({
+          title: enabled ? "Automatic RCA Enabled" : "Automatic RCA Disabled",
+          description: enabled
+            ? "Aurora will automatically investigate new incidents from incident.io"
+            : "New incidents will be stored but not automatically investigated",
+        });
+      } else {
+        toast({ title: "Failed to update settings", description: "Could not update RCA settings. Please try again.", variant: "destructive" });
       }
-      toast({
-        title: enabled ? "Automatic RCA Enabled" : "Automatic RCA Disabled",
-        description: enabled
-          ? "Aurora will automatically investigate new incidents from incident.io"
-          : "New incidents will be stored but not automatically investigated",
-      });
     } catch (error) {
       toast({
         title: "Failed to update settings",
@@ -92,13 +94,15 @@ export function IncidentIoWebhookStep({ onDisconnect, loading }: IncidentIoWebho
       const result = await incidentIoService.updateRcaSettings({ postbackEnabled: enabled });
       if (result) {
         setPostbackEnabled(result.postbackEnabled);
+        toast({
+          title: enabled ? "Post-back Enabled" : "Post-back Disabled",
+          description: enabled
+            ? "RCA results will be posted to the incident.io timeline"
+            : "RCA results will only be available in Aurora",
+        });
+      } else {
+        toast({ title: "Failed to update settings", description: "Could not update post-back setting. Please try again.", variant: "destructive" });
       }
-      toast({
-        title: enabled ? "Post-back Enabled" : "Post-back Disabled",
-        description: enabled
-          ? "RCA results will be posted to the incident.io timeline"
-          : "RCA results will only be available in Aurora",
-      });
     } catch (error) {
       toast({
         title: "Failed to update settings",

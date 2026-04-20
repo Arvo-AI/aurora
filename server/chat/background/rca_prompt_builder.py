@@ -1219,7 +1219,7 @@ def build_incidentio_rca_prompt(
     permalink = incident.get("permalink") or ""
 
     severity_obj = incident.get("severity") or {}
-    severity = severity_obj.get("name", "unknown") if isinstance(severity_obj, dict) else str(severity_obj)
+    severity = severity_obj.get("name", "") if isinstance(severity_obj, dict) else str(severity_obj)
 
     inc_type_obj = incident.get("incident_type") or {}
     inc_type = inc_type_obj.get("name", "") if isinstance(inc_type_obj, dict) else str(inc_type_obj)
@@ -1250,7 +1250,7 @@ def build_incidentio_rca_prompt(
 
     alert_details = {
         'title': name,
-        'status': f"{status} (severity: {severity})",
+        'status': f"{status} (severity: {severity})" if severity else status,
         'message': ". ".join(message_parts),
         'labels': {},
     }

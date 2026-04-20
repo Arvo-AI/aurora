@@ -1,6 +1,5 @@
 """incident.io connector routes: connect, status, disconnect, webhook, alerts, settings."""
 
-import json
 import logging
 import os
 from typing import Any, Dict, Optional
@@ -64,7 +63,7 @@ class IncidentioClient:
             try:
                 body = exc.response.text if exc.response is not None else ""
             except Exception:
-                pass
+                body = "(unreadable response body)"
             logger.warning("[INCIDENTIO] HTTP %s from %s: %s", status, path, body[:500])
             if status == 401:
                 raise IncidentioAPIError("Invalid API key") from exc
@@ -119,10 +118,14 @@ def connect(user_id):
 
     client = IncidentioClient(api_key)
     try:
-        result = client.list_incidents(page_size=1)
+        client.list_incidents(page_size=1)
     except IncidentioAPIError as exc:
         logger.warning("[INCIDENTIO] Connection validation failed for user %s: %s", user_id, exc)
-        return jsonify({"error": str(exc)}), 502
+        msg = str(exc)
+        safe_messages = {"Invalid API key", "API key lacks required permissions", "Connection to incident.io timed out", "Unable to reach incident.io API"}
+        if not any(msg.startswith(s) for s in safe_messages):
+            msg = "Failed to validate API key with incident.io"
+        return jsonify({"error": msg}), 502
 
     token_payload = {"api_key": api_key}
 
@@ -152,7 +155,7 @@ def status(user_id):
         client.list_incidents(page_size=1)
     except IncidentioAPIError as exc:
         logger.warning("[INCIDENTIO] Status check failed for user %s: %s", user_id, exc)
-        return jsonify({"connected": False, "error": str(exc)})
+        return jsonify({"connected": False, "error": "Connection check failed"})
 
     return jsonify({"connected": True})
 
@@ -166,7 +169,7 @@ def disconnect(user_id):
         if not success:
             return jsonify({"error": "Failed to delete stored credentials"}), 500
 
-        logger.info("[INCIDENTIO] Disconnected user %s (deleted %s entries)", user_id, deleted_count)
+        logger.info("[INCIDENTIO] Disconnected user %s", user_id)
         return jsonify({"success": True, "message": "incident.io disconnected successfully"})
     except Exception:
         logger.exception("[INCIDENTIO] Failed to disconnect user %s", user_id)
@@ -203,8 +206,8 @@ def alert_webhook(user_id: str):
 def get_alerts(user_id):
     """Fetch stored incident.io events."""
     org_id = get_org_id_from_request()
-    limit = request.args.get("limit", 50, type=int)
-    offset = request.args.get("offset", 0, type=int)
+    limit = min(max(request.args.get("limit", 50, type=int), 1), 200)
+    offset = max(request.args.get("offset", 0, type=int), 0)
     severity_filter = request.args.get("severity")
 
     try:

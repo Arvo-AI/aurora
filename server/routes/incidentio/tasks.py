@@ -345,8 +345,8 @@ def _trigger_rca_pipeline(
                         (task.id, str(incident_id)),
                     )
                     conn.commit()
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("[INCIDENTIO] Failed to store RCA task ID for incident %s: %s", incident_id, exc)
 
         logger.info("[INCIDENTIO] Triggered RCA for incident %s (task=%s)", incident_id, task.id)
 

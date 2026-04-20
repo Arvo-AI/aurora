@@ -8,7 +8,7 @@ Provides three tools for RCA:
 
 import json
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from pydantic import BaseModel, Field
 
@@ -152,7 +152,7 @@ def _calculate_duration(incident: Dict[str, Any]) -> Optional[int]:
 def _truncate_output(data: Any) -> str:
     output = json.dumps(data, default=str)
     if len(output) > MAX_OUTPUT_SIZE:
-        return output[:MAX_OUTPUT_SIZE] + '..."truncated"}'
+        return json.dumps({"truncated": True, "partial": output[:MAX_OUTPUT_SIZE]})
     return output
 
 
