@@ -461,6 +461,15 @@ WEAVIATE_PORT=8080
 WEAVIATE_GRPC_PORT=50051
 ```
 
+## MCP Server
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MCP_PORT` | `8811` | Port the MCP server listens on |
+| `BACKEND_URL` | `http://aurora-server:5080` | Internal Aurora API URL (shared with other services) |
+
+The MCP server authenticates clients via Bearer tokens stored in the `mcp_tokens` database table. No additional environment variable is needed for token configuration -- see the [MCP integration guide](../integrations/mcp) for details.
+
 ## Rate Limiting
 
 | Variable | Default | Description |
