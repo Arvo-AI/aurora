@@ -21,20 +21,21 @@ spec:
     spec:
       automountServiceAccountToken: false
       securityContext:
-        {{- include "aurora.podSecurityContext" (dict "service" "memgraph" "global" $ "defaults" (dict "runAsUser" 1000 "runAsGroup" 1000 "fsGroup" 1000)) | nindent 8 }}
+        {{- include "aurora.podSecurityContext" (dict "service" "memgraph" "global" $ "defaults" (dict "runAsUser" 101 "runAsGroup" 101 "fsGroup" 101)) | nindent 8 }}
       {{- include "aurora.scheduling" (dict "service" "memgraph" "global" $) | nindent 6 }}
       containers:
         - name: memgraph
           image: memgraph/memgraph-mage:3.8.1
           imagePullPolicy: IfNotPresent
+          securityContext:
+            {{- include "aurora.containerSecurityContext" (dict "service" "memgraph" "global" $ "defaults" (dict)) | nindent 12 }}
           command: ["/usr/lib/memgraph/memgraph"]
           args:
             - "--memory-limit={{ .Values.config.MEMGRAPH_MEMORY_LIMIT | default "512" }}"
             - "--log-level=ERROR"
             - "--also-log-to-stderr"
-            - "--data-directory=/var/lib/memgraph"
-          securityContext:
-            {{- include "aurora.containerSecurityContext" (dict "service" "memgraph" "global" $ "defaults" (dict)) | nindent 12 }}
+            - "--log-file="
+            - "--data-directory=/var/lib/memgraph/data"
           ports:
             - name: bolt
               containerPort: 7687
