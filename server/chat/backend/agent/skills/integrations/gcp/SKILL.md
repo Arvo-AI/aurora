@@ -1,16 +1,15 @@
 ---
 name: gcp
 id: gcp
-description: "GCP integration — Compute Engine, GKE, Cloud SQL, Cloud Storage, Cloud Run, Cloud Logging, IAM via CLI and Terraform"
+description: "GCP integration — Compute Engine, GKE, Cloud SQL, Cloud Storage, Cloud Run, Cloud Logging, IAM via CLI"
 category: cloud_provider
 connection_check:
   method: provider_in_preference
 tools:
   - cloud_exec
-  - iac_tool
-index: "GCP — Compute Engine, GKE, Cloud SQL, Cloud Storage, Cloud Run, Logging, Terraform IaC"
+index: "GCP — Compute Engine, GKE, Cloud SQL, Cloud Storage, Cloud Run, Logging"
 rca_priority: 10
-allowed-tools: cloud_exec, iac_tool
+allowed-tools: cloud_exec
 metadata:
   author: aurora
   version: "2.0"
@@ -27,7 +26,6 @@ Authentication and project are auto-configured — never ask users for credentia
 - Get current project: `cloud_exec('gcp', 'config get-value project')`
 - Set project explicitly: `cloud_exec('gcp', 'config set project <PROJECT_ID>')`
 - If user specifies a project, set it. Otherwise fetch the current one and reuse it everywhere.
-- ALWAYS get the project ID before writing Terraform.
 
 ## CLI Reference
 
@@ -222,168 +220,14 @@ When investigating a GCP incident:
 11. **Check node health**: `kubectl describe node`, `kubectl top nodes`
 12. **Compare healthy vs unhealthy**: Side-by-side pod metrics and logs
 
-## Terraform
-
-Use `iac_tool` — provider.tf is AUTO-GENERATED. Never write terraform{} or provider{} blocks.
-
-**PREREQUISITE:** Always get project ID first:
-```python
-cloud_exec('gcp', 'config get-value project')
-```
-
-### Compute Instance
-```hcl
-resource "google_service_account" "default" {
-  account_id   = "my-custom-sa"
-  display_name = "Custom SA for VM"
-}
-
-resource "google_compute_instance" "vm" {
-  name         = "my-instance"
-  machine_type = "e2-medium"
-  zone         = "us-central1-b"
-
-  boot_disk {
-    initialize_params {
-      image = "debian-cloud/debian-12"
-    }
-  }
-
-  network_interface {
-    network = "default"
-    access_config {}
-  }
-
-  service_account {
-    email  = google_service_account.default.email
-    scopes = ["cloud-platform"]
-  }
-}
-```
-
-### GKE Cluster
-```hcl
-resource "google_container_cluster" "primary" {
-  name     = "my-cluster"
-  location = "us-central1"
-
-  initial_node_count       = 1
-  remove_default_node_pool = true
-}
-
-resource "google_container_node_pool" "primary_nodes" {
-  name       = "primary-pool"
-  location   = "us-central1"
-  cluster    = google_container_cluster.primary.name
-  node_count = 3
-
-  node_config {
-    machine_type = "e2-medium"
-    oauth_scopes = ["https://www.googleapis.com/auth/cloud-platform"]
-  }
-
-  autoscaling {
-    min_node_count = 1
-    max_node_count = 5
-  }
-}
-```
-
-### Cloud SQL
-```hcl
-resource "google_sql_database_instance" "db" {
-  name             = "my-db"
-  database_version = "POSTGRES_15"
-  region           = "us-central1"
-
-  settings {
-    tier              = "db-f1-micro"
-    availability_type = "ZONAL"
-
-    backup_configuration {
-      enabled = true
-    }
-  }
-
-  deletion_protection = false
-}
-
-resource "google_sql_database" "database" {
-  name     = "mydb"
-  instance = google_sql_database_instance.db.name
-}
-```
-
-### Cloud Storage
-```hcl
-resource "google_storage_bucket" "bucket" {
-  name     = "my-unique-bucket-name"
-  location = "US"
-
-  versioning {
-    enabled = true
-  }
-
-  lifecycle_rule {
-    condition {
-      age = 30
-    }
-    action {
-      type = "Delete"
-    }
-  }
-}
-```
-
-### VPC Network
-```hcl
-resource "google_compute_network" "vpc" {
-  name                    = "my-vpc"
-  auto_create_subnetworks = false
-}
-
-resource "google_compute_subnetwork" "subnet" {
-  name          = "my-subnet"
-  ip_cidr_range = "10.0.0.0/24"
-  region        = "us-central1"
-  network       = google_compute_network.vpc.id
-}
-
-resource "google_compute_firewall" "allow_ssh" {
-  name    = "allow-ssh"
-  network = google_compute_network.vpc.name
-
-  allow {
-    protocol = "tcp"
-    ports    = ["22"]
-  }
-
-  source_ranges = ["0.0.0.0/0"]
-  target_tags   = ["ssh-enabled"]
-}
-```
-
-### Common Terraform resources
-`google_compute_instance`, `google_compute_firewall`, `google_compute_network`, `google_compute_subnetwork`,
-`google_container_cluster`, `google_container_node_pool`,
-`google_storage_bucket`, `google_sql_database_instance`, `google_sql_database`,
-`google_cloud_run_v2_service`, `google_cloudfunctions_function`,
-`google_compute_global_forwarding_rule`, `google_compute_health_check`,
-`google_project_iam_member`, `google_service_account`,
-`google_pubsub_topic`, `google_pubsub_subscription`,
-`google_artifact_registry_repository`, `google_secret_manager_secret`
-
 ## Error Recovery
 
 1. **API not enabled** → `cloud_exec('gcp', 'services enable <SERVICE>.googleapis.com')` — common: container.googleapis.com, sqladmin.googleapis.com, run.googleapis.com, cloudfunctions.googleapis.com
 2. **Permission denied** → Check IAM: `projects get-iam-policy <PROJECT>`, verify service account roles
 3. **Beta feature** → Prefix with beta: `cloud_exec('gcp', 'beta <COMMAND>')`
 4. **CLI syntax** → `cloud_exec('gcp', '<CATEGORY> --help')` for subcommand reference
-5. **Terraform failure** → Verify with CLI, then fix manifest
 
 ### Context7 lookup on failure
-For Terraform errors:
-`mcp_context7_get_library_docs(context7CompatibleLibraryID='/hashicorp/terraform-provider-google', topic='google_container_cluster')`
 For CLI errors:
 `mcp_context7_get_library_docs(context7CompatibleLibraryID='/websites/cloud_google_sdk', topic='container clusters get-credentials')`
 

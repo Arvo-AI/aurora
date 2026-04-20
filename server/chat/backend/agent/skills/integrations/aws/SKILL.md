@@ -1,16 +1,15 @@
 ---
 name: aws
 id: aws
-description: "AWS integration — EC2, EKS, RDS, S3, Lambda, CloudWatch, IAM, VPC, ELB via CLI and Terraform"
+description: "AWS integration — EC2, EKS, RDS, S3, Lambda, CloudWatch, IAM, VPC, ELB via CLI"
 category: cloud_provider
 connection_check:
   method: provider_in_preference
 tools:
   - cloud_exec
-  - iac_tool
-index: "AWS — EC2, EKS, RDS, S3, Lambda, CloudWatch, IAM, VPC, Terraform IaC"
+index: "AWS — EC2, EKS, RDS, S3, Lambda, CloudWatch, IAM, VPC"
 rca_priority: 10
-allowed-tools: cloud_exec, iac_tool
+allowed-tools: cloud_exec
 metadata:
   author: aurora
   version: "2.0"
@@ -20,7 +19,7 @@ metadata:
 
 ## Overview
 Full Amazon Web Services access via `cloud_exec('aws', 'COMMAND')`.
-Available CLIs: `aws`, `kubectl`, `eksctl`, `sam`, `cdk`, `helm`, `terraform`.
+Available CLIs: `aws`, `kubectl`, `eksctl`, `helm`.
 Authentication is automatic — never ask users for credentials.
 
 ## Multi-Account Support (CRITICAL)
@@ -205,190 +204,14 @@ When investigating an AWS incident:
 10. **Check networking**: Security groups, NACLs, route tables, target health
 11. **Compare healthy vs unhealthy**: `kubectl top pods`, instance metrics side-by-side
 
-## Terraform
-
-Use `iac_tool` — provider.tf is AUTO-GENERATED. Never write terraform{} or provider{} blocks.
-
-**PREREQUISITE:** Always get the account ID first:
-```python
-cloud_exec('aws', "sts get-caller-identity --query 'Account' --output text", account_id='<ACCT>')
-```
-
-### EC2 Instance (with AMI data source — CORRECT approach)
-```hcl
-data "aws_ami" "ubuntu" {
-  most_recent = true
-  filter {
-    name   = "name"
-    values = ["ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-*"]
-  }
-  filter {
-    name   = "virtualization-type"
-    values = ["hvm"]
-  }
-  owners = ["099720109477"] # Canonical
-}
-
-resource "aws_instance" "vm" {
-  ami           = data.aws_ami.ubuntu.id
-  instance_type = "t3.micro"
-  subnet_id     = "<SUBNET_ID>"
-
-  tags = {
-    Name = "my-vm"
-  }
-}
-```
-AMI IDs are region-specific — always use `data "aws_ami"` or look up via CLI.
-
-### EKS Cluster (with IAM role — required)
-```hcl
-resource "aws_iam_role" "eks_cluster" {
-  name = "eks-cluster-role"
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Action    = ["sts:AssumeRole", "sts:TagSession"]
-      Effect    = "Allow"
-      Principal = { Service = "eks.amazonaws.com" }
-    }]
-  })
-}
-
-resource "aws_iam_role_policy_attachment" "eks_policy" {
-  policy_arn = "arn:aws:iam::aws:policy/AmazonEKSClusterPolicy"
-  role       = aws_iam_role.eks_cluster.name
-}
-
-resource "aws_eks_cluster" "cluster" {
-  name     = "my-cluster"
-  role_arn = aws_iam_role.eks_cluster.arn
-  version  = "1.31"
-
-  vpc_config {
-    subnet_ids = [aws_subnet.az1.id, aws_subnet.az2.id]
-  }
-
-  depends_on = [aws_iam_role_policy_attachment.eks_policy]
-}
-
-resource "aws_eks_node_group" "nodes" {
-  cluster_name    = aws_eks_cluster.cluster.name
-  node_group_name = "workers"
-  node_role_arn   = aws_iam_role.node.arn
-  subnet_ids      = [aws_subnet.az1.id, aws_subnet.az2.id]
-
-  scaling_config {
-    desired_size = 2
-    max_size     = 4
-    min_size     = 1
-  }
-
-  depends_on = [
-    aws_iam_role_policy_attachment.node_AmazonEKSWorkerNodePolicy,
-    aws_iam_role_policy_attachment.node_AmazonEKS_CNI_Policy,
-    aws_iam_role_policy_attachment.node_AmazonEC2ContainerRegistryReadOnly,
-  ]
-}
-```
-
-### RDS (PostgreSQL)
-```hcl
-resource "aws_db_instance" "db" {
-  identifier                  = "my-db"
-  allocated_storage           = 20
-  engine                      = "postgres"
-  engine_version              = "15"
-  instance_class              = "db.t3.micro"
-  db_name                     = "mydb"
-  username                    = "admin"
-  manage_master_user_password = true
-  skip_final_snapshot         = true
-  vpc_security_group_ids      = [aws_security_group.db.id]
-  db_subnet_group_name        = aws_db_subnet_group.main.name
-}
-```
-
-### VPC + Subnets
-```hcl
-resource "aws_vpc" "main" {
-  cidr_block           = "10.0.0.0/16"
-  enable_dns_hostnames = true
-  tags = { Name = "main-vpc" }
-}
-
-resource "aws_subnet" "az1" {
-  vpc_id            = aws_vpc.main.id
-  cidr_block        = "10.0.1.0/24"
-  availability_zone = "us-east-1a"
-}
-
-resource "aws_subnet" "az2" {
-  vpc_id            = aws_vpc.main.id
-  cidr_block        = "10.0.2.0/24"
-  availability_zone = "us-east-1b"
-}
-
-resource "aws_internet_gateway" "gw" {
-  vpc_id = aws_vpc.main.id
-}
-```
-
-### S3 Bucket
-```hcl
-resource "aws_s3_bucket" "bucket" {
-  bucket = "my-unique-bucket-name"
-}
-
-resource "aws_s3_bucket_versioning" "versioning" {
-  bucket = aws_s3_bucket.bucket.id
-  versioning_configuration {
-    status = "Enabled"
-  }
-}
-```
-
-### Security Group
-```hcl
-resource "aws_security_group" "web" {
-  name_prefix = "web-"
-  vpc_id      = aws_vpc.main.id
-
-  ingress {
-    from_port   = 443
-    to_port     = 443
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-}
-```
-
-### Common Terraform resources
-`aws_instance`, `aws_security_group`, `aws_vpc`, `aws_subnet`, `aws_internet_gateway`,
-`aws_eks_cluster`, `aws_eks_node_group`, `aws_s3_bucket`, `aws_db_instance`, `aws_db_subnet_group`,
-`aws_lambda_function`, `aws_lb`, `aws_lb_target_group`, `aws_lb_listener`,
-`aws_iam_role`, `aws_iam_policy`, `aws_iam_role_policy_attachment`,
-`aws_route53_zone`, `aws_route53_record`, `aws_ecr_repository`,
-`aws_ecs_cluster`, `aws_ecs_service`, `aws_ecs_task_definition`
-
 ## Error Recovery
 
 1. **Permission denied** → Check IAM: `iam get-role`, `iam list-attached-role-policies`, `iam simulate-principal-policy`
 2. **Resource not found** → Verify region: `ec2 describe-regions`, check account_id
 3. **CLI syntax** → `cloud_exec('aws', '<SERVICE> help')` for subcommand reference
-4. **Terraform failure** → Verify resources exist with CLI, then fix manifest
 
 ### Context7 lookup on failure
-For Terraform errors, query Context7 with the resource type:
-`mcp_context7_get_library_docs(context7CompatibleLibraryID='/hashicorp/terraform-provider-aws', topic='aws_eks_cluster')`
-For CLI errors, query:
+For CLI errors:
 `mcp_context7_get_library_docs(context7CompatibleLibraryID='/websites/aws_amazon_cli', topic='eks update-kubeconfig')`
 
 ## Region Mapping

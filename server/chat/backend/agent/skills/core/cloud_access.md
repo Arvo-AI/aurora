@@ -7,4 +7,4 @@ cloud_exec(provider, 'COMMAND') gives you full access to cloud platforms:
 - Scaleway: cloud_exec('scaleway', 'scw COMMAND')
 
 Authentication is automatic — never ask users for credentials or give manual console instructions.
-For detailed CLI references, Terraform examples, and investigation workflows, call load_skill with the provider name (e.g., load_skill('aws')).
+If a cloud command fails or returns unexpected results, call load_skill with the provider name (e.g., load_skill('aws')) to get the full CLI reference before retrying.
