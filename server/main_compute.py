@@ -14,7 +14,6 @@ import os
 import hmac
 import secrets
 import hmac
-from flask import Flask
 from flask_cors import CORS
 from werkzeug.middleware.proxy_fix import ProxyFix
 from utils.db.db_utils import ensure_database_exists, initialize_tables
@@ -25,60 +24,15 @@ logging.basicConfig(level=logging.DEBUG, format="%(asctime)s - %(name)s - %(leve
 logging.getLogger('werkzeug').setLevel(logging.INFO)
 logging.getLogger('utils.auth.stateless_auth').setLevel(logging.INFO)
  
-import requests
-import os, json, base64
+import os
 import secrets  # For generating a secure random key
 import flask
-from flask import Flask, redirect, request, session, jsonify
+from flask import Flask, request, jsonify
 from dotenv import load_dotenv
 from utils.db.db_utils import (
     ensure_database_exists,
     initialize_tables,
-    connect_to_db_as_admin,
-    connect_to_db_as_user,
 )
-import urllib.parse
-import time
-import traceback
-from datetime import datetime
-import subprocess
-import shutil
-
-# CORS imports
-from flask_cors import CORS
-from utils.web.cors_utils import create_cors_response
-
-# Routes imports - organized sections below
-
-# GCP imports
-from connectors.gcp_connector.auth import (
-    get_credentials,
-    get_project_list,
-    ensure_aurora_full_access,
-    get_aurora_service_account_email,
-)
-from connectors.gcp_connector.auth.oauth import (
-    get_auth_url,
-    exchange_code_for_token,
-)
-from utils.auth.token_management import (
-    get_token_data,
-    store_tokens_in_db,
-)
-from connectors.gcp_connector.billing import store_bigquery_data, is_bigquery_enabled, has_active_billing
-from connectors.gcp_connector.gcp.projects import list_gke_clusters
-
-# Azure imports
-from connectors.azure_connector.k8s_client import get_aks_clusters, extract_resource_group
-from azure.identity import ClientSecretCredential
-
-# AWS imports
-import boto3, flask
-from utils.auth.stateless_auth import get_user_id_from_request
-
-# Google API imports
-from googleapiclient.discovery import build  # local import to avoid global dependency
-
 
 
 # Initialize Flask application
@@ -233,7 +187,7 @@ _OPEN_PATHS = frozenset(("/api/auth/login", "/api/auth/register"))
 
 _OPEN_PREFIXES = (
     "/health",
-    "/gcp/callback",
+    "/callback",
     "/github/callback",
     "/bitbucket/callback",
     "/slack/callback",
@@ -254,6 +208,7 @@ _OPEN_PREFIXES = (
     "/cloudbees/webhook/",
     "/spinnaker/webhook/",
     "/ovh_api/ovh/oauth2/callback",
+    "/azure/callback",
     "/azure/setup-script",
     "/azure/setup-script-ps1",
     "/aws/setup-script",
