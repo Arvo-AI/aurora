@@ -62,6 +62,19 @@ def on_prem_kubectl(
             'provider': 'onprem_kubectl',
         })
 
+    from utils.security.alignment_check import check_alignment
+    alignment = check_alignment(full_command, tool_name="kubectl_onprem", user_id=user_id, session_id=session_id)
+    if alignment.conclusion:
+        return json.dumps({
+            'success': False,
+            'error': f"Command blocked by safety guardrail: {alignment.thought}",
+            'code': 'ALIGNMENT_BLOCKED',
+            'chat_output': f"$ {full_command}\nBlocked by safety guardrail: {alignment.thought}",
+            'command': full_command,
+            'return_code': 1,
+            'provider': 'onprem_kubectl',
+        })
+
     # Call internal API on chatbot service
     try:
         chatbot_url = os.getenv('CHATBOT_INTERNAL_URL')

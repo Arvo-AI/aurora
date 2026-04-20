@@ -224,6 +224,17 @@ LLM costs depend on:
 2. Use OpenRouter for flexible, pay-per-token pricing
 3. Use Ollama for zero API costs (requires local GPU)
 
+## Safety Guardrail Model
+
+Aurora can run an LLM-based alignment check before executing commands, verifying that the agent's actions match the user's original intent. This catches novel dangerous behavior that deterministic rules cannot anticipate.
+
+```bash
+# Format: provider/model-name (same as MAIN_MODEL / RCA_MODEL)
+ALIGNMENT_CHECK_MODEL=openai/gpt-4o-mini
+```
+
+The alignment check model can be any provider supported above. A fast, cheap model is recommended since this runs on every command execution. See [Alignment Check Configuration](../configuration/alignment-check.md) for full setup details.
+
 ## Troubleshooting
 
 ### "Invalid API key"

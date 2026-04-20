@@ -1430,6 +1430,17 @@ Security & Compliance
                 "provider": provider.lower(),
             })
 
+        from utils.security.alignment_check import check_alignment
+        alignment = check_alignment(command, tool_name="cloud_exec", user_id=user_id, session_id=session_id)
+        if alignment.conclusion:
+            return json.dumps({
+                "success": False,
+                "error": f"Command blocked by safety guardrail: {alignment.thought}",
+                "code": "ALIGNMENT_BLOCKED",
+                "final_command": command,
+                "provider": provider.lower(),
+            })
+
         # Set up ISOLATED environment based on provider - NO GLOBAL STATE!
         isolated_env = None
         auth_command = None

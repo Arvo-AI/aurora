@@ -388,7 +388,16 @@ def terminal_exec(
             "success": False,
             "error": "Command blocked: privilege escalation is not permitted"
         })
-    
+
+    from utils.security.alignment_check import check_alignment
+    alignment = check_alignment(command, tool_name="terminal_exec", user_id=user_id, session_id=session_id)
+    if alignment.conclusion:
+        return json.dumps({
+            "success": False,
+            "error": f"Command blocked by safety guardrail: {alignment.thought}",
+            "code": "ALIGNMENT_BLOCKED",
+        })
+
     try:
         logger.info(f"Executing terminal command for user {user_id}: {command[:100]}")
         
