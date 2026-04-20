@@ -8,7 +8,7 @@ from flask import Blueprint, jsonify, request
 from utils.db.connection_pool import db_pool
 from utils.auth.token_management import get_token_data
 from utils.auth.rbac_decorators import require_permission
-from utils.auth.stateless_auth import get_org_id_from_request
+from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context
 from chat.background.task import run_background_chat
 from typing import List, Dict, Any, Optional
 from uuid import UUID
@@ -56,6 +56,7 @@ def _build_source_url(source_type: str, user_id: str) -> str:
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                set_rls_context(cursor, conn, user_id, log_prefix="[Incidents]")
                 cursor.execute(
                     "SELECT client_id FROM user_tokens WHERE user_id=%s AND provider=%s",
                     (user_id, source_type),
@@ -278,10 +279,7 @@ def get_incidents(user_id):
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
-                # Set RLS context
-                cursor.execute("SET myapp.current_user_id = %s", (user_id,))
-                cursor.execute("SET myapp.current_org_id = %s", (org_id,))
-                conn.commit()
+                set_rls_context(cursor, conn, user_id, log_prefix="[Incidents]")
 
                 query = """
                     SELECT 
@@ -347,10 +345,7 @@ def get_incident(user_id, incident_id: str):
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
-                # Set RLS context
-                cursor.execute("SET myapp.current_user_id = %s", (user_id,))
-                cursor.execute("SET myapp.current_org_id = %s", (org_id,))
-                conn.commit()
+                set_rls_context(cursor, conn, user_id, log_prefix="[Incidents]")
                 # Get incident details
                 cursor.execute(
                     """
@@ -911,9 +906,7 @@ def get_incident_alerts(user_id, incident_id: str):
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
-                cursor.execute("SET myapp.current_user_id = %s", (user_id,))
-                cursor.execute("SET myapp.current_org_id = %s", (org_id,))
-                conn.commit()
+                set_rls_context(cursor, conn, user_id, log_prefix="[Incidents]")
 
                 cursor.execute(
                     "SELECT 1 FROM incidents WHERE id = %s AND org_id = %s",
@@ -1011,10 +1004,7 @@ def update_incident(user_id, incident_id: str):
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
-                # Set RLS context
-                cursor.execute("SET myapp.current_user_id = %s", (user_id,))
-                cursor.execute("SET myapp.current_org_id = %s", (org_id,))
-                conn.commit()
+                set_rls_context(cursor, conn, user_id, log_prefix="[Incidents]")
                 # Build update query dynamically based on provided fields
                 update_fields = []
                 values = []
@@ -1157,9 +1147,7 @@ def incident_chat(user_id, incident_id: str):
             #   2. incidents.aurora_chat_session_id - for the original RCA session
             with db_pool.get_admin_connection() as conn:
                 with conn.cursor() as cursor:
-                    cursor.execute("SET myapp.current_user_id = %s", (user_id,))
-                    cursor.execute("SET myapp.current_org_id = %s", (org_id,))
-                    conn.commit()
+                    set_rls_context(cursor, conn, user_id, log_prefix="[Incidents]")
                     cursor.execute(
                         """
                         SELECT cs.id
@@ -1206,9 +1194,7 @@ def incident_chat(user_id, incident_id: str):
             # Create new session - fetch incident details and thoughts for context
             with db_pool.get_admin_connection() as conn:
                 with conn.cursor() as cursor:
-                    cursor.execute("SET myapp.current_user_id = %s", (user_id,))
-                    cursor.execute("SET myapp.current_org_id = %s", (org_id,))
-                    conn.commit()
+                    set_rls_context(cursor, conn, user_id, log_prefix="[Incidents]")
 
                     # Get incident
                     cursor.execute(
@@ -1360,6 +1346,7 @@ KEY: Do NOT automatically start a full investigation unless explicitly asked. De
             try:
                 with db_pool.get_admin_connection() as conn:
                     with conn.cursor() as cursor:
+                        # No RLS needed — incident_suggestions not RLS-protected
                         cursor.execute(
                             """UPDATE incident_suggestions
                                SET executed_at = NOW(),
@@ -1416,6 +1403,7 @@ def update_suggestion(user_id, suggestion_id: str):
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                set_rls_context(cursor, conn, user_id, log_prefix="[Incidents]")
                 cursor.execute(
                     """
                     SELECT s.id FROM incident_suggestions s
@@ -1471,6 +1459,7 @@ def mark_suggestion_executed(user_id, suggestion_id: str):
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                set_rls_context(cursor, conn, user_id, log_prefix="[Incidents]")
                 cursor.execute(
                     """SELECT s.id, s.incident_id
                        FROM incident_suggestions s
@@ -1528,6 +1517,7 @@ def apply_fix_suggestion(user_id, suggestion_id: str):
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                set_rls_context(cursor, conn, user_id, log_prefix="[Incidents]")
                 cursor.execute(
                     """SELECT 1 FROM incident_suggestions s
                        JOIN incidents i ON s.incident_id = i.id
@@ -1605,15 +1595,13 @@ def merge_alert_to_incident(user_id, target_incident_id: str):
         
         # Cancel the source incident's RCA FIRST (before any DB changes)
         # This uses Celery task revocation to immediately stop the running task
-        rca_cancelled = cancel_rca_for_incident(source_incident_id)
+        rca_cancelled = cancel_rca_for_incident(source_incident_id, user_id=user_id)
         if rca_cancelled:
             logger.info(f"[INCIDENTS] Cancelled RCA for source incident {source_incident_id}")
 
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
-                cursor.execute("SET myapp.current_user_id = %s", (user_id,))
-                cursor.execute("SET myapp.current_org_id = %s", (org_id,))
-                conn.commit()
+                set_rls_context(cursor, conn, user_id, log_prefix="[Incidents]")
 
                 # Get source incident details
                 cursor.execute(
@@ -1863,9 +1851,7 @@ def get_recent_unlinked_incidents(user_id):
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
-                cursor.execute("SET myapp.current_user_id = %s", (user_id,))
-                cursor.execute("SET myapp.current_org_id = %s", (org_id,))
-                conn.commit()
+                set_rls_context(cursor, conn, user_id, log_prefix="[Incidents]")
 
                 query = """
                     SELECT id, alert_title, alert_service, severity, source_type,

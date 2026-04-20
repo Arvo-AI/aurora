@@ -48,6 +48,7 @@ def _check_rate_limit(user_id: str, email: str, action: str) -> tuple[bool, str]
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                set_rls_context(cursor, conn, user_id, log_prefix="[RCAEmails]")
                 if action == 'resend':
                     # Check resend rate limit (5 per hour)
                     one_hour_ago = datetime.now() - timedelta(hours=1)

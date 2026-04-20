@@ -33,7 +33,7 @@ def _query_connected_providers(cur, user_id=None, conn=None):
         """, (user_id, SUPPORTED_PROVIDERS, user_id, SUPPORTED_PROVIDERS))
         return [row[0] for row in cur.fetchall()]
     else:
-        # users table is not RLS-protected; iterate per-user to set RLS before querying protected tables
+        # No RLS needed — cross-org loop sets RLS per user
         cur.execute(
             "SELECT DISTINCT id, org_id FROM users WHERE org_id IS NOT NULL"
         )
@@ -172,7 +172,7 @@ def run_full_discovery(self):
 
     try:
         conn = connect_to_db_as_admin()
-        cur = conn.cursor()
+        cur = conn.cursor()  # No RLS needed — cross-org loop, sets RLS per user inside
         rows = _query_connected_providers(cur, conn=conn)
         cur.close()
         conn.close()
@@ -304,7 +304,7 @@ def mark_stale_services(self):
 
     try:
         conn = connect_to_db_as_admin()
-        cur = conn.cursor()
+        cur = conn.cursor()  # No RLS needed — cross-org loop, sets RLS per user inside
         rows = _query_connected_providers(cur, conn=conn)
         cur.close()
         conn.close()

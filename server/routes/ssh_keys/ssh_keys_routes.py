@@ -83,6 +83,7 @@ def create_ssh_key(user_id):
         # Store public key in DB token_data for quick listing (safe to keep outside Vault)
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
+                set_rls_context(cur, conn, user_id, log_prefix="[SSHKeys:create]")
                 cur.execute(
                     """
                     UPDATE user_tokens
@@ -180,6 +181,7 @@ def rename_ssh_key(user_id, key_id: int):
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
+                set_rls_context(cur, conn, user_id, log_prefix="[SSHKeys:rename]")
                 cur.execute(
                     """
                     UPDATE user_tokens

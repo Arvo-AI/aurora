@@ -85,8 +85,10 @@ def _resolve_repository(
 
     try:
         from utils.db.connection_pool import db_pool
+        from utils.auth.stateless_auth import set_rls_context
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
+                set_rls_context(cur, conn, user_id, log_prefix="[GithubRCA:resolve]")
                 cur.execute(
                     "SELECT repo_full_name FROM github_connected_repos WHERE user_id = %s",
                     (user_id,),

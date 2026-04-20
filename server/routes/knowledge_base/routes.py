@@ -17,7 +17,7 @@ from werkzeug.utils import secure_filename
 from utils.db.connection_pool import db_pool
 from utils.web.cors_utils import create_cors_response
 from utils.auth.rbac_decorators import require_permission
-from utils.auth.stateless_auth import get_org_id_from_request
+from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context
 
 logger = logging.getLogger(__name__)
 
@@ -75,9 +75,7 @@ def get_memory(user_id):
     try:
         with db_pool.get_user_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
-            cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
-            conn.commit()
+            set_rls_context(cursor, conn, user_id, log_prefix="[KnowledgeBase]")
 
             cursor.execute(
                 """
@@ -132,9 +130,7 @@ def update_memory(user_id):
     try:
         with db_pool.get_user_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
-            cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
-            conn.commit()
+            set_rls_context(cursor, conn, user_id, log_prefix="[KnowledgeBase]")
 
             # Upsert the memory content
             cursor.execute(
@@ -179,9 +175,7 @@ def list_documents(user_id):
     try:
         with db_pool.get_user_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
-            cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
-            conn.commit()
+            set_rls_context(cursor, conn, user_id, log_prefix="[KnowledgeBase]")
 
             cursor.execute(
                 """
@@ -273,9 +267,7 @@ def upload_document(user_id):
     try:
         with db_pool.get_user_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
-            cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
-            conn.commit()
+            set_rls_context(cursor, conn, user_id, log_prefix="[KnowledgeBase]")
 
             # Check if document with same original filename exists
             cursor.execute(
@@ -315,9 +307,7 @@ def upload_document(user_id):
             try:
                 with db_pool.get_user_connection() as conn:
                     cursor = conn.cursor()
-                    cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
-                    cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
-                    conn.commit()
+                    set_rls_context(cursor, conn, user_id, log_prefix="[KnowledgeBase]")
 
                     cursor.execute(
                         """
@@ -349,9 +339,7 @@ def upload_document(user_id):
             # Update status to failed - use generic message for users, log full error server-side
             with db_pool.get_user_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
-                cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
-                conn.commit()
+                set_rls_context(cursor, conn, user_id, log_prefix="[KnowledgeBase]")
 
                 cursor.execute(
                     """
@@ -392,9 +380,7 @@ def get_document(user_id, doc_id: str):
     try:
         with db_pool.get_user_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
-            cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
-            conn.commit()
+            set_rls_context(cursor, conn, user_id, log_prefix="[KnowledgeBase]")
 
             cursor.execute(
                 """
@@ -429,9 +415,7 @@ def delete_document(user_id, doc_id: str):
     try:
         with db_pool.get_user_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
-            cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
-            conn.commit()
+            set_rls_context(cursor, conn, user_id, log_prefix="[KnowledgeBase]")
 
             # Get document info first
             cursor.execute(
@@ -580,9 +564,7 @@ def _check_user_limits(user_id: str, file_size: int) -> str | None:
     try:
         with db_pool.get_user_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
-            cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
-            conn.commit()
+            set_rls_context(cursor, conn, user_id, log_prefix="[KnowledgeBase]")
 
             cursor.execute(
                 """

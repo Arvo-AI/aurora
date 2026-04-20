@@ -99,6 +99,7 @@ def _resolve_token(token: str) -> tuple[str, str]:
     ok = False
     try:
         with conn.cursor() as cur:
+            # No RLS needed — token bootstrap, no user_id yet
             cur.execute(
                 "SELECT user_id, org_id FROM mcp_tokens "
                 "WHERE token = %s AND status = 'active' "

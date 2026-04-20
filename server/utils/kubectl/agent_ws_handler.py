@@ -19,6 +19,7 @@ def _execute_query(query, params):
     cursor = None
     try:
         cursor = conn.cursor()
+        # No RLS needed — active_kubectl_connections not RLS-protected
         cursor.execute(query, params)
         conn.commit()
     finally:
@@ -40,6 +41,8 @@ def get_agent_websocket_by_cluster(user_id: str, cluster_identifier: str):
     conn = connect_to_db_as_admin()
     try:
         cursor = conn.cursor()
+        from utils.auth.stateless_auth import set_rls_context
+        set_rls_context(cursor, conn, user_id, log_prefix="[KubectlWS:resolve]")
         cursor.execute("""
             SELECT c.cluster_id, t.user_id
             FROM active_kubectl_connections c
@@ -91,6 +94,7 @@ async def handle_kubectl_agent(websocket) -> None:
         conn = connect_to_db_as_admin()
         try:
             cursor = conn.cursor()
+            # No RLS needed — webhook bootstrap, no user_id
             cursor.execute("SELECT cluster_name, status, expires_at, user_id FROM kubectl_agent_tokens WHERE token = %s", (token,))
             result = cursor.fetchone()
             if not result:

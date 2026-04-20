@@ -28,7 +28,7 @@ class PooledConnectionWrapper:
         if not self._closed:
             try:
                 self._connection.rollback()
-                with self._connection.cursor() as cur:
+                with self._connection.cursor() as cur:  # No RLS needed — pool cleanup (RESET vars)
                     cur.execute(
                         "RESET myapp.current_user_id; RESET myapp.current_org_id;"
                     )

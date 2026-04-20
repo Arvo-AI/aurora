@@ -51,7 +51,7 @@ from chat.backend.agent.tools.cloud_tools import register_websocket_connection, 
 from chat.backend.agent.access import ModeAccessController
 from utils.text.text_utils import clean_markdown
 from utils.internal.api_handler import handle_http_request
-from utils.auth.stateless_auth import validate_user_exists, get_org_id_for_user
+from utils.auth.stateless_auth import validate_user_exists, get_org_id_for_user, set_rls_context
 
 
 class RateLimiter:
@@ -366,6 +366,7 @@ async def process_workflow_async(wf, state, websocket, user_id, incident_id=None
                         if len(cleaned_text) > 20:  # Lower threshold
                             with db_pool.get_admin_connection() as conn:
                                 with conn.cursor() as cursor:
+                                    # No RLS needed — incident_thoughts not RLS-protected
                                     cursor.execute(
                                         "INSERT INTO incident_thoughts (incident_id, timestamp, content, thought_type) "
                                         "VALUES (%s, %s, %s, %s)",
@@ -412,6 +413,7 @@ async def process_workflow_async(wf, state, websocket, user_id, incident_id=None
 
             with db_pool.get_admin_connection() as conn:
                 with conn.cursor() as cursor:
+                    set_rls_context(cursor, conn, user_id, log_prefix="[Chatbot:StreamingSave]")
                     cursor.execute(
                         "SELECT messages FROM chat_sessions WHERE id = %s FOR UPDATE",
                         (session_id,),
@@ -460,6 +462,7 @@ async def process_workflow_async(wf, state, websocket, user_id, incident_id=None
 
             with db_pool.get_admin_connection() as conn:
                 with conn.cursor() as cursor:
+                    set_rls_context(cursor, conn, user_id, log_prefix="[Chatbot:StreamingFinalize]")
                     cursor.execute(
                         "SELECT messages FROM chat_sessions WHERE id = %s FOR UPDATE",
                         (session_id,),
@@ -1141,6 +1144,7 @@ async def handle_connection(websocket) -> None:
                     from utils.db.connection_pool import db_pool
                     with db_pool.get_admin_connection() as conn:
                         with conn.cursor() as cur:
+                            set_rls_context(cur, conn, user_id, log_prefix="[Chatbot:RBAC]")
                             cur.execute(
                                 "SELECT incident_id FROM chat_sessions WHERE id = %s AND org_id = %s",
                                 (session_id, org_id),

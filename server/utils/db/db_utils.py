@@ -49,7 +49,7 @@ def ensure_database_exists():
         logging.debug(f"Connecting to postgres database as {init_params['user']}")
         conn = psycopg2.connect(**init_params)
         conn.autocommit = True
-        cursor = conn.cursor()
+        cursor = conn.cursor()  # No RLS needed — infrastructure DDL/bootstrap
         logging.info("Connected to postgres database.")
 
         # Create the target database if it doesn't exist
@@ -116,7 +116,7 @@ def initialize_tables():
     logging.debug("Initializing Kubernetes database tables using admin credentials.")
     try:
         with db_pool.get_admin_connection() as conn:
-            cursor = conn.cursor()
+            cursor = conn.cursor()  # No RLS needed — schema migration/DDL
 
             # Try to acquire advisory lock (non-blocking)
             cursor.execute("SELECT pg_try_advisory_lock(1234567890);")
@@ -2322,7 +2322,7 @@ def initialize_tables():
 
             # Release advisory lock
             try:
-                with conn.cursor() as unlock_cursor:
+                with conn.cursor() as unlock_cursor:  # No RLS needed — advisory lock release
                     unlock_cursor.execute("SELECT pg_advisory_unlock(1234567890);")
             except Exception as unlock_error:
                 logging.warning(f"Error releasing advisory lock: {unlock_error}")
@@ -2339,7 +2339,7 @@ def store_data_in_db(data):
     """
     try:
         with db_pool.get_admin_connection() as conn:
-            cursor = conn.cursor()
+            cursor = conn.cursor()  # No RLS needed — cloud_billing_usage not RLS-protected
 
             insert_query = """
                 INSERT INTO cloud_billing_usage (

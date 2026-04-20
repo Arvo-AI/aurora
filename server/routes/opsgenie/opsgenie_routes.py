@@ -13,7 +13,7 @@ from utils.db.connection_pool import db_pool
 from utils.web.cors_utils import create_cors_response
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.auth.rbac_decorators import require_permission
-from utils.auth.stateless_auth import get_org_id_from_request
+from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context
 from utils.secrets.secret_ref_utils import delete_user_secret
 
 logger = logging.getLogger(__name__)
@@ -414,6 +414,7 @@ def _get_stored_opsgenie_credentials(user_id: str) -> Optional[Dict[str, Any]]:
 
         with db_pool.get_admin_connection() as conn:
             cursor = conn.cursor()
+            set_rls_context(cursor, conn, user_id, log_prefix="[Opsgenie:_get_stored_creds]")
             cursor.execute(
                 "SELECT user_id FROM user_tokens WHERE org_id = %s AND provider = 'opsgenie' AND is_active = TRUE AND secret_ref IS NOT NULL LIMIT 1",
                 (org_id,)
@@ -613,6 +614,7 @@ def disconnect(user_id):
 
         with db_pool.get_admin_connection() as conn:
             cursor = conn.cursor()
+            set_rls_context(cursor, conn, user_id, log_prefix="[Opsgenie:disconnect]")
             cursor.execute(
                 "DELETE FROM opsgenie_events WHERE user_id = %s",
                 (user_id,)
@@ -714,7 +716,7 @@ def list_ingested_events(user_id):
     try:
         with db_pool.get_admin_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SET myapp.current_org_id = %s", (org_id,))
+            set_rls_context(cursor, conn, user_id, log_prefix="[OpsGenie]")
 
             base_query = """
                 SELECT id, action, alert_message, status, source, payload, received_at, created_at

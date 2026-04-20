@@ -15,7 +15,7 @@ from datetime import datetime, timedelta, timezone
 
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.enforcer import get_enforcer, reload_policies
-from utils.auth.stateless_auth import get_org_id_from_request
+from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context
 from utils.db.db_utils import connect_to_db_as_user
 
 logger = logging.getLogger(__name__)
@@ -33,6 +33,7 @@ def list_users(user_id):
     conn = connect_to_db_as_user()
     try:
         with conn.cursor() as cur:
+            # No RLS needed — users not RLS-protected
             cur.execute(
                 "SELECT id, email, name, role, created_at FROM users WHERE org_id = %s ORDER BY created_at",
                 (org_id,),
@@ -79,10 +80,7 @@ def create_user(user_id):
     conn = connect_to_db_as_user()
     try:
         with conn.cursor() as cur:
-            cur.execute("SET myapp.current_user_id = %s;", (user_id,))
-            if org_id:
-                cur.execute("SET myapp.current_org_id = %s;", (org_id,))
-            conn.commit()
+            set_rls_context(cur, conn, user_id, log_prefix="[Admin]")
 
             cur.execute("SELECT id, email, name, org_id FROM users WHERE email = %s", (email,))
             existing = cur.fetchone()
@@ -206,6 +204,7 @@ def get_user_roles(user_id, target_user_id):
     conn = connect_to_db_as_user()
     try:
         with conn.cursor() as cur:
+            # No RLS needed — users not RLS-protected
             cur.execute("SELECT 1 FROM users WHERE id = %s AND org_id IS NOT DISTINCT FROM %s", (target_user_id, org_id))
             if not cur.fetchone():
                 return jsonify({"error": "User not found in this organization"}), 404
@@ -239,6 +238,7 @@ def assign_role(user_id, target_user_id):
     conn = connect_to_db_as_user()
     try:
         with conn.cursor() as cur:
+            # No RLS needed — users not RLS-protected
             cur.execute("SELECT 1 FROM users WHERE id = %s AND org_id IS NOT DISTINCT FROM %s", (target_user_id, org_id))
             if not cur.fetchone():
                 return jsonify({"error": "Target user not found in this organization"}), 404
@@ -264,10 +264,7 @@ def assign_role(user_id, target_user_id):
     conn = connect_to_db_as_user()
     try:
         with conn.cursor() as cur:
-            cur.execute("SET myapp.current_user_id = %s;", (user_id,))
-            if org_id:
-                cur.execute("SET myapp.current_org_id = %s;", (org_id,))
-            conn.commit()
+            set_rls_context(cur, conn, user_id, log_prefix="[Admin]")
             cur.execute("UPDATE users SET role = %s WHERE id = %s AND org_id IS NOT DISTINCT FROM %s", (role, target_user_id, org_id))
         conn.commit()
     finally:
@@ -292,6 +289,7 @@ def revoke_role(user_id, target_user_id, role):
     conn = connect_to_db_as_user()
     try:
         with conn.cursor() as cur:
+            # No RLS needed — users not RLS-protected
             cur.execute("SELECT 1 FROM users WHERE id = %s AND org_id IS NOT DISTINCT FROM %s", (target_user_id, org_id))
             if not cur.fetchone():
                 return jsonify({"error": "Target user not found in this organization"}), 404
@@ -320,10 +318,7 @@ def revoke_role(user_id, target_user_id, role):
     conn = connect_to_db_as_user()
     try:
         with conn.cursor() as cur:
-            cur.execute("SET myapp.current_user_id = %s;", (user_id,))
-            if org_id:
-                cur.execute("SET myapp.current_org_id = %s;", (org_id,))
-            conn.commit()
+            set_rls_context(cur, conn, user_id, log_prefix="[Admin]")
             cur.execute("UPDATE users SET role = %s WHERE id = %s AND org_id IS NOT DISTINCT FROM %s", (fallback_role, target_user_id, org_id))
         conn.commit()
     finally:
@@ -346,10 +341,7 @@ def delete_user(user_id, target_user_id):
     conn = connect_to_db_as_user()
     try:
         with conn.cursor() as cur:
-            cur.execute("SET myapp.current_user_id = %s;", (user_id,))
-            if org_id:
-                cur.execute("SET myapp.current_org_id = %s;", (org_id,))
-            conn.commit()
+            set_rls_context(cur, conn, user_id, log_prefix="[Admin]")
 
             cur.execute(
                 "SELECT id, email FROM users WHERE id = %s AND org_id IS NOT DISTINCT FROM %s",

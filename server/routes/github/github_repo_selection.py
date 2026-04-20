@@ -7,6 +7,7 @@ import json
 from flask import Blueprint, jsonify, request
 from utils.db.connection_pool import db_pool
 from utils.auth.rbac_decorators import require_permission
+from utils.auth.stateless_auth import set_rls_context
 
 github_repo_selection_bp = Blueprint('github_repo_selection', __name__)
 logger = logging.getLogger(__name__)
@@ -16,6 +17,7 @@ def _get_user_org_id(user_id: str) -> str | None:
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
+                # No RLS needed — users not RLS-protected
                 cur.execute("SELECT org_id FROM users WHERE id = %s", (user_id,))
                 row = cur.fetchone()
                 return row[0] if row else None
@@ -28,6 +30,7 @@ def _update_metadata_status(user_id: str, repo_full_name: str, status: str):
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
+                set_rls_context(cur, conn, user_id, log_prefix="[github_repo_selection:_update_metadata_status]")
                 cur.execute(
                     "UPDATE github_connected_repos SET metadata_status = %s, updated_at = NOW() WHERE user_id = %s AND repo_full_name = %s",
                     (status, user_id, repo_full_name),
@@ -44,6 +47,7 @@ def get_repo_selections(user_id):
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
+                set_rls_context(cur, conn, user_id, log_prefix="[github_repo_selection:get_repo_selections]")
                 cur.execute(
                     """SELECT repo_full_name, repo_id, default_branch, is_private,
                               metadata_summary, metadata_status, repo_data, created_at
@@ -88,6 +92,7 @@ def save_repo_selections(user_id):
 
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
+                set_rls_context(cur, conn, user_id, log_prefix="[github_repo_selection:save_repo_selections]")
                 cur.execute(
                     "SELECT repo_full_name FROM github_connected_repos WHERE user_id = %s",
                     (user_id,),
@@ -168,6 +173,7 @@ def clear_repo_selections(user_id):
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
+                set_rls_context(cur, conn, user_id, log_prefix="[github_repo_selection:clear_repo_selections]")
                 cur.execute("DELETE FROM github_connected_repos WHERE user_id = %s", (user_id,))
                 conn.commit()
         return jsonify({"message": "All repository selections cleared"})
@@ -188,6 +194,7 @@ def update_repo_metadata(user_id, repo_full_name):
 
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
+                set_rls_context(cur, conn, user_id, log_prefix="[github_repo_selection:update_repo_metadata]")
                 cur.execute(
                     """UPDATE github_connected_repos
                        SET metadata_summary = %s, metadata_status = 'ready', updated_at = NOW()
@@ -215,6 +222,7 @@ def trigger_metadata_generation(user_id):
 
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
+                set_rls_context(cur, conn, user_id, log_prefix="[github_repo_selection:trigger_metadata_generation]")
                 cur.execute(
                     """UPDATE github_connected_repos SET metadata_status = 'generating', updated_at = NOW()
                        WHERE user_id = %s AND repo_full_name = %s""",

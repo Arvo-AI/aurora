@@ -149,9 +149,11 @@ def is_kubectl_onprem_connected(user_id: str) -> bool:
         return False
     try:
         from utils.db.connection_pool import db_pool
+        from utils.auth.stateless_auth import set_rls_context
 
         with db_pool.get_user_connection() as conn:
             with conn.cursor() as cursor:
+                set_rls_context(cursor, conn, user_id, log_prefix="[KubectlOnprem:check]")
                 cursor.execute(
                     """SELECT COUNT(*) FROM active_kubectl_connections c
                        JOIN kubectl_agent_tokens t ON c.token = t.token

@@ -24,7 +24,7 @@ def _get_users_with_integrations() -> List[Dict[str, Any]]:
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
-                # users table is not RLS-protected; iterate per-user to set RLS before querying protected tables
+                # No RLS needed — cross-org loop sets RLS per user
                 cur.execute("SELECT DISTINCT ON (org_id) id, org_id FROM users WHERE org_id IS NOT NULL ORDER BY org_id, id")
                 all_users = cur.fetchall()
 

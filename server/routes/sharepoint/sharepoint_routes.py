@@ -18,7 +18,7 @@ from connectors.sharepoint_connector.search_service import SharePointSearchServi
 from utils.db.connection_pool import db_pool
 from utils.web.cors_utils import create_cors_response
 from utils.auth.oauth2_state_cache import retrieve_oauth2_state, store_oauth2_state
-from utils.auth.stateless_auth import get_user_id_from_request
+from utils.auth.stateless_auth import get_user_id_from_request, set_rls_context
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 
 logger = logging.getLogger(__name__)
@@ -215,6 +215,7 @@ def disconnect():
         secret_ref = None
         with db_pool.get_admin_connection() as conn:
             cursor = conn.cursor()
+            set_rls_context(cursor, conn, user_id, log_prefix="[SHAREPOINT:disconnect]")
             cursor.execute(
                 "SELECT secret_ref FROM user_tokens WHERE user_id = %s AND provider = %s",
                 (user_id, "sharepoint"),

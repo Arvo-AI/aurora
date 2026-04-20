@@ -84,6 +84,7 @@ def build_knowledge_base_memory_segment(user_id: Optional[str]) -> str:
     try:
         with db_pool.get_admin_connection() as conn:
             cursor = conn.cursor()
+            # No RLS needed — users, knowledge_base_memory not RLS-protected
             cursor.execute(
                 "SELECT org_id FROM users WHERE id = %s", (user_id,)
             )

@@ -34,6 +34,7 @@ def resolve_org_id(user_id: str) -> Optional[str]:
         from utils.db.connection_pool import db_pool
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                # No RLS needed — users not RLS-protected
                 cursor.execute("SELECT org_id FROM users WHERE id = %s", (user_id,))
                 row = cursor.fetchone()
                 if row and row[0]:
@@ -95,6 +96,7 @@ def validate_user_exists(user_id: str) -> bool:
         from utils.db.connection_pool import db_pool
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                # No RLS needed — users not RLS-protected
                 cursor.execute("SELECT 1 FROM users WHERE id = %s", (user_id,))
                 return cursor.fetchone() is not None
     except Exception as e:
@@ -146,6 +148,7 @@ def get_org_id_from_request() -> Optional[str]:
             from utils.db.connection_pool import db_pool
             with db_pool.get_admin_connection() as conn:
                 with conn.cursor() as cursor:
+                    # No RLS needed — users not RLS-protected
                     cursor.execute(
                         "SELECT org_id FROM users WHERE id = %s",
                         (user_id,)
@@ -374,11 +377,7 @@ def get_user_preference(user_id: str, key: str, default=None):
     try:
         conn = connect_to_db_as_user()
         cursor = conn.cursor()
-        cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
-        org_id = resolve_org_id(user_id)
-        if org_id:
-            cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
-        conn.commit()
+        set_rls_context(cursor, conn, user_id, log_prefix="[Prefs:get]")
         
         cursor.execute(
             "SELECT preference_value FROM user_preferences WHERE user_id = %s AND preference_key = %s",
@@ -487,6 +486,7 @@ def get_user_email(user_id: str) -> Optional[str]:
         # Try to get email from user_tokens table first (faster)
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                # No RLS needed — user_tokens not RLS-protected
                 cursor.execute(
                     "SELECT email FROM user_tokens WHERE user_id = %s AND email IS NOT NULL LIMIT 1",
                     (user_id,)
@@ -528,6 +528,7 @@ def get_org_id_for_user(user_id: str) -> Optional[str]:
         from utils.db.connection_pool import db_pool
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                # No RLS needed — users not RLS-protected
                 cursor.execute("SELECT org_id FROM users WHERE id = %s", (user_id,))
                 row = cursor.fetchone()
                 org_id = row[0] if row and row[0] else None

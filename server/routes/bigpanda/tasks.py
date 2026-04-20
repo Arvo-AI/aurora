@@ -277,6 +277,7 @@ def process_bigpanda_event(
             )
             with db_pool.get_admin_connection() as conn:
                 cursor = conn.cursor()
+                set_rls_context(cursor, conn, user_id, log_prefix="[BIGPANDA:task_id_update]")
                 cursor.execute(
                     "UPDATE incidents SET rca_celery_task_id = %s WHERE id = %s",
                     (task.id, str(aurora_incident_id)),

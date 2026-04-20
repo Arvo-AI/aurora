@@ -8,6 +8,7 @@ import logging
 import time
 from typing import Dict, Optional, List, Any
 from utils.db.connection_pool import db_pool
+from utils.auth.stateless_auth import set_rls_context
 
 logger = logging.getLogger(__name__)
 
@@ -79,11 +80,9 @@ def store_tokens_in_db(user_id: str, token_data: Dict, provider: str,
         with db_pool.get_admin_connection() as conn:
             cursor = conn.cursor()
             
-            if request_org_id:
-                cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
-                cursor.execute("SET myapp.current_org_id = %s;", (request_org_id,))
-            else:
-                logger.warning("[STORE-TOKENS] request_org_id is None/empty, NOT setting session vars")
+            resolved_org_id = set_rls_context(cursor, conn, user_id, log_prefix="[STORE-TOKENS]")
+            if resolved_org_id:
+                request_org_id = resolved_org_id
 
             # Store only metadata and secret reference in database
             if provider == "azure":

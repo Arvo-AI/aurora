@@ -161,6 +161,7 @@ def _fetch_incident_thoughts(incident_id: str) -> List[Dict[str, Any]]:
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                # No RLS needed — incident_thoughts not RLS-protected
                 cursor.execute(
                     """
                     SELECT content, thought_type, timestamp
@@ -194,6 +195,7 @@ def _fetch_incident_suggestions(incident_id: str) -> List[Dict[str, Any]]:
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                # No RLS needed — incident_suggestions not RLS-protected
                 cursor.execute(
                     """
                     SELECT title, description, type
@@ -372,8 +374,7 @@ def _save_postmortem(incident_id: str, user_id: str, content: str, org_id: str) 
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
-                cursor.execute("SET myapp.current_user_id = %s", (user_id,))
-                cursor.execute("SET myapp.current_org_id = %s", (org_id,))
+                set_rls_context(cursor, conn, user_id, log_prefix="[Postmortem:save]")
                 conn.commit()
                 cursor.execute(
                     """

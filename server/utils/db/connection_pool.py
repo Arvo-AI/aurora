@@ -130,7 +130,7 @@ class DatabaseConnectionPool:
             if connection:
                 try:
                     connection.rollback()
-                    with connection.cursor() as cur:
+                    with connection.cursor() as cur:  # No RLS needed — pool cleanup (RESET vars)
                         cur.execute(
                             "RESET myapp.current_user_id; RESET myapp.current_org_id;"
                         )
@@ -152,7 +152,7 @@ class DatabaseConnectionPool:
             user_id = request.headers.get('X-User-ID')
             org_id = request.headers.get('X-Org-ID') or getattr(g, '_org_id_resolved', None) or None
             if user_id or org_id:
-                with connection.cursor() as cur:
+                with connection.cursor() as cur:  # No RLS needed — auto-setting RLS vars for Flask request
                     if user_id:
                         cur.execute("SET myapp.current_user_id = %s", (user_id,))
                     if org_id:

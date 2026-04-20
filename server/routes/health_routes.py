@@ -47,6 +47,7 @@ def check_database_health():
         )
 
         cursor = conn.cursor()
+        # No RLS needed — infrastructure health check
         cursor.execute("SELECT 1")
         cursor.close()
         conn.close()
