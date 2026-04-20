@@ -247,12 +247,12 @@ def process_grafana_alert(
                                         starts_at, fingerprint,
                                     )
                             # source_alert_id is INTEGER; CRC32 the hex fingerprint to a signed 32-bit int.
-                            # fingerprint is Optional — guard against None so we don't crash on malformed payloads.
-                            if fingerprint:
-                                crc = zlib.crc32(fingerprint.encode())
-                                per_alert_source_id = crc - (1 << 32) if crc >= (1 << 31) else crc
-                            else:
-                                per_alert_source_id = None
+                            # Fallback: synthesize from alertname+labels so alerts without fingerprint still get tracked.
+                            if not fingerprint:
+                                labels = single_alert.get("labels") or {}
+                                fingerprint = json.dumps(labels, sort_keys=True)
+                            crc = zlib.crc32(fingerprint.encode())
+                            per_alert_source_id = crc - (1 << 32) if crc >= (1 << 31) else crc
 
                             per_alert_title = (
                                 alert_payload.get("commonLabels", {}).get("alertname")
