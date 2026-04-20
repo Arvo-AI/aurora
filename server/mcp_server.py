@@ -156,7 +156,7 @@ mcp = FastMCP(
         "Use the curated tools for incidents and infrastructure. "
         "For anything else, use aurora_api -- read aurora://api-catalog first to discover endpoints."
     ),
-    host="0.0.0.0",
+    host="0.0.0.0",  # Bind all interfaces; auth is enforced via Bearer token in MCP_AUTH_TOKEN
     stateless_http=True,
     json_response=True,
 )

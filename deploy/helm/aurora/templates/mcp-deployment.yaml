@@ -51,6 +51,12 @@ spec:
                 name: {{ include "aurora.secretName.db" . }}
             - secretRef:
                 name: {{ include "aurora.secretName.backend" . }}
+          {{- if .Values.ssl.caCertSecret }}
+          volumeMounts:
+            - name: ssl-ca-cert
+              mountPath: {{ .Values.ssl.caCertMountPath }}
+              readOnly: true
+          {{- end }}
           startupProbe:
             tcpSocket:
               port: 8811
@@ -72,3 +78,9 @@ spec:
             failureThreshold: 3
           resources:
             {{- toYaml .Values.resources.mcp | nindent 12 }}
+      {{- if .Values.ssl.caCertSecret }}
+      volumes:
+        - name: ssl-ca-cert
+          secret:
+            secretName: {{ .Values.ssl.caCertSecret }}
+      {{- end }}

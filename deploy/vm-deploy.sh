@@ -193,7 +193,7 @@ if $SKIP_FIREWALL; then
   warn "Skipping firewall setup (--skip-firewall)"
 else
   info "Configuring firewall rules..."
-  PORTS=(80 443 3000 5080 5006)
+  PORTS=(80 443 3000 5080 5006 "${MCP_PORT:-8811}")
 
   if command -v ufw &>/dev/null; then
     for port in "${PORTS[@]}"; do
@@ -411,6 +411,7 @@ echo ""
 echo "  Frontend:  $FRONTEND_URL"
 echo "  API:       $BACKEND_URL_PUBLIC/health/"
 echo "  WebSocket: $WEBSOCKET_URL"
+echo "  MCP:       http://${VM_HOSTNAME}:${MCP_PORT:-8811}"
 echo ""
 info "Useful commands:"
 echo "  View logs:     cd $REPO_ROOT && make prod-local-logs"
@@ -423,7 +424,7 @@ if ! $IS_IP; then
 fi
 
 if [[ -n "${DETECTED_IP:-}" ]] && $IS_IP; then
-  info "If connecting from outside the VM, ensure your cloud security group allows inbound TCP on ports: 3000, 5080, 5006"
+  info "If connecting from outside the VM, ensure your cloud security group allows inbound TCP on ports: 3000, 5080, 5006, ${MCP_PORT:-8811}"
 fi
 
 echo ""

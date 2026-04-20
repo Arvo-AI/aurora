@@ -78,7 +78,7 @@ spec:
                 port:
                   number: 5006
     {{- if .Values.ingress.hosts.mcp }}
-    # MCP Server: mcp.aurora.example.com
+    # MCP Server -- WARNING: pair with an auth proxy; unauthenticated access grants full platform control
     - host: {{ .Values.ingress.hosts.mcp | quote }}
       http:
         paths:

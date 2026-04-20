@@ -436,6 +436,8 @@ services:
     environment:
       <<: *common-env
       OTEL_SERVICE_NAME: aurora-mcp
+      # Tools calling external APIs (incident.io, GitHub, etc.) will fail in airgapped mode
+      AURORA_AIRGAPPED: "true"
     depends_on:
       aurora-server:
         condition: service_started
