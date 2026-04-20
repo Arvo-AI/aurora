@@ -174,9 +174,9 @@ def list_incidentio_incidents(
     page_size = min(max(page_size, 1), 25)
     params: Dict[str, Any] = {"page_size": page_size}
     if status:
-        params["status"] = status
+        params["status_category[one_of]"] = status
     if severity:
-        params["severity"] = severity
+        params["severity[one_of]"] = severity
 
     result = _api_request(api_key, "GET", "/incidents", params=params)
     if "error" in result:

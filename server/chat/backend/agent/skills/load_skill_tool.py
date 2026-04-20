@@ -67,12 +67,22 @@ def load_skill(skill_id: str, **kwargs) -> str:
         # Fuzzy match: if exact ID not found, try normalizing and partial match
         if skill_id not in registry.get_all_skill_ids():
             normalized = skill_id.lower().replace("dot", ".").replace(".", "").replace("-", "").replace("_", "").replace(" ", "")
-            for candidate in registry.get_all_skill_ids():
+            best_match = None
+            for candidate in sorted(registry.get_all_skill_ids()):
                 candidate_norm = candidate.lower().replace(".", "").replace("-", "").replace("_", "")
-                if normalized == candidate_norm or candidate_norm.startswith(normalized) or normalized.startswith(candidate_norm):
-                    logger.info("load_skill fuzzy matched '%s' -> '%s'", skill_id, candidate)
-                    skill_id = candidate
+                if normalized == candidate_norm:
+                    best_match = candidate
                     break
+                if (
+                    len(normalized) >= 4
+                    and len(candidate_norm) >= 4
+                    and (candidate_norm.startswith(normalized) or normalized.startswith(candidate_norm))
+                    and best_match is None
+                ):
+                    best_match = candidate
+            if best_match:
+                logger.info("load_skill fuzzy matched '%s' -> '%s'", skill_id, best_match)
+                skill_id = best_match
 
         result = registry.load_skill(skill_id, user_id)
 
