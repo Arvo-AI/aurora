@@ -28,6 +28,8 @@ services:
     enabled: true    # Set false to use Weaviate Cloud or external instance
   vault:
     enabled: true    # Set false to use external Vault or other secrets manager
+  memgraph:
+    enabled: true    # Set false if graph features are not needed
   minio:
     enabled: false   # Set true for local dev (provides S3-compatible storage in-cluster)
 
@@ -92,6 +94,7 @@ replicaCounts:
   celeryBeat: 1      # Task scheduler - only 1 to avoid duplicate tasks
   redis: 1           # Redis - single instance, no clustering configured
   weaviate: 1        # Vector database - single instance, clustering requires additional config
+  memgraph: 1        # Graph database - single instance, in-memory
   vault: 1           # Secrets manager - single instance, HA requires additional config
   postgres: 1        # Database - single instance, replication requires additional config
 
@@ -124,6 +127,12 @@ config:
   WEAVIATE_HOST: ""  # Auto-generated if empty: <release>-weaviate
   WEAVIATE_PORT: "8080"
   WEAVIATE_GRPC_PORT: "50051"
+  
+  # --- Graph Database (Memgraph) ---
+  MEMGRAPH_HOST: ""  # Auto-generated if empty: <release>-memgraph
+  MEMGRAPH_PORT: "7687"
+  MEMGRAPH_SCHEME: "bolt"  # Use "bolt+ssc" for Memgraph Cloud (SSL, self-signed), "bolt+s" for CA-signed SSL
+  MEMGRAPH_MEMORY_LIMIT: "512"  # MB, passed to --memory-limit flag
   
   # --- SSL/TLS for External Services ---
   # PostgreSQL: "prefer" auto-negotiates TLS (works for RDS/Cloud SQL out of box)
@@ -325,7 +334,11 @@ secrets:
     
     # --- Optional: Rate Limiting Bypass ---
     RATE_LIMIT_BYPASS_TOKEN: ""  # Custom token to bypass rate limits
-  
+
+    # --- Optional: Memgraph Graph Database ---
+    MEMGRAPH_USER: "memgraph"    # Default admin user for in-cluster Memgraph
+    MEMGRAPH_PASSWORD: ""        # REQUIRED if memgraph enabled - Generate with: openssl rand -base64 32
+
   # --- LLM API Keys (secret-llm.yaml) ---
   # Mounted by: chatbot, celery-worker, celery-beat
   llm:
@@ -438,6 +451,13 @@ resources:
       cpu: "300m"
       memory: "512Mi"
   weaviate:
+    requests:
+      cpu: "100m"
+      memory: "512Mi"
+    limits:
+      cpu: "500m"
+      memory: "1Gi"
+  memgraph:
     requests:
       cpu: "100m"
       memory: "512Mi"
@@ -568,6 +588,8 @@ persistence:
     size: 10Gi           # Secrets storage
   redis:
     size: 5Gi            # Celery task state and cache
+  memgraph:
+    size: 5Gi            # Graph database snapshots
   minio:
     size: 10Gi           # Object storage (local dev only)
 

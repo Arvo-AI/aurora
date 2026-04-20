@@ -28,6 +28,7 @@ def get_memgraph_client():
                     port=int(os.environ["MEMGRAPH_PORT"]),
                     username=os.environ["MEMGRAPH_USER"],
                     password=os.environ["MEMGRAPH_PASSWORD"],
+                    scheme=os.environ.get("MEMGRAPH_SCHEME", "bolt"),
                 )
     return _client_instance
 
@@ -35,17 +36,18 @@ def get_memgraph_client():
 class MemgraphClient:
     """Encapsulates all Memgraph Cypher queries for the Aurora dependency graph."""
 
-    def __init__(self, host, port, username, password):
+    def __init__(self, host, port, username, password, scheme="bolt"):
         self._host = host
         self._port = port
         self._username = username
         self._password = password
+        self._scheme = scheme
         self._driver = None
         self._schema_initialized = False
 
     def _get_driver(self):
         if self._driver is None:
-            uri = f"bolt://{self._host}:{self._port}"
+            uri = f"{self._scheme}://{self._host}:{self._port}"
             self._driver = GraphDatabase.driver(
                 uri,
                 auth=(self._username, self._password),

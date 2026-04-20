@@ -251,6 +251,7 @@ FLASK_SECRET=$(openssl rand -base64 32)
 AUTH_SECRET=$(openssl rand -base64 32)
 INTERNAL_API_SECRET=$(openssl rand -base64 32)
 SEARXNG_SECRET=$(openssl rand -base64 32)
+MEMGRAPH_PW=$(openssl rand -base64 32)
 
 info "Generating $VALUES_FILE ..."
 cp "$CHART_DIR/values.yaml" "$VALUES_FILE"
@@ -321,6 +322,7 @@ yq -i ".secrets.app.FLASK_SECRET_KEY = \"$FLASK_SECRET\"" "$VALUES_FILE"
 yq -i ".secrets.app.AUTH_SECRET = \"$AUTH_SECRET\"" "$VALUES_FILE"
 yq -i ".secrets.app.INTERNAL_API_SECRET = \"$INTERNAL_API_SECRET\"" "$VALUES_FILE"
 yq -i ".secrets.app.SEARXNG_SECRET = \"$SEARXNG_SECRET\"" "$VALUES_FILE"
+yq -i ".secrets.app.MEMGRAPH_PASSWORD = \"$MEMGRAPH_PW\"" "$VALUES_FILE"
 
 # LLM
 LLM_KEY_FIELD="OPENROUTER_API_KEY"
