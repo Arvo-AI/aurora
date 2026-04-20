@@ -654,7 +654,6 @@ ingress:
     frontend: "aurora.example.com"
     api: "api.aurora.example.com"
     ws: "ws.aurora.example.com"
-    mcp: ""  # WARNING: Requires auth proxy (e.g. oauth2-proxy). Do not enable without authentication.
 
   # Additional Ingress resources (e.g., external ingress for webhooks).
   # Each entry creates a separate Kubernetes Ingress object.
