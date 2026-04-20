@@ -336,8 +336,10 @@ secrets:
     RATE_LIMIT_BYPASS_TOKEN: ""  # Custom token to bypass rate limits
 
     # --- Optional: Memgraph Graph Database ---
-    MEMGRAPH_USER: "memgraph"    # Default admin user for in-cluster Memgraph
-    MEMGRAPH_PASSWORD: ""        # REQUIRED if memgraph enabled - Generate with: openssl rand -base64 32
+    # Only needed if connecting to a Memgraph instance with auth enabled (e.g., Memgraph Cloud).
+    # In-cluster Memgraph runs without auth by default (network-isolated via ClusterIP).
+    MEMGRAPH_USER: ""
+    MEMGRAPH_PASSWORD: ""
 
   # --- LLM API Keys (secret-llm.yaml) ---
   # Mounted by: chatbot, celery-worker, celery-beat

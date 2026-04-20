@@ -40,17 +40,6 @@ spec:
               containerPort: 7687
             - name: metrics
               containerPort: 7444
-          env:
-            - name: MEMGRAPH_USER
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "aurora.secretName.app" . }}
-                  key: MEMGRAPH_USER
-            - name: MEMGRAPH_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "aurora.secretName.app" . }}
-                  key: MEMGRAPH_PASSWORD
           volumeMounts:
             - name: memgraph-data
               mountPath: /var/lib/memgraph
