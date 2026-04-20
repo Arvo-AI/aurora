@@ -51,6 +51,8 @@ spec:
                 name: {{ include "aurora.secretName.db" . }}
             - secretRef:
                 name: {{ include "aurora.secretName.backend" . }}
+            - secretRef:
+                name: {{ include "aurora.secretName.app" . }}
           {{- if .Values.ssl.caCertSecret }}
           volumeMounts:
             - name: ssl-ca-cert
