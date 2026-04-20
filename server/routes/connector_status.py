@@ -19,7 +19,7 @@ import requests
 from flask import Blueprint, jsonify
 
 from utils.auth.rbac_decorators import require_permission
-from utils.auth.stateless_auth import get_org_id_from_request
+from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.db.connection_pool import db_pool
 
@@ -39,6 +39,7 @@ def _check_grafana(user_id: str, org_id: str) -> Dict[str, Any]:
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                set_rls_context(cursor, conn, user_id, log_prefix="[ConnectorStatus]")
                 cursor.execute(
                     """SELECT 1 FROM user_tokens
                        WHERE (user_id = %s OR org_id = %s)
@@ -707,6 +708,7 @@ def _check_all_connectors(user_id: str, org_id: str) -> Dict[str, Dict[str, Any]
 
     with db_pool.get_admin_connection() as conn:
         with conn.cursor() as cursor:
+            set_rls_context(cursor, conn, user_id, log_prefix="[ConnectorStatus]")
             cursor.execute(
                 """
                 SELECT DISTINCT ON (provider) provider, user_id
@@ -747,6 +749,7 @@ def _check_all_connectors(user_id: str, org_id: str) -> Dict[str, Dict[str, Any]
         if not creds:
             with db_pool.get_admin_connection() as fallback_conn:
                 with fallback_conn.cursor() as cur:
+                    set_rls_context(cur, fallback_conn, user_id, log_prefix="[ConnectorStatus]")
                     cur.execute(
                         "SELECT 1 FROM user_connections WHERE (user_id = %s OR org_id = %s) AND provider = %s AND status = 'active' LIMIT 1",
                         (user_id, org_id, provider),
@@ -787,6 +790,7 @@ def _check_onprem(user_id: str, org_id: str) -> Dict[str, Any]:
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                set_rls_context(cursor, conn, user_id, log_prefix="[ConnectorStatus]")
                 cursor.execute(
                     """SELECT COUNT(*) FROM user_manual_vms
                        WHERE (user_id = %s OR org_id = %s)
@@ -804,6 +808,7 @@ def _check_kubectl(user_id: str, org_id: str) -> Dict[str, Any]:
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                set_rls_context(cursor, conn, user_id, log_prefix="[ConnectorStatus]")
                 cursor.execute(
                     """SELECT COUNT(*) FROM active_kubectl_connections ac
                        JOIN kubectl_agent_tokens kat ON ac.token = kat.token

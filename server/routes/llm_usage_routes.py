@@ -2,7 +2,7 @@
 import logging
 from flask import Blueprint, request, jsonify
 from utils.auth.rbac_decorators import require_permission
-from utils.auth.stateless_auth import get_org_id_from_request
+from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context
 from utils.web.cors_utils import create_cors_response
 from utils.db.connection_pool import db_pool
 
@@ -23,11 +23,7 @@ def get_available_models(user_id):
         org_id = get_org_id_from_request()
         with db_pool.get_user_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
-            if org_id:
-                cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
-            
-            # Query org-wide usage when org_id available, else fall back to user
+            set_rls_context(cursor, conn, user_id, log_prefix="[LLMUsage]")
             if org_id:
                 cursor.execute("""
                     SELECT 
@@ -153,9 +149,7 @@ def get_cost_over_time(user_id):
     try:
         with db_pool.get_user_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
-            if org_id:
-                cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
+            set_rls_context(cursor, conn, user_id, log_prefix="[LLMUsage]")
 
             cursor.execute(f"""
                 SELECT
@@ -210,9 +204,7 @@ def get_usage_summary(user_id):
     try:
         with db_pool.get_user_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
-            if org_id:
-                cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
+            set_rls_context(cursor, conn, user_id, log_prefix="[LLMUsage]")
 
             cursor.execute(f"""
                 SELECT
@@ -268,9 +260,7 @@ def get_session_usage(user_id, session_id):
         org_id = get_org_id_from_request()
         with db_pool.get_user_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
-            if org_id:
-                cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
+            set_rls_context(cursor, conn, user_id, log_prefix="[LLMUsage]")
 
             cursor.execute("""
                 SELECT

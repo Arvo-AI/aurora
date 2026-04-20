@@ -17,24 +17,13 @@ export interface RCAEmailsResponse {
   additional_emails: RCAEmail[];
 }
 
-import { getEnv } from '@/lib/env';
-
-const API_BASE_URL = getEnv('NEXT_PUBLIC_BACKEND_URL');
-
 /**
  * List all RCA notification emails for the user
  */
-export async function listRCAEmails(userId: string): Promise<RCAEmailsResponse> {
-  if (!userId) {
-    throw new Error('User not authenticated');
-  }
-
-  const response = await fetch(`${API_BASE_URL}/api/rca-emails`, {
+export async function listRCAEmails(): Promise<RCAEmailsResponse> {
+  const response = await fetch('/api/proxy/rca-emails', {
     method: 'GET',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-User-ID': userId,
-    },
+    headers: { 'Content-Type': 'application/json' },
   });
 
   if (!response.ok) {
@@ -48,17 +37,10 @@ export async function listRCAEmails(userId: string): Promise<RCAEmailsResponse> 
 /**
  * Add a new email address and send verification code
  */
-export async function addRCAEmail(userId: string, email: string): Promise<void> {
-  if (!userId) {
-    throw new Error('User not authenticated');
-  }
-
-  const response = await fetch(`${API_BASE_URL}/api/rca-emails/add`, {
+export async function addRCAEmail(email: string): Promise<void> {
+  const response = await fetch('/api/proxy/rca-emails/add', {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-User-ID': userId,
-    },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email }),
   });
 
@@ -71,17 +53,10 @@ export async function addRCAEmail(userId: string, email: string): Promise<void> 
 /**
  * Verify an email address with the provided code
  */
-export async function verifyRCAEmail(userId: string, email: string, code: string): Promise<void> {
-  if (!userId) {
-    throw new Error('User not authenticated');
-  }
-
-  const response = await fetch(`${API_BASE_URL}/api/rca-emails/verify`, {
+export async function verifyRCAEmail(email: string, code: string): Promise<void> {
+  const response = await fetch('/api/proxy/rca-emails/verify', {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-User-ID': userId,
-    },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email, code }),
   });
 
@@ -94,17 +69,10 @@ export async function verifyRCAEmail(userId: string, email: string, code: string
 /**
  * Resend verification code to an email address
  */
-export async function resendVerificationCode(userId: string, email: string): Promise<void> {
-  if (!userId) {
-    throw new Error('User not authenticated');
-  }
-
-  const response = await fetch(`${API_BASE_URL}/api/rca-emails/resend`, {
+export async function resendVerificationCode(email: string): Promise<void> {
+  const response = await fetch('/api/proxy/rca-emails/resend', {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-User-ID': userId,
-    },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email }),
   });
 
@@ -117,17 +85,10 @@ export async function resendVerificationCode(userId: string, email: string): Pro
 /**
  * Toggle an email address enabled/disabled
  */
-export async function toggleRCAEmail(userId: string, emailId: number, isEnabled: boolean): Promise<void> {
-  if (!userId) {
-    throw new Error('User not authenticated');
-  }
-
-  const response = await fetch(`${API_BASE_URL}/api/rca-emails/${emailId}/toggle`, {
+export async function toggleRCAEmail(emailId: number, isEnabled: boolean): Promise<void> {
+  const response = await fetch(`/api/proxy/rca-emails/${emailId}/toggle`, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-User-ID': userId,
-    },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ is_enabled: isEnabled }),
   });
 
@@ -140,17 +101,10 @@ export async function toggleRCAEmail(userId: string, emailId: number, isEnabled:
 /**
  * Remove an email address
  */
-export async function removeRCAEmail(userId: string, emailId: number): Promise<void> {
-  if (!userId) {
-    throw new Error('User not authenticated');
-  }
-
-  const response = await fetch(`${API_BASE_URL}/api/rca-emails/${emailId}`, {
+export async function removeRCAEmail(emailId: number): Promise<void> {
+  const response = await fetch(`/api/proxy/rca-emails/${emailId}`, {
     method: 'DELETE',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-User-ID': userId,
-    },
+    headers: { 'Content-Type': 'application/json' },
   });
 
   if (!response.ok) {
@@ -158,4 +112,3 @@ export async function removeRCAEmail(userId: string, emailId: number): Promise<v
     throw new Error(error.error || 'Failed to remove email');
   }
 }
-

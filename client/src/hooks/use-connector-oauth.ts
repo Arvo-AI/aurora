@@ -43,19 +43,10 @@ export function useConnectorOAuth(connector: ConnectorConfig, userId: string | n
   };
 
   const handleGitHubOAuth = async (onStatusChange: () => void) => {
-    if (!userId) {
-      toast({
-        title: "Error",
-        description: "User ID is required",
-        variant: "destructive",
-      });
-      return;
-    }
-
     setIsConnecting(true);
 
     try {
-      const oauthUrl = await GitHubIntegrationService.initiateOAuth(userId);
+      const oauthUrl = await GitHubIntegrationService.initiateOAuth();
       const popup = window.open(
         oauthUrl,
         'github-oauth',
@@ -115,19 +106,10 @@ export function useConnectorOAuth(connector: ConnectorConfig, userId: string | n
   };
 
   const handleBitbucketOAuth = async (onStatusChange: () => void) => {
-    if (!userId) {
-      toast({
-        title: "Error",
-        description: "User ID is required",
-        variant: "destructive",
-      });
-      return;
-    }
-
     setIsConnecting(true);
 
     try {
-      const oauthUrl = await BitbucketIntegrationService.initiateOAuth(userId);
+      const oauthUrl = await BitbucketIntegrationService.initiateOAuth();
       const popup = window.open(
         oauthUrl,
         'bitbucket-oauth',

@@ -21,6 +21,7 @@ from routes.slack.slack_events_helpers import (
 )
 from utils.secrets.secret_ref_utils import get_user_token_data
 from chat.background.task import run_background_chat
+from utils.auth.stateless_auth import set_rls_context
 
 logger = logging.getLogger(__name__)
 
@@ -315,7 +316,7 @@ def _handle_run_suggestion(payload: dict, action: dict, slack_user_id: str, team
         # 3. FETCH SUGGESTION from database
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
-                # Get suggestion details and owner info
+                set_rls_context(cursor, conn, clicker_user_id, log_prefix="[SlackEvents:run_suggestion]")
                 cursor.execute(
                     """
                     SELECT s.command, s.title, s.risk, i.user_id, i.aurora_chat_session_id, u.email
@@ -475,6 +476,7 @@ def _handle_suggestion_details(payload: dict, action: dict, slack_user_id: str, 
         # 4. FETCH SUGGESTION DETAILS from database
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                # No RLS needed — incident_suggestions not RLS-protected
                 cursor.execute(
                     """
                     SELECT s.title, s.description, s.command, s.type, s.risk

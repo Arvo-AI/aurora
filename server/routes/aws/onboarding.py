@@ -344,6 +344,7 @@ def workspace_cleanup(user_id, workspace_id):
             from utils.db.connection_pool import db_pool
             with db_pool.get_admin_connection() as conn:
                 cur = conn.cursor()
+                # No RLS needed — workspaces not RLS-protected
                 cur.execute(
                     """UPDATE workspaces SET aws_discovery_summary = NULL,
                        aws_discovery_artifact_bucket = NULL,

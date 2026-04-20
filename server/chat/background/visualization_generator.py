@@ -10,6 +10,7 @@ from celery_config import celery_app
 from chat.background.visualization_extractor import VisualizationData, VisualizationExtractor
 from utils.db.connection_pool import db_pool
 from utils.cache.redis_client import get_redis_client
+from utils.auth.stateless_auth import set_rls_context
 from chat.backend.constants import MAX_TOOL_OUTPUT_CHARS, INFRASTRUCTURE_TOOLS
 
 logger = logging.getLogger(__name__)
@@ -65,7 +66,7 @@ def update_visualization(
         if not tool_calls:
             return {"status": "skipped", "reason": "no_tool_calls"}
         
-        existing_viz = _fetch_existing_visualization(incident_id)
+        existing_viz = _fetch_existing_visualization(incident_id, user_id)
         
         extractor = _get_extractor()
         updated_viz = extractor.extract_incremental(
@@ -89,7 +90,7 @@ def update_visualization(
                 logger.info(f"[Visualization] Converted {investigating_count} 'investigating' nodes to 'unknown' in final visualization")
         
         validated_json = updated_viz.model_dump_json(indent=2)
-        _store_visualization(incident_id, validated_json)
+        _store_visualization(incident_id, validated_json, user_id)
         _notify_sse_clients(incident_id, updated_viz.version)
         
         logger.info(
@@ -114,6 +115,8 @@ def _fetch_recent_tool_calls(session_id: str, user_id: str, limit: int = 10) -> 
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                if not set_rls_context(cursor, conn, user_id, log_prefix="[Visualization]"):
+                    return []
                 cursor.execute("""
                     SELECT llm_context_history
                     FROM chat_sessions
@@ -149,11 +152,13 @@ def _fetch_recent_tool_calls(session_id: str, user_id: str, limit: int = 10) -> 
         return []
 
 
-def _fetch_existing_visualization(incident_id: str) -> Optional[VisualizationData]:
+def _fetch_existing_visualization(incident_id: str, user_id: str) -> Optional[VisualizationData]:
     """Fetch current visualization from incidents table."""
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                if not set_rls_context(cursor, conn, user_id, log_prefix="[Visualization]"):
+                    return None
                 cursor.execute("""
                     SELECT visualization_code
                     FROM incidents
@@ -172,11 +177,13 @@ def _fetch_existing_visualization(incident_id: str) -> Optional[VisualizationDat
         return None
 
 
-def _store_visualization(incident_id: str, json_str: str):
+def _store_visualization(incident_id: str, json_str: str, user_id: str):
     """Store updated visualization in database."""
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                if not set_rls_context(cursor, conn, user_id, log_prefix="[Visualization]"):
+                    raise RuntimeError(f"Cannot resolve org_id for user {user_id}")
                 cursor.execute("""
                     UPDATE incidents
                     SET visualization_code = %s,

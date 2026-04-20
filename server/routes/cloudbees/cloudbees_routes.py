@@ -17,7 +17,7 @@ from utils.web.cors_utils import create_cors_response
 from utils.web.webhook_signature import SIGNATURE_HEADER, verify_webhook_signature
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.auth.rbac_decorators import require_permission
-from utils.auth.stateless_auth import get_org_id_from_request
+from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context
 from utils.secrets.secret_ref_utils import delete_user_secret
 
 logger = logging.getLogger(__name__)
@@ -243,6 +243,8 @@ def _verify_webhook_user(user_id: str) -> bool:
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                if not set_rls_context(cursor, conn, user_id, log_prefix="[CLOUDBEES:verify_webhook]"):
+                    return False
                 cursor.execute(
                     "SELECT 1 FROM user_tokens WHERE user_id = %s AND provider = %s LIMIT 1",
                     (user_id, CLOUDBEES_PROVIDER),
@@ -395,7 +397,7 @@ def list_deployments(user_id):
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
-                cursor.execute("SET myapp.current_org_id = %s", (org_id,))
+                set_rls_context(cursor, conn, user_id, log_prefix="[CloudBees]")
 
                 if service_filter:
                     cursor.execute(

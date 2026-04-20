@@ -28,6 +28,7 @@ from connectors.jira_connector.client import JiraClient
 import requests
 from utils.auth.oauth2_state_cache import retrieve_oauth2_state, store_oauth2_state
 from utils.auth.rbac_decorators import require_permission
+from utils.auth.stateless_auth import set_rls_context
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.db.connection_pool import db_pool
 
@@ -375,6 +376,7 @@ def disconnect(user_id):
     try:
         with db_pool.get_admin_connection() as conn:
             cursor = conn.cursor()
+            set_rls_context(cursor, conn, user_id, log_prefix="[ATLASSIAN:disconnect]")
             for target in targets:
                 provider = "opsgenie" if target == "jsm_ops" else target
                 cursor.execute(

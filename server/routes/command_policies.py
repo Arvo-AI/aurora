@@ -15,6 +15,7 @@ from utils.auth.stateless_auth import (
     get_org_id_from_request,
     get_user_preference,
     store_user_preference,
+    set_rls_context,
 )
 from utils.auth.command_policy import (
     evaluate_compound_command,
@@ -55,6 +56,7 @@ def list_policies(user_id):
     from utils.db.connection_pool import db_pool
     with db_pool.get_admin_connection() as conn:
         with conn.cursor() as cur:
+            set_rls_context(cur, conn, user_id, log_prefix="[CommandPolicies:list]")
             cur.execute(
                 "SELECT id, mode, pattern, description, priority, enabled, "
                 "created_at, updated_at, updated_by, source "
@@ -114,6 +116,7 @@ def create_policy(user_id):
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
+                set_rls_context(cur, conn, user_id, log_prefix="[CommandPolicies:create]")
                 cur.execute(
                     "INSERT INTO org_command_policies "
                     "(org_id, mode, pattern, description, priority, updated_by) "
@@ -170,6 +173,7 @@ def update_policy(user_id, rule_id):
     from utils.db.connection_pool import db_pool
     with db_pool.get_admin_connection() as conn:
         with conn.cursor() as cur:
+            set_rls_context(cur, conn, user_id, log_prefix="[CommandPolicies:update]")
             cur.execute(
                 f"UPDATE org_command_policies SET {', '.join(updates)} "
                 "WHERE id = %s AND org_id = %s",
@@ -194,6 +198,7 @@ def delete_policy(user_id, rule_id):
     from utils.db.connection_pool import db_pool
     with db_pool.get_admin_connection() as conn:
         with conn.cursor() as cur:
+            set_rls_context(cur, conn, user_id, log_prefix="[CommandPolicies:delete]")
             cur.execute(
                 "DELETE FROM org_command_policies WHERE id = %s AND org_id = %s",
                 (rule_id, org_id),
@@ -259,6 +264,7 @@ def toggle_list(user_id):
         from utils.db.connection_pool import db_pool
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
+                set_rls_context(cur, conn, user_id, log_prefix="[CommandPolicies:toggle]")
                 cur.execute(
                     "SELECT COUNT(*) FROM org_command_policies "
                     "WHERE org_id = %s AND mode = %s",
@@ -337,6 +343,7 @@ def apply_template(user_id):
     from utils.db.connection_pool import db_pool
     with db_pool.get_admin_connection() as conn:
         with conn.cursor() as cur:
+            set_rls_context(cur, conn, user_id, log_prefix="[CommandPolicies:apply_template]")
             cur.execute(
                 "DELETE FROM org_command_policies WHERE org_id = %s AND source = 'template'",
                 (org_id,),
@@ -379,6 +386,7 @@ def clear_active_template(user_id):
     from utils.db.connection_pool import db_pool
     with db_pool.get_admin_connection() as conn:
         with conn.cursor() as cur:
+            set_rls_context(cur, conn, user_id, log_prefix="[CommandPolicies:clear_template]")
             cur.execute("DELETE FROM org_command_policies WHERE org_id = %s AND source = 'template'", (org_id,))
             cur.execute(pref_upsert, (org_key, org_id, "command_policy_active_template", json.dumps(None)))
         conn.commit()

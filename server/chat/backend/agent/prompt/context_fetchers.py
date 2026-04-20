@@ -14,10 +14,11 @@ def build_manual_vm_access_segment(user_id: Optional[str]) -> str:
         return ""
 
     try:
+        from utils.auth.stateless_auth import set_rls_context
         with db_pool.get_user_connection() as conn:
             with conn.cursor() as cur:
-                cur.execute("SET myapp.current_user_id = %s;", (user_id,))
-                conn.commit()
+                if not set_rls_context(cur, conn, user_id, log_prefix="[ContextFetchers]"):
+                    return ""
                 cur.execute(
                     """
                     SELECT mv.name, mv.ip_address, mv.port, mv.ssh_username, mv.ssh_jump_command, mv.ssh_key_id,
@@ -83,6 +84,7 @@ def build_knowledge_base_memory_segment(user_id: Optional[str]) -> str:
     try:
         with db_pool.get_admin_connection() as conn:
             cursor = conn.cursor()
+            # No RLS needed — users, knowledge_base_memory not RLS-protected
             cursor.execute(
                 "SELECT org_id FROM users WHERE id = %s", (user_id,)
             )

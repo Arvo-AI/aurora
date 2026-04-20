@@ -12,7 +12,7 @@ from utils.web.cors_utils import create_cors_response
 from utils.logging.secure_logging import mask_credential_value
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.auth.rbac_decorators import require_permission
-from utils.auth.stateless_auth import get_org_id_from_request
+from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context
 from utils.secrets.secret_ref_utils import delete_user_secret
 logger = logging.getLogger(__name__)
 
@@ -253,6 +253,7 @@ def _get_stored_datadog_credentials(user_id: str) -> Optional[Dict[str, Any]]:
         from utils.db.db_utils import connect_to_db_as_admin
         conn = connect_to_db_as_admin()
         cursor = conn.cursor()
+        set_rls_context(cursor, conn, user_id, log_prefix="[Datadog:_get_stored_datadog_credentials]")
         cursor.execute(
             "SELECT user_id FROM user_tokens WHERE org_id = %s AND provider = 'datadog' AND is_active = TRUE AND secret_ref IS NOT NULL LIMIT 1",
             (org_id,)
@@ -392,6 +393,7 @@ def disconnect(user_id):
 
         with db_pool.get_admin_connection() as conn:
             cursor = conn.cursor()
+            set_rls_context(cursor, conn, user_id, log_prefix="[DATADOG:disconnect]")
             cursor.execute(
                 "DELETE FROM datadog_events WHERE user_id = %s",
                 (user_id,)
@@ -550,7 +552,7 @@ def list_ingested_events(user_id):
     try:
         with db_pool.get_admin_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SET myapp.current_org_id = %s", (org_id,))
+            set_rls_context(cursor, conn, user_id, log_prefix="[Datadog]")
 
             base_query = """
                 SELECT id, event_type, event_title, status, scope, payload, received_at, created_at

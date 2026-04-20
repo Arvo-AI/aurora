@@ -165,9 +165,11 @@ class LLMContextManager:
     def load_context_history(session_id: str, user_id: str) -> List[Any]:
         """Load the complete LLM context history from the database."""
         try:
+            from utils.auth.stateless_auth import set_rls_context
             with db_pool.get_user_connection() as conn:
                 cursor = conn.cursor(cursor_factory=RealDictCursor)
-                cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
+                if not set_rls_context(cursor, conn, user_id, log_prefix="[LLMContextManager]"):
+                    return []
                 cursor.execute("""
                     SELECT llm_context_history 
                     FROM chat_sessions 

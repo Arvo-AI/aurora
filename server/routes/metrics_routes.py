@@ -4,7 +4,7 @@ import logging
 from flask import Blueprint, jsonify, request
 from utils.db.connection_pool import db_pool
 from utils.auth.rbac_decorators import require_permission
-from utils.auth.stateless_auth import get_org_id_from_request
+from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context
 
 logger = logging.getLogger(__name__)
 
@@ -53,9 +53,7 @@ def get_metrics_summary(user_id):
     try:
         with db_pool.get_user_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
-            if org_id:
-                cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
+            set_rls_context(cursor, conn, user_id, log_prefix="[Metrics]")
 
             # Total / active / resolved counts
             cursor.execute("""
@@ -179,9 +177,7 @@ def get_mttr(user_id):
     try:
         with db_pool.get_user_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
-            if org_id:
-                cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
+            set_rls_context(cursor, conn, user_id, log_prefix="[Metrics]")
 
             where_clauses = [
                 "resolved_at IS NOT NULL",
@@ -273,9 +269,7 @@ def get_mtts(user_id):
     try:
         with db_pool.get_user_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
-            if org_id:
-                cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
+            set_rls_context(cursor, conn, user_id, log_prefix="[Metrics]")
 
             where_clauses = [
                 "analyzed_at IS NOT NULL",
@@ -352,9 +346,7 @@ def get_mttd(user_id):
     try:
         with db_pool.get_user_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
-            if org_id:
-                cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
+            set_rls_context(cursor, conn, user_id, log_prefix="[Metrics]")
 
             cursor.execute("""
                 SELECT
@@ -408,9 +400,7 @@ def get_incident_frequency(user_id):
     try:
         with db_pool.get_user_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
-            if org_id:
-                cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
+            set_rls_context(cursor, conn, user_id, log_prefix="[Metrics]")
 
             cursor.execute(f"""
                 SELECT
@@ -449,9 +439,7 @@ def get_change_failure_rate(user_id):
     try:
         with db_pool.get_user_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
-            if org_id:
-                cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
+            set_rls_context(cursor, conn, user_id, log_prefix="[Metrics]")
 
             cursor.execute("""
                 WITH deploys AS (
@@ -520,9 +508,7 @@ def get_agent_execution(user_id):
     try:
         with db_pool.get_user_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
-            if org_id:
-                cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
+            set_rls_context(cursor, conn, user_id, log_prefix="[Metrics]")
 
             if incident_id:
                 # Per-incident waterfall

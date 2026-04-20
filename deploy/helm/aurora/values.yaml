@@ -146,7 +146,6 @@ config:
   CHATBOT_INTERNAL_URL: ""    # Auto-generated if empty: http://<release>-chatbot:5007
   VAULT_ADDR: ""              # Default applied by chart when empty: http://<release>-vault:8200
   SEARXNG_URL: ""             # Auto-generated if empty: http://<release>-searxng:8080
-  SEARXNG_BASE_URL: ""        #Example: https://aurora.example.com
   
   # --- Secrets Backend ---
   # "vault" (default) or "aws_secrets_manager"
@@ -160,6 +159,8 @@ config:
   # --- AWS Secrets Manager (only when SECRETS_BACKEND=aws_secrets_manager) ---
   AWS_SM_REGION: ""
   AWS_SM_PREFIX: "aurora/users"
+  AWS_SM_ACCESS_KEY_ID: ""      # Dedicated IAM key for Secrets Manager access (avoids collision with AWS connector creds)
+  AWS_SM_SECRET_ACCESS_KEY: ""  # Falls back to default boto3 chain if both are empty
   
   # --- LLM Configuration ---
   LLM_PROVIDER_MODE: "openrouter"  #Provider: openrouter, openai, anthropic, google
@@ -178,7 +179,7 @@ config:
   AURORA_VERIFY_CLI_IDENTITY: "false"
   
   # --- Optional Features (enable as needed) ---
-  ENABLE_POD_ISOLATION: "false"              # Isolate terminal commands in separate pods
+  ENABLE_POD_ISOLATION: "false"               # Isolate terminal commands in separate pods
   # NEXT_PUBLIC_* feature flags — written to window.__ENV by docker-entrypoint.sh at startup, no image rebuild needed
   NEXT_PUBLIC_ENABLE_OVH: "false"            # OVH Cloud integration
   NEXT_PUBLIC_ENABLE_PAGERDUTY_OAUTH: "false" # PagerDuty integration
@@ -305,8 +306,11 @@ secrets:
     FLASK_SECRET_KEY: ""         # REQUIRED - Generate with: openssl rand -base64 32
     AUTH_SECRET: ""              # REQUIRED - Generate with: openssl rand -base64 32
     SEARXNG_SECRET: ""           # REQUIRED - Generate with: openssl rand -base64 32
+    INTERNAL_API_SECRET: ""      # REQUIRED - Generate with: openssl rand -base64 32
 
-    # --- Optional: AWS Integration ---
+    # --- Optional: AWS Connector ---
+    # IAM identity for cross-account STS AssumeRole into user AWS accounts.
+    # Not related to AWS_SM_* credentials used for the secrets backend.
     AWS_ACCESS_KEY_ID: ""
     AWS_SECRET_ACCESS_KEY: ""
     

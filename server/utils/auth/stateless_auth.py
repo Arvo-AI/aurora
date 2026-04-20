@@ -34,6 +34,7 @@ def resolve_org_id(user_id: str) -> Optional[str]:
         from utils.db.connection_pool import db_pool
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                # No RLS needed — users not RLS-protected
                 cursor.execute("SELECT org_id FROM users WHERE id = %s", (user_id,))
                 row = cursor.fetchone()
                 if row and row[0]:
@@ -95,6 +96,7 @@ def validate_user_exists(user_id: str) -> bool:
         from utils.db.connection_pool import db_pool
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                # No RLS needed — users not RLS-protected
                 cursor.execute("SELECT 1 FROM users WHERE id = %s", (user_id,))
                 return cursor.fetchone() is not None
     except Exception as e:
@@ -146,6 +148,7 @@ def get_org_id_from_request() -> Optional[str]:
             from utils.db.connection_pool import db_pool
             with db_pool.get_admin_connection() as conn:
                 with conn.cursor() as cursor:
+                    # No RLS needed — users not RLS-protected
                     cursor.execute(
                         "SELECT org_id FROM users WHERE id = %s",
                         (user_id,)
@@ -176,10 +179,7 @@ def get_credentials_from_db(user_id: str, provider: str) -> Optional[Dict[str, A
 
                 conn = connect_to_db_as_user()
                 cur = conn.cursor()
-                cur.execute("SET myapp.current_user_id = %s;", (user_id,))
-                conn.commit()
-
-                org_id = resolve_org_id(user_id)
+                set_rls_context(cur, conn, user_id, log_prefix="[Creds:AWS]")
 
                 cur.execute(
                     """
@@ -236,10 +236,8 @@ def get_credentials_from_db(user_id: str, provider: str) -> Optional[Dict[str, A
                 try:
                     conn = connect_to_db_as_user()
                     cursor = conn.cursor()
-                    cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
-                    conn.commit()
+                    org_id = set_rls_context(cursor, conn, user_id, log_prefix="[Creds:Azure]")
                     
-                    org_id = resolve_org_id(user_id)
                     cursor.execute(
                         """SELECT subscription_id, subscription_name
                            FROM user_tokens
@@ -279,8 +277,7 @@ def store_deployment_task(user_id: str, task_id: str, deployment_id: str = None,
     try:
         conn = connect_to_db_as_user()
         cursor = conn.cursor()
-        cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
-        conn.commit()
+        set_rls_context(cursor, conn, user_id, log_prefix="[StoreDeployTask]")
         
         cursor.execute("""
             INSERT INTO deployment_tasks (user_id, task_id, deployment_id, status, task_data)
@@ -306,8 +303,7 @@ def get_deployment_task(user_id: str, task_id: str = None) -> Optional[Dict]:
     try:
         conn = connect_to_db_as_user()
         cursor = conn.cursor()
-        cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
-        conn.commit()
+        set_rls_context(cursor, conn, user_id, log_prefix="[GetDeployTask]")
         
         if task_id:
             cursor.execute(
@@ -345,16 +341,9 @@ def get_deployment_task(user_id: str, task_id: str = None) -> Optional[Dict]:
 def store_user_preference(user_id: str, key: str, value: Any):
     """Store user preference in database."""
     try:
-        org_id = None
-        try:
-            org_id = get_org_id_from_request()
-        except Exception:
-            logger.debug("No request context for org_id in store_user_preference")
-
         conn = connect_to_db_as_user()
         cursor = conn.cursor()
-        cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
-        conn.commit()
+        org_id = set_rls_context(cursor, conn, user_id, log_prefix="[StoreUserPref]")
         
         if org_id:
             cursor.execute("""
@@ -388,8 +377,7 @@ def get_user_preference(user_id: str, key: str, default=None):
     try:
         conn = connect_to_db_as_user()
         cursor = conn.cursor()
-        cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
-        conn.commit()
+        set_rls_context(cursor, conn, user_id, log_prefix="[Prefs:get]")
         
         cursor.execute(
             "SELECT preference_value FROM user_preferences WHERE user_id = %s AND preference_key = %s",
@@ -442,8 +430,7 @@ def get_connected_providers(user_id: str) -> List[str]:
     try:
         conn = connect_to_db_as_user()
         cursor = conn.cursor()
-        cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
-        conn.commit()
+        set_rls_context(cursor, conn, user_id, log_prefix="[ConnectedProviders]")
         
         # Check user_tokens table (OAuth/secret-based providers)
         cursor.execute(
@@ -499,6 +486,7 @@ def get_user_email(user_id: str) -> Optional[str]:
         # Try to get email from user_tokens table first (faster)
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                # No RLS needed — user_tokens not RLS-protected
                 cursor.execute(
                     "SELECT email FROM user_tokens WHERE user_id = %s AND email IS NOT NULL LIMIT 1",
                     (user_id,)
@@ -516,22 +504,6 @@ def get_user_email(user_id: str) -> Optional[str]:
         logger.error(f"Error getting user email: {e}")
         return None
 
-def create_cors_response():
-    """Create a CORS response for OPTIONS requests."""
-    from flask import make_response, request as flask_request
-    import os
-    response = make_response()
-    frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
-    origin = flask_request.headers.get("Origin", frontend_url)
-    allowed_origins = {frontend_url, "http://localhost:3000"}
-    if origin in allowed_origins:
-        response.headers['Access-Control-Allow-Origin'] = origin
-    else:
-        response.headers['Access-Control-Allow-Origin'] = frontend_url
-    response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
-    response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-User-ID, X-Org-ID'
-    response.headers['Access-Control-Allow-Credentials'] = 'true'
-    return response
 
 
 import time as _time
@@ -556,6 +528,7 @@ def get_org_id_for_user(user_id: str) -> Optional[str]:
         from utils.db.connection_pool import db_pool
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                # No RLS needed — users not RLS-protected
                 cursor.execute("SELECT org_id FROM users WHERE id = %s", (user_id,))
                 row = cursor.fetchone()
                 org_id = row[0] if row and row[0] else None

@@ -1,17 +1,22 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getAuthenticatedUser } from '@/lib/auth-helper';
+import { env } from '@/lib/server-env';
 
-const API_BASE_URL = process.env.BACKEND_URL;
+const METHODS_WITHOUT_BODY = new Set(['GET', 'HEAD', 'OPTIONS']);
 
-/**
- * Forward an authenticated GET request to a backend API path,
- * passing through query-string parameters and auth headers.
- */
-export async function forwardAuthenticatedGet(
+function buildUrl(backendPath: string, qs?: string): string {
+  return qs ? `${env.BACKEND_URL}${backendPath}?${qs}` : `${env.BACKEND_URL}${backendPath}`;
+}
+
+export async function forwardRequest(
   request: NextRequest,
+  method: string,
   backendPath: string,
   errorLabel: string,
+  options: { timeoutMs?: number; passBody?: boolean } = {},
 ): Promise<NextResponse> {
+  const { timeoutMs = 30_000, passBody = !METHODS_WITHOUT_BODY.has(method.toUpperCase()) } = options;
+
   try {
     const authResult = await getAuthenticatedUser();
     if (authResult instanceof NextResponse) return authResult;
@@ -19,22 +24,55 @@ export async function forwardAuthenticatedGet(
 
     const { searchParams } = new URL(request.url);
     const qs = searchParams.toString();
-    const url = qs
-      ? `${API_BASE_URL}${backendPath}?${qs}`
-      : `${API_BASE_URL}${backendPath}`;
+    const url = buildUrl(backendPath, qs);
+
+    const headers: Record<string, string> = { ...authHeaders };
+
+    if (env.INTERNAL_API_SECRET) {
+      headers['X-Internal-Secret'] = env.INTERNAL_API_SECRET;
+    }
+
+    let body: BodyInit | undefined;
+    let useDuplex = false;
+    if (passBody) {
+      const ct = request.headers.get('content-type') || '';
+      if (ct.includes('multipart/form-data')) {
+        body = request.body as unknown as BodyInit;
+        headers['Content-Type'] = ct;
+        useDuplex = true;
+      } else if (ct.includes('application/json')) {
+        headers['Content-Type'] = 'application/json';
+        body = await request.text();
+      } else if (ct.includes('application/x-www-form-urlencoded')) {
+        headers['Content-Type'] = ct;
+        body = await request.text();
+      } else {
+        try {
+          const text = await request.text();
+          if (text.length > 0) {
+            if (ct) headers['Content-Type'] = ct;
+            body = text;
+          }
+        } catch {
+          // no body
+        }
+      }
+    }
 
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 10_000);
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
     let response: Response;
     try {
       response = await fetch(url, {
-        method: 'GET',
-        headers: authHeaders,
+        method,
+        headers,
+        body,
         credentials: 'include',
         cache: 'no-store',
         signal: controller.signal,
-      });
+        ...(useDuplex ? { duplex: 'half' as const } : {}),
+      } as RequestInit);
       clearTimeout(timeoutId);
     } catch (fetchErr: unknown) {
       clearTimeout(timeoutId);
@@ -55,10 +93,34 @@ export async function forwardAuthenticatedGet(
       );
     }
 
-    const data = await response.json();
-    return NextResponse.json(data);
+    const ct = response.headers.get('content-type') || '';
+
+    // 204/304 have no body — reading it would throw
+    if (response.status === 204 || response.status === 304) {
+      return new NextResponse(null, { status: response.status });
+    }
+
+    if (ct.includes('application/json')) {
+      const data = await response.json();
+      return NextResponse.json(data, { status: response.status });
+    }
+
+    // Redact non-JSON responses (e.g. werkzeug debug pages) to prevent info leakage
+    if (ct.includes('text/html')) {
+      return NextResponse.json(
+        { error: `Unexpected HTML response from ${errorLabel}` },
+        { status: 502 },
+      );
+    }
+
+    const text = await response.text();
+    return new NextResponse(text, {
+      status: response.status,
+      headers: { 'Content-Type': ct || 'text/plain' },
+    });
   } catch (error) {
-    console.error(`[api/${errorLabel}] Error:`, error);
+    const safeError = error instanceof Error ? { message: error.message, name: error.name } : {};
+    console.error(`[api/${errorLabel}] Error:`, safeError);
     return NextResponse.json(
       { error: `Failed to load ${errorLabel}` },
       { status: 500 },

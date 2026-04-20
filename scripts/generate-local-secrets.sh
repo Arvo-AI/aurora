@@ -47,6 +47,7 @@ generate_secret() {
 POSTGRES_PASSWORD=$(generate_secret)
 FLASK_SECRET_KEY=$(generate_secret)
 AUTH_SECRET=$(generate_secret)
+INTERNAL_API_SECRET=$(generate_secret)
 
 # Update .env file
 # Use sed to update or add each variable
@@ -66,6 +67,12 @@ if grep -q "^AUTH_SECRET=" "$ENV_FILE"; then
     sed -i.bak "s|^AUTH_SECRET=.*|AUTH_SECRET=$AUTH_SECRET|" "$ENV_FILE"
 else
     echo "AUTH_SECRET=$AUTH_SECRET" >> "$ENV_FILE"
+fi
+
+if grep -q "^INTERNAL_API_SECRET=" "$ENV_FILE"; then
+    sed -i.bak "s|^INTERNAL_API_SECRET=.*|INTERNAL_API_SECRET=$INTERNAL_API_SECRET|" "$ENV_FILE"
+else
+    echo "INTERNAL_API_SECRET=$INTERNAL_API_SECRET" >> "$ENV_FILE"
 fi
 
 # Add AGENT_RECURSION_LIMIT if not present (required for agent)

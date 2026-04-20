@@ -121,7 +121,7 @@ def slack_callback():
         authed_user = token_data.get('authed_user', {})
         
         if not access_token:
-            logging.error(f"No access token in Slack response: {token_data}")
+            logging.error(f"No access token in Slack response (keys: {list(token_data.keys())})")
             return redirect(f"{FRONTEND_URL}?slack_auth=failed&error=no_token")
         
         # Create incidents channel first (blocking - OAuth fails if channel can't be created)

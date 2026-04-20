@@ -4,6 +4,14 @@ AWS Secrets Manager secrets backend implementation.
 Uses boto3 to interact with AWS Secrets Manager directly.
 This is an alternative to HashiCorp Vault for deployments where
 AWS Secrets Manager is the approved secrets store (e.g., EKS with IRSA).
+
+Credential resolution order:
+  1. AWS_SM_ACCESS_KEY_ID / AWS_SM_SECRET_ACCESS_KEY  (dedicated SM creds)
+  2. Default boto3 chain  (env vars, IRSA, instance profile, etc.)
+
+Using dedicated env vars avoids collisions with the AWS connector's
+AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY, which serve a different purpose
+(cross-account STS AssumeRole into user AWS accounts).
 """
 
 import os
@@ -24,7 +32,9 @@ class AWSSecretsManagerBackend(SecretsBackend):
     Configuration via environment variables:
     - AWS_SM_REGION: AWS region for Secrets Manager (required)
     - AWS_SM_PREFIX: Path prefix for secret names (default: aurora/users)
-    - AWS credentials: standard boto3 chain (env vars, IRSA, instance profile)
+    - AWS_SM_ACCESS_KEY_ID: Dedicated access key for Secrets Manager (optional)
+    - AWS_SM_SECRET_ACCESS_KEY: Dedicated secret key for Secrets Manager (optional)
+    - Falls back to standard boto3 credential chain when dedicated vars are unset.
 
     Secret reference format:
         awssm:{region}:{prefix}/{secret_name}
@@ -68,17 +78,35 @@ class AWSSecretsManagerBackend(SecretsBackend):
                 return
 
             try:
-                self._client = boto3.client(
-                    "secretsmanager",
-                    region_name=self.region,
-                )
+                sm_access_key = os.getenv("AWS_SM_ACCESS_KEY_ID", "").strip()
+                sm_secret_key = os.getenv("AWS_SM_SECRET_ACCESS_KEY", "").strip()
+
+                if sm_access_key and sm_secret_key:
+                    self._client = boto3.client(
+                        "secretsmanager",
+                        region_name=self.region,
+                        aws_access_key_id=sm_access_key,
+                        aws_secret_access_key=sm_secret_key,
+                    )
+                    logger.info(
+                        "AWSSecretsManagerBackend initialized with dedicated credentials "
+                        "(region: %s, prefix: %s)",
+                        self.region,
+                        self.prefix,
+                    )
+                else:
+                    self._client = boto3.client(
+                        "secretsmanager",
+                        region_name=self.region,
+                    )
+                    logger.info(
+                        "AWSSecretsManagerBackend initialized with default credential chain "
+                        "(region: %s, prefix: %s)",
+                        self.region,
+                        self.prefix,
+                    )
 
                 self._available = True
-                logger.info(
-                    "AWSSecretsManagerBackend initialized (region: %s, prefix: %s)",
-                    self.region,
-                    self.prefix,
-                )
 
             except Exception as e:
                 logger.error("Failed to initialize AWS Secrets Manager client: %s", e)

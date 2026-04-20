@@ -95,76 +95,39 @@ def write_tfvars(data: Dict[str, Any], workdir: str) -> str:
 def setup_azure_terraform_environment_isolated(user_id: str):
     """Set up Terraform environment with Azure credentials - ISOLATED VERSION."""
     try:
-        # Get selected project/subscription from context
         from chat.backend.agent.tools.cloud_tools import get_selected_project_id
+        from chat.backend.agent.tools.auth import setup_azure_environment_cached
+
         selected_subscription_id = get_selected_project_id()
+        ok, subscription_id, _auth_method, cached_env = setup_azure_environment_cached(
+            user_id, selected_subscription_id
+        )
+        if not ok or not subscription_id or not cached_env:
+            raise ValueError("Azure cached auth returned no credentials")
 
-        # Try cached Azure setup first (configures az CLI env and caches identity)
-        try:
-            from chat.backend.agent.tools.auth import setup_azure_environment_cached
-            ok_cached, cached_subscription_id, _ = setup_azure_environment_cached(user_id, selected_subscription_id)
-            if ok_cached and cached_subscription_id:
-                # We still need to set ARM_* variables for Terraform provider
-                from utils.auth.cloud_auth import generate_azure_access_token
-                from utils.auth.token_management import get_token_data
-                azure_creds = generate_azure_access_token(user_id, cached_subscription_id)
-                tenant_id = azure_creds["tenant_id"]
-                token_data = get_token_data(user_id, "azure")
-                if not token_data or not isinstance(token_data, dict):
-                    raise ValueError(f"No Azure credentials found for user {user_id}")
-                client_id = token_data.get("client_id")
-                client_secret = token_data.get("client_secret")
-                if not all([tenant_id, client_id, client_secret, cached_subscription_id]):
-                    raise ValueError("Incomplete Azure credentials for Terraform")
-                os.environ["ARM_CLIENT_ID"] = str(client_id)
-                os.environ["ARM_CLIENT_SECRET"] = str(client_secret)
-                os.environ["ARM_SUBSCRIPTION_ID"] = str(cached_subscription_id)
-                os.environ["ARM_TENANT_ID"] = str(tenant_id)
-                os.environ["TF_VAR_subscription_id"] = str(cached_subscription_id)
-                os.environ["TF_VAR_tenant_id"] = str(tenant_id)
-                os.environ["TF_VAR_client_id"] = str(client_id)
-                logger.info(f"Azure Terraform environment configured for subscription: {cached_subscription_id} (cached)")
-                return True, cached_subscription_id, None
-        except Exception as e:
-            logger.debug(f"Cached Azure setup unavailable; falling back to direct setup: {e}")
-
-        # Get Azure credentials
-        from utils.auth.cloud_auth import generate_azure_access_token
+        # The cached helper returns AZURE_* env vars; add ARM_* and TF_VAR_*
+        # that the Terraform Azure provider needs.
         from utils.auth.token_management import get_token_data
-        azure_creds = generate_azure_access_token(user_id, selected_subscription_id)
-        access_token = azure_creds["access_token"]
-        subscription_id = azure_creds["subscription_id"]
-        tenant_id = azure_creds["tenant_id"]
-
-        # Get the raw credentials for Terraform
         token_data = get_token_data(user_id, "azure")
         if not token_data or not isinstance(token_data, dict):
-            raise ValueError(f"No Azure credentials found for user {user_id}")
+            raise ValueError(f"No Azure token data found for user {user_id}")
 
         client_id = token_data.get("client_id")
         client_secret = token_data.get("client_secret")
-
-        if not all([tenant_id, client_id, client_secret, subscription_id]):
+        tenant_id = cached_env.get("AZURE_TENANT_ID", "")
+        if not all([client_id, client_secret, tenant_id]):
             raise ValueError("Incomplete Azure credentials for Terraform")
 
-        # BUILD ISOLATED ENVIRONMENT - NO global os.environ modification!
-        isolated_env = {
-            "PATH": os.environ.get("PATH", ""),
-            "HOME": os.environ.get("HOME", ""),
-            "USER": os.environ.get("USER", ""),
-            # Terraform Azure provider environment variables
-            "ARM_CLIENT_ID": str(client_id),
-            "ARM_CLIENT_SECRET": str(client_secret),
-            "ARM_SUBSCRIPTION_ID": str(subscription_id),
-            "ARM_TENANT_ID": str(tenant_id),
-            # Terraform variables
-            "TF_VAR_subscription_id": str(subscription_id),
-            "TF_VAR_tenant_id": str(tenant_id),
-            "TF_VAR_client_id": str(client_id),
-        }
+        cached_env["ARM_CLIENT_ID"] = str(client_id)
+        cached_env["ARM_CLIENT_SECRET"] = str(client_secret)
+        cached_env["ARM_SUBSCRIPTION_ID"] = str(subscription_id)
+        cached_env["ARM_TENANT_ID"] = str(tenant_id)
+        cached_env["TF_VAR_subscription_id"] = str(subscription_id)
+        cached_env["TF_VAR_tenant_id"] = str(tenant_id)
+        cached_env["TF_VAR_client_id"] = str(client_id)
 
         logger.info(f"Azure Terraform isolated environment configured for subscription: {subscription_id}")
-        return True, subscription_id, isolated_env
+        return True, subscription_id, cached_env
 
     except Exception as e:
         logger.error(f"Failed to setup Azure Terraform environment: {e}")
@@ -184,17 +147,12 @@ def setup_aws_terraform_environment_isolated(user_id: str):
         # Try cached AWS setup first with isolated environment for concurrency safety
         try:
             from chat.backend.agent.tools.auth import setup_aws_credentials_cached
-            result = setup_aws_credentials_cached(user_id, return_isolated=True)
-            if len(result) == 4:  # New format with isolated env
-                ok_cached, cached_region, auth_method, isolated_env = result
-                if ok_cached and cached_region and isolated_env:
-                    logger.info(f"(cached) AWS credentials configured for Terraform in region: {cached_region} (isolated)")
-                    return True, cached_region, isolated_env
-            else:  # Fallback to old format
-                ok_cached, cached_region, _ = result
-                if ok_cached and cached_region:
-                    logger.info(f"(cached) AWS credentials configured for Terraform in region: {cached_region}")
-                    return True, cached_region, None
+            ok_cached, cached_region, _auth_method, isolated_env = setup_aws_credentials_cached(user_id)
+            if ok_cached and cached_region and isolated_env:
+                isolated_env["TF_VAR_region"] = cached_region
+                isolated_env["TF_VAR_access_key"] = isolated_env.get("AWS_ACCESS_KEY_ID", "")
+                logger.info("(cached) AWS credentials configured for Terraform (isolated)")
+                return True, cached_region, isolated_env
         except Exception as e:
             logger.debug(f"Cached AWS setup unavailable; falling back to direct setup: {e}")
 
@@ -229,10 +187,17 @@ def setup_aws_terraform_environment_isolated(user_id: str):
         # Validate credentials by making a test call to AWS STS
         try:
             import boto3
+            import botocore.session
+            
+            botocore_sess = botocore.session.Session()
+            botocore_sess.set_config_variable('config_file', '/dev/null')
+            botocore_sess.set_config_variable('credentials_file', '/dev/null')
+            
             session = boto3.Session(
                 aws_access_key_id=access_key_id,
                 aws_secret_access_key=secret_access_key,
-                region_name=region
+                region_name=region,
+                botocore_session=botocore_sess,
             )
             sts = session.client('sts')
             identity = sts.get_caller_identity()
@@ -274,65 +239,20 @@ def setup_aws_terraform_environment(user_id: str):
 def setup_gcp_terraform_environment_isolated(user_id: str):
     """Set up Terraform environment with GCP credentials - ISOLATED VERSION."""
     try:
-        # Get provider preference from context
         from chat.backend.agent.tools.cloud_tools import get_selected_project_id
-        from utils.auth.cloud_auth import generate_contextual_access_token
+        from chat.backend.agent.tools.auth import setup_gcp_impersonation_cached
         from utils.auth.token_management import get_token_data
+
         selected_project_id = get_selected_project_id()
+        ok, project_id, auth_method, cached_env = setup_gcp_impersonation_cached(
+            user_id, selected_project_id=selected_project_id
+        )
+        if not ok or not project_id or not cached_env:
+            raise ValueError("GCP cached auth returned no credentials")
 
-        # Try cached GCP impersonation first
-        try:
-            from chat.backend.agent.tools.auth import setup_gcp_impersonation_cached
-            ok_cached, cached_project_id, _ = setup_gcp_impersonation_cached(
-                user_id, selected_project_id=selected_project_id
-            )
-            if ok_cached and cached_project_id:
-                # Ensure Terraform gets project variable
-                os.environ["TF_VAR_project_id"] = cached_project_id
-                # Also try to create credentials file for Terraform (best-effort)
-                try:
-                    from connectors.gcp_connector.auth import (
-                        create_local_credentials_file,
-                        GCP_AUTH_TYPE_SA,
-                    )
-                    token_data = get_token_data(user_id, "gcp")
-                    # SA mode uses service_account_json; OAuth mode uses refresh_token.
-                    # create_local_credentials_file handles both.
-                    has_creds = token_data and (
-                        token_data.get("auth_type") == GCP_AUTH_TYPE_SA
-                        or token_data.get("refresh_token")
-                    )
-                    if has_creds:
-                        credentials_file_path = create_local_credentials_file(token_data, cached_project_id)
-                        os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = credentials_file_path
-                        logger.info(f"Created credentials file for Terraform: {credentials_file_path}")
-                    else:
-                        logger.warning("Could not get token data for Terraform credentials file")
-                except Exception as e:
-                    logger.warning(f"Failed to create credentials file for Terraform: {e}")
-                return True, cached_project_id, None
-        except Exception as e:
-            logger.debug(f"Cached GCP setup unavailable; falling back to direct setup: {e}")
+        cached_env["TF_VAR_project_id"] = project_id
 
-        # Set up GCP credentials for Terraform
-        logger.info("Setting up GCP credentials for Terraform...")
-        token_resp = generate_contextual_access_token(user_id, selected_project_id=selected_project_id)
-        access_token = token_resp["access_token"]
-        project_id = token_resp["project_id"]
-
-        # BUILD ISOLATED ENVIRONMENT - NO global os.environ modification!
-        isolated_env = {
-            "PATH": os.environ.get("PATH", ""),
-            "HOME": os.environ.get("HOME", ""),
-            "USER": os.environ.get("USER", ""),
-            # Terraform GCP provider environment variables  
-            "GOOGLE_OAUTH_ACCESS_TOKEN": access_token,
-            "GOOGLE_CLOUD_PROJECT": project_id,
-            "TF_VAR_project_id": project_id,
-        }
-
-        # Method 2: Create credentials file for Terraform (more reliable)
-        credentials_file_path = None
+        # Create credentials file for Terraform (more reliable than token alone)
         try:
             from connectors.gcp_connector.auth import (
                 create_local_credentials_file,
@@ -340,22 +260,23 @@ def setup_gcp_terraform_environment_isolated(user_id: str):
             )
             token_data = get_token_data(user_id, "gcp")
             # SA mode uses service_account_json; OAuth mode uses refresh_token.
+            # create_local_credentials_file handles both.
             has_creds = token_data and (
                 token_data.get("auth_type") == GCP_AUTH_TYPE_SA
                 or token_data.get("refresh_token")
             )
             if has_creds:
                 credentials_file_path = create_local_credentials_file(token_data, project_id)
-                isolated_env["GOOGLE_APPLICATION_CREDENTIALS"] = credentials_file_path
+                cached_env["GOOGLE_APPLICATION_CREDENTIALS"] = credentials_file_path
                 logger.info(f"Created credentials file for Terraform: {credentials_file_path}")
             else:
                 logger.warning("Could not get token data for Terraform credentials file")
         except Exception as e:
             logger.warning(f"Failed to create credentials file for Terraform: {e}")
-            # Continue with access token only
 
         logger.info(f"GCP Terraform isolated environment configured for project: {project_id}")
-        return True, project_id, isolated_env
+        return True, project_id, cached_env
+
     except Exception as e:
         logger.error(f"Failed to setup GCP Terraform environment: {e}")
         return False, None, None
@@ -396,8 +317,8 @@ def setup_ovh_terraform_environment_isolated(user_id: str):
         try:
             conn = connect_to_db_as_user()
             with conn.cursor() as cur:
-                cur.execute("SET myapp.current_user_id = %s;", (user_id,))
-                conn.commit()
+                from utils.auth.stateless_auth import set_rls_context
+                set_rls_context(cur, conn, user_id, log_prefix="[Terraform]")
                 cur.execute(
                     "SELECT preference_value FROM user_preferences WHERE user_id = %s AND preference_key = 'ovh_root_project';",
                     (user_id,)
@@ -470,10 +391,9 @@ def setup_scaleway_terraform_environment_isolated(user_id: str):
         try:
             conn = connect_to_db_as_user()
             with conn.cursor() as cur:
-                cur.execute("SET myapp.current_user_id = %s;", (user_id,))
-                conn.commit()
+                from utils.auth.stateless_auth import set_rls_context
+                set_rls_context(cur, conn, user_id, log_prefix="[Terraform]")
                 
-                # Get access_key (stored as client_id) and organization_id (subscription_id)
                 cur.execute(
                     "SELECT client_id, subscription_id, subscription_name FROM user_tokens WHERE user_id = %s AND provider = 'scaleway';",
                     (user_id,)

@@ -119,6 +119,8 @@ x-common-env: &common-env
   VAULT_KV_BASE_PATH: ${VAULT_KV_BASE_PATH}
   AWS_SM_REGION: ${AWS_SM_REGION:-}
   AWS_SM_PREFIX: ${AWS_SM_PREFIX:-aurora/users}
+  AWS_SM_ACCESS_KEY_ID: ${AWS_SM_ACCESS_KEY_ID:-}
+  AWS_SM_SECRET_ACCESS_KEY: ${AWS_SM_SECRET_ACCESS_KEY:-}
 
   # Memgraph (Graph Database)
   MEMGRAPH_HOST: ${MEMGRAPH_HOST}
@@ -148,12 +150,12 @@ services:
       - "${FLASK_PORT}:${FLASK_PORT}"
     volumes:
       - terraform-workdir:/app/terraform_workdir
-      - /var/run/docker.sock:/var/run/docker.sock
     command: ["python", "main_compute.py"]
     environment:
       <<: *common-env
       OTEL_SERVICE_NAME: aurora-server
       FLASK_PORT: ${FLASK_PORT}
+      INTERNAL_API_SECRET: ${INTERNAL_API_SECRET}
       FRONTEND_URL: ${FRONTEND_URL}
       BACKEND_URL: ${BACKEND_URL}
       NEXT_PUBLIC_BACKEND_URL: ${NEXT_PUBLIC_BACKEND_URL}
@@ -211,13 +213,13 @@ services:
       - "host.docker.internal:host-gateway"
     volumes:
       - terraform-workdir:/app/terraform_workdir
-      - /var/run/docker.sock:/var/run/docker.sock
     command: >
       celery -A celery_config worker
         --loglevel=info
     environment:
       <<: *common-env
       OTEL_SERVICE_NAME: celery-worker
+      INTERNAL_API_SECRET: ${INTERNAL_API_SECRET}
       CHATBOT_INTERNAL_URL: ${CHATBOT_INTERNAL_URL}
       FRONTEND_URL: ${FRONTEND_URL}
       BACKEND_URL: ${BACKEND_URL}
@@ -284,7 +286,6 @@ services:
     volumes:
       - ./config/searxng:/etc/searxng
     environment:
-      - SEARXNG_BASE_URL=${SEARXNG_BASE_URL}
       - SEARXNG_SECRET=${SEARXNG_SECRET}
     restart: unless-stopped
 
@@ -344,10 +345,10 @@ services:
     command: ["python", "main_chatbot.py"]
     volumes:
       - terraform-workdir:/app/terraform_workdir
-      - /var/run/docker.sock:/var/run/docker.sock
     environment:
       <<: *common-env
       OTEL_SERVICE_NAME: chatbot
+      INTERNAL_API_SECRET: ${INTERNAL_API_SECRET}
       FRONTEND_URL: ${FRONTEND_URL}
       CHATBOT_INTERNAL_URL: ${CHATBOT_INTERNAL_URL}
       CHATBOT_POD_TTL: ${CHATBOT_POD_TTL}
@@ -448,6 +449,7 @@ services:
       BACKEND_URL: ${BACKEND_URL}
       FRONTEND_URL: ${FRONTEND_URL}
       AUTH_SECRET: ${AUTH_SECRET}
+      INTERNAL_API_SECRET: ${INTERNAL_API_SECRET}
     ports:
       - "3000:3000"
     depends_on:

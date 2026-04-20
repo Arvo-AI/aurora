@@ -297,6 +297,7 @@ cd "$REPO_ROOT"
 POSTGRES_PW=$(generate_secret)
 FLASK_SECRET=$(generate_secret)
 AUTH_SECRET=$(generate_secret)
+INTERNAL_API_SECRET=$(generate_secret)
 SEARXNG_SECRET=$(generate_secret)
 MEMGRAPH_PW=$(generate_secret | head -c 32)
 
@@ -317,6 +318,7 @@ sed -i.bak "s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=$POSTGRES_PW|" .env
 # Secrets
 sed -i.bak "s|^FLASK_SECRET_KEY=.*|FLASK_SECRET_KEY=$FLASK_SECRET|" .env
 sed -i.bak "s|^AUTH_SECRET=.*|AUTH_SECRET=$AUTH_SECRET|" .env
+sed -i.bak "s|^INTERNAL_API_SECRET=.*|INTERNAL_API_SECRET=$INTERNAL_API_SECRET|" .env
 sed -i.bak "s|^SEARXNG_SECRET=.*|SEARXNG_SECRET=$SEARXNG_SECRET|" .env
 
 # Memgraph
@@ -326,13 +328,6 @@ sed -i.bak "s|^MEMGRAPH_PASSWORD=.*|MEMGRAPH_PASSWORD=$MEMGRAPH_PW|" .env
 sed -i.bak "s|^FRONTEND_URL=.*|FRONTEND_URL=$FRONTEND_URL|" .env
 sed -i.bak "s|^NEXT_PUBLIC_BACKEND_URL=.*|NEXT_PUBLIC_BACKEND_URL=$BACKEND_URL_PUBLIC|" .env
 sed -i.bak "s|^NEXT_PUBLIC_WEBSOCKET_URL=.*|NEXT_PUBLIC_WEBSOCKET_URL=$WEBSOCKET_URL|" .env
-
-# SearXNG base URL (public-facing)
-if $IS_IP; then
-  sed -i.bak "s|^SEARXNG_BASE_URL=.*|SEARXNG_BASE_URL=http://${VM_HOSTNAME}:8082|" .env
-else
-  sed -i.bak "s|^SEARXNG_BASE_URL=.*|SEARXNG_BASE_URL=http://${VM_HOSTNAME}:8082|" .env
-fi
 
 # LLM provider
 sed -i.bak "s|^LLM_PROVIDER_MODE=.*|LLM_PROVIDER_MODE=$LLM_PROVIDER_MODE|" .env

@@ -123,6 +123,8 @@ x-common-env: &common-env
   VAULT_KV_BASE_PATH: ${VAULT_KV_BASE_PATH}
   AWS_SM_REGION: ${AWS_SM_REGION:-}
   AWS_SM_PREFIX: ${AWS_SM_PREFIX:-aurora/users}
+  AWS_SM_ACCESS_KEY_ID: ${AWS_SM_ACCESS_KEY_ID:-}
+  AWS_SM_SECRET_ACCESS_KEY: ${AWS_SM_SECRET_ACCESS_KEY:-}
 
   # Memgraph (Graph Database)
   MEMGRAPH_HOST: ${MEMGRAPH_HOST}
@@ -155,12 +157,12 @@ services:
       - "${FLASK_PORT}:${FLASK_PORT}"
     volumes:
       - terraform-workdir:/app/terraform_workdir
-      - /var/run/docker.sock:/var/run/docker.sock
     command: ["python", "main_compute.py"]
     environment:
       <<: *common-env
       OTEL_SERVICE_NAME: aurora-server
       FLASK_PORT: ${FLASK_PORT}
+      INTERNAL_API_SECRET: ${INTERNAL_API_SECRET}
 
       # Frontend/Backend URLs
       FRONTEND_URL: ${FRONTEND_URL}
@@ -243,13 +245,13 @@ services:
       - "host.docker.internal:host-gateway"
     volumes:
       - terraform-workdir:/app/terraform_workdir
-      - /var/run/docker.sock:/var/run/docker.sock
     command: >
       celery -A celery_config worker
         --loglevel=info
     environment:
       <<: *common-env
       OTEL_SERVICE_NAME: celery-worker
+      INTERNAL_API_SECRET: ${INTERNAL_API_SECRET}
       CHATBOT_INTERNAL_URL: ${CHATBOT_INTERNAL_URL}
 
       # Frontend/Backend URLs
@@ -329,7 +331,6 @@ services:
     volumes:
       - ./config/searxng:/etc/searxng
     environment:
-      - SEARXNG_BASE_URL=${SEARXNG_BASE_URL}
       - SEARXNG_SECRET=${SEARXNG_SECRET}
     restart: unless-stopped
 
@@ -394,10 +395,10 @@ services:
     command: ["python", "main_chatbot.py"]
     volumes:
       - terraform-workdir:/app/terraform_workdir
-      - /var/run/docker.sock:/var/run/docker.sock
     environment:
       <<: *common-env
       OTEL_SERVICE_NAME: chatbot
+      INTERNAL_API_SECRET: ${INTERNAL_API_SECRET}
 
       # Frontend URL
       FRONTEND_URL: ${FRONTEND_URL}
@@ -489,6 +490,7 @@ services:
     command: ["python", "mcp_server.py"]
     environment:
       <<: *common-env
+      INTERNAL_API_SECRET: ${INTERNAL_API_SECRET}
       OTEL_SERVICE_NAME: aurora-mcp
     depends_on:
       aurora-server:
@@ -549,6 +551,7 @@ services:
       # Auth.js configuration (required)
       AUTH_SECRET: ${AUTH_SECRET}
       AUTH_URL: ${FRONTEND_URL}
+      INTERNAL_API_SECRET: ${INTERNAL_API_SECRET}
     ports:
       - "3000:3000"
     depends_on:

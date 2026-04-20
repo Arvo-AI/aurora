@@ -27,6 +27,17 @@ logger = logging.getLogger("aurora.mcp")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 
 API_BASE = os.environ.get("BACKEND_URL", "http://aurora-server:5080")
+_AURORA_ENV = os.environ.get("AURORA_ENV", "production")
+_INTERNAL_SECRET = os.environ.get("INTERNAL_API_SECRET", "")
+
+if not _INTERNAL_SECRET:
+    if _AURORA_ENV == "dev":
+        logger.warning("INTERNAL_API_SECRET not set (AURORA_ENV='dev') — MCP proxy auth disabled for local development")
+    else:
+        raise RuntimeError(
+            "FATAL: INTERNAL_API_SECRET is not set and AURORA_ENV='%s'. "
+            "Refusing to start MCP proxy without authentication secrets." % _AURORA_ENV
+        )
 
 _current_bearer_token: contextvars.ContextVar[str] = contextvars.ContextVar("_current_bearer_token")
 
@@ -95,6 +106,7 @@ def _resolve_token(token: str) -> tuple[str, str]:
     ok = False
     try:
         with conn.cursor() as cur:
+            # No RLS needed — token bootstrap, no user_id yet
             cur.execute(
                 "SELECT user_id, org_id FROM mcp_tokens "
                 "WHERE token = %s AND status = 'active' "
@@ -131,6 +143,8 @@ async def _api(method: str, path: str, *, params: dict | None = None,
     token = _get_token()
     user_id, org_id = _resolve_token(token)
     headers = {"X-User-ID": user_id, "X-Org-ID": org_id}
+    if _INTERNAL_SECRET:
+        headers["X-Internal-Secret"] = _INTERNAL_SECRET
     async with httpx.AsyncClient(base_url=API_BASE, timeout=timeout) as client:
         resp = await client.request(method, path, params=params, json=body, headers=headers)
         try:

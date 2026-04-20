@@ -6,7 +6,7 @@ from datetime import datetime
 from utils.db.db_utils import connect_to_db_as_user
 from utils.web.cors_utils import create_cors_response
 from utils.auth.rbac_decorators import require_permission
-from utils.auth.stateless_auth import get_org_id_from_request
+from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context
 from utils.web.limiter_ext import limiter
 
 
@@ -60,10 +60,7 @@ def get_chat_sessions(user_id):
         conn = connect_to_db_as_user()
         cursor = conn.cursor()
         
-        # Set user context for RLS
-        cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
-        cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
-        conn.commit()
+        set_rls_context(cursor, conn, user_id, log_prefix="[ChatRoutes]")
         
         if scope == 'org':
             cursor.execute("""
@@ -145,10 +142,7 @@ def create_chat_session(user_id):
         conn = connect_to_db_as_user()
         cursor = conn.cursor()
         
-        # Set user context for RLS
-        cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
-        cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
-        conn.commit()
+        set_rls_context(cursor, conn, user_id, log_prefix="[ChatRoutes]")
         
         # Insert new chat session
         cursor.execute("""
@@ -196,10 +190,7 @@ def get_chat_session(user_id, session_id):
         conn = connect_to_db_as_user()
         cursor = conn.cursor()
         
-        # Set user context for RLS
-        cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
-        cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
-        conn.commit()
+        set_rls_context(cursor, conn, user_id, log_prefix="[ChatRoutes]")
         
         # Any org member can read sessions in their org (not restricted to own user_id)
         cursor.execute("""
@@ -308,9 +299,7 @@ def get_chat_session_status(user_id, session_id):
         conn = connect_to_db_as_user()
         cursor = conn.cursor()
 
-        cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
-        cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
-        conn.commit()
+        set_rls_context(cursor, conn, user_id, log_prefix="[ChatRoutes]")
 
         cursor.execute("""
             SELECT COALESCE(status, 'active'),
@@ -349,10 +338,7 @@ def update_chat_session(user_id, session_id):
         conn = connect_to_db_as_user()
         cursor = conn.cursor()
         
-        # Set user context for RLS
-        cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
-        cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
-        conn.commit()
+        set_rls_context(cursor, conn, user_id, log_prefix="[ChatRoutes]")
         
         # Check if session exists and is not cancelled
         cursor.execute("""
@@ -460,10 +446,7 @@ def delete_chat_session(user_id, session_id):
         conn = connect_to_db_as_user()
         cursor = conn.cursor()
         
-        # Set user context for RLS
-        cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
-        cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
-        conn.commit()
+        set_rls_context(cursor, conn, user_id, log_prefix="[ChatRoutes]")
         
         # Check if session exists
         cursor.execute("""
@@ -517,9 +500,7 @@ def delete_all_chat_sessions(user_id):
 
         conn = connect_to_db_as_user()
         cursor = conn.cursor()
-        cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
-        cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
-        conn.commit()
+        set_rls_context(cursor, conn, user_id, log_prefix="[ChatRoutes]")
         
         if current_session_id:
             logging.info(f"Preserving session {current_session_id}, deleting all others")

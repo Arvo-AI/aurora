@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Optional, List, Dict
 
 from utils.db.db_utils import connect_to_db_as_user, connect_to_db_as_admin
+from utils.auth.stateless_auth import set_rls_context
 
 logger = logging.getLogger(__name__)
 
@@ -14,8 +15,12 @@ def _resolve_org_id(user_id: str) -> Optional[str]:
     """Resolve org_id for org-aware queries."""
     try:
         from utils.auth.stateless_auth import resolve_org_id
-        return resolve_org_id(user_id)
-    except Exception:
+        org = resolve_org_id(user_id)
+        if not org:
+            logger.warning("[CONN-META] Could not resolve org_id for user %s — RLS context will not be set", user_id)
+        return org
+    except Exception as e:
+        logger.warning("[CONN-META] Failed to resolve org_id for user %s: %s — RLS context will not be set", user_id, e)
         return None
 
 
@@ -57,9 +62,7 @@ def save_connection_metadata(
     try:
         conn = connect_to_db_as_admin()
         with conn.cursor() as cur:
-            if org_id:
-                cur.execute("SET myapp.current_user_id = %s;", (user_id,))
-                cur.execute("SET myapp.current_org_id = %s;", (org_id,))
+            set_rls_context(cur, conn, user_id, log_prefix="[CONN-META:save]")
             cur.execute(
                 sql,
                 (
@@ -113,9 +116,7 @@ def set_connection_status(
             status,
         )
         with conn.cursor() as cur:
-            if org_id:
-                cur.execute("SET myapp.current_user_id = %s;", (user_id,))
-                cur.execute("SET myapp.current_org_id = %s;", (org_id,))
+            set_rls_context(cur, conn, user_id, log_prefix="[CONN-META:setStatus]")
             cur.execute(sql, (status, datetime.utcnow(), user_id, provider, account_id))
         conn.commit()
         logger.info("[CONN-META] Status update success for %s/%s/%s", user_id, provider, account_id)
@@ -143,10 +144,7 @@ def list_active_connections(user_id: str) -> List[Dict]:
     try:
         conn = connect_to_db_as_user()
         with conn.cursor() as cur:
-            cur.execute("SET myapp.current_user_id = %s;", (user_id,))
-            if org_id:
-                cur.execute("SET myapp.current_org_id = %s;", (org_id,))
-            conn.commit()
+            set_rls_context(cur, conn, user_id, log_prefix="[CONN-META:list]")
             cur.execute(sql, (user_id, org_id, user_id))
             rows = cur.fetchall()
         logger.info("[CONN-META] Fetched %d active connections for user %s", len(rows), user_id)
@@ -189,10 +187,7 @@ def get_user_aws_connection(user_id: str) -> Optional[Dict]:
     try:
         conn = connect_to_db_as_user()
         with conn.cursor() as cur:
-            cur.execute("SET myapp.current_user_id = %s;", (user_id,))
-            if org_id:
-                cur.execute("SET myapp.current_org_id = %s;", (org_id,))
-            conn.commit()
+            set_rls_context(cur, conn, user_id, log_prefix="[CONN-META:awsConn]")
             cur.execute(sql, (user_id, org_id, user_id))
             row = cur.fetchone()
             
@@ -232,10 +227,7 @@ def get_all_user_aws_connections(user_id: str) -> List[Dict]:
     try:
         conn = connect_to_db_as_user()
         with conn.cursor() as cur:
-            cur.execute("SET myapp.current_user_id = %s;", (user_id,))
-            if org_id:
-                cur.execute("SET myapp.current_org_id = %s;", (org_id,))
-            conn.commit()
+            set_rls_context(cur, conn, user_id, log_prefix="[CONN-META:allAws]")
             cur.execute(sql, (user_id, org_id, user_id))
             rows = cur.fetchall()
 
@@ -315,6 +307,7 @@ def delete_connection_secret(
     try:
         conn = connect_to_db_as_admin()
         with conn.cursor() as cur:
+            set_rls_context(cur, conn, user_id, log_prefix="[CONN-META:deleteSecret]")
             cur.execute(sql_select, (user_id, provider, account_id))
             row = cur.fetchone()
             
@@ -381,8 +374,7 @@ def get_inactive_aws_connections(user_id: str) -> List[Dict]:
     try:
         conn = connect_to_db_as_user()
         with conn.cursor() as cur:
-            cur.execute("SET myapp.current_user_id = %s;", (user_id,))
-            conn.commit()
+            set_rls_context(cur, conn, user_id, log_prefix="[ConnUtils]")
             cur.execute(sql, (user_id,))
             rows = cur.fetchall()
         return [
@@ -414,8 +406,7 @@ def get_inactive_aws_connection(user_id: str, account_id: str) -> Optional[Dict]
     try:
         conn = connect_to_db_as_user()
         with conn.cursor() as cur:
-            cur.execute("SET myapp.current_user_id = %s;", (user_id,))
-            conn.commit()
+            set_rls_context(cur, conn, user_id, log_prefix="[ConnUtils]")
             cur.execute(sql, (user_id, account_id))
             row = cur.fetchone()
         if row:

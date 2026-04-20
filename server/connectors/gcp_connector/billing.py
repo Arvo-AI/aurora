@@ -1,16 +1,9 @@
-from flask import Flask, redirect, request, session, jsonify
-import requests
-from google.cloud import billing_v1
 from google.cloud import bigquery
-from connectors.gcp_connector.auth.oauth import get_credentials
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from utils.db.db_utils import connect_to_db_as_admin
-import psycopg2
-from psycopg2 import DatabaseError
+from utils.auth.stateless_auth import set_rls_context
 import logging
-from psycopg2.extras import execute_batch
-import json
 
 def categorize_bigquery_data(service, sku):
     """
@@ -153,6 +146,7 @@ def store_bigquery_data(credentials, project_id, user_id):
         try:
             conn = connect_to_db_as_admin()
             cursor = conn.cursor()
+            set_rls_context(cursor, conn, user_id, log_prefix="[GCPBilling:store_bigquery_data]")
             insert_query = """
                 INSERT INTO cloud_billing_usage (
                     service, sku, category, cost, usage, unit,

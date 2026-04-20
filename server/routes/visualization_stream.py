@@ -5,7 +5,7 @@ import os
 from flask import Blueprint, Response, jsonify, stream_with_context
 import redis
 from utils.auth.rbac_decorators import require_permission
-from utils.auth.stateless_auth import get_org_id_from_request
+from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context
 from utils.cache.redis_client import get_redis_ssl_kwargs
 from utils.db.connection_pool import db_pool
 
@@ -22,6 +22,7 @@ def stream_visualization_updates(user_id, incident_id: str):
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                set_rls_context(cursor, conn, user_id, log_prefix="[visualization:stream_auth]")
                 cursor.execute(
                     "SELECT 1 FROM incidents WHERE id = %s AND org_id = %s",
                     (incident_id, org_id),
@@ -79,6 +80,7 @@ def get_current_visualization(user_id, incident_id: str):
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                set_rls_context(cursor, conn, user_id, log_prefix="[visualization:get_current]")
                 cursor.execute("""
                     SELECT visualization_code, visualization_updated_at
                     FROM incidents

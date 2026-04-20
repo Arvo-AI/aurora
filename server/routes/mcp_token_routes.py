@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 from flask import Blueprint, jsonify, request
 from psycopg2.extras import RealDictCursor
 from utils.auth.rbac_decorators import require_permission
-from utils.auth.stateless_auth import get_org_id_from_request
+from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context
 from utils.db.db_adapters import connect_to_db_as_user
 from utils.web.limiter_ext import limiter
 
@@ -51,8 +51,7 @@ def create_mcp_token(user_id):
 
         with connect_to_db_as_user() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cursor:
-                cursor.execute("SET myapp.current_user_id = %s", (user_id,))
-                cursor.execute("SET myapp.current_org_id = %s", (org_id,))
+                set_rls_context(cursor, conn, user_id, log_prefix="[MCPToken]")
                 cursor.execute("""
                     INSERT INTO mcp_tokens (token, user_id, org_id, name, expires_at, status)
                     VALUES (%s, %s, %s, %s, %s, 'active')
@@ -87,8 +86,7 @@ def list_mcp_tokens(user_id):
 
         with connect_to_db_as_user() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cursor:
-                cursor.execute("SET myapp.current_user_id = %s", (user_id,))
-                cursor.execute("SET myapp.current_org_id = %s", (org_id,))
+                set_rls_context(cursor, conn, user_id, log_prefix="[MCPToken]")
                 cursor.execute("""
                     SELECT id, name, created_at, last_used_at, expires_at, status,
                            CONCAT(SUBSTRING(token, 1, 20), '...') as token_preview
@@ -118,8 +116,7 @@ def revoke_mcp_token(user_id, token_id):
 
         with connect_to_db_as_user() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cursor:
-                cursor.execute("SET myapp.current_user_id = %s", (user_id,))
-                cursor.execute("SET myapp.current_org_id = %s", (org_id,))
+                set_rls_context(cursor, conn, user_id, log_prefix="[MCPToken]")
                 cursor.execute(
                     "UPDATE mcp_tokens SET status = 'revoked' WHERE id = %s AND user_id = %s AND org_id = %s RETURNING id",
                     (token_id, user_id, org_id)
