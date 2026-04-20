@@ -60,11 +60,17 @@ class IncidentioClient:
             raise IncidentioAPIError("Unable to reach incident.io API") from exc
         except requests.HTTPError as exc:
             status = exc.response.status_code if exc.response is not None else None
+            body = ""
+            try:
+                body = exc.response.text if exc.response is not None else ""
+            except Exception:
+                pass
+            logger.warning("[INCIDENTIO] HTTP %s from %s: %s", status, path, body[:500])
             if status == 401:
                 raise IncidentioAPIError("Invalid API key") from exc
             if status == 403:
-                raise IncidentioAPIError("API key lacks required permissions") from exc
-            raise IncidentioAPIError(f"incident.io API error ({status})") from exc
+                raise IncidentioAPIError(f"API key lacks required permissions: {body[:200]}") from exc
+            raise IncidentioAPIError(f"incident.io API error ({status}): {body[:200]}") from exc
 
     def list_incidents(self, page_size: int = 5) -> Dict[str, Any]:
         return self._request("GET", "/incidents", params={"page_size": page_size}).json()
@@ -257,10 +263,15 @@ def get_alerts(user_id):
 def get_webhook_url(user_id):
     """Return the webhook URL for this user's incident.io configuration."""
     ngrok_url = os.getenv("NGROK_URL", "").rstrip("/")
+    frontend_url = os.getenv("FRONTEND_URL", "").rstrip("/")
     backend_url = os.getenv("NEXT_PUBLIC_BACKEND_URL", "").rstrip("/")
 
-    base_url = ngrok_url if (ngrok_url and backend_url.startswith("http://localhost")) else backend_url
-    webhook_url = f"{base_url}/incidentio/alerts/webhook/{user_id}"
+    if ngrok_url:
+        webhook_url = f"{ngrok_url}/api/incident-io/alerts/webhook/{user_id}"
+    elif frontend_url and not frontend_url.startswith("http://localhost"):
+        webhook_url = f"{frontend_url}/api/incident-io/alerts/webhook/{user_id}"
+    else:
+        webhook_url = f"{backend_url}/incidentio/alerts/webhook/{user_id}"
 
     return jsonify({
         "webhookUrl": webhook_url,

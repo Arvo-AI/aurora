@@ -63,14 +63,27 @@ def load_skill(skill_id: str, **kwargs) -> str:
         from .registry import SkillRegistry
 
         registry = SkillRegistry.get_instance()
+
+        # Fuzzy match: if exact ID not found, try normalizing and partial match
+        if skill_id not in registry.get_all_skill_ids():
+            normalized = skill_id.lower().replace("dot", ".").replace(".", "").replace("-", "").replace("_", "").replace(" ", "")
+            for candidate in registry.get_all_skill_ids():
+                candidate_norm = candidate.lower().replace(".", "").replace("-", "").replace("_", "")
+                if normalized == candidate_norm or candidate_norm.startswith(normalized) or normalized.startswith(candidate_norm):
+                    logger.info("load_skill fuzzy matched '%s' -> '%s'", skill_id, candidate)
+                    skill_id = candidate
+                    break
+
         result = registry.load_skill(skill_id, user_id)
 
         if not result.is_connected:
             all_ids = registry.get_all_skill_ids()
             if skill_id not in all_ids:
+                connected = registry.get_connected_skill_ids(user_id)
+                hint = f"Only these integrations have skills: {', '.join(connected)}. Cloud providers (aws, gcp, azure) use cloud_exec directly — no load_skill needed."
                 return json.dumps({
-                    "error": f"Unknown skill '{skill_id}'. Check the CONNECTED INTEGRATIONS index for valid skill IDs.",
-                    "available": registry.get_connected_skill_ids(user_id),
+                    "error": f"No skill '{skill_id}'. {hint}",
+                    "available_skills": connected,
                 })
             return json.dumps({
                 "error": f"Integration '{skill_id}' is not connected for this user.",

@@ -38,6 +38,18 @@ import InfrastructureVisualization from '@/components/incidents/InfrastructureVi
 import ExecutionWaterfall from './ExecutionWaterfall';
 import { ReactFlowProvider } from '@xyflow/react';
 
+const SOURCE_DISPLAY_NAMES: Record<string, string> = {
+  incidentio: 'incident.io',
+  pagerduty: 'PagerDuty',
+  opsgenie: 'OpsGenie',
+  bigpanda: 'BigPanda',
+  newrelic: 'New Relic',
+};
+
+function sourceDisplayName(source: string): string {
+  return SOURCE_DISPLAY_NAMES[source] ?? source.charAt(0).toUpperCase() + source.slice(1);
+}
+
 interface IncidentCardProps {
   incident: Incident;
   duration: string;
@@ -356,12 +368,12 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
                   rel="noopener noreferrer"
                   className="inline-flex items-center gap-1.5 text-zinc-400 hover:text-white transition-colors"
                 >
-                  {alert.source.charAt(0).toUpperCase() + alert.source.slice(1)} Alert
+                  {sourceDisplayName(alert.source)} Alert
                   <ExternalLink className="w-3.5 h-3.5" />
                 </a>
               ) : (
                 <span className="inline-flex items-center gap-1.5 text-zinc-400">
-                  {alert.source.charAt(0).toUpperCase() + alert.source.slice(1)} Alert
+                  {sourceDisplayName(alert.source)} Alert
                 </span>
               )}
             </div>

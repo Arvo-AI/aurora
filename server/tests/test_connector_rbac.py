@@ -37,6 +37,7 @@ CONNECTOR_DIRS: Set[str] = {
     "github",
     "google_chat",
     "grafana",
+    "incidentio",
     "jenkins",
     "jira",
     "netdata",

@@ -564,6 +564,19 @@ def get_incident(user_id, incident_id: str):
                             logger.debug("[INCIDENTS] Found OpsGenie/JSM payload for alert")
                     except (ValueError, TypeError):
                         logger.debug("[INCIDENTS] Skipping payload fetch for opsgenie alert (non-integer id)")
+                elif source_type == "incidentio":
+                    try:
+                        alert_id_int = int(source_alert_id)
+                        cursor.execute(
+                            "SELECT payload FROM incidentio_alerts WHERE id = %s AND org_id = %s",
+                            (alert_id_int, org_id),
+                        )
+                        alert_row = cursor.fetchone()
+                        if alert_row and alert_row[0] is not None:
+                            raw_payload = alert_row[0]
+                            logger.debug("[INCIDENTS] Found incident.io payload for alert")
+                    except (ValueError, TypeError):
+                        logger.debug("[INCIDENTS] Skipping payload fetch for incidentio alert (non-integer id)")
 
                 # Log warning if no payload found for any source type
                 if not raw_payload:

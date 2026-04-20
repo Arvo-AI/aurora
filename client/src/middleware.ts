@@ -18,6 +18,7 @@ const publicRoutes = [
   "/api/auth/setup-org",  // Org setup for org-less users
   "/google-chat/events",  // Google Chat event POSTs (rewritten to backend)
   "/api/ping",            // Connection health check
+  "/api/incident-io/alerts/webhook", // incident.io webhook POSTs
 ]
 
 // Routes that should redirect authenticated users away

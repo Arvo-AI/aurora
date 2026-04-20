@@ -11,6 +11,7 @@ import { Loader2 } from "lucide-react";
 import { getUserFriendlyError } from "@/lib/utils";
 import { IncidentIoWebhookStep } from "@/components/incident-io/IncidentIoWebhookStep";
 import ConnectorAuthGuard from "@/components/connectors/ConnectorAuthGuard";
+import Image from "next/image";
 
 const CACHE_KEY = "incident_io_connection_status";
 
@@ -140,16 +141,12 @@ export default function IncidentIoAuthPage() {
     }
   };
 
+  const isConnected = Boolean(status?.connected);
+
   if (isCheckingStatus) {
     return (
       <ConnectorAuthGuard connectorName="incident.io">
         <div className="container mx-auto py-8 px-4 max-w-2xl">
-          <div className="mb-6">
-            <h1 className="text-3xl font-bold">incident.io Integration</h1>
-            <p className="text-muted-foreground mt-1">
-              Connect your incident.io account for incident lifecycle tracking
-            </p>
-          </div>
           <Card>
             <CardContent className="flex items-center justify-center py-12">
               <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
@@ -163,44 +160,63 @@ export default function IncidentIoAuthPage() {
   return (
     <ConnectorAuthGuard connectorName="incident.io">
       <div className="container mx-auto py-8 px-4 max-w-2xl">
-        <div className="mb-6">
-          <h1 className="text-3xl font-bold">incident.io Integration</h1>
-          <p className="text-muted-foreground mt-1">
-            Connect your incident.io account for incident lifecycle tracking
-          </p>
+        <div className="flex items-center gap-4 mb-6">
+          <div className="flex items-center justify-center h-12 w-12 rounded-lg bg-white dark:bg-white p-1.5">
+            <Image src="/incidentio.svg" alt="incident.io" width={40} height={40} />
+          </div>
+          <div>
+            <h1 className="text-3xl font-bold">incident.io</h1>
+            <p className="text-muted-foreground mt-0.5">
+              Incident lifecycle tracking and automated RCA
+            </p>
+          </div>
         </div>
 
-        {!status?.connected ? (
+        <div className="flex items-center justify-center mb-8">
+          <div className="flex items-center">
+            <div className={`flex items-center justify-center w-10 h-10 rounded-full font-bold ${!isConnected ? 'text-white' : 'bg-gray-200 text-gray-600'}`} style={!isConnected ? { backgroundColor: '#F04438' } : undefined}>
+              1
+            </div>
+            <div className="w-24 h-1" style={{ backgroundColor: isConnected ? '#F04438' : '#e5e7eb' }}></div>
+            <div className={`flex items-center justify-center w-10 h-10 rounded-full font-bold ${isConnected ? 'text-white' : 'bg-gray-200 text-gray-600'}`} style={isConnected ? { backgroundColor: '#F04438' } : undefined}>
+              2
+            </div>
+          </div>
+        </div>
+
+        <div className="flex items-center justify-center mb-6 text-sm font-medium">
+          <span className={!isConnected ? 'text-foreground' : 'text-muted-foreground'} style={!isConnected ? { color: '#F04438' } : undefined}>
+            Connect
+          </span>
+          <span className="mx-4 text-muted-foreground">&rarr;</span>
+          <span className={isConnected ? 'text-foreground' : 'text-muted-foreground'} style={isConnected ? { color: '#F04438' } : undefined}>
+            Configure Webhook
+          </span>
+        </div>
+
+        {!isConnected ? (
           <Card>
             <CardHeader>
               <CardTitle>Connect to incident.io</CardTitle>
               <CardDescription>
-                Enter your incident.io API key to establish a connection.
+                Create an API key at <strong>Settings &rarr; API keys</strong> in incident.io with the <strong>Create incidents</strong> permission, then paste it below.
               </CardDescription>
             </CardHeader>
             <CardContent>
-              <form onSubmit={handleConnect} className="space-y-4">
+              <form className="space-y-4" onSubmit={handleConnect}>
                 <div className="space-y-2">
                   <Label htmlFor="apiKey">API Key</Label>
                   <Input
                     id="apiKey"
                     type="password"
-                    placeholder="Enter your incident.io API key"
+                    placeholder="Paste your incident.io API key"
                     value={apiKey}
                     onChange={(e) => setApiKey(e.target.value)}
                     required
                   />
-                </div>
-
-                <div className="bg-muted/50 rounded-lg p-4 text-sm">
-                  <p className="font-medium mb-2">How to get your API key:</p>
-                  <ol className="list-decimal list-inside space-y-1 text-muted-foreground">
-                    <li>Go to <strong className="text-foreground">incident.io</strong> &rarr; <strong className="text-foreground">Settings</strong> &rarr; <strong className="text-foreground">API keys</strong></li>
-                    <li>Click <strong className="text-foreground">Create API key</strong></li>
-                    <li>Give it a descriptive name (e.g. &quot;Aurora RCA&quot;)</li>
-                    <li>Select permissions: <code className="bg-muted px-1 rounded text-xs">read</code> access to incidents and incident updates</li>
-                    <li>Copy and paste the key above</li>
-                  </ol>
+                  <p className="text-xs text-muted-foreground">
+                    Requires the <strong>View all incident data, including private incidents</strong> permission. Keys are stored securely in Vault.
+                  </p>
                 </div>
 
                 <Button type="submit" className="w-full" disabled={loading || !apiKey}>
@@ -210,7 +226,7 @@ export default function IncidentIoAuthPage() {
                       Connecting...
                     </>
                   ) : (
-                    "Connect to incident.io"
+                    "Connect incident.io"
                   )}
                 </Button>
               </form>
