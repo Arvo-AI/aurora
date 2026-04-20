@@ -17,6 +17,24 @@ Aurora exposes its full API surface over [MCP](https://modelcontextprotocol.io/)
 | `search_knowledge_base` | Semantic search across ingested runbooks, postmortems, and docs |
 | `aurora_api` | Generic proxy to any of Aurora's ~340 API endpoints |
 
+## Resources
+
+MCP resources provide read-only reference data your AI assistant can pull in for context:
+
+| Resource URI | Description |
+|-------------|-------------|
+| `aurora://api-catalog` | Auto-generated list of all Aurora API endpoints (from Flask route map) |
+| `aurora://health` | Live system health: database, Redis, Weaviate, Celery status |
+
+## Prompts
+
+Pre-built investigation workflows your assistant can invoke:
+
+| Prompt | Parameters | Description |
+|--------|-----------|-------------|
+| `investigate_incident` | `incident_id` | Step-by-step incident investigation: fetch details, review AI summary, check graph impact, search runbooks |
+| `blast_radius_analysis` | `service_name` | Analyze downstream dependencies, check active incidents on affected services, estimate user impact |
+
 ## Authentication
 
 MCP uses per-user Bearer tokens stored in the `mcp_tokens` table. Tokens are resolved directly against Postgres (not via the Flask API) to keep the auth path independent of the main server.
