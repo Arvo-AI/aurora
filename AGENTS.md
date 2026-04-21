@@ -81,6 +81,60 @@ Every new connector (or connector route file) **must** satisfy all of the follow
 - [ ] Blueprint registered in `server/main_compute.py` with appropriate `url_prefix`
 - [ ] Connector directory added to `CONNECTOR_DIRS` in `tests/test_connector_rbac.py`
 
+## Security Invariants
+
+These rules are enforced by automated review (CodeRabbit) and **must** be followed during development to avoid review churn.
+
+### Credential Isolation
+- Never mutate shared process state (e.g. `os.environ`, on-disk CLI config) with per-user credentials. Credentials must be scoped per-invocation and passed explicitly.
+- Subprocess calls (`subprocess.run`, `Popen`, etc.) must receive an explicit `env` parameter with only the variables they need — never inherit the full server environment.
+- Never log secrets, tokens, credentials, or full OAuth/auth responses at any log level.
+
+### Client ↔ Backend Boundary
+- All client-to-backend HTTP requests must go through the Next.js API route proxy using `forwardRequest` from `@/lib/backend-proxy`. Never call the Flask backend directly from browser code.
+- Never derive, store, or trust user identity (`user_id`, `org_id`) on the client side. Identity resolution is server-side only.
+- All inter-service calls (frontend server → backend, MCP → backend) must include the internal API secret header.
+
+### HTML & XSS
+- Never render untrusted HTML without sanitization. Any use of `dangerouslySetInnerHTML` must sanitize the content first.
+
+### Infrastructure
+- Never mount the Docker socket (`/var/run/docker.sock`) into application containers.
+- CORS handling must go through the centralized utility — never add ad-hoc `Access-Control-*` headers in route files.
+- Environment variable changes must stay in sync across all Docker Compose files (`docker-compose.yaml`, `docker-compose.prod-local.yml`) and `.env.example`.
+
+### Route & Connector Security
+- Routes must use RBAC decorators (`@require_permission`), never manual auth checks.
+- Token storage must go through centralized helpers (`store_tokens_in_db` / `get_token_data`), not ad-hoc DB writes.
+- OAuth callbacks must never log full token responses.
+
+## Security Invariants
+
+These rules are enforced by automated review (CodeRabbit) and **must** be followed during development to avoid review churn.
+
+### Credential Isolation
+- Never mutate shared process state (e.g. `os.environ`, on-disk CLI config) with per-user credentials. Credentials must be scoped per-invocation and passed explicitly.
+- Subprocess calls (`subprocess.run`, `Popen`, etc.) must receive an explicit `env` parameter with only the variables they need — never inherit the full server environment.
+- Never log secrets, tokens, credentials, or full OAuth/auth responses at any log level.
+
+### Client ↔ Backend Boundary
+- All client-to-backend HTTP requests must go through the Next.js API route proxy using `forwardRequest` from `@/lib/backend-proxy`. Never call the Flask backend directly from browser code.
+- Never derive, store, or trust user identity (`user_id`, `org_id`) on the client side. Identity resolution is server-side only.
+- All inter-service calls (frontend server → backend, MCP → backend) must include the internal API secret header.
+
+### HTML & XSS
+- Never render untrusted HTML without sanitization. Any use of `dangerouslySetInnerHTML` must sanitize the content first.
+
+### Infrastructure
+- Never mount the Docker socket (`/var/run/docker.sock`) into application containers.
+- CORS handling must go through the centralized utility — never add ad-hoc `Access-Control-*` headers in route files.
+- Environment variable changes must stay in sync across all Docker Compose files (`docker-compose.yaml`, `docker-compose.prod-local.yml`) and `.env.example`.
+
+### Route & Connector Security
+- Routes must use RBAC decorators (`@require_permission`), never manual auth checks.
+- Token storage must go through centralized helpers (`store_tokens_in_db` / `get_token_data`), not ad-hoc DB writes.
+- OAuth callbacks must never log full token responses.
+
 ## Code Style
 - **Python**: Use Flask blueprints in routes/, async with langchain/langgraph, psycopg2 for DB, logging at INFO level
 - **TypeScript**: Strict mode, ESLint (next/core-web-vitals), no-unused-vars off in src/, use @/ imports, React 18 functional components
