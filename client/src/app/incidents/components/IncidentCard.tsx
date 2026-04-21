@@ -222,7 +222,7 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
   // Recursively extract text content from React nodes for suggestion matching
   const extractTextFromNode = useCallback((node: React.ReactNode): string => {
     if (typeof node === 'string') return node;
-    if (Array.isArray(node)) return node.map(extractTextFromNode).join('');
+    if (Array.isArray(node)) return node.map((child) => extractTextFromNode(child)).join('');
     if (React.isValidElement(node) && node.props.children) {
       return extractTextFromNode(node.props.children);
     }
