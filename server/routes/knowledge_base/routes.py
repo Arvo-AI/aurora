@@ -22,6 +22,7 @@ from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context
 logger = logging.getLogger(__name__)
 
 knowledge_base_bp = Blueprint("knowledge_base", __name__)
+_LOG_PREFIX = "[KnowledgeBase]"
 
 MEMORY_MAX_LENGTH = 5000
 ALLOWED_EXTENSIONS = {'md', 'txt', 'pdf'}
@@ -75,7 +76,7 @@ def get_memory(user_id):
     try:
         with db_pool.get_user_connection() as conn:
             cursor = conn.cursor()
-            set_rls_context(cursor, conn, user_id, log_prefix="[KnowledgeBase]")
+            set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
 
             cursor.execute(
                 """
@@ -130,7 +131,7 @@ def update_memory(user_id):
     try:
         with db_pool.get_user_connection() as conn:
             cursor = conn.cursor()
-            set_rls_context(cursor, conn, user_id, log_prefix="[KnowledgeBase]")
+            set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
 
             # Upsert the memory content
             cursor.execute(
@@ -175,7 +176,7 @@ def list_documents(user_id):
     try:
         with db_pool.get_user_connection() as conn:
             cursor = conn.cursor()
-            set_rls_context(cursor, conn, user_id, log_prefix="[KnowledgeBase]")
+            set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
 
             cursor.execute(
                 """
@@ -267,7 +268,7 @@ def upload_document(user_id):
     try:
         with db_pool.get_user_connection() as conn:
             cursor = conn.cursor()
-            set_rls_context(cursor, conn, user_id, log_prefix="[KnowledgeBase]")
+            set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
 
             # Check if document with same original filename exists
             cursor.execute(
@@ -307,7 +308,7 @@ def upload_document(user_id):
             try:
                 with db_pool.get_user_connection() as conn:
                     cursor = conn.cursor()
-                    set_rls_context(cursor, conn, user_id, log_prefix="[KnowledgeBase]")
+                    set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
 
                     cursor.execute(
                         """
@@ -339,7 +340,7 @@ def upload_document(user_id):
             # Update status to failed - use generic message for users, log full error server-side
             with db_pool.get_user_connection() as conn:
                 cursor = conn.cursor()
-                set_rls_context(cursor, conn, user_id, log_prefix="[KnowledgeBase]")
+                set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
 
                 cursor.execute(
                     """
@@ -380,7 +381,7 @@ def get_document(user_id, doc_id: str):
     try:
         with db_pool.get_user_connection() as conn:
             cursor = conn.cursor()
-            set_rls_context(cursor, conn, user_id, log_prefix="[KnowledgeBase]")
+            set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
 
             cursor.execute(
                 """
@@ -415,7 +416,7 @@ def delete_document(user_id, doc_id: str):
     try:
         with db_pool.get_user_connection() as conn:
             cursor = conn.cursor()
-            set_rls_context(cursor, conn, user_id, log_prefix="[KnowledgeBase]")
+            set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
 
             # Get document info first
             cursor.execute(
@@ -564,7 +565,7 @@ def _check_user_limits(user_id: str, file_size: int) -> str | None:
     try:
         with db_pool.get_user_connection() as conn:
             cursor = conn.cursor()
-            set_rls_context(cursor, conn, user_id, log_prefix="[KnowledgeBase]")
+            set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
 
             cursor.execute(
                 """

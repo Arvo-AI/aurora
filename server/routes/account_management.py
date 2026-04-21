@@ -13,6 +13,7 @@ import requests
 import os
 
 account_management_bp = Blueprint("account_management", __name__)
+_DELETE_LOG_PREFIX = "[AccountMgmt:delete_connected_account]"
 
 
 def _validate_provider_connection(provider: str, token_data: dict) -> bool:
@@ -232,7 +233,7 @@ def delete_connected_account(user_id, target_user_id, provider):
         try:
             conn = connect_to_db_as_admin()
             cursor = conn.cursor()
-            set_rls_context(cursor, conn, user_id, log_prefix="[AccountMgmt:delete_connected_account]")
+            set_rls_context(cursor, conn, user_id, log_prefix=_DELETE_LOG_PREFIX)
             cursor.execute(
                 "SELECT secret_ref FROM user_tokens WHERE user_id = %s AND (org_id = %s OR org_id IS NULL) AND provider = %s",
                 (user_id, org_id, provider)
@@ -256,7 +257,7 @@ def delete_connected_account(user_id, target_user_id, provider):
             # For providers that don't use Vault, delete from DB directly
             conn = connect_to_db_as_admin()
             cursor = conn.cursor()
-            set_rls_context(cursor, conn, user_id, log_prefix="[AccountMgmt:delete_connected_account]")
+            set_rls_context(cursor, conn, user_id, log_prefix=_DELETE_LOG_PREFIX)
 
             cursor.execute(
                 "DELETE FROM user_tokens WHERE user_id = %s AND (org_id = %s OR org_id IS NULL) AND provider = %s",
@@ -284,7 +285,7 @@ def delete_connected_account(user_id, target_user_id, provider):
             try:
                 conn = connect_to_db_as_admin()
                 cursor = conn.cursor()
-                set_rls_context(cursor, conn, user_id, log_prefix="[AccountMgmt:delete_connected_account]")
+                set_rls_context(cursor, conn, user_id, log_prefix=_DELETE_LOG_PREFIX)
                 cursor.execute(
                     "DELETE FROM user_preferences WHERE user_id = %s AND (org_id = %s OR org_id IS NULL) AND preference_key = 'gcp_root_project'",
                     (user_id, org_id)

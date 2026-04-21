@@ -10,6 +10,7 @@ from utils.web.limiter_ext import limiter
 
 logger = logging.getLogger(__name__)
 mcp_token_bp = Blueprint('mcp_token', __name__)
+_LOG_PREFIX = "[MCPToken]"
 
 
 def _generate_token():
@@ -51,7 +52,7 @@ def create_mcp_token(user_id):
 
         with connect_to_db_as_user() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cursor:
-                set_rls_context(cursor, conn, user_id, log_prefix="[MCPToken]")
+                set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
                 cursor.execute("""
                     INSERT INTO mcp_tokens (token, user_id, org_id, name, expires_at, status)
                     VALUES (%s, %s, %s, %s, %s, 'active')
@@ -86,7 +87,7 @@ def list_mcp_tokens(user_id):
 
         with connect_to_db_as_user() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cursor:
-                set_rls_context(cursor, conn, user_id, log_prefix="[MCPToken]")
+                set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
                 cursor.execute("""
                     SELECT id, name, created_at, last_used_at, expires_at, status,
                            CONCAT(SUBSTRING(token, 1, 20), '...') as token_preview
@@ -116,7 +117,7 @@ def revoke_mcp_token(user_id, token_id):
 
         with connect_to_db_as_user() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cursor:
-                set_rls_context(cursor, conn, user_id, log_prefix="[MCPToken]")
+                set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
                 cursor.execute(
                     "UPDATE mcp_tokens SET status = 'revoked' WHERE id = %s AND user_id = %s AND org_id = %s RETURNING id",
                     (token_id, user_id, org_id)

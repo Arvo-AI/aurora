@@ -13,6 +13,7 @@ from routes.audit_routes import record_audit_event
 logger = logging.getLogger(__name__)
 
 rca_emails_bp = Blueprint('rca_emails', __name__)
+_LOG_PREFIX = "[RCAEmails]"
 
 # Email validation regex
 EMAIL_REGEX = re.compile(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$')
@@ -48,7 +49,7 @@ def _check_rate_limit(user_id: str, email: str, action: str) -> tuple[bool, str]
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
-                set_rls_context(cursor, conn, user_id, log_prefix="[RCAEmails]")
+                set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
                 if action == 'resend':
                     # Check resend rate limit (5 per hour)
                     one_hour_ago = datetime.now() - timedelta(hours=1)
@@ -80,7 +81,7 @@ def list_rca_emails(user_id):
         # Get additional emails from database
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
-                set_rls_context(cursor, conn, user_id, log_prefix="[RCAEmails]")
+                set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
                 cursor.execute(
                     """
                     SELECT id, email, is_verified, created_at, verified_at, is_enabled
@@ -144,7 +145,7 @@ def add_rca_email(user_id):
         
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
-                set_rls_context(cursor, conn, user_id, log_prefix="[RCAEmails]")
+                set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
                 
                 # Check if email already exists for this user
                 cursor.execute(
@@ -220,7 +221,7 @@ def verify_rca_email(user_id):
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
-                set_rls_context(cursor, conn, user_id, log_prefix="[RCAEmails]")
+                set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
                 
                 # Get email record
                 cursor.execute(
@@ -292,7 +293,7 @@ def resend_verification_code(user_id):
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
-                set_rls_context(cursor, conn, user_id, log_prefix="[RCAEmails]")
+                set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
                 
                 # Check if email exists and is not verified
                 cursor.execute(
@@ -360,7 +361,7 @@ def toggle_rca_email(user_id, email_id: int):
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
-                set_rls_context(cursor, conn, user_id, log_prefix="[RCAEmails]")
+                set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
                 
                 # Update enabled status
                 cursor.execute(
@@ -398,7 +399,7 @@ def remove_rca_email(user_id, email_id: int):
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
-                set_rls_context(cursor, conn, user_id, log_prefix="[RCAEmails]")
+                set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
                 
                 # Delete email
                 cursor.execute(

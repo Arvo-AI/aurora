@@ -24,6 +24,7 @@ from utils.auth.token_management import get_token_data, store_tokens_in_db
 logger = logging.getLogger(__name__)
 
 sharepoint_bp = Blueprint("sharepoint", __name__)
+_AUTH_REQUIRED_MSG = "User authentication required"
 
 
 def _get_stored_sharepoint_credentials(user_id: str) -> Optional[Dict[str, Any]]:
@@ -74,7 +75,7 @@ def connect():
 
     user_id = get_user_id_from_request()
     if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
+        return jsonify({"error": _AUTH_REQUIRED_MSG}), 401
 
     try:
         data = request.get_json(force=True, silent=True) or {}
@@ -153,7 +154,7 @@ def status():
 
     user_id = get_user_id_from_request()
     if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
+        return jsonify({"error": _AUTH_REQUIRED_MSG}), 401
 
     creds = _get_stored_sharepoint_credentials(user_id)
     if not creds:
@@ -208,7 +209,7 @@ def disconnect():
 
     user_id = get_user_id_from_request()
     if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
+        return jsonify({"error": _AUTH_REQUIRED_MSG}), 401
 
     try:
         # Fetch secret_ref before deleting the DB row so we can clean up Vault
@@ -253,7 +254,7 @@ def search():
 
     user_id = get_user_id_from_request()
     if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
+        return jsonify({"error": _AUTH_REQUIRED_MSG}), 401
 
     try:
         data = request.get_json(force=True, silent=True) or {}
@@ -299,7 +300,7 @@ def fetch_page():
 
     user_id = get_user_id_from_request()
     if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
+        return jsonify({"error": _AUTH_REQUIRED_MSG}), 401
 
     try:
         data = request.get_json(force=True, silent=True) or {}
@@ -343,7 +344,7 @@ def fetch_document():
 
     user_id = get_user_id_from_request()
     if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
+        return jsonify({"error": _AUTH_REQUIRED_MSG}), 401
 
     try:
         data = request.get_json(force=True, silent=True) or {}
@@ -387,7 +388,7 @@ def create_page():
 
     user_id = get_user_id_from_request()
     if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
+        return jsonify({"error": _AUTH_REQUIRED_MSG}), 401
 
     try:
         data = request.get_json(force=True, silent=True) or {}
@@ -433,7 +434,7 @@ def list_sites():
 
     user_id = get_user_id_from_request()
     if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
+        return jsonify({"error": _AUTH_REQUIRED_MSG}), 401
 
     search_query = request.args.get("search", "")
 

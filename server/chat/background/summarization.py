@@ -60,6 +60,7 @@ from chat.background.suggestion_extractor import (
 )
 
 logger = logging.getLogger(__name__)
+_LOG_PREFIX = "[IncidentSummary]"
 
 
 def _build_summary_prompt(
@@ -324,7 +325,7 @@ def _fetch_incident_basics(incident_id: str, user_id: str) -> Optional[Dict[str,
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
-                if not set_rls_context(cursor, conn, user_id, log_prefix="[IncidentSummary]"):
+                if not set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX):
                     return None
 
                 cursor.execute(
@@ -356,7 +357,7 @@ def _fetch_incident_basics(incident_id: str, user_id: str) -> Optional[Dict[str,
                 }
     except Exception as e:
         logger.error(
-            f"[IncidentSummary] Failed to fetch incident basics for {incident_id}: {e}"
+            f"{_LOG_PREFIX} Failed to fetch incident basics for {incident_id}: {e}"
         )
         return None
 
@@ -369,7 +370,7 @@ def _fetch_chat_transcript(
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
-                if not set_rls_context(cursor, conn, user_id, log_prefix="[IncidentSummary]"):
+                if not set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX):
                     return "[Transcript unavailable]"
 
                 cursor.execute(
@@ -420,7 +421,7 @@ def _fetch_chat_transcript(
                 return transcript
     except Exception as e:
         logger.error(
-            f"[IncidentSummary] Failed to fetch chat transcript for {session_id}: {e}"
+            f"{_LOG_PREFIX} Failed to fetch chat transcript for {session_id}: {e}"
         )
         return "[Transcript unavailable]"
 
@@ -465,7 +466,7 @@ def generate_incident_summary(
     from celery.exceptions import SoftTimeLimitExceeded
 
     logger.info(
-        f"[IncidentSummary] Generating summary for incident {incident_id} (user={user_id}, source={source_type})"
+        f"{_LOG_PREFIX} Generating summary for incident {incident_id} (user={user_id}, source={source_type})"
     )
 
     try:
@@ -503,7 +504,7 @@ def generate_incident_summary(
         )
 
         logger.info(
-            f"[IncidentSummary] Generated summary for incident {incident_id} ({len(summary)} chars)"
+            f"{_LOG_PREFIX} Generated summary for incident {incident_id} ({len(summary)} chars)"
         )
 
         # Update the incident with the summary
@@ -519,7 +520,7 @@ def generate_incident_summary(
 
     except SoftTimeLimitExceeded:
         logger.error(
-            f"[IncidentSummary] Timeout generating summary for incident {incident_id}"
+            f"{_LOG_PREFIX} Timeout generating summary for incident {incident_id}"
         )
         _update_incident_summary(
             incident_id,
@@ -534,13 +535,13 @@ def generate_incident_summary(
 
     except Exception as e:
         logger.exception(
-            f"[IncidentSummary] Failed to generate summary for incident {incident_id}: {e}"
+            f"{_LOG_PREFIX} Failed to generate summary for incident {incident_id}: {e}"
         )
 
         # Retry on transient errors
         if self.request.retries < self.max_retries:
             logger.info(
-                f"[IncidentSummary] Retrying summary generation (attempt {self.request.retries + 1})"
+                f"{_LOG_PREFIX} Retrying summary generation (attempt {self.request.retries + 1})"
             )
             raise self.retry(exc=e)
 
@@ -576,14 +577,14 @@ def generate_incident_summary_from_chat(
     from celery.exceptions import SoftTimeLimitExceeded
 
     logger.info(
-        f"[IncidentSummary] Regenerating summary from chat for incident {incident_id} (user={user_id}, session={session_id})"
+        f"{_LOG_PREFIX} Regenerating summary from chat for incident {incident_id} (user={user_id}, session={session_id})"
     )
 
     try:
         basics = _fetch_incident_basics(incident_id, user_id=user_id)
         if not basics:
             logger.warning(
-                f"[IncidentSummary] Incident {incident_id} not found; skipping chat-based summary"
+                f"{_LOG_PREFIX} Incident {incident_id} not found; skipping chat-based summary"
             )
             return {"incident_id": incident_id, "status": "not_found"}
 
@@ -592,7 +593,7 @@ def generate_incident_summary_from_chat(
         all_citations = extractor.extract_citations_from_session(session_id, user_id)
 
         logger.info(
-            f"[IncidentSummary] Extracted {len(all_citations)} potential citations for incident {incident_id}"
+            f"{_LOG_PREFIX} Extracted {len(all_citations)} potential citations for incident {incident_id}"
         )
 
         # Fetch transcript as fallback if no citations
@@ -635,7 +636,7 @@ def generate_incident_summary_from_chat(
         )
 
         logger.info(
-            f"[IncidentSummary] Generated chat-based summary for incident {incident_id} ({len(summary)} chars)"
+            f"{_LOG_PREFIX} Generated chat-based summary for incident {incident_id} ({len(summary)} chars)"
         )
 
         # Parse used citations from the summary and save only those
@@ -654,7 +655,7 @@ def generate_incident_summary_from_chat(
             if used_citations:
                 save_incident_citations(incident_id, used_citations)
                 logger.info(
-                    f"[IncidentSummary] Saved {len(used_citations)} used citations for incident {incident_id}"
+                    f"{_LOG_PREFIX} Saved {len(used_citations)} used citations for incident {incident_id}"
                 )
 
         # Extract and save structured suggestions with commands
@@ -672,11 +673,11 @@ def generate_incident_summary_from_chat(
             if suggestions:
                 save_incident_suggestions(incident_id, suggestions)
                 logger.info(
-                    f"[IncidentSummary] Saved {len(suggestions)} suggestions for incident {incident_id}"
+                    f"{_LOG_PREFIX} Saved {len(suggestions)} suggestions for incident {incident_id}"
                 )
         except Exception as e:
             logger.exception(
-                f"[IncidentSummary] Failed to extract suggestions for incident {incident_id}: {e}"
+                f"{_LOG_PREFIX} Failed to extract suggestions for incident {incident_id}: {e}"
             )
 
         _update_incident_summary(incident_id, summary, user_id=user_id)
@@ -713,7 +714,7 @@ def generate_incident_summary_from_chat(
 
     except SoftTimeLimitExceeded:
         logger.error(
-            f"[IncidentSummary] Timeout generating chat-based summary for incident {incident_id}"
+            f"{_LOG_PREFIX} Timeout generating chat-based summary for incident {incident_id}"
         )
         _update_incident_summary(
             incident_id,
@@ -728,12 +729,12 @@ def generate_incident_summary_from_chat(
 
     except Exception as e:
         logger.exception(
-            f"[IncidentSummary] Failed chat-based summary for incident {incident_id}: {e}"
+            f"{_LOG_PREFIX} Failed chat-based summary for incident {incident_id}: {e}"
         )
 
         if self.request.retries < self.max_retries:
             logger.info(
-                f"[IncidentSummary] Retrying chat-based summary (attempt {self.request.retries + 1})"
+                f"{_LOG_PREFIX} Retrying chat-based summary (attempt {self.request.retries + 1})"
             )
             raise self.retry(exc=e)
 
@@ -769,7 +770,7 @@ def _update_incident_summary(
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
                 if user_id:
-                    if not set_rls_context(cursor, conn, user_id, log_prefix="[IncidentSummary]"):
+                    if not set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX):
                         return
                 
                 # If status is None, only update summary and preserve current aurora_status
@@ -801,14 +802,14 @@ def _update_incident_summary(
 
             if rows_updated > 0:
                 logger.info(
-                    f"[IncidentSummary] Updated incident {incident_id} with summary (status={status})"
+                    f"{_LOG_PREFIX} Updated incident {incident_id} with summary (status={status})"
                 )
             else:
                 logger.warning(
-                    f"[IncidentSummary] No rows updated for incident {incident_id}"
+                    f"{_LOG_PREFIX} No rows updated for incident {incident_id}"
                 )
 
     except Exception as e:
         logger.error(
-            f"[IncidentSummary] Failed to update incident {incident_id} summary: {e}"
+            f"{_LOG_PREFIX} Failed to update incident {incident_id} summary: {e}"
         )

@@ -9,6 +9,7 @@ from utils.db.connection_pool import db_pool
 logger = logging.getLogger(__name__)
 
 llm_usage_bp = Blueprint('llm_usage', __name__)
+_LOG_PREFIX = "[LLMUsage]"
 
 @llm_usage_bp.route('/api/llm-usage/models', methods=['OPTIONS'])
 def get_available_models_options():
@@ -23,7 +24,7 @@ def get_available_models(user_id):
         org_id = get_org_id_from_request()
         with db_pool.get_user_connection() as conn:
             cursor = conn.cursor()
-            set_rls_context(cursor, conn, user_id, log_prefix="[LLMUsage]")
+            set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
             if org_id:
                 cursor.execute("""
                     SELECT 
@@ -149,7 +150,7 @@ def get_cost_over_time(user_id):
     try:
         with db_pool.get_user_connection() as conn:
             cursor = conn.cursor()
-            set_rls_context(cursor, conn, user_id, log_prefix="[LLMUsage]")
+            set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
 
             cursor.execute(f"""
                 SELECT
@@ -204,7 +205,7 @@ def get_usage_summary(user_id):
     try:
         with db_pool.get_user_connection() as conn:
             cursor = conn.cursor()
-            set_rls_context(cursor, conn, user_id, log_prefix="[LLMUsage]")
+            set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
 
             cursor.execute(f"""
                 SELECT
@@ -260,7 +261,7 @@ def get_session_usage(user_id, session_id):
         org_id = get_org_id_from_request()
         with db_pool.get_user_connection() as conn:
             cursor = conn.cursor()
-            set_rls_context(cursor, conn, user_id, log_prefix="[LLMUsage]")
+            set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
 
             cursor.execute("""
                 SELECT

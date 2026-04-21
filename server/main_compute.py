@@ -185,8 +185,10 @@ if _AURORA_ENV != "dev" and not _INTERNAL_API_SECRET:
 
 _OPEN_PATHS = frozenset(("/api/auth/login", "/api/auth/register"))
 
+_HEALTH_PATH = "/health"
+
 _OPEN_PREFIXES = (
-    "/health",
+    _HEALTH_PATH,
     "/callback",
     "/github/callback",
     "/bitbucket/callback",
@@ -256,7 +258,7 @@ def verify_internal_api_secret():
 # ============================================================================
 
 # Separate from _OPEN_PREFIXES: this only skips routes that carry identity headers before auth completes (login/register); webhook routes don't need listing here because they lack X-User-ID/X-Org-ID and the check below short-circuits on missing headers.
-_TENANT_OPEN_PREFIXES = ("/api/auth/login", "/api/auth/register", "/health")
+_TENANT_OPEN_PREFIXES = ("/api/auth/login", "/api/auth/register", _HEALTH_PATH)
 
 @app.before_request
 def enforce_user_org_binding():
@@ -484,7 +486,7 @@ from routes.ssh_keys import bp as ssh_keys_bp
 from routes.vms import bp as vms_bp
 
 app.register_blueprint(user_preferences_bp)
-app.register_blueprint(health_bp, url_prefix="/health") # NEW: Health check endpoint
+app.register_blueprint(health_bp, url_prefix=_HEALTH_PATH) # NEW: Health check endpoint
 app.register_blueprint(llm_usage_bp)
 app.register_blueprint(aws_bp)  # Primary AWS routes at root
 app.register_blueprint(rca_emails_bp)  # RCA email management routes

@@ -19,6 +19,7 @@ from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context
 from utils.db.db_utils import connect_to_db_as_user
 
 logger = logging.getLogger(__name__)
+_LOG_PREFIX = "[Admin]"
 
 admin_bp = Blueprint("admin", __name__, url_prefix="/api/admin")
 
@@ -80,7 +81,7 @@ def create_user(user_id):
     conn = connect_to_db_as_user()
     try:
         with conn.cursor() as cur:
-            set_rls_context(cur, conn, user_id, log_prefix="[Admin]")
+            set_rls_context(cur, conn, user_id, log_prefix=_LOG_PREFIX)
 
             cur.execute("SELECT id, email, name, org_id FROM users WHERE email = %s", (email,))
             existing = cur.fetchone()
@@ -264,7 +265,7 @@ def assign_role(user_id, target_user_id):
     conn = connect_to_db_as_user()
     try:
         with conn.cursor() as cur:
-            set_rls_context(cur, conn, user_id, log_prefix="[Admin]")
+            set_rls_context(cur, conn, user_id, log_prefix=_LOG_PREFIX)
             cur.execute("UPDATE users SET role = %s WHERE id = %s AND org_id IS NOT DISTINCT FROM %s", (role, target_user_id, org_id))
         conn.commit()
     finally:
@@ -318,7 +319,7 @@ def revoke_role(user_id, target_user_id, role):
     conn = connect_to_db_as_user()
     try:
         with conn.cursor() as cur:
-            set_rls_context(cur, conn, user_id, log_prefix="[Admin]")
+            set_rls_context(cur, conn, user_id, log_prefix=_LOG_PREFIX)
             cur.execute("UPDATE users SET role = %s WHERE id = %s AND org_id IS NOT DISTINCT FROM %s", (fallback_role, target_user_id, org_id))
         conn.commit()
     finally:
@@ -341,7 +342,7 @@ def delete_user(user_id, target_user_id):
     conn = connect_to_db_as_user()
     try:
         with conn.cursor() as cur:
-            set_rls_context(cur, conn, user_id, log_prefix="[Admin]")
+            set_rls_context(cur, conn, user_id, log_prefix=_LOG_PREFIX)
 
             cur.execute(
                 "SELECT id, email FROM users WHERE id = %s AND org_id IS NOT DISTINCT FROM %s",
