@@ -10,6 +10,7 @@ from typing import Dict, Any, Optional, Tuple
 from routes.terraform.terraform_manager import TerraformManager
 from routes.terraform.terraform_generator import TerraformGenerator
 import logging
+from utils.log_sanitizer import sanitize
 
 logger = logging.getLogger(__name__)
 
@@ -160,14 +161,14 @@ def setup_aws_terraform_environment_isolated(user_id: str):
         from utils.auth.stateless_auth import get_credentials_from_db
         aws_credentials = get_credentials_from_db(user_id, "aws")
         if not aws_credentials:
-            logger.error(f"No AWS credentials found for user {user_id}")
+            logger.error("No AWS credentials found for user %s", sanitize(user_id))
             return False, None, None
 
         # Validate required fields
         required_fields = ['aws_access_key_id', 'aws_secret_access_key']
         missing_fields = [field for field in required_fields if not aws_credentials.get(field)]
         if missing_fields:
-            logger.error(f"Missing required AWS credential fields for user {user_id}: {missing_fields}")
+            logger.error("Missing required AWS credential fields for user %s: %s", sanitize(user_id), missing_fields)
             return False, None, None
 
         access_key_id = aws_credentials['aws_access_key_id']
@@ -202,10 +203,10 @@ def setup_aws_terraform_environment_isolated(user_id: str):
             sts = session.client('sts')
             identity = sts.get_caller_identity()
             account_id = identity['Account']
-            logger.info(f"Successfully validated AWS credentials for account: {account_id}")
+            logger.info("Successfully validated AWS credentials for account: [REDACTED]")
 
         except Exception as e:
-            logger.error(f"AWS credentials validation failed: {e}")
+            logger.error("AWS credentials validation failed: %s", type(e).__name__)
             return False, None, None
 
         # BUILD ISOLATED ENVIRONMENT - NO global os.environ modification!
@@ -301,7 +302,7 @@ def setup_ovh_terraform_environment_isolated(user_id: str):
         token_data = get_valid_access_token(user_id)
         
         if not token_data:
-            logger.error(f"No OVH credentials found for user {user_id}")
+            logger.error("No OVH credentials found for user %s", sanitize(user_id))
             return False, None, None
 
         access_token = token_data.get('access_token')
@@ -374,7 +375,7 @@ def setup_scaleway_terraform_environment_isolated(user_id: str):
         token_data = get_token_data(user_id, "scaleway")
         
         if not token_data:
-            logger.error(f"No Scaleway credentials found for user {user_id}")
+            logger.error("No Scaleway credentials found for user %s", sanitize(user_id))
             return False, None, None
 
         secret_key = token_data.get('secret_key')

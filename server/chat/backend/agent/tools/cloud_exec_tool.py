@@ -1521,7 +1521,7 @@ Security & Compliance
                             pj = r.json()
                             resource_name = pj.get("name") or pj.get("projectId") or resource_id
                     except Exception:
-                        pass
+                        pass  # optional metadata lookup; fallback to resource_id below
                 resource_name = resource_name or resource_id
 
             elif provider.lower() in ['aws', 'amazon']:

@@ -17,10 +17,10 @@ def _resolve_org_id(user_id: str) -> Optional[str]:
         from utils.auth.stateless_auth import resolve_org_id
         org = resolve_org_id(user_id)
         if not org:
-            logger.warning("[CONN-META] Could not resolve org_id for user %s — RLS context will not be set", user_id)
+            logger.warning("[CONN-META] Could not resolve org_id — RLS context will not be set")
         return org
     except Exception as e:
-        logger.warning("[CONN-META] Failed to resolve org_id for user %s: %s — RLS context will not be set", user_id, e)
+        logger.warning("[CONN-META] Failed to resolve org_id: %s — RLS context will not be set", type(e).__name__)
         return None
 
 

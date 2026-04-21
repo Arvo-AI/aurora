@@ -3,10 +3,11 @@
 import logging
 import secrets
 import time
+from html import escape as html_escape
 from typing import Any, Dict, Optional
 
 import requests
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, Response, jsonify, request
 
 from connectors.sharepoint_connector.auth import (
     exchange_code_for_token,
@@ -28,12 +29,25 @@ sharepoint_bp = Blueprint("sharepoint", __name__)
 _AUTH_REQUIRED_MSG = "User authentication required"
 
 
+@sharepoint_bp.after_request
+def _set_security_headers(response):
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    return response
+
+
 def _get_request_body() -> Dict[str, Any]:
     """Safely parse the JSON request body."""
     try:
         return request.get_json(force=True, silent=True) or {}
     except Exception:
         return {}
+
+
+def _safe_json_response(data: Any, status: int = 200) -> Response:
+    """Return a JSON response with explicit content-type to prevent MIME sniffing."""
+    import json as _json
+    body = _json.dumps(data)
+    return Response(body, status=status, content_type="application/json")
 
 
 def _require_user_id():
@@ -168,11 +182,11 @@ def _exchange_oauth_code(user_id: str, data: dict, code: str):
         token_payload["expires_at"] = int(time.time()) + int(expires_in)
 
     store_tokens_in_db(user_id, token_payload, "sharepoint")
-    return jsonify({
+    return _safe_json_response({
         "success": True,
         "connected": True,
-        "userDisplayName": display_name,
-        "userEmail": email,
+        "userDisplayName": html_escape(display_name) if display_name else None,
+        "userEmail": html_escape(email) if email else None,
     })
 
 
@@ -195,10 +209,10 @@ def status(user_id):
         or creds.get("user_email")
     )
 
-    return jsonify({
+    return _safe_json_response({
         "connected": True,
-        "userDisplayName": display_name,
-        "userEmail": email,
+        "userDisplayName": html_escape(display_name) if display_name else None,
+        "userEmail": html_escape(email) if email else None,
     })
 
 
@@ -290,7 +304,7 @@ def search(user_id):
         logger.exception("[SHAREPOINT] Search failed for user %s", sanitize(user_id))
         return jsonify({"error": "Failed to search SharePoint"}), 502
 
-    return jsonify({"results": results, "count": len(results)})
+    return _safe_json_response({"results": results, "count": len(results)})
 
 
 @sharepoint_bp.route("/fetch-page", methods=["POST", "OPTIONS"])
@@ -316,7 +330,7 @@ def fetch_page(user_id):
         logger.exception("[SHAREPOINT] Fetch page failed for user %s", sanitize(user_id))
         return jsonify({"error": "Failed to fetch SharePoint page"}), 502
 
-    return jsonify(result)
+    return _safe_json_response(result)
 
 
 @sharepoint_bp.route("/fetch-document", methods=["POST", "OPTIONS"])
@@ -342,7 +356,7 @@ def fetch_document(user_id):
         logger.exception("[SHAREPOINT] Fetch document failed for user %s", sanitize(user_id))
         return jsonify({"error": "Failed to fetch SharePoint document"}), 502
 
-    return jsonify(result)
+    return _safe_json_response(result)
 
 
 @sharepoint_bp.route("/create-page", methods=["POST", "OPTIONS"])
@@ -370,7 +384,7 @@ def create_page(user_id):
         logger.exception("[SHAREPOINT] Create page failed for user %s", sanitize(user_id))
         return jsonify({"error": "Failed to create SharePoint page"}), 502
 
-    return jsonify(result)
+    return _safe_json_response(result)
 
 
 @sharepoint_bp.route("/sites", methods=["GET", "OPTIONS"])
@@ -386,7 +400,7 @@ def list_sites(user_id):
     try:
         client = SharePointClient(access_token)
         sites = client.search_sites(search_query)
-        return jsonify({"sites": sites, "count": len(sites)})
+        return _safe_json_response({"sites": sites, "count": len(sites)})
     except requests.HTTPError as exc:
         return _handle_list_sites_401(exc, user_id, creds, search_query)
     except Exception as exc:
@@ -408,7 +422,7 @@ def _handle_list_sites_401(exc: requests.HTTPError, user_id: str, creds: dict, s
     try:
         client = SharePointClient(refreshed.get("access_token"))
         sites = client.search_sites(search_query)
-        return jsonify({"sites": sites, "count": len(sites)})
+        return _safe_json_response({"sites": sites, "count": len(sites)})
     except Exception as retry_exc:
         logger.exception("[SHAREPOINT] List sites retry failed for user %s: %s", sanitize(user_id), retry_exc)
         return jsonify({"error": "Failed to list SharePoint sites"}), 502

@@ -536,7 +536,7 @@ def get_org_id_for_user(user_id: str) -> Optional[str]:
                 _user_org_cache[user_id] = (org_id, _time.monotonic())
                 return org_id
     except Exception as e:
-        logger.warning("Error looking up org_id for user %s: %s", sanitize(user_id), e)
+        logger.warning("Error looking up org_id for user %s: %s", sanitize(user_id), type(e).__name__)
         return None
 
 

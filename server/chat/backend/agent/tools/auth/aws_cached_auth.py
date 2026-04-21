@@ -55,12 +55,12 @@ def _cache_set(key: str, value: dict) -> None:
     if client is not None:
         try:
             client.setex(key, ttl, json.dumps(value))
-            logger.info(f"AWS setup cache SET key={key} ttl={ttl}s")
+            logger.info("AWS setup cache SET ttl=%ss", ttl)
             return
         except Exception as e:
             logger.debug(f"AWS cache SET error: {e}")
     _aws_local_cache[key] = (time.time() + ttl, value)
-    logger.info(f"AWS setup local-cache SET key={key} ttl={ttl}s")
+    logger.info("AWS setup local-cache SET ttl=%ss", ttl)
 
 
 def setup_aws_credentials_cached(user_id: str, selected_region: Optional[str] = None) -> Tuple[bool, Optional[str], Optional[str], Optional[dict]]:
