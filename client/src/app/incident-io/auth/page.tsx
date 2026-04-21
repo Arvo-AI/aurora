@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useToast } from "@/hooks/use-toast";
-import { incidentIoService, IncidentIoStatus } from "@/lib/services/incident-io";
+import { useConnectorAuth } from "@/hooks/use-connector-auth";
+import { incidentIoService } from "@/lib/services/incident-io";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -13,64 +14,22 @@ import { IncidentIoWebhookStep } from "@/components/incident-io/IncidentIoWebhoo
 import ConnectorAuthGuard from "@/components/connectors/ConnectorAuthGuard";
 import Image from "next/image";
 
-const CACHE_KEY = "incident_io_connection_status";
-
 export default function IncidentIoAuthPage() {
   const { toast } = useToast();
   const [apiKey, setApiKey] = useState("");
-  const [status, setStatus] = useState<IncidentIoStatus | null>(null);
   const [loading, setLoading] = useState(false);
-  const [isCheckingStatus, setIsCheckingStatus] = useState(true);
 
-  const loadStatus = async (skipCache = false) => {
-    try {
-      if (!skipCache && typeof window !== "undefined") {
-        const cachedStatus = localStorage.getItem(CACHE_KEY);
-        if (cachedStatus) {
-          const parsedStatus = JSON.parse(cachedStatus);
-          setStatus(parsedStatus);
-          setIsCheckingStatus(false);
-          if (parsedStatus?.connected) return;
-        }
-      }
-      await fetchAndUpdateStatus();
-    } catch (err) {
-      console.error("Failed to load incident.io status", err);
-      setIsCheckingStatus(false);
-    }
-  };
-
-  const fetchAndUpdateStatus = async () => {
-    try {
-      const result = await incidentIoService.getStatus();
-      if (result !== null) {
-        const cachedStatus = localStorage.getItem(CACHE_KEY);
-        const wasCachedConnected = cachedStatus ? JSON.parse(cachedStatus)?.connected : false;
-        const stateChanged = wasCachedConnected !== result.connected;
-
-        setStatus(result);
-        if (typeof window !== "undefined") {
-          localStorage.setItem(CACHE_KEY, JSON.stringify(result));
-          if (result.connected) {
-            localStorage.setItem("isIncidentIoConnected", "true");
-          } else {
-            localStorage.removeItem("isIncidentIoConnected");
-          }
-          if (stateChanged) {
-            window.dispatchEvent(new CustomEvent("providerStateChanged"));
-          }
-        }
-      }
-    } catch (err) {
-      console.error("[incident.io] Failed to fetch status:", err);
-    } finally {
-      setIsCheckingStatus(false);
-    }
-  };
-
-  useEffect(() => {
-    loadStatus();
-  }, []);
+  const {
+    isConnected,
+    isCheckingStatus,
+    updateLocalState,
+    disconnect,
+  } = useConnectorAuth({
+    cacheKey: "incident_io_connection_status",
+    storageKey: "isIncidentIoConnected",
+    fetchStatus: () => incidentIoService.getStatus(),
+    disconnectPath: "/api/connected-accounts/incidentio",
+  });
 
   const handleConnect = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -78,18 +37,8 @@ export default function IncidentIoAuthPage() {
 
     try {
       const result = await incidentIoService.connect({ apiKey });
-      setStatus(result);
-
-      if (typeof window !== "undefined") {
-        localStorage.setItem(CACHE_KEY, JSON.stringify(result));
-        localStorage.setItem("isIncidentIoConnected", "true");
-        window.dispatchEvent(new CustomEvent("providerStateChanged"));
-      }
-
-      toast({
-        title: "Success",
-        description: "incident.io connected successfully!",
-      });
+      updateLocalState(result);
+      toast({ title: "Success", description: "incident.io connected successfully!" });
     } catch (err: any) {
       console.error("incident.io connection failed", err);
       toast({
@@ -105,30 +54,9 @@ export default function IncidentIoAuthPage() {
 
   const handleDisconnect = async () => {
     setLoading(true);
-
     try {
-      const response = await fetch("/api/connected-accounts/incidentio", {
-        method: "DELETE",
-        credentials: "include",
-      });
-
-      if (response.ok || response.status === 204) {
-        setStatus({ connected: false });
-
-        if (typeof window !== "undefined") {
-          localStorage.removeItem(CACHE_KEY);
-          localStorage.removeItem("isIncidentIoConnected");
-          window.dispatchEvent(new CustomEvent("providerStateChanged"));
-        }
-
-        toast({
-          title: "Success",
-          description: "incident.io disconnected successfully",
-        });
-      } else {
-        const text = await response.text();
-        throw new Error(text || "Failed to disconnect");
-      }
+      await disconnect();
+      toast({ title: "Success", description: "incident.io disconnected successfully" });
     } catch (err: any) {
       console.error("incident.io disconnect failed", err);
       toast({
@@ -140,8 +68,6 @@ export default function IncidentIoAuthPage() {
       setLoading(false);
     }
   };
-
-  const isConnected = Boolean(status?.connected);
 
   if (isCheckingStatus) {
     return (
