@@ -2,6 +2,8 @@ from flask import jsonify, request
 import logging
 import os
 
+from utils.log_sanitizer import sanitize
+
 logger = logging.getLogger(__name__)
 
 FRONTEND_URL = os.getenv("FRONTEND_URL")
@@ -21,7 +23,7 @@ def create_cors_response(success=True):
     if normalised in allowed_lower:
         resp.headers.add('Access-Control-Allow-Origin', origin)
     elif FRONTEND_URL:
-        logger.info("CORS: rejected origin %s, falling back to FRONTEND_URL", origin or "(empty)")
+        logger.info("CORS: rejected origin %s, falling back to FRONTEND_URL", sanitize(origin) or "(empty)")
         resp.headers.add('Access-Control-Allow-Origin', FRONTEND_URL)
     resp.headers.add('Vary', 'Origin')
     resp.headers.add('Access-Control-Allow-Headers', 'Content-Type, X-Provider, X-Requested-With, X-User-ID, X-Org-ID, Authorization, X-Internal-Secret')

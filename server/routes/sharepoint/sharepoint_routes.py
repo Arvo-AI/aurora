@@ -20,6 +20,7 @@ from utils.web.cors_utils import create_cors_response
 from utils.auth.oauth2_state_cache import retrieve_oauth2_state, store_oauth2_state
 from utils.auth.stateless_auth import get_user_id_from_request, set_rls_context
 from utils.auth.token_management import get_token_data, store_tokens_in_db
+from utils.log_sanitizer import sanitize
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +33,7 @@ def _get_stored_sharepoint_credentials(user_id: str) -> Optional[Dict[str, Any]]
     try:
         return get_token_data(user_id, "sharepoint")
     except Exception as exc:
-        logger.error("Failed to retrieve SharePoint credentials for user %s: %s", user_id, exc)
+        logger.error("Failed to retrieve SharePoint credentials for user %s: %s", sanitize(user_id), exc)
         return None
 
 
@@ -45,7 +46,7 @@ def _refresh_sharepoint_credentials(user_id: str, creds: Dict[str, Any]) -> Opti
     try:
         token_data = refresh_access_token(refresh_token)
     except Exception as exc:
-        logger.warning("[SHAREPOINT] OAuth refresh failed for user %s: %s", user_id, exc)
+        logger.warning("[SHAREPOINT] OAuth refresh failed for user %s: %s", sanitize(user_id), exc)
         return None
 
     access_token = token_data.get("access_token")
@@ -99,13 +100,13 @@ def connect():
     if not state_data:
         return jsonify({"error": "Invalid or expired OAuth state"}), 400
     if state_data.get("user_id") != user_id or state_data.get("endpoint") != "sharepoint":
-        logger.warning("[SHAREPOINT] OAuth state mismatch for user %s", user_id)
+        logger.warning("[SHAREPOINT] OAuth state mismatch for user %s", sanitize(user_id))
         return jsonify({"error": "OAuth state mismatch"}), 400
 
     try:
         token_data = exchange_code_for_token(code)
     except Exception as exc:
-        logger.error("[SHAREPOINT] OAuth token exchange failed for user %s: %s", user_id, exc)
+        logger.error("[SHAREPOINT] OAuth token exchange failed for user %s: %s", sanitize(user_id), exc)
         return jsonify({"error": "SharePoint OAuth token exchange failed"}), 502
 
     access_token = token_data.get("access_token")
@@ -118,7 +119,7 @@ def connect():
         client = SharePointClient(access_token)
         user_profile = client.get_current_user()
     except Exception as exc:
-        logger.warning("[SHAREPOINT] OAuth validation failed for user %s: %s", user_id, exc)
+        logger.warning("[SHAREPOINT] OAuth validation failed for user %s: %s", sanitize(user_id), exc)
         return jsonify({"error": "Failed to validate SharePoint OAuth token"}), 401
 
     display_name = (user_profile or {}).get("displayName")
@@ -176,15 +177,15 @@ def status():
                     client = SharePointClient(refreshed.get("access_token"))
                     user_profile = client.get_current_user()
                 except Exception as retry_exc:
-                    logger.warning("[SHAREPOINT] Status validation retry failed for user %s: %s", user_id, retry_exc)
+                    logger.warning("[SHAREPOINT] Status validation retry failed for user %s: %s", sanitize(user_id), retry_exc)
                     return jsonify({"connected": False})
             else:
                 return jsonify({"connected": False})
         else:
-            logger.warning("[SHAREPOINT] Status validation failed for user %s: %s", user_id, exc)
+            logger.warning("[SHAREPOINT] Status validation failed for user %s: %s", sanitize(user_id), exc)
             return jsonify({"connected": False})
     except Exception as exc:
-        logger.warning("[SHAREPOINT] Status validation failed for user %s: %s", user_id, exc)
+        logger.warning("[SHAREPOINT] Status validation failed for user %s: %s", sanitize(user_id), exc)
         return jsonify({"connected": False})
 
     display_name = (user_profile or {}).get("displayName") or creds.get("user_display_name")
@@ -237,9 +238,9 @@ def disconnect():
                 from utils.secrets.secret_ref_utils import secret_manager
                 secret_manager.delete_secret(secret_ref)
             except Exception as vault_exc:
-                logger.warning("[SHAREPOINT] Failed to delete Vault secret for user %s: %s", user_id, vault_exc)
+                logger.warning("[SHAREPOINT] Failed to delete Vault secret for user %s: %s", sanitize(user_id), vault_exc)
 
-        logger.info("[SHAREPOINT] Disconnected user %s (deleted %s token rows)", user_id, deleted_count)
+        logger.info("[SHAREPOINT] Disconnected user %s (deleted %s token rows)", sanitize(user_id), deleted_count)
         return jsonify({"success": True, "message": "SharePoint disconnected successfully"})
     except Exception as exc:
         logger.exception("[SHAREPOINT] Failed to disconnect provider")
@@ -283,10 +284,10 @@ def search():
         status_code = exc.response.status_code if exc.response is not None else None
         if status_code == 401:
             return jsonify({"error": "SharePoint credentials expired"}), 401
-        logger.exception("[SHAREPOINT] Search failed for user %s", user_id)
+        logger.exception("[SHAREPOINT] Search failed for user %s", sanitize(user_id))
         return jsonify({"error": "Failed to search SharePoint"}), 502
     except Exception:
-        logger.exception("[SHAREPOINT] Search failed for user %s", user_id)
+        logger.exception("[SHAREPOINT] Search failed for user %s", sanitize(user_id))
         return jsonify({"error": "Failed to search SharePoint"}), 502
 
     return jsonify({"results": results, "count": len(results)})
@@ -327,10 +328,10 @@ def fetch_page():
         status_code = exc.response.status_code if exc.response is not None else None
         if status_code == 401:
             return jsonify({"error": "SharePoint credentials expired"}), 401
-        logger.exception("[SHAREPOINT] Fetch page failed for user %s", user_id)
+        logger.exception("[SHAREPOINT] Fetch page failed for user %s", sanitize(user_id))
         return jsonify({"error": "Failed to fetch SharePoint page"}), 502
     except Exception:
-        logger.exception("[SHAREPOINT] Fetch page failed for user %s", user_id)
+        logger.exception("[SHAREPOINT] Fetch page failed for user %s", sanitize(user_id))
         return jsonify({"error": "Failed to fetch SharePoint page"}), 502
 
     return jsonify(result)
@@ -371,10 +372,10 @@ def fetch_document():
         status_code = exc.response.status_code if exc.response is not None else None
         if status_code == 401:
             return jsonify({"error": "SharePoint credentials expired"}), 401
-        logger.exception("[SHAREPOINT] Fetch document failed for user %s", user_id)
+        logger.exception("[SHAREPOINT] Fetch document failed for user %s", sanitize(user_id))
         return jsonify({"error": "Failed to fetch SharePoint document"}), 502
     except Exception:
-        logger.exception("[SHAREPOINT] Fetch document failed for user %s", user_id)
+        logger.exception("[SHAREPOINT] Fetch document failed for user %s", sanitize(user_id))
         return jsonify({"error": "Failed to fetch SharePoint document"}), 502
 
     return jsonify(result)
@@ -417,10 +418,10 @@ def create_page():
         status_code = exc.response.status_code if exc.response is not None else None
         if status_code == 401:
             return jsonify({"error": "SharePoint credentials expired"}), 401
-        logger.exception("[SHAREPOINT] Create page failed for user %s", user_id)
+        logger.exception("[SHAREPOINT] Create page failed for user %s", sanitize(user_id))
         return jsonify({"error": "Failed to create SharePoint page"}), 502
     except Exception:
-        logger.exception("[SHAREPOINT] Create page failed for user %s", user_id)
+        logger.exception("[SHAREPOINT] Create page failed for user %s", sanitize(user_id))
         return jsonify({"error": "Failed to create SharePoint page"}), 502
 
     return jsonify(result)
@@ -458,15 +459,15 @@ def list_sites():
                     client = SharePointClient(refreshed.get("access_token"))
                     sites = client.search_sites(search_query)
                 except Exception as retry_exc:
-                    logger.exception("[SHAREPOINT] List sites retry failed for user %s: %s", user_id, retry_exc)
+                    logger.exception("[SHAREPOINT] List sites retry failed for user %s: %s", sanitize(user_id), retry_exc)
                     return jsonify({"error": "Failed to list SharePoint sites"}), 502
             else:
                 return jsonify({"error": "SharePoint credentials expired"}), 401
         else:
-            logger.exception("[SHAREPOINT] List sites failed for user %s: %s", user_id, exc)
+            logger.exception("[SHAREPOINT] List sites failed for user %s: %s", sanitize(user_id), exc)
             return jsonify({"error": "Failed to list SharePoint sites"}), 502
     except Exception as exc:
-        logger.exception("[SHAREPOINT] List sites failed for user %s: %s", user_id, exc)
+        logger.exception("[SHAREPOINT] List sites failed for user %s: %s", sanitize(user_id), exc)
         return jsonify({"error": "Failed to list SharePoint sites"}), 502
 
     return jsonify({"sites": sites, "count": len(sites)})

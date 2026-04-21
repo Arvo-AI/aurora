@@ -4,6 +4,7 @@ import logging
 from typing import Optional, Dict, Any, List
 from flask import request, jsonify
 from utils.db.db_utils import connect_to_db_as_user
+from utils.log_sanitizer import sanitize
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -535,7 +536,7 @@ def get_org_id_for_user(user_id: str) -> Optional[str]:
                 _user_org_cache[user_id] = (org_id, _time.monotonic())
                 return org_id
     except Exception as e:
-        logger.warning("Error looking up org_id for user %s: %s", user_id, e)
+        logger.warning("Error looking up org_id for user %s: %s", sanitize(user_id), e)
         return None
 
 
@@ -547,7 +548,7 @@ def set_rls_context(cursor, conn, user_id: str, *, log_prefix: str = "") -> Opti
     """
     org_id = get_org_id_for_user(user_id)
     if not org_id:
-        logger.error("%s Missing org_id for user %s; cannot set RLS context", log_prefix, user_id)
+        logger.error("%s Missing org_id for user %s; cannot set RLS context", log_prefix, sanitize(user_id))
         return None
 
     cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
