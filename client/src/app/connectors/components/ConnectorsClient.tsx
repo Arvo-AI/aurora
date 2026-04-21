@@ -66,7 +66,7 @@ export default function ConnectorsClient() {
         categories.add(connector.category);
       }
     });
-    return Array.from(categories).sort();
+    return Array.from(categories).sort((a, b) => a.localeCompare(b));
   }, [allConnectors]);
 
   const filteredConnectors = useMemo(() => {
