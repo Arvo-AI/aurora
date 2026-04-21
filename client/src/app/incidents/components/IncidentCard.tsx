@@ -183,9 +183,10 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
     const parts = text.split(/(\[\d+(?:,\s*\d+)*\]|\[S:\d+\])/g);
 
     return parts.map((part, index) => {
-      // Match suggestion marker [S:id]
+      // Match suggestion marker [S:id] — always consume to avoid showing raw tokens
       const suggestionMatch = part.match(/^\[S:(\d+)\]$/);
-      if (suggestionMatch && canWrite) {
+      if (suggestionMatch) {
+        if (!canWrite) return null;
         const suggestion = findFixSuggestionById(suggestionMatch[1]);
         if (suggestion) {
           return (

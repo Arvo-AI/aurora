@@ -331,38 +331,46 @@ After the summary, add a separate paragraph titled "## Suggested Next Steps" tha
     return prompt
 
 
-def _fetch_fix_suggestions(incident_id: str) -> List[Dict[str, Any]]:
+def _fetch_fix_suggestions(incident_id: str, _retries: int = 2) -> List[Dict[str, Any]]:
     """Fetch pre-existing fix suggestions (created by github_fix during RCA)."""
+    import time
     from utils.db.connection_pool import db_pool
 
-    try:
-        with db_pool.get_admin_connection() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute(
-                    """
-                    SELECT id, title, description, file_path, repository
-                    FROM incident_suggestions
-                    WHERE incident_id = %s AND type = 'fix'
-                    ORDER BY created_at
-                    """,
-                    (incident_id,),
+    for attempt in range(_retries + 1):
+        try:
+            with db_pool.get_admin_connection() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        SELECT id, title, description, file_path, repository
+                        FROM incident_suggestions
+                        WHERE incident_id = %s AND type = 'fix'
+                        ORDER BY created_at
+                        """,
+                        (incident_id,),
+                    )
+                    rows = cursor.fetchall()
+                    return [
+                        {
+                            "id": row[0],
+                            "title": row[1],
+                            "description": row[2] or "",
+                            "file_path": row[3] or "",
+                            "repository": row[4] or "",
+                        }
+                        for row in rows
+                    ]
+        except Exception as e:
+            if attempt < _retries:
+                logger.warning(
+                    f"[IncidentSummary] Transient failure fetching fix suggestions for {incident_id} (attempt {attempt + 1}): {e}"
                 )
-                rows = cursor.fetchall()
-                return [
-                    {
-                        "id": row[0],
-                        "title": row[1],
-                        "description": row[2] or "",
-                        "file_path": row[3] or "",
-                        "repository": row[4] or "",
-                    }
-                    for row in rows
-                ]
-    except Exception as e:
-        logger.warning(
-            f"[IncidentSummary] Failed to fetch fix suggestions for {incident_id}: {e}"
-        )
-        return []
+                time.sleep(0.5 * (attempt + 1))
+            else:
+                logger.error(
+                    f"[IncidentSummary] Failed to fetch fix suggestions for {incident_id} after {_retries + 1} attempts: {e}"
+                )
+                return []
 
 
 def _fetch_incident_basics(incident_id: str) -> Optional[Dict[str, Any]]:
