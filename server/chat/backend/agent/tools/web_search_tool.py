@@ -446,9 +446,12 @@ class WebSearchTool:
             
         # Try to get from user's provider preference
         try:
-            # This would integrate with the existing provider preference system
-            return determine_target_provider_from_context()
-        except:
+            from utils.cloud.cloud_utils import get_provider_preference
+            available_providers = get_provider_preference() or []
+            if not available_providers:
+                return None
+            return determine_target_provider_from_context(available_providers)
+        except Exception:
             return None
             
     def _get_cache_key(
