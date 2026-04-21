@@ -13,7 +13,6 @@ from flask import Blueprint, jsonify, request
 
 from routes.incidentio.tasks import process_incidentio_event
 from utils.db.connection_pool import db_pool
-from utils.web.cors_utils import create_cors_response
 from utils.auth.stateless_auth import (
     get_org_id_from_request,
     get_user_preference,
@@ -123,7 +122,7 @@ def _get_stored_credentials(user_id: str) -> Optional[Dict[str, Any]]:
 # ── Routes ──────────────────────────────────────────────────────────
 
 
-@incidentio_bp.route("/connect", methods=["POST", "OPTIONS"])
+@incidentio_bp.route("/connect", methods=["POST"])
 @require_permission("connectors", "write")
 def connect(user_id):
     """Validate API key against incident.io and store credentials."""
@@ -157,7 +156,7 @@ def connect(user_id):
     return jsonify({"success": True, "connected": True})
 
 
-@incidentio_bp.route("/status", methods=["GET", "OPTIONS"])
+@incidentio_bp.route("/status", methods=["GET"])
 @require_permission("connectors", "read")
 def status(user_id):
     """Check incident.io connection status."""
@@ -179,7 +178,7 @@ def status(user_id):
     return jsonify({"connected": True})
 
 
-@incidentio_bp.route("/disconnect", methods=["POST", "DELETE", "OPTIONS"])
+@incidentio_bp.route("/disconnect", methods=["POST", "DELETE"])
 @require_permission("connectors", "write")
 def disconnect(user_id):
     """Remove stored incident.io credentials."""
@@ -195,12 +194,9 @@ def disconnect(user_id):
         return jsonify({"error": "Failed to disconnect incident.io"}), 500
 
 
-@incidentio_bp.route("/alerts/webhook/<user_id>", methods=["POST", "OPTIONS"])
+@incidentio_bp.route("/alerts/webhook/<user_id>", methods=["POST"])
 def alert_webhook(user_id: str):
     """Receive webhook events from incident.io."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
     if not user_id:
         return jsonify({"error": "user_id is required"}), 400
 
@@ -238,7 +234,7 @@ def alert_webhook(user_id: str):
     return jsonify({"received": True})
 
 
-@incidentio_bp.route("/alerts", methods=["GET", "OPTIONS"])
+@incidentio_bp.route("/alerts", methods=["GET"])
 @require_permission("connectors", "read")
 def get_alerts(user_id):
     """Fetch stored incident.io events."""
@@ -298,7 +294,7 @@ def get_alerts(user_id):
         return jsonify({"error": "Failed to fetch alerts"}), 500
 
 
-@incidentio_bp.route("/alerts/webhook-url", methods=["GET", "OPTIONS"])
+@incidentio_bp.route("/alerts/webhook-url", methods=["GET"])
 @require_permission("connectors", "read")
 def get_webhook_url(user_id):
     """Return the webhook URL for this user's incident.io configuration."""
@@ -323,7 +319,7 @@ def get_webhook_url(user_id):
     })
 
 
-@incidentio_bp.route("/webhook-secret", methods=["PUT", "OPTIONS"])
+@incidentio_bp.route("/webhook-secret", methods=["PUT"])
 @require_permission("connectors", "write")
 def save_webhook_secret(user_id):
     """Store the webhook signing secret from incident.io's endpoint settings."""
@@ -350,7 +346,7 @@ def save_webhook_secret(user_id):
     return jsonify({"success": True})
 
 
-@incidentio_bp.route("/rca-settings", methods=["GET", "OPTIONS"])
+@incidentio_bp.route("/rca-settings", methods=["GET"])
 @require_permission("connectors", "read")
 def get_rca_settings(user_id):
     rca_enabled = get_user_preference(user_id, "incidentio_rca_enabled", default=True)
@@ -358,7 +354,7 @@ def get_rca_settings(user_id):
     return jsonify({"rcaEnabled": rca_enabled, "postbackEnabled": postback_enabled})
 
 
-@incidentio_bp.route("/rca-settings", methods=["PUT", "OPTIONS"])
+@incidentio_bp.route("/rca-settings", methods=["PUT"])
 @require_permission("connectors", "write")
 def update_rca_settings(user_id):
     try:
