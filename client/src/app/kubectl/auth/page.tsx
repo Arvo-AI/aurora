@@ -19,12 +19,12 @@ const backendUrl = getEnv('NEXT_PUBLIC_BACKEND_URL') || '';
 const hasRequiredEndpoints = Boolean(wsUrl && backendUrl);
 
 const getHelmInstallCommand = (token: string) => hasRequiredEndpoints
-  ? `helm install ${KUBECTL_AGENT.RELEASE_NAME} ${KUBECTL_AGENT.CHART_OCI_URL} \\
-  --version ${KUBECTL_AGENT.CHART_VERSION} \\
-  --create-namespace \\
-  --namespace ${KUBECTL_AGENT.DEFAULT_NAMESPACE} \\
-  --set aurora.agentToken="${token}" \\
-  --set aurora.backendUrl="${backendUrl}" \\
+  ? String.raw`helm install ${KUBECTL_AGENT.RELEASE_NAME} ${KUBECTL_AGENT.CHART_OCI_URL} \
+  --version ${KUBECTL_AGENT.CHART_VERSION} \
+  --create-namespace \
+  --namespace ${KUBECTL_AGENT.DEFAULT_NAMESPACE} \
+  --set aurora.agentToken="${token}" \
+  --set aurora.backendUrl="${backendUrl}" \
   --set aurora.wsEndpoint="${wsUrl}"`
   : '# Error: NEXT_PUBLIC_BACKEND_URL or NEXT_PUBLIC_WEBSOCKET_URL is not configured';
 

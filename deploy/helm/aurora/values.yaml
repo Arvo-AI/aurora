@@ -407,9 +407,11 @@ resources:
     requests:
       cpu: "100m"
       memory: "256Mi"
+      ephemeral-storage: "100Mi"
     limits:
       cpu: "500m"
       memory: "1Gi"
+      ephemeral-storage: "500Mi"
   celeryWorker:
     requests:
       cpu: "100m"
@@ -463,9 +465,11 @@ resources:
     requests:
       cpu: "100m"
       memory: "512Mi"
+      ephemeral-storage: "100Mi"
     limits:
       cpu: "500m"
       memory: "1Gi"
+      ephemeral-storage: "500Mi"
   transformers:
     requests:
       cpu: "100m"

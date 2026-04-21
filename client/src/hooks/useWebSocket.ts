@@ -167,7 +167,7 @@ export const useWebSocket = (config: WebSocketConfig) => {
       reconnectAttempts: prev.reconnectAttempts + 1
     }));
     const baseDelay = Math.min(1000 * Math.pow(2, state.reconnectAttempts), 30000);
-    const jitter = Math.random() * 1000;
+    const jitter = crypto.getRandomValues(new Uint32Array(1))[0] / (0xFFFFFFFF / 1000);
     reconnectTimeoutRef.current = setTimeout(() => {
       if (mountedRef.current && shouldReconnectRef.current) {
         connectRef.current();
@@ -251,7 +251,7 @@ export const useWebSocket = (config: WebSocketConfig) => {
 
       // Build URL with token, replacing any existing token param
       if (token) {
-        const parsed = new URL(wsUrl, window.location.origin);
+        const parsed = new URL(wsUrl, globalThis.location.origin);
         parsed.searchParams.set('token', token);
         wsUrl = parsed.toString();
       }

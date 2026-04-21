@@ -39,7 +39,7 @@ spec:
       {{- include "aurora.scheduling" (dict "service" "mcp" "global" $) | nindent 6 }}
       containers:
         - name: aurora-mcp
-          image: "{{ .Values.image.registry }}/aurora-server:{{ .Values.image.tag }}"
+          image: "{{ .Values.image.registry }}/aurora-server:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: IfNotPresent
           command: ["python", "mcp_server.py"]
           securityContext:

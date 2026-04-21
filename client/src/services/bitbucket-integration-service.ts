@@ -132,7 +132,8 @@ export class BitbucketIntegrationService {
   }
 
   static async getRepos(workspace: string, project?: string): Promise<ReposResponse> {
-    const path = `/repos/${encodeURIComponent(workspace)}${project ? `?project=${encodeURIComponent(project)}` : ''}`;
+    const base = `/repos/${encodeURIComponent(workspace)}`;
+    const path = project ? `${base}?project=${encodeURIComponent(project)}` : base;
     return this.request<ReposResponse>(path, { errorMessage: 'Failed to fetch repositories' });
   }
 
@@ -144,7 +145,8 @@ export class BitbucketIntegrationService {
   }
 
   static async getPullRequests(workspace: string, repoSlug: string, state?: string): Promise<PullRequestsResponse> {
-    const path = `/pull-requests/${encodeURIComponent(workspace)}/${encodeURIComponent(repoSlug)}${state ? `?state=${encodeURIComponent(state)}` : ''}`;
+    const base = `/pull-requests/${encodeURIComponent(workspace)}/${encodeURIComponent(repoSlug)}`;
+    const path = state ? `${base}?state=${encodeURIComponent(state)}` : base;
     return this.request<PullRequestsResponse>(path, { errorMessage: 'Failed to fetch pull requests' });
   }
 
