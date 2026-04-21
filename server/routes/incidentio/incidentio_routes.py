@@ -124,12 +124,11 @@ def connect(user_id):
     try:
         client.list_incidents(page_size=1)
     except IncidentioAPIError as exc:
-        logger.warning("[INCIDENTIO] Connection validation failed for user %s: %s", user_id, exc)
-        msg = str(exc)
+        internal_msg = str(exc)
+        logger.warning("[INCIDENTIO] Connection validation failed for user %s", user_id)
         safe_messages = {"Invalid API key", "API key lacks required permissions", "Connection to incident.io timed out", "Unable to reach incident.io API"}
-        if not any(msg.startswith(s) for s in safe_messages):
-            msg = "Failed to validate API key with incident.io"
-        return jsonify({"error": msg}), 502
+        user_msg = next((s for s in safe_messages if internal_msg.startswith(s)), "Failed to validate API key with incident.io")
+        return jsonify({"error": user_msg}), 502
 
     token_payload = {"api_key": api_key}
 
@@ -157,8 +156,8 @@ def status(user_id):
     client = IncidentioClient(api_key)
     try:
         client.list_incidents(page_size=1)
-    except IncidentioAPIError as exc:
-        logger.warning("[INCIDENTIO] Status check failed for user %s: %s", user_id, exc)
+    except IncidentioAPIError:
+        logger.warning("[INCIDENTIO] Status check failed for user %s", user_id)
         return jsonify({"connected": False, "error": "Connection check failed"})
 
     return jsonify({"connected": True})
@@ -189,9 +188,11 @@ def alert_webhook(user_id: str):
     if not user_id:
         return jsonify({"error": "user_id is required"}), 400
 
+    safe_uid = user_id[:36] if user_id else ""
+
     creds = get_token_data(user_id, "incidentio")
     if not creds:
-        logger.warning("[INCIDENTIO] Webhook for user %s with no connection", user_id)
+        logger.warning("[INCIDENTIO] Webhook with no connection: %s", safe_uid)
         return jsonify({"error": "incident.io not connected for this user"}), 404
 
     webhook_secret = creds.get("webhook_secret")
@@ -200,20 +201,20 @@ def alert_webhook(user_id: str):
         timestamp = request.headers.get("webhook-timestamp", "")
         signature_header = request.headers.get("webhook-signature", "")
         if not msg_id or not timestamp or not signature_header:
-            logger.warning("[INCIDENTIO] Webhook rejected: missing Svix headers for user %s", user_id[:50])
+            logger.warning("[INCIDENTIO] Webhook rejected: missing Svix headers: %s", safe_uid)
             return jsonify({"error": "Missing webhook signature headers"}), 401
         to_sign = f"{msg_id}.{timestamp}.{request.get_data(as_text=True)}"
         secret_bytes = base64.b64decode(webhook_secret.split("_")[-1]) if webhook_secret.startswith("whsec_") else webhook_secret.encode()
         expected = base64.b64encode(hmac.new(secret_bytes, to_sign.encode(), hashlib.sha256).digest()).decode()
         signatures = [s.split(",")[-1] for s in signature_header.split(" ")]
         if not any(hmac.compare_digest(expected, s) for s in signatures):
-            logger.warning("[INCIDENTIO] Webhook rejected: invalid signature for user %s", user_id[:50])
+            logger.warning("[INCIDENTIO] Webhook rejected: invalid signature: %s", safe_uid)
             return jsonify({"error": "Invalid webhook signature"}), 401
 
     payload = request.get_json(silent=True) or {}
 
     event_type = payload.get("event_type") or (payload.get("event", {}) or {}).get("type", "unknown")
-    logger.info("[INCIDENTIO] Webhook for user %s: event_type=%s", user_id, event_type)
+    logger.info("[INCIDENTIO] Webhook received: user=%s event=%s", safe_uid, event_type)
 
     metadata = {"remote_addr": request.remote_addr}
     process_incidentio_event.delay(payload, metadata, user_id)
