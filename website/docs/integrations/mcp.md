@@ -58,7 +58,7 @@ Add to `~/.cursor/mcp.json`:
 {
   "mcpServers": {
     "aurora": {
-      "url": "http://<AURORA_MCP_HOST>:<MCP_PORT>/mcp",
+      "url": "<AURORA_MCP_URL>/mcp",
       "headers": {
         "Authorization": "Bearer <YOUR_MCP_TOKEN>"
       }
@@ -75,7 +75,7 @@ Add to Claude Desktop's MCP config (`~/Library/Application Support/Claude/claude
 {
   "mcpServers": {
     "aurora": {
-      "url": "http://<AURORA_MCP_HOST>:<MCP_PORT>/mcp",
+      "url": "<AURORA_MCP_URL>/mcp",
       "headers": {
         "Authorization": "Bearer <YOUR_MCP_TOKEN>"
       }
@@ -92,7 +92,7 @@ Add to Windsurf's MCP configuration:
 {
   "mcpServers": {
     "aurora": {
-      "serverUrl": "http://<AURORA_MCP_HOST>:<MCP_PORT>/mcp",
+      "serverUrl": "<AURORA_MCP_URL>/mcp",
       "headers": {
         "Authorization": "Bearer <YOUR_MCP_TOKEN>"
       }
@@ -101,14 +101,14 @@ Add to Windsurf's MCP configuration:
 }
 ```
 
-Replace `<AURORA_MCP_HOST>` with your Aurora deployment's MCP endpoint:
+Replace `<AURORA_MCP_URL>` with your Aurora deployment's MCP endpoint:
 
-| Deployment | Endpoint |
+| Deployment | `<AURORA_MCP_URL>` |
 |-----------|----------|
-| Docker Compose (local) | `localhost:8811` |
-| Docker Compose (remote/VM) | `<VM_IP>:8811` |
-| Kubernetes (port-forward) | `localhost:8811` after `kubectl port-forward svc/aurora-oss-mcp 8811:8811 -n aurora-oss` |
-| Kubernetes (ingress) | `mcp.yourdomain.com` (see [Kubernetes docs](../deployment/kubernetes#mcp-ingress)) |
+| Docker Compose (local) | `http://localhost:8811` |
+| Docker Compose (remote/VM) | `http://<VM_IP>:8811` |
+| Kubernetes (port-forward) | `http://localhost:8811` after `kubectl port-forward svc/aurora-oss-mcp 8811:8811 -n aurora-oss` |
+| Kubernetes (ingress) | `https://mcp.yourdomain.com` (see [Kubernetes docs](../deployment/kubernetes#mcp-ingress)) |
 
 ## Security Considerations
 
@@ -131,7 +131,7 @@ The MCP server grants full platform access to any client with a valid token. Whe
 
 Once connected, your AI assistant can interact with Aurora:
 
-```
+```text
 "List all investigating incidents"
 → calls list_incidents(status="investigating")
 

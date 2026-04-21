@@ -338,14 +338,16 @@ When `className` is `nginx`, these are auto-applied as annotations by the Helm c
 
 ### MCP Ingress {#mcp-ingress}
 
-The MCP server (`aurora-mcp`) runs on port 8811 inside the cluster. By default it is **not exposed** via ingress -- developers connect using `kubectl port-forward`:
+The MCP server (`aurora-mcp`) runs on port 8811 inside the cluster.
+By default, it is reachable through the API ingress host at `/mcp` (e.g., `https://api.<domain>/mcp`).
+For local-only access, developers can use `kubectl port-forward`:
 
 ```bash
 kubectl port-forward svc/aurora-oss-mcp 8811:8811 -n aurora-oss
 # MCP endpoint: http://localhost:8811/mcp
 ```
 
-To expose MCP externally, set the `ingress.hosts.mcp` value:
+To expose MCP on a dedicated hostname, set `ingress.hosts.mcp`:
 
 ```yaml
 ingress:
@@ -354,7 +356,7 @@ ingress:
 ```
 
 :::warning
-Enabling MCP ingress exposes full platform access to any client with a valid token. Always pair with an auth proxy (e.g. oauth2-proxy sidecar or nginx `auth_request`). See the [MCP security guide](../integrations/mcp#security-considerations).
+Enabling a dedicated MCP ingress exposes full platform access to any client with a valid token. The default `/mcp` path on the API host is already accessible. Always pair with an auth proxy (e.g. oauth2-proxy sidecar or nginx `auth_request`). See the [MCP security guide](../integrations/mcp#security-considerations).
 :::
 
 ## EKS: Fixing nip.io URLs

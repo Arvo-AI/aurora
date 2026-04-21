@@ -203,6 +203,12 @@ services:
         condition: service_healthy
       memgraph:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:${FLASK_PORT}/health/')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
     restart: unless-stopped
 
   celery_worker:
@@ -442,7 +448,7 @@ services:
       AURORA_AIRGAPPED: "true"
     depends_on:
       aurora-server:
-        condition: service_started
+        condition: service_healthy
       postgres:
         condition: service_healthy
     restart: unless-stopped

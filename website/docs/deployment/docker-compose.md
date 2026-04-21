@@ -135,7 +135,7 @@ Then recreate the frontend container to pick up the new values (no rebuild neede
 docker compose -f docker-compose.prod-local.yml up -d frontend
 ```
 
-Make sure the relevant ports (3000, 5080, 5006) are open in your firewall or cloud security group.
+Make sure the relevant ports (3000, 5080, 5006, and 8811 if using MCP) are open in your firewall or cloud security group.
 
 ## Service Architecture
 

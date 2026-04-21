@@ -108,28 +108,27 @@ def _resolve_token(token: str) -> tuple[str, str]:
     ok = False
     try:
         with conn.cursor() as cur:
-            cur.execute("SET myapp.mcp_token_resolve = 'true'")
-            try:
-                cur.execute(
-                    "SELECT user_id, org_id FROM mcp_tokens "
-                    "WHERE token = %s AND status = 'active' "
-                    "AND (expires_at IS NULL OR expires_at > NOW())",
-                    (token,),
-                )
+            cur.execute("SET LOCAL myapp.mcp_token_resolve = 'true'")
+            cur.execute(
+                "SELECT user_id, org_id FROM mcp_tokens "
+                "WHERE token = %s AND status = 'active' "
+                "AND (expires_at IS NULL OR expires_at > NOW())",
+                (token,),
+            )
 
-                row = cur.fetchone()
-                if not row:
-                    raise ValueError("Invalid, expired, or revoked MCP token")
-                now = time.monotonic()
-                if now - _last_used_cache.get(token, 0) > 60:
-                    cur.execute("UPDATE mcp_tokens SET last_used_at = NOW() WHERE token = %s", (token,))
-                    _last_used_cache[token] = now
-            finally:
-                cur.execute("RESET myapp.mcp_token_resolve")
-            conn.commit()
-            ok = True
-            return row[0], row[1]
+            row = cur.fetchone()
+            if not row:
+                raise ValueError("Invalid, expired, or revoked MCP token")
+            now = time.monotonic()
+            if now - _last_used_cache.get(token, 0) > 60:
+                cur.execute("UPDATE mcp_tokens SET last_used_at = NOW() WHERE token = %s", (token,))
+                _last_used_cache[token] = now
+        conn.commit()
+        ok = True
+        return row[0], row[1]
     finally:
+        if not ok:
+            conn.rollback()
         pool.putconn(conn, close=not ok)
 
 
