@@ -127,8 +127,9 @@ x-common-env: &common-env
   # Memgraph (Graph Database)
   MEMGRAPH_HOST: ${MEMGRAPH_HOST}
   MEMGRAPH_PORT: ${MEMGRAPH_PORT}
-  MEMGRAPH_USER: ${MEMGRAPH_USER}
-  MEMGRAPH_PASSWORD: ${MEMGRAPH_PASSWORD}
+  MEMGRAPH_SCHEME: ${MEMGRAPH_SCHEME:-bolt}
+  MEMGRAPH_USER: ${MEMGRAPH_USER:-}
+  MEMGRAPH_PASSWORD: ${MEMGRAPH_PASSWORD:-}
   DISCOVERY_INTERVAL_HOURS: ${DISCOVERY_INTERVAL_HOURS}
 
   # Email Notifications (SMTP)
@@ -228,6 +229,12 @@ services:
       - vault
       - seaweedfs-filer
       - memgraph
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:${FLASK_PORT:-5080}/health/')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
 
   celery_worker:
     build:
@@ -470,8 +477,10 @@ services:
       <<: *common-env
       INTERNAL_API_SECRET: ${INTERNAL_API_SECRET}
     depends_on:
-      - aurora-server
-      - postgres
+      aurora-server:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "python3", "-c", "import socket; s=socket.socket(); s.settimeout(2); s.connect(('localhost',8811)); s.close()"]
       interval: 15s
@@ -644,9 +653,6 @@ services:
       - "7444:7444"
     volumes:
       - memgraph-data:/var/lib/memgraph
-    environment:
-      - MEMGRAPH_USER=${MEMGRAPH_USER}
-      - MEMGRAPH_PASSWORD=${MEMGRAPH_PASSWORD}
     command: >
       --memory-limit=512
       --log-level=ERROR

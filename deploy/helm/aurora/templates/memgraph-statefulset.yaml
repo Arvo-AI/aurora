@@ -1,0 +1,76 @@
+{{- if .Values.services.memgraph.enabled }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "aurora.fullname" . }}-memgraph
+  labels:
+    {{- include "aurora.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ include "aurora.fullname" . }}-memgraph
+  replicas: {{ .Values.replicaCounts.memgraph }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "aurora.name" . }}-memgraph
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "aurora.name" . }}-memgraph
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/part-of: aurora
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        {{- include "aurora.podSecurityContext" (dict "service" "memgraph" "global" $ "defaults" (dict "runAsUser" 101 "runAsGroup" 101 "fsGroup" 101)) | nindent 8 }}
+      {{- include "aurora.scheduling" (dict "service" "memgraph" "global" $) | nindent 6 }}
+      containers:
+        - name: memgraph
+          image: memgraph/memgraph-mage:3.8.1
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            {{- include "aurora.containerSecurityContext" (dict "service" "memgraph" "global" $ "defaults" (dict)) | nindent 12 }}
+          command: ["/usr/lib/memgraph/memgraph"]
+          args:
+            - "--memory-limit={{ .Values.config.MEMGRAPH_MEMORY_LIMIT | default "512" }}"
+            - "--log-level=ERROR"
+            - "--also-log-to-stderr"
+            - "--log-file="
+            - "--data-directory=/var/lib/memgraph/data"
+          ports:
+            - name: bolt
+              containerPort: 7687
+            - name: metrics
+              containerPort: 7444
+          volumeMounts:
+            - name: memgraph-data
+              mountPath: /var/lib/memgraph
+          startupProbe:
+            tcpSocket:
+              port: 7687
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 30
+          readinessProbe:
+            tcpSocket:
+              port: 7687
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            tcpSocket:
+              port: 7687
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.resources.memgraph | nindent 12 }}
+  volumeClaimTemplates:
+    - metadata:
+        name: memgraph-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: {{ .Values.persistence.memgraph.size }}
+{{- end }}

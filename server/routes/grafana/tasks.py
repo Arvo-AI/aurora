@@ -298,11 +298,11 @@ def process_grafana_alert(
                                 if original_incident_id:
                                     cursor.execute(
                                         """INSERT INTO incident_alerts
-                                           (user_id, incident_id, source_type, source_alert_id, alert_title, alert_service,
+                                           (user_id, org_id, incident_id, source_type, source_alert_id, alert_title, alert_service,
                                             alert_severity, correlation_strategy, correlation_score, alert_metadata)
-                                           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                                           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
                                         (
-                                            user_id, original_incident_id, "grafana", per_alert_source_id,
+                                            user_id, org_id, original_incident_id, "grafana", per_alert_source_id,
                                             per_alert_title, _extract_service(alert_payload),
                                             _extract_severity(alert_payload), "resolved_webhook", 1.0,
                                             json.dumps({"resolved_webhook": True, "fingerprint": fingerprint}),
@@ -395,6 +395,7 @@ def process_grafana_alert(
                                         alert_severity=severity,
                                         correlation_result=correlation_result,
                                         alert_metadata=alert_metadata, raw_payload=alert_payload,
+                                        org_id=org_id,
                                     )
                                     cursor.execute("RELEASE SAVEPOINT sp_handle_correlated")
                                     conn.commit()
@@ -459,10 +460,10 @@ def process_grafana_alert(
                                 cursor.execute("SAVEPOINT sp_incident_alerts")
                                 cursor.execute(
                                     """INSERT INTO incident_alerts
-                                       (user_id, incident_id, source_type, source_alert_id, alert_title, alert_service,
+                                       (user_id, org_id, incident_id, source_type, source_alert_id, alert_title, alert_service,
                                         alert_severity, correlation_strategy, correlation_score, alert_metadata)
-                                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
-                                    (user_id, incident_id, "grafana", per_alert_source_id, per_alert_title,
+                                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                                    (user_id, org_id, incident_id, "grafana", per_alert_source_id, per_alert_title,
                                      service, severity, "primary", 1.0, json.dumps(alert_metadata)),
                                 )
                                 cursor.execute(
