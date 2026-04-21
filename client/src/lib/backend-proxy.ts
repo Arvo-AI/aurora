@@ -8,10 +8,7 @@ function buildUrl(backendPath: string, qs?: string): string {
   return qs ? `${env.BACKEND_URL}${backendPath}?${qs}` : `${env.BACKEND_URL}${backendPath}`;
 }
 
-/**
- * Extract and forward the request body, setting the appropriate Content-Type header.
- * Multipart requests are streamed (duplex); everything else is buffered as text.
- */
+// Extract and forward the request body; multipart is streamed, everything else buffered as text.
 async function prepareBody(
   request: NextRequest,
   headers: Record<string, string>,
@@ -46,12 +43,9 @@ async function prepareBody(
   return { body: undefined, useDuplex: false };
 }
 
-/**
- * Convert a successful backend response into a NextResponse.
- * 204/304 have no body — reading it would throw, so return early.
- * HTML is redacted (e.g. werkzeug debug pages) to prevent info leakage.
- */
+// Turn a successful backend response into a NextResponse.
 function formatSuccessResponse(response: Response, errorLabel: string): Promise<NextResponse> | NextResponse {
+  // 204/304 have no body — reading it would throw
   if (response.status === 204 || response.status === 304) {
     return new NextResponse(null, { status: response.status });
   }
@@ -62,6 +56,7 @@ function formatSuccessResponse(response: Response, errorLabel: string): Promise<
     return response.json().then((data) => NextResponse.json(data, { status: response.status }));
   }
 
+  // Redact HTML (e.g. werkzeug debug pages) to prevent info leakage
   if (ct.includes('text/html')) {
     return NextResponse.json(
       { error: `Unexpected HTML response from ${errorLabel}` },
@@ -69,6 +64,7 @@ function formatSuccessResponse(response: Response, errorLabel: string): Promise<
     );
   }
 
+  // Fall back to plain text
   return response.text().then((text) =>
     new NextResponse(text, {
       status: response.status,
@@ -77,10 +73,7 @@ function formatSuccessResponse(response: Response, errorLabel: string): Promise<
   );
 }
 
-/**
- * Proxy a Next.js API-route request to the Python backend.
- * Handles auth, timeout, body forwarding, and error normalisation.
- */
+// Proxy a Next.js API-route request to the Python backend with auth, timeout, and error normalisation.
 export async function forwardRequest(
   request: NextRequest,
   method: string,
