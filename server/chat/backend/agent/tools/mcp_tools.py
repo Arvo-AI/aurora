@@ -280,10 +280,15 @@ region = {aws_creds.get("region", "us-east-1")}
                         credentials_content += f"aws_session_token = {aws_creds.get('session_token', '')}\n"
                     
                     credentials_file = os.path.join(aws_dir, "credentials")
-                    # Write credentials with restricted permissions (0600 = owner read/write only)
-                    fd = os.open(credentials_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-                    with os.fdopen(fd, "w") as f:
-                        f.write(credentials_content)
+
+                    # Write credentials with restricted permissions (0600 = owner read/write only).
+                    # Offload blocking file I/O to a thread so we don't stall the event loop.
+                    def _write_secure_file(path: str, content: str) -> None:
+                        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+                        with os.fdopen(fd, "w") as f:
+                            f.write(content)
+
+                    await asyncio.to_thread(_write_secure_file, credentials_file, credentials_content)
                     
                     # Create config file
                     config_content = f"""[default]
@@ -291,10 +296,8 @@ region = {aws_creds.get("region", "us-east-1")}
 output = json
 """
                     config_file = os.path.join(aws_dir, "config")
-                    fd = os.open(config_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-                    with os.fdopen(fd, "w") as f:
-                        f.write(config_content)
-                    
+                    await asyncio.to_thread(_write_secure_file, config_file, config_content)
+
                     # Set environment variables to point to our custom AWS config location
                     env["AWS_SHARED_CREDENTIALS_FILE"] = credentials_file
                     env["AWS_CONFIG_FILE"] = config_file
