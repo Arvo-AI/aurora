@@ -28,6 +28,42 @@ sharepoint_bp = Blueprint("sharepoint", __name__)
 _AUTH_REQUIRED_MSG = "User authentication required"
 
 
+def _get_request_body() -> Dict[str, Any]:
+    """Safely parse the JSON request body."""
+    try:
+        return request.get_json(force=True, silent=True) or {}
+    except Exception:
+        return {}
+
+
+def _require_user_id():
+    """Return (user_id, None) or (None, error_response)."""
+    uid = get_user_id_from_request()
+    if not uid:
+        return None, (jsonify({"error": _AUTH_REQUIRED_MSG}), 401)
+    return uid, None
+
+
+def _require_access_token(user_id: str):
+    """Return (access_token, creds, None) or (None, None, error_response)."""
+    creds = _get_stored_sharepoint_credentials(user_id)
+    if not creds:
+        return None, None, (jsonify({"error": "SharePoint not connected"}), 404)
+    token = creds.get("access_token")
+    if not token:
+        return None, None, (jsonify({"error": "SharePoint credentials missing"}), 400)
+    return token, creds, None
+
+
+def _handle_http_error(exc: requests.HTTPError, user_id: str, label: str):
+    """Return an error response for a SharePoint HTTPError (no retry)."""
+    status_code = exc.response.status_code if exc.response is not None else None
+    if status_code == 401:
+        return jsonify({"error": "SharePoint credentials expired"}), 401
+    logger.exception("[SHAREPOINT] %s failed for user %s", label, sanitize(user_id))
+    return jsonify({"error": f"Failed to {label.lower()}"}), 502
+
+
 def _get_stored_sharepoint_credentials(user_id: str) -> Optional[Dict[str, Any]]:
     """Retrieve stored SharePoint credentials for user."""
     try:
@@ -74,24 +110,24 @@ def connect():
     if request.method == "OPTIONS":
         return create_cors_response()
 
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": _AUTH_REQUIRED_MSG}), 401
+    user_id, err = _require_user_id()
+    if err:
+        return err
 
-    try:
-        data = request.get_json(force=True, silent=True) or {}
-    except Exception:
-        data = {}
+    data = _get_request_body()
 
     code = data.get("code")
     if not code:
-        # Step 1: Generate state and return auth URL
         state = secrets.token_urlsafe(32)
         store_oauth2_state(state, user_id, "sharepoint")
         auth_url = get_auth_url(state=state)
         return jsonify({"authUrl": auth_url})
 
-    # Step 2: Exchange code for token
+    return _exchange_oauth_code(user_id, data, code)
+
+
+def _exchange_oauth_code(user_id: str, data: dict, code: str):
+    """Validate OAuth state, exchange code, store token, and return profile."""
     state = data.get("state")
     if not state:
         return jsonify({"error": "Missing OAuth state parameter"}), 400
@@ -110,11 +146,9 @@ def connect():
         return jsonify({"error": "SharePoint OAuth token exchange failed"}), 502
 
     access_token = token_data.get("access_token")
-    refresh_token = token_data.get("refresh_token")
     if not access_token:
         return jsonify({"error": "SharePoint OAuth token exchange returned no access_token"}), 502
 
-    # Validate token by fetching user profile
     try:
         client = SharePointClient(access_token)
         user_profile = client.get_current_user()
@@ -130,6 +164,7 @@ def connect():
         "user_display_name": display_name,
         "user_email": email,
     }
+    refresh_token = token_data.get("refresh_token")
     if refresh_token:
         token_payload["refresh_token"] = refresh_token
 
@@ -153,39 +188,16 @@ def status():
     if request.method == "OPTIONS":
         return create_cors_response()
 
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": _AUTH_REQUIRED_MSG}), 401
+    user_id, err = _require_user_id()
+    if err:
+        return err
 
     creds = _get_stored_sharepoint_credentials(user_id)
-    if not creds:
+    if not creds or not creds.get("access_token"):
         return jsonify({"connected": False})
 
-    access_token = creds.get("access_token")
-    if not access_token:
-        return jsonify({"connected": False})
-
-    try:
-        client = SharePointClient(access_token)
-        user_profile = client.get_current_user()
-    except requests.HTTPError as exc:
-        status_code = exc.response.status_code if exc.response is not None else None
-        if status_code == 401:
-            refreshed = _refresh_sharepoint_credentials(user_id, creds)
-            if refreshed:
-                try:
-                    client = SharePointClient(refreshed.get("access_token"))
-                    user_profile = client.get_current_user()
-                except Exception as retry_exc:
-                    logger.warning("[SHAREPOINT] Status validation retry failed for user %s: %s", sanitize(user_id), retry_exc)
-                    return jsonify({"connected": False})
-            else:
-                return jsonify({"connected": False})
-        else:
-            logger.warning("[SHAREPOINT] Status validation failed for user %s: %s", sanitize(user_id), exc)
-            return jsonify({"connected": False})
-    except Exception as exc:
-        logger.warning("[SHAREPOINT] Status validation failed for user %s: %s", sanitize(user_id), exc)
+    user_profile = _validate_sharepoint_token(user_id, creds)
+    if user_profile is None:
         return jsonify({"connected": False})
 
     display_name = (user_profile or {}).get("displayName") or creds.get("user_display_name")
@@ -202,18 +214,42 @@ def status():
     })
 
 
+def _validate_sharepoint_token(user_id: str, creds: Dict[str, Any]) -> Optional[Dict]:
+    """Validate the SharePoint token, refreshing if expired. Returns profile or None."""
+    try:
+        client = SharePointClient(creds.get("access_token"))
+        return client.get_current_user()
+    except requests.HTTPError as exc:
+        status_code = exc.response.status_code if exc.response is not None else None
+        if status_code != 401:
+            logger.warning("[SHAREPOINT] Status validation failed for user %s: %s", sanitize(user_id), exc)
+            return None
+    except Exception as exc:
+        logger.warning("[SHAREPOINT] Status validation failed for user %s: %s", sanitize(user_id), exc)
+        return None
+
+    refreshed = _refresh_sharepoint_credentials(user_id, creds)
+    if not refreshed:
+        return None
+    try:
+        client = SharePointClient(refreshed.get("access_token"))
+        return client.get_current_user()
+    except Exception as retry_exc:
+        logger.warning("[SHAREPOINT] Status validation retry failed for user %s: %s", sanitize(user_id), retry_exc)
+        return None
+
+
 @sharepoint_bp.route("/disconnect", methods=["POST", "DELETE", "OPTIONS"])
 def disconnect():
     """Disconnect SharePoint by removing stored credentials."""
     if request.method == "OPTIONS":
         return create_cors_response()
 
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": _AUTH_REQUIRED_MSG}), 401
+    user_id, err = _require_user_id()
+    if err:
+        return err
 
     try:
-        # Fetch secret_ref before deleting the DB row so we can clean up Vault
         secret_ref = None
         with db_pool.get_admin_connection() as conn:
             cursor = conn.cursor()
@@ -242,7 +278,7 @@ def disconnect():
 
         logger.info("[SHAREPOINT] Disconnected user %s (deleted %s token rows)", sanitize(user_id), deleted_count)
         return jsonify({"success": True, "message": "SharePoint disconnected successfully"})
-    except Exception as exc:
+    except Exception:
         logger.exception("[SHAREPOINT] Failed to disconnect provider")
         return jsonify({"error": "Failed to disconnect SharePoint"}), 500
 
@@ -253,39 +289,27 @@ def search():
     if request.method == "OPTIONS":
         return create_cors_response()
 
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": _AUTH_REQUIRED_MSG}), 401
+    user_id, err = _require_user_id()
+    if err:
+        return err
 
-    try:
-        data = request.get_json(force=True, silent=True) or {}
-    except Exception:
-        data = {}
-
+    data = _get_request_body()
     query = data.get("query")
     if not query:
         return jsonify({"error": "Search query is required"}), 400
 
+    _, _, token_err = _require_access_token(user_id)
+    if token_err:
+        return token_err
+
     site_id = data.get("siteId") or data.get("site_id")
     max_results = data.get("maxResults") or data.get("max_results") or 10
-
-    creds = _get_stored_sharepoint_credentials(user_id)
-    if not creds:
-        return jsonify({"error": "SharePoint not connected"}), 404
-
-    access_token = creds.get("access_token")
-    if not access_token:
-        return jsonify({"error": "SharePoint credentials missing"}), 400
 
     try:
         svc = SharePointSearchService(user_id)
         results = svc.search(query=query, site_id=site_id, max_results=max_results)
     except requests.HTTPError as exc:
-        status_code = exc.response.status_code if exc.response is not None else None
-        if status_code == 401:
-            return jsonify({"error": "SharePoint credentials expired"}), 401
-        logger.exception("[SHAREPOINT] Search failed for user %s", sanitize(user_id))
-        return jsonify({"error": "Failed to search SharePoint"}), 502
+        return _handle_http_error(exc, user_id, "Search SharePoint")
     except Exception:
         logger.exception("[SHAREPOINT] Search failed for user %s", sanitize(user_id))
         return jsonify({"error": "Failed to search SharePoint"}), 502
@@ -299,37 +323,25 @@ def fetch_page():
     if request.method == "OPTIONS":
         return create_cors_response()
 
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": _AUTH_REQUIRED_MSG}), 401
+    user_id, err = _require_user_id()
+    if err:
+        return err
 
-    try:
-        data = request.get_json(force=True, silent=True) or {}
-    except Exception:
-        data = {}
-
+    data = _get_request_body()
     site_id = data.get("siteId") or data.get("site_id")
     page_id = data.get("pageId") or data.get("page_id")
     if not site_id or not page_id:
         return jsonify({"error": "siteId and pageId are required"}), 400
 
-    creds = _get_stored_sharepoint_credentials(user_id)
-    if not creds:
-        return jsonify({"error": "SharePoint not connected"}), 404
-
-    access_token = creds.get("access_token")
-    if not access_token:
-        return jsonify({"error": "SharePoint credentials missing"}), 400
+    _, _, token_err = _require_access_token(user_id)
+    if token_err:
+        return token_err
 
     try:
         svc = SharePointSearchService(user_id)
         result = svc.fetch_page_markdown(site_id=site_id, page_id=page_id)
     except requests.HTTPError as exc:
-        status_code = exc.response.status_code if exc.response is not None else None
-        if status_code == 401:
-            return jsonify({"error": "SharePoint credentials expired"}), 401
-        logger.exception("[SHAREPOINT] Fetch page failed for user %s", sanitize(user_id))
-        return jsonify({"error": "Failed to fetch SharePoint page"}), 502
+        return _handle_http_error(exc, user_id, "Fetch SharePoint page")
     except Exception:
         logger.exception("[SHAREPOINT] Fetch page failed for user %s", sanitize(user_id))
         return jsonify({"error": "Failed to fetch SharePoint page"}), 502
@@ -343,37 +355,25 @@ def fetch_document():
     if request.method == "OPTIONS":
         return create_cors_response()
 
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": _AUTH_REQUIRED_MSG}), 401
+    user_id, err = _require_user_id()
+    if err:
+        return err
 
-    try:
-        data = request.get_json(force=True, silent=True) or {}
-    except Exception:
-        data = {}
-
+    data = _get_request_body()
     drive_id = data.get("driveId") or data.get("drive_id")
     item_id = data.get("itemId") or data.get("item_id")
     if not drive_id or not item_id:
         return jsonify({"error": "driveId and itemId are required"}), 400
 
-    creds = _get_stored_sharepoint_credentials(user_id)
-    if not creds:
-        return jsonify({"error": "SharePoint not connected"}), 404
-
-    access_token = creds.get("access_token")
-    if not access_token:
-        return jsonify({"error": "SharePoint credentials missing"}), 400
+    _, _, token_err = _require_access_token(user_id)
+    if token_err:
+        return token_err
 
     try:
         svc = SharePointSearchService(user_id)
         result = svc.fetch_document_text(drive_id=drive_id, item_id=item_id)
     except requests.HTTPError as exc:
-        status_code = exc.response.status_code if exc.response is not None else None
-        if status_code == 401:
-            return jsonify({"error": "SharePoint credentials expired"}), 401
-        logger.exception("[SHAREPOINT] Fetch document failed for user %s", sanitize(user_id))
-        return jsonify({"error": "Failed to fetch SharePoint document"}), 502
+        return _handle_http_error(exc, user_id, "Fetch SharePoint document")
     except Exception:
         logger.exception("[SHAREPOINT] Fetch document failed for user %s", sanitize(user_id))
         return jsonify({"error": "Failed to fetch SharePoint document"}), 502
@@ -387,39 +387,27 @@ def create_page():
     if request.method == "OPTIONS":
         return create_cors_response()
 
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": _AUTH_REQUIRED_MSG}), 401
+    user_id, err = _require_user_id()
+    if err:
+        return err
 
-    try:
-        data = request.get_json(force=True, silent=True) or {}
-    except Exception:
-        data = {}
-
+    data = _get_request_body()
     title = data.get("title")
     content = data.get("content")
     if not title or not content:
         return jsonify({"error": "title and content are required"}), 400
 
+    _, _, token_err = _require_access_token(user_id)
+    if token_err:
+        return token_err
+
     site_id = data.get("siteId") or data.get("site_id")
-
-    creds = _get_stored_sharepoint_credentials(user_id)
-    if not creds:
-        return jsonify({"error": "SharePoint not connected"}), 404
-
-    access_token = creds.get("access_token")
-    if not access_token:
-        return jsonify({"error": "SharePoint credentials missing"}), 400
 
     try:
         svc = SharePointSearchService(user_id)
         result = svc.create_page(title=title, markdown_content=content, site_id=site_id)
     except requests.HTTPError as exc:
-        status_code = exc.response.status_code if exc.response is not None else None
-        if status_code == 401:
-            return jsonify({"error": "SharePoint credentials expired"}), 401
-        logger.exception("[SHAREPOINT] Create page failed for user %s", sanitize(user_id))
-        return jsonify({"error": "Failed to create SharePoint page"}), 502
+        return _handle_http_error(exc, user_id, "Create SharePoint page")
     except Exception:
         logger.exception("[SHAREPOINT] Create page failed for user %s", sanitize(user_id))
         return jsonify({"error": "Failed to create SharePoint page"}), 502
@@ -433,41 +421,42 @@ def list_sites():
     if request.method == "OPTIONS":
         return create_cors_response()
 
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": _AUTH_REQUIRED_MSG}), 401
+    user_id, err = _require_user_id()
+    if err:
+        return err
 
     search_query = request.args.get("search", "")
 
-    creds = _get_stored_sharepoint_credentials(user_id)
-    if not creds:
-        return jsonify({"error": "SharePoint not connected"}), 404
-
-    access_token = creds.get("access_token")
-    if not access_token:
-        return jsonify({"error": "SharePoint credentials missing"}), 400
+    access_token, creds, token_err = _require_access_token(user_id)
+    if token_err:
+        return token_err
 
     try:
         client = SharePointClient(access_token)
         sites = client.search_sites(search_query)
+        return jsonify({"sites": sites, "count": len(sites)})
     except requests.HTTPError as exc:
-        status_code = exc.response.status_code if exc.response is not None else None
-        if status_code == 401:
-            refreshed = _refresh_sharepoint_credentials(user_id, creds)
-            if refreshed:
-                try:
-                    client = SharePointClient(refreshed.get("access_token"))
-                    sites = client.search_sites(search_query)
-                except Exception as retry_exc:
-                    logger.exception("[SHAREPOINT] List sites retry failed for user %s: %s", sanitize(user_id), retry_exc)
-                    return jsonify({"error": "Failed to list SharePoint sites"}), 502
-            else:
-                return jsonify({"error": "SharePoint credentials expired"}), 401
-        else:
-            logger.exception("[SHAREPOINT] List sites failed for user %s: %s", sanitize(user_id), exc)
-            return jsonify({"error": "Failed to list SharePoint sites"}), 502
+        return _handle_list_sites_401(exc, user_id, creds, search_query)
     except Exception as exc:
         logger.exception("[SHAREPOINT] List sites failed for user %s: %s", sanitize(user_id), exc)
         return jsonify({"error": "Failed to list SharePoint sites"}), 502
 
-    return jsonify({"sites": sites, "count": len(sites)})
+
+def _handle_list_sites_401(exc: requests.HTTPError, user_id: str, creds: dict, search_query: str):
+    """Handle 401 on list-sites by refreshing and retrying once."""
+    status_code = exc.response.status_code if exc.response is not None else None
+    if status_code != 401:
+        logger.exception("[SHAREPOINT] List sites failed for user %s: %s", sanitize(user_id), exc)
+        return jsonify({"error": "Failed to list SharePoint sites"}), 502
+
+    refreshed = _refresh_sharepoint_credentials(user_id, creds)
+    if not refreshed:
+        return jsonify({"error": "SharePoint credentials expired"}), 401
+
+    try:
+        client = SharePointClient(refreshed.get("access_token"))
+        sites = client.search_sites(search_query)
+        return jsonify({"sites": sites, "count": len(sites)})
+    except Exception as retry_exc:
+        logger.exception("[SHAREPOINT] List sites retry failed for user %s: %s", sanitize(user_id), retry_exc)
+        return jsonify({"error": "Failed to list SharePoint sites"}), 502

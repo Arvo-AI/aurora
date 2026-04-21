@@ -155,6 +155,33 @@ def _normalize_mode(mode: Optional[str]) -> str:
 
 # Deployment update listener removed
 
+async def _ws_reject(websocket, text: str, *, close_reason: str = ""):
+    """Send an error frame and optionally close the WebSocket."""
+    await websocket.send(json.dumps({"type": "error", "data": {"text": text}}))
+    if close_reason:
+        await websocket.close(code=1008, reason=close_reason)
+
+
+def _warm_user_caches(user_id: str):
+    """Kick off background tasks that pre-warm per-user caches."""
+    asyncio.create_task(update_api_cost_cache_async(user_id))
+    logger.info(f"Started preemptive API cost cache update for user {user_id}")
+
+    try:
+        from chat.backend.agent.tools.mcp_preloader import preload_user_tools
+        preload_user_tools(user_id)
+        logger.info(f"Triggered MCP preload for user {user_id} on connection")
+    except Exception as e:
+        logger.debug(f"Failed to trigger MCP preload on connection: {e}")
+
+    try:
+        from chat.backend.agent.tools.mcp_preloader import update_user_activity
+        update_user_activity(user_id)
+        logger.debug(f"Updated MCP preloader activity for user {user_id}")
+    except Exception as e:
+        logger.debug(f"Failed to update MCP preloader activity: {e}")
+
+
 async def handle_init(data, websocket, current_user_id, deployment_listener_task):
     """Handle connection initialization message and return updated state.
 
@@ -169,11 +196,7 @@ async def handle_init(data, websocket, current_user_id, deployment_listener_task
             f"WebSocket init rejected: token user {current_user_id!r} "
             f"does not match init user_id {user_id!r}"
         )
-        await websocket.send(json.dumps({
-            "type": "error",
-            "data": {"text": "Authentication failed: user identity mismatch."}
-        }))
-        await websocket.close(code=1008, reason="User identity mismatch")
+        await _ws_reject(websocket, "Authentication failed: user identity mismatch.", close_reason="User identity mismatch")
         return current_user_id, deployment_listener_task
 
     if user_id and not current_user_id:
@@ -181,37 +204,19 @@ async def handle_init(data, websocket, current_user_id, deployment_listener_task
             logger.warning(
                 f"WebSocket init rejected: legacy auth attempted while INTERNAL_API_SECRET is configured (user_id={user_id!r})"
             )
-            await websocket.send(json.dumps({
-                "type": "error",
-                "data": {"text": "Authentication failed: token-based auth required."}
-            }))
-            await websocket.close(code=1008, reason="Token-based auth required")
+            await _ws_reject(websocket, "Authentication failed: token-based auth required.", close_reason="Token-based auth required")
             return current_user_id, deployment_listener_task
 
         if not validate_user_exists(user_id):
             logger.warning(f"WebSocket init rejected: invalid user_id {user_id!r}")
-            await websocket.send(json.dumps({
-                "type": "error",
-                "data": {"text": "Authentication failed: invalid user identity."}
-            }))
+            await _ws_reject(websocket, "Authentication failed: invalid user identity.")
             return current_user_id, deployment_listener_task
 
         logger.info(f"Initializing connection for user {user_id}")
         current_user_id = user_id
 
-        # Preemptively warm the API cost cache for this user
-        asyncio.create_task(update_api_cost_cache_async(user_id))
-        logger.info(f"Started preemptive API cost cache update for user {user_id}")
+        _warm_user_caches(user_id)
 
-        # Trigger MCP preloading for this user
-        try:
-            from chat.backend.agent.tools.mcp_preloader import preload_user_tools
-            preload_user_tools(user_id)
-            logger.info(f"Triggered MCP preload for user {user_id} on connection")
-        except Exception as e:
-            logger.debug(f"Failed to trigger MCP preload on connection: {e}")
-        
-        # Start deployment listener for this user
         if deployment_listener_task:
             deployment_listener_task.cancel()
             try:
@@ -219,16 +224,7 @@ async def handle_init(data, websocket, current_user_id, deployment_listener_task
             except asyncio.CancelledError:
                 pass
 
-        # Deployment listener removed
         logger.info(f"Started deployment listener for user {user_id}")
-
-        # Update user activity for MCP preloader
-        try:
-            from chat.backend.agent.tools.mcp_preloader import update_user_activity
-            update_user_activity(user_id)
-            logger.debug(f"Updated MCP preloader activity for user {user_id}")
-        except Exception as e:
-            logger.debug(f"Failed to update MCP preloader activity: {e}")
 
     return current_user_id, deployment_listener_task
 def process_attachments_and_append_to_question(question, attachments):

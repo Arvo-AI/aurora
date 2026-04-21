@@ -722,19 +722,33 @@ def _session_has_successful_jira_action(session_id: str, user_id: str) -> bool:
                 if not row or not row[0]:
                     return False
                 msgs = row[0] if isinstance(row[0], list) else json.loads(row[0])
-                for msg in msgs:
-                    for tc in (msg.get('toolCalls') or []):
-                        if (tc.get('tool_name') or '').lower() in _JIRA_TOOL_NAMES:
-                            output = tc.get('output') or ''
-                            try:
-                                parsed = json.loads(output) if isinstance(output, str) else output
-                                if isinstance(parsed, dict) and parsed.get('status') == 'success':
-                                    return True
-                            except (json.JSONDecodeError, TypeError, ValueError):
-                                if '"success"' in str(output):
-                                    return True
+                return _any_jira_success(msgs)
     except Exception as exc:
         logger.warning(f"[JiraFollowup] Failed to check existing actions: {exc}")
+    return False
+
+
+def _any_jira_success(msgs: list) -> bool:
+    """Scan chat messages for a successful Jira tool call."""
+    for msg in msgs:
+        for tc in (msg.get('toolCalls') or []):
+            if (tc.get('tool_name') or '').lower() not in _JIRA_TOOL_NAMES:
+                continue
+            if _tool_call_succeeded(tc):
+                return True
+    return False
+
+
+def _tool_call_succeeded(tc: dict) -> bool:
+    """Return True if a single tool-call dict indicates success."""
+    output = tc.get('output') or ''
+    try:
+        parsed = json.loads(output) if isinstance(output, str) else output
+        if isinstance(parsed, dict) and parsed.get('status') == 'success':
+            return True
+    except (json.JSONDecodeError, TypeError, ValueError):
+        if '"success"' in str(output):
+            return True
     return False
 
 

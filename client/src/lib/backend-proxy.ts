@@ -8,6 +8,79 @@ function buildUrl(backendPath: string, qs?: string): string {
   return qs ? `${env.BACKEND_URL}${backendPath}?${qs}` : `${env.BACKEND_URL}${backendPath}`;
 }
 
+/**
+ * Extract and forward the request body, setting the appropriate Content-Type header.
+ * Multipart requests are streamed (duplex); everything else is buffered as text.
+ */
+async function prepareBody(
+  request: NextRequest,
+  headers: Record<string, string>,
+): Promise<{ body: BodyInit | undefined; useDuplex: boolean }> {
+  const ct = request.headers.get('content-type') || '';
+
+  if (ct.includes('multipart/form-data')) {
+    headers['Content-Type'] = ct;
+    return { body: request.body as unknown as BodyInit, useDuplex: true };
+  }
+
+  if (ct.includes('application/json')) {
+    headers['Content-Type'] = 'application/json';
+    return { body: await request.text(), useDuplex: false };
+  }
+
+  if (ct.includes('application/x-www-form-urlencoded')) {
+    headers['Content-Type'] = ct;
+    return { body: await request.text(), useDuplex: false };
+  }
+
+  try {
+    const text = await request.text();
+    if (text.length > 0) {
+      if (ct) headers['Content-Type'] = ct;
+      return { body: text, useDuplex: false };
+    }
+  } catch {
+    // no body
+  }
+
+  return { body: undefined, useDuplex: false };
+}
+
+/**
+ * Convert a successful backend response into a NextResponse.
+ * 204/304 have no body — reading it would throw, so return early.
+ * HTML is redacted (e.g. werkzeug debug pages) to prevent info leakage.
+ */
+function formatSuccessResponse(response: Response, errorLabel: string): Promise<NextResponse> | NextResponse {
+  if (response.status === 204 || response.status === 304) {
+    return new NextResponse(null, { status: response.status });
+  }
+
+  const ct = response.headers.get('content-type') || '';
+
+  if (ct.includes('application/json')) {
+    return response.json().then((data) => NextResponse.json(data, { status: response.status }));
+  }
+
+  if (ct.includes('text/html')) {
+    return NextResponse.json(
+      { error: `Unexpected HTML response from ${errorLabel}` },
+      { status: 502 },
+    );
+  }
+
+  return response.text().then((text) =>
+    new NextResponse(text, {
+      status: response.status,
+      headers: { 'Content-Type': ct || 'text/plain' },
+    }),
+  );
+}
+
+/**
+ * Proxy a Next.js API-route request to the Python backend.
+ * Handles auth, timeout, body forwarding, and error normalisation.
+ */
 export async function forwardRequest(
   request: NextRequest,
   method: string,
@@ -23,11 +96,9 @@ export async function forwardRequest(
     const { headers: authHeaders } = authResult;
 
     const { searchParams } = new URL(request.url);
-    const qs = searchParams.toString();
-    const url = buildUrl(backendPath, qs);
+    const url = buildUrl(backendPath, searchParams.toString());
 
     const headers: Record<string, string> = { ...authHeaders };
-
     if (env.INTERNAL_API_SECRET) {
       headers['X-Internal-Secret'] = env.INTERNAL_API_SECRET;
     }
@@ -35,28 +106,7 @@ export async function forwardRequest(
     let body: BodyInit | undefined;
     let useDuplex = false;
     if (passBody) {
-      const ct = request.headers.get('content-type') || '';
-      if (ct.includes('multipart/form-data')) {
-        body = request.body as unknown as BodyInit;
-        headers['Content-Type'] = ct;
-        useDuplex = true;
-      } else if (ct.includes('application/json')) {
-        headers['Content-Type'] = 'application/json';
-        body = await request.text();
-      } else if (ct.includes('application/x-www-form-urlencoded')) {
-        headers['Content-Type'] = ct;
-        body = await request.text();
-      } else {
-        try {
-          const text = await request.text();
-          if (text.length > 0) {
-            if (ct) headers['Content-Type'] = ct;
-            body = text;
-          }
-        } catch {
-          // no body
-        }
-      }
+      ({ body, useDuplex } = await prepareBody(request, headers));
     }
 
     const controller = new AbortController();
@@ -77,10 +127,7 @@ export async function forwardRequest(
     } catch (fetchErr: unknown) {
       clearTimeout(timeoutId);
       if (fetchErr instanceof Error && fetchErr.name === 'AbortError') {
-        return NextResponse.json(
-          { error: `Request timeout for ${errorLabel}` },
-          { status: 504 },
-        );
+        return NextResponse.json({ error: `Request timeout for ${errorLabel}` }, { status: 504 });
       }
       throw fetchErr;
     }
@@ -93,37 +140,10 @@ export async function forwardRequest(
       );
     }
 
-    const ct = response.headers.get('content-type') || '';
-
-    // 204/304 have no body — reading it would throw
-    if (response.status === 204 || response.status === 304) {
-      return new NextResponse(null, { status: response.status });
-    }
-
-    if (ct.includes('application/json')) {
-      const data = await response.json();
-      return NextResponse.json(data, { status: response.status });
-    }
-
-    // Redact non-JSON responses (e.g. werkzeug debug pages) to prevent info leakage
-    if (ct.includes('text/html')) {
-      return NextResponse.json(
-        { error: `Unexpected HTML response from ${errorLabel}` },
-        { status: 502 },
-      );
-    }
-
-    const text = await response.text();
-    return new NextResponse(text, {
-      status: response.status,
-      headers: { 'Content-Type': ct || 'text/plain' },
-    });
+    return await formatSuccessResponse(response, errorLabel);
   } catch (error) {
     const safeError = error instanceof Error ? { message: error.message, name: error.name } : {};
     console.error(`[api/${errorLabel}] Error:`, safeError);
-    return NextResponse.json(
-      { error: `Failed to load ${errorLabel}` },
-      { status: 500 },
-    );
+    return NextResponse.json({ error: `Failed to load ${errorLabel}` }, { status: 500 });
   }
 }
