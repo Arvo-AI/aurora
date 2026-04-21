@@ -309,16 +309,22 @@ output = json
                     pass
 
             
-            process = subprocess.Popen(
+            # Offload the blocking Popen spawn to a worker thread so we don't
+            # stall the event loop while the child is fork/exec'd. The returned
+            # Popen object is still used with its synchronous stdin/stdout
+            # pipes in send_mcp_message, so we keep subprocess.Popen here rather
+            # than switching to asyncio.create_subprocess_exec.
+            process = await asyncio.to_thread(
+                subprocess.Popen,
                 cmd,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 env=env,
                 text=True,
-                bufsize=1
+                bufsize=1,
             )
-            
+
             # Give the process a moment to start
             # Docker containers need more time, especially on first run (image pull)
             startup_wait = 2.0 if server_type == "github" else 0.5
