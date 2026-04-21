@@ -37,6 +37,9 @@ from .trigger_rca_tool import trigger_rca, TriggerRCAArgs
 # Visualization trigger caching
 from cachetools import TTLCache
 _viz_triggers: TTLCache = TTLCache(maxsize=100, ttl=3600)  # 1 hour TTL
+
+# Strong references for fire-and-forget tasks so they aren't GC'd before completion.
+_background_tasks: "set[asyncio.Task]" = set()
 from chat.backend.constants import MAX_TOOL_OUTPUT_CHARS
 from .github_apply_fix_tool import github_apply_fix, GitHubApplyFixArgs
 from .cloud_exec_tool import cloud_exec
@@ -417,7 +420,9 @@ def send_tool_completion(tool_name: str, output: str, status: str = "completed",
                     loop = asyncio.get_event_loop()
                     if loop.is_running():
                         # If we're in an async context, schedule the send
-                        asyncio.create_task(agent_websocket_sender(result_data))
+                        _ws_send_task = asyncio.create_task(agent_websocket_sender(result_data))
+                        _background_tasks.add(_ws_send_task)
+                        _ws_send_task.add_done_callback(_background_tasks.discard)
                     else:
                         # If we're in a sync context, run in thread
                         loop.run_until_complete(agent_websocket_sender(result_data))

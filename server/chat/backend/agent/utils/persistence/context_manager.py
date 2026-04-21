@@ -14,7 +14,9 @@ logger = logging.getLogger(__name__)
 
 class ContextManager:
     """Drop-in replacement for LLMContextManager with performance optimizations."""
-    
+
+    _cleanup_tasks: "set[asyncio.Task]" = set()
+
     def __init__(self):
         """Initialize optimized components."""
         self.cache = RedisCache()
@@ -26,7 +28,8 @@ class ContextManager:
         # Start async queue in background
         try:
             loop = asyncio.get_running_loop()
-            asyncio.create_task(self.async_queue.start())
+            # Keep a reference so the task is not GC'd before start() completes.
+            self._queue_start_task = asyncio.create_task(self.async_queue.start())
         except RuntimeError:
             # No event loop running yet
             logger.debug("Event loop not available for async queue")
@@ -213,4 +216,6 @@ class ContextManager:
     def cleanup(cls):
         """Cleanup resources on shutdown."""
         if hasattr(cls, '_instance'):
-            asyncio.create_task(cls._instance.async_queue.stop())
+            stop_task = asyncio.create_task(cls._instance.async_queue.stop())
+            cls._cleanup_tasks.add(stop_task)
+            stop_task.add_done_callback(cls._cleanup_tasks.discard)

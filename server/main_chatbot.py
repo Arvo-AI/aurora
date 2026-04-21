@@ -29,6 +29,9 @@ load_dotenv()
 
 from collections import defaultdict
 import asyncio
+
+# Strong references for fire-and-forget tasks so they aren't GC'd before completion.
+_background_tasks: "set[asyncio.Task]" = set()
 from langchain_core.messages import AIMessageChunk, HumanMessage, AIMessage
 import websockets
 import logging
@@ -110,7 +113,9 @@ async def handle_init(data, websocket, current_user_id, deployment_listener_task
         current_user_id = user_id
 
         # Preemptively warm the API cost cache for this user
-        asyncio.create_task(update_api_cost_cache_async(user_id))
+        _cost_warm_task = asyncio.create_task(update_api_cost_cache_async(user_id))
+        _background_tasks.add(_cost_warm_task)
+        _cost_warm_task.add_done_callback(_background_tasks.discard)
         logger.info(f"Started preemptive API cost cache update for user {user_id}")
 
         # Trigger MCP preloading for this user
@@ -730,7 +735,9 @@ async def process_workflow_async(wf, state, websocket, user_id, incident_id=None
         try:
             # Update API cost cache after workflow completion to capture new usage
             # This ensures that any LLM usage from this workflow is immediately reflected
-            asyncio.create_task(update_api_cost_cache_async(user_id))
+            _cost_update_task = asyncio.create_task(update_api_cost_cache_async(user_id))
+            _background_tasks.add(_cost_update_task)
+            _cost_update_task.add_done_callback(_background_tasks.discard)
             logger.debug(f"Triggered post-request API cost update for user {user_id}")
 
             is_cached, total_cost = get_cached_api_cost(user_id)
