@@ -37,20 +37,12 @@ import { Suggestion } from '@/lib/services/incidents';
 import InfrastructureVisualization from '@/components/incidents/InfrastructureVisualization';
 import ExecutionWaterfall from './ExecutionWaterfall';
 import { ReactFlowProvider } from '@xyflow/react';
-
-const SOURCE_DISPLAY_NAMES: Record<string, string> = {
-  incidentio: 'incident.io',
-  pagerduty: 'PagerDuty',
-  opsgenie: 'OpsGenie',
-  bigpanda: 'BigPanda',
-  newrelic: 'New Relic',
-  datadog: 'Datadog',
-  dynatrace: 'Dynatrace',
-  cloudbees: 'CloudBees',
-};
+import { connectorRegistry } from '@/components/connectors/ConnectorRegistry';
 
 function sourceDisplayName(source: string): string {
-  return SOURCE_DISPLAY_NAMES[source] ?? source.charAt(0).toUpperCase() + source.slice(1);
+  const connector = connectorRegistry.get(source);
+  if (connector) return connector.name;
+  return source.charAt(0).toUpperCase() + source.slice(1);
 }
 
 interface IncidentCardProps {
