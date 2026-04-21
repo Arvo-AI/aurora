@@ -16,9 +16,9 @@ from connectors.sharepoint_connector.auth import (
 from connectors.sharepoint_connector.client import SharePointClient
 from connectors.sharepoint_connector.search_service import SharePointSearchService
 from utils.db.connection_pool import db_pool
-from utils.web.cors_utils import create_cors_response
 from utils.auth.oauth2_state_cache import retrieve_oauth2_state, store_oauth2_state
 from utils.auth.stateless_auth import get_user_id_from_request, set_rls_context
+from utils.auth.rbac_decorators import require_permission
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.log_sanitizer import sanitize
 
@@ -105,15 +105,9 @@ def _refresh_sharepoint_credentials(user_id: str, creds: Dict[str, Any]) -> Opti
 
 
 @sharepoint_bp.route("/connect", methods=["POST", "OPTIONS"])
-def connect():
+@require_permission("connectors", "write")
+def connect(user_id):
     """Connect SharePoint via Microsoft OAuth2."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
-    user_id, err = _require_user_id()
-    if err:
-        return err
-
     data = _get_request_body()
 
     code = data.get("code")
@@ -183,15 +177,9 @@ def _exchange_oauth_code(user_id: str, data: dict, code: str):
 
 
 @sharepoint_bp.route("/status", methods=["GET", "OPTIONS"])
-def status():
+@require_permission("connectors", "read")
+def status(user_id):
     """Check SharePoint connection status."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
-    user_id, err = _require_user_id()
-    if err:
-        return err
-
     creds = _get_stored_sharepoint_credentials(user_id)
     if not creds or not creds.get("access_token"):
         return jsonify({"connected": False})
@@ -240,15 +228,9 @@ def _validate_sharepoint_token(user_id: str, creds: Dict[str, Any]) -> Optional[
 
 
 @sharepoint_bp.route("/disconnect", methods=["POST", "DELETE", "OPTIONS"])
-def disconnect():
+@require_permission("connectors", "write")
+def disconnect(user_id):
     """Disconnect SharePoint by removing stored credentials."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
-    user_id, err = _require_user_id()
-    if err:
-        return err
-
     try:
         secret_ref = None
         with db_pool.get_admin_connection() as conn:
@@ -284,15 +266,9 @@ def disconnect():
 
 
 @sharepoint_bp.route("/search", methods=["POST", "OPTIONS"])
-def search():
+@require_permission("connectors", "read")
+def search(user_id):
     """Search SharePoint for content matching query."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
-    user_id, err = _require_user_id()
-    if err:
-        return err
-
     data = _get_request_body()
     query = data.get("query")
     if not query:
@@ -318,15 +294,9 @@ def search():
 
 
 @sharepoint_bp.route("/fetch-page", methods=["POST", "OPTIONS"])
-def fetch_page():
+@require_permission("connectors", "read")
+def fetch_page(user_id):
     """Fetch a SharePoint page and return its content as markdown."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
-    user_id, err = _require_user_id()
-    if err:
-        return err
-
     data = _get_request_body()
     site_id = data.get("siteId") or data.get("site_id")
     page_id = data.get("pageId") or data.get("page_id")
@@ -350,15 +320,9 @@ def fetch_page():
 
 
 @sharepoint_bp.route("/fetch-document", methods=["POST", "OPTIONS"])
-def fetch_document():
+@require_permission("connectors", "read")
+def fetch_document(user_id):
     """Fetch a SharePoint document and return extracted text."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
-    user_id, err = _require_user_id()
-    if err:
-        return err
-
     data = _get_request_body()
     drive_id = data.get("driveId") or data.get("drive_id")
     item_id = data.get("itemId") or data.get("item_id")
@@ -382,15 +346,9 @@ def fetch_document():
 
 
 @sharepoint_bp.route("/create-page", methods=["POST", "OPTIONS"])
-def create_page():
+@require_permission("connectors", "write")
+def create_page(user_id):
     """Create a new SharePoint page."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
-    user_id, err = _require_user_id()
-    if err:
-        return err
-
     data = _get_request_body()
     title = data.get("title")
     content = data.get("content")
@@ -416,15 +374,9 @@ def create_page():
 
 
 @sharepoint_bp.route("/sites", methods=["GET", "OPTIONS"])
-def list_sites():
+@require_permission("connectors", "read")
+def list_sites(user_id):
     """List SharePoint sites, optionally filtered by search query."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
-    user_id, err = _require_user_id()
-    if err:
-        return err
-
     search_query = request.args.get("search", "")
 
     access_token, creds, token_err = _require_access_token(user_id)

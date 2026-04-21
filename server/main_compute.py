@@ -437,6 +437,12 @@ if is_sharepoint_enabled():
     from routes.sharepoint import bp as sharepoint_bp  # noqa: F401
     app.register_blueprint(sharepoint_bp, url_prefix="/sharepoint")
 
+# --- Notion Integration Routes ---
+# Always registered (no feature flag): frontend gates via isNotionEnabled(),
+# but backend routes must remain reachable so OAuth callbacks work in all envs.
+from routes.notion import bp as notion_bp  # noqa: F401
+app.register_blueprint(notion_bp, url_prefix="/notion")
+
 # --- Bitbucket Integration Routes ---
 from routes.bitbucket.bitbucket import bitbucket_bp
 from routes.bitbucket.bitbucket_browsing import bitbucket_browsing_bp

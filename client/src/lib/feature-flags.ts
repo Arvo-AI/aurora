@@ -32,3 +32,7 @@ export const isJiraEnabled = () => {
 export const isSpinnakerEnabled = () => {
   return getEnv('NEXT_PUBLIC_ENABLE_SPINNAKER') === 'true';
 };
+
+export const isNotionEnabled = () => {
+  return getEnv('NEXT_PUBLIC_ENABLE_NOTION') === 'true';
+};

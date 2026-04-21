@@ -228,6 +228,14 @@ const logos = {
       onError={(e) => console.error('Failed to load Confluence logo:', e)}
     />
   ),
+  notion: (
+    <img
+      src="/notion.svg"
+      className="w-4 h-4 min-w-4 min-h-4 object-contain"
+      alt="Notion"
+      onError={(e) => console.error('Failed to load Notion logo:', e)}
+    />
+  ),
   opsgenie: (
     <img
       src="/opsgenie.svg"
@@ -410,6 +418,11 @@ const getLogoForCommand = (command: string | any, toolName: string, provider?: s
   // Confluence tools
   if (tool.startsWith('confluence_') || tool === 'confluence') {
     return 'confluence'
+  }
+
+  // Notion tools
+  if (tool.startsWith('notion_') || tool === 'notion') {
+    return 'notion'
   }
 
   // OpsGenie / JSM Operations tools

@@ -5,6 +5,7 @@ import ReactMarkdown from 'react-markdown';
 import { Download, Edit2, Save, X, ExternalLink, RefreshCw, FileText } from 'lucide-react';
 import { postmortemService, PostmortemData } from '@/lib/services/incidents';
 import { postmortemMarkdownComponents } from '@/lib/markdown-components';
+import ExportToNotionDialog from '@/components/postmortem/ExportToNotionDialog';
 
 interface PostmortemPanelProps {
   incidentId: string;
@@ -26,6 +27,7 @@ export default function PostmortemPanel({ incidentId, incidentTitle, isVisible, 
   const [confluenceParentPageId, setConfluenceParentPageId] = useState('');
   const [exportSuccess, setExportSuccess] = useState<string | null>(null);
   const [exportError, setExportError] = useState<string | null>(null);
+  const [showNotionDialog, setShowNotionDialog] = useState(false);
 
   const loadPostmortem = useCallback(async () => {
     const result = await postmortemService.getPostmortem(incidentId);
@@ -145,6 +147,13 @@ export default function PostmortemPanel({ incidentId, incidentTitle, isVisible, 
                 <ExternalLink className="w-3 h-3" />
                 Export to Confluence
               </button>
+              <button
+                onClick={() => setShowNotionDialog(true)}
+                className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 transition-colors"
+              >
+                <ExternalLink className="w-3 h-3" />
+                Export to Notion
+              </button>
             </>
           )}
           {editing && (
@@ -241,6 +250,21 @@ export default function PostmortemPanel({ incidentId, incidentTitle, isVisible, 
         </div>
       )}
 
+      {/* Notion link if already exported */}
+      {postmortem?.notionPageUrl && (
+        <div className="mb-4">
+          <a
+            href={postmortem.notionPageUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1 text-xs text-blue-400 hover:text-blue-300"
+          >
+            <ExternalLink className="w-3 h-3" />
+            View in Notion
+          </a>
+        </div>
+      )}
+
       {/* Content */}
       {postmortem === null ? (
         <div className="flex flex-col items-center justify-center py-12 text-zinc-500 gap-2">
@@ -263,6 +287,13 @@ export default function PostmortemPanel({ incidentId, incidentTitle, isVisible, 
           </ReactMarkdown>
         </div>
       )}
+
+      <ExportToNotionDialog
+        open={showNotionDialog}
+        onOpenChange={setShowNotionDialog}
+        incidentId={incidentId}
+        onExported={() => { loadPostmortem(); }}
+      />
     </div>
   );
 }

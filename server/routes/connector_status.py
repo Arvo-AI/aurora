@@ -444,6 +444,25 @@ def _check_sharepoint(creds: Dict[str, Any]) -> Dict[str, Any]:
         return {"connected": False}
 
 
+def _check_notion(creds: Dict[str, Any]) -> Dict[str, Any]:
+    """Validates Notion connection via GET /v1/users/me; handles OAuth refresh."""
+    from connectors.notion_connector.client import NotionClient, NotionAuthExpiredError
+    uid = creds.get("_user_id")
+    if not uid:
+        return {"connected": False}
+    try:
+        NotionClient(uid).get_self()
+        return {
+            "connected": True,
+            "workspaceName": creds.get("workspace_name"),
+            "authType": creds.get("type", "oauth"),
+        }
+    except NotionAuthExpiredError:
+        return {"connected": False}
+    except Exception:
+        return {"connected": False}
+
+
 def _check_spinnaker(creds: Dict[str, Any]) -> Dict[str, Any]:
     """Mirrors /spinnaker/status — validates via Spinnaker Gate API."""
     try:
@@ -673,6 +692,7 @@ PROVIDER_CHECKERS = {
     "scaleway": _check_scaleway,
     "ovh": _check_ovh,
     "sharepoint": _check_sharepoint,
+    "notion": _check_notion,
     "spinnaker": _check_spinnaker,
     "pagerduty": _check_pagerduty,
     "opsgenie":      _check_opsgenie,

@@ -41,6 +41,7 @@ export default function ConnectorCard({ connector, connectedOverride }: Connecto
   const [showOvhDialog, setShowOvhDialog] = useState(false);
   const [showScalewayDialog, setShowScalewayDialog] = useState(false);
   const [showAzureDialog, setShowAzureDialog] = useState(false);
+  const [showNotionDialog, setShowNotionDialog] = useState(false);
   const [isConnectingOAuth, setIsConnectingOAuth] = useState(false);
   const [showDisconnectDialog, setShowDisconnectDialog] = useState(false);
   
@@ -217,7 +218,16 @@ export default function ConnectorCard({ connector, connectedOverride }: Connecto
       }
       return;
     }
-    
+
+    if (connector.id === "notion") {
+      if (!isConnected) {
+        router.push("/notion/connect");
+      } else {
+        setShowNotionDialog(true);
+      }
+      return;
+    }
+
     if (connector.path) {
       router.push(connector.path);
     } else if (connector.onConnect) {
@@ -507,6 +517,7 @@ export default function ConnectorCard({ connector, connectedOverride }: Connecto
         showAzureDialog={showAzureDialog}
         showOvhDialog={showOvhDialog}
         showScalewayDialog={showScalewayDialog}
+        showNotionDialog={showNotionDialog}
         onGitHubDialogChange={(open) => {
           if (!open && githubStatus.isAuthenticated && !githubStatus.isConnected) {
             toast({ title: "Select at least one repository", description: "GitHub requires at least one connected repo to be useful during investigations.", variant: "destructive" });
@@ -532,6 +543,7 @@ export default function ConnectorCard({ connector, connectedOverride }: Connecto
         onAzureDialogChange={setShowAzureDialog}
         onOvhDialogChange={setShowOvhDialog}
         onScalewayDialogChange={setShowScalewayDialog}
+        onNotionDialogChange={setShowNotionDialog}
         onGitHubDialogClose={() => setShowGitHubDialog(false)}
       />
 
