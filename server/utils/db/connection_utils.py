@@ -99,7 +99,6 @@ def set_connection_status(
     status: str,
 ) -> bool:
     """Update the status column for a connection (disconnect etc.)."""
-    org_id = _resolve_org_id(user_id)
     sql = """
         UPDATE user_connections
         SET status = %s, last_verified_at = %s

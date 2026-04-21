@@ -234,8 +234,6 @@ def get_feedback(user_id, incident_id: str):
     if not _validate_uuid(incident_id):
         return jsonify({"error": "Invalid incident ID format"}), 400
 
-    org_id = get_org_id_from_request()
-
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:

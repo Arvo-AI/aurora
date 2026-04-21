@@ -421,7 +421,7 @@ export default function VMConfig() {
         description: `Validating credentials for ${vm.name}...`,
       });
 
-      const effectiveUserId = await getEffectiveUserId();
+      await getEffectiveUserId();
       const { platform, actualVmId } = getPlatformAndId(vmId);
 
       const endpoint =
@@ -491,7 +491,7 @@ export default function VMConfig() {
     setSavingState(vmId, true);
 
     try {
-      const effectiveUserId = await getEffectiveUserId();
+      await getEffectiveUserId();
       const { platform, actualVmId } = getPlatformAndId(vmId);
 
       const endpoint =

@@ -244,7 +244,7 @@ def setup_gcp_terraform_environment_isolated(user_id: str):
         from utils.auth.token_management import get_token_data
 
         selected_project_id = get_selected_project_id()
-        ok, project_id, auth_method, cached_env = setup_gcp_impersonation_cached(
+        ok, project_id, _, cached_env = setup_gcp_impersonation_cached(
             user_id, selected_project_id=selected_project_id
         )
         if not ok or not project_id or not cached_env:

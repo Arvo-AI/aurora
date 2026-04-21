@@ -258,7 +258,6 @@ def get_usage_summary(user_id):
 def get_session_usage(user_id, session_id):
     """Get per-request token/cost breakdown for a session."""
     try:
-        org_id = get_org_id_from_request()
         with db_pool.get_user_connection() as conn:
             cursor = conn.cursor()
             set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)

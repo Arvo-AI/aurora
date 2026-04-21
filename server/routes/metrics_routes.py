@@ -4,7 +4,7 @@ import logging
 from flask import Blueprint, jsonify, request
 from utils.db.connection_pool import db_pool
 from utils.auth.rbac_decorators import require_permission
-from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context
+from utils.auth.stateless_auth import set_rls_context
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +45,6 @@ def _parse_window_hours(default: int = 4) -> tuple[int | None, tuple | None]:
 @require_permission("incidents", "read")
 def get_metrics_summary(user_id):
     """Dashboard overview — key SRE metrics in a single call."""
-    org_id = get_org_id_from_request()
     period = _get_period_interval(request.args.get("period", "30d"))
     window_hours, err = _parse_window_hours()
     if err:
@@ -170,7 +169,6 @@ def get_metrics_summary(user_id):
 @require_permission("incidents", "read")
 def get_mttr(user_id):
     """Mean Time to Resolve — only incidents explicitly marked resolved by a human."""
-    org_id = get_org_id_from_request()
     period = _get_period_interval(request.args.get("period", "30d"))
     severity_filter = request.args.get("severity")
     service_filter = request.args.get("service")
@@ -262,7 +260,6 @@ def get_mttr(user_id):
 @require_permission("incidents", "read")
 def get_mtts(user_id):
     """Mean Time to Solution — how fast Aurora produces an RCA (analyzed_at - started_at)."""
-    org_id = get_org_id_from_request()
     period = _get_period_interval(request.args.get("period", "30d"))
     severity_filter = request.args.get("severity")
     service_filter = request.args.get("service")
@@ -341,7 +338,6 @@ def get_mttd(user_id):
     """MTTD = pickup latency — time from webhook arrival (started_at) to the
     moment the RCA worker actually began running (investigation_started_at).
     """
-    org_id = get_org_id_from_request()
     period = _get_period_interval(request.args.get("period", "30d"))
 
     try:
@@ -389,7 +385,6 @@ def get_mttd(user_id):
 @require_permission("incidents", "read")
 def get_incident_frequency(user_id):
     """Incident count over time, grouped by severity or service."""
-    org_id = get_org_id_from_request()
     period = _get_period_interval(request.args.get("period", "30d"))
     group_by = request.args.get("group_by", "severity")
 
@@ -431,7 +426,6 @@ def get_incident_frequency(user_id):
 @require_permission("incidents", "read")
 def get_change_failure_rate(user_id):
     """Percentage of deployments followed by an incident within a time window."""
-    org_id = get_org_id_from_request()
     period = _get_period_interval(request.args.get("period", "30d"))
     window_hours, err = _parse_window_hours()
     if err:
@@ -502,7 +496,6 @@ def get_change_failure_rate(user_id):
 @require_permission("incidents", "read")
 def get_agent_execution(user_id):
     """Agent execution waterfall (per-incident) or aggregate tool stats."""
-    org_id = get_org_id_from_request()
     period = _get_period_interval(request.args.get("period", "30d"))
     incident_id = request.args.get("incident_id")
 
