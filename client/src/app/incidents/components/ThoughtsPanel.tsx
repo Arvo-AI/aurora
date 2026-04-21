@@ -68,7 +68,9 @@ export default function ThoughtsPanel({ thoughts, incident, isVisible, canIntera
 
   // 'thoughts' or session ID
   const [activeTab, setActiveTab] = useState<string>('thoughts');
-  const [chatSessions, setChatSessions] = useState<ChatSession[]>(incident.chatSessions || []);
+  const [chatSessions, setChatSessions] = useState<ChatSession[]>(
+    (incident.chatSessions || []).filter((s: ChatSession) => s.id !== incident.chatSessionId)
+  );
   const [currentMessages, setCurrentMessages] = useState<ChatMessage[]>([]);
   const [inputValue, setInputValue] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -85,7 +87,10 @@ export default function ThoughtsPanel({ thoughts, incident, isVisible, canIntera
   // Preserves optimistic sessions that exist in local state but not yet in parent's data.
   useEffect(() => {
     // Parent's data: from incident prop (polled from backend every 3s)
-    const incidentSessions = incident.chatSessions || [];
+    // Exclude the RCA session — its content is already shown in the Thoughts tab
+    const incidentSessions = (incident.chatSessions || []).filter(
+      (s: ChatSession) => s.id !== incident.chatSessionId
+    );
     
     // Clean up creatingSessionIds: remove IDs that now exist in parent's data
     // This prevents the Set from growing indefinitely
@@ -116,8 +121,11 @@ export default function ThoughtsPanel({ thoughts, incident, isVisible, canIntera
     // Don't reset if we're creating a session
     if (creatingSessionIds.current.size > 0) return;
     
-    if (incident.activeTab === 'chat' && incident.chatSessions && incident.chatSessions.length > 0) {
-      setActiveTab(incident.chatSessions[incident.chatSessions.length - 1].id);
+    const filteredSessions = (incident.chatSessions || []).filter(
+      (s: ChatSession) => s.id !== incident.chatSessionId
+    );
+    if (incident.activeTab === 'chat' && filteredSessions.length > 0) {
+      setActiveTab(filteredSessions[filteredSessions.length - 1].id);
     } else {
       setActiveTab('thoughts');
     }
@@ -157,21 +165,40 @@ export default function ThoughtsPanel({ thoughts, incident, isVisible, canIntera
         };
       }).filter((m: ChatMessage) => m.content.trim() !== '');
       
-      // Only update messages if we have more messages than before, or if switching tabs
-      // This prevents the flash when the optimistic message (in local state) is briefly replaced
-      // by stale data from parent's poll (which might not have the new session yet)
+      // Merge server messages with local optimistic state.
+      // The optimistic user message lives in local state while the streaming bot
+      // response arrives from the server via polling.  We keep the local user
+      // messages and append/update any server-side assistant messages.
       setCurrentMessages((prev: ChatMessage[]) => {
-        // If we're currently polling this session (waiting for response), check if data is actually newer
         if (pollingSessionId === activeTab && prev.length > 0) {
-          // Only keep prev if messages haven't changed (same length AND same last message content)
-          // This allows assistant responses to come through even if message count is same
-          const prevLastContent = prev[prev.length - 1]?.content || '';
-          const messagesLastContent = messages[messages.length - 1]?.content || '';
-          
-          if (messages.length < prev.length || 
-              (messages.length === prev.length && messagesLastContent === prevLastContent)) {
-            return prev; // Keep optimistic messages - data is stale or unchanged
+          const serverUserMessages = messages.filter((m: ChatMessage) => m.role === 'user');
+          const localUserMessages = prev.filter((m: ChatMessage) => m.role === 'user');
+
+          // Server has caught up with all optimistic user messages — use server state as-is
+          if (serverUserMessages.length >= localUserMessages.length) {
+            return messages;
           }
+
+          // Check if assistant content actually changed since last render
+          const serverAssistantMessages = messages.filter((m: ChatMessage) => m.role === 'assistant');
+          if (serverAssistantMessages.length === 0) {
+            return prev;
+          }
+          const prevAssistant = prev.filter((m: ChatMessage) => m.role === 'assistant');
+          const prevAssistantLast = prevAssistant[prevAssistant.length - 1]?.content || '';
+          const serverAssistantLast = serverAssistantMessages[serverAssistantMessages.length - 1]?.content || '';
+          if (prevAssistant.length === serverAssistantMessages.length && prevAssistantLast === serverAssistantLast) {
+            return prev;
+          }
+
+          // Server has new assistant content but hasn't persisted all our user messages yet.
+          // Keep server order and append only the optimistic user messages the server is missing.
+          // Re-key with "optimistic-" prefix to avoid React key collisions with server-indexed IDs.
+          const optimisticTail = localUserMessages.slice(serverUserMessages.length).map((m) => ({
+            ...m,
+            id: `optimistic-${m.id}`,
+          }));
+          return [...messages, ...optimisticTail];
         }
         return messages;
       });
@@ -440,34 +467,38 @@ export default function ThoughtsPanel({ thoughts, incident, isVisible, canIntera
       {/* Chat View - for any chat session tab */}
       {activeTab !== 'thoughts' && (
         <div className="flex-1 relative overflow-hidden">
-          <div className="absolute inset-0 overflow-y-auto py-4 pb-32">
-            {currentMessages.map((msg: ChatMessage) => (
-              <div key={msg.id} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'} px-4 py-2`}>
-                <div className={
+          <div className="absolute inset-0 overflow-y-auto p-5 pb-32">
+            <div className="space-y-4">
+              {currentMessages.map((msg: ChatMessage) => (
+                <div key={msg.id} className={
                   msg.role === 'user'
-                    ? 'rounded-2xl py-2 px-4 max-w-[70%] bg-muted text-foreground'
-                    : 'w-full text-foreground'
+                    ? 'pl-4 border-l-2 border-blue-500/50'
+                    : 'pl-4 border-l-2 border-zinc-700 hover:border-orange-500/50 transition-colors'
                 }>
-                  <div className="break-words leading-relaxed">
+                  <div className="text-xs text-zinc-500 mb-1">
+                    {msg.role === 'user' ? 'You' : 'Aurora'}
+                  </div>
+                  <div className="text-sm text-zinc-300 break-words leading-relaxed min-w-0 overflow-hidden">
                     <MarkdownRenderer content={msg.content} />
                   </div>
                 </div>
-              </div>
-            ))}
-            {isLoading && pollingSessionId === activeTab && (
-              <div className="flex justify-start px-4 py-2">
-                <div className="w-full text-foreground">
-                  <div className="flex gap-1 items-center">
-                    <span className="w-2 h-2 bg-muted-foreground rounded-full animate-bounce" />
-                    <span className="w-2 h-2 bg-muted-foreground rounded-full animate-bounce" style={{ animationDelay: '100ms' }} />
-                    <span className="w-2 h-2 bg-muted-foreground rounded-full animate-bounce" style={{ animationDelay: '200ms' }} />
+              ))}
+              {isLoading && pollingSessionId === activeTab && (
+                <div className="pl-4 border-l-2 border-orange-500/50">
+                  <div className="flex items-center gap-2 text-sm text-zinc-400">
+                    <div className="flex gap-1">
+                      <span className="w-1.5 h-1.5 bg-orange-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+                      <span className="w-1.5 h-1.5 bg-orange-400 rounded-full animate-bounce" style={{ animationDelay: '100ms' }} />
+                      <span className="w-1.5 h-1.5 bg-orange-400 rounded-full animate-bounce" style={{ animationDelay: '200ms' }} />
+                    </div>
+                    <span>Thinking...</span>
                   </div>
                 </div>
-              </div>
-            )}
-            {currentMessages.length === 0 && !isLoading && (
-              <p className="text-center text-zinc-500 text-sm py-8">No messages in this chat yet</p>
-            )}
+              )}
+              {currentMessages.length === 0 && !isLoading && (
+                <p className="text-center text-zinc-500 text-sm py-8">No messages in this chat yet</p>
+              )}
+            </div>
           </div>
 
           {/* Input at bottom */}

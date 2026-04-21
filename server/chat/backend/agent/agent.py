@@ -205,16 +205,15 @@ class Agent:
                     logging.error(f"Invalid user_id format: '{state.user_id}' - must be a non-empty string")
                     # Don't fail completely, but log the error
                 
-                # Get connected providers from database (always fetch from DB, no preferences stored)
+                # Get verified providers (cloud + SkillRegistry-validated integrations)
                 provider_preference = getattr(state, 'provider_preference', None)
                 if provider_preference is None:
                     try:
-                        from utils.auth.stateless_auth import get_connected_providers
-                        provider_preference = get_connected_providers(state.user_id)
+                        from chat.background.rca_prompt_builder import get_user_providers
+                        provider_preference = get_user_providers(state.user_id)
                     except Exception as e:
                         logging.error(f"Error getting connected providers: {e}")
                         provider_preference = []
-                    # Update state so downstream code can access it
                     state.provider_preference = provider_preference
                 
                 selected_project_id = getattr(state, 'selected_project_id', None)

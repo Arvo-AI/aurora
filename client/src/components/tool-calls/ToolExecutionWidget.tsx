@@ -6,7 +6,7 @@ import { Card } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
-import { ChevronDown, ChevronUp, X, Check } from "lucide-react"
+import { ChevronDown, ChevronUp, X, Check, AlertCircle } from "lucide-react"
 import CommandLogo from "./CommandLogo"
 import { useTheme } from "next-themes"
 import { GitHubCommitTool } from "@/components/GitHubCommitTool"
@@ -196,6 +196,16 @@ const ToolExecutionWidget = ({ tool, className, sendMessage, sendRaw, onToolUpda
     command = "Knowledge Base"
   }
 
+  if (tool.tool_name === "load_skill") {
+    try {
+      const parsed = JSON.parse(normalizedInput)
+      const skillId = parsed.skill_id || parsed.kwargs?.skill_id || ''
+      command = skillId ? `Loading ${skillId} skill` : "Loading integration skill"
+    } catch {
+      command = "Loading integration skill"
+    }
+  }
+
   // terminal_exec parsing - extract command from input or output
   if (tool.tool_name === "terminal_exec") {
     try {
@@ -267,6 +277,11 @@ const ToolExecutionWidget = ({ tool, className, sendMessage, sendRaw, onToolUpda
   else if (tool.tool_name === "query_cloudflare" || tool.tool_name === "cloudflare_list_zones" || tool.tool_name === "cloudflare_action") {
     command = parseCloudflareCommand(tool.tool_name, normalizedInput)
   }
+  // Notion tools: humanize the label (actual output rendering stays generic via RenderOutput)
+  else if (tool.tool_name?.startsWith("notion_")) {
+    const humanTitle = tool.tool_name.replace(/_/g, " ").replace(/\bnotion\b/i, "Notion")
+    command = humanTitle
+  }
 
   // If command is still JSON blob, use default
   if (typeof command === "string" && command.trim().startsWith("{")) {
@@ -275,10 +290,15 @@ const ToolExecutionWidget = ({ tool, className, sendMessage, sendRaw, onToolUpda
 
   // Final safety check: ensure command is always a string
   if (typeof command !== 'string') {
-    command = typeof command === 'object' && command !== null 
-      ? JSON.stringify(command, null, 2) 
+    command = typeof command === 'object' && command !== null
+      ? JSON.stringify(command, null, 2)
       : String(command || defaultCliCommand)
   }
+
+  // Notion reauth-required detection: show a subtle banner above the output
+  const isNotionReauth = tool.tool_name?.startsWith("notion_") &&
+    typeof tool.output === "string" &&
+    tool.output.includes('"code":"reauth_required"')
 
   // Extract provider for logo display
   let provider = ''
@@ -502,6 +522,21 @@ const ToolExecutionWidget = ({ tool, className, sendMessage, sendRaw, onToolUpda
                 <Skeleton className="h-4 w-1/2" />
                 <Skeleton className="h-4 w-5/6" />
                 <Skeleton className="h-4 w-2/3" />
+              </div>
+            )}
+
+            {isNotionReauth && (
+              <div className="mx-4 mt-3 flex items-center gap-2 rounded-md border bg-muted/50 px-3 py-2 text-sm">
+                <AlertCircle className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
+                <span className="flex-1 text-muted-foreground">Notion credentials expired</span>
+                <a
+                  href="/notion/connect"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-xs font-medium text-foreground underline hover:no-underline"
+                >
+                  Reconnect
+                </a>
               </div>
             )}
 

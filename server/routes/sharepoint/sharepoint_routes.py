@@ -16,9 +16,8 @@ from connectors.sharepoint_connector.auth import (
 from connectors.sharepoint_connector.client import SharePointClient
 from connectors.sharepoint_connector.search_service import SharePointSearchService
 from utils.db.connection_pool import db_pool
-from utils.web.cors_utils import create_cors_response
 from utils.auth.oauth2_state_cache import retrieve_oauth2_state, store_oauth2_state
-from utils.auth.stateless_auth import get_user_id_from_request
+from utils.auth.rbac_decorators import require_permission
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 
 logger = logging.getLogger(__name__)
@@ -67,15 +66,9 @@ def _refresh_sharepoint_credentials(user_id: str, creds: Dict[str, Any]) -> Opti
 
 
 @sharepoint_bp.route("/connect", methods=["POST", "OPTIONS"])
-def connect():
+@require_permission("connectors", "write")
+def connect(user_id):
     """Connect SharePoint via Microsoft OAuth2."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
-
     try:
         data = request.get_json(force=True, silent=True) or {}
     except Exception:
@@ -146,15 +139,9 @@ def connect():
 
 
 @sharepoint_bp.route("/status", methods=["GET", "OPTIONS"])
-def status():
+@require_permission("connectors", "read")
+def status(user_id):
     """Check SharePoint connection status."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
-
     creds = _get_stored_sharepoint_credentials(user_id)
     if not creds:
         return jsonify({"connected": False})
@@ -201,15 +188,9 @@ def status():
 
 
 @sharepoint_bp.route("/disconnect", methods=["POST", "DELETE", "OPTIONS"])
-def disconnect():
+@require_permission("connectors", "write")
+def disconnect(user_id):
     """Disconnect SharePoint by removing stored credentials."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
-
     try:
         # Fetch secret_ref before deleting the DB row so we can clean up Vault
         secret_ref = None
@@ -245,15 +226,9 @@ def disconnect():
 
 
 @sharepoint_bp.route("/search", methods=["POST", "OPTIONS"])
-def search():
+@require_permission("connectors", "read")
+def search(user_id):
     """Search SharePoint for content matching query."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
-
     try:
         data = request.get_json(force=True, silent=True) or {}
     except Exception:
@@ -291,15 +266,9 @@ def search():
 
 
 @sharepoint_bp.route("/fetch-page", methods=["POST", "OPTIONS"])
-def fetch_page():
+@require_permission("connectors", "read")
+def fetch_page(user_id):
     """Fetch a SharePoint page and return its content as markdown."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
-
     try:
         data = request.get_json(force=True, silent=True) or {}
     except Exception:
@@ -335,15 +304,9 @@ def fetch_page():
 
 
 @sharepoint_bp.route("/fetch-document", methods=["POST", "OPTIONS"])
-def fetch_document():
+@require_permission("connectors", "read")
+def fetch_document(user_id):
     """Fetch a SharePoint document and return extracted text."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
-
     try:
         data = request.get_json(force=True, silent=True) or {}
     except Exception:
@@ -379,15 +342,9 @@ def fetch_document():
 
 
 @sharepoint_bp.route("/create-page", methods=["POST", "OPTIONS"])
-def create_page():
+@require_permission("connectors", "write")
+def create_page(user_id):
     """Create a new SharePoint page."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
-
     try:
         data = request.get_json(force=True, silent=True) or {}
     except Exception:
@@ -425,15 +382,9 @@ def create_page():
 
 
 @sharepoint_bp.route("/sites", methods=["GET", "OPTIONS"])
-def list_sites():
+@require_permission("connectors", "read")
+def list_sites(user_id):
     """List SharePoint sites, optionally filtered by search query."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
-    user_id = get_user_id_from_request()
-    if not user_id:
-        return jsonify({"error": "User authentication required"}), 401
-
     search_query = request.args.get("search", "")
 
     creds = _get_stored_sharepoint_credentials(user_id)

@@ -228,6 +228,14 @@ const logos = {
       onError={(e) => console.error('Failed to load Confluence logo:', e)}
     />
   ),
+  notion: (
+    <img
+      src="/notion.svg"
+      className="w-4 h-4 min-w-4 min-h-4 object-contain"
+      alt="Notion"
+      onError={(e) => console.error('Failed to load Notion logo:', e)}
+    />
+  ),
   opsgenie: (
     <img
       src="/opsgenie.svg"
@@ -256,6 +264,24 @@ const logos = {
       xmlns="http://www.w3.org/2000/svg"
     >
       <path strokeLinecap="round" strokeLinejoin="round" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
+    </svg>
+  ),
+  loadSkill: (
+    <svg
+      className="w-4 h-4 min-w-4 min-h-4 text-teal-500 dark:text-teal-400"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      viewBox="0 0 24 24"
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <circle cx="12" cy="12" r="3" />
+      <line x1="12" y1="3" x2="12" y2="9" />
+      <line x1="5.5" y1="17.5" x2="9.5" y2="14" />
+      <line x1="18.5" y1="17.5" x2="14.5" y2="14" />
+      <circle cx="12" cy="3" r="1.5" fill="currentColor" />
+      <circle cx="5.5" cy="17.5" r="1.5" fill="currentColor" />
+      <circle cx="18.5" cy="17.5" r="1.5" fill="currentColor" />
     </svg>
   ),
   rcaUpdate: (
@@ -303,6 +329,11 @@ const getLogoForCommand = (command: string | any, toolName: string, provider?: s
   // Tailscale - check provider prop (cloud_exec passes provider)
   if (prov === 'tailscale' || tool.includes('tailscale') || cmd.includes('tailscale')) {
     return 'tailscale'
+  }
+
+  // Load skill tool
+  if (tool === 'load_skill') {
+    return 'loadSkill'
   }
 
   // Web search tool
@@ -387,6 +418,11 @@ const getLogoForCommand = (command: string | any, toolName: string, provider?: s
   // Confluence tools
   if (tool.startsWith('confluence_') || tool === 'confluence') {
     return 'confluence'
+  }
+
+  // Notion tools
+  if (tool.startsWith('notion_') || tool === 'notion') {
+    return 'notion'
   }
 
   // OpsGenie / JSM Operations tools

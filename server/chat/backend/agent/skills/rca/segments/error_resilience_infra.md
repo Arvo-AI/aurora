@@ -1,0 +1,4 @@
+- If cloud monitoring/metrics commands fail -> use kubectl directly
+- If kubectl fails -> check cloud provider CLI alternatives
+- If one log source fails -> try another (kubectl logs, cloud logging, container logs)
+- If a resource isn't found -> check other namespaces, regions, or projects
