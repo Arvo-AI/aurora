@@ -21,9 +21,9 @@ echo -e "${GREEN}Generating secure secrets for Aurora...${NC}"
 
 # Check if .env file exists
 ENV_FILE=".env"
-if [ ! -f "$ENV_FILE" ]; then
+if [[ ! -f "$ENV_FILE" ]]; then
     echo -e "${YELLOW}Warning: .env file not found. Creating from .env.example...${NC}"
-    if [ -f ".env.example" ]; then
+    if [[ -f ".env.example" ]]; then
         cp .env.example .env
     else
         echo "Error: .env.example not found. Please create .env manually."

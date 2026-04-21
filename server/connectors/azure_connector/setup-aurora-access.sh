@@ -153,7 +153,7 @@ AKS_CLUSTERS=$(az aks list --query "[].{name:name,resourceGroup:resourceGroup}" 
 AKS_CLUSTERS=$(echo "$AKS_CLUSTERS" | jq --arg sub_id "$SUBSCRIPTION_ID" 'map(. + {subscriptionId: $sub_id})')
 CLUSTER_COUNT=$(echo "$AKS_CLUSTERS" | jq length)
 
-if [ "$CLUSTER_COUNT" -eq 0 ]; then
+if [[ "$CLUSTER_COUNT" -eq 0 ]]; then
     echo "   No AKS clusters found in this subscription"
 else
     echo "   Found $CLUSTER_COUNT AKS cluster(s):"
@@ -352,7 +352,7 @@ az role assignment create --assignee "$READONLY_CLIENT_ID" --role "Cognitive Ser
 echo "Granting Azure AD read permissions for CLI authentication..."
 # Get the application ID for the read-only service principal
 READONLY_APP_ID=$(az ad sp show --id "$READONLY_CLIENT_ID" --query "appId" -o tsv 2>/dev/null)
-if [ -n "$READONLY_APP_ID" ]; then
+if [[ -n "$READONLY_APP_ID" ]]; then
     # Add User.Read permission (minimal permission to read own profile)
     az ad app permission add --id "$READONLY_APP_ID" \
         --api 00000003-0000-0000-c000-000000000000 \
@@ -381,7 +381,7 @@ echo "AURORA SETUP COMPLETE!"
 echo "================================"
 echo
 
-if [ "$CLUSTER_COUNT" -gt 0 ]; then
+if [[ "$CLUSTER_COUNT" -gt 0 ]]; then
     echo "AKS CLUSTER ROLE ASSIGNMENTS"
     echo "Automatically assigning permissions to existing AKS clusters..."
     echo "================================"
@@ -423,7 +423,7 @@ if [ "$CLUSTER_COUNT" -gt 0 ]; then
         echo "Adding Kubernetes RBAC permissions for cluster: $cluster_name"
         echo "Getting service principal object ID..."
         OBJECT_ID=$(az ad sp show --id "$CLIENT_ID" --query "id" --output tsv 2>/dev/null)
-        if [ -z "$OBJECT_ID" ]; then
+        if [[ -z "$OBJECT_ID" ]]; then
             echo "   Failed to get service principal object ID"
             continue
         fi
@@ -476,7 +476,7 @@ cat << EOF
 }
 EOF
 
-if [ "$CLUSTER_COUNT" -gt 0 ]; then
+if [[ "$CLUSTER_COUNT" -gt 0 ]]; then
     echo
     echo "NOTE: AKS cluster permissions have been automatically configured."
     echo "Your clusters will be available in Aurora after authentication."
