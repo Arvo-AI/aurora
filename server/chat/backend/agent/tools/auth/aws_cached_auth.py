@@ -83,14 +83,14 @@ def setup_aws_credentials_cached(user_id: str, selected_region: Optional[str] = 
         logger.info(f"TIME: get_credentials_from_db took {time.perf_counter() - creds_start:.2f}s")
         if not aws_credentials:
             logger.error(f"No AWS credentials found for user {user_id}")
-            return (False, None, None, None) if return_isolated else (False, None, None)
+            return (False, None, None, None)
 
         # Validate
         access_key_id = aws_credentials.get('aws_access_key_id')
         secret_access_key = aws_credentials.get('aws_secret_access_key')
         if not access_key_id or not secret_access_key:
             logger.error("Missing required AWS credential fields")
-            return (False, None, None, None) if return_isolated else (False, None, None)
+            return (False, None, None, None)
 
         # Resolve region
         regions = aws_credentials.get('aws_regions', ['us-east-1'])
@@ -131,7 +131,7 @@ def setup_aws_credentials_cached(user_id: str, selected_region: Optional[str] = 
                 os.environ["AWS_SECRET_ACCESS_KEY"] = secret_access_key
                 os.environ["AWS_DEFAULT_REGION"] = region
                 os.environ["AWS_REGION"] = region
-                return True, region, "access_key"
+                return True, region, "access_key", None
 
         # STS validation - always use explicit credentials for thread safety
         import boto3
@@ -222,11 +222,11 @@ def setup_aws_credentials_cached(user_id: str, selected_region: Optional[str] = 
 
             logger.info(f"Successfully set up AWS credentials for region: {region}")
             logger.info(f"TIME: setup_aws_credentials (cached helper) completed in {time.perf_counter() - fn_start:.2f}s")
-            return True, region, "access_key"
+            return True, region, "access_key", None
 
     except Exception as e:
         logger.error(f"Failed to set up AWS credentials (cached helper): {e}")
-        return (False, None, None, None) if return_isolated else (False, None, None)
+        return (False, None, None, None)
 
 
 def setup_aws_credentials_cached_isolated(user_id: str, selected_region: Optional[str] = None) -> Tuple[bool, Optional[str], Optional[str], Optional[dict]]:
