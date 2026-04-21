@@ -236,6 +236,7 @@ def process_incidentio_event(
                         )
                         conn.commit()
                     except Exception as e:
+                        conn.rollback()
                         logger.warning("[INCIDENTIO] Failed to link alert: %s", e)
 
                 # Trigger summary + RCA outside cursor context
@@ -252,6 +253,7 @@ def process_incidentio_event(
 
         except Exception as db_exc:
             logger.exception("[INCIDENTIO] Database error: %s", db_exc)
+            raise
 
     except Exception as exc:
         logger.exception("[INCIDENTIO] Failed to process event")
@@ -377,7 +379,7 @@ def postback_rca_to_incidentio(
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
                 cursor.execute(
-                    "SELECT summary, status FROM incidents WHERE id = %s",
+                    "SELECT aurora_summary, aurora_status FROM incidents WHERE id = %s",
                     (aurora_incident_id,),
                 )
                 row = cursor.fetchone()
@@ -388,8 +390,8 @@ def postback_rca_to_incidentio(
             logger.info("[INCIDENTIO] No RCA summary after retries, skipping postback")
             return
 
-        summary, status = row
-        if status not in ("analyzed", "completed"):
+        summary, aurora_status = row
+        if aurora_status not in ("analyzed", "completed"):
             if self.request.retries < self.max_retries:
                 raise self.retry(countdown=120)
             return

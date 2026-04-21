@@ -52,12 +52,7 @@ def load_skill(skill_id: str, **kwargs) -> str:
         logger.warning("load_skill called without user_id — with_user_context wrapper may have failed")
         return json.dumps({"error": "No user context available — this indicates a system configuration issue."})
 
-    # Dedup: if this skill was already loaded in this session, return short ack
     key = _session_key(user_id, session_id)
-    with _loaded_skills_lock:
-        already_loaded = _loaded_skills.get(key, set())
-        if skill_id in already_loaded:
-            return f"Skill '{skill_id}' is already loaded in this conversation — no need to reload."
 
     try:
         from .registry import SkillRegistry
@@ -84,6 +79,12 @@ def load_skill(skill_id: str, **kwargs) -> str:
                 logger.info("load_skill fuzzy matched '%s' -> '%s'", skill_id, best_match)
                 skill_id = best_match
 
+        # Dedup after canonicalization so aliases don't bypass cache
+        with _loaded_skills_lock:
+            already_loaded = _loaded_skills.get(key, set())
+            if skill_id in already_loaded:
+                return f"Skill '{skill_id}' is already loaded in this conversation — no need to reload."
+
         result = registry.load_skill(skill_id, user_id)
 
         if not result.is_connected:
@@ -109,6 +110,6 @@ def load_skill(skill_id: str, **kwargs) -> str:
 
         return result.content
 
-    except Exception as e:
-        logger.error(f"Error loading skill '{skill_id}': {e}", exc_info=True)
-        return json.dumps({"error": f"Failed to load skill: {e}"})
+    except Exception:
+        logger.exception("Error loading skill '%s'", skill_id)
+        return json.dumps({"error": "Failed to load skill. Please retry or contact support if the issue persists."})

@@ -1,7 +1,10 @@
 """incident.io connector routes: connect, status, disconnect, webhook, alerts, settings."""
 
+import hashlib
+import hmac
 import logging
 import os
+import secrets
 from typing import Any, Dict, Optional
 
 import requests
@@ -78,7 +81,7 @@ class IncidentioClient:
         return self._request("GET", f"/incidents/{incident_id}").json()
 
     def get_incident_updates(self, incident_id: str) -> Dict[str, Any]:
-        return self._request("GET", f"/incident_updates", params={"incident_id": incident_id}).json()
+        return self._request("GET", "/incident_updates", params={"incident_id": incident_id}).json()
 
     def post_incident_update(self, incident_id: str, message: str) -> Dict[str, Any]:
         return self._request(
@@ -127,7 +130,7 @@ def connect(user_id):
             msg = "Failed to validate API key with incident.io"
         return jsonify({"error": msg}), 502
 
-    token_payload = {"api_key": api_key}
+    token_payload = {"api_key": api_key, "webhook_secret": secrets.token_hex(32)}
 
     try:
         store_tokens_in_db(user_id, token_payload, "incidentio")
@@ -189,6 +192,17 @@ def alert_webhook(user_id: str):
     if not creds:
         logger.warning("[INCIDENTIO] Webhook for user %s with no connection", user_id)
         return jsonify({"error": "incident.io not connected for this user"}), 404
+
+    webhook_secret = creds.get("webhook_secret")
+    signature = request.headers.get("X-Aurora-Signature", "")
+    if webhook_secret:
+        if not signature:
+            logger.warning("[INCIDENTIO] Webhook rejected: missing X-Aurora-Signature for user %s", user_id[:50])
+            return jsonify({"error": "Missing X-Aurora-Signature header"}), 401
+        expected = hmac.new(webhook_secret.encode(), request.get_data(), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(expected, signature):
+            logger.warning("[INCIDENTIO] Webhook rejected: invalid signature for user %s", user_id[:50])
+            return jsonify({"error": "Invalid webhook signature"}), 401
 
     payload = request.get_json(silent=True) or {}
 
