@@ -59,25 +59,17 @@ def load_skill(skill_id: str, **kwargs) -> str:
 
         registry = SkillRegistry.get_instance()
 
-        # Fuzzy match: if exact ID not found, try normalizing and partial match
+        # Normalize: strip dots/dashes/underscores/spaces for typo tolerance
+        # (e.g. "incident.io" or "incident-io" → "incidentio")
+        # No prefix matching — avoids false positives like "google" → "google_chat"
         if skill_id not in registry.get_all_skill_ids():
             normalized = skill_id.lower().replace("dot", ".").replace(".", "").replace("-", "").replace("_", "").replace(" ", "")
-            best_match = None
             for candidate in sorted(registry.get_all_skill_ids()):
                 candidate_norm = candidate.lower().replace(".", "").replace("-", "").replace("_", "")
                 if normalized == candidate_norm:
-                    best_match = candidate
+                    logger.info("load_skill normalized '%s' -> '%s'", skill_id, candidate)
+                    skill_id = candidate
                     break
-                if (
-                    len(normalized) >= 4
-                    and len(candidate_norm) >= 4
-                    and (candidate_norm.startswith(normalized) or normalized.startswith(candidate_norm))
-                    and best_match is None
-                ):
-                    best_match = candidate
-            if best_match:
-                logger.info("load_skill fuzzy matched '%s' -> '%s'", skill_id, best_match)
-                skill_id = best_match
 
         # Dedup after canonicalization so aliases don't bypass cache
         with _loaded_skills_lock:
