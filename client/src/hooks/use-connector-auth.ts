@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 
 interface ConnectorStatus {
   connected: boolean;
@@ -19,6 +19,8 @@ export function useConnectorAuth<T extends ConnectorStatus>({
 }: UseConnectorAuthOptions<T>) {
   const [status, setStatus] = useState<T | null>(null);
   const [isCheckingStatus, setIsCheckingStatus] = useState(true);
+  const fetchStatusRef = useRef(fetchStatus);
+  fetchStatusRef.current = fetchStatus;
 
   const updateLocalState = useCallback(
     (result: T, { fireEvent = true } = {}) => {
@@ -41,34 +43,25 @@ export function useConnectorAuth<T extends ConnectorStatus>({
 
   const refresh = useCallback(async () => {
     try {
-      const result = await fetchStatus();
+      const result = await fetchStatusRef.current();
       if (result !== null) updateLocalState(result);
     } catch {
       // leave current status as-is
     } finally {
       setIsCheckingStatus(false);
     }
-  }, [fetchStatus, updateLocalState]);
-
-  const loadStatus = useCallback(
-    async (skipCache = false) => {
-      if (!skipCache) {
-        const cached = localStorage.getItem(cacheKey);
-        if (cached) {
-          const parsed = JSON.parse(cached);
-          setStatus(parsed);
-          setIsCheckingStatus(false);
-          if (parsed?.connected) return;
-        }
-      }
-      await refresh();
-    },
-    [cacheKey, refresh],
-  );
+  }, [updateLocalState]);
 
   useEffect(() => {
-    loadStatus();
-  }, [loadStatus]);
+    const cached = localStorage.getItem(cacheKey);
+    if (cached) {
+      const parsed = JSON.parse(cached);
+      setStatus(parsed);
+      setIsCheckingStatus(false);
+      if (parsed?.connected) return;
+    }
+    refresh();
+  }, [cacheKey, refresh]);
 
   const disconnect = useCallback(async (): Promise<boolean> => {
     const response = await fetch(disconnectPath, {
