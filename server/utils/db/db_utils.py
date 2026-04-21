@@ -378,6 +378,32 @@ def initialize_tables():
                         UNIQUE(user_id, org_id, preference_key)
                     );
                 """,
+                "users": """
+                    CREATE TABLE IF NOT EXISTS users (
+                        id VARCHAR(255) PRIMARY KEY DEFAULT gen_random_uuid()::TEXT,
+                        email VARCHAR(255) NOT NULL UNIQUE,
+                        password_hash VARCHAR(255) NOT NULL,
+                        name VARCHAR(255),
+                        org_id VARCHAR(255),
+                        must_change_password BOOLEAN DEFAULT FALSE,
+                        created_at TIMESTAMP DEFAULT NOW(),
+                        updated_at TIMESTAMP DEFAULT NOW()
+                    );
+                    
+                    CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
+                """,
+                "organizations": """
+                    CREATE TABLE IF NOT EXISTS organizations (
+                        id VARCHAR(255) PRIMARY KEY DEFAULT gen_random_uuid()::TEXT,
+                        name VARCHAR(255) NOT NULL,
+                        slug VARCHAR(255) NOT NULL UNIQUE,
+                        created_by VARCHAR(255) REFERENCES users(id),
+                        created_at TIMESTAMP DEFAULT NOW(),
+                        updated_at TIMESTAMP DEFAULT NOW()
+                    );
+
+                    CREATE INDEX IF NOT EXISTS idx_organizations_slug ON organizations(slug);
+                """,
                 "org_command_policies": """
                     CREATE TABLE IF NOT EXISTS org_command_policies (
                         id SERIAL PRIMARY KEY,
@@ -1020,32 +1046,6 @@ def initialize_tables():
 
                     CREATE INDEX IF NOT EXISTS idx_kubectl_connections_token ON active_kubectl_connections(token);
                     CREATE UNIQUE INDEX IF NOT EXISTS idx_kubectl_connections_cluster_id ON active_kubectl_connections(cluster_id);
-                """,
-                "users": """
-                    CREATE TABLE IF NOT EXISTS users (
-                        id VARCHAR(255) PRIMARY KEY DEFAULT gen_random_uuid()::TEXT,
-                        email VARCHAR(255) NOT NULL UNIQUE,
-                        password_hash VARCHAR(255) NOT NULL,
-                        name VARCHAR(255),
-                        org_id VARCHAR(255),
-                        must_change_password BOOLEAN DEFAULT FALSE,
-                        created_at TIMESTAMP DEFAULT NOW(),
-                        updated_at TIMESTAMP DEFAULT NOW()
-                    );
-                    
-                    CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
-                """,
-                "organizations": """
-                    CREATE TABLE IF NOT EXISTS organizations (
-                        id VARCHAR(255) PRIMARY KEY DEFAULT gen_random_uuid()::TEXT,
-                        name VARCHAR(255) NOT NULL,
-                        slug VARCHAR(255) NOT NULL UNIQUE,
-                        created_by VARCHAR(255) REFERENCES users(id),
-                        created_at TIMESTAMP DEFAULT NOW(),
-                        updated_at TIMESTAMP DEFAULT NOW()
-                    );
-
-                    CREATE INDEX IF NOT EXISTS idx_organizations_slug ON organizations(slug);
                 """,
                 "org_invitations": """
                     CREATE TABLE IF NOT EXISTS org_invitations (
