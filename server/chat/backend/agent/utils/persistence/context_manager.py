@@ -103,7 +103,6 @@ class ContextManager:
                            messages: List[Dict[str, Any]], 
                            tool_capture: Optional[List[Any]] = None) -> bool:
         """Execute the actual database save operation (moved from LLMContextManager)."""
-        import json
         from datetime import datetime
         from utils.db.connection_pool import db_pool
         
@@ -156,7 +155,6 @@ class ContextManager:
 
     def _serialize_messages(self, processed_messages):
         """Serialize messages, using cache when possible."""
-        import json
         cached_serialized = self.cache.get_serialized(processed_messages)
         if cached_serialized:
             logger.debug(f"Using cached serialization for {len(processed_messages)} messages")
@@ -168,7 +166,6 @@ class ContextManager:
     @staticmethod
     def _upsert_session(cursor, conn, session_id, user_id, context_json, now):
         """Try UPDATE, then INSERT if the session doesn't exist. Returns bool or None (updated OK, continue)."""
-        import json
         cursor.execute("""
             UPDATE chat_sessions 
             SET llm_context_history = %s, updated_at = %s
