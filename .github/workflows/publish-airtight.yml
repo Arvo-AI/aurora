@@ -42,7 +42,7 @@ jobs:
             bucket_url: https://storage.googleapis.com/aurora-airtight-bucket-arm64
 
     env:
-      AURORA_IMAGES: "aurora_server:latest aurora_celery-worker:latest aurora_celery-beat:latest aurora_chatbot:latest aurora_frontend:latest"
+      AURORA_IMAGES: "aurora_server:latest aurora_celery-worker:latest aurora_celery-beat:latest aurora_chatbot:latest aurora_mcp:latest aurora_frontend:latest"
       THIRD_PARTY_IMAGES: >-
         postgres:15-alpine
         redis:7-alpine
@@ -92,6 +92,7 @@ jobs:
           docker tag aurora_server:latest aurora_celery-worker:latest
           docker tag aurora_server:latest aurora_celery-beat:latest
           docker tag aurora_server:latest aurora_chatbot:latest
+          docker tag aurora_server:latest aurora_mcp:latest
 
           docker buildx build --platform ${{ matrix.platform }} \
             -f client/Dockerfile --target prod \

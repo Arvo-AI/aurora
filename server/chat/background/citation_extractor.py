@@ -37,10 +37,12 @@ class CitationExtractor:
             List of Citation objects with sequential indices
         """
         from utils.db.connection_pool import db_pool
+        from utils.auth.stateless_auth import set_rls_context
 
         try:
             with db_pool.get_admin_connection() as conn:
                 with conn.cursor() as cursor:
+                    set_rls_context(cursor, conn, user_id, log_prefix="[CitationExtractor:extract_citations_from_session]")
                     cursor.execute(
                         """
                         SELECT llm_context_history
@@ -304,7 +306,7 @@ def save_incident_citations(
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
-                # Delete existing citations for this incident
+                # No RLS needed — incident_citations not RLS-protected
                 cursor.execute(
                     "DELETE FROM incident_citations WHERE incident_id = %s",
                     (incident_id,)

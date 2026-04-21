@@ -69,7 +69,7 @@ def get_user_id_from_slack_team(team_id: str) -> Optional[str]:
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
-                # Query user_tokens for Slack users with matching team_id (stored in subscription_id)
+                # No RLS needed — webhook bootstrap, no user_id
                 cursor.execute(
                     """
                     SELECT user_id 
@@ -101,7 +101,7 @@ def get_user_id_from_slack_user(slack_user_id: str, team_id: str) -> Optional[st
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
-                # Query user_tokens for Slack users with matching team_id (stored in subscription_id)
+                # No RLS needed — webhook bootstrap, no user_id
                 cursor.execute(
                     """
                     SELECT user_id, secret_ref 
@@ -506,6 +506,7 @@ def get_incident_by_slack_message(user_id: str, slack_message_ts: str):
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                # No RLS needed — webhook bootstrap, no user_id
                 cursor.execute(
                     """
                     SELECT id, aurora_chat_session_id
@@ -546,7 +547,7 @@ def get_session_from_thread(user_id: str, channel_id: str, thread_ts: str):
         # Otherwise, look up by thread_ts in chat session metadata
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
-                # Look up chat session by thread_ts in trigger_metadata
+                # No RLS needed — webhook bootstrap, no user_id
                 cursor.execute(
                     """
                     SELECT id, ui_state
@@ -677,6 +678,7 @@ def get_incident_suggestions(incident_id: str):
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                # No RLS needed — incident_suggestions not RLS-protected
                 cursor.execute(
                     """
                     SELECT id, title, description, type, risk, command

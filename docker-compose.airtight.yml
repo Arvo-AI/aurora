@@ -119,12 +119,15 @@ x-common-env: &common-env
   VAULT_KV_BASE_PATH: ${VAULT_KV_BASE_PATH}
   AWS_SM_REGION: ${AWS_SM_REGION:-}
   AWS_SM_PREFIX: ${AWS_SM_PREFIX:-aurora/users}
+  AWS_SM_ACCESS_KEY_ID: ${AWS_SM_ACCESS_KEY_ID:-}
+  AWS_SM_SECRET_ACCESS_KEY: ${AWS_SM_SECRET_ACCESS_KEY:-}
 
   # Memgraph (Graph Database)
   MEMGRAPH_HOST: ${MEMGRAPH_HOST}
   MEMGRAPH_PORT: ${MEMGRAPH_PORT}
-  MEMGRAPH_USER: ${MEMGRAPH_USER}
-  MEMGRAPH_PASSWORD: ${MEMGRAPH_PASSWORD}
+  MEMGRAPH_SCHEME: ${MEMGRAPH_SCHEME:-bolt}
+  MEMGRAPH_USER: ${MEMGRAPH_USER:-}
+  MEMGRAPH_PASSWORD: ${MEMGRAPH_PASSWORD:-}
   DISCOVERY_INTERVAL_HOURS: ${DISCOVERY_INTERVAL_HOURS}
 
   # Email Notifications (SMTP) - optional for local
@@ -148,12 +151,12 @@ services:
       - "${FLASK_PORT}:${FLASK_PORT}"
     volumes:
       - terraform-workdir:/app/terraform_workdir
-      - /var/run/docker.sock:/var/run/docker.sock
     command: ["python", "main_compute.py"]
     environment:
       <<: *common-env
       OTEL_SERVICE_NAME: aurora-server
       FLASK_PORT: ${FLASK_PORT}
+      INTERNAL_API_SECRET: ${INTERNAL_API_SECRET}
       FRONTEND_URL: ${FRONTEND_URL}
       BACKEND_URL: ${BACKEND_URL}
       NEXT_PUBLIC_BACKEND_URL: ${NEXT_PUBLIC_BACKEND_URL}
@@ -201,6 +204,12 @@ services:
         condition: service_healthy
       memgraph:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:${FLASK_PORT}/health/')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
     restart: unless-stopped
 
   celery_worker:
@@ -211,13 +220,13 @@ services:
       - "host.docker.internal:host-gateway"
     volumes:
       - terraform-workdir:/app/terraform_workdir
-      - /var/run/docker.sock:/var/run/docker.sock
     command: >
       celery -A celery_config worker
         --loglevel=info
     environment:
       <<: *common-env
       OTEL_SERVICE_NAME: celery-worker
+      INTERNAL_API_SECRET: ${INTERNAL_API_SECRET}
       CHATBOT_INTERNAL_URL: ${CHATBOT_INTERNAL_URL}
       FRONTEND_URL: ${FRONTEND_URL}
       BACKEND_URL: ${BACKEND_URL}
@@ -284,7 +293,6 @@ services:
     volumes:
       - ./config/searxng:/etc/searxng
     environment:
-      - SEARXNG_BASE_URL=${SEARXNG_BASE_URL}
       - SEARXNG_SECRET=${SEARXNG_SECRET}
     restart: unless-stopped
 
@@ -344,10 +352,10 @@ services:
     command: ["python", "main_chatbot.py"]
     volumes:
       - terraform-workdir:/app/terraform_workdir
-      - /var/run/docker.sock:/var/run/docker.sock
     environment:
       <<: *common-env
       OTEL_SERVICE_NAME: chatbot
+      INTERNAL_API_SECRET: ${INTERNAL_API_SECRET}
       FRONTEND_URL: ${FRONTEND_URL}
       CHATBOT_INTERNAL_URL: ${CHATBOT_INTERNAL_URL}
       CHATBOT_POD_TTL: ${CHATBOT_POD_TTL}
@@ -425,6 +433,33 @@ services:
       timeout: 5s
       retries: 3
 
+  aurora-mcp:
+    image: aurora_mcp:latest
+    pull_policy: never
+    container_name: aurora-mcp
+    logging: *default-logging
+    ports:
+      - "${MCP_PORT:-8811}:8811"
+    command: ["python", "mcp_server.py"]
+    environment:
+      <<: *common-env
+      OTEL_SERVICE_NAME: aurora-mcp
+      INTERNAL_API_SECRET: ${INTERNAL_API_SECRET}
+      # Tools calling external APIs (incident.io, GitHub, etc.) will fail in airgapped mode
+      AURORA_AIRGAPPED: "true"
+    depends_on:
+      aurora-server:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import socket; s=socket.socket(); s.settimeout(2); s.connect(('localhost',8811)); s.close()"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
   t2v-transformers:
     image: cr.weaviate.io/semitechnologies/transformers-inference:sentence-transformers-all-MiniLM-L6-v2
     pull_policy: never
@@ -448,6 +483,7 @@ services:
       BACKEND_URL: ${BACKEND_URL}
       FRONTEND_URL: ${FRONTEND_URL}
       AUTH_SECRET: ${AUTH_SECRET}
+      INTERNAL_API_SECRET: ${INTERNAL_API_SECRET}
     ports:
       - "3000:3000"
     depends_on:
@@ -574,9 +610,6 @@ services:
       - "7444:7444"
     volumes:
       - memgraph-data:/var/lib/memgraph
-    environment:
-      - MEMGRAPH_USER=${MEMGRAPH_USER}
-      - MEMGRAPH_PASSWORD=${MEMGRAPH_PASSWORD}
     command: >
       --memory-limit=512
       --log-level=WARNING

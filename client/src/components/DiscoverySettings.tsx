@@ -8,7 +8,6 @@ import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
 import { Radar, Check } from "lucide-react";
 import { useAuth } from "@/hooks/useAuthHooks";
-import { getEnv } from "@/lib/env";
 
 export function DiscoverySettings() {
   const [status, setStatus] = useState<string>("loading");
@@ -18,7 +17,6 @@ export function DiscoverySettings() {
   const [savingInterval, setSavingInterval] = useState(false);
   const { toast } = useToast();
   const { userId } = useAuth();
-  const backendUrl = getEnv("NEXT_PUBLIC_BACKEND_URL");
 
   useEffect(() => {
     fetch("/api/prediscovery/status", { credentials: "include" })
@@ -31,16 +29,14 @@ export function DiscoverySettings() {
   }, []);
 
   useEffect(() => {
-    if (!userId || !backendUrl) return;
-    fetch(`${backendUrl}/api/user-preferences?key=prediscovery_interval_hours`, {
-      headers: { "X-User-ID": userId },
-    })
+    if (!userId) return;
+    fetch(`/api/proxy/user-preferences?key=prediscovery_interval_hours`)
       .then((r) => r.json())
       .then((data) => {
         if (data.value != null) setIntervalHours(data.value);
       })
       .catch(() => {});
-  }, [userId, backendUrl]);
+  }, [userId]);
 
   const runDiscovery = async () => {
     setDiscovering(true);
@@ -63,14 +59,14 @@ export function DiscoverySettings() {
   };
 
   const saveInterval = async () => {
-    if (!userId || !backendUrl) return;
+    if (!userId) return;
     const clamped = Math.max(1, Math.round(intervalHours));
     setIntervalHours(clamped);
     setSavingInterval(true);
     try {
-      const res = await fetch(`${backendUrl}/api/user-preferences`, {
+      const res = await fetch(`/api/proxy/user-preferences`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", "X-User-ID": userId },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ key: "prediscovery_interval_hours", value: clamped }),
       });
       if (res.ok) {

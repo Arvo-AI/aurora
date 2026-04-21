@@ -67,7 +67,7 @@ export default function BitbucketProviderIntegration() {
     if (!userId) return;
     setIsCheckingStatus(true);
     try {
-      const data = await BitbucketIntegrationService.checkStatus(userId);
+      const data = await BitbucketIntegrationService.checkStatus();
       setIsAuthenticated(data.connected || false);
       setDisplayName(data.display_name || data.username || '');
       setAuthType(data.auth_type || '');
@@ -86,7 +86,7 @@ export default function BitbucketProviderIntegration() {
     }
     setIsLoading(true);
     try {
-      const oauthUrl = await BitbucketIntegrationService.initiateOAuth(userId);
+      const oauthUrl = await BitbucketIntegrationService.initiateOAuth();
       const popup = window.open(oauthUrl, 'bitbucket-oauth', 'width=600,height=700,scrollbars=yes,resizable=yes');
 
       if (!popup) {
@@ -123,7 +123,7 @@ export default function BitbucketProviderIntegration() {
     }
     setIsLoading(true);
     try {
-      await BitbucketIntegrationService.connectWithApiToken(userId, email, apiToken);
+      await BitbucketIntegrationService.connectWithApiToken(email, apiToken);
       toast({ title: "Connected", description: "Bitbucket connected with API token" });
       setEmail('');
       setApiToken('');
@@ -140,7 +140,7 @@ export default function BitbucketProviderIntegration() {
   const handleDisconnect = async () => {
     if (!userId) return;
     try {
-      await BitbucketIntegrationService.disconnect(userId);
+      await BitbucketIntegrationService.disconnect();
       setIsAuthenticated(false);
       setDisplayName('');
       setAuthType('');
@@ -274,7 +274,7 @@ export default function BitbucketProviderIntegration() {
       )}
 
       {isAuthenticated && userId && (
-        <BitbucketWorkspaceBrowser userId={userId} />
+        <BitbucketWorkspaceBrowser />
       )}
     </div>
   );

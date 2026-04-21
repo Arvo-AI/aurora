@@ -76,15 +76,15 @@ def prepare_github_commit_suggestion(
         Dict with commit suggestion details or error status
     """
     try:
-        from ..mcp_tools import get_user_cloud_credentials
-
         repo = "user/repository"
         branch = "main"
 
         try:
             from utils.db.connection_pool import db_pool
+            from utils.auth.stateless_auth import set_rls_context
             with db_pool.get_admin_connection() as conn:
                 with conn.cursor() as cur:
+                    set_rls_context(cur, conn, user_id, log_prefix="[IaC:repos]")
                     cur.execute(
                         """SELECT repo_full_name, default_branch
                            FROM github_connected_repos

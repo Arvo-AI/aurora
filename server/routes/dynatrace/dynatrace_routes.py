@@ -15,6 +15,7 @@ from utils.auth.stateless_auth import (
     get_org_id_from_request,
     get_user_preference,
     store_user_preference,
+    set_rls_context,
 )
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 from routes.dynatrace.config import DYNATRACE_TIMEOUT
@@ -195,7 +196,7 @@ def get_alerts(user_id):
     try:
         with db_pool.get_admin_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SET myapp.current_org_id = %s", (org_id,))
+            set_rls_context(cursor, conn, user_id, log_prefix="[Dynatrace]")
 
             conditions = ["org_id = %s"]
             params: list = [org_id]

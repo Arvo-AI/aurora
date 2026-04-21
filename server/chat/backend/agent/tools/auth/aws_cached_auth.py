@@ -1,8 +1,6 @@
 import json
 import logging
 import os
-import subprocess
-from utils.terminal.terminal_run import terminal_run
 import time
 from typing import Optional, Tuple
 
@@ -57,21 +55,20 @@ def _cache_set(key: str, value: dict) -> None:
     if client is not None:
         try:
             client.setex(key, ttl, json.dumps(value))
-            logger.info(f"AWS setup cache SET key={key} ttl={ttl}s")
+            logger.info("AWS setup cache SET ttl=%ss", ttl)
             return
         except Exception as e:
             logger.debug(f"AWS cache SET error: {e}")
     _aws_local_cache[key] = (time.time() + ttl, value)
-    logger.info(f"AWS setup local-cache SET key={key} ttl={ttl}s")
+    logger.info("AWS setup local-cache SET ttl=%ss", ttl)
 
 
-def setup_aws_credentials_cached(user_id: str, selected_region: Optional[str] = None, return_isolated: bool = False) -> Tuple[bool, Optional[str], Optional[str], Optional[dict]]:
-    """Setup AWS auth with caching. 
+def setup_aws_credentials_cached(user_id: str, selected_region: Optional[str] = None) -> Tuple[bool, Optional[str], Optional[str], Optional[dict]]:
+    """Setup AWS auth with caching.
     
-    Returns (success, region, auth_method, isolated_env) if return_isolated=True
-    Returns (success, region, auth_method) if return_isolated=False (backward compat)
-    
-    When return_isolated=True, returns an isolated environment dict instead of modifying os.environ.
+    Returns (success, region, auth_method, isolated_env).
+    The isolated_env dict should be passed to subprocess/terminal_run via env=
+    to avoid cross-tenant credential leaks in the shared process environment.
     """
     try:
         fn_start = time.perf_counter()
@@ -83,14 +80,14 @@ def setup_aws_credentials_cached(user_id: str, selected_region: Optional[str] = 
         logger.info(f"TIME: get_credentials_from_db took {time.perf_counter() - creds_start:.2f}s")
         if not aws_credentials:
             logger.error(f"No AWS credentials found for user {user_id}")
-            return (False, None, None, None) if return_isolated else (False, None, None)
+            return False, None, None, None
 
         # Validate
         access_key_id = aws_credentials.get('aws_access_key_id')
         secret_access_key = aws_credentials.get('aws_secret_access_key')
         if not access_key_id or not secret_access_key:
             logger.error("Missing required AWS credential fields")
-            return (False, None, None, None) if return_isolated else (False, None, None)
+            return False, None, None, None
 
         # Resolve region
         regions = aws_credentials.get('aws_regions', ['us-east-1'])
@@ -100,44 +97,41 @@ def setup_aws_credentials_cached(user_id: str, selected_region: Optional[str] = 
             region = selected_region or 'us-east-1'
         logger.info(f"Using AWS region: {region}")
 
-        # Build isolated environment (always needed for return_isolated mode)
-        isolated_env = None
-        if return_isolated:
-            isolated_env = {
-                "PATH": os.environ.get("PATH", ""),
-                "HOME": os.environ.get("HOME", ""),
-                "USER": os.environ.get("USER", ""),
-                "AWS_ACCESS_KEY_ID": access_key_id,
-                "AWS_SECRET_ACCESS_KEY": secret_access_key,
-                "AWS_DEFAULT_REGION": region,
-                "AWS_REGION": region,
-            }
+        isolated_env = {
+            "PATH": os.environ.get("PATH", ""),
+            "HOME": os.environ.get("HOME", ""),
+            "USER": os.environ.get("USER", ""),
+            "AWS_ACCESS_KEY_ID": access_key_id,
+            "AWS_SECRET_ACCESS_KEY": secret_access_key,
+            "AWS_DEFAULT_REGION": region,
+            "AWS_REGION": region,
+        }
 
         # Cache check
         key = _cache_key(user_id, access_key_id, region)
         cached = _cache_get(key)
         if cached:
             logger.info(f"AWS setup cache HIT for user={user_id} region={region}")
-            if return_isolated:
-                # Return isolated environment without modifying os.environ
-                return True, region, "access_key", isolated_env
-            else:
-                # Legacy mode: modify os.environ for backward compatibility
-                # Clear any existing AWS profile environment variables to avoid conflicts
-                for key in ["AWS_PROFILE", "AWS_DEFAULT_PROFILE", "AWS_CONFIG_FILE", "AWS_SHARED_CREDENTIALS_FILE"]:
-                    if key in os.environ:
-                        del os.environ[key]
-                os.environ["AWS_ACCESS_KEY_ID"] = access_key_id
-                os.environ["AWS_SECRET_ACCESS_KEY"] = secret_access_key
-                os.environ["AWS_DEFAULT_REGION"] = region
-                os.environ["AWS_REGION"] = region
-                return True, region, "access_key"
+            return True, region, "access_key", isolated_env
 
-        # STS validation - always use explicit credentials for thread safety
+        # STS validation - use a botocore session with config/credentials files
+        # pointed at /dev/null to avoid stale profile state. Fully thread-safe.
         import boto3
+        import botocore.session
         from botocore.config import Config
         
         sts_start = time.perf_counter()
+        
+        botocore_sess = botocore.session.Session()
+        botocore_sess.set_config_variable('config_file', '/dev/null')
+        botocore_sess.set_config_variable('credentials_file', '/dev/null')
+        
+        session = boto3.Session(
+            aws_access_key_id=access_key_id,
+            aws_secret_access_key=secret_access_key,
+            region_name=region,
+            botocore_session=botocore_sess,
+        )
         
         # Create a config to avoid profile issues
         config = Config(
@@ -146,14 +140,7 @@ def setup_aws_credentials_cached(user_id: str, selected_region: Optional[str] = 
             retries={'max_attempts': 3}
         )
         
-        # Use explicit credentials with boto3.client to avoid profile lookup
-        sts = boto3.client(
-            'sts',
-            aws_access_key_id=access_key_id,
-            aws_secret_access_key=secret_access_key,
-            region_name=region,
-            config=config
-        )
+        sts = session.client('sts', config=config)
         identity = sts.get_caller_identity()
         logger.info(f"TIME: AWS STS validation took {time.perf_counter() - sts_start:.2f}s")
         account_id = identity['Account']
@@ -164,75 +151,10 @@ def setup_aws_credentials_cached(user_id: str, selected_region: Optional[str] = 
         # Cache the successful validation
         _cache_set(key, {"success": True})
         
-        # Return based on mode
-        if return_isolated:
-            # Return isolated environment without modifying os.environ
-            logger.info(f"AWS credentials configured (isolated mode) for region: {region}")
-            return True, region, "access_key", isolated_env
-        else:
-            # Legacy mode: modify os.environ for backward compatibility
-            # Clear any existing AWS profile environment variables to avoid conflicts
-            for key in ["AWS_PROFILE", "AWS_DEFAULT_PROFILE", "AWS_CONFIG_FILE", "AWS_SHARED_CREDENTIALS_FILE"]:
-                if key in os.environ:
-                    del os.environ[key]
-            
-            # Apply env
-            os.environ["AWS_ACCESS_KEY_ID"] = access_key_id
-            os.environ["AWS_SECRET_ACCESS_KEY"] = secret_access_key
-            os.environ["AWS_DEFAULT_REGION"] = region
-            os.environ["AWS_REGION"] = region
-            if "AWS_SESSION_TOKEN" in os.environ:
-                del os.environ["AWS_SESSION_TOKEN"]
-
-            # Configure AWS CLI default region (best-effort) - only in legacy mode
-            try:
-                config_start = time.perf_counter()
-                region_cmd = ["aws", "configure", "set", "region", region]
-                region_result = terminal_run(
-                    region_cmd,
-                    capture_output=True,
-                    text=True,
-                    timeout=10,
-                )
-                logger.info(f"TIME: aws configure set region took {time.perf_counter() - config_start:.2f}s")
-                if region_result.returncode == 0:
-                    logger.info(f"Successfully set default AWS region: {region}")
-                else:
-                    logger.warning(f"Failed to set default AWS region: {region_result.stderr}")
-
-                if _AWS_VERIFY_CLI_IDENTITY:
-                    try:
-                        identity_start = time.perf_counter()
-                        identity_cmd = terminal_run(
-                            ['aws', 'sts', 'get-caller-identity'],
-                            capture_output=True,
-                            text=True,
-                            timeout=10,
-                            env=os.environ.copy(),
-                        )
-                        logger.info(f"TIME: aws sts get-caller-identity took {time.perf_counter() - identity_start:.2f}s")
-                        if identity_cmd.returncode == 0:
-                            logger.info(f"AWS CLI identity verification successful: {identity_cmd.stdout.strip()}")
-                        else:
-                            logger.warning(f"AWS CLI identity verification failed: {identity_cmd.stderr}")
-                    except Exception as e:
-                        logger.warning(f"Failed to verify AWS CLI configuration: {e}")
-            except Exception as e:
-                logger.warning(f"Failed to configure AWS CLI settings: {e}")
-
-            logger.info(f"Successfully set up AWS credentials for region: {region}")
-            logger.info(f"TIME: setup_aws_credentials (cached helper) completed in {time.perf_counter() - fn_start:.2f}s")
-            return True, region, "access_key"
+        logger.info("AWS credentials configured (isolated mode)")
+        logger.info(f"TIME: setup_aws_credentials (cached helper) completed in {time.perf_counter() - fn_start:.2f}s")
+        return True, region, "access_key", isolated_env
 
     except Exception as e:
         logger.error(f"Failed to set up AWS credentials (cached helper): {e}")
-        return (False, None, None, None) if return_isolated else (False, None, None)
-
-
-def setup_aws_credentials_cached_isolated(user_id: str, selected_region: Optional[str] = None) -> Tuple[bool, Optional[str], Optional[str], Optional[dict]]:
-    """Concurrent-safe version that always returns isolated environment.
-    
-    Returns (success, region, auth_method, isolated_env).
-    This is a convenience wrapper that always uses return_isolated=True.
-    """
-    return setup_aws_credentials_cached(user_id, selected_region, return_isolated=True) 
+        return False, None, None, None 

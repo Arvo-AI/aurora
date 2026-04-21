@@ -870,7 +870,7 @@ def get_user_cloud_credentials(user_id: str) -> Dict[str, Dict]:
             """Get credentials for a specific provider from database."""
             try:
                 with conn.cursor() as cursor:
-                    # Cloud providers store credentials in connected_accounts table
+                    # No RLS needed — connected_accounts not RLS-protected
                     cursor.execute("""
                         SELECT provider_data FROM connected_accounts 
                         WHERE user_id = %s AND provider = %s AND status = 'active'

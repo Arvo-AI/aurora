@@ -94,14 +94,13 @@ export default function McpTokens() {
   }
 
   function mcpConfigJson(token: string) {
-    const backendUrl = getEnv('NEXT_PUBLIC_BACKEND_URL') || 'http://localhost:5080';
-    const u = new URL(backendUrl);
-    u.port = '8811';
-    u.pathname = '/mcp';
+    const backendUrl = (getEnv('NEXT_PUBLIC_BACKEND_URL') || 'http://localhost:5080').replace(/\/$/, '');
+    const isLocal = /^https?:\/\/(localhost|127\.0\.0\.1)(:|$)/.test(backendUrl);
+    const mcpUrl = isLocal ? backendUrl.replace(/:\d+/, ':8811') : `${backendUrl}/mcp`;
     return JSON.stringify({
       mcpServers: {
         aurora: {
-          url: u.toString().replace(/\/$/, ''),
+          url: mcpUrl,
           headers: { Authorization: `Bearer ${token}` },
         },
       },

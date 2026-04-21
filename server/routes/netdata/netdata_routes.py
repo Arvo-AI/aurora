@@ -11,7 +11,7 @@ from utils.db.connection_pool import db_pool
 from utils.web.cors_utils import create_cors_response
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.auth.rbac_decorators import require_permission
-from utils.auth.stateless_auth import get_org_id_from_request
+from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context
 from utils.secrets.secret_ref_utils import delete_user_secret
 
 logger = logging.getLogger(__name__)
@@ -105,6 +105,7 @@ def disconnect(user_id):
         alert_rows = 0
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                set_rls_context(cursor, conn, user_id, log_prefix="[NETDATA:disconnect]")
                 cursor.execute(
                     "DELETE FROM netdata_alerts WHERE user_id = %s",
                     (user_id,)
@@ -162,6 +163,7 @@ def alert_webhook(user_id: str):
         try:
             with db_pool.get_admin_connection() as conn:
                 cursor = conn.cursor()
+                set_rls_context(cursor, conn, user_id, log_prefix="[NETDATA:webhook]")
                 cursor.execute(
                     """
                     INSERT INTO netdata_verification_tokens (user_id, token, created_at)
@@ -192,7 +194,7 @@ def get_alerts(user_id):
     try:
         with db_pool.get_admin_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SET myapp.current_org_id = %s", (org_id,))
+            set_rls_context(cursor, conn, user_id, log_prefix="[Netdata]")
 
             if status_filter:
                 cursor.execute(
@@ -282,6 +284,7 @@ def get_webhook_url(user_id):
     try:
         with db_pool.get_admin_connection() as conn:
             cursor = conn.cursor()
+            set_rls_context(cursor, conn, user_id, log_prefix="[NETDATA:webhook_url]")
             cursor.execute(
                 "SELECT token FROM netdata_verification_tokens WHERE user_id = %s",
                 (user_id,)

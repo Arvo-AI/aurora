@@ -5,19 +5,23 @@ Celery tasks for scheduled infrastructure discovery.
 import logging
 
 from celery_config import celery_app
+from utils.auth.stateless_auth import set_rls_context
 
 logger = logging.getLogger(__name__)
 
 SUPPORTED_PROVIDERS = ('gcp', 'aws', 'azure', 'ovh', 'scaleway', 'tailscale', 'kubectl')
 
 
-def _query_connected_providers(cur, user_id=None):
+def _query_connected_providers(cur, user_id=None, conn=None):
     """Query distinct (user_id, provider) pairs from active connections.
 
     If user_id is given, returns just the provider names for that user.
     Otherwise returns (user_id, provider) rows for all users.
+    Requires conn for cross-org queries to set RLS context per-org.
     """
     if user_id is not None:
+        if conn:
+            set_rls_context(cur, conn, user_id, log_prefix="[Discovery]")
         cur.execute("""
             SELECT DISTINCT provider FROM (
                 SELECT provider FROM user_connections
@@ -29,17 +33,29 @@ def _query_connected_providers(cur, user_id=None):
         """, (user_id, SUPPORTED_PROVIDERS, user_id, SUPPORTED_PROVIDERS))
         return [row[0] for row in cur.fetchall()]
     else:
-        cur.execute("""
-            SELECT DISTINCT user_id, provider FROM (
-                SELECT user_id, provider FROM user_connections
-                WHERE status = 'active' AND provider IN %s
-                UNION
-                SELECT user_id, provider FROM user_tokens
-                WHERE is_active = true AND provider IN %s
-            ) AS connected
-            ORDER BY user_id
-        """, (SUPPORTED_PROVIDERS, SUPPORTED_PROVIDERS))
-        return cur.fetchall()
+        # No RLS needed — cross-org loop sets RLS per user
+        cur.execute(
+            "SELECT DISTINCT id, org_id FROM users WHERE org_id IS NOT NULL"
+        )
+        all_users = cur.fetchall()
+        results = []
+        for uid, org_id in all_users:
+            cur.execute("SET myapp.current_user_id = %s;", (uid,))
+            cur.execute("SET myapp.current_org_id = %s;", (org_id,))
+            if conn:
+                conn.commit()
+            cur.execute("""
+                SELECT DISTINCT provider FROM (
+                    SELECT provider FROM user_connections
+                    WHERE user_id = %s AND status = 'active' AND provider IN %s
+                    UNION
+                    SELECT provider FROM user_tokens
+                    WHERE user_id = %s AND is_active = true AND provider IN %s
+                ) AS connected
+            """, (uid, SUPPORTED_PROVIDERS, uid, SUPPORTED_PROVIDERS))
+            for row in cur.fetchall():
+                results.append((uid, row[0]))
+        return results
 
 
 def _clear_discovery_lock(user_id):
@@ -156,8 +172,8 @@ def run_full_discovery(self):
 
     try:
         conn = connect_to_db_as_admin()
-        cur = conn.cursor()
-        rows = _query_connected_providers(cur)
+        cur = conn.cursor()  # No RLS needed — cross-org loop, sets RLS per user inside
+        rows = _query_connected_providers(cur, conn=conn)
         cur.close()
         conn.close()
 
@@ -211,7 +227,8 @@ def run_user_discovery(self, user_id):
     try:
         conn = connect_to_db_as_admin()
         cur = conn.cursor()
-        provider_names = _query_connected_providers(cur, user_id)
+        set_rls_context(cur, conn, user_id, log_prefix="[Discovery Task]")
+        provider_names = _query_connected_providers(cur, user_id, conn=conn)
 
         if not provider_names:
             cur.close()
@@ -287,8 +304,8 @@ def mark_stale_services(self):
 
     try:
         conn = connect_to_db_as_admin()
-        cur = conn.cursor()
-        rows = _query_connected_providers(cur)
+        cur = conn.cursor()  # No RLS needed — cross-org loop, sets RLS per user inside
+        rows = _query_connected_providers(cur, conn=conn)
         cur.close()
         conn.close()
         user_ids = list({row[0] for row in rows})

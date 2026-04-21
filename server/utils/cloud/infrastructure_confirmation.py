@@ -93,18 +93,17 @@ def wait_for_user_confirmation(
     Wait for user confirmation via WebSocket.
     Uses simple polling to check for responses.
     
-    For background chats (is_background=True), confirmations are auto-approved
-    since background chats run in read-only mode and don't have user interaction.
+    For background chats (is_background=True), confirmations are denied
+    since there is no interactive user to approve destructive operations.
     """
-    # Check if this is a background chat - auto-approve if so
-    # Background chats run in read-only mode, so destructive operations should
-    # already be blocked by ModeAccessController. This is an additional safety check.
+    # Background chats have no user interaction channel, so destructive operations
+    # must be denied rather than auto-approved.
     try:
         from chat.backend.agent.tools.cloud_tools import get_state_context
         state = get_state_context()
         if state and getattr(state, 'is_background', False):
-            logger.info(f"[BackgroundChat] Auto-approving confirmation for {tool_name} (read-only mode)")
-            return True
+            logger.warning(f"[BackgroundChat] Denying confirmation for {tool_name} -- no interactive user")
+            return False
     except Exception as e:
         logger.debug(f"Could not check background state: {e}")
     

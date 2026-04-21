@@ -1,8 +1,6 @@
 import json
 import logging
 import os
-import subprocess
-from utils.terminal.terminal_run import terminal_run
 import time
 from typing import Optional, Tuple
 
@@ -15,7 +13,6 @@ logger = logging.getLogger(__name__)
 # Caching controls - use consolidated variables
 _AZ_CACHE_ENABLED = os.getenv("AURORA_SETUP_CACHE_ENABLED", "true").lower() == "true"
 _AZ_CACHE_TTL = int(os.getenv("AURORA_SETUP_CACHE_TTL", "300"))
-_AZ_VERIFY_AZ_CLI = os.getenv("AURORA_VERIFY_CLI_IDENTITY", "false").lower() == "true"
 
 _local_cache: dict[str, tuple[float, dict]] = {}
 
@@ -67,8 +64,13 @@ def _cache_set(key: str, value: dict) -> None:
             logger.debug(f"Azure cache SET error: {e}")
 
 
-def setup_azure_environment_cached(user_id: str, subscription_id: Optional[str] = None) -> Tuple[bool, Optional[str], Optional[str]]:
-    """Set up Azure auth with caching. Returns (success, subscription_id, auth_method)."""
+def setup_azure_environment_cached(user_id: str, subscription_id: Optional[str] = None) -> Tuple[bool, Optional[str], Optional[str], Optional[dict]]:
+    """Set up Azure auth with caching.
+
+    Returns (success, subscription_id, auth_method, isolated_env).
+    The isolated_env dict should be passed to subprocess/terminal_run via env=
+    to avoid cross-tenant credential leaks in the shared process environment.
+    """
     try:
         fn_start = time.perf_counter()
         logger.info("Setting up Azure environment (cached helper)...")
@@ -76,7 +78,6 @@ def setup_azure_environment_cached(user_id: str, subscription_id: Optional[str] 
         # Acquire Azure credentials and subscription
         current_mode = get_mode_from_context()
         az_creds = generate_azure_access_token(user_id, subscription_id, mode=current_mode)
-        access_token = az_creds["access_token"]  # not used by az login but kept for uniformity
         subscription_id = az_creds["subscription_id"]
         tenant_id = az_creds["tenant_id"]
         client_id = az_creds.get("client_id")
@@ -85,73 +86,24 @@ def setup_azure_environment_cached(user_id: str, subscription_id: Optional[str] 
         if not all([tenant_id, client_id, client_secret]):
             raise ValueError("Incomplete Azure credentials for CLI authentication")
 
+        # Build isolated environment dict instead of mutating os.environ
+        isolated_env = {
+            "PATH": os.environ.get("PATH", ""),
+            "HOME": os.environ.get("HOME", ""),
+            "USER": os.environ.get("USER", ""),
+            "AZURE_CLIENT_ID": str(client_id),
+            "AZURE_CLIENT_SECRET": str(client_secret),
+            "AZURE_TENANT_ID": str(tenant_id),
+        }
+
         # Cache check
         key = _cache_key(user_id, subscription_id, current_mode)
         cached = _cache_get(key)
         if cached:
             logger.info("Azure setup cache HIT")
-            os.environ["AZURE_CLIENT_ID"] = str(client_id)
-            os.environ["AZURE_CLIENT_SECRET"] = str(client_secret)
-            os.environ["AZURE_TENANT_ID"] = str(tenant_id)
-            return True, subscription_id, "service_principal"
+            return True, subscription_id, "service_principal", isolated_env
 
-        # Apply env
-        os.environ["AZURE_CLIENT_ID"] = str(client_id)
-        os.environ["AZURE_CLIENT_SECRET"] = str(client_secret)
-        os.environ["AZURE_TENANT_ID"] = str(tenant_id)
-
-        # az login service principal
-        try:
-            login_cmd = [
-                "az", "login", "--service-principal",
-                "--username", str(client_id),
-                "--password", str(client_secret),
-                "--tenant", str(tenant_id),
-                "--output", "none",
-            ]
-            login_result = terminal_run(
-                login_cmd,
-                capture_output=True,
-                text=True,
-                timeout=30,
-            )
-            if login_result.returncode != 0:
-                logger.error(f"Azure CLI login failed: {login_result.stderr}")
-                raise ValueError(f"Azure CLI authentication failed: {login_result.stderr}")
-            logger.info("Azure CLI authenticated successfully")
-            if subscription_id:
-                set_subscription_cmd = ["az", "account", "set", "--subscription", str(subscription_id)]
-                sub_result = terminal_run(
-                    set_subscription_cmd,
-                    capture_output=True,
-                    text=True,
-                    timeout=10,
-                )
-                if sub_result.returncode == 0:
-                    logger.info(f"Azure CLI default subscription set to: {subscription_id}")
-                else:
-                    logger.warning(f"Failed to set default subscription: {sub_result.stderr}")
-
-            if _AZ_VERIFY_AZ_CLI:
-                try:
-                    who_cmd = terminal_run(
-                        ["az", "account", "show"],
-                        capture_output=True,
-                        text=True,
-                        timeout=10,
-                    )
-                    if who_cmd.returncode == 0:
-                        logger.info("Azure CLI identity verification successful")
-                    else:
-                        logger.warning(f"Azure CLI identity verification failed: {who_cmd.stderr}")
-                except Exception as e:
-                    logger.warning(f"Failed to verify Azure CLI identity: {e}")
-        except subprocess.TimeoutExpired:
-            raise ValueError("Azure CLI authentication timed out")
-        except Exception as e:
-            raise ValueError(f"Azure CLI setup failed: {e}")
-
-        # Cache success
+        # Cache the successful credential resolution
         try:
             _cache_set(key, {
                 "ok": True,
@@ -167,8 +119,8 @@ def setup_azure_environment_cached(user_id: str, subscription_id: Optional[str] 
 
         logger.info(f"Azure environment configured for subscription: {subscription_id}")
         logger.info(f"TIME: setup_azure (cached helper) completed in {time.perf_counter() - fn_start:.2f}s")
-        return True, subscription_id, "service_principal"
+        return True, subscription_id, "service_principal", isolated_env
 
     except Exception as e:
         logger.error(f"Failed to setup Azure environment (cached helper): {e}")
-        return False, None, None 
+        return False, None, None, None
