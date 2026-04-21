@@ -30,6 +30,7 @@ Authentication and subscription are auto-configured — never ask users for cred
 
 ## Subscription Setup
 - Get subscription ID: `cloud_exec('azure', "account show --query 'id' -o tsv")`
+
 ## CLI Reference
 
 ### Discovery

@@ -356,7 +356,7 @@ When investigating a Scaleway incident:
 
 ### Context7 lookup on failure
 For resource reference:
-`mcp_context7_get_library_docs(context7CompatibleLibraryID='/scaleway/terraform-provider-scaleway', topic='scaleway_instance_server')`
+`mcp_context7_get_library_docs(context7CompatibleLibraryID='/scaleway/scaleway-cli', topic='instance server create')`
 
 ## Region Mapping
 - France (default): fr-par, zones: fr-par-1, fr-par-2, fr-par-3

@@ -114,24 +114,24 @@ cloud_exec('ovh', 'cloud kube kubeconfig reset <CLUSTER_ID> --cloud-project <PRO
 
 **KUBECTL WORKFLOW (for OVH MKS clusters):**
 1. Save kubeconfig to file: `cloud_exec('ovh', 'cloud kube kubeconfig generate <CLUSTER_ID> --cloud-project <PROJECT_ID>', output_file='/tmp/kubeconfig.yaml')`
-2. Run kubectl: `terminal_exec('kubectl --kubeconfig=/tmp/kubeconfig.yaml get pods -A')`
+2. Run kubectl: `cloud_exec('ovh', 'kubectl --kubeconfig=/tmp/kubeconfig.yaml get pods -A')`
 3. CRITICAL: Use output_file parameter to save kubeconfig — avoids shell escaping issues with YAML
 4. Do NOT try to embed kubeconfig YAML in echo commands — it will break
 
 ```python
-terminal_exec('kubectl --kubeconfig=/tmp/kubeconfig.yaml get pods -n <NS> -o wide')
-terminal_exec('kubectl --kubeconfig=/tmp/kubeconfig.yaml describe pod <POD> -n <NS>')
-terminal_exec('kubectl --kubeconfig=/tmp/kubeconfig.yaml logs <POD> -n <NS> --since=1h --tail=200')
-terminal_exec('kubectl --kubeconfig=/tmp/kubeconfig.yaml logs <POD> -n <NS> -c <CONTAINER> --previous')
-terminal_exec('kubectl --kubeconfig=/tmp/kubeconfig.yaml get events -n <NS> --sort-by=.lastTimestamp')
-terminal_exec('kubectl --kubeconfig=/tmp/kubeconfig.yaml top pods -n <NS>')
-terminal_exec('kubectl --kubeconfig=/tmp/kubeconfig.yaml top nodes')
-terminal_exec('kubectl --kubeconfig=/tmp/kubeconfig.yaml get hpa -n <NS>')
-terminal_exec('kubectl --kubeconfig=/tmp/kubeconfig.yaml get deployments -n <NS>')
-terminal_exec('kubectl --kubeconfig=/tmp/kubeconfig.yaml rollout history deployment/<DEPLOY> -n <NS>')
-terminal_exec('kubectl --kubeconfig=/tmp/kubeconfig.yaml get pvc -n <NS>')
-terminal_exec('kubectl --kubeconfig=/tmp/kubeconfig.yaml get svc -n <NS>')
-terminal_exec('kubectl --kubeconfig=/tmp/kubeconfig.yaml get ingress -n <NS>')
+cloud_exec('ovh', 'kubectl --kubeconfig=/tmp/kubeconfig.yaml get pods -n <NS> -o wide')
+cloud_exec('ovh', 'kubectl --kubeconfig=/tmp/kubeconfig.yaml describe pod <POD> -n <NS>')
+cloud_exec('ovh', 'kubectl --kubeconfig=/tmp/kubeconfig.yaml logs <POD> -n <NS> --since=1h --tail=200')
+cloud_exec('ovh', 'kubectl --kubeconfig=/tmp/kubeconfig.yaml logs <POD> -n <NS> -c <CONTAINER> --previous')
+cloud_exec('ovh', 'kubectl --kubeconfig=/tmp/kubeconfig.yaml get events -n <NS> --sort-by=.lastTimestamp')
+cloud_exec('ovh', 'kubectl --kubeconfig=/tmp/kubeconfig.yaml top pods -n <NS>')
+cloud_exec('ovh', 'kubectl --kubeconfig=/tmp/kubeconfig.yaml top nodes')
+cloud_exec('ovh', 'kubectl --kubeconfig=/tmp/kubeconfig.yaml get hpa -n <NS>')
+cloud_exec('ovh', 'kubectl --kubeconfig=/tmp/kubeconfig.yaml get deployments -n <NS>')
+cloud_exec('ovh', 'kubectl --kubeconfig=/tmp/kubeconfig.yaml rollout history deployment/<DEPLOY> -n <NS>')
+cloud_exec('ovh', 'kubectl --kubeconfig=/tmp/kubeconfig.yaml get pvc -n <NS>')
+cloud_exec('ovh', 'kubectl --kubeconfig=/tmp/kubeconfig.yaml get svc -n <NS>')
+cloud_exec('ovh', 'kubectl --kubeconfig=/tmp/kubeconfig.yaml get ingress -n <NS>')
 ```
 
 ### Managed Databases
