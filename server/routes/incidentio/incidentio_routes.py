@@ -1,10 +1,10 @@
 """incident.io connector routes: connect, status, disconnect, webhook, alerts, settings."""
 
+import base64
 import hashlib
 import hmac
 import logging
 import os
-import secrets
 from typing import Any, Dict, Optional
 
 import requests
@@ -16,6 +16,7 @@ from utils.web.cors_utils import create_cors_response
 from utils.auth.stateless_auth import (
     get_org_id_from_request,
     get_user_preference,
+    set_rls_context,
     store_user_preference,
 )
 from utils.auth.token_management import get_token_data, store_tokens_in_db
@@ -130,7 +131,7 @@ def connect(user_id):
             msg = "Failed to validate API key with incident.io"
         return jsonify({"error": msg}), 502
 
-    token_payload = {"api_key": api_key, "webhook_secret": secrets.token_hex(32)}
+    token_payload = {"api_key": api_key}
 
     try:
         store_tokens_in_db(user_id, token_payload, "incidentio")
@@ -194,13 +195,18 @@ def alert_webhook(user_id: str):
         return jsonify({"error": "incident.io not connected for this user"}), 404
 
     webhook_secret = creds.get("webhook_secret")
-    signature = request.headers.get("X-Aurora-Signature", "")
     if webhook_secret:
-        if not signature:
-            logger.warning("[INCIDENTIO] Webhook rejected: missing X-Aurora-Signature for user %s", user_id[:50])
-            return jsonify({"error": "Missing X-Aurora-Signature header"}), 401
-        expected = hmac.new(webhook_secret.encode(), request.get_data(), hashlib.sha256).hexdigest()
-        if not hmac.compare_digest(expected, signature):
+        msg_id = request.headers.get("webhook-id", "")
+        timestamp = request.headers.get("webhook-timestamp", "")
+        signature_header = request.headers.get("webhook-signature", "")
+        if not msg_id or not timestamp or not signature_header:
+            logger.warning("[INCIDENTIO] Webhook rejected: missing Svix headers for user %s", user_id[:50])
+            return jsonify({"error": "Missing webhook signature headers"}), 401
+        to_sign = f"{msg_id}.{timestamp}.{request.get_data(as_text=True)}"
+        secret_bytes = base64.b64decode(webhook_secret.split("_")[-1]) if webhook_secret.startswith("whsec_") else webhook_secret.encode()
+        expected = base64.b64encode(hmac.new(secret_bytes, to_sign.encode(), hashlib.sha256).digest()).decode()
+        signatures = [s.split(",")[-1] for s in signature_header.split(" ")]
+        if not any(hmac.compare_digest(expected, s) for s in signatures):
             logger.warning("[INCIDENTIO] Webhook rejected: invalid signature for user %s", user_id[:50])
             return jsonify({"error": "Invalid webhook signature"}), 401
 
@@ -294,15 +300,43 @@ def get_webhook_url(user_id):
             "2. Click 'Add endpoint'",
             "3. Paste the webhook URL above",
             "4. Select events: incident.created, incident.updated",
-            "5. Save — incidents will now trigger Aurora RCA automatically",
+            "5. Save the endpoint, then copy the signing secret from the endpoint settings",
+            "6. Paste the signing secret (starts with whsec_) into the field above",
         ],
     })
+
+
+@incidentio_bp.route("/webhook-secret", methods=["PUT", "OPTIONS"])
+@require_permission("connectors", "write")
+def save_webhook_secret(user_id):
+    """Store the webhook signing secret from incident.io's endpoint settings."""
+    try:
+        data = request.get_json(force=True, silent=True) or {}
+    except Exception:
+        data = {}
+
+    secret = data.get("webhookSecret", "").strip()
+    if not secret:
+        return jsonify({"error": "webhookSecret is required"}), 400
+
+    creds = _get_stored_credentials(user_id)
+    if not creds:
+        return jsonify({"error": "incident.io not connected"}), 400
+
+    creds["webhook_secret"] = secret
+    try:
+        store_tokens_in_db(user_id, creds, "incidentio")
+    except Exception:
+        logger.exception("[INCIDENTIO] Failed to store webhook secret for user %s", user_id)
+        return jsonify({"error": "Failed to store webhook secret"}), 500
+
+    return jsonify({"success": True})
 
 
 @incidentio_bp.route("/rca-settings", methods=["GET", "OPTIONS"])
 @require_permission("connectors", "read")
 def get_rca_settings(user_id):
-    rca_enabled = get_user_preference(user_id, "incidentio_rca_enabled", default=False)
+    rca_enabled = get_user_preference(user_id, "incidentio_rca_enabled", default=True)
     postback_enabled = get_user_preference(user_id, "incidentio_postback_enabled", default=False)
     return jsonify({"rcaEnabled": rca_enabled, "postbackEnabled": postback_enabled})
 

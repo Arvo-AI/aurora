@@ -25,15 +25,19 @@ class ListIncidentsArgs(BaseModel):
     """Arguments for list_incidentio_incidents."""
     status: Optional[str] = Field(
         default=None,
-        description="Filter by status: 'live', 'closed', 'declined'. Leave empty for all.",
+        description="Filter by status category: 'live', 'closed', 'declined'. Leave empty for all.",
     )
     severity: Optional[str] = Field(
         default=None,
         description="Filter by severity ID or name (e.g., 'critical', 'major').",
     )
     page_size: int = Field(
-        default=10,
-        description="Number of incidents to return (max 25).",
+        default=25,
+        description="Number of incidents to return (max 100).",
+    )
+    after: Optional[str] = Field(
+        default=None,
+        description="Pagination cursor from a previous response's 'next_cursor'. Use to fetch the next page.",
     )
 
 
@@ -151,19 +155,27 @@ def _calculate_duration(incident: Dict[str, Any]) -> Optional[int]:
 
 def _truncate_output(data: Any) -> str:
     output = json.dumps(data, default=str)
-    if len(output) > MAX_OUTPUT_SIZE:
-        return json.dumps({"truncated": True, "partial": output[:MAX_OUTPUT_SIZE]})
-    return output
+    if len(output) <= MAX_OUTPUT_SIZE:
+        return output
+    if isinstance(data, dict) and "incidents" in data and isinstance(data["incidents"], list):
+        items = data["incidents"]
+        while items and len(json.dumps(data, default=str)) > MAX_OUTPUT_SIZE:
+            items.pop()
+        data["truncated"] = True
+        data["total_returned"] = len(items)
+        return json.dumps(data, default=str)
+    return output[:MAX_OUTPUT_SIZE]
 
 
 def list_incidentio_incidents(
     status: Optional[str] = None,
     severity: Optional[str] = None,
-    page_size: int = 10,
+    page_size: int = 25,
+    after: Optional[str] = None,
     user_id: Optional[str] = None,
     **kwargs,
 ) -> str:
-    """List recent incidents from incident.io for pattern analysis during RCA."""
+    """List incidents from incident.io. Use 'after' cursor to paginate through large result sets."""
     if not user_id:
         return json.dumps({"error": "No user context available"})
 
@@ -171,12 +183,14 @@ def list_incidentio_incidents(
     if not api_key:
         return json.dumps({"error": "incident.io not connected"})
 
-    page_size = min(max(page_size, 1), 25)
+    page_size = min(max(page_size, 1), 100)
     params: Dict[str, Any] = {"page_size": page_size}
     if status:
         params["status_category[one_of]"] = status
     if severity:
         params["severity[one_of]"] = severity
+    if after:
+        params["after"] = after
 
     result = _api_request(api_key, "GET", "/incidents", params=params)
     if "error" in result:
@@ -185,10 +199,20 @@ def list_incidentio_incidents(
     incidents = result.get("incidents") or []
     summaries = [_format_incident_summary(inc) for inc in incidents]
 
-    return _truncate_output({
+    pagination = result.get("pagination_meta") or {}
+    output: Dict[str, Any] = {
         "incidents": summaries,
         "total_returned": len(summaries),
-    })
+    }
+    if pagination.get("after"):
+        output["next_cursor"] = pagination["after"]
+        output["has_more"] = True
+    else:
+        output["has_more"] = False
+    if "total_record_count" in pagination:
+        output["total_count"] = pagination["total_record_count"]
+
+    return _truncate_output(output)
 
 
 def get_incidentio_incident(

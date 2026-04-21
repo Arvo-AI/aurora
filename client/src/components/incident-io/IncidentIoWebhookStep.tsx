@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
+import { Input } from "@/components/ui/input";
 import { CheckCircle2, Copy, ExternalLink, Loader2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { incidentIoService, IncidentIoWebhookUrlResponse } from "@/lib/services/incident-io";
@@ -21,11 +22,13 @@ export function IncidentIoWebhookStep({ onDisconnect, loading }: IncidentIoWebho
   const { toast } = useToast();
   const [webhookData, setWebhookData] = useState<IncidentIoWebhookUrlResponse | null>(null);
   const [loadingWebhook, setLoadingWebhook] = useState(true);
-  const [rcaEnabled, setRcaEnabled] = useState(false);
+  const [rcaEnabled, setRcaEnabled] = useState(true);
   const [postbackEnabled, setPostbackEnabled] = useState(false);
   const [loadingSettings, setLoadingSettings] = useState(true);
   const [updatingRca, setUpdatingRca] = useState(false);
   const [updatingPostback, setUpdatingPostback] = useState(false);
+  const [webhookSecret, setWebhookSecret] = useState("");
+  const [savingSecret, setSavingSecret] = useState(false);
 
   useEffect(() => {
     let isMounted = true;
@@ -124,6 +127,24 @@ export function IncidentIoWebhookStep({ onDisconnect, loading }: IncidentIoWebho
     }
   };
 
+  const handleSaveWebhookSecret = async () => {
+    if (!webhookSecret.trim()) return;
+    setSavingSecret(true);
+    try {
+      const success = await incidentIoService.saveWebhookSecret(webhookSecret.trim());
+      if (success) {
+        toast({ title: "Webhook secret saved", description: "Webhook signatures will now be verified." });
+        setWebhookSecret("");
+      } else {
+        toast({ title: "Failed to save", description: "Could not save webhook secret. Please try again.", variant: "destructive" });
+      }
+    } catch {
+      toast({ title: "Failed to save", description: "Could not save webhook secret.", variant: "destructive" });
+    } finally {
+      setSavingSecret(false);
+    }
+  };
+
   return (
     <Card>
       <CardHeader>
@@ -216,6 +237,28 @@ export function IncidentIoWebhookStep({ onDisconnect, loading }: IncidentIoWebho
                 </div>
               </div>
 
+              <div>
+                <label className="text-sm font-medium">Webhook Signing Secret</label>
+                <p className="text-xs text-muted-foreground mb-1">
+                  Paste the signing secret from your incident.io webhook endpoint settings to verify webhook authenticity.
+                </p>
+                <div className="flex gap-2">
+                  <Input
+                    type="password"
+                    placeholder="whsec_..."
+                    value={webhookSecret}
+                    onChange={(e) => setWebhookSecret(e.target.value)}
+                  />
+                  <Button
+                    variant="outline"
+                    onClick={handleSaveWebhookSecret}
+                    disabled={savingSecret || !webhookSecret.trim()}
+                  >
+                    {savingSecret ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save"}
+                  </Button>
+                </div>
+              </div>
+
               <div className="bg-muted/50 rounded-lg p-4">
                 <p className="font-medium text-sm mb-3">Setup Instructions:</p>
                 <ol className="list-decimal list-inside space-y-2 text-sm text-muted-foreground">
@@ -226,7 +269,7 @@ export function IncidentIoWebhookStep({ onDisconnect, loading }: IncidentIoWebho
               </div>
 
               <a
-                href="https://incident.io/docs/webhooks"
+                href="https://docs.incident.io/api-reference/webhooks"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="inline-flex items-center gap-1 text-sm text-blue-600 hover:underline"

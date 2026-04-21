@@ -1511,9 +1511,10 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
             func=final_list_func,
             name="list_incidentio_incidents",
             description=(
-                "List recent incidents from incident.io. Use this to find related incidents, "
+                "List incidents from incident.io. Use this to find related incidents, "
                 "identify patterns, and understand the scope of an ongoing issue. "
-                "Filter by status (live/closed) or severity."
+                "Filter by status (live/closed/declined) or severity. "
+                "Supports pagination via 'after' cursor for large result sets."
             ),
             args_schema=ListIncidentsArgs,
         ))

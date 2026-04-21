@@ -90,6 +90,20 @@ export const incidentIoService = {
     }
   },
 
+  async saveWebhookSecret(webhookSecret: string): Promise<boolean> {
+    try {
+      await apiRequest(`${API_BASE}/webhook-secret`, {
+        method: 'PUT',
+        body: JSON.stringify({ webhookSecret }),
+        cache: 'no-store',
+      });
+      return true;
+    } catch (error) {
+      console.error('[incidentIoService] Failed to save webhook secret:', error);
+      return false;
+    }
+  },
+
   async getRcaSettings(): Promise<IncidentIoRcaSettings | null> {
     try {
       return await apiRequest<IncidentIoRcaSettings>(`${API_BASE}/rca-settings`, {

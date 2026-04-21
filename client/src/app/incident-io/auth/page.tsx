@@ -199,7 +199,7 @@ export default function IncidentIoAuthPage() {
             <CardHeader>
               <CardTitle>Connect to incident.io</CardTitle>
               <CardDescription>
-                Create an API key at <strong>Settings &rarr; API keys</strong> in incident.io with the <strong>Create incidents</strong> permission, then paste it below.
+                Create an API key at <strong>Settings &rarr; API keys</strong> in incident.io, then paste it below.
               </CardDescription>
             </CardHeader>
             <CardContent>
@@ -215,7 +215,7 @@ export default function IncidentIoAuthPage() {
                     required
                   />
                   <p className="text-xs text-muted-foreground">
-                    Requires the <strong>View all incident data, including private incidents</strong> permission. Keys are stored securely in Vault.
+                    The API key needs these permissions: <strong>View all incident data (including private incidents)</strong> and <strong>Create incidents</strong>. Keys are stored securely in Vault.
                   </p>
                 </div>
 

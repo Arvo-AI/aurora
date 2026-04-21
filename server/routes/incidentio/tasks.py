@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 def _should_trigger_rca(user_id: str) -> bool:
     from utils.auth.stateless_auth import get_user_preference
-    return get_user_preference(user_id, "incidentio_rca_enabled", default=False)
+    return get_user_preference(user_id, "incidentio_rca_enabled", default=True)
 
 
 def _should_postback(user_id: str) -> bool:
@@ -154,6 +154,7 @@ def process_incidentio_event(
 
                     # Alert correlation
                     try:
+                        cursor.execute("SAVEPOINT sp_correlation")
                         correlator = AlertCorrelator()
                         correlation_result = correlator.correlate(
                             cursor=cursor,
@@ -183,7 +184,9 @@ def process_incidentio_event(
                             )
                             conn.commit()
                             return
+                        cursor.execute("RELEASE SAVEPOINT sp_correlation")
                     except Exception as corr_exc:
+                        cursor.execute("ROLLBACK TO SAVEPOINT sp_correlation")
                         logger.warning("[INCIDENTIO] Correlation failed, continuing: %s", corr_exc)
 
                     if not _should_trigger_rca(user_id):
@@ -278,7 +281,7 @@ def _extract_service(fields: Dict[str, Any]) -> str:
 
 def _trigger_rca_pipeline(
     user_id: str,
-    incident_id: int,
+    incident_id: str,
     fields: Dict[str, Any],
     payload: Dict[str, Any],
     alert_metadata: Dict[str, Any],
