@@ -229,6 +229,12 @@ services:
       - vault
       - seaweedfs-filer
       - memgraph
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:${FLASK_PORT:-5080}/health/')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
 
   celery_worker:
     build:
@@ -471,8 +477,10 @@ services:
       <<: *common-env
       INTERNAL_API_SECRET: ${INTERNAL_API_SECRET}
     depends_on:
-      - aurora-server
-      - postgres
+      aurora-server:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "python3", "-c", "import socket; s=socket.socket(); s.settimeout(2); s.connect(('localhost',8811)); s.close()"]
       interval: 15s

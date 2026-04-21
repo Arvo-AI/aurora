@@ -108,28 +108,27 @@ def _resolve_token(token: str) -> tuple[str, str]:
     ok = False
     try:
         with conn.cursor() as cur:
-            cur.execute("SET myapp.mcp_token_resolve = 'true'")
-            try:
-                cur.execute(
-                    "SELECT user_id, org_id FROM mcp_tokens "
-                    "WHERE token = %s AND status = 'active' "
-                    "AND (expires_at IS NULL OR expires_at > NOW())",
-                    (token,),
-                )
+            cur.execute("SET LOCAL myapp.mcp_token_resolve = 'true'")
+            cur.execute(
+                "SELECT user_id, org_id FROM mcp_tokens "
+                "WHERE token = %s AND status = 'active' "
+                "AND (expires_at IS NULL OR expires_at > NOW())",
+                (token,),
+            )
 
-                row = cur.fetchone()
-                if not row:
-                    raise ValueError("Invalid, expired, or revoked MCP token")
-                now = time.monotonic()
-                if now - _last_used_cache.get(token, 0) > 60:
-                    cur.execute("UPDATE mcp_tokens SET last_used_at = NOW() WHERE token = %s", (token,))
-                    _last_used_cache[token] = now
-            finally:
-                cur.execute("RESET myapp.mcp_token_resolve")
-            conn.commit()
-            ok = True
-            return row[0], row[1]
+            row = cur.fetchone()
+            if not row:
+                raise ValueError("Invalid, expired, or revoked MCP token")
+            now = time.monotonic()
+            if now - _last_used_cache.get(token, 0) > 60:
+                cur.execute("UPDATE mcp_tokens SET last_used_at = NOW() WHERE token = %s", (token,))
+                _last_used_cache[token] = now
+        conn.commit()
+        ok = True
+        return row[0], row[1]
     finally:
+        if not ok:
+            conn.rollback()
         pool.putconn(conn, close=not ok)
 
 
@@ -308,8 +307,26 @@ if __name__ == "__main__":
     _original_app_factory = mcp.streamable_http_app
 
     def _patched_app_factory():
+        from starlette.responses import JSONResponse
+        from starlette.routing import Route
+
         app = _original_app_factory()
         app.add_middleware(BearerTokenMiddleware)
+
+        async def _healthz(request):
+            pool = _get_pool()
+            try:
+                conn = pool.getconn()
+                try:
+                    with conn.cursor() as cur:
+                        cur.execute("SELECT 1")
+                finally:
+                    pool.putconn(conn)
+                return JSONResponse({"status": "ok"})
+            except Exception as e:
+                return JSONResponse({"status": "error", "detail": str(e)}, status_code=503)
+
+        app.routes.append(Route("/healthz", _healthz, methods=["GET"]))
         return app
 
     mcp.streamable_http_app = _patched_app_factory
