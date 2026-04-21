@@ -202,7 +202,6 @@ def setup_aws_terraform_environment_isolated(user_id: str):
             )
             sts = session.client('sts')
             identity = sts.get_caller_identity()
-            account_id = identity['Account']
             logger.info("Successfully validated AWS credentials for account: [REDACTED]")
 
         except Exception as e:

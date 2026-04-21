@@ -2,7 +2,7 @@
 
 import re
 
-_CONTROL_CHARS = re.compile(r"[\r\n\t\x00-\x1f\x7f]")
+_CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]")
 
 
 def sanitize(value: object) -> str:

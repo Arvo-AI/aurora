@@ -313,7 +313,7 @@ if __name__ == "__main__":
         app = _original_app_factory()
         app.add_middleware(BearerTokenMiddleware)
 
-        async def _healthz(request):
+        def _healthz(request):
             pool = _get_pool()
             try:
                 conn = pool.getconn()
