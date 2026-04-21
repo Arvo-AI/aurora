@@ -26,9 +26,21 @@ def _should_postback(user_id: str) -> bool:
 
 
 def _extract_incident_fields(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """Extract normalized incident fields from the webhook event envelope."""
+    """Extract normalized incident fields from the webhook event envelope.
+
+    incident.io nests incident data under the event-type key, e.g.
+    payload["public_incident.incident_updated_v2"]["incident"].
+    """
     event = payload.get("event", {}) or {}
-    incident = event.get("incident") or payload.get("incident") or {}
+    incident = event.get("incident") or payload.get("incident") or None
+
+    if not incident:
+        for key, value in payload.items():
+            if key.startswith("public_incident.") and isinstance(value, dict):
+                incident = value.get("incident") or value
+                break
+
+    incident = incident or {}
 
     severity_obj = incident.get("severity") or {}
     incident_type_obj = incident.get("incident_type") or {}

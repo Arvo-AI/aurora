@@ -377,6 +377,6 @@ def update_rca_settings(user_id):
 
     return jsonify({
         "success": True,
-        "rcaEnabled": get_user_preference(user_id, "incidentio_rca_enabled", default=False),
+        "rcaEnabled": get_user_preference(user_id, "incidentio_rca_enabled", default=True),
         "postbackEnabled": get_user_preference(user_id, "incidentio_postback_enabled", default=False),
     })

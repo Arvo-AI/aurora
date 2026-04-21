@@ -345,36 +345,27 @@ def get_deployment_task(user_id: str, task_id: str = None) -> Optional[Dict]:
 def store_user_preference(user_id: str, key: str, value: Any):
     """Store user preference in database."""
     try:
-        org_id = None
-        try:
-            org_id = get_org_id_from_request()
-        except Exception:
-            logger.debug("No request context for org_id in store_user_preference")
+        org_id = resolve_org_id(user_id)
+        if not org_id:
+            logger.error("Cannot store preference %s: no org_id for user %s", key, user_id)
+            return
 
         conn = connect_to_db_as_user()
         cursor = conn.cursor()
         cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
+        cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
         conn.commit()
-        
-        if org_id:
-            cursor.execute("""
-                INSERT INTO user_preferences (user_id, org_id, preference_key, preference_value)
-                VALUES (%s, %s, %s, %s)
-                ON CONFLICT (user_id, org_id, preference_key) WHERE org_id IS NOT NULL DO UPDATE SET
-                    preference_value = EXCLUDED.preference_value,
-                    updated_at = CURRENT_TIMESTAMP
-            """, (user_id, org_id, key, json.dumps(value)))
-        else:
-            cursor.execute("""
-                DELETE FROM user_preferences
-                WHERE user_id = %s AND org_id IS NULL AND preference_key = %s
-            """, (user_id, key))
-            cursor.execute("""
-                INSERT INTO user_preferences (user_id, org_id, preference_key, preference_value)
-                VALUES (%s, NULL, %s, %s)
-            """, (user_id, key, json.dumps(value)))
+
+        cursor.execute(
+            "DELETE FROM user_preferences WHERE org_id = %s AND preference_key = %s",
+            (org_id, key),
+        )
+        cursor.execute("""
+            INSERT INTO user_preferences (user_id, org_id, preference_key, preference_value)
+            VALUES (%s, %s, %s, %s)
+        """, (user_id, org_id, key, json.dumps(value)))
         conn.commit()
-        logger.debug(f"Stored preference {key} for user {user_id}")
+        logger.debug("Stored preference %s for org %s (by user %s)", key, org_id, user_id)
     except Exception as e:
         logger.error(f"Error storing user preference: {e}")
     finally:
@@ -386,15 +377,25 @@ def store_user_preference(user_id: str, key: str, value: Any):
 def get_user_preference(user_id: str, key: str, default=None):
     """Get user preference from database."""
     try:
+        org_id = resolve_org_id(user_id)
+
         conn = connect_to_db_as_user()
         cursor = conn.cursor()
         cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
+        if org_id:
+            cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
         conn.commit()
-        
-        cursor.execute(
-            "SELECT preference_value FROM user_preferences WHERE user_id = %s AND preference_key = %s",
-            (user_id, key)
-        )
+
+        if org_id:
+            cursor.execute(
+                "SELECT preference_value FROM user_preferences WHERE org_id = %s AND preference_key = %s",
+                (org_id, key)
+            )
+        else:
+            cursor.execute(
+                "SELECT preference_value FROM user_preferences WHERE user_id = %s AND preference_key = %s",
+                (user_id, key)
+            )
         result = cursor.fetchone()
         if result:
             logger.debug(f"Retrieved preference {key} for user {user_id}")
