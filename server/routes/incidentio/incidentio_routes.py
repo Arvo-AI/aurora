@@ -5,6 +5,7 @@ import hashlib
 import hmac
 import logging
 import os
+import re
 from typing import Any, Dict, Optional
 
 import requests
@@ -16,7 +17,6 @@ from utils.web.cors_utils import create_cors_response
 from utils.auth.stateless_auth import (
     get_org_id_from_request,
     get_user_preference,
-    set_rls_context,
     store_user_preference,
 )
 from utils.auth.token_management import get_token_data, store_tokens_in_db
@@ -26,13 +26,37 @@ from utils.secrets.secret_ref_utils import delete_user_secret
 INCIDENTIO_API_BASE = "https://api.incident.io/v2"
 INCIDENTIO_TIMEOUT = 15
 
+_SAFE_LOG_RE = re.compile(r"[^a-zA-Z0-9._\-]")
+
 logger = logging.getLogger(__name__)
 
 incidentio_bp = Blueprint("incidentio", __name__)
 
 
+def _sanitize_for_log(value: str, max_len: int = 80) -> str:
+    """Strip any character that isn't alphanumeric, dot, dash, or underscore."""
+    return _SAFE_LOG_RE.sub("", value)[:max_len]
+
+
 class IncidentioAPIError(Exception):
-    pass
+    """Error codes avoid leaking HTTP response bodies through str(exc)."""
+    INVALID_KEY = "invalid_key"
+    FORBIDDEN = "forbidden"
+    TIMEOUT = "timeout"
+    UNREACHABLE = "unreachable"
+    API_ERROR = "api_error"
+
+    _USER_MESSAGES = {
+        INVALID_KEY: "Invalid API key",
+        FORBIDDEN: "API key lacks required permissions",
+        TIMEOUT: "Connection to incident.io timed out",
+        UNREACHABLE: "Unable to reach incident.io API",
+        API_ERROR: "Failed to validate API key with incident.io",
+    }
+
+    def __init__(self, code: str):
+        self.code = code
+        super().__init__(self._USER_MESSAGES.get(code, self._USER_MESSAGES[self.API_ERROR]))
 
 
 class IncidentioClient:
@@ -57,23 +81,18 @@ class IncidentioClient:
             )
             response.raise_for_status()
             return response
-        except requests.exceptions.Timeout as exc:
-            raise IncidentioAPIError("Connection to incident.io timed out") from exc
-        except requests.exceptions.ConnectionError as exc:
-            raise IncidentioAPIError("Unable to reach incident.io API") from exc
+        except requests.exceptions.Timeout:
+            raise IncidentioAPIError(IncidentioAPIError.TIMEOUT)
+        except requests.exceptions.ConnectionError:
+            raise IncidentioAPIError(IncidentioAPIError.UNREACHABLE)
         except requests.HTTPError as exc:
             status = exc.response.status_code if exc.response is not None else None
-            body = ""
-            try:
-                body = exc.response.text if exc.response is not None else ""
-            except Exception:
-                body = "(unreadable response body)"
-            logger.warning("[INCIDENTIO] HTTP %s from %s: %s", status, path, body[:500])
+            logger.warning("[INCIDENTIO] HTTP %s from %s", status, path)
             if status == 401:
-                raise IncidentioAPIError("Invalid API key") from exc
+                raise IncidentioAPIError(IncidentioAPIError.INVALID_KEY)
             if status == 403:
-                raise IncidentioAPIError(f"API key lacks required permissions: {body[:200]}") from exc
-            raise IncidentioAPIError(f"incident.io API error ({status}): {body[:200]}") from exc
+                raise IncidentioAPIError(IncidentioAPIError.FORBIDDEN)
+            raise IncidentioAPIError(IncidentioAPIError.API_ERROR)
 
     def list_incidents(self, page_size: int = 5) -> Dict[str, Any]:
         return self._request("GET", "/incidents", params={"page_size": page_size}).json()
@@ -96,8 +115,8 @@ def _get_stored_credentials(user_id: str) -> Optional[Dict[str, Any]]:
     try:
         creds = get_token_data(user_id, "incidentio")
         return creds if creds else None
-    except Exception as exc:
-        logger.error("[INCIDENTIO] Failed to retrieve credentials for user %s: %s", user_id, exc)
+    except Exception:
+        logger.exception("[INCIDENTIO] Failed to retrieve credentials for user %s", user_id)
         return None
 
 
@@ -124,18 +143,15 @@ def connect(user_id):
     try:
         client.list_incidents(page_size=1)
     except IncidentioAPIError as exc:
-        internal_msg = str(exc)
-        logger.warning("[INCIDENTIO] Connection validation failed for user %s", user_id)
-        safe_messages = {"Invalid API key", "API key lacks required permissions", "Connection to incident.io timed out", "Unable to reach incident.io API"}
-        user_msg = next((s for s in safe_messages if internal_msg.startswith(s)), "Failed to validate API key with incident.io")
-        return jsonify({"error": user_msg}), 502
+        logger.warning("[INCIDENTIO] Connection validation failed: %s", exc.code)
+        return jsonify({"error": str(exc)}), 502
 
     token_payload = {"api_key": api_key}
 
     try:
         store_tokens_in_db(user_id, token_payload, "incidentio")
-    except Exception as exc:
-        logger.exception("[INCIDENTIO] Failed to store credentials for user %s: %s", user_id, exc)
+    except Exception:
+        logger.exception("[INCIDENTIO] Failed to store credentials for user %s", user_id)
         return jsonify({"error": "Failed to store credentials"}), 500
 
     return jsonify({"success": True, "connected": True})
@@ -188,11 +204,11 @@ def alert_webhook(user_id: str):
     if not user_id:
         return jsonify({"error": "user_id is required"}), 400
 
-    safe_uid = user_id[:36] if user_id else ""
+    log_uid = _sanitize_for_log(user_id, 36)
 
     creds = get_token_data(user_id, "incidentio")
     if not creds:
-        logger.warning("[INCIDENTIO] Webhook with no connection: %s", safe_uid)
+        logger.warning("[INCIDENTIO] Webhook with no connection: %s", log_uid)
         return jsonify({"error": "incident.io not connected for this user"}), 404
 
     webhook_secret = creds.get("webhook_secret")
@@ -201,20 +217,20 @@ def alert_webhook(user_id: str):
         timestamp = request.headers.get("webhook-timestamp", "")
         signature_header = request.headers.get("webhook-signature", "")
         if not msg_id or not timestamp or not signature_header:
-            logger.warning("[INCIDENTIO] Webhook rejected: missing Svix headers: %s", safe_uid)
+            logger.warning("[INCIDENTIO] Webhook rejected: missing Svix headers: %s", log_uid)
             return jsonify({"error": "Missing webhook signature headers"}), 401
         to_sign = f"{msg_id}.{timestamp}.{request.get_data(as_text=True)}"
         secret_bytes = base64.b64decode(webhook_secret.split("_")[-1]) if webhook_secret.startswith("whsec_") else webhook_secret.encode()
         expected = base64.b64encode(hmac.new(secret_bytes, to_sign.encode(), hashlib.sha256).digest()).decode()
         signatures = [s.split(",")[-1] for s in signature_header.split(" ")]
         if not any(hmac.compare_digest(expected, s) for s in signatures):
-            logger.warning("[INCIDENTIO] Webhook rejected: invalid signature: %s", safe_uid)
+            logger.warning("[INCIDENTIO] Webhook rejected: invalid signature: %s", log_uid)
             return jsonify({"error": "Invalid webhook signature"}), 401
 
     payload = request.get_json(silent=True) or {}
 
     event_type = payload.get("event_type") or (payload.get("event", {}) or {}).get("type", "unknown")
-    logger.info("[INCIDENTIO] Webhook received: user=%s event=%s", safe_uid, event_type)
+    logger.info("[INCIDENTIO] Webhook received: user=%s event=%s", log_uid, _sanitize_for_log(str(event_type)))
 
     metadata = {"remote_addr": request.remote_addr}
     process_incidentio_event.delay(payload, metadata, user_id)
@@ -277,8 +293,8 @@ def get_alerts(user_id):
             "limit": limit,
             "offset": offset,
         })
-    except Exception as exc:
-        logger.exception("[INCIDENTIO] Failed to fetch alerts: %s", exc)
+    except Exception:
+        logger.exception("[INCIDENTIO] Failed to fetch alerts")
         return jsonify({"error": "Failed to fetch alerts"}), 500
 
 
