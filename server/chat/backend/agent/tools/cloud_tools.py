@@ -879,10 +879,11 @@ def get_cloud_tools():
     # - When a tool_capture **is** active we additionally key on the `id()` of the object so each
     #   session gets its own wrapped functions that close over the *right* capture instance.
     rca_flag = getattr(state_context, 'trigger_rca_requested', False) if state_context else False
+    is_background = getattr(state_context, 'is_background', False) if state_context else False
     if tool_capture is None:
-        cache_key = f"{user_id}:nocapture:{mode_suffix}:rca={rca_flag}"
+        cache_key = f"{user_id}:nocapture:{mode_suffix}:background={is_background}:rca={rca_flag}"
     else:
-        cache_key = f"{user_id}:capture:{id(tool_capture)}:{mode_suffix}:rca={rca_flag}"
+        cache_key = f"{user_id}:capture:{id(tool_capture)}:{mode_suffix}:background={is_background}:rca={rca_flag}"
     
     if user_id:
         current_time = time.time()
@@ -1719,6 +1720,37 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
             logging.info(f"Added 4 Confluence tools for user {user_id}")
     except Exception as e:
         logging.warning(f"Failed to add Confluence search tools: {e}")
+
+    # Add Notion tools if connected
+    # Background RCA runs only get the tools they actually need — the full 38-tool
+    # surface wastes prompt tokens every turn when most are irrelevant to RCA.
+    _NOTION_RCA_TOOLS = {
+        "notion_search",
+        "notion_fetch",
+        "notion_query_database",
+        "notion_export_postmortem",
+        "notion_create_action_items",
+    }
+    try:
+        from .notion import NOTION_TOOL_SPECS, is_notion_connected
+        if user_id and is_notion_connected(user_id):
+            is_background = getattr(state_context, 'is_background', False) if state_context else False
+            specs = NOTION_TOOL_SPECS
+            if is_background:
+                specs = [s for s in specs if s[1] in _NOTION_RCA_TOOLS]
+            for _func, _name, _schema, _desc in specs:
+                _ctx = with_user_context(_func)
+                _notif = with_completion_notification(_ctx)
+                _final = wrap_func_with_capture(_notif, _name) if tool_capture else _notif
+                tools.append(StructuredTool.from_function(
+                    func=_final,
+                    name=_name,
+                    description=_desc,
+                    args_schema=_schema,
+                ))
+            logging.info(f"Added {len(specs)} Notion tools for user {user_id} (background={is_background})")
+    except Exception as e:
+        logging.warning(f"Failed to add Notion tools: {e}")
 
     # Add Jira tools if enabled
     try:

@@ -1,5 +1,5 @@
 import { Github, Server } from "lucide-react";
-import { isOvhEnabled, isSharePointEnabled, isJiraEnabled, isSpinnakerEnabled } from "@/lib/feature-flags";
+import { isOvhEnabled, isSharePointEnabled, isJiraEnabled, isSpinnakerEnabled, isNotionEnabled } from "@/lib/feature-flags";
 import type { ConnectorConfig } from "./types";
 
 class ConnectorRegistry {
@@ -205,6 +205,19 @@ class ConnectorRegistry {
         category: "Documentation",
         path: "/sharepoint/connect",
         storageKey: "isSharePointConnected",
+      });
+    }
+
+    if (isNotionEnabled()) {
+      this.register({
+        id: "notion",
+        name: "Notion",
+        description: "Export postmortems, search workspace docs, and let Aurora create runbooks and action-item rows in your Notion workspace.",
+        iconPath: "/notion.svg",
+        iconBgColor: "bg-white dark:bg-white",
+        category: "Documentation",
+        path: "/notion/connect",
+        storageKey: "isNotionConnected",
       });
     }
 

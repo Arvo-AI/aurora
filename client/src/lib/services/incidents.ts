@@ -114,6 +114,10 @@ export interface PostmortemData {
   confluencePageId?: string;
   confluencePageUrl?: string;
   confluenceExportedAt?: string;
+  notionPageId?: string;
+  notionPageUrl?: string;
+  notionExportedAt?: string;
+  notionDatabaseId?: string;
 }
 
 export interface PostmortemListItem {
@@ -126,6 +130,10 @@ export interface PostmortemListItem {
   confluencePageId: string | null;
   confluencePageUrl: string | null;
   confluenceExportedAt: string | null;
+  notionPageId: string | null;
+  notionPageUrl: string | null;
+  notionExportedAt: string | null;
+  notionDatabaseId: string | null;
 }
 
 export interface StreamingThought {
@@ -567,6 +575,54 @@ export const postmortemService = {
       );
     } catch (error) {
       console.error('Error exporting to Confluence:', error);
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      return { success: false, error: message };
+    }
+  },
+
+  async exportToNotion(
+    incidentId: string,
+    params: {
+      databaseId: string;
+      titleProperty?: string;
+      propertyMapping?: Record<string, string>;
+      actionItemsDatabaseId?: string;
+    },
+  ): Promise<{ success: boolean; pageUrl?: string; pageId?: string; actionItemCount?: number; error?: string; code?: string }> {
+    try {
+      const response = await fetch(`/api/incidents/${incidentId}/postmortem/export/notion`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          databaseId: params.databaseId,
+          titleProperty: params.titleProperty,
+          propertyMapping: params.propertyMapping,
+          actionItemsDatabaseId: params.actionItemsDatabaseId,
+        }),
+      });
+      const text = await response.text();
+      let data: Record<string, unknown> = {};
+      try {
+        data = text ? JSON.parse(text) : {};
+      } catch {
+        data = {};
+      }
+      if (!response.ok) {
+        return {
+          success: false,
+          error: (data.error as string) || `Export failed (${response.status})`,
+          code: data.code as string | undefined,
+        };
+      }
+      return {
+        success: Boolean(data.success ?? true),
+        pageUrl: data.pageUrl as string | undefined,
+        pageId: data.pageId as string | undefined,
+        actionItemCount: data.actionItemCount as number | undefined,
+      };
+    } catch (error) {
+      console.error('Error exporting to Notion:', error);
       const message = error instanceof Error ? error.message : 'Unknown error';
       return { success: false, error: message };
     }
