@@ -265,6 +265,10 @@ app.register_blueprint(admin_bp)  # RBAC admin routes
 from routes.org_routes import org_bp
 app.register_blueprint(org_bp)
 
+# --- Command Policy Routes ---
+from routes.command_policies import command_policies_bp
+app.register_blueprint(command_policies_bp)
+
 # --- GitHub Integration Routes ---
 from routes.github.github import github_bp
 from routes.github.github_user_repos import github_user_repos_bp
@@ -388,6 +392,12 @@ from utils.flags.feature_flags import is_sharepoint_enabled
 if is_sharepoint_enabled():
     from routes.sharepoint import bp as sharepoint_bp  # noqa: F401
     app.register_blueprint(sharepoint_bp, url_prefix="/sharepoint")
+
+# --- Notion Integration Routes ---
+# Always registered (no feature flag): frontend gates via isNotionEnabled(),
+# but backend routes must remain reachable so OAuth callbacks work in all envs.
+from routes.notion import bp as notion_bp  # noqa: F401
+app.register_blueprint(notion_bp, url_prefix="/notion")
 
 # --- Bitbucket Integration Routes ---
 from routes.bitbucket.bitbucket import bitbucket_bp

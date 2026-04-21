@@ -796,9 +796,16 @@ def build_suggestions_blocks(incident_id: str, suggestions: list, max_suggestion
     """
     if not suggestions:
         return []
-    
+
+    eligible = [
+        s for s in suggestions
+        if s.get('command')
+    ][:max_suggestions]
+    if not eligible:
+        return []
+
     blocks = []
-    
+
     # Header
     blocks.append({
         "type": "header",
@@ -807,38 +814,36 @@ def build_suggestions_blocks(incident_id: str, suggestions: list, max_suggestion
             "text": "Suggested Next Steps"
         }
     })
-    
-    # Show up to max_suggestions
-    for i, suggestion in enumerate(suggestions[:max_suggestions]):
-        if not suggestion.get('command'):
-            continue  # Skip suggestions without commands
-        
+
+    for suggestion in eligible:
         # Validate required fields
         title = suggestion.get('title', 'Action')
         if not title:
             title = 'Action'
-        
+
+        is_high_risk = suggestion.get('risk') == 'high'
         command = suggestion.get('command', '')
-        
+
         # Truncate command for display (Slack has limits)
         # Show more context - users can click "More details" for full command
         command_display = command[:COMMAND_FULL_DISPLAY_LENGTH] + '... (click More details for full command)' if len(command) > COMMAND_FULL_DISPLAY_LENGTH else command
-        
+
         # Build compact text with just title and command (no description)
-        text = f"*{title}*\n`{command_display}`"
+        risk_label = " ⚠️ _High Risk_" if is_high_risk else ""
+        text = f"*{title}*{risk_label}\n`{command_display}`"
         if len(text) > SLACK_SECTION_TEXT_BUFFER:  # Leave buffer for Slack
             text = text[:SLACK_SECTION_TEXT_BUFFER] + "..."
-        
-        # Build the run button (always green/primary)
+
+        # Build the run button — red/danger for high-risk, green/primary otherwise
         run_button = {
             "type": "button",
             "text": {
                 "type": "plain_text",
-                "text": "Run"
+                "text": "⚠️ Run" if is_high_risk else "Run"
             },
             "value": f"{incident_id}:{suggestion['id']}",
             "action_id": f"run_suggestion_{suggestion['id']}",
-            "style": "primary"  # Always green
+            "style": "danger" if is_high_risk else "primary"
         }
         
         # Build actions with Run button and More details button

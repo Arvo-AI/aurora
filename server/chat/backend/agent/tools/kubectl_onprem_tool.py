@@ -41,7 +41,27 @@ def on_prem_kubectl(
     command = command.strip()
     if command.lower().startswith('kubectl '):
         command = command[8:].strip()
-    
+
+    # Org command policy check against full kubectl command
+    from utils.auth.command_policy import evaluate_compound_command
+    from utils.auth.stateless_auth import get_org_id_for_user
+    full_command = f"kubectl {command}"
+    org_id = get_org_id_for_user(user_id) if user_id else None
+    verdict = evaluate_compound_command(org_id, full_command)
+    if not verdict.allowed:
+        reason = (verdict.rule_description or "Matched organization policy")[:200]
+        logger.warning("Policy denied kubectl_onprem command for user %s (%s)",
+                        user_id, reason)
+        return json.dumps({
+            'success': False,
+            'error': f"Command blocked by organization policy: {reason}",
+            'code': 'POLICY_DENIED',
+            'chat_output': f"$ {full_command}\nBlocked by organization policy: {reason}",
+            'command': full_command,
+            'return_code': 1,
+            'provider': 'onprem_kubectl',
+        })
+
     # Call internal API on chatbot service
     try:
         chatbot_url = os.getenv('CHATBOT_INTERNAL_URL')
@@ -121,3 +141,25 @@ def on_prem_kubectl(
         response_data['chat_output'] = f"$ {full_command}\nError: {error}"
     
     return json.dumps(response_data)
+
+
+def is_kubectl_onprem_connected(user_id: str) -> bool:
+    """Check if user has active on-prem kubectl connections."""
+    if not user_id:
+        return False
+    try:
+        from utils.db.connection_pool import db_pool
+
+        with db_pool.get_user_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """SELECT COUNT(*) FROM active_kubectl_connections c
+                       JOIN kubectl_agent_tokens t ON c.token = t.token
+                       WHERE t.user_id = %s AND c.status = 'active'""",
+                    (user_id,),
+                )
+                count = cursor.fetchone()[0]
+                return count > 0
+    except Exception:
+        logger.debug("kubectl on-prem connection check failed for user %s", user_id)
+        return False

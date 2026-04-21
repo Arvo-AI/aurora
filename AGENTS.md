@@ -44,6 +44,43 @@ Aurora uses S3-compatible object storage via `server/utils/storage/storage.py`. 
 - **S3 API**: http://localhost:8333 (credentials: admin/admin)
 - **Supports**: AWS S3, Cloudflare R2, Backblaze B2, GCS (via S3 interop), MinIO, any S3-compatible service
 
+## New Connector Checklist
+
+Every new connector (or connector route file) **must** satisfy all of the following before merge. CI enforces RBAC via `tests/test_connector_rbac.py`.
+
+### RBAC (mandatory — CI-enforced)
+- [ ] Every route function decorated with `@require_permission("connectors", "read")` (GET/status) or `@require_permission("connectors", "write")` (POST/connect/disconnect)
+- [ ] Import from `utils.auth.rbac_decorators import require_permission`
+- [ ] Route function accepts `user_id` as first positional arg (injected by decorator)
+- [ ] No manual `get_user_id_from_request()` or OPTIONS handling (decorator does both)
+- [ ] Webhook/callback routes exempt only if authenticated via HMAC/signing secret or OAuth state param
+
+### Skills Integration
+- [ ] `SKILL.md` created at `server/chat/backend/agent/skills/integrations/<name>/SKILL.md`
+- [ ] Skill registered in `server/chat/backend/agent/skills/registry.py` with `check_connection` callable
+- [ ] `rca_priority` set appropriately (lower = loaded earlier in RCA prompt)
+- [ ] RCA workflow section is **read-only** — agent searches but never writes during RCA
+
+### Agent Tools
+- [ ] Tools registered as LangChain `StructuredTool` in `server/chat/backend/agent/tools/cloud_tools.py`
+- [ ] Tools gated behind `is_<name>_connected(user_id)` check
+- [ ] `run_<name>_tool()` pattern with `_do(client)` callback for auth + error handling
+
+### Frontend
+- [ ] Provider added to `ConnectorRegistry.ts` with proper `stateEvent` name
+- [ ] Status query uses `revalidateOnEvents` with the provider's state event
+- [ ] Disconnect triggers `window.dispatchEvent(new Event('<name>StateChanged'))`
+- [ ] Event-triggered revalidation uses `queryClient.invalidate()` (not `.fetch()`)
+
+### Token Storage
+- [ ] Tokens stored via `store_tokens_in_db(user_id, payload, "<name>")`
+- [ ] Token retrieval via `get_token_data(user_id, "<name>")`
+- [ ] Disconnect deletes via `delete_user_secret(user_id, "<name>")`
+
+### Blueprint Registration
+- [ ] Blueprint registered in `server/main_compute.py` with appropriate `url_prefix`
+- [ ] Connector directory added to `CONNECTOR_DIRS` in `tests/test_connector_rbac.py`
+
 ## Code Style
 - **Python**: Use Flask blueprints in routes/, async with langchain/langgraph, psycopg2 for DB, logging at INFO level
 - **TypeScript**: Strict mode, ESLint (next/core-web-vitals), no-unused-vars off in src/, use @/ imports, React 18 functional components

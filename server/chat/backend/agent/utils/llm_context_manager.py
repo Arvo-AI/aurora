@@ -36,10 +36,6 @@ class LLMContextManager:
         # Remove control characters except newlines and tabs
         sanitized = re.sub(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]', '[CTRL_CHAR]', sanitized)
         
-        # Truncate if too long to prevent database issues
-        if len(sanitized) > 10000:
-            sanitized = sanitized[:10000] + "\n... (truncated due to length)"
-        
         return sanitized
 
     @staticmethod

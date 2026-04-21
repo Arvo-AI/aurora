@@ -140,6 +140,23 @@
   -ms-overflow-style: none;
 }
 
+.scrollbar-thin::-webkit-scrollbar {
+  height: 1px;
+}
+.scrollbar-thin::-webkit-scrollbar-track {
+  background: transparent;
+}
+.scrollbar-thin::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 2px;
+}
+.scrollbar-thin:hover::-webkit-scrollbar-thumb {
+  background: hsl(var(--muted-foreground) / 0.25);
+}
+.scrollbar-thin {
+  scrollbar-width: thin;
+}
+
 /* Code block styles - using Prism okaidia theme */
 /* Only override font properties, preserve Prism.js colors */
 pre[class*="language-"] {
