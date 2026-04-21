@@ -64,7 +64,7 @@ spec:
           {{- end }}
           startupProbe:
             httpGet:
-              path: /mcp
+              path: /healthz
               port: 8811
             initialDelaySeconds: 10
             periodSeconds: 10
@@ -72,14 +72,14 @@ spec:
             failureThreshold: 30
           readinessProbe:
             httpGet:
-              path: /mcp
+              path: /healthz
               port: 8811
             periodSeconds: 10
             timeoutSeconds: 5
             failureThreshold: 3
           livenessProbe:
             httpGet:
-              path: /mcp
+              path: /healthz
               port: 8811
             periodSeconds: 20
             timeoutSeconds: 5

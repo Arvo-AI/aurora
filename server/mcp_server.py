@@ -307,8 +307,26 @@ if __name__ == "__main__":
     _original_app_factory = mcp.streamable_http_app
 
     def _patched_app_factory():
+        from starlette.responses import JSONResponse
+        from starlette.routing import Route
+
         app = _original_app_factory()
         app.add_middleware(BearerTokenMiddleware)
+
+        async def _healthz(request):
+            pool = _get_pool()
+            try:
+                conn = pool.getconn()
+                try:
+                    with conn.cursor() as cur:
+                        cur.execute("SELECT 1")
+                finally:
+                    pool.putconn(conn)
+                return JSONResponse({"status": "ok"})
+            except Exception as e:
+                return JSONResponse({"status": "error", "detail": str(e)}, status_code=503)
+
+        app.routes.append(Route("/healthz", _healthz, methods=["GET"]))
         return app
 
     mcp.streamable_http_app = _patched_app_factory
