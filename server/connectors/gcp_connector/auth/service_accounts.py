@@ -718,9 +718,10 @@ def create_local_credentials_file(token_data, project_id: str) -> str:
             "access_token": updated_token_data.get("access_token"),
             "token_uri": TOKEN_URL,
             # Use RFC3339 timestamp string for expiry to satisfy google-auth parsing
-            "expiry": datetime.datetime.utcfromtimestamp(
-                updated_token_data.get("expires_at", int(time.time()) + 3600)
-            ).isoformat("T") + "Z",
+            "expiry": datetime.datetime.fromtimestamp(
+                updated_token_data.get("expires_at", int(time.time()) + 3600),
+                datetime.timezone.utc,
+            ).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "project_id": project_id,
             "quota_project_id": project_id
         }

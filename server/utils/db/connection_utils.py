@@ -2,7 +2,7 @@
 """Utility helpers for working with the user_connections table."""
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, List, Dict
 
 from utils.db.db_utils import connect_to_db_as_user, connect_to_db_as_admin
@@ -73,7 +73,7 @@ def save_connection_metadata(
                     region,
                     workspace_id,
                     status,
-                    datetime.utcnow(),
+                    datetime.now(timezone.utc),
                 ),
             )
         conn.commit()
@@ -116,7 +116,7 @@ def set_connection_status(
             if org_id:
                 cur.execute("SET myapp.current_user_id = %s;", (user_id,))
                 cur.execute("SET myapp.current_org_id = %s;", (org_id,))
-            cur.execute(sql, (status, datetime.utcnow(), user_id, provider, account_id))
+            cur.execute(sql, (status, datetime.now(timezone.utc), user_id, provider, account_id))
         conn.commit()
         logger.info("[CONN-META] Status update success for %s/%s/%s", user_id, provider, account_id)
         return True
@@ -344,7 +344,7 @@ def delete_connection_secret(
             cur.execute(
                 sql_update,
                 (
-                    datetime.utcnow(),
+                    datetime.now(timezone.utc),
                     user_id,
                     provider,
                     account_id,

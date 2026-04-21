@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from flask import Blueprint, request, jsonify, session, Response
 import flask
 from utils.web.cors_utils import create_cors_response
@@ -16,7 +16,7 @@ def debug_user_info(user_id):
         return create_cors_response()
     try:
         debug_info = {
-            "time": datetime.utcnow().isoformat(),
+            "time": datetime.now(timezone.utc).isoformat(),
             "user_id": user_id,
             "session_keys": list(session.keys()),
             "request_headers": dict(request.headers),
