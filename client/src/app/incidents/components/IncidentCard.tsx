@@ -44,6 +44,9 @@ const SOURCE_DISPLAY_NAMES: Record<string, string> = {
   opsgenie: 'OpsGenie',
   bigpanda: 'BigPanda',
   newrelic: 'New Relic',
+  datadog: 'Datadog',
+  dynatrace: 'Dynatrace',
+  cloudbees: 'CloudBees',
 };
 
 function sourceDisplayName(source: string): string {

@@ -280,15 +280,12 @@ def get_alerts(user_id):
 def get_webhook_url(user_id):
     """Return the webhook URL for this user's incident.io configuration."""
     ngrok_url = os.getenv("NGROK_URL", "").rstrip("/")
-    frontend_url = os.getenv("FRONTEND_URL", "").rstrip("/")
     backend_url = os.getenv("NEXT_PUBLIC_BACKEND_URL", "").rstrip("/")
+    base_url = ngrok_url if ngrok_url and backend_url.startswith("http://localhost") else backend_url
+    if not base_url:
+        base_url = request.host_url.rstrip("/")
 
-    if ngrok_url:
-        webhook_url = f"{ngrok_url}/api/incident-io/alerts/webhook/{user_id}"
-    elif frontend_url and not frontend_url.startswith("http://localhost"):
-        webhook_url = f"{frontend_url}/api/incident-io/alerts/webhook/{user_id}"
-    else:
-        webhook_url = f"{backend_url}/incidentio/alerts/webhook/{user_id}"
+    webhook_url = f"{base_url}/incidentio/alerts/webhook/{user_id}"
 
     return jsonify({
         "webhookUrl": webhook_url,
