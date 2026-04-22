@@ -221,15 +221,13 @@ export default function BitbucketWorkspaceBrowser({}: BitbucketWorkspaceBrowserP
           ) : repos.length > 0 ? (
             <div className="space-y-1 max-h-48 overflow-y-auto border border-border rounded-lg p-2">
               {repos.map((repo) => (
-                <div
+                <button
+                  type="button"
                   key={repo.slug}
-                  role="button"
-                  tabIndex={0}
-                  className={`flex items-center justify-between p-2 rounded-md cursor-pointer hover:bg-muted/30 transition-colors ${
-                    selectedRepo?.slug === repo.slug ? 'border border-primary/50 bg-primary/5' : ''
+                  className={`w-full flex items-center justify-between p-2 rounded-md cursor-pointer hover:bg-muted/30 transition-colors text-left bg-transparent ${
+                    selectedRepo?.slug === repo.slug ? 'border border-primary/50 bg-primary/5' : 'border border-transparent'
                   }`}
                   onClick={() => handleRepoSelect(repo)}
-                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleRepoSelect(repo); } }}
                 >
                   <div className="flex flex-col min-w-0 flex-1">
                     <div className="flex items-center gap-2">
@@ -239,7 +237,7 @@ export default function BitbucketWorkspaceBrowser({}: BitbucketWorkspaceBrowserP
                       </Badge>
                     </div>
                   </div>
-                </div>
+                </button>
               ))}
             </div>
           ) : (

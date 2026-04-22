@@ -199,12 +199,11 @@ export function PostmortemsSettings() {
         return (
           <div key={item.id} className="border border-zinc-800 rounded-lg mb-2">
             {/* Collapsed row header */}
-            <div
-              role="button"
-              tabIndex={0}
-              className="flex items-center justify-between p-4 cursor-pointer hover:bg-zinc-800/50"
+            <button
+              type="button"
+              aria-expanded={isExpanded}
+              className="w-full flex items-center justify-between p-4 cursor-pointer hover:bg-zinc-800/50 text-left bg-transparent border-0"
               onClick={() => handleToggle(item.id)}
-              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleToggle(item.id); } }}
             >
               <div className="flex items-center gap-2 min-w-0">
                 {isExpanded ? (
@@ -217,7 +216,7 @@ export function PostmortemsSettings() {
               <span className="text-xs text-zinc-500 shrink-0 ml-4">
                 {formatDate(item.generatedAt)}
               </span>
-            </div>
+            </button>
 
             {/* Expanded content */}
             {isExpanded && (

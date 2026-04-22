@@ -133,7 +133,6 @@ export default function EnhancedChatInput({
     <div className={`w-full max-w-4xl mx-auto space-y-3 ${className}`}>
       {/* Input container with original styling */}
       <div
-        role="presentation"
         className={`bg-muted rounded-3xl border border-input p-4 space-y-3 transition-colors ${
           isDragOver ? 'border-primary bg-primary/5' : ''
         }`}
