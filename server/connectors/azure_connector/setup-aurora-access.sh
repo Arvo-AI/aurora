@@ -351,7 +351,7 @@ az role assignment create --assignee "$READONLY_CLIENT_ID" --role "Cognitive Ser
 # Grant minimal Azure AD permissions for CLI authentication (NOT admin/owner roles)
 echo "Granting Azure AD read permissions for CLI authentication..."
 # Get the application ID for the read-only service principal
-READONLY_APP_ID=$(az ad sp show --id "$READONLY_CLIENT_ID" --query "appId" -o tsv 2>/dev/null)
+READONLY_APP_ID=$(az ad sp show --id "$READONLY_CLIENT_ID" --query "appId" -o tsv 2>/dev/null || true)
 if [[ -n "$READONLY_APP_ID" ]]; then
     # Add User.Read permission (minimal permission to read own profile)
     az ad app permission add --id "$READONLY_APP_ID" \
@@ -422,7 +422,7 @@ if [[ "$CLUSTER_COUNT" -gt 0 ]]; then
         # Add Kubernetes RBAC permissions
         echo "Adding Kubernetes RBAC permissions for cluster: $cluster_name"
         echo "Getting service principal object ID..."
-        OBJECT_ID=$(az ad sp show --id "$CLIENT_ID" --query "id" --output tsv 2>/dev/null)
+        OBJECT_ID=$(az ad sp show --id "$CLIENT_ID" --query "id" --output tsv 2>/dev/null || true)
         if [[ -z "$OBJECT_ID" ]]; then
             echo "   Failed to get service principal object ID"
             continue
