@@ -20,6 +20,8 @@ import concurrent.futures
 from langchain_core.tools import StructuredTool
 from .output_sanitizer import truncate_json_fields
 
+logger = logging.getLogger(__name__)
+
 # Import cloud tools
 from .iac_tool import run_iac_tool
 
