@@ -347,7 +347,7 @@ def store_user_preference(user_id: str, key: str, value: Any):
     try:
         org_id = resolve_org_id(user_id)
         if not org_id:
-            logger.error("Cannot store preference %s: no org_id for user %s", key, user_id)
+            logger.error("Cannot store preference: no org_id resolved")
             return
 
         conn = connect_to_db_as_user()
@@ -365,9 +365,9 @@ def store_user_preference(user_id: str, key: str, value: Any):
             VALUES (%s, %s, %s, %s)
         """, (user_id, org_id, key, json.dumps(value)))
         conn.commit()
-        logger.debug("Stored preference %s for org %s (by user %s)", key, org_id, user_id)
-    except Exception as e:
-        logger.error(f"Error storing user preference: {e}")
+        logger.debug("Stored org preference successfully")
+    except Exception:
+        logger.exception("Error storing user preference")
     finally:
         if 'cursor' in locals() and cursor:
             cursor.close()
