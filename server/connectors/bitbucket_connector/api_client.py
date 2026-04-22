@@ -4,7 +4,7 @@ Wraps the Bitbucket 2.0 REST API with authentication and pagination support.
 """
 import base64
 import logging
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 import requests
 
@@ -15,10 +15,12 @@ _BITBUCKET_ALLOWED_HOSTS = frozenset({"api.bitbucket.org", "bitbucket.org"})
 
 
 def _validate_bitbucket_url(url: str) -> None:
-    """Raise ValueError if url does not point to a known Bitbucket host."""
-    host = urlsplit(url).hostname
-    if host not in _BITBUCKET_ALLOWED_HOSTS:
-        raise ValueError(f"URL host '{host}' is not a known Bitbucket domain")
+    """Raise ValueError if url does not point to a known Bitbucket host over HTTPS."""
+    parts = urlsplit(url)
+    if parts.scheme != "https":
+        raise ValueError(f"URL scheme '{parts.scheme}' is not allowed; only HTTPS is permitted")
+    if parts.hostname not in _BITBUCKET_ALLOWED_HOSTS:
+        raise ValueError(f"URL host '{parts.hostname}' is not a known Bitbucket domain")
 
 
 def _sanitize_url(url: str) -> str:
@@ -163,8 +165,12 @@ class BitbucketAPIClient:
             try:
                 _validate_bitbucket_url(url)
             except ValueError:
-                logger.warning("Pagination stopped: next URL host not in allowlist (%s)", _sanitize_url(url))
-                break
+                logger.warning("Pagination rejected untrusted next URL: %s", _sanitize_url(url))
+                return {
+                    "error": True,
+                    "status": None,
+                    "message": "Pagination halted: next URL failed validation",
+                }
             response = requests.get(url, headers=headers, params=params, timeout=self.REQUEST_TIMEOUT)
             if response.status_code != 200:
                 logger.error(f"Bitbucket API error {response.status_code} at {_sanitize_url(url)}")
@@ -224,7 +230,11 @@ class BitbucketAPIClient:
 
     def get_file_contents(self, workspace, repo_slug, path, commit="HEAD"):
         """Get the contents of a file at a specific commit/branch."""
-        url = f"{BITBUCKET_API_BASE}/repositories/{workspace}/{repo_slug}/src/{commit}/{path}"
+        url = (
+            f"{BITBUCKET_API_BASE}/repositories/"
+            f"{quote(workspace, safe='')}/{quote(repo_slug, safe='')}"
+            f"/src/{quote(commit, safe='')}/{quote(path, safe='/')}"
+        )
         _validate_bitbucket_url(url)
         headers = self._get_headers()
         response = requests.get(url, headers=headers, timeout=self.REQUEST_TIMEOUT)
@@ -260,7 +270,11 @@ class BitbucketAPIClient:
 
     def get_directory_tree(self, workspace, repo_slug, path="", commit="HEAD"):
         """Get directory listing at a path."""
-        url = f"{BITBUCKET_API_BASE}/repositories/{workspace}/{repo_slug}/src/{commit}/{path}"
+        url = (
+            f"{BITBUCKET_API_BASE}/repositories/"
+            f"{quote(workspace, safe='')}/{quote(repo_slug, safe='')}"
+            f"/src/{quote(commit, safe='')}/{quote(path, safe='/')}"
+        )
         params = {"format": "meta"}
         return self._get(url, params=params)
 

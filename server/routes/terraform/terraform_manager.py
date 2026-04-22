@@ -1284,8 +1284,15 @@ class TerraformManager:
         Returns:
             Dictionary of environment variables
         """
-        # Start with current environment
-        env = os.environ.copy()
+        # Build a minimal subprocess environment instead of inheriting the full server env
+        _TERRAFORM_ENV_ALLOWLIST = {
+            "PATH", "HOME", "USER", "LANG", "LC_ALL",
+            "SSL_CERT_FILE", "SSL_CERT_DIR",
+            "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
+            "http_proxy", "https_proxy", "no_proxy",
+            "TMPDIR", "TMP", "TEMP",
+        }
+        env = {k: v for k, v in os.environ.items() if k in _TERRAFORM_ENV_ALLOWLIST}
 
         # Inject per-instance .terraformrc path (avoids mutating os.environ)
         terraformrc = getattr(self, "_terraformrc_path", None)

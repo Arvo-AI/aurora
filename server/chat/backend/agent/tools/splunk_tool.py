@@ -6,7 +6,6 @@ import re
 from typing import Any, Dict, Optional
 
 import requests
-import os
 from pydantic import BaseModel, Field
 
 from utils.auth.token_management import get_token_data

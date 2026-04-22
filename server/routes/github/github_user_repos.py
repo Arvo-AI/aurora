@@ -122,7 +122,7 @@ def get_user_branches(user_id, repo_full_name):
     if request.method == 'OPTIONS':
         return create_cors_response()
     
-    if not re.fullmatch(r'[a-zA-Z0-9._-]+/[a-zA-Z0-9._-]+', repo_full_name):
+    if not re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9._-]*/[a-zA-Z0-9][a-zA-Z0-9._-]*', repo_full_name):
         return create_cors_response({"error": "Invalid repository name format", "branches": []}, 400)
 
     try:
