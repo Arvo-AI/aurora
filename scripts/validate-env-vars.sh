@@ -54,7 +54,7 @@ sort -u "$USED_VARS_FILE" -o "$USED_VARS_FILE"
 
 # Filter out common false positives (framework/system variables)
 # Note: Use grep -v for better cross-platform compatibility
-grep -v -E '^(__NEXT_|NEXT_PHASE$|NEXT_DEBUG_BUILD$|NEXT_PRIVATE_|NEXT_SSG_FETCH_METRICS$|NEXT_SERVER_ACTIONS_ENCRYPTION_KEY$)' "$USED_VARS_FILE" > "${USED_VARS_FILE}.tmp" && mv "${USED_VARS_FILE}.tmp" "$USED_VARS_FILE"
+grep -v -E '^(__NEXT_|NEXT_PHASE$|NEXT_DEBUG_BUILD$|NEXT_PRIVATE_|NEXT_SSG_FETCH_METRICS$|NEXT_SERVER_ACTIONS_ENCRYPTION_KEY$|NEXT_RUNTIME$)' "$USED_VARS_FILE" > "${USED_VARS_FILE}.tmp" && mv "${USED_VARS_FILE}.tmp" "$USED_VARS_FILE"
 
 # Vercel deployment vars (only exist in Vercel environment)
 grep -v '^VERCEL' "$USED_VARS_FILE" > "${USED_VARS_FILE}.tmp" && mv "${USED_VARS_FILE}.tmp" "$USED_VARS_FILE"

@@ -9,7 +9,7 @@ from utils.db.connection_pool import db_pool
 from utils.web.cors_utils import create_cors_response
 from utils.auth.token_management import store_tokens_in_db
 from utils.auth.rbac_decorators import require_permission
-from utils.auth.stateless_auth import get_org_id_from_request, validate_user_exists
+from utils.auth.stateless_auth import get_org_id_from_request, validate_user_exists, set_rls_context
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +24,7 @@ def _has_grafana_row(user_id: str) -> Tuple[bool, bool]:
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                set_rls_context(cursor, conn, user_id, log_prefix="[GRAFANA:has_row]")
                 cursor.execute(
                     "SELECT is_active FROM user_tokens WHERE user_id = %s AND provider = 'grafana' LIMIT 1",
                     (user_id,),
@@ -42,6 +43,7 @@ def _set_grafana_active(user_id: str, active: bool) -> bool:
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                set_rls_context(cursor, conn, user_id, log_prefix="[GRAFANA:set_active]")
                 cursor.execute(
                     "UPDATE user_tokens SET is_active = %s, timestamp = CURRENT_TIMESTAMP "
                     "WHERE user_id = %s AND provider = 'grafana'",
@@ -150,7 +152,7 @@ def get_alerts(user_id):
     try:
         with db_pool.get_admin_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SET myapp.current_org_id = %s", (org_id,))
+            set_rls_context(cursor, conn, user_id, log_prefix="[Grafana]")
             
             if state_filter:
                 cursor.execute(

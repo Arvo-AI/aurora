@@ -7,6 +7,7 @@ from kubernetes.client.exceptions import ApiException
 
 from utils.db.connection_pool import db_pool
 from utils.auth.token_management import get_token_data
+from utils.auth.stateless_auth import set_rls_context
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +24,7 @@ def _fetch_user_ssh_keys(user_id: str) -> Dict[str, str]:
     ssh_keys: Dict[str, str] = {}
     with db_pool.get_admin_connection() as conn:
         cursor = conn.cursor()
+        set_rls_context(cursor, conn, user_id, log_prefix="[SSHSetup:_fetch_user_ssh_keys]")
         cursor.execute(
             "SELECT provider FROM user_tokens WHERE user_id = %s AND provider LIKE %s",
             (user_id, SSH_PROVIDER_PATTERN)

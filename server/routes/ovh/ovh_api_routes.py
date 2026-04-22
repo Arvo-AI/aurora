@@ -107,25 +107,26 @@ def ovh_projects_read(user_id):
 
                 if project_response.ok:
                     project_data = project_response.json()
+                    status = project_data.get('status', 'unknown')
                     projects.append({
                         'projectId': project_id,
-                        'projectName': project_data.get('description', project_id),
-                        'status': project_data.get('status', 'unknown'),
+                        'name': project_data.get('description', project_id),
+                        'hasPermission': status in ('ok', 'unknown'),
                         'enabled': True
                     })
                 else:
                     projects.append({
                         'projectId': project_id,
-                        'projectName': project_id,
-                        'status': 'unknown',
+                        'name': project_id,
+                        'hasPermission': True,
                         'enabled': True
                     })
             except Exception as e:
                 logger.warning(f"Failed to fetch details for project {project_id}: {e}")
                 projects.append({
                     'projectId': project_id,
-                    'projectName': project_id,
-                    'status': 'unknown',
+                    'name': project_id,
+                    'hasPermission': True,
                     'enabled': True
                 })
 

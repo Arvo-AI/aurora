@@ -42,20 +42,31 @@ def refresh_aws_credentials():
     expiring_role_arns = {k.split(":")[0] for k in expiring_cache_keys}
 
     from utils.db.connection_pool import db_pool
+    from utils.auth.stateless_auth import set_rls_context
 
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
+                # No RLS needed — cross-org loop sets RLS per user
                 cur.execute(
-                    "SELECT uc.user_id, uc.role_arn, uc.region, "
-                    "       uc.workspace_id, w.aws_external_id "
-                    "FROM user_connections uc "
-                    "JOIN workspaces w ON w.id = uc.workspace_id "
-                    "WHERE uc.provider = 'aws' AND uc.status = 'active' "
-                    "AND uc.workspace_id IS NOT NULL "
-                    "AND w.aws_external_id IS NOT NULL"
+                    "SELECT DISTINCT id, org_id FROM users WHERE org_id IS NOT NULL"
                 )
-                rows = cur.fetchall()
+                all_users = cur.fetchall()
+                rows = []
+                for uid, org_id in all_users:
+                    set_rls_context(cur, conn, uid, log_prefix="[AWSCredRefresh]")
+                    cur.execute(
+                        "SELECT uc.user_id, uc.role_arn, uc.region, "
+                        "       uc.workspace_id, w.aws_external_id "
+                        "FROM user_connections uc "
+                        "JOIN workspaces w ON w.id = uc.workspace_id "
+                        "WHERE uc.provider = 'aws' AND uc.status = 'active' "
+                        "AND uc.workspace_id IS NOT NULL "
+                        "AND w.aws_external_id IS NOT NULL "
+                        "AND uc.user_id = %s",
+                        (uid,)
+                    )
+                    rows.extend(cur.fetchall())
     except Exception as e:
         logger.error("Failed to query active AWS connections for refresh: %s", e)
         return {"refreshed": 0, "error": str(e)}

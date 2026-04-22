@@ -14,6 +14,7 @@ spec:
     metadata:
       annotations:
         checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/searxng-config: {{ include (print $.Template.BasePath "/searxng-configmap.yaml") . | sha256sum }}
         {{- if not .Values.secrets.app.existingSecret }}
         checksum/secret-app: {{ include (print $.Template.BasePath "/secret-app.yaml") . | sha256sum }}
         {{- end }}
@@ -26,6 +27,16 @@ spec:
       securityContext:
         {{- include "aurora.podSecurityContext" (dict "service" "searxng" "global" $ "defaults" (dict "runAsUser" 977 "runAsGroup" 977 "fsGroup" 977)) | nindent 8 }}
       {{- include "aurora.scheduling" (dict "service" "searxng" "global" $) | nindent 6 }}
+      initContainers:
+        - name: copy-settings
+          image: searxng/searxng:2025.5.8-7ca24eee4
+          command: ["sh", "-c", "cp /etc/searxng-source/settings.yml /etc/searxng/settings.yml"]
+          volumeMounts:
+            - name: searxng-source
+              mountPath: /etc/searxng-source
+              readOnly: true
+            - name: searxng-config
+              mountPath: /etc/searxng
       containers:
         - name: searxng
           image: searxng/searxng:2025.5.8-7ca24eee4
@@ -35,6 +46,11 @@ spec:
           ports:
             - name: http
               containerPort: 8080
+          env:
+            - name: UWSGI_WORKERS
+              value: "2"
+            - name: UWSGI_THREADS
+              value: "2"
           envFrom:
             - configMapRef:
                 name: {{ include "aurora.fullname" . }}-config
@@ -68,5 +84,8 @@ spec:
           resources:
             {{- toYaml .Values.resources.searxng | nindent 12 }}
       volumes:
+        - name: searxng-source
+          configMap:
+            name: {{ include "aurora.fullname" . }}-searxng-settings
         - name: searxng-config
           emptyDir: {}

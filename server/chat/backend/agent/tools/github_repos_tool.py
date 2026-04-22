@@ -23,8 +23,10 @@ def get_connected_repos(**kwargs) -> str:
 
     try:
         from utils.db.connection_pool import db_pool
+        from utils.auth.stateless_auth import set_rls_context
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
+                set_rls_context(cur, conn, user_id, log_prefix="[GithubRepos:list]")
                 cur.execute(
                     """SELECT repo_full_name, default_branch, is_private, metadata_summary, metadata_status
                        FROM github_connected_repos

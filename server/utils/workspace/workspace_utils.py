@@ -32,7 +32,7 @@ def get_or_create_workspace(user_id: str, workspace_name: str = "default") -> Di
         with db_pool.get_admin_connection() as conn:
             cursor = conn.cursor()
             
-            # Try to get existing workspace
+            # No RLS needed — workspaces not RLS-protected
             cursor.execute(
                 "SELECT id, user_id, name, aws_external_id, aws_discovery_artifact_bucket, "
                 "aws_discovery_artifact_key, aws_discovery_summary, created_at, updated_at "
@@ -172,6 +172,7 @@ def get_workspace_by_id(workspace_id: str) -> Optional[Dict[str, Any]]:
         with db_pool.get_admin_connection() as conn:
             cursor = conn.cursor()
             
+            # No RLS needed — workspaces not RLS-protected
             cursor.execute(
                 "SELECT id, user_id, name, aws_external_id, aws_discovery_artifact_bucket, "
                 "aws_discovery_artifact_key, aws_discovery_summary, created_at, updated_at "
@@ -225,6 +226,7 @@ def get_user_workspaces(user_id: str) -> list:
         with db_pool.get_admin_connection() as conn:
             cursor = conn.cursor()
             
+            # No RLS needed — workspaces not RLS-protected
             cursor.execute(
                 "SELECT id, user_id, name, aws_external_id, aws_discovery_artifact_bucket, "
                 "aws_discovery_artifact_key, aws_discovery_summary, created_at, updated_at "

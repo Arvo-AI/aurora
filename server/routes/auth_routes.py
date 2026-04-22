@@ -79,6 +79,7 @@ def register():
         conn = connect_to_db_as_user()
         try:
             with conn.cursor() as cursor:
+                # No RLS needed — users, organizations not RLS-protected
                 cursor.execute(
                     "SELECT id FROM users WHERE email = %s",
                     (email,)
@@ -187,6 +188,7 @@ def setup_org(user_id):
         conn = connect_to_db_as_user()
         try:
             with conn.cursor() as cursor:
+                # No RLS needed — users, organizations not RLS-protected
                 cursor.execute(
                     "SELECT u.id, u.org_id, o.name "
                     "FROM users u LEFT JOIN organizations o ON u.org_id = o.id "
@@ -290,6 +292,7 @@ def login():
         conn = connect_to_db_as_user()
         try:
             with conn.cursor() as cursor:
+                # No RLS needed — users not RLS-protected
                 cursor.execute(
                     "SELECT u.id, u.email, u.name, u.password_hash, u.role, u.org_id, o.name, "
                     "COALESCE(u.must_change_password, FALSE) "
@@ -358,6 +361,7 @@ def change_password(user_id):
         conn = connect_to_db_as_user()
         try:
             with conn.cursor() as cursor:
+                # No RLS needed — users not RLS-protected
                 cursor.execute(
                     "SELECT password_hash FROM users WHERE id = %s",
                     (user_id,)
@@ -407,6 +411,7 @@ def get_current_user(user_id):
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                # No RLS needed — users, organizations not RLS-protected
                 cursor.execute(
                     "SELECT u.role, u.org_id, o.name, COALESCE(u.must_change_password, FALSE) "
                     "FROM users u LEFT JOIN organizations o ON u.org_id = o.id "
@@ -441,6 +446,7 @@ def get_admins(user_id):
     conn = connect_to_db_as_user()
     try:
         with conn.cursor() as cursor:
+            # No RLS needed — users not RLS-protected
             cursor.execute(
                 "SELECT name, email FROM users WHERE role = 'admin' AND org_id = %s ORDER BY created_at",
                 (org_id,),

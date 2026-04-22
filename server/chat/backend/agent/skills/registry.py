@@ -496,9 +496,11 @@ class SkillRegistry:
         """Fetch connected on-prem cluster names and IDs for template rendering."""
         try:
             from utils.db.connection_pool import db_pool
+            from utils.auth.stateless_auth import set_rls_context
 
             with db_pool.get_user_connection() as conn:
                 with conn.cursor() as cur:
+                    set_rls_context(cur, conn, user_id, log_prefix="[SkillRegistry:kubectl]")
                     cur.execute(
                         """SELECT c.cluster_id, t.cluster_name
                            FROM active_kubectl_connections c
@@ -606,9 +608,11 @@ class SkillRegistry:
         """Fetch recent deployment records from the database."""
         try:
             from utils.db.connection_pool import db_pool
+            from utils.auth.stateless_auth import set_rls_context
 
             with db_pool.get_admin_connection() as conn:
                 with conn.cursor() as cur:
+                    set_rls_context(cur, conn, user_id, log_prefix="[SkillRegistry:_get_recent_deploys]")
                     cur.execute(
                         """SELECT service, environment, result, build_number,
                                   commit_sha, trace_id, received_at

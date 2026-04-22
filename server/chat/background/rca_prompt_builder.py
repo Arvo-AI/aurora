@@ -345,9 +345,11 @@ def _has_onprem_clusters(user_id: Optional[str]) -> bool:
         return False
     try:
         from utils.db.db_adapters import connect_to_db_as_user
+        from utils.auth.stateless_auth import set_rls_context
         conn = connect_to_db_as_user()
         try:
             cursor = conn.cursor()
+            set_rls_context(cursor, conn, user_id, log_prefix="[RCAPrompt:onprem]")
             cursor.execute("""
                 SELECT COUNT(*) FROM active_kubectl_connections c
                 JOIN kubectl_agent_tokens t ON c.token = t.token
@@ -438,8 +440,10 @@ def _get_recent_jenkins_deployments(user_id: str, service: str = "", lookback_mi
     lookback_minutes = max(1, min(int(lookback_minutes), 10080))  # 1 min to 7 days
     try:
         from utils.db.connection_pool import db_pool
+        from utils.auth.stateless_auth import set_rls_context
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                set_rls_context(cursor, conn, user_id, log_prefix="[RCAPrompt:_get_recent_jenkins_deployments]")
                 conditions = ["user_id = %s", "received_at >= NOW() - make_interval(mins => %s)"]
                 params: list = [user_id, lookback_minutes]
 

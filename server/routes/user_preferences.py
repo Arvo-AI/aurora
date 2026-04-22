@@ -5,8 +5,9 @@ from utils.auth.stateless_auth import (
     store_user_preference, 
     get_user_preference,
     get_credentials_from_db,
-    create_cors_response
+    set_rls_context,
 )
+from utils.web.cors_utils import create_cors_response
 from utils.auth.rbac_decorators import require_permission
 import json
 
@@ -63,9 +64,8 @@ def clear_session(user_id):
         from utils.db.db_utils import connect_to_db_as_user
         conn = connect_to_db_as_user()
         cursor = conn.cursor()
-        cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
-        conn.commit()
-        
+        set_rls_context(cursor, conn, user_id, log_prefix="[UserPrefs:clear]")
+
         # Clear all user preferences (session-like data)
         cursor.execute("DELETE FROM user_preferences WHERE user_id = %s", (user_id,))
         
@@ -120,9 +120,8 @@ def get_batch_preferences(user_id):
         from utils.db.db_utils import connect_to_db_as_user
         conn = connect_to_db_as_user()
         cursor = conn.cursor()
-        cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
-        conn.commit()
-        
+        set_rls_context(cursor, conn, user_id, log_prefix="[UserPrefs:get]")
+
         placeholders = ','.join(['%s'] * len(keys))
         cursor.execute(
             f"SELECT preference_key, preference_value FROM user_preferences WHERE user_id = %s AND preference_key IN ({placeholders})",

@@ -123,7 +123,7 @@ def _update_document_status(
         with db_pool.get_admin_connection() as conn:
             cursor = conn.cursor()
 
-            # Use static SQL with COALESCE to conditionally update fields
+            # No RLS needed — knowledge_base_documents not RLS-protected
             cursor.execute(
                 """
                 UPDATE knowledge_base_documents
@@ -155,6 +155,7 @@ def _get_document_info(document_id: str, user_id: str) -> dict | None:
     try:
         with db_pool.get_admin_connection() as conn:
             cursor = conn.cursor()
+            # No RLS needed — knowledge_base_documents not RLS-protected
             cursor.execute(
                 """
                 SELECT original_filename, file_type, storage_path
@@ -230,7 +231,7 @@ def cleanup_stale_documents() -> dict:
         with db_pool.get_admin_connection() as conn:
             cursor = conn.cursor()
 
-            # Find and mark stale documents as failed
+            # No RLS needed — knowledge_base_documents not RLS-protected
             cursor.execute(
                 """
                 UPDATE knowledge_base_documents

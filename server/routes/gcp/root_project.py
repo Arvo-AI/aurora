@@ -8,7 +8,6 @@ from utils.auth.stateless_auth import (
     store_user_preference,
     get_user_preference,
     get_credentials_from_db,
-    create_cors_response
 )
 from utils.auth.rbac_decorators import require_permission
 from connectors.gcp_connector.auth.oauth import get_credentials

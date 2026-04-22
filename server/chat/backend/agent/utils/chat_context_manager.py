@@ -308,10 +308,11 @@ Provide a detailed summary that preserves essential context:"""
     ):
         """Store context compression event in database for tracking."""
         try:
+            from utils.auth.stateless_auth import set_rls_context
             with db_pool.get_user_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
-                conn.commit()
+                if not set_rls_context(cursor, conn, user_id, log_prefix="[ChatContextManager]"):
+                    return
 
                 # Add compression metadata to chat session
                 cursor.execute(

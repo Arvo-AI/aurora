@@ -195,6 +195,7 @@ def process_dynatrace_problem(
             )
             with db_pool.get_admin_connection() as conn:
                 cursor = conn.cursor()
+                set_rls_context(cursor, conn, user_id, log_prefix="[DYNATRACE:task_id_update]")
                 cursor.execute(
                     "UPDATE incidents SET rca_celery_task_id = %s WHERE id = %s",
                     (task.id, str(incident_id)),

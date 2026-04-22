@@ -55,10 +55,13 @@ def _save_ui_message(session_id: str, user_id: str, ui_messages: List[Dict[str, 
     """
     try:
         from utils.db.db_utils import connect_to_db_as_user
+        from utils.auth.stateless_auth import set_rls_context
         
         conn = connect_to_db_as_user()
         cursor = conn.cursor()
-        cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
+        if not set_rls_context(cursor, conn, user_id, log_prefix="[ImmediateSave]"):
+            conn.close()
+            return False
         
         cursor.execute("""
             SELECT messages FROM chat_sessions 

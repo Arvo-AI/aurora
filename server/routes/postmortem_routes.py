@@ -16,13 +16,14 @@ from connectors.confluence_connector.client import (
 )
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.auth.rbac_decorators import require_permission
-from utils.auth.stateless_auth import get_org_id_from_request
+from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context
 from connectors.confluence_connector.auth import refresh_access_token
 from utils.db.connection_pool import db_pool
 
 logger = logging.getLogger(__name__)
 
 postmortem_bp = Blueprint("postmortem", __name__)
+_LOG_PREFIX = "[Postmortem]"
 
 
 def _validate_uuid(value: str) -> bool:
@@ -88,9 +89,7 @@ def get_postmortem(user_id, incident_id):
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
-                cursor.execute("SET myapp.current_user_id = %s", (user_id,))
-                cursor.execute("SET myapp.current_org_id = %s", (org_id,))
-                conn.commit()
+                set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
                 cursor.execute(
                     """SELECT id, incident_id, user_id, content, generated_at, updated_at,
                               confluence_page_id, confluence_page_url, confluence_exported_at,
@@ -161,9 +160,7 @@ def update_postmortem(user_id, incident_id):
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
-                cursor.execute("SET myapp.current_user_id = %s", (user_id,))
-                cursor.execute("SET myapp.current_org_id = %s", (org_id,))
-                conn.commit()
+                set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
                 cursor.execute(
                     """UPDATE postmortems
                        SET content = %s, updated_at = CURRENT_TIMESTAMP
@@ -214,9 +211,7 @@ def export_to_confluence(user_id, incident_id):
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
-                cursor.execute("SET myapp.current_user_id = %s", (user_id,))
-                cursor.execute("SET myapp.current_org_id = %s", (org_id,))
-                conn.commit()
+                set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
                 cursor.execute(
                     """SELECT id, content FROM postmortems
                        WHERE incident_id = %s AND org_id = %s""",
@@ -316,9 +311,7 @@ def export_to_confluence(user_id, incident_id):
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
-                cursor.execute("SET myapp.current_user_id = %s", (user_id,))
-                cursor.execute("SET myapp.current_org_id = %s", (org_id,))
-                conn.commit()
+                set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
                 # Write to normalized exports table
                 cursor.execute(
                     """INSERT INTO postmortem_exports
@@ -436,9 +429,7 @@ def list_postmortems(user_id):
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
-                cursor.execute("SET myapp.current_user_id = %s", (user_id,))
-                cursor.execute("SET myapp.current_org_id = %s", (org_id,))
-                conn.commit()
+                set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
                 cursor.execute(
                     """SELECT p.id, p.incident_id, p.user_id, p.content, p.generated_at, p.updated_at,
                               p.confluence_page_id, p.confluence_page_url, p.confluence_exported_at,
@@ -513,9 +504,7 @@ def export_to_jira(user_id, incident_id):
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
-                cursor.execute("SET myapp.current_user_id = %s", (user_id,))
-                cursor.execute("SET myapp.current_org_id = %s", (org_id,))
-                conn.commit()
+                set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
                 cursor.execute(
                     """SELECT id, content FROM postmortems
                        WHERE incident_id = %s AND org_id = %s""",
@@ -620,9 +609,7 @@ def export_to_jira(user_id, incident_id):
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
-                cursor.execute("SET myapp.current_user_id = %s", (user_id,))
-                cursor.execute("SET myapp.current_org_id = %s", (org_id,))
-                conn.commit()
+                set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
                 # Write to normalized exports table
                 cursor.execute(
                     """INSERT INTO postmortem_exports

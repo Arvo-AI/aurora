@@ -141,6 +141,7 @@ Aurora integrates with 22+ tools across your stack:
 | **Monitoring** | PagerDuty, Datadog, Grafana, Netdata, Dynatrace, Coroot, ThousandEyes, BigPanda |
 | **Cloud Providers** | AWS, Azure, GCP, OVH, Scaleway |
 | **Infrastructure** | Kubernetes, Terraform, Docker |
+| **AI Assistants** | [MCP server](website/docs/integrations/mcp.md) for Cursor, Claude Desktop, Windsurf |
 | **Communication** | Slack |
 | **Code & Docs** | GitHub, Bitbucket, Confluence |
 | **Search** | Self-hosted SearXNG |

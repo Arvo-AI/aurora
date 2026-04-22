@@ -1,6 +1,6 @@
 import { NextRequest } from 'next/server';
-import { forwardAuthenticatedGet } from '@/lib/backend-proxy';
+import { forwardRequest } from '@/lib/backend-proxy';
 
 export async function GET(request: NextRequest) {
-  return forwardAuthenticatedGet(request, '/newrelic/events/ingested', 'New Relic events');
+  return forwardRequest(request, 'GET', '/newrelic/events/ingested', 'New Relic events');
 }
