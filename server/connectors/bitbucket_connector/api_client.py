@@ -11,6 +11,14 @@ import requests
 logger = logging.getLogger(__name__)
 
 BITBUCKET_API_BASE = "https://api.bitbucket.org/2.0"
+_BITBUCKET_ALLOWED_HOSTS = frozenset({"api.bitbucket.org", "bitbucket.org"})
+
+
+def _validate_bitbucket_url(url: str) -> None:
+    """Raise ValueError if url does not point to a known Bitbucket host."""
+    host = urlsplit(url).hostname
+    if host not in _BITBUCKET_ALLOWED_HOSTS:
+        raise ValueError(f"URL host '{host}' is not a known Bitbucket domain")
 
 
 def _sanitize_url(url: str) -> str:
@@ -82,6 +90,7 @@ class BitbucketAPIClient:
 
     def _get(self, url, params=None):
         """Single-resource GET. Returns response JSON or error dict."""
+        _validate_bitbucket_url(url)
         response = requests.get(url, headers=self._get_headers(), params=params, timeout=self.REQUEST_TIMEOUT)
         if response.status_code != 200:
             logger.error(f"Bitbucket GET {_sanitize_url(url)} failed: {response.status_code}")
@@ -90,6 +99,7 @@ class BitbucketAPIClient:
 
     def _get_raw(self, url, params=None):
         """GET that returns raw text (for diffs, logs). Returns string or error dict."""
+        _validate_bitbucket_url(url)
         headers = self._get_headers()
         headers["Accept"] = "text/plain"
         response = requests.get(url, headers=headers, params=params, timeout=self.REQUEST_TIMEOUT)
@@ -100,6 +110,7 @@ class BitbucketAPIClient:
 
     def _post(self, url, json_data=None, data=None, files=None):
         """POST with JSON or form/multipart data. Returns response JSON or error dict."""
+        _validate_bitbucket_url(url)
         headers = self._get_headers()
         if json_data is not None:
             headers["Content-Type"] = "application/json"
@@ -114,6 +125,7 @@ class BitbucketAPIClient:
 
     def _put(self, url, json_data=None):
         """PUT with JSON data. Returns response JSON or error dict."""
+        _validate_bitbucket_url(url)
         headers = self._get_headers()
         headers["Content-Type"] = "application/json"
         response = requests.put(url, headers=headers, json=json_data, timeout=self.REQUEST_TIMEOUT)
@@ -124,6 +136,7 @@ class BitbucketAPIClient:
 
     def _delete(self, url):
         """DELETE. Returns status dict."""
+        _validate_bitbucket_url(url)
         response = requests.delete(url, headers=self._get_headers(), timeout=self.REQUEST_TIMEOUT)
         if response.status_code not in (200, 204):
             logger.error(f"Bitbucket DELETE {_sanitize_url(url)} failed: {response.status_code}")
@@ -147,6 +160,7 @@ class BitbucketAPIClient:
         page_count = 0
 
         while url and page_count < page_limit:
+            _validate_bitbucket_url(url)
             response = requests.get(url, headers=headers, params=params, timeout=self.REQUEST_TIMEOUT)
             if response.status_code != 200:
                 logger.error(f"Bitbucket API error {response.status_code} at {_sanitize_url(url)}")

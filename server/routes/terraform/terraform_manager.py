@@ -118,7 +118,7 @@ class TerraformManager:
                 shutil.copy(terraform_binary, "/usr/local/bin/terraform")
                 
                 # Make Terraform executable
-                os.chmod("/usr/local/bin/terraform", 0o755)
+                os.chmod("/usr/local/bin/terraform", 0o750)
                 
                 logger.info("Terraform installed successfully")
                 return True
@@ -1395,7 +1395,7 @@ plugin_cache_may_break_dependency_lock_file = true
             # Create plugin cache directory with proper permissions
             cache_dir = "/tmp/terraform-plugin-cache"
             os.makedirs(cache_dir, exist_ok=True)
-            os.chmod(cache_dir, 0o755)  # Ensure proper permissions
+            os.chmod(cache_dir, 0o750)  # Ensure proper permissions
             
             # Set environment variable to use this config
             os.environ['TF_CLI_CONFIG_FILE'] = terraformrc_path

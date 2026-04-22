@@ -401,9 +401,11 @@ resources:
     requests:
       cpu: "200m"
       memory: "512Mi"
+      ephemeral-storage: "1Gi"
     limits:
       cpu: "2000m"
       memory: "2Gi"
+      ephemeral-storage: "2Gi"
   mcp:
     requests:
       cpu: "100m"
@@ -417,9 +419,11 @@ resources:
     requests:
       cpu: "100m"
       memory: "1Gi"
+      ephemeral-storage: "1Gi"
     limits:
       cpu: "1000m"
       memory: "4Gi"
+      ephemeral-storage: "2Gi"
   celeryBeat:
     requests:
       cpu: "50m"
@@ -431,9 +435,11 @@ resources:
     requests:
       cpu: "100m"
       memory: "256Mi"
+      ephemeral-storage: "100Mi"
     limits:
       cpu: "500m"
       memory: "1Gi"
+      ephemeral-storage: "1Gi"
   frontend:
     requests:
       cpu: "50m"
@@ -445,23 +451,29 @@ resources:
     requests:
       cpu: "50m"
       memory: "128Mi"
+      ephemeral-storage: "50Mi"
     limits:
       cpu: "200m"
       memory: "256Mi"
+      ephemeral-storage: "1Gi"
   searxng:
     requests:
       cpu: "50m"
       memory: "128Mi"
+      ephemeral-storage: "50Mi"
     limits:
       cpu: "300m"
       memory: "512Mi"
+      ephemeral-storage: "1Gi"
   weaviate:
     requests:
       cpu: "100m"
       memory: "512Mi"
+      ephemeral-storage: "100Mi"
     limits:
       cpu: "500m"
       memory: "1Gi"
+      ephemeral-storage: "1Gi"
   memgraph:
     requests:
       cpu: "100m"
@@ -482,16 +494,20 @@ resources:
     requests:
       cpu: "50m"
       memory: "128Mi"
+      ephemeral-storage: "50Mi"
     limits:
       cpu: "200m"
       memory: "256Mi"
+      ephemeral-storage: "1Gi"
   postgres:
     requests:
       cpu: "100m"
       memory: "512Mi"
+      ephemeral-storage: "50Mi"
     limits:
       cpu: "500m"
       memory: "1Gi"
+      ephemeral-storage: "1Gi"
   minio:
     requests:
       cpu: "50m"

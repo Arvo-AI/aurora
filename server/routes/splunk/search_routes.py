@@ -3,6 +3,7 @@
 import logging
 import re
 from typing import Any, Dict, Optional, Tuple
+from urllib.parse import quote
 
 import requests
 import os
@@ -229,7 +230,7 @@ def get_job_status(user_id, sid: str):
         return jsonify({"error": "Splunk not connected"}), 400
 
     try:
-        url = f"{creds['base_url']}/services/search/v2/jobs/{sid}"
+        url = f"{creds['base_url']}/services/search/v2/jobs/{quote(sid, safe='')}"
         headers = _splunk_headers(creds["api_token"])
         headers["Accept"] = "application/json"
 
@@ -285,7 +286,7 @@ def get_job_results(user_id, sid: str):
     count = request.args.get("count", 1000, type=int)
 
     try:
-        url = f"{creds['base_url']}/services/search/v2/jobs/{sid}/results"
+        url = f"{creds['base_url']}/services/search/v2/jobs/{quote(sid, safe='')}/results"
         headers = _splunk_headers(creds["api_token"])
         headers["Accept"] = "application/json"
 
@@ -336,7 +337,7 @@ def cancel_job(user_id, sid: str):
         return jsonify({"error": "Splunk not connected"}), 400
 
     try:
-        url = f"{creds['base_url']}/services/search/v2/jobs/{sid}/control"
+        url = f"{creds['base_url']}/services/search/v2/jobs/{quote(sid, safe='')}/control"
         response = requests.post(
             url,
             headers=_splunk_headers(creds["api_token"]),
