@@ -43,7 +43,7 @@ export default function CountUp({
     const str = num.toString();
     if (str.includes('.')) {
       const decimals = str.split('.')[1];
-      if (parseInt(decimals) !== 0) {
+      if (Number.parseInt(decimals) !== 0) {
         return decimals.length;
       }
     }
