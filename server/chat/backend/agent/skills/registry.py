@@ -326,6 +326,15 @@ class SkillRegistry:
             else:
                 lines.append(f"- {meta.id}: {meta.index}")
 
+            # Inline dynamic context the LLM needs at tool-call time, so it
+            # doesn't have to call load_skill first. Kept short to stay within
+            # the ~300-token budget for this always-loaded index.
+            if meta.id == "kubectl_onprem":
+                ctx = self._get_kubectl_onprem_context(user_id)
+                cluster_list = ctx.get("cluster_list", "")
+                if cluster_list and not cluster_list.startswith("("):
+                    lines.append(f"  Connected clusters:\n{cluster_list}")
+
         lines.append("")
         return "\n".join(lines)
 
