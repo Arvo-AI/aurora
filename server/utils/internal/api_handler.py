@@ -1,5 +1,6 @@
 """Internal API handler for chatbot service HTTP endpoints."""
 import asyncio
+import hmac
 import json
 import logging
 import os
@@ -49,7 +50,12 @@ async def handle_http_request(reader, writer):
 
 async def _handle_kubectl_execute(headers, body, writer):
     """Handle internal kubectl execution endpoint."""
-    if headers.get('x-internal-secret') != os.getenv('INTERNAL_API_SECRET'):
+    internal_secret = os.getenv('INTERNAL_API_SECRET') or ''
+    provided = headers.get('x-internal-secret') or ''
+    # Reject when the server-side secret isn't configured (no auth bypass via
+    # an empty-string match), and compare in constant time to avoid leaking
+    # timing information about the correct prefix.
+    if not internal_secret or not hmac.compare_digest(internal_secret, provided):
         await _send_json_response(writer, {"error": "Unauthorized"}, status="403 Forbidden")
         return
     
