@@ -5,6 +5,7 @@ import re
 from typing import Any, Dict, Optional, Tuple
 
 import requests
+import os
 from flask import Blueprint, Response, jsonify, request, stream_with_context
 
 from utils.web.cors_utils import create_cors_response
@@ -13,6 +14,8 @@ from utils.auth.rbac_decorators import require_permission
 
 SPLUNK_TIMEOUT = 30
 SPLUNK_SEARCH_TIMEOUT = 120
+
+SPLUNK_SSL_VERIFY = os.environ.get("SPLUNK_SSL_VERIFY", "true").lower() not in ("0", "false", "no")
 
 # Regex for valid Splunk SID: alphanumerics, underscores, hyphens, dots
 SID_PATTERN = re.compile(r"^[a-zA-Z0-9_.\-]+$")
@@ -97,7 +100,7 @@ def search_sync(user_id):
             headers=_splunk_headers(creds["api_token"]),
             data=payload,
             timeout=SPLUNK_SEARCH_TIMEOUT,
-            verify=False,
+            verify=SPLUNK_SSL_VERIFY,
             stream=False,
         )
 
@@ -182,7 +185,7 @@ def create_search_job(user_id):
             headers=_splunk_headers(creds["api_token"]),
             data=payload,
             timeout=SPLUNK_TIMEOUT,
-            verify=False,
+            verify=SPLUNK_SSL_VERIFY,
         )
 
         if response.status_code == 401:
@@ -235,7 +238,7 @@ def get_job_status(user_id, sid: str):
             headers=headers,
             params={"output_mode": "json"},
             timeout=SPLUNK_TIMEOUT,
-            verify=False,
+            verify=SPLUNK_SSL_VERIFY,
         )
 
         if response.status_code == 404:
@@ -295,7 +298,7 @@ def get_job_results(user_id, sid: str):
                 "count": count,
             },
             timeout=SPLUNK_SEARCH_TIMEOUT,
-            verify=False,
+            verify=SPLUNK_SSL_VERIFY,
         )
 
         if response.status_code == 404:
@@ -339,7 +342,7 @@ def cancel_job(user_id, sid: str):
             headers=_splunk_headers(creds["api_token"]),
             data={"action": "cancel"},
             timeout=SPLUNK_TIMEOUT,
-            verify=False,
+            verify=SPLUNK_SSL_VERIFY,
         )
 
         if response.status_code == 404:

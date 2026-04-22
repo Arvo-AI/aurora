@@ -22,6 +22,8 @@ from utils.auth.rbac_decorators import require_permission
 from utils.secrets.secret_ref_utils import delete_user_secret
 SPLUNK_TIMEOUT = 15
 
+SPLUNK_SSL_VERIFY = os.environ.get("SPLUNK_SSL_VERIFY", "true").lower() not in ("0", "false", "no")
+
 logger = logging.getLogger(__name__)
 
 splunk_bp = Blueprint("splunk", __name__)
@@ -73,9 +75,8 @@ class SplunkClient:
     def _request(self, method: str, path: str, **kwargs) -> requests.Response:
         url = f"{self.base_url}{path}"
         try:
-            # verify=False to support self-signed certs (common in Splunk Enterprise)
             response = requests.request(
-                method, url, headers=self.headers, timeout=SPLUNK_TIMEOUT, verify=False, **kwargs
+                method, url, headers=self.headers, timeout=SPLUNK_TIMEOUT, verify=SPLUNK_SSL_VERIFY, **kwargs
             )
             response.raise_for_status()
             return response

@@ -6,6 +6,7 @@ import re
 from typing import Any, Dict, Optional
 
 import requests
+import os
 from pydantic import BaseModel, Field
 
 from utils.auth.token_management import get_token_data
@@ -13,6 +14,8 @@ from utils.auth.token_management import get_token_data
 logger = logging.getLogger(__name__)
 
 SPLUNK_SEARCH_TIMEOUT = 60
+
+SPLUNK_SSL_VERIFY = os.environ.get("SPLUNK_SSL_VERIFY", "true").lower() not in ("0", "false", "no")
 MAX_OUTPUT_SIZE = 2 * 1024 * 1024  # 2MB max output
 MAX_RESULT_SIZE = 10000  # 10KB max per individual result
 MAX_FIELD_VALUE_LENGTH = 1000  # Truncate individual field values longer than this
@@ -174,7 +177,7 @@ def search_splunk(
             headers=_splunk_headers(creds["api_token"]),
             data=payload,
             timeout=SPLUNK_SEARCH_TIMEOUT,
-            verify=False,
+            verify=SPLUNK_SSL_VERIFY,
         )
 
         if response.status_code == 401:
@@ -255,7 +258,7 @@ def list_splunk_indexes(user_id: Optional[str] = None, **kwargs) -> str:
             headers=headers,
             params={"output_mode": "json", "count": MAX_INDEXES_RETURN},
             timeout=30,
-            verify=False,
+            verify=SPLUNK_SSL_VERIFY,
         )
 
         if response.status_code == 401:
@@ -341,7 +344,7 @@ def list_splunk_sourcetypes(
             headers=_splunk_headers(creds["api_token"]),
             data=payload,
             timeout=30,
-            verify=False,
+            verify=SPLUNK_SSL_VERIFY,
         )
 
         if response.status_code == 401:

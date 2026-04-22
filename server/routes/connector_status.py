@@ -11,6 +11,7 @@ connected right now?"
 
 import base64
 import logging
+import os
 import time as _time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict
@@ -25,6 +26,8 @@ from utils.db.connection_pool import db_pool
 
 logger = logging.getLogger(__name__)
 _LOG_PREFIX = "[ConnectorStatus]"
+
+SPLUNK_SSL_VERIFY = os.environ.get("SPLUNK_SSL_VERIFY", "true").lower() not in ("0", "false", "no")
 
 connector_status_bp = Blueprint("connector_status", __name__)
 
@@ -114,7 +117,7 @@ def _check_splunk(creds: Dict[str, Any]) -> Dict[str, Any]:
             f"{base_url}/services/server/info?output_mode=json",
             headers={"Authorization": f"Bearer {api_token}"},
             timeout=HTTP_TIMEOUT,
-            verify=False,
+            verify=SPLUNK_SSL_VERIFY,
         )
         r.raise_for_status()
         return {"connected": True, "baseUrl": base_url}
