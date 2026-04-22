@@ -96,7 +96,7 @@ def assume_role_and_get_creds(
         "Assumed role %s, session expires at %s (in %s)",
         role_arn,
         expiration.isoformat(),
-        expiration - datetime.utcnow().replace(tzinfo=timezone.utc),
+        expiration - datetime.now(timezone.utc),
     )
 
     return creds_dict, session

@@ -9,7 +9,7 @@ import os
 import uuid
 import requests
 import socket
-from datetime import datetime
+from datetime import datetime, timezone
 from flask import Blueprint, jsonify
 import psycopg2
 import redis
@@ -231,7 +231,7 @@ def health_check():
 
     response = {
         "overall_status": overall_status,
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
         "response_time_ms": response_time,
         "checks": checks,
     }

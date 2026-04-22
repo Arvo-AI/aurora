@@ -10,7 +10,7 @@ import logging
 import json
 import asyncio
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Optional
 from utils.auth.stateless_auth import set_rls_context
 
@@ -1126,7 +1126,7 @@ class Workflow:
                                 "output_token_details": output_details,
                                 "estimated_cost": estimated_cost,
                                 "response_time_ms": response_time_ms,
-                                "timestamp": datetime.utcnow().isoformat() + "Z",
+                                "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
                                 "session_totals": _session_usage.copy(),
                             })
                             _model_turn_start = None

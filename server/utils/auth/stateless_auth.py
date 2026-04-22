@@ -180,7 +180,7 @@ def get_credentials_from_db(user_id: str, provider: str) -> Optional[Dict[str, A
 
                 conn = connect_to_db_as_user()
                 cur = conn.cursor()
-                set_rls_context(cur, conn, user_id, log_prefix="[Creds:AWS]")
+                org_id = set_rls_context(cur, conn, user_id, log_prefix="[Creds:AWS]")
 
                 cur.execute(
                     """

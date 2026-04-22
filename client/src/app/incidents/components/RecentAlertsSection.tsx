@@ -99,16 +99,11 @@ function RecentAlertCard({
   );
 }
 
-export default function RecentAlertsSection({ 
+export default function RecentAlertsSection({
   currentIncidentId,
   auroraStatus,
   onAlertMerged,
 }: RecentAlertsSectionProps) {
-  // Don't show if RCA has completed
-  if (auroraStatus === 'complete' || auroraStatus === 'summarizing' || auroraStatus === 'error') {
-    return null;
-  }
-
   const [isExpanded, setIsExpanded] = useState(false);
   const [recentIncidents, setRecentIncidents] = useState<RecentIncident[]>([]);
   const [loading, setLoading] = useState(false);
@@ -160,6 +155,11 @@ export default function RecentAlertsSection({
       onAlertMerged?.();
     }
   };
+
+  // Don't show if RCA has completed
+  if (auroraStatus === 'complete' || auroraStatus === 'summarizing' || auroraStatus === 'error') {
+    return null;
+  }
 
   // Always render the button - it will show "No other recent alerts" if empty
   // Only skip rendering if we've already fetched and there's nothing, AND the user hasn't expanded it

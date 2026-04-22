@@ -61,11 +61,6 @@ function stripIncidentPrefix(title: string): string {
 }
 
 export default function ThoughtsPanel({ thoughts, incident, isVisible, canInteract = true }: ThoughtsPanelProps) {
-  // Don't render RCA panel for merged incidents
-  if (incident.status === 'merged') {
-    return null;
-  }
-
   // 'thoughts' or session ID
   const [activeTab, setActiveTab] = useState<string>('thoughts');
   const [chatSessions, setChatSessions] = useState<ChatSession[]>(
@@ -369,6 +364,8 @@ export default function ThoughtsPanel({ thoughts, incident, isVisible, canIntera
     }
   };
 
+  // Don't render RCA panel for merged incidents or when panel is hidden
+  if (incident.status === 'merged') return null;
   if (!isVisible) return null;
 
   return (

@@ -398,6 +398,9 @@ export default function ChatHistory({
               return (
                 <div
                   key={session.id}
+                  role="button"
+                  tabIndex={isInProgress ? -1 : 0}
+                  aria-disabled={isInProgress}
                   className={cn(
                     "group w-full flex items-center justify-between px-2.5 py-1.5 rounded-md transition-colors text-left text-sm",
                     isInProgress
@@ -408,6 +411,7 @@ export default function ChatHistory({
                       : "text-muted-foreground hover:bg-primary/10 hover:text-foreground"
                   )}
                   onClick={() => !isInProgress && handleSessionClick(session.id)}
+                  onKeyDown={(e) => { if (!isInProgress && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); handleSessionClick(session.id); } }}
                   title={isInProgress ? "Analysis in progress..." : undefined}
                 >
                   {RowContent}

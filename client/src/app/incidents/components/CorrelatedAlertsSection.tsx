@@ -158,7 +158,7 @@ export default function CorrelatedAlertsSection({ alerts }: CorrelatedAlertsSect
   const safeParseDate = (dateString: string | null | undefined): number => {
     if (!dateString) return 0;
     const timestamp = new Date(dateString).getTime();
-    return isNaN(timestamp) ? 0 : timestamp;
+    return Number.isNaN(timestamp) ? 0 : timestamp;
   };
   
   // Sort by receivedAt descending (newest first)
