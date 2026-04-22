@@ -92,8 +92,10 @@ export default function ConnectorsClient() {
   }, [allConnectors, searchQuery, selectedCategories]);
 
   const { installedConnectors, availableConnectors } = useMemo(() => {
-    const installed = filteredConnectors.filter((connector) => statuses[connector.id]);
-    const available = filteredConnectors.filter((connector) => !statuses[connector.id]);
+    const cmp = (a: typeof filteredConnectors[number], b: typeof filteredConnectors[number]) =>
+      a.name.localeCompare(b.name);
+    const installed = filteredConnectors.filter((connector) => statuses[connector.id]).sort(cmp);
+    const available = filteredConnectors.filter((connector) => !statuses[connector.id]).sort(cmp);
     
     return {
       installedConnectors: installed,
