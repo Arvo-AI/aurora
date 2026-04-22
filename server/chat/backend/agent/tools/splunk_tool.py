@@ -15,7 +15,8 @@ logger = logging.getLogger(__name__)
 
 SPLUNK_SEARCH_TIMEOUT = 60
 
-SPLUNK_SSL_VERIFY = os.environ.get("SPLUNK_SSL_VERIFY", "true").lower() not in ("0", "false", "no")
+from utils.splunk_config import SPLUNK_SSL_VERIFY
+
 MAX_OUTPUT_SIZE = 2 * 1024 * 1024  # 2MB max output
 MAX_RESULT_SIZE = 10000  # 10KB max per individual result
 MAX_FIELD_VALUE_LENGTH = 1000  # Truncate individual field values longer than this

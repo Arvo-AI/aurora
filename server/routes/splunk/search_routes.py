@@ -6,7 +6,6 @@ from typing import Any, Dict, Optional, Tuple
 from urllib.parse import quote
 
 import requests
-import os
 from flask import Blueprint, Response, jsonify, request, stream_with_context
 
 from utils.web.cors_utils import create_cors_response
@@ -16,7 +15,7 @@ from utils.auth.rbac_decorators import require_permission
 SPLUNK_TIMEOUT = 30
 SPLUNK_SEARCH_TIMEOUT = 120
 
-SPLUNK_SSL_VERIFY = os.environ.get("SPLUNK_SSL_VERIFY", "true").lower() not in ("0", "false", "no")
+from utils.splunk_config import SPLUNK_SSL_VERIFY
 
 # Regex for valid Splunk SID: alphanumerics, underscores, hyphens, dots
 SID_PATTERN = re.compile(r"^[a-zA-Z0-9_.\-]+$")

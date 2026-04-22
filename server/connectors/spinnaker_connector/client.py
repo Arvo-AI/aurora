@@ -14,7 +14,7 @@ import tempfile
 import threading
 import time
 from typing import Any, Dict, List, Optional, Tuple
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 import requests
 from requests.auth import HTTPBasicAuth
@@ -249,6 +249,11 @@ class SpinnakerClient:
         parsed = urlparse(path)
         if parsed.scheme or parsed.netloc:
             raise SpinnakerAPIError("Invalid API path: must be a relative path")
+        if parsed.query or parsed.fragment:
+            raise SpinnakerAPIError("Invalid API path: query/fragment not allowed")
+        decoded = unquote(parsed.path)
+        if "/.." in decoded or decoded.startswith(".."):
+            raise SpinnakerAPIError("Invalid API path: path traversal not allowed")
         url = f"{self.base_url}{path}"
 
         try:

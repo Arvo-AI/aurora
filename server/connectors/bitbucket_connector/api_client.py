@@ -221,6 +221,7 @@ class BitbucketAPIClient:
     def get_file_contents(self, workspace, repo_slug, path, commit="HEAD"):
         """Get the contents of a file at a specific commit/branch."""
         url = f"{BITBUCKET_API_BASE}/repositories/{workspace}/{repo_slug}/src/{commit}/{path}"
+        _validate_bitbucket_url(url)
         headers = self._get_headers()
         response = requests.get(url, headers=headers, timeout=self.REQUEST_TIMEOUT)
         if response.status_code != 200:

@@ -43,6 +43,7 @@ x-common-env: &common-env
   REDIS_SSL_CA_CERTS: ${REDIS_SSL_CA_CERTS:-}
   REDIS_SSL_CERT_REQS: ${REDIS_SSL_CERT_REQS:-}
   WEAVIATE_SECURE: ${WEAVIATE_SECURE:-false}
+  SPLUNK_SSL_VERIFY: ${SPLUNK_SSL_VERIFY:-true}
 
   # Knowledge Base storage uses the pluggable storage system (SeaWeedFS/S3-compatible)
   # Configure via STORAGE_* environment variables
@@ -218,7 +219,6 @@ services:
       RATE_LIMITING_ENABLED: ${RATE_LIMITING_ENABLED}
       RATE_LIMIT_BYPASS_TOKEN: ${RATE_LIMIT_BYPASS_TOKEN}
       RATE_LIMIT_HEADERS_ENABLED: ${RATE_LIMIT_HEADERS_ENABLED}
-      SPLUNK_SSL_VERIFY: ${SPLUNK_SSL_VERIFY:-true}
 
       # OVH OAuth2
       OVH_CA_CLIENT_ID: ${OVH_CA_CLIENT_ID}
