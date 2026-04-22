@@ -3,10 +3,10 @@ import os
 import time
 from typing import Dict, Optional, Any
 from dataclasses import dataclass
-from datetime import datetime
 import tiktoken
 import json
 from utils.db.connection_pool import db_pool
+from utils.auth.stateless_auth import set_rls_context
 from .openrouter_pricing_service import get_pricing_service
 from .provider_pricing_service import get_provider_pricing_service
 
@@ -283,19 +283,14 @@ class LLMUsageTracker:
     def store_usage(cls, usage: LLMUsage) -> bool:
         """Store LLM usage data in the database"""
         try:
-            # Resolve org_id from user if not provided
-            if not usage.org_id and usage.user_id:
-                try:
-                    from utils.auth.stateless_auth import get_org_id_for_user
-                    usage.org_id = get_org_id_for_user(usage.user_id)
-                except Exception as e:
-                    logger.debug("Could not resolve org_id for user %s: %s", usage.user_id, e)
-
             with db_pool.get_user_connection() as conn:
                 cursor = conn.cursor()
 
-                # Set user context for RLS
-                cursor.execute("SET myapp.current_user_id = %s;", (usage.user_id,))
+                resolved_org_id = set_rls_context(cursor, conn, usage.user_id, log_prefix="[LLMUsage:store]")
+                if not resolved_org_id:
+                    logger.error("[LLMUsage:store] Cannot store usage — org_id unresolvable for user %s", usage.user_id)
+                    return False
+                usage.org_id = resolved_org_id
 
                 # Insert usage record
                 cursor.execute(
@@ -469,7 +464,7 @@ class LLMUsageTracker:
         try:
             with db_pool.get_user_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
+                set_rls_context(cursor, conn, user_id, log_prefix="[LLMUsage]")
 
                 # Get LLM summary statistics (exclude non-LLM cost rows)
                 cursor.execute(

@@ -9,7 +9,7 @@ from utils.db.connection_pool import db_pool
 from utils.db.org_backfill import migrate_user_to_org, _USER_SCOPED_TABLES_SQL, _INCIDENT_CHILD_TABLES_SQL
 from utils.auth import VALID_ROLES
 from utils.auth.rbac_decorators import require_permission, require_auth_only
-from utils.auth.stateless_auth import get_org_id_from_request
+from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context
 from utils.auth.enforcer import assign_role_to_user, remove_role_from_user, get_user_roles_in_org
 from routes.audit_routes import record_audit_event
 
@@ -28,6 +28,7 @@ def _validate_org_id_for_user(user_id: str, org_id: str) -> bool:
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                # No RLS needed — users not RLS-protected
                 cursor.execute(
                     "SELECT 1 FROM users WHERE id = %s AND org_id = %s",
                     (user_id, org_id),
@@ -256,6 +257,7 @@ def get_current_org(user_id):
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                # No RLS needed — organizations, users not RLS-protected
                 cursor.execute(
                     "SELECT id, name, slug, created_by, created_at FROM organizations WHERE id = %s",
                     (org_id,),
@@ -328,6 +330,7 @@ def update_org(user_id):
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
                 if name:
+                    # No RLS needed — organizations not RLS-protected
                     cursor.execute(
                         "SELECT id FROM organizations WHERE LOWER(name) = LOWER(%s) AND id != %s",
                         (name, org_id)
@@ -388,6 +391,7 @@ def add_member(user_id):
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                # No RLS needed — users not RLS-protected
                 cursor.execute(
                     "SELECT org_id FROM users WHERE id = %s",
                     (target_user_id,),
@@ -397,6 +401,7 @@ def add_member(user_id):
                     return jsonify({"error": "User not found"}), 404
 
                 old_org_id = user_row[0]
+                set_rls_context(cursor, conn, target_user_id, log_prefix="[OrgAddMember]")
                 row = _transfer_user_to_org(cursor, target_user_id, old_org_id, org_id, role)
 
                 if not row:
@@ -448,7 +453,7 @@ def remove_member(user_id, target_user_id):
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
-                # Ensure at least one admin remains after removal
+                # No RLS needed — first query is on users (not RLS-protected); set_rls_context called below
                 cursor.execute(
                     "SELECT COUNT(*) FROM users WHERE org_id = %s AND role = 'admin' AND id != %s",
                     (org_id, target_user_id),
@@ -469,7 +474,8 @@ def remove_member(user_id, target_user_id):
                 cursor.execute(
                     "UPDATE organizations SET created_by = NULL WHERE created_by = %s", (target_user_id,)
                 )
-                # Clean up user-scoped data
+                # Clean up user-scoped data (RLS-protected tables)
+                set_rls_context(cursor, conn, target_user_id, log_prefix="[OrgRemoveMember]")
                 for tbl in (
                     "user_tokens", "user_connections", "user_manual_vms",
                     "user_preferences", "rca_notification_emails",
@@ -508,6 +514,7 @@ def my_invitations(user_id):
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                # No RLS needed — users, org_invitations not RLS-protected
                 cursor.execute("SELECT email FROM users WHERE id = %s", (user_id,))
                 user_row = cursor.fetchone()
                 if not user_row:
@@ -561,6 +568,7 @@ def decline_invitation(user_id, invitation_id):
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                # No RLS needed — users, org_invitations not RLS-protected
                 cursor.execute("SELECT email FROM users WHERE id = %s", (user_id,))
                 user_row = cursor.fetchone()
                 if not user_row:
@@ -600,6 +608,7 @@ def cancel_invitation(user_id, invitation_id):
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                # No RLS needed — org_invitations not RLS-protected
                 cursor.execute(
                     """UPDATE org_invitations SET status = 'cancelled'
                        WHERE id = %s AND org_id = %s AND status = 'pending'
@@ -642,7 +651,7 @@ def _list_invitations(org_id: str):
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
-                # Mark any past-due invitations so the status column stays accurate
+                # No RLS needed — org_invitations not RLS-protected
                 cursor.execute(
                     """UPDATE org_invitations SET status = 'expired'
                        WHERE org_id = %s AND status = 'pending'
@@ -697,7 +706,7 @@ def _create_invitation(org_id: str, user_id: str):
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
-                # Expire stale invitations before checking for duplicates
+                # No RLS needed — org_invitations not RLS-protected
                 cursor.execute(
                     """UPDATE org_invitations SET status = 'expired'
                        WHERE org_id = %s AND email = %s AND status = 'pending'
@@ -763,6 +772,7 @@ def join_org(user_id):
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                # First queries are on users/org_invitations (not RLS-protected); set_rls_context called below
                 new_org_id = None
                 new_role = "viewer"
 
@@ -834,6 +844,7 @@ def join_org(user_id):
                         conn.commit()
                     return jsonify({"error": "You are already a member of this organization"}), 409
 
+                set_rls_context(cursor, conn, user_id, log_prefix="[OrgJoin]")
                 _transfer_user_to_org(cursor, user_id, old_org_id, new_org_id, new_role)
 
                 if invitation_id:
@@ -894,6 +905,7 @@ def get_org_stats(user_id):
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                set_rls_context(cursor, conn, user_id, log_prefix="[OrgStats]")
                 cursor.execute(
                     "SELECT COUNT(*) FROM users WHERE org_id = %s", (org_id,)
                 )
@@ -942,6 +954,7 @@ def get_org_activity(user_id):
         events = []
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                # No RLS needed — users not RLS-protected
                 cursor.execute(
                     """SELECT id, email, name, role, created_at
                        FROM users WHERE org_id = %s
@@ -1048,6 +1061,7 @@ def get_org_preferences(user_id):
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                set_rls_context(cursor, conn, user_id, log_prefix="[OrgPreferences]")
                 cursor.execute(
                     """SELECT preference_key, preference_value
                        FROM user_preferences
@@ -1084,6 +1098,7 @@ def update_org_preferences(user_id):
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                set_rls_context(cursor, conn, user_id, log_prefix="[OrgPreferences]")
                 for key, value in data.items():
                     if key == "notification_emails":
                         continue

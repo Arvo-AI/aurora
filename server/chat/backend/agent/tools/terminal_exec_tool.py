@@ -5,14 +5,41 @@ Provides direct terminal pod access for operations not covered by specialized to
 
 import json
 import logging
+import os
 import re
 import shlex
-from typing import Optional
+from typing import Optional, Dict
 from utils.terminal.terminal_run import terminal_run
 from .cloud_exec_tool import cloud_exec
 from .iac_tool import run_iac_tool
 
 logger = logging.getLogger(__name__)
+
+
+# Keys that are safe to pass through to child processes.
+# Everything else (VAULT_TOKEN, DATABASE_URL, SECRET_KEY, etc.) is stripped.
+_SAFE_ENV_KEYS = {
+    "PATH", "HOME", "USER", "SHELL", "TERM", "LANG", "LC_ALL", "LC_CTYPE",
+    "TZ", "HOSTNAME", "PWD", "LOGNAME",
+    "ENABLE_POD_ISOLATION",
+    "TMPDIR", "TEMP", "TMP",
+    "SSL_CERT_FILE", "REQUESTS_CA_BUNDLE",
+}
+
+
+def _build_sanitized_env() -> Dict[str, str]:
+    """Build a minimal environment dict from the current process env.
+
+    Only passes through safe, non-secret variables so that commands
+    executed via terminal_exec cannot inspect server secrets like
+    VAULT_TOKEN, DATABASE_URL, or cloud credentials.
+    """
+    sanitized = {}
+    for key in _SAFE_ENV_KEYS:
+        value = os.environ.get(key)
+        if value is not None:
+            sanitized[key] = value
+    return sanitized
 
 
 def _has_shell_metacharacters(command: str) -> bool:
@@ -354,6 +381,7 @@ def terminal_exec(
                 "error": f"Command blocked for safety: contains dangerous pattern"
             })
 
+
     if _contains_forbidden_elevation(command):
         logger.warning(f"Blocked privilege escalation attempt for user {user_id}: {command}")
         return json.dumps({
@@ -364,13 +392,16 @@ def terminal_exec(
     try:
         logger.info(f"Executing terminal command for user {user_id}: {command[:100]}")
         
+        sanitized_env = _build_sanitized_env()
+        
         result = terminal_run(
             command,
             shell=True,
             capture_output=True,
             text=True,
             timeout=timeout or 60,  # 60s default timeout
-            cwd=working_dir  # None uses current directory (works for both local & K8s)
+            cwd=working_dir,  # None uses current directory (works for both local & K8s)
+            env=sanitized_env
         )
         
         success = result.returncode == 0

@@ -38,7 +38,6 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { useUserId } from "@/hooks/use-user-id";
 import { isOvhEnabled } from "@/lib/feature-flags";
-import { getEnv } from '@/lib/env';
 import ConnectorAuthGuard from "@/components/connectors/ConnectorAuthGuard";
 
 type VMSource = "auto" | "manual";
@@ -80,10 +79,6 @@ type ManualVMDraft = {
   sshKeyId: string;
   sshUsername: string;
 };
-
-// Manual VM APIs go through Next.js API routes to avoid CORS issues
-// OVH/Scaleway calls still use direct backend URL (CORS allowed for these endpoints)
-const backendUrl = getEnv('NEXT_PUBLIC_BACKEND_URL');
 
 export default function VMConfig() {
   const { toast } = useToast();
@@ -193,16 +188,13 @@ export default function VMConfig() {
     }
   };
 
-  const fetchAutoVms = async (effectiveUserId: string) => {
-    if (!backendUrl) return [];
+  const fetchAutoVms = async () => {
     const all: VM[] = [];
     
     // OVH (only if feature flag is enabled)
     if (isOvhEnabled()) {
       try {
-        const ovhResponse = await fetch(`${backendUrl}/ovh_api/ovh/instances`, {
-          headers: { "X-User-ID": effectiveUserId },
-          credentials: "include",
+        const ovhResponse = await fetch(`/api/proxy/ovh/instances`, {
         });
         if (ovhResponse.ok) {
           const ovhData = await ovhResponse.json();
@@ -227,10 +219,8 @@ export default function VMConfig() {
     // Scaleway
     try {
       const scwResponse = await fetch(
-        `${backendUrl}/scaleway_api/scaleway/instances`,
+        `/api/proxy/scaleway/instances`,
         {
-          headers: { "X-User-ID": effectiveUserId },
-          credentials: "include",
         },
       );
       if (scwResponse.ok) {
@@ -302,9 +292,8 @@ export default function VMConfig() {
       setIsLoading(true);
     }
     try {
-      const effectiveUserId = await getEffectiveUserId();
       const [autoRes, manualRes, keysRes] = await Promise.allSettled([
-        fetchAutoVms(effectiveUserId),
+        fetchAutoVms(),
         fetchManualVms(),
         refreshKeys(),
       ]);
@@ -432,25 +421,23 @@ export default function VMConfig() {
         description: `Validating credentials for ${vm.name}...`,
       });
 
-      const effectiveUserId = await getEffectiveUserId();
+      await getEffectiveUserId();
       const { platform, actualVmId } = getPlatformAndId(vmId);
 
       const endpoint =
         platform === "ovh"
-          ? `${backendUrl}/ovh_api/ovh/instances/${actualVmId}/ssh-keys`
-          : `${backendUrl}/scaleway_api/scaleway/instances/${actualVmId}/ssh-keys`;
+          ? `/api/proxy/ovh/instances/${actualVmId}/ssh-keys`
+          : `/api/proxy/scaleway/instances/${actualVmId}/ssh-keys`;
 
       const response = await fetch(endpoint, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "X-User-ID": effectiveUserId,
         },
         body: JSON.stringify({
           sshKeyId: Number(sshKeyId),
           ...(sshUsernames[vmId] && { username: sshUsernames[vmId] }),
         }),
-        credentials: "include",
       });
 
       if (!response.ok) {
@@ -504,20 +491,16 @@ export default function VMConfig() {
     setSavingState(vmId, true);
 
     try {
-      const effectiveUserId = await getEffectiveUserId();
+      await getEffectiveUserId();
       const { platform, actualVmId } = getPlatformAndId(vmId);
 
       const endpoint =
         platform === "ovh"
-          ? `${backendUrl}/ovh_api/ovh/instances/${actualVmId}/ssh-keys`
-          : `${backendUrl}/scaleway_api/scaleway/instances/${actualVmId}/ssh-keys`;
+          ? `/api/proxy/ovh/instances/${actualVmId}/ssh-keys`
+          : `/api/proxy/scaleway/instances/${actualVmId}/ssh-keys`;
 
       const response = await fetch(endpoint, {
         method: "DELETE",
-        headers: {
-          "X-User-ID": effectiveUserId,
-        },
-        credentials: "include",
       });
 
       if (!response.ok) {

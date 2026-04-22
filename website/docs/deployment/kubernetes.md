@@ -336,6 +336,29 @@ Regardless of which controller you use, ensure these are configured:
 
 When `className` is `nginx`, these are auto-applied as annotations by the Helm chart. For other controllers, configure equivalent settings via `ingress.annotations` or your controller's configuration.
 
+### MCP Ingress {#mcp-ingress}
+
+The MCP server (`aurora-mcp`) runs on port 8811 inside the cluster.
+By default, it is reachable through the API ingress host at `/mcp` (e.g., `https://api.<domain>/mcp`).
+For local-only access, developers can use `kubectl port-forward`:
+
+```bash
+kubectl port-forward svc/aurora-oss-mcp 8811:8811 -n aurora-oss
+# MCP endpoint: http://localhost:8811/mcp
+```
+
+To expose MCP on a dedicated hostname, set `ingress.hosts.mcp`:
+
+```yaml
+ingress:
+  hosts:
+    mcp: "mcp.aurora-oss.<IP>.nip.io"  # or mcp.yourdomain.com
+```
+
+:::warning
+Enabling a dedicated MCP ingress exposes full platform access to any client with a valid token. The default `/mcp` path on the API host is already accessible. Always pair with an auth proxy (e.g. oauth2-proxy sidecar or nginx `auth_request`). See the [MCP security guide](../integrations/mcp#security-considerations).
+:::
+
 ## EKS: Fixing nip.io URLs
 
 AWS load balancers return a hostname instead of an IP. The deploy script resolves this automatically, but if your URLs aren't working, see the [EKS setup guide](./eks-setup) or resolve manually:
@@ -374,6 +397,7 @@ For testing, [nip.io](https://nip.io) works without any DNS setup. For productio
 aurora.yourdomain.com      CNAME  <ingress-hostname-or-IP>
 api.aurora.yourdomain.com  CNAME  <ingress-hostname-or-IP>
 ws.aurora.yourdomain.com   CNAME  <ingress-hostname-or-IP>
+mcp.aurora.yourdomain.com  CNAME  <ingress-hostname-or-IP>   # optional, see MCP Ingress below
 ```
 
 ### TLS with cert-manager (Let's Encrypt)

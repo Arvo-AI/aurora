@@ -1,14 +1,10 @@
 import { NextRequest } from 'next/server';
-import { forwardAuthenticatedRequest } from '@/lib/backend-proxy';
+import { forwardRequest } from '@/lib/backend-proxy';
 
-export async function GET() {
-  return forwardAuthenticatedRequest('/incidentio/rca-settings', 'incident-io/rca-settings');
+export async function GET(request: NextRequest) {
+  return forwardRequest(request, 'GET', '/incidentio/rca-settings', 'incident-io/rca-settings');
 }
 
 export async function PUT(request: NextRequest) {
-  const body = await request.json();
-  return forwardAuthenticatedRequest('/incidentio/rca-settings', 'incident-io/rca-settings', {
-    method: 'PUT',
-    body,
-  });
+  return forwardRequest(request, 'PUT', '/incidentio/rca-settings', 'incident-io/rca-settings');
 }

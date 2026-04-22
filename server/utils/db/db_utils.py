@@ -49,7 +49,7 @@ def ensure_database_exists():
         logging.debug(f"Connecting to postgres database as {init_params['user']}")
         conn = psycopg2.connect(**init_params)
         conn.autocommit = True
-        cursor = conn.cursor()
+        cursor = conn.cursor()  # No RLS needed — infrastructure DDL/bootstrap
         logging.info("Connected to postgres database.")
 
         # Create the target database if it doesn't exist
@@ -116,7 +116,7 @@ def initialize_tables():
     logging.debug("Initializing Kubernetes database tables using admin credentials.")
     try:
         with db_pool.get_admin_connection() as conn:
-            cursor = conn.cursor()
+            cursor = conn.cursor()  # No RLS needed — schema migration/DDL
 
             # Try to acquire advisory lock (non-blocking)
             cursor.execute("SELECT pg_try_advisory_lock(1234567890);")
@@ -377,50 +377,6 @@ def initialize_tables():
                         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         UNIQUE(user_id, org_id, preference_key)
                     );
-                """,
-                "users": """
-                    CREATE TABLE IF NOT EXISTS users (
-                        id VARCHAR(255) PRIMARY KEY DEFAULT gen_random_uuid()::TEXT,
-                        email VARCHAR(255) NOT NULL UNIQUE,
-                        password_hash VARCHAR(255) NOT NULL,
-                        name VARCHAR(255),
-                        org_id VARCHAR(255),
-                        must_change_password BOOLEAN DEFAULT FALSE,
-                        created_at TIMESTAMP DEFAULT NOW(),
-                        updated_at TIMESTAMP DEFAULT NOW()
-                    );
-                    
-                    CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
-                """,
-                "organizations": """
-                    CREATE TABLE IF NOT EXISTS organizations (
-                        id VARCHAR(255) PRIMARY KEY DEFAULT gen_random_uuid()::TEXT,
-                        name VARCHAR(255) NOT NULL,
-                        slug VARCHAR(255) NOT NULL UNIQUE,
-                        created_by VARCHAR(255) REFERENCES users(id),
-                        created_at TIMESTAMP DEFAULT NOW(),
-                        updated_at TIMESTAMP DEFAULT NOW()
-                    );
-
-                    CREATE INDEX IF NOT EXISTS idx_organizations_slug ON organizations(slug);
-                """,
-                "org_command_policies": """
-                    CREATE TABLE IF NOT EXISTS org_command_policies (
-                        id SERIAL PRIMARY KEY,
-                        org_id VARCHAR(255) NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
-                        mode VARCHAR(20) NOT NULL CHECK (mode IN ('allow', 'deny')),
-                        pattern TEXT NOT NULL,
-                        description TEXT,
-                        priority INT DEFAULT 0,
-                        enabled BOOLEAN DEFAULT true,
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        updated_by VARCHAR(255),
-                        source VARCHAR(20) DEFAULT 'custom' NOT NULL,
-                        UNIQUE(org_id, mode, pattern, source)
-                    );
-                    CREATE INDEX IF NOT EXISTS idx_ocp_org
-                        ON org_command_policies(org_id);
                 """,
                 "workspaces": """
                     CREATE TABLE IF NOT EXISTS workspaces (
@@ -1046,6 +1002,50 @@ def initialize_tables():
 
                     CREATE INDEX IF NOT EXISTS idx_kubectl_connections_token ON active_kubectl_connections(token);
                     CREATE UNIQUE INDEX IF NOT EXISTS idx_kubectl_connections_cluster_id ON active_kubectl_connections(cluster_id);
+                """,
+                "users": """
+                    CREATE TABLE IF NOT EXISTS users (
+                        id VARCHAR(255) PRIMARY KEY DEFAULT gen_random_uuid()::TEXT,
+                        email VARCHAR(255) NOT NULL UNIQUE,
+                        password_hash VARCHAR(255) NOT NULL,
+                        name VARCHAR(255),
+                        org_id VARCHAR(255),
+                        must_change_password BOOLEAN DEFAULT FALSE,
+                        created_at TIMESTAMP DEFAULT NOW(),
+                        updated_at TIMESTAMP DEFAULT NOW()
+                    );
+
+                    CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
+                """,
+                "organizations": """
+                    CREATE TABLE IF NOT EXISTS organizations (
+                        id VARCHAR(255) PRIMARY KEY DEFAULT gen_random_uuid()::TEXT,
+                        name VARCHAR(255) NOT NULL,
+                        slug VARCHAR(255) NOT NULL UNIQUE,
+                        created_by VARCHAR(255) REFERENCES users(id),
+                        created_at TIMESTAMP DEFAULT NOW(),
+                        updated_at TIMESTAMP DEFAULT NOW()
+                    );
+
+                    CREATE INDEX IF NOT EXISTS idx_organizations_slug ON organizations(slug);
+                """,
+                "org_command_policies": """
+                    CREATE TABLE IF NOT EXISTS org_command_policies (
+                        id SERIAL PRIMARY KEY,
+                        org_id VARCHAR(255) NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+                        mode VARCHAR(20) NOT NULL CHECK (mode IN ('allow', 'deny')),
+                        pattern TEXT NOT NULL,
+                        description TEXT,
+                        priority INT DEFAULT 0,
+                        enabled BOOLEAN DEFAULT true,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_by VARCHAR(255),
+                        source VARCHAR(20) DEFAULT 'custom' NOT NULL,
+                        UNIQUE(org_id, mode, pattern, source)
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_ocp_org
+                        ON org_command_policies(org_id);
                 """,
                 "org_invitations": """
                     CREATE TABLE IF NOT EXISTS org_invitations (
@@ -2010,15 +2010,12 @@ def initialize_tables():
                 cursor.execute(f"ALTER TABLE {table_name} FORCE ROW LEVEL SECURITY;")
                 logging.info(f"RLS forced on table '{table_name}'.")
 
-                # RLS condition: enforce org scoping when session var is set,
-                # allow through when unset (prevents crashes from code paths that
-                # don't call SET myapp.current_org_id before writing)
+                # RLS condition: deny access when org_id context is not set (default-deny).
+                # All code paths must SET myapp.current_org_id before querying.
                 _rls_using = f"""
                     org_id IS NOT NULL
-                    AND (
-                        COALESCE(current_setting('myapp.current_org_id', true), '') = ''
-                        OR org_id = current_setting('myapp.current_org_id', true)::text
-                    )
+                    AND COALESCE(current_setting('myapp.current_org_id', true), '') != ''
+                    AND org_id = current_setting('myapp.current_org_id', true)::text
                 """
 
                 # SELECT policy
@@ -2069,6 +2066,31 @@ def initialize_tables():
                 logging.info(f"RLS policies for table '{table_name}': {policies}")
 
             # Commit table creation and RLS before running migrations
+            conn.commit()
+
+            # The MCP server must resolve a bearer token to (user_id, org_id) before
+            # it knows which org the request belongs to. This policy permits SELECT
+            # when the session explicitly opts in via myapp.mcp_token_resolve='true'.
+            cursor.execute("""
+                DO $$ BEGIN
+                    DROP POLICY IF EXISTS select_by_token_resolve ON mcp_tokens;
+                    CREATE POLICY select_by_token_resolve ON mcp_tokens
+                    FOR SELECT USING (
+                        current_setting('myapp.mcp_token_resolve', true) = 'true'
+                    );
+                END $$;
+            """)
+            cursor.execute("""
+                DO $$ BEGIN
+                    DROP POLICY IF EXISTS update_by_token_resolve ON mcp_tokens;
+                    CREATE POLICY update_by_token_resolve ON mcp_tokens
+                    FOR UPDATE USING (
+                        current_setting('myapp.mcp_token_resolve', true) = 'true'
+                    );
+                END $$;
+            """)
+            logging.info("Added MCP token resolve RLS policies on mcp_tokens.")
+
             conn.commit()
 
             # Migration: Add role column to users table for RBAC
@@ -2430,7 +2452,7 @@ def initialize_tables():
 
             # Release advisory lock
             try:
-                with conn.cursor() as unlock_cursor:
+                with conn.cursor() as unlock_cursor:  # No RLS needed — advisory lock release
                     unlock_cursor.execute("SELECT pg_advisory_unlock(1234567890);")
             except Exception as unlock_error:
                 logging.warning(f"Error releasing advisory lock: {unlock_error}")
@@ -2447,7 +2469,7 @@ def store_data_in_db(data):
     """
     try:
         with db_pool.get_admin_connection() as conn:
-            cursor = conn.cursor()
+            cursor = conn.cursor()  # No RLS needed — cloud_billing_usage not RLS-protected
 
             insert_query = """
                 INSERT INTO cloud_billing_usage (

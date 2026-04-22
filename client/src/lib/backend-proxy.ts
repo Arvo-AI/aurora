@@ -1,39 +1,105 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getAuthenticatedUser } from '@/lib/auth-helper';
+import { env } from '@/lib/server-env';
 
-const API_BASE_URL = process.env.BACKEND_URL;
-const DEFAULT_TIMEOUT_MS = 15_000;
+const METHODS_WITHOUT_BODY = new Set(['GET', 'HEAD', 'OPTIONS']);
 
-export async function forwardAuthenticatedRequest(
+function buildUrl(backendPath: string, qs?: string): string {
+  return qs ? `${env.BACKEND_URL}${backendPath}?${qs}` : `${env.BACKEND_URL}${backendPath}`;
+}
+
+// Extract and forward the request body; multipart is streamed, everything else buffered as text.
+async function prepareBody(
+  request: NextRequest,
+  headers: Record<string, string>,
+): Promise<{ body: BodyInit | undefined; useDuplex: boolean }> {
+  const ct = request.headers.get('content-type') || '';
+
+  if (ct.includes('multipart/form-data')) {
+    headers['Content-Type'] = ct;
+    return { body: request.body as unknown as BodyInit, useDuplex: true };
+  }
+
+  if (ct.includes('application/json')) {
+    headers['Content-Type'] = 'application/json';
+    return { body: await request.text(), useDuplex: false };
+  }
+
+  if (ct.includes('application/x-www-form-urlencoded')) {
+    headers['Content-Type'] = ct;
+    return { body: await request.text(), useDuplex: false };
+  }
+
+  try {
+    const text = await request.text();
+    if (text.length > 0) {
+      if (ct) headers['Content-Type'] = ct;
+      return { body: text, useDuplex: false };
+    }
+  } catch {
+    // no body
+  }
+
+  return { body: undefined, useDuplex: false };
+}
+
+// Turn a successful backend response into a NextResponse.
+function formatSuccessResponse(response: Response, errorLabel: string): Promise<NextResponse> | NextResponse {
+  // 204/304 have no body — reading it would throw
+  if (response.status === 204 || response.status === 304) {
+    return new NextResponse(null, { status: response.status });
+  }
+
+  const ct = response.headers.get('content-type') || '';
+
+  if (ct.includes('application/json')) {
+    return response.json().then((data) => NextResponse.json(data, { status: response.status }));
+  }
+
+  // Redact HTML (e.g. werkzeug debug pages) to prevent info leakage
+  if (ct.includes('text/html')) {
+    return NextResponse.json(
+      { error: `Unexpected HTML response from ${errorLabel}` },
+      { status: 502 },
+    );
+  }
+
+  // Fall back to plain text
+  return response.text().then((text) =>
+    new NextResponse(text, {
+      status: response.status,
+      headers: { 'Content-Type': ct || 'text/plain' },
+    }),
+  );
+}
+
+// Proxy a Next.js API-route request to the Python backend with auth, timeout, and error normalisation.
+export async function forwardRequest(
+  request: NextRequest,
+  method: string,
   backendPath: string,
   errorLabel: string,
-  options: {
-    method?: string;
-    request?: NextRequest | Request;
-    body?: unknown;
-    timeoutMs?: number;
-  } = {},
+  options: { timeoutMs?: number; passBody?: boolean } = {},
 ): Promise<NextResponse> {
-  const { method = 'GET', request, body, timeoutMs = DEFAULT_TIMEOUT_MS } = options;
+  const { timeoutMs = 30_000, passBody = !METHODS_WITHOUT_BODY.has(method.toUpperCase()) } = options;
 
   try {
     const authResult = await getAuthenticatedUser();
     if (authResult instanceof NextResponse) return authResult;
     const { headers: authHeaders } = authResult;
 
-    let qs = '';
-    if (request && method === 'GET') {
-      const { searchParams } = new URL(request.url);
-      qs = searchParams.toString();
+    const { searchParams } = new URL(request.url);
+    const url = buildUrl(backendPath, searchParams.toString());
+
+    const headers: Record<string, string> = { ...authHeaders };
+    if (env.INTERNAL_API_SECRET) {
+      headers['X-Internal-Secret'] = env.INTERNAL_API_SECRET;
     }
 
-    const url = qs
-      ? `${API_BASE_URL}${backendPath}?${qs}`
-      : `${API_BASE_URL}${backendPath}`;
-
-    const fetchHeaders: Record<string, string> = { ...authHeaders };
-    if (body !== undefined) {
-      fetchHeaders['Content-Type'] = 'application/json';
+    let body: BodyInit | undefined;
+    let useDuplex = false;
+    if (passBody) {
+      ({ body, useDuplex } = await prepareBody(request, headers));
     }
 
     const controller = new AbortController();
@@ -43,14 +109,20 @@ export async function forwardAuthenticatedRequest(
     try {
       response = await fetch(url, {
         method,
-        headers: fetchHeaders,
+        headers,
+        body,
         credentials: 'include',
         cache: 'no-store',
         signal: controller.signal,
-        ...(body !== undefined && { body: JSON.stringify(body) }),
-      });
-    } finally {
+        ...(useDuplex ? { duplex: 'half' as const } : {}),
+      } as RequestInit);
       clearTimeout(timeoutId);
+    } catch (fetchErr: unknown) {
+      clearTimeout(timeoutId);
+      if (fetchErr instanceof Error && fetchErr.name === 'AbortError') {
+        return NextResponse.json({ error: `Request timeout for ${errorLabel}` }, { status: 504 });
+      }
+      throw fetchErr;
     }
 
     if (!response.ok) {
@@ -61,20 +133,11 @@ export async function forwardAuthenticatedRequest(
       );
     }
 
-    const data = await response.json();
-    return NextResponse.json(data);
+    return await formatSuccessResponse(response, errorLabel);
   } catch (error) {
-    if (error instanceof Error && error.name === 'AbortError') {
-      return NextResponse.json(
-        { error: `Request timeout for ${errorLabel}` },
-        { status: 504 },
-      );
-    }
-    console.error(`[api/${errorLabel}] Error:`, error);
-    return NextResponse.json(
-      { error: `Failed to load ${errorLabel}` },
-      { status: 500 },
-    );
+    const safeError = error instanceof Error ? { message: error.message, name: error.name } : {};
+    console.error(`[api/${errorLabel}] Error:`, safeError);
+    return NextResponse.json({ error: `Failed to load ${errorLabel}` }, { status: 500 });
   }
 }
 
@@ -87,8 +150,5 @@ export async function forwardAuthenticatedGet(
   backendPath: string,
   errorLabel: string,
 ): Promise<NextResponse> {
-  return forwardAuthenticatedRequest(backendPath, errorLabel, {
-    method: 'GET',
-    request,
-  });
+  return forwardRequest(request, 'GET', backendPath, errorLabel);
 }

@@ -10,6 +10,7 @@ import json
 from typing import TYPE_CHECKING, Optional, Dict, Any, Set, Tuple
 
 from utils.db.db_utils import connect_to_db_as_admin
+from utils.auth.stateless_auth import set_rls_context
 from utils.secrets.secret_cache import (
     get_cached_secret,
     update_secret_cache,
@@ -159,6 +160,7 @@ class SecretRefManager:
         try:
             conn = connect_to_db_as_admin()
             cursor = conn.cursor()
+            set_rls_context(cursor, conn, user_id, log_prefix="[SecretRef:updateToken]")
             cursor.execute(
                 f"UPDATE user_tokens SET secret_ref = %s, is_active = TRUE "
                 f"WHERE user_id = %s AND provider = %s {clause}",
@@ -193,6 +195,7 @@ class SecretRefManager:
         try:
             conn = connect_to_db_as_admin()
             cursor = conn.cursor()
+            set_rls_context(cursor, conn, user_id, log_prefix="[SecretRef:hasCreds]")
             cursor.execute(
                 """SELECT 1 FROM user_tokens
                    WHERE (user_id = %s OR org_id = %s)
@@ -225,6 +228,7 @@ class SecretRefManager:
         try:
             conn = connect_to_db_as_admin()
             cursor = conn.cursor()
+            set_rls_context(cursor, conn, user_id, log_prefix="[SecretRef:getToken]")
             cursor.execute(
                 """SELECT secret_ref, client_id, client_secret
                    FROM user_tokens
@@ -296,6 +300,7 @@ class SecretRefManager:
         try:
             conn = connect_to_db_as_admin()
             cursor = conn.cursor()
+            set_rls_context(cursor, conn, user_id, log_prefix="[SecretRef:migrate]")
 
             cursor.execute(
                 f"SELECT token_data FROM user_tokens "
@@ -349,6 +354,7 @@ class SecretRefManager:
         try:
             conn = connect_to_db_as_admin()
             cursor = conn.cursor()
+            set_rls_context(cursor, conn, user_id, log_prefix="[SecretRef:clearRef]")
             cursor.execute(
                 f"UPDATE user_tokens SET is_active = FALSE, secret_ref = '' "
                 f"WHERE user_id = %s AND provider = %s {clause}",
@@ -384,7 +390,8 @@ class SecretRefManager:
             conn = connect_to_db_as_admin()
             cursor = conn.cursor()
 
-            if org_id:
+            resolved_org = set_rls_context(cursor, conn, user_id, log_prefix="[SecretRef:deleteSecret]")
+            if resolved_org:
                 scope_where = "(user_id = %s OR org_id = %s)"
                 scope_params: Tuple = (user_id, org_id)
             else:

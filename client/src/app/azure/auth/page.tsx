@@ -1,25 +1,18 @@
 "use client";
 
-import { useState, useEffect, ReactNode, useRef } from "react";
+import { useState, useEffect } from "react";
 import Image from "next/image";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Loader2, Download, Check } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { AuthCard } from "@/components/cloud-provider";
-import { CardDescription } from "@/components/ui/card";
 import { getEnv } from '@/lib/env';
 import ConnectorAuthGuard from "@/components/connectors/ConnectorAuthGuard";
 import { copyToClipboard } from '@/lib/utils';
 
 const backendUrl = getEnv('NEXT_PUBLIC_BACKEND_URL');
 
-interface Cluster {
-  name: string;
-  resourceGroup: string;
-  subscriptionId: string;
-}
 
 export default function AzureAuthPage() {
   const [isLoading, setIsLoading] = useState(false);
@@ -45,7 +38,6 @@ export default function AzureAuthPage() {
   const [isReadOnlySectionExpanded, setIsReadOnlySectionExpanded] = useState(false);
   const [jsonInput, setJsonInput] = useState("");
   const [showCredentials, setShowCredentials] = useState(false);
-  const [isSetupComplete, setIsSetupComplete] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
   const [backendClusters, setBackendClusters] = useState<Array<{
     name: string;
@@ -263,13 +255,12 @@ export default function AzureAuthPage() {
       }
 
       // Make request to backend login
-      const response = await fetch(`${backendUrl}/azure/login`, {
+      const response = await fetch(`/api/proxy/azure/login`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
         body: JSON.stringify(requestBody),
-        credentials: 'include'
       });
 
       if (!response.ok) {
@@ -279,12 +270,8 @@ export default function AzureAuthPage() {
       }
 
       // After successful login, fetch data
-      const fetchResponse = await fetch(`${backendUrl}/azure/fetch_data?userId=${encodeURIComponent(userId)}`, {
+      const fetchResponse = await fetch(`/api/proxy/azure/fetch_data?userId=${encodeURIComponent(userId)}`, {
         method: "GET",
-        headers: {
-          'X-User-ID': userId
-        },
-        credentials: 'include'
       });
       
       if (!fetchResponse.ok) {
@@ -399,13 +386,12 @@ export default function AzureAuthPage() {
       }
 
       // Make request to backend login
-      const response = await fetch(`${backendUrl}/azure/login`, {
+      const response = await fetch(`/api/proxy/azure/login`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
         body: JSON.stringify(requestBody),
-        credentials: 'include'
       });
 
       if (!response.ok) {
@@ -415,12 +401,8 @@ export default function AzureAuthPage() {
       }
 
       // After successful login, fetch data
-      const fetchResponse = await fetch(`${backendUrl}/azure/fetch_data?userId=${encodeURIComponent(userId)}`, {
+      const fetchResponse = await fetch(`/api/proxy/azure/fetch_data?userId=${encodeURIComponent(userId)}`, {
         method: "GET",
-        headers: {
-          'X-User-ID': userId
-        },
-        credentials: 'include'
       });
 
       if (!fetchResponse.ok) {
@@ -475,9 +457,8 @@ export default function AzureAuthPage() {
 
   const downloadSetupScript = async () => {
     try {
-      const response = await fetch(`${backendUrl}/azure/setup-script`, {
+      const response = await fetch(`/api/proxy/azure/setup-script`, {
         method: 'GET',
-        credentials: 'include'
       });
 
       if (!response.ok) {
@@ -503,9 +484,8 @@ export default function AzureAuthPage() {
 
   const downloadPowerShellScript = async () => {
     try {
-      const response = await fetch(`${backendUrl}/azure/setup-script-ps1`, {
+      const response = await fetch(`/api/proxy/azure/setup-script-ps1`, {
         method: 'GET',
-        credentials: 'include'
       });
 
       if (!response.ok) {
@@ -555,8 +535,7 @@ export default function AzureAuthPage() {
     setIsLoadingCredentials(true);
     setStoredCredentialsError(null);
     try {
-      const response = await fetch(`${backendUrl}/api/user/tokens`, {
-        credentials: 'include'
+      const response = await fetch(`/api/proxy/user/tokens`, {
       });
 
       if (!response.ok) {
@@ -875,7 +854,7 @@ export default function AzureAuthPage() {
                 <div className="flex flex-col sm:flex-row gap-3">
                   <Button
                      onClick={() => {
-                       // Use GitHub Gist for localhost, deployed backend for production
+                       // Use GitHub Gist for localhost, deployed frontend proxy for production
                        const scriptUrl = backendUrl?.includes('localhost') 
                          ? 'https://gist.githubusercontent.com/isiddharthsingh/45f810e9c82af2855b5b394b84567f21/raw/34a1a32317c14ee2bf4667a82adde4b7b166b226/gistfile1.sh'
                          : `${backendUrl}/azure/setup-script`;
@@ -897,7 +876,7 @@ export default function AzureAuthPage() {
 
                   <Button
                      onClick={() => {
-                       // Use GitHub Gist for localhost, deployed backend for production
+                       // Use GitHub Gist for localhost, deployed frontend proxy for production
                        const scriptUrl = backendUrl?.includes('localhost') 
                          ? 'https://gist.githubusercontent.com/isiddharthsingh/45f810e9c82af2855b5b394b84567f21/raw/34a1a32317c14ee2bf4667a82adde4b7b166b226/gistfile1.sh'
                          : `${backendUrl}/azure/setup-script`;
@@ -1267,12 +1246,8 @@ kubectl create clusterrolebinding aurora-sp-admin-binding --clusterrole=cluster-
                                }
 
                                // Refetch data to ensure permissions were applied
-                               const fetchResponse = await fetch(`${backendUrl}/azure/fetch_data?userId=${encodeURIComponent(userId)}`, {
+                               const fetchResponse = await fetch(`/api/proxy/azure/fetch_data?userId=${encodeURIComponent(userId)}`, {
                                  method: "GET",
-                                 headers: {
-                                   'X-User-ID': userId
-                                 },
-                                 credentials: 'include'
                                });
 
                               if (!fetchResponse.ok) {

@@ -9,10 +9,7 @@ import { fetchProjects, saveProjects, ProjectCache } from '@/components/cloud-pr
 import { Project } from '@/components/cloud-provider/types';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
-import { getEnv } from '@/lib/env';
 import { useConnectedAccounts } from '@/hooks/useConnectedAccounts';
-
-const BACKEND_URL = getEnv('NEXT_PUBLIC_BACKEND_URL');
 
 interface GcpProviderIntegrationProps {
   onDisconnect?: () => void;

@@ -116,6 +116,7 @@ Once the services are running:
 - **Frontend**: http://localhost:3000
 - **API**: http://localhost:5080
 - **WebSocket**: ws://localhost:5006
+- **MCP**: http://localhost:8811/mcp (see [MCP integration guide](../integrations/mcp))
 - **SeaweedFS UI**: http://localhost:8888 (file browser)
 
 ### Remote / VM Access
@@ -134,7 +135,7 @@ Then recreate the frontend container to pick up the new values (no rebuild neede
 docker compose -f docker-compose.prod-local.yml up -d frontend
 ```
 
-Make sure the relevant ports (3000, 5080, 5006) are open in your firewall or cloud security group.
+Make sure the relevant ports (3000, 5080, 5006, and 8811 if using MCP) are open in your firewall or cloud security group.
 
 ## Service Architecture
 
@@ -146,15 +147,17 @@ All services run in Docker containers:
     │  :3000  │         │ :5080   │         │  :5006  │
     └─────────┘         └─────────┘         └─────────┘
                               │
-                              ▼
-                     ┌─────────────────┐
-                     │  Celery Worker  │
-                     │ (background)    │
-                     └─────────────────┘
-                              │
-    ┌─────────────────────────┼─────────────────────────┐
-    │           │             │             │           │
-    ▼           ▼             ▼             ▼           ▼
+                        ┌─────┴─────┐
+                        │           │
+                        ▼           ▼
+               ┌─────────────┐ ┌─────────┐
+               │Celery Worker│ │  MCP    │
+               │ (background)│ │  :8811  │
+               └─────────────┘ └─────────┘
+                        │
+    ┌───────────────────┼─────────────────────────┐
+    │           │       │             │           │
+    ▼           ▼       ▼             ▼           ▼
 ┌───────┐ ┌─────────┐ ┌──────────┐ ┌───────┐ ┌─────────┐
 │Postgres│ │  Redis  │ │ Weaviate │ │ Vault │ │SeaweedFS│
 │ :5432  │ │  :6379  │ │  :8080   │ │ :8200 │ │  :8333  │

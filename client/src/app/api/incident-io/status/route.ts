@@ -1,5 +1,6 @@
-import { forwardAuthenticatedRequest } from '@/lib/backend-proxy';
+import { NextRequest } from 'next/server';
+import { forwardRequest } from '@/lib/backend-proxy';
 
-export async function GET() {
-  return forwardAuthenticatedRequest('/incidentio/status', 'incident-io/status');
+export async function GET(request: NextRequest) {
+  return forwardRequest(request, 'GET', '/incidentio/status', 'incident-io/status');
 }

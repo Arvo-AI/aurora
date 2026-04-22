@@ -19,6 +19,7 @@ import json
 from flask import request, jsonify
 from routes.tailscale import tailscale_bp
 from utils.auth.rbac_decorators import require_permission
+from utils.auth.stateless_auth import set_rls_context
 from utils.auth.token_management import store_tokens_in_db, get_token_data
 from utils.secrets.secret_ref_utils import has_user_credentials, delete_user_secret
 from utils.db.connection_utils import set_connection_status
@@ -166,6 +167,7 @@ def tailscale_tailnets_get(user_id):
         root_tailnet_id = None
         try:
             with conn.cursor() as cur:
+                set_rls_context(cur, conn, user_id, log_prefix="[tailscale:tailnets_get]")
                 cur.execute("""
                     SELECT preference_value FROM user_preferences
                     WHERE user_id = %s AND preference_key = %s
@@ -225,6 +227,7 @@ def tailscale_tailnets_post(user_id):
         conn = connect_to_db_as_admin()
         try:
             with conn.cursor() as cur:
+                set_rls_context(cur, conn, user_id, log_prefix="[tailscale:tailnets_post]")
                 from utils.auth.stateless_auth import get_org_id_from_request
                 try:
                     _org_id = get_org_id_from_request()
@@ -296,6 +299,7 @@ def tailscale_disconnect(user_id):
         conn = connect_to_db_as_admin()
         try:
             with conn.cursor() as cur:
+                set_rls_context(cur, conn, user_id, log_prefix="[tailscale:disconnect]")
                 cur.execute("""
                     DELETE FROM user_preferences
                     WHERE user_id = %s AND preference_key IN (%s, %s)
@@ -386,6 +390,7 @@ def tailscale_root_tailnet_get(user_id):
 
         try:
             with conn.cursor() as cur:
+                set_rls_context(cur, conn, user_id, log_prefix="[tailscale:root_tailnet_get]")
                 cur.execute("""
                     SELECT preference_value FROM user_preferences
                     WHERE user_id = %s AND preference_key = %s
@@ -430,6 +435,7 @@ def tailscale_root_tailnet_post(user_id):
                 return jsonify({"error": "tailnetId is required"}), 400
 
             with conn.cursor() as cur:
+                set_rls_context(cur, conn, user_id, log_prefix="[tailscale:root_tailnet_post]")
                 from utils.auth.stateless_auth import get_org_id_from_request
                 try:
                     _org_id = get_org_id_from_request()

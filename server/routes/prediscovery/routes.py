@@ -9,7 +9,7 @@ import logging
 from flask import Blueprint, jsonify
 
 from utils.auth.rbac_decorators import require_permission
-from utils.auth.stateless_auth import get_org_id_from_request
+from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context
 from utils.db.connection_pool import db_pool
 
 logger = logging.getLogger(__name__)
@@ -45,9 +45,7 @@ def get_prediscovery_status(user_id):
         org_id = get_org_id_from_request()
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
-                cur.execute("SET myapp.current_user_id = %s", (user_id,))
-                cur.execute("SET myapp.current_org_id = %s", (org_id or '',))
-                conn.commit()
+                set_rls_context(cur, conn, user_id, log_prefix="[Prediscovery]")
 
                 cur.execute("""
                     SELECT id, status, created_at, updated_at

@@ -102,24 +102,8 @@ export const useWebSocket = (config: WebSocketConfig) => {
       reconnectAttempts: 0
     }));
 
-    // Send initialization message with user_id
-    const userId = user?.id || configRef.current.userId || undefined;
-    if (userId && wsRef.current) {
-      const initMessage: WebSocketMessage = {
-        type: 'init',
-        user_id: userId
-      };
-      wsRef.current.send(JSON.stringify(initMessage));
-    } else {
-      console.warn('Cannot send init message - user not loaded or websocket not ready:', {
-        hasUser: !!user?.id,
-        hasConfigUserId: !!configRef.current.userId,
-        hasWebSocket: !!wsRef.current,
-      });
-    }
-
     configRef.current.onConnect?.();
-  }, [user?.id]);
+  }, []);
 
   const handleMessage = useCallback((event: MessageEvent) => {
     if (!mountedRef.current) return;
@@ -164,6 +148,33 @@ export const useWebSocket = (config: WebSocketConfig) => {
     }
   }, []);
 
+  // Create a ref for connect function to avoid circular dependency
+  const connectRef = useRef<() => void>(() => {});
+
+  const scheduleReconnect = useCallback(() => {
+    const maxAttempts = configRef.current.maxReconnectAttempts || 3;
+    if (!shouldReconnectRef.current || state.reconnectAttempts >= maxAttempts) {
+      if (state.reconnectAttempts >= maxAttempts) {
+        setState(prev => ({
+          ...prev,
+          error: `Connection failed after ${maxAttempts} attempts`
+        }));
+      }
+      return;
+    }
+    setState(prev => ({
+      ...prev,
+      reconnectAttempts: prev.reconnectAttempts + 1
+    }));
+    const baseDelay = Math.min(1000 * Math.pow(2, state.reconnectAttempts), 30000);
+    const jitter = crypto.getRandomValues(new Uint32Array(1))[0] / (0xFFFFFFFF / 1000);
+    reconnectTimeoutRef.current = setTimeout(() => {
+      if (mountedRef.current && shouldReconnectRef.current) {
+        connectRef.current();
+      }
+    }, baseDelay + jitter);
+  }, [state.reconnectAttempts]);
+
   const handleClose = useCallback(() => {
     if (!mountedRef.current) return;
 
@@ -175,39 +186,8 @@ export const useWebSocket = (config: WebSocketConfig) => {
 
     configRef.current.onDisconnect?.();
 
-    const maxAttempts = configRef.current.maxReconnectAttempts || 10;
-
-    if (shouldReconnectRef.current && 
-        state.reconnectAttempts < maxAttempts) {
-      
-      setState(prev => ({
-        ...prev,
-        reconnectAttempts: prev.reconnectAttempts + 1
-      }));
-
-      // Exponential backoff with jitter
-      const baseDelay = Math.min(1000 * Math.pow(2, state.reconnectAttempts), 30000);
-      const jitter = Math.random() * 1000; // Add up to 1 second of jitter
-      const reconnectDelay = baseDelay + jitter;
-      
-      
-      reconnectTimeoutRef.current = setTimeout(() => {
-        if (mountedRef.current && shouldReconnectRef.current) {
-          // Call connect through a ref to avoid circular dependency
-          connectRef.current();
-        }
-      }, reconnectDelay);
-    } else if (state.reconnectAttempts >= maxAttempts) {
-      console.error(`WebSocket reconnection failed after ${maxAttempts} attempts`);
-      setState(prev => ({
-        ...prev,
-        error: `Connection failed after ${maxAttempts} attempts`
-      }));
-    }
-  }, [state.reconnectAttempts]);
-
-  // Create a ref for connect function to avoid circular dependency
-  const connectRef = useRef<() => void>(() => {});
+    scheduleReconnect();
+  }, [scheduleReconnect]);
 
   const connect = useCallback(async () => {
     if (!mountedRef.current) return;
@@ -230,7 +210,53 @@ export const useWebSocket = (config: WebSocketConfig) => {
     }));
 
     try {
-      const ws = new WebSocket(configRef.current.url);
+      let wsUrl = configRef.current.url;
+
+      // Fetch a fresh token per connection (tokens are single-use via jti enforcement)
+      let token: string | null = null;
+      try {
+        const tokenRes = await fetch('/api/ws-token');
+        if (tokenRes.ok) {
+          const data = await tokenRes.json();
+          token = data.token || null;
+        } else if (tokenRes.status === 401 || tokenRes.status === 403) {
+          console.error('WS token auth failed (session expired), stopping reconnect');
+          shouldReconnectRef.current = false;
+          setState(prev => ({
+            ...prev,
+            isConnecting: false,
+            error: 'Session expired — please log in again'
+          }));
+          return;
+        } else {
+          console.error(`WS token fetch failed (status ${tokenRes.status}), will retry on next reconnect`);
+          setState(prev => ({
+            ...prev,
+            isConnecting: false,
+            error: 'Unable to obtain WebSocket token, retrying...'
+          }));
+          scheduleReconnect();
+          return;
+        }
+      } catch (tokenErr) {
+        console.error('Network error fetching WS token, will retry on next reconnect:', tokenErr);
+        setState(prev => ({
+          ...prev,
+          isConnecting: false,
+          error: 'Network error obtaining WebSocket token, retrying...'
+        }));
+        scheduleReconnect();
+        return;
+      }
+
+      // Build URL with token, replacing any existing token param
+      if (token) {
+        const parsed = new URL(wsUrl, globalThis.location.origin);
+        parsed.searchParams.set('token', token);
+        wsUrl = parsed.toString();
+      }
+
+      const ws = new WebSocket(wsUrl);
       
       // Set binary type to handle different frame types
       ws.binaryType = 'arraybuffer';

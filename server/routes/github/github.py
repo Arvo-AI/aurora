@@ -209,12 +209,12 @@ def github_callback():
         access_token = token_data.get("access_token")
         
         if not access_token:
-            logging.error(f"No access token in GitHub response: {token_data}")
+            logging.error(f"No access token in GitHub response (keys: {list(token_data.keys())})")
             return flask.render_template("github_callback_error.html", 
                                         error="Invalid response from GitHub",
                                         frontend_url=FRONTEND_URL)
         
-        logging.info(f"Received access token: {access_token[:5]}...")
+        logging.info("Received GitHub access token")
         
         # Get user information to identify the user
         user_response = requests.get("https://api.github.com/user", 

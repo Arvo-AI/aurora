@@ -1,0 +1,66 @@
+language: en-US
+reviews:
+  profile: assertive
+  high_level_summary: true
+  request_changes_workflow: false
+  collapse_walkthrough: false
+  path_filters:
+    - "!**/dist/**"
+    - "!**/node_modules/**"
+    - "!**/*.lock"
+    - "!**/generated/**"
+
+  instructions: |
+    Flag any PR that violates these security principles:
+
+    1. Never mutate shared process state with per-user credentials. Credentials must be isolated per-invocation and passed explicitly — never written to the global environment or on-disk CLI config.
+
+    2. All client-to-backend requests must go through the Next.js API route proxy using forwardRequest (client/src/lib/backend-proxy.ts). Never call the Flask backend directly from browser code.
+
+    3. Never handle, store, or trust user identity (user_id, org_id) on the client side. Identity resolution is a server-side concern.
+
+    4. All inter-service calls (frontend server → backend, MCP → backend) must include the internal API secret header.
+
+    5. All queries on RLS-protected tables outside a Flask request context must call set_rls_context() before executing. Without it, queries silently return 0 rows.
+
+    6. Never render untrusted HTML without sanitization. Any use of dangerouslySetInnerHTML must sanitize first.
+
+    7. Never log secrets, tokens, credentials, or full auth responses at any log level.
+
+    8. Child processes spawned by the application must receive a minimal allowlisted environment — server secrets must never leak into user-spawned subprocesses.
+
+    9. Never mount the Docker socket into application containers.
+
+    10. CORS handling must go through the centralized utility — never add ad-hoc Access-Control headers in route files.
+
+    11. Environment variable changes must stay in sync across all Docker Compose files and .env.example.
+
+  path_instructions:
+    - path: "server/chat/backend/agent/tools/**"
+      instructions: |
+        - Subprocess calls must receive an explicit env parameter with isolated credentials — never inherit the server environment.
+
+    - path: "server/routes/**"
+      instructions: |
+        - Routes must use RBAC decorators (@require_permission), never manual auth checks.
+        - Token storage must go through the centralized helpers (store_tokens_in_db / get_token_data), not ad-hoc DB writes.
+
+    - path: "client/src/**"
+      instructions: |
+        - Backend calls must use forwardRequest from @/lib/backend-proxy — no direct fetch to the Flask backend.
+        - Never derive or handle user_id / org_id in client code.
+
+    - path: "docker-compose*"
+      instructions: |
+        - Never mount /var/run/docker.sock.
+        - Security-sensitive env vars should only go to services that need them.
+        - Changes must be mirrored across all Compose variants and .env.example.
+
+    - path: "server/connectors/**"
+      instructions: |
+        - OAuth callbacks must never log full token responses.
+        - Token storage must go through the centralized helpers, not ad-hoc DB writes.
+
+  auto_review:
+    enabled: true
+    drafts: false
