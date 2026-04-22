@@ -238,9 +238,12 @@ export function IncidentIoWebhookStep({ onDisconnect, loading }: IncidentIoWebho
               </div>
 
               <div>
-                <label className="text-sm font-medium">Webhook Signing Secret</label>
+                <label className="text-sm font-medium">Webhook Signing Secret (recommended)</label>
                 <p className="text-xs text-muted-foreground mb-1">
-                  Paste the signing secret from your incident.io webhook endpoint settings to verify webhook authenticity.
+                  After creating the webhook endpoint in incident.io, copy the signing secret
+                  (starts with <code className="bg-muted px-1 rounded">whsec_</code>) and paste it below.
+                  When set, Aurora will cryptographically verify that incoming webhooks are genuine.
+                  Without it, any request to your webhook URL will be accepted.
                 </p>
                 <div className="flex gap-2">
                   <Input
