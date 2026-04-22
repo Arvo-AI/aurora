@@ -160,7 +160,11 @@ class BitbucketAPIClient:
         page_count = 0
 
         while url and page_count < page_limit:
-            _validate_bitbucket_url(url)
+            try:
+                _validate_bitbucket_url(url)
+            except ValueError:
+                logger.warning("Pagination stopped: next URL host not in allowlist (%s)", _sanitize_url(url))
+                break
             response = requests.get(url, headers=headers, params=params, timeout=self.REQUEST_TIMEOUT)
             if response.status_code != 200:
                 logger.error(f"Bitbucket API error {response.status_code} at {_sanitize_url(url)}")

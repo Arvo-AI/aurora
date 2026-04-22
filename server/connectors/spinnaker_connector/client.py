@@ -10,6 +10,7 @@ is reused across Flask requests and agent tool calls.
 import hashlib
 import logging
 import os
+import posixpath
 import tempfile
 import threading
 import time
@@ -254,6 +255,9 @@ class SpinnakerClient:
         decoded = unquote(parsed.path)
         if "/.." in decoded or decoded.startswith(".."):
             raise SpinnakerAPIError("Invalid API path: path traversal not allowed")
+        normalized = posixpath.normpath(decoded)
+        if normalized != decoded:
+            raise SpinnakerAPIError("Invalid API path: non-canonical path segments not allowed")
         url = f"{self.base_url}{path}"
 
         try:

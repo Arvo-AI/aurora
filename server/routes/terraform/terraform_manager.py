@@ -1280,12 +1280,17 @@ class TerraformManager:
     def _get_terraform_env(self) -> dict:
         """
         Get environment variables for Terraform execution, including cloud provider credentials.
-        
+
         Returns:
             Dictionary of environment variables
         """
         # Start with current environment
         env = os.environ.copy()
+
+        # Inject per-instance .terraformrc path (avoids mutating os.environ)
+        terraformrc = getattr(self, "_terraformrc_path", None)
+        if terraformrc:
+            env["TF_CLI_CONFIG_FILE"] = terraformrc
         
         # Add cloud provider credentials if authenticator is available
         if self.authenticator:
@@ -1356,7 +1361,12 @@ class TerraformManager:
         return env
 
     def _create_terraform_network_config(self) -> None:
-        """Create Terraform configuration file for maximum performance and reliability."""
+        """Create Terraform configuration file for maximum performance and reliability.
+
+        Stores the path in ``self._terraformrc_path`` so that
+        :meth:`_get_terraform_env` can inject it into subprocess
+        environments without mutating ``os.environ``.
+        """
         try:
             # Test DNS resolution first
             self._test_network_connectivity()
@@ -1397,8 +1407,8 @@ plugin_cache_may_break_dependency_lock_file = true
             os.makedirs(cache_dir, exist_ok=True)
             os.chmod(cache_dir, 0o750)  # Ensure proper permissions
             
-            # Set environment variable to use this config
-            os.environ['TF_CLI_CONFIG_FILE'] = terraformrc_path
+            # Store path so _get_terraform_env can inject it per-subprocess
+            self._terraformrc_path = terraformrc_path
             
             logger.info(f"Created Terraform network configuration at {terraformrc_path} (direct downloads only)")
             
