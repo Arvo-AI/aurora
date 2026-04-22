@@ -22,7 +22,7 @@ from utils.auth.rbac_decorators import require_permission
 from utils.secrets.secret_ref_utils import delete_user_secret
 SPLUNK_TIMEOUT = 15
 
-SPLUNK_SSL_VERIFY = os.environ.get("SPLUNK_SSL_VERIFY", "true").lower() not in ("0", "false", "no")
+from utils.splunk_config import SPLUNK_SSL_VERIFY
 
 logger = logging.getLogger(__name__)
 
@@ -86,7 +86,11 @@ class SplunkClient:
         except requests.exceptions.SSLError as exc:
             # SSLError must come before ConnectionError (it's a subclass)
             logger.error(f"[SPLUNK] {method} {url} SSL error: {exc}")
-            raise SplunkAPIError("SSL/TLS error. Check the instance URL protocol (https://).") from exc
+            raise SplunkAPIError(
+                "SSL/TLS error connecting to Splunk. If your instance uses a self-signed "
+                "or internal CA certificate, set SPLUNK_SSL_VERIFY to a CA bundle path, "
+                "or to 'false' to disable verification (not recommended for production)."
+            ) from exc
         except requests.exceptions.ConnectionError as exc:
             logger.error(f"[SPLUNK] {method} {url} connection error: {exc}")
             error_str = str(exc).lower()

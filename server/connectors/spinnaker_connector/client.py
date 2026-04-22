@@ -10,10 +10,12 @@ is reused across Flask requests and agent tool calls.
 import hashlib
 import logging
 import os
+import posixpath
 import tempfile
 import threading
 import time
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import unquote, urlparse
 
 import requests
 from requests.auth import HTTPBasicAuth
@@ -243,6 +245,19 @@ class SpinnakerClient:
     def _request(self, method: str, path: str, **kwargs: Any) -> Any:
         """Send an authenticated request to Spinnaker Gate API."""
         kwargs.setdefault("timeout", SPINNAKER_TIMEOUT)
+        if not path.startswith("/"):
+            raise SpinnakerAPIError("Invalid API path: must start with /")
+        parsed = urlparse(path)
+        if parsed.scheme or parsed.netloc:
+            raise SpinnakerAPIError("Invalid API path: must be a relative path")
+        if parsed.query or parsed.fragment:
+            raise SpinnakerAPIError("Invalid API path: query/fragment not allowed")
+        decoded = unquote(parsed.path)
+        if "/.." in decoded or decoded.startswith(".."):
+            raise SpinnakerAPIError("Invalid API path: path traversal not allowed")
+        normalized = posixpath.normpath(decoded)
+        if normalized != decoded:
+            raise SpinnakerAPIError("Invalid API path: non-canonical path segments not allowed")
         url = f"{self.base_url}{path}"
 
         try:

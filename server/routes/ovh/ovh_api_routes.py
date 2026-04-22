@@ -9,8 +9,10 @@ This module provides endpoints for:
 """
 import logging
 import json
+import re
 import requests
 from flask import request, jsonify
+from urllib.parse import quote
 
 from routes.ovh import ovh_bp
 from routes.ovh.oauth2_auth_code_flow import get_valid_access_token
@@ -392,7 +394,7 @@ def save_ovh_ssh_keys(user_id, instance_id):
     for project_id in projects_resp.json():
         try:
             inst_resp = requests.get(
-                f'{api_base_url}/cloud/project/{project_id}/instance/{instance_id}', 
+                f'{api_base_url}/cloud/project/{quote(str(project_id), safe="")}/instance/{quote(instance_id, safe="")}', 
                 headers=headers, 
                 timeout=5
             )
