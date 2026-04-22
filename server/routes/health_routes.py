@@ -168,7 +168,10 @@ async def send_chatbot_test_message():
                     return {"status": "healthy", "message": "Chatbot connection and initial response successful"}
                 return {
                     "status": "unhealthy",
-                    "error": f"Unexpected chatbot response: {response_data.get('type')}",
+                    "error": (
+                        f"Unexpected chatbot response: type={response_data.get('type')!r} "
+                        f"status={response_data.get('data', {}).get('status')!r}"
+                    ),
                 }
             except json.JSONDecodeError:
                 return {"status": "unhealthy", "error": "Invalid JSON response from chatbot"}
