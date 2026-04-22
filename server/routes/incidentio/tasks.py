@@ -144,6 +144,7 @@ def process_incidentio_event(
                     is_new_incident = event_type in (
                         "incident.created", "v2.incidents.created",
                         "incident.declared", "public_incident.incident_created",
+                        "public_incident.incident_created_v2",
                     )
 
                     if not is_new_incident:
