@@ -107,7 +107,6 @@ def _infer_aws_sg_edges(security_groups, graph_nodes):
         inbound_rules = sg.get("IpPermissions", [])
         for rule in inbound_rules:
             from_port = rule.get("FromPort")
-            to_port = rule.get("ToPort")
 
             # Determine dependency type from port
             port = from_port
