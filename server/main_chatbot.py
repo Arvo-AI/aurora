@@ -573,12 +573,6 @@ async def process_workflow_async(wf, state, websocket, user_id, incident_id=None
                                 save_incident_thought(token_text, force=False)
                                 save_streaming_chat_message(token_text, force=False)
                     
-                    elif event_type == "values":
-                        # Final state update
-                        logger.debug(f"[STREAM DEBUG] Received values event")
-                        # Handle final state if needed
-                        continue
-                    
                     elif event_type == "messages":
                         try:
                             msg_chunk, _ = event_data
