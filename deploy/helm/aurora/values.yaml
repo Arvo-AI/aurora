@@ -186,6 +186,7 @@ config:
   # --- Security ---
   RATE_LIMITING_ENABLED: "false"
   RATE_LIMIT_HEADERS_ENABLED: "true"
+  SPLUNK_SSL_VERIFY: "true"
   AURORA_VERIFY_CLI_IDENTITY: "false"
   
   # --- Optional Features (enable as needed) ---
