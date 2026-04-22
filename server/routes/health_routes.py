@@ -141,6 +141,7 @@ async def send_chatbot_test_message():
         token_qs = f"?token={token}"
 
     uri = f"ws://{host}:{port}{token_qs}"
+    safe_uri = f"ws://{host}:{port}"
 
     try:
         async with websockets.connect(uri, ping_interval=None) as websocket:
@@ -177,14 +178,14 @@ async def send_chatbot_test_message():
                 return {"status": "unhealthy", "error": "Invalid JSON response from chatbot"}
 
     except asyncio.TimeoutError:
-        return {"status": "unhealthy", "error": f"Timeout waiting for chatbot response at {uri}"}
+        return {"status": "unhealthy", "error": f"Timeout waiting for chatbot response at {safe_uri}"}
     except websockets.exceptions.ConnectionClosed as e:
-        return {"status": "unhealthy", "error": f"Chatbot connection closed unexpectedly at {uri}"}
+        return {"status": "unhealthy", "error": f"Chatbot connection closed unexpectedly at {safe_uri}"}
     except Exception as e:
-        logger.warning("Chatbot WS health check failed at %s: %s", uri, e)
+        logger.warning("Chatbot WS health check failed at %s: %s", safe_uri, e)
         return {
             "status": "unhealthy",
-            "error": f"Chatbot health check failed at {uri}. "
+            "error": f"Chatbot health check failed at {safe_uri}. "
                      f"WebSocket port is hardcoded to 5006 — if your chatbot uses a different port, update health_routes.py."
         }
 
