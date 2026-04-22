@@ -49,7 +49,7 @@ async def handle_http_request(reader, writer):
 
 async def _handle_kubectl_execute(headers, body, writer):
     """Handle internal kubectl execution endpoint."""
-    if headers.get('x-internal-secret') != os.getenv('FLASK_SECRET_KEY'):
+    if headers.get('x-internal-secret') != os.getenv('INTERNAL_API_SECRET'):
         await _send_json_response(writer, {"error": "Unauthorized"}, status="403 Forbidden")
         return
     
