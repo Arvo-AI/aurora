@@ -1182,14 +1182,7 @@ class TerraformManager:
             return 'nginx:latest'
         else:
             # Default based on cloud provider
-            if cloud_provider == 'gcp':
-                return 'dummy-value'
-            elif cloud_provider == 'aws':
-                return 'dummy-value'
-            elif cloud_provider == 'azure':
-                return 'dummy-value'
-            else:
-                return 'dummy-value'
+            return 'dummy-value'
 
     def _post_process_terraform_code(self, terraform_code: str) -> str:
         """

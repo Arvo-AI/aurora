@@ -85,6 +85,7 @@ def setup_aws_credentials_cached(user_id: str, selected_region: Optional[str] = 
         # Validate
         access_key_id = aws_credentials.get('aws_access_key_id')
         secret_access_key = aws_credentials.get('aws_secret_access_key')
+        session_token = aws_credentials.get('aws_session_token')
         if not access_key_id or not secret_access_key:
             logger.error("Missing required AWS credential fields")
             return False, None, None, None
@@ -106,6 +107,8 @@ def setup_aws_credentials_cached(user_id: str, selected_region: Optional[str] = 
             "AWS_DEFAULT_REGION": region,
             "AWS_REGION": region,
         }
+        if session_token:
+            isolated_env["AWS_SESSION_TOKEN"] = session_token
 
         # Cache check
         key = _cache_key(user_id, access_key_id, region)
@@ -129,6 +132,7 @@ def setup_aws_credentials_cached(user_id: str, selected_region: Optional[str] = 
         session = boto3.Session(
             aws_access_key_id=access_key_id,
             aws_secret_access_key=secret_access_key,
+            aws_session_token=session_token,
             region_name=region,
             botocore_session=botocore_sess,
         )

@@ -242,9 +242,8 @@ class SpinnakerClient:
     # Internal request helper
     # ------------------------------------------------------------------
 
-    def _request(self, method: str, path: str, **kwargs: Any) -> Any:
-        """Send an authenticated request to Spinnaker Gate API."""
-        kwargs.setdefault("timeout", SPINNAKER_TIMEOUT)
+    def _validate_path(self, path: str) -> None:
+        """Validate that *path* is a safe, canonical API path segment."""
         if not path.startswith("/"):
             raise SpinnakerAPIError("Invalid API path: must start with /")
         parsed = urlparse(path)
@@ -255,9 +254,13 @@ class SpinnakerClient:
         decoded = unquote(parsed.path)
         if "/.." in decoded:
             raise SpinnakerAPIError("Invalid API path: path traversal not allowed")
-        normalized = posixpath.normpath(decoded)
-        if normalized != decoded:
+        if posixpath.normpath(decoded) != decoded:
             raise SpinnakerAPIError("Invalid API path: non-canonical path segments not allowed")
+
+    def _request(self, method: str, path: str, **kwargs: Any) -> Any:
+        """Send an authenticated request to Spinnaker Gate API."""
+        kwargs.setdefault("timeout", SPINNAKER_TIMEOUT)
+        self._validate_path(path)
         url = f"{self.base_url}{path}"
 
         try:

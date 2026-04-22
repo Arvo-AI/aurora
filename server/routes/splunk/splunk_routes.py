@@ -86,11 +86,7 @@ class SplunkClient:
         except requests.exceptions.SSLError as exc:
             # SSLError must come before ConnectionError (it's a subclass)
             logger.error(f"[SPLUNK] {method} {url} SSL error: {exc}")
-            raise SplunkAPIError(
-                "SSL/TLS error connecting to Splunk. If your instance uses a self-signed "
-                "or internal CA certificate, set SPLUNK_SSL_VERIFY to a CA bundle path, "
-                "or to 'false' to disable verification (not recommended for production)."
-            ) from exc
+            raise SplunkAPIError("SSL/TLS error — check SPLUNK_SSL_VERIFY config") from exc
         except requests.exceptions.ConnectionError as exc:
             logger.error(f"[SPLUNK] {method} {url} connection error: {exc}")
             error_str = str(exc).lower()

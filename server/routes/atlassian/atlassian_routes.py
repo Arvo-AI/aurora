@@ -98,7 +98,7 @@ def _validate_jsm_ops(access_token: str, cloud_id: str) -> Optional[Dict[str, An
     if not isinstance(cloud_id, str) or not cloud_id.strip():
         logger.warning("[ATLASSIAN] JSM Ops validation requires a cloud_id")
         return None
-    cloud_id = cloud_id.strip()
+    cloud_id = cloud_id.strip().lower()
     if not re.fullmatch(r'[a-f0-9\-]{1,64}', cloud_id):
         logger.warning("[ATLASSIAN] JSM Ops cloud_id has invalid format")
         return None

@@ -228,12 +228,28 @@ class BitbucketAPIClient:
     # File / Directory / Code Search
     # ------------------------------------------------------------------
 
+    def _resolve_commit(self, workspace, repo_slug, ref):
+        """Resolve a branch/tag name to a commit hash. Returns the ref unchanged if resolution fails."""
+        if ref == "HEAD" or len(ref) >= 12 and ref.isalnum():
+            return ref
+        result = self._get(
+            f"{BITBUCKET_API_BASE}/repositories/"
+            f"{quote(workspace, safe='')}/{quote(repo_slug, safe='')}"
+            f"/refs/branches/{quote(ref, safe='')}"
+        )
+        if isinstance(result, dict) and not result.get("error"):
+            target_hash = result.get("target", {}).get("hash")
+            if target_hash:
+                return target_hash
+        return ref
+
     def get_file_contents(self, workspace, repo_slug, path, commit="HEAD"):
         """Get the contents of a file at a specific commit/branch."""
+        commit = self._resolve_commit(workspace, repo_slug, commit)
         url = (
             f"{BITBUCKET_API_BASE}/repositories/"
             f"{quote(workspace, safe='')}/{quote(repo_slug, safe='')}"
-            f"/src/{quote(commit, safe='')}/{quote(path, safe='/')}"
+            f"/src/{commit}/{quote(path, safe='/')}"
         )
         _validate_bitbucket_url(url)
         headers = self._get_headers()
@@ -270,10 +286,11 @@ class BitbucketAPIClient:
 
     def get_directory_tree(self, workspace, repo_slug, path="", commit="HEAD"):
         """Get directory listing at a path."""
+        commit = self._resolve_commit(workspace, repo_slug, commit)
         url = (
             f"{BITBUCKET_API_BASE}/repositories/"
             f"{quote(workspace, safe='')}/{quote(repo_slug, safe='')}"
-            f"/src/{quote(commit, safe='')}/{quote(path, safe='/')}"
+            f"/src/{commit}/{quote(path, safe='/')}"
         )
         params = {"format": "meta"}
         return self._get(url, params=params)
