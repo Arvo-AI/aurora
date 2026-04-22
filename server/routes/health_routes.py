@@ -9,7 +9,7 @@ import os
 import uuid
 import requests
 import socket
-from datetime import datetime, timezone
+from datetime import datetime
 from flask import Blueprint, jsonify
 import psycopg2
 import redis
