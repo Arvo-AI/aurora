@@ -15,8 +15,6 @@ logger = logging.getLogger(__name__)
 class ContextManager:
     """Drop-in replacement for LLMContextManager with performance optimizations."""
 
-    _cleanup_tasks: "set[asyncio.Task]" = set()
-
     def __init__(self):
         """Initialize optimized components."""
         self.cache = RedisCache()
@@ -208,9 +206,7 @@ class ContextManager:
         return True
 
     @classmethod
-    def cleanup(cls):
-        """Cleanup resources on shutdown."""
+    async def cleanup(cls):
+        """Cleanup resources on shutdown. Must be awaited from an async context."""
         if hasattr(cls, '_instance'):
-            stop_task = asyncio.create_task(cls._instance.async_queue.stop())
-            cls._cleanup_tasks.add(stop_task)
-            stop_task.add_done_callback(cls._cleanup_tasks.discard)
+            await cls._instance.async_queue.stop()
