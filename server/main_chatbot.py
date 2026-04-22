@@ -572,13 +572,15 @@ async def process_workflow_async(wf, state, websocket, user_id, incident_id=None
                                 # Save tokens incrementally to incident thoughts
                                 save_incident_thought(token_text, force=False)
                                 save_streaming_chat_message(token_text, force=False)
-                    
+
                     elif event_type == "values":
-                        # Final state update
-                        logger.debug(f"[STREAM DEBUG] Received values event")
-                        # Handle final state if needed
+                        # Stub: skip complete-state "values" events.
+                        # The real handler below would re-send content already streamed
+                        # via the "messages" event path, causing duplicates in the UI / DB.
+                        # Keep this branch first so the duplicate-send path is unreachable.
+                        logger.debug("[STREAM DEBUG] Received values event (skipped to avoid duplicate sends)")
                         continue
-                    
+
                     elif event_type == "messages":
                         try:
                             msg_chunk, _ = event_data

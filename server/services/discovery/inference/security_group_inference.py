@@ -110,7 +110,7 @@ def _infer_aws_sg_edges(security_groups, graph_nodes):
             to_port = rule.get("ToPort")
 
             # Determine dependency type from port
-            port = from_port if from_port == to_port else from_port
+            port = from_port
             if port is not None:
                 dep_type, _ = infer_dependency_type_from_port(port)
             else:
