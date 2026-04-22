@@ -268,7 +268,7 @@ export default function Navigation({
                   <div className="relative" ref={userMenuRef}>
                     <button
                       type="button"
-                      aria-haspopup="menu"
+                      aria-haspopup="true"
                       aria-expanded={isUserMenuOpen}
                       className="flex items-center gap-3 w-full px-3 py-2 rounded-md hover:bg-primary/10 transition-colors text-sm border border-transparent hover:border-border/50 cursor-pointer bg-transparent text-left"
                       onClick={() => setIsUserMenuOpen(!isUserMenuOpen)}

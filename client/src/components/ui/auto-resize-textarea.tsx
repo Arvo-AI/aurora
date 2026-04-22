@@ -32,7 +32,7 @@ const AutoResizeTextarea = forwardRef<HTMLTextAreaElement, AutoResizeTextareaPro
       shadow.textContent = textarea.value + '\u200B';
 
       const scrollHeight = shadow.scrollHeight;
-      const lineHeight = Number.parseInt(window.getComputedStyle(textarea).lineHeight);
+      const lineHeight = Number.parseInt(window.getComputedStyle(textarea).lineHeight, 10);
       const maxHeight = lineHeight * maxRows;
       const newHeight = Math.min(scrollHeight, maxHeight);
 
