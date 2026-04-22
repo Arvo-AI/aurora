@@ -206,7 +206,7 @@ class ContextManager:
         return True
 
     @classmethod
-    async def cleanup(cls):
+    async def cleanup(cls) -> None:
         """Cleanup resources on shutdown. Must be awaited from an async context."""
         if hasattr(cls, '_instance'):
             await cls._instance.async_queue.stop()
