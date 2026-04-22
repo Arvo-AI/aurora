@@ -6,6 +6,7 @@ This module provides comprehensive health checks for all Aurora services.
 import logging
 import time
 import os
+import uuid
 import requests
 import socket
 from datetime import datetime
@@ -16,6 +17,7 @@ from celery_config import celery_app
 import websockets
 import asyncio
 import json
+import jwt as pyjwt
 
 
 logger = logging.getLogger(__name__)
@@ -117,20 +119,41 @@ async def send_chatbot_test_message():
     else:
         host = os.getenv('CHATBOT_HOST', 'chatbot')
     port = 5006
-    uri = f"ws://{host}:{port}"
-    
+
+    # Mint a short-lived JWT matching the chatbot's expected format
+    # (see main_chatbot.py:_validate_ws_token). Skipped when INTERNAL_API_SECRET
+    # is unset (dev mode); the chatbot allows unauthenticated connections then.
+    internal_secret = os.getenv('INTERNAL_API_SECRET', '')
+    token_qs = ''
+    if internal_secret:
+        now = int(time.time())
+        token = pyjwt.encode(
+            {
+                "userId": "health-check",
+                "aud": "chatbot-ws",
+                "jti": str(uuid.uuid4()),
+                "iat": now,
+                "exp": now + 60,
+            },
+            internal_secret + "aurora:ws-token-signing",
+            algorithm="HS256",
+        )
+        token_qs = f"?token={token}"
+
+    uri = f"ws://{host}:{port}{token_qs}"
+
     try:
         async with websockets.connect(uri, ping_interval=None) as websocket:
             # Send init message
             await websocket.send(json.dumps({
                 "type": "init",
-                "user_id": "user_32760a7xMqdpxteAQgVbt1cKc6b"
+                "user_id": "health-check"
             }))
 
             # Send a test query
             await websocket.send(json.dumps({
                 "query": "Hello",
-                "user_id": "user_32760a7xMqdpxteAQgVbt1cKc6b",
+                "user_id": "health-check",
                 "session_id": "health_check_session"
             }))
 
@@ -143,6 +166,13 @@ async def send_chatbot_test_message():
                 response_data = json.loads(response)
                 if response_data.get("type") == "status" and response_data.get("data", {}).get("status") == "START":
                     return {"status": "healthy", "message": "Chatbot connection and initial response successful"}
+                return {
+                    "status": "unhealthy",
+                    "error": (
+                        f"Unexpected chatbot response: type={response_data.get('type')!r} "
+                        f"status={response_data.get('data', {}).get('status')!r}"
+                    ),
+                }
             except json.JSONDecodeError:
                 return {"status": "unhealthy", "error": "Invalid JSON response from chatbot"}
 
