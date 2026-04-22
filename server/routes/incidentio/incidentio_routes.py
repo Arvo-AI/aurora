@@ -306,8 +306,12 @@ def get_webhook_url(user_id):
 
     webhook_url = f"{base_url}/incidentio/alerts/webhook/{user_id}"
 
+    creds = _get_stored_credentials(user_id)
+    has_secret = bool(creds and creds.get("webhook_secret"))
+
     return jsonify({
         "webhookUrl": webhook_url,
+        "hasWebhookSecret": has_secret,
         "instructions": [
             "1. Go to incident.io → Settings → Webhooks",
             "2. Click 'Add endpoint'",

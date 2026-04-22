@@ -29,6 +29,7 @@ export function IncidentIoWebhookStep({ onDisconnect, loading }: IncidentIoWebho
   const [updatingPostback, setUpdatingPostback] = useState(false);
   const [webhookSecret, setWebhookSecret] = useState("");
   const [savingSecret, setSavingSecret] = useState(false);
+  const [hasWebhookSecret, setHasWebhookSecret] = useState(false);
 
   useEffect(() => {
     let isMounted = true;
@@ -45,6 +46,9 @@ export function IncidentIoWebhookStep({ onDisconnect, loading }: IncidentIoWebho
 
         if (isMounted) {
           setWebhookData(webhookResponse);
+          if (webhookResponse) {
+            setHasWebhookSecret(webhookResponse.hasWebhookSecret);
+          }
           if (rcaSettings) {
             setRcaEnabled(rcaSettings.rcaEnabled);
             setPostbackEnabled(rcaSettings.postbackEnabled);
@@ -135,6 +139,7 @@ export function IncidentIoWebhookStep({ onDisconnect, loading }: IncidentIoWebho
       if (success) {
         toast({ title: "Webhook secret saved", description: "Webhook signatures will now be verified." });
         setWebhookSecret("");
+        setHasWebhookSecret(true);
       } else {
         toast({ title: "Failed to save", description: "Could not save webhook secret. Please try again.", variant: "destructive" });
       }
@@ -239,27 +244,56 @@ export function IncidentIoWebhookStep({ onDisconnect, loading }: IncidentIoWebho
 
               <div>
                 <label className="text-sm font-medium">Webhook Signing Secret (recommended)</label>
-                <p className="text-xs text-muted-foreground mb-1">
-                  After creating the webhook endpoint in incident.io, copy the signing secret
-                  (starts with <code className="bg-muted px-1 rounded">whsec_</code>) and paste it below.
-                  When set, Aurora will cryptographically verify that incoming webhooks are genuine.
-                  Without it, any request to your webhook URL will be accepted.
-                </p>
-                <div className="flex gap-2">
-                  <Input
-                    type="password"
-                    placeholder="whsec_..."
-                    value={webhookSecret}
-                    onChange={(e) => setWebhookSecret(e.target.value)}
-                  />
-                  <Button
-                    variant="outline"
-                    onClick={handleSaveWebhookSecret}
-                    disabled={savingSecret || !webhookSecret.trim()}
-                  >
-                    {savingSecret ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save"}
-                  </Button>
-                </div>
+                {hasWebhookSecret ? (
+                  <div className="mt-1 space-y-2">
+                    <div className="flex items-center gap-2 text-sm text-green-600 dark:text-green-400">
+                      <CheckCircle2 className="h-4 w-4" />
+                      Signing secret configured — webhook signatures are being verified.
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      To update, paste a new secret below.
+                    </p>
+                    <div className="flex gap-2">
+                      <Input
+                        type="password"
+                        placeholder="whsec_..."
+                        value={webhookSecret}
+                        onChange={(e) => setWebhookSecret(e.target.value)}
+                      />
+                      <Button
+                        variant="outline"
+                        onClick={handleSaveWebhookSecret}
+                        disabled={savingSecret || !webhookSecret.trim()}
+                      >
+                        {savingSecret ? <Loader2 className="h-4 w-4 animate-spin" /> : "Update"}
+                      </Button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="mt-1 space-y-2">
+                    <p className="text-xs text-muted-foreground">
+                      After creating the webhook endpoint in incident.io, copy the signing secret
+                      (starts with <code className="bg-muted px-1 rounded">whsec_</code>) and paste it below.
+                      When set, Aurora will cryptographically verify that incoming webhooks are genuine.
+                      Without it, any request to your webhook URL will be accepted.
+                    </p>
+                    <div className="flex gap-2">
+                      <Input
+                        type="password"
+                        placeholder="whsec_..."
+                        value={webhookSecret}
+                        onChange={(e) => setWebhookSecret(e.target.value)}
+                      />
+                      <Button
+                        variant="outline"
+                        onClick={handleSaveWebhookSecret}
+                        disabled={savingSecret || !webhookSecret.trim()}
+                      >
+                        {savingSecret ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save"}
+                      </Button>
+                    </div>
+                  </div>
+                )}
               </div>
 
               <div className="bg-muted/50 rounded-lg p-4">
