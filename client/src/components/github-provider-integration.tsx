@@ -361,8 +361,11 @@ export default function GitHubProviderIntegration() {
     <>
       {/* Header */}
       <div
+        role="button"
+        tabIndex={0}
         className="flex items-center justify-between p-3 border border-border rounded-lg hover:bg-muted/50 transition-colors cursor-pointer"
         onClick={() => { if (githubStatus.isAuthenticated) setExpanded(!expanded); }}
+        onKeyDown={(e) => { if ((e.key === 'Enter' || e.key === ' ') && githubStatus.isAuthenticated) { e.preventDefault(); setExpanded(!expanded); } }}
       >
         <div className="flex items-center gap-3">
           <div className="w-6 h-6 relative flex-shrink-0">
@@ -405,7 +408,14 @@ export default function GitHubProviderIntegration() {
             </Button>
           )}
           {githubStatus.isAuthenticated && (
-            <div className="cursor-pointer p-1 hover:bg-muted rounded" onClick={(e) => { e.stopPropagation(); setExpanded(!expanded); }}>
+            <div
+              role="button"
+              tabIndex={0}
+              className="cursor-pointer p-1 hover:bg-muted rounded"
+              onClick={(e) => { e.stopPropagation(); setExpanded(!expanded); }}
+              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); setExpanded(!expanded); } }}
+              aria-label={expanded ? 'Collapse' : 'Expand'}
+            >
               {expanded ? <ChevronDown className="w-4 h-4 text-muted-foreground" /> : <ChevronRight className="w-4 h-4 text-muted-foreground" />}
             </div>
           )}

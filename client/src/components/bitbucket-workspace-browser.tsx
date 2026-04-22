@@ -183,7 +183,7 @@ export default function BitbucketWorkspaceBrowser({}: BitbucketWorkspaceBrowserP
   return (
     <div className="space-y-3">
       <div>
-        <label className="text-sm font-medium mb-1.5 block">Workspace</label>
+        <span className="text-sm font-medium mb-1.5 block">Workspace</span>
         {isLoadingWorkspaces ? (
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
             <Loader2 className="w-4 h-4 animate-spin" />
@@ -208,7 +208,7 @@ export default function BitbucketWorkspaceBrowser({}: BitbucketWorkspaceBrowserP
       {selectedWorkspace && (
         <div>
           <div className="flex items-center justify-between mb-1.5">
-            <label className="text-sm font-medium">Repositories</label>
+            <span className="text-sm font-medium">Repositories</span>
             {repos.length > 0 && (
               <Badge variant="outline" className="text-xs">{repos.length} available</Badge>
             )}
@@ -223,10 +223,13 @@ export default function BitbucketWorkspaceBrowser({}: BitbucketWorkspaceBrowserP
               {repos.map((repo) => (
                 <div
                   key={repo.slug}
+                  role="button"
+                  tabIndex={0}
                   className={`flex items-center justify-between p-2 rounded-md cursor-pointer hover:bg-muted/30 transition-colors ${
                     selectedRepo?.slug === repo.slug ? 'border border-primary/50 bg-primary/5' : ''
                   }`}
                   onClick={() => handleRepoSelect(repo)}
+                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleRepoSelect(repo); } }}
                 >
                   <div className="flex flex-col min-w-0 flex-1">
                     <div className="flex items-center gap-2">
@@ -247,7 +250,7 @@ export default function BitbucketWorkspaceBrowser({}: BitbucketWorkspaceBrowserP
 
       {selectedRepo && (
         <div>
-          <label className="text-sm font-medium mb-1.5 block">Branch</label>
+          <span className="text-sm font-medium mb-1.5 block">Branch</span>
           {isLoadingBranches ? (
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
               <Loader2 className="w-4 h-4 animate-spin" />

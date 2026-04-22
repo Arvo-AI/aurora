@@ -1237,9 +1237,9 @@ make dev`}</pre>
 
                   <div className="space-y-2">
                     <div className="space-y-1.5">
-                      <label className="text-xs text-white/50">External ID</label>
+                      <label htmlFor="aws-onboarding-external-id" className="text-xs text-white/50">External ID</label>
                       <div className="flex gap-2">
-                        <Input value={onboardingData.externalId} readOnly className="font-mono text-xs bg-white/5 text-white border-white/10 focus-visible:ring-white/20" />
+                        <Input id="aws-onboarding-external-id" value={onboardingData.externalId} readOnly className="font-mono text-xs bg-white/5 text-white border-white/10 focus-visible:ring-white/20" />
                         <Button variant="outline" size="icon" onClick={() => handleCopy(onboardingData.externalId, 'externalId')} className="border-white/10 hover:bg-white/5 text-white/70 h-8 w-8">
                           {copySuccess['externalId'] ? <CheckCircle className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
                         </Button>
@@ -1247,7 +1247,7 @@ make dev`}</pre>
                     </div>
 
                     <div className="space-y-1.5">
-                      <label className="text-xs text-white/50">Trust Policy JSON</label>
+                      <span className="text-xs text-white/50">Trust Policy JSON</span>
                       <div className="relative">
                         <pre className="text-white text-xs whitespace-pre-wrap font-mono bg-black/30 p-3 pr-10 rounded border border-white/10">{trustPolicyJson}</pre>
                         <Button variant="outline" size="icon" onClick={() => handleCopy(trustPolicyJson, 'trustPolicy')} className="absolute top-2 right-2 h-6 w-6 border-white/10 hover:bg-white/5 text-white/70">

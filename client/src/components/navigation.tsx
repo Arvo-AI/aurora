@@ -266,9 +266,14 @@ export default function Navigation({
                   </TooltipProvider>
                   
                   <div className="relative" ref={userMenuRef}>
-                    <div 
+                    <div
+                      role="button"
+                      tabIndex={0}
+                      aria-haspopup="menu"
+                      aria-expanded={isUserMenuOpen}
                       className="flex items-center gap-3 w-full px-3 py-2 rounded-md hover:bg-primary/10 transition-colors text-sm border border-transparent hover:border-border/50 cursor-pointer"
                       onClick={() => setIsUserMenuOpen(!isUserMenuOpen)}
+                      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setIsUserMenuOpen(!isUserMenuOpen); } }}
                     >
                     <Avatar className="w-8 h-8">
                       <AvatarImage src={user.imageUrl} alt={user.fullName || "User"} />

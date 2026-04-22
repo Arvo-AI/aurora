@@ -184,8 +184,9 @@ export default function PostmortemPanel({ incidentId, incidentTitle, isVisible, 
           <p className="text-xs text-zinc-400 mb-3">Export postmortem to Confluence</p>
           <div className="space-y-2">
             <div>
-              <label className="text-xs text-zinc-500 block mb-1">Space Key *</label>
+              <label htmlFor="postmortem-confluence-space-key" className="text-xs text-zinc-500 block mb-1">Space Key *</label>
               <input
+                id="postmortem-confluence-space-key"
                 type="text"
                 value={confluenceSpaceKey}
                 onChange={e => setConfluenceSpaceKey(e.target.value)}
@@ -194,8 +195,9 @@ export default function PostmortemPanel({ incidentId, incidentTitle, isVisible, 
               />
             </div>
             <div>
-              <label className="text-xs text-zinc-500 block mb-1">Parent Page ID (optional)</label>
+              <label htmlFor="postmortem-confluence-parent-page-id" className="text-xs text-zinc-500 block mb-1">Parent Page ID (optional)</label>
               <input
+                id="postmortem-confluence-parent-page-id"
                 type="text"
                 value={confluenceParentPageId}
                 onChange={e => setConfluenceParentPageId(e.target.value)}
