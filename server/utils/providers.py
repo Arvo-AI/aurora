@@ -6,6 +6,8 @@ Keep this in sync with:
   (KNOWN_PROVIDERS — superset)
 """
 
+__all__ = ["CONNECTOR_DIRS", "KNOWN_PROVIDERS"]
+
 CONNECTOR_DIRS: frozenset = frozenset({
     "aws",
     "atlassian",
