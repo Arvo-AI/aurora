@@ -26,6 +26,8 @@ from utils.db.connection_pool import db_pool
 logger = logging.getLogger(__name__)
 _LOG_PREFIX = "[ConnectorStatus]"
 
+from utils.splunk_config import SPLUNK_SSL_VERIFY
+
 connector_status_bp = Blueprint("connector_status", __name__)
 
 LIVE_CHECK_TIMEOUT = 10
@@ -114,7 +116,7 @@ def _check_splunk(creds: Dict[str, Any]) -> Dict[str, Any]:
             f"{base_url}/services/server/info?output_mode=json",
             headers={"Authorization": f"Bearer {api_token}"},
             timeout=HTTP_TIMEOUT,
-            verify=False,
+            verify=SPLUNK_SSL_VERIFY,
         )
         r.raise_for_status()
         return {"connected": True, "baseUrl": base_url}

@@ -46,6 +46,7 @@ x-common-env: &common-env
   REDIS_SSL_CA_CERTS: ${REDIS_SSL_CA_CERTS:-}
   REDIS_SSL_CERT_REQS: ${REDIS_SSL_CERT_REQS:-}
   WEAVIATE_SECURE: ${WEAVIATE_SECURE:-false}
+  SPLUNK_SSL_VERIFY: ${SPLUNK_SSL_VERIFY:-false}
 
   # AWS base credentials for role assumption
   AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}

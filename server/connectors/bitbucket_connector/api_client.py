@@ -4,13 +4,23 @@ Wraps the Bitbucket 2.0 REST API with authentication and pagination support.
 """
 import base64
 import logging
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 import requests
 
 logger = logging.getLogger(__name__)
 
 BITBUCKET_API_BASE = "https://api.bitbucket.org/2.0"
+_BITBUCKET_ALLOWED_HOSTS = frozenset({"api.bitbucket.org", "bitbucket.org"})
+
+
+def _validate_bitbucket_url(url: str) -> None:
+    """Raise ValueError if url does not point to a known Bitbucket host over HTTPS."""
+    parts = urlsplit(url)
+    if parts.scheme != "https":
+        raise ValueError(f"URL scheme '{parts.scheme}' is not allowed; only HTTPS is permitted")
+    if parts.hostname not in _BITBUCKET_ALLOWED_HOSTS:
+        raise ValueError(f"URL host '{parts.hostname}' is not a known Bitbucket domain")
 
 
 def _sanitize_url(url: str) -> str:
@@ -82,6 +92,7 @@ class BitbucketAPIClient:
 
     def _get(self, url, params=None):
         """Single-resource GET. Returns response JSON or error dict."""
+        _validate_bitbucket_url(url)
         response = requests.get(url, headers=self._get_headers(), params=params, timeout=self.REQUEST_TIMEOUT)
         if response.status_code != 200:
             logger.error(f"Bitbucket GET {_sanitize_url(url)} failed: {response.status_code}")
@@ -90,6 +101,7 @@ class BitbucketAPIClient:
 
     def _get_raw(self, url, params=None):
         """GET that returns raw text (for diffs, logs). Returns string or error dict."""
+        _validate_bitbucket_url(url)
         headers = self._get_headers()
         headers["Accept"] = "text/plain"
         response = requests.get(url, headers=headers, params=params, timeout=self.REQUEST_TIMEOUT)
@@ -100,6 +112,7 @@ class BitbucketAPIClient:
 
     def _post(self, url, json_data=None, data=None, files=None):
         """POST with JSON or form/multipart data. Returns response JSON or error dict."""
+        _validate_bitbucket_url(url)
         headers = self._get_headers()
         if json_data is not None:
             headers["Content-Type"] = "application/json"
@@ -114,6 +127,7 @@ class BitbucketAPIClient:
 
     def _put(self, url, json_data=None):
         """PUT with JSON data. Returns response JSON or error dict."""
+        _validate_bitbucket_url(url)
         headers = self._get_headers()
         headers["Content-Type"] = "application/json"
         response = requests.put(url, headers=headers, json=json_data, timeout=self.REQUEST_TIMEOUT)
@@ -124,6 +138,7 @@ class BitbucketAPIClient:
 
     def _delete(self, url):
         """DELETE. Returns status dict."""
+        _validate_bitbucket_url(url)
         response = requests.delete(url, headers=self._get_headers(), timeout=self.REQUEST_TIMEOUT)
         if response.status_code not in (200, 204):
             logger.error(f"Bitbucket DELETE {_sanitize_url(url)} failed: {response.status_code}")
@@ -147,6 +162,15 @@ class BitbucketAPIClient:
         page_count = 0
 
         while url and page_count < page_limit:
+            try:
+                _validate_bitbucket_url(url)
+            except ValueError:
+                logger.warning("Pagination rejected untrusted next URL: %s", _sanitize_url(url))
+                return {
+                    "error": True,
+                    "status": None,
+                    "message": "Pagination halted: next URL failed validation",
+                }
             response = requests.get(url, headers=headers, params=params, timeout=self.REQUEST_TIMEOUT)
             if response.status_code != 200:
                 logger.error(f"Bitbucket API error {response.status_code} at {_sanitize_url(url)}")
@@ -204,9 +228,30 @@ class BitbucketAPIClient:
     # File / Directory / Code Search
     # ------------------------------------------------------------------
 
+    def _resolve_commit(self, workspace, repo_slug, ref):
+        """Resolve a branch/tag name to a commit hash. Returns the ref unchanged if resolution fails."""
+        if ref == "HEAD" or len(ref) >= 12 and ref.isalnum():
+            return ref
+        result = self._get(
+            f"{BITBUCKET_API_BASE}/repositories/"
+            f"{quote(workspace, safe='')}/{quote(repo_slug, safe='')}"
+            f"/refs/branches/{quote(ref, safe='')}"
+        )
+        if isinstance(result, dict) and not result.get("error"):
+            target_hash = result.get("target", {}).get("hash")
+            if target_hash:
+                return target_hash
+        return ref
+
     def get_file_contents(self, workspace, repo_slug, path, commit="HEAD"):
         """Get the contents of a file at a specific commit/branch."""
-        url = f"{BITBUCKET_API_BASE}/repositories/{workspace}/{repo_slug}/src/{commit}/{path}"
+        commit = self._resolve_commit(workspace, repo_slug, commit)
+        url = (
+            f"{BITBUCKET_API_BASE}/repositories/"
+            f"{quote(workspace, safe='')}/{quote(repo_slug, safe='')}"
+            f"/src/{commit}/{quote(path, safe='/')}"
+        )
+        _validate_bitbucket_url(url)
         headers = self._get_headers()
         response = requests.get(url, headers=headers, timeout=self.REQUEST_TIMEOUT)
         if response.status_code != 200:
@@ -241,7 +286,12 @@ class BitbucketAPIClient:
 
     def get_directory_tree(self, workspace, repo_slug, path="", commit="HEAD"):
         """Get directory listing at a path."""
-        url = f"{BITBUCKET_API_BASE}/repositories/{workspace}/{repo_slug}/src/{commit}/{path}"
+        commit = self._resolve_commit(workspace, repo_slug, commit)
+        url = (
+            f"{BITBUCKET_API_BASE}/repositories/"
+            f"{quote(workspace, safe='')}/{quote(repo_slug, safe='')}"
+            f"/src/{commit}/{quote(path, safe='/')}"
+        )
         params = {"format": "meta"}
         return self._get(url, params=params)
 

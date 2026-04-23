@@ -47,14 +47,14 @@ class AlertCorrelator:
 
     _NOT_CORRELATED = CorrelationResult(is_correlated=False)
 
-    ENABLED: bool = True
-    SHADOW_MODE: bool = False
-    TIME_WINDOW_SECONDS: int = 300
-    SCORE_THRESHOLD: float = 0.6
-    TOPOLOGY_WEIGHT: float = 0.5
-    TIME_WEIGHT: float = 0.3
-    SIMILARITY_WEIGHT: float = 0.2
-    MAX_GROUP_SIZE: int = 50
+    DEFAULT_ENABLED: bool = True
+    DEFAULT_SHADOW_MODE: bool = False
+    DEFAULT_TIME_WINDOW_SECONDS: int = 300
+    DEFAULT_SCORE_THRESHOLD: float = 0.6
+    DEFAULT_TOPOLOGY_WEIGHT: float = 0.5
+    DEFAULT_TIME_WEIGHT: float = 0.3
+    DEFAULT_SIMILARITY_WEIGHT: float = 0.2
+    DEFAULT_MAX_GROUP_SIZE: int = 50
 
     def __init__(
         self,
@@ -68,27 +68,27 @@ class AlertCorrelator:
         similarity_weight: Optional[float] = None,
         max_group_size: Optional[int] = None,
     ) -> None:
-        self.enabled = enabled if enabled is not None else self.ENABLED
-        self.shadow_mode = shadow_mode if shadow_mode is not None else self.SHADOW_MODE
+        self.enabled = enabled if enabled is not None else self.DEFAULT_ENABLED
+        self.shadow_mode = shadow_mode if shadow_mode is not None else self.DEFAULT_SHADOW_MODE
         self.time_window_seconds = (
             time_window_seconds
             if time_window_seconds is not None
-            else self.TIME_WINDOW_SECONDS
+            else self.DEFAULT_TIME_WINDOW_SECONDS
         )
         self.score_threshold = (
-            score_threshold if score_threshold is not None else self.SCORE_THRESHOLD
+            score_threshold if score_threshold is not None else self.DEFAULT_SCORE_THRESHOLD
         )
         self.topology_weight = (
-            topology_weight if topology_weight is not None else self.TOPOLOGY_WEIGHT
+            topology_weight if topology_weight is not None else self.DEFAULT_TOPOLOGY_WEIGHT
         )
-        self.time_weight = time_weight if time_weight is not None else self.TIME_WEIGHT
+        self.time_weight = time_weight if time_weight is not None else self.DEFAULT_TIME_WEIGHT
         self.similarity_weight = (
             similarity_weight
             if similarity_weight is not None
-            else self.SIMILARITY_WEIGHT
+            else self.DEFAULT_SIMILARITY_WEIGHT
         )
         self.max_group_size = (
-            max_group_size if max_group_size is not None else self.MAX_GROUP_SIZE
+            max_group_size if max_group_size is not None else self.DEFAULT_MAX_GROUP_SIZE
         )
 
         # Instantiate strategies

@@ -186,6 +186,7 @@ config:
   # --- Security ---
   RATE_LIMITING_ENABLED: "false"
   RATE_LIMIT_HEADERS_ENABLED: "true"
+  SPLUNK_SSL_VERIFY: "false" # "false" (default), "true", or path to a private CA bundle
   AURORA_VERIFY_CLI_IDENTITY: "false"
   
   # --- Optional Features (enable as needed) ---
@@ -434,9 +435,11 @@ resources:
     requests:
       cpu: "100m"
       memory: "256Mi"
+      ephemeral-storage: "100Mi"
     limits:
       cpu: "500m"
       memory: "1Gi"
+      ephemeral-storage: "1Gi"
   frontend:
     requests:
       cpu: "50m"
@@ -450,23 +453,29 @@ resources:
     requests:
       cpu: "50m"
       memory: "128Mi"
+      ephemeral-storage: "50Mi"
     limits:
       cpu: "200m"
       memory: "256Mi"
+      ephemeral-storage: "1Gi"
   searxng:
     requests:
       cpu: "50m"
       memory: "128Mi"
+      ephemeral-storage: "50Mi"
     limits:
       cpu: "300m"
       memory: "512Mi"
+      ephemeral-storage: "1Gi"
   weaviate:
     requests:
       cpu: "100m"
       memory: "512Mi"
+      ephemeral-storage: "100Mi"
     limits:
       cpu: "500m"
       memory: "1Gi"
+      ephemeral-storage: "1Gi"
   memgraph:
     requests:
       cpu: "100m"
@@ -487,16 +496,20 @@ resources:
     requests:
       cpu: "50m"
       memory: "128Mi"
+      ephemeral-storage: "50Mi"
     limits:
       cpu: "200m"
       memory: "256Mi"
+      ephemeral-storage: "1Gi"
   postgres:
     requests:
       cpu: "100m"
       memory: "512Mi"
+      ephemeral-storage: "50Mi"
     limits:
       cpu: "500m"
       memory: "1Gi"
+      ephemeral-storage: "1Gi"
   minio:
     requests:
       cpu: "50m"
