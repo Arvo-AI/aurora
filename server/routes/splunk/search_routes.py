@@ -3,6 +3,7 @@
 import logging
 import re
 from typing import Any, Dict, Optional, Tuple
+from urllib.parse import quote
 
 import requests
 from flask import Blueprint, Response, jsonify, request, stream_with_context
@@ -13,6 +14,8 @@ from utils.auth.rbac_decorators import require_permission
 
 SPLUNK_TIMEOUT = 30
 SPLUNK_SEARCH_TIMEOUT = 120
+
+from utils.splunk_config import SPLUNK_SSL_VERIFY
 
 # Regex for valid Splunk SID: alphanumerics, underscores, hyphens, dots
 SID_PATTERN = re.compile(r"^[a-zA-Z0-9_.\-]+$")
@@ -97,7 +100,7 @@ def search_sync(user_id):
             headers=_splunk_headers(creds["api_token"]),
             data=payload,
             timeout=SPLUNK_SEARCH_TIMEOUT,
-            verify=False,
+            verify=SPLUNK_SSL_VERIFY,
             stream=False,
         )
 
@@ -182,7 +185,7 @@ def create_search_job(user_id):
             headers=_splunk_headers(creds["api_token"]),
             data=payload,
             timeout=SPLUNK_TIMEOUT,
-            verify=False,
+            verify=SPLUNK_SSL_VERIFY,
         )
 
         if response.status_code == 401:
@@ -226,7 +229,7 @@ def get_job_status(user_id, sid: str):
         return jsonify({"error": "Splunk not connected"}), 400
 
     try:
-        url = f"{creds['base_url']}/services/search/v2/jobs/{sid}"
+        url = f"{creds['base_url']}/services/search/v2/jobs/{quote(sid, safe='')}"
         headers = _splunk_headers(creds["api_token"])
         headers["Accept"] = "application/json"
 
@@ -235,7 +238,7 @@ def get_job_status(user_id, sid: str):
             headers=headers,
             params={"output_mode": "json"},
             timeout=SPLUNK_TIMEOUT,
-            verify=False,
+            verify=SPLUNK_SSL_VERIFY,
         )
 
         if response.status_code == 404:
@@ -282,7 +285,7 @@ def get_job_results(user_id, sid: str):
     count = request.args.get("count", 1000, type=int)
 
     try:
-        url = f"{creds['base_url']}/services/search/v2/jobs/{sid}/results"
+        url = f"{creds['base_url']}/services/search/v2/jobs/{quote(sid, safe='')}/results"
         headers = _splunk_headers(creds["api_token"])
         headers["Accept"] = "application/json"
 
@@ -295,7 +298,7 @@ def get_job_results(user_id, sid: str):
                 "count": count,
             },
             timeout=SPLUNK_SEARCH_TIMEOUT,
-            verify=False,
+            verify=SPLUNK_SSL_VERIFY,
         )
 
         if response.status_code == 404:
@@ -333,13 +336,13 @@ def cancel_job(user_id, sid: str):
         return jsonify({"error": "Splunk not connected"}), 400
 
     try:
-        url = f"{creds['base_url']}/services/search/v2/jobs/{sid}/control"
+        url = f"{creds['base_url']}/services/search/v2/jobs/{quote(sid, safe='')}/control"
         response = requests.post(
             url,
             headers=_splunk_headers(creds["api_token"]),
             data={"action": "cancel"},
             timeout=SPLUNK_TIMEOUT,
-            verify=False,
+            verify=SPLUNK_SSL_VERIFY,
         )
 
         if response.status_code == 404:

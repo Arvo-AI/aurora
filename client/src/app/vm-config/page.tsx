@@ -1234,10 +1234,11 @@ export default function VMConfig() {
                               {(!vm.imageName ||
                                 vm.imageName === "Unknown") && (
                                 <div className="space-y-2">
-                                  <label className="text-sm font-medium text-orange-600 dark:text-orange-400">
+                                  <label htmlFor={`vm-ssh-username-${vm.id}`} className="text-sm font-medium text-orange-600 dark:text-orange-400">
                                     SSH Username (required - image unknown)
                                   </label>
                                   <input
+                                    id={`vm-ssh-username-${vm.id}`}
                                     type="text"
                                     placeholder={
                                       vm.platform === "Scaleway"

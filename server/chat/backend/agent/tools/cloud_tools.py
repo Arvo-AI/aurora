@@ -17,10 +17,10 @@ from contextlib import asynccontextmanager
 from threading import local
 import concurrent.futures
 
-_background_tasks: set = set()
-
 from langchain_core.tools import StructuredTool
 from .output_sanitizer import truncate_json_fields
+
+logger = logging.getLogger(__name__)
 
 # Import cloud tools
 from .iac_tool import run_iac_tool
@@ -39,6 +39,9 @@ from .trigger_rca_tool import trigger_rca, TriggerRCAArgs
 # Visualization trigger caching
 from cachetools import TTLCache
 _viz_triggers: TTLCache = TTLCache(maxsize=100, ttl=3600)  # 1 hour TTL
+
+# Strong references for fire-and-forget tasks so they aren't GC'd before completion.
+_background_tasks: "set[asyncio.Task]" = set()
 from chat.backend.constants import MAX_TOOL_OUTPUT_CHARS
 from .github_apply_fix_tool import github_apply_fix, GitHubApplyFixArgs
 from .cloud_exec_tool import cloud_exec
@@ -428,9 +431,16 @@ def send_tool_completion(tool_name: str, output: str, status: str = "completed",
                     loop = asyncio.get_event_loop()
                     if loop.is_running():
                         # If we're in an async context, schedule the send
-                        task = asyncio.create_task(agent_websocket_sender(result_data))
-                        _background_tasks.add(task)
-                        task.add_done_callback(_background_tasks.discard)
+                        def _on_ws_send_done(task: asyncio.Task) -> None:
+                            _background_tasks.discard(task)
+                            if not task.cancelled():
+                                exc = task.exception()
+                                if exc is not None:
+                                    logger.warning("Agent WebSocket send failed: %s", exc)
+
+                        _ws_send_task = asyncio.create_task(agent_websocket_sender(result_data))
+                        _background_tasks.add(_ws_send_task)
+                        _ws_send_task.add_done_callback(_on_ws_send_done)
                     else:
                         # If we're in a sync context, run in thread
                         loop.run_until_complete(agent_websocket_sender(result_data))

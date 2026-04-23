@@ -54,27 +54,36 @@ def write_terraform_files_from_zip(zip_path: str, workdir: str, cloud_provider: 
 
 
 def init_terraform(workdir: str, authenticator=None) -> bool:
-    """
-    Initialize Terraform in the given working directory.
-    Returns True if successful, False otherwise.
+    """Initialize Terraform in the given working directory.
+
+    .. deprecated::
+        Use ``iac_execution_core.run_terraform_command`` with
+        ``setup_terraform_environment_isolated`` instead for proper
+        credential isolation.
     """
     manager = TerraformManager(workdir, authenticator)
     return manager.init()
 
 
 def plan_terraform(workdir: str, authenticator=None) -> Tuple[bool, str]:
-    """
-    Run 'terraform plan' in the given working directory.
-    Returns (success, output).
+    """Run 'terraform plan' in the given working directory.
+
+    .. deprecated::
+        Use ``iac_execution_core.run_terraform_command`` with
+        ``setup_terraform_environment_isolated`` instead for proper
+        credential isolation.
     """
     manager = TerraformManager(workdir, authenticator)
     return manager.plan()
 
 
 def apply_terraform(workdir: str, authenticator=None) -> Tuple[bool, str]:
-    """
-    Run 'terraform apply' in the given working directory.
-    Returns (success, output).
+    """Run 'terraform apply' in the given working directory.
+
+    .. deprecated::
+        Use ``iac_execution_core.run_terraform_command`` with
+        ``setup_terraform_environment_isolated`` instead for proper
+        credential isolation.
     """
     manager = TerraformManager(workdir, authenticator)
     return manager.apply()

@@ -124,7 +124,7 @@ echo ""
 echo -e "${YELLOW}Checking: Variables in code but missing from .env.example...${NC}"
 MISSING_IN_ENV_EXAMPLE=$(comm -23 "$USED_VARS_FILE" "$ENV_EXAMPLE_VARS_FILE")
 
-if [ -n "$MISSING_IN_ENV_EXAMPLE" ]; then
+if [[ -n "$MISSING_IN_ENV_EXAMPLE" ]]; then
   echo -e "${RED}✗ ERROR: The following variables are used in code but not in .env.example:${NC}"
   echo "$MISSING_IN_ENV_EXAMPLE" | sed 's/^/  - /'
   echo ""
@@ -144,7 +144,7 @@ MISSING_DOCKER=$(echo "$MISSING_DOCKER" | grep -v '^IMAGE_BACKEND$' || true)
 MISSING_DOCKER=$(echo "$MISSING_DOCKER" | grep -v '^IMAGE_FRONTEND$' || true)
 # Add more CI-only vars here if needed in the future
 
-if [ -n "$MISSING_DOCKER" ]; then
+if [[ -n "$MISSING_DOCKER" ]]; then
   echo -e "${RED}✗ ERROR: The following variables are in docker-compose but not in .env.example:${NC}"
   echo "$MISSING_DOCKER" | sed 's/^/  - /'
   echo ""
@@ -159,10 +159,10 @@ echo -e "${BLUE}  Summary${NC}"
 echo -e "${BLUE}================================================${NC}"
 echo ""
 
-if [ $HAS_ERRORS -eq 0 ] && [ $HAS_WARNINGS -eq 0 ]; then
+if [[ $HAS_ERRORS -eq 0 && $HAS_WARNINGS -eq 0 ]]; then
   echo -e "${GREEN}✓ All checks passed! Environment variables are properly configured.${NC}"
   exit 0
-elif [ $HAS_ERRORS -eq 0 ]; then
+elif [[ $HAS_ERRORS -eq 0 ]]; then
   echo -e "${YELLOW}⚠ Validation passed with warnings.${NC}"
   exit 0
 else

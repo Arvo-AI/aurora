@@ -160,7 +160,7 @@ def build_terraform_validation_segment(state: Optional[Any]) -> str:
     if not terraform_code and not runtime_flag:
         return ""
 
-    needs_attention = runtime_flag or _has_terraform_placeholders(terraform_code or "")
+    needs_attention = runtime_flag or _has_terraform_placeholders(terraform_code)
     note_header = "TERRAFORM VALIDATION:\n"
     if needs_attention:
         details = (

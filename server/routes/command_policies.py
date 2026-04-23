@@ -6,7 +6,7 @@ Prefix: /api/org
 
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 
 from flask import Blueprint, jsonify, request
 
@@ -165,7 +165,7 @@ def update_policy(user_id, rule_id):
         return jsonify({"error": "No fields to update"}), 400
 
     updates.append("updated_at = %s")
-    params.append(datetime.utcnow())
+    params.append(datetime.now(timezone.utc))
     updates.append("updated_by = %s")
     params.append(user_id)
     params.extend([rule_id, org_id])

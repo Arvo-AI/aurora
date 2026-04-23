@@ -187,7 +187,7 @@ export function SplunkWebhookStep({ status, onDisconnect, loading }: SplunkWebho
             ) : webhookData ? (
               <div className="space-y-4">
                 <div>
-                  <label className="text-sm font-medium">Your Webhook URL</label>
+                  <span className="text-sm font-medium">Your Webhook URL</span>
                   <div className="flex gap-2 mt-1">
                     <code className="flex-1 p-2 bg-muted rounded text-xs break-all">
                       {webhookData.webhookUrl}

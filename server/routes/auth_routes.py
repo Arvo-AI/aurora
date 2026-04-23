@@ -15,6 +15,8 @@ import os
 
 auth_bp = Blueprint('auth', __name__, url_prefix='/api/auth')
 
+_DUMMY_BCRYPT_HASH = bcrypt.hashpw(os.urandom(16), bcrypt.gensalt()).decode('utf-8')
+
 FRONTEND_URL = os.getenv("FRONTEND_URL")
 
 SLUG_REGEX = re.compile(r'^[a-z0-9][a-z0-9-]{0,48}[a-z0-9]$')
@@ -308,7 +310,7 @@ def login():
                     user_id, user_email, user_name, password_hash, user_role, user_org_id, user_org_name, must_change_pw = user
                 else:
                     # Dummy hash to maintain consistent timing
-                    password_hash = bcrypt.hashpw(b'dummy', bcrypt.gensalt()).decode('utf-8')
+                    password_hash = _DUMMY_BCRYPT_HASH
                 
                 # Verify password (runs regardless of whether user exists)
                 password_valid = bcrypt.checkpw(password.encode('utf-8'), password_hash.encode('utf-8'))

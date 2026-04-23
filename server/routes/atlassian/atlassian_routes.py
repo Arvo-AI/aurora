@@ -7,9 +7,11 @@ authorization flow.  Stores separate ``provider`` entries per product.
 from __future__ import annotations
 
 import logging
+import re
 import secrets as _secrets
 import time
 from typing import Any, Dict, List, Optional
+from urllib.parse import quote
 
 from flask import Blueprint, jsonify, request
 
@@ -93,10 +95,14 @@ def _validate_jira(access_token: str, base_url: str, auth_type: str, cloud_id: O
 
 def _validate_jsm_ops(access_token: str, cloud_id: str) -> Optional[Dict[str, Any]]:
     """Validate JSM Operations credentials via a lightweight alerts query."""
-    if not cloud_id:
+    if not isinstance(cloud_id, str) or not cloud_id.strip():
         logger.warning("[ATLASSIAN] JSM Ops validation requires a cloud_id")
         return None
-    url = f"https://api.atlassian.com/jsm/ops/api/{cloud_id}/v1/alerts"
+    cloud_id = cloud_id.strip().lower()
+    if not re.fullmatch(r'[a-f0-9\-]{1,64}', cloud_id):
+        logger.warning("[ATLASSIAN] JSM Ops cloud_id has invalid format")
+        return None
+    url = f"https://api.atlassian.com/jsm/ops/api/{quote(cloud_id, safe='')}/v1/alerts"
     headers = {"Authorization": f"Bearer {access_token}", "Accept": "application/json"}
     try:
         r = requests.get(url, headers=headers, params={"limit": 1}, timeout=10)
