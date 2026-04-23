@@ -9,7 +9,7 @@ import time
 from typing import Dict, Optional, List, Any
 from utils.db.connection_pool import db_pool
 from utils.auth.stateless_auth import set_rls_context
-from utils.log_sanitizer import sanitize, safe_provider, hash_for_log
+from utils.log_sanitizer import safe_provider, hash_for_log
 
 logger = logging.getLogger(__name__)
 

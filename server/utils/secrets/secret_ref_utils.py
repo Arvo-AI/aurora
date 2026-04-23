@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Optional, Dict, Any, Set, Tuple
 
 from utils.db.db_utils import connect_to_db_as_admin
 from utils.auth.stateless_auth import set_rls_context
-from utils.log_sanitizer import sanitize, safe_provider
+from utils.log_sanitizer import safe_provider
 from utils.secrets.secret_cache import (
     get_cached_secret,
     update_secret_cache,
