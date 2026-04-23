@@ -30,6 +30,9 @@ load_dotenv()
 
 from collections import defaultdict
 import asyncio
+
+# Strong references for fire-and-forget tasks so they aren't GC'd before completion.
+_background_tasks: "set[asyncio.Task]" = set()
 from langchain_core.messages import AIMessageChunk, HumanMessage, AIMessage
 import websockets
 import logging
@@ -164,7 +167,9 @@ async def _ws_reject(websocket, text: str, *, close_reason: str = ""):
 
 def _warm_user_caches(user_id: str):
     """Kick off background tasks that pre-warm per-user caches."""
-    asyncio.create_task(update_api_cost_cache_async(user_id))
+    _cost_warm_task = asyncio.create_task(update_api_cost_cache_async(user_id))
+    _background_tasks.add(_cost_warm_task)
+    _cost_warm_task.add_done_callback(_background_tasks.discard)
     logger.info(f"Started preemptive API cost cache update for user {user_id}")
 
     try:
@@ -567,13 +572,15 @@ async def process_workflow_async(wf, state, websocket, user_id, incident_id=None
                                 # Save tokens incrementally to incident thoughts
                                 save_incident_thought(token_text, force=False)
                                 save_streaming_chat_message(token_text, force=False)
-                    
+
                     elif event_type == "values":
-                        # Final state update
-                        logger.debug(f"[STREAM DEBUG] Received values event")
-                        # Handle final state if needed
+                        # Stub: skip complete-state "values" events.
+                        # The real handler below would re-send content already streamed
+                        # via the "messages" event path, causing duplicates in the UI / DB.
+                        # Keep this branch first so the duplicate-send path is unreachable.
+                        logger.debug("[STREAM DEBUG] Received values event (skipped to avoid duplicate sends)")
                         continue
-                    
+
                     elif event_type == "messages":
                         try:
                             msg_chunk, _ = event_data
@@ -819,7 +826,9 @@ async def process_workflow_async(wf, state, websocket, user_id, incident_id=None
         try:
             # Update API cost cache after workflow completion to capture new usage
             # This ensures that any LLM usage from this workflow is immediately reflected
-            asyncio.create_task(update_api_cost_cache_async(user_id))
+            _cost_update_task = asyncio.create_task(update_api_cost_cache_async(user_id))
+            _background_tasks.add(_cost_update_task)
+            _cost_update_task.add_done_callback(_background_tasks.discard)
             logger.debug(f"Triggered post-request API cost update for user {user_id}")
 
             is_cached, total_cost = get_cached_api_cost(user_id)
@@ -872,16 +881,8 @@ async def handle_connection(websocket) -> None:
             await websocket.close(code=1008, reason="Invalid authentication token")
             return
 
-        # Eagerly warm caches for token-authenticated users
-        asyncio.get_event_loop().call_soon(
-            lambda uid=token_user_id: asyncio.ensure_future(update_api_cost_cache_async(uid))
-        )
-        try:
-            from chat.backend.agent.tools.mcp_preloader import preload_user_tools, update_user_activity
-            preload_user_tools(token_user_id)
-            update_user_activity(token_user_id)
-        except Exception as e:
-            logger.debug(f"Token preload failed: {e}")
+        # Eagerly warm caches for token-authenticated users (tracked-task pattern)
+        _warm_user_caches(token_user_id)
     elif _INTERNAL_API_SECRET:
         logger.warning(f"WebSocket connection {client_id} has no valid token (INTERNAL_API_SECRET is set)")
         await websocket.send(json.dumps({

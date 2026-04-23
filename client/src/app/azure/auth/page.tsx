@@ -974,8 +974,9 @@ export default function AzureAuthPage() {
         {authMethod === 'manual_credentials' && (
           <div className="bg-card shadow rounded-lg p-6 mb-8">
             <div className="flex flex-col md:flex-row gap-6">
-              <div 
-                className={`flex-1 p-6 cursor-pointer transition-all duration-200 ${
+              <button
+                type="button"
+                className={`flex-1 p-6 cursor-pointer transition-all duration-200 text-left bg-transparent border-0 ${
                   currentStep === 2 ? 'ring-2 ring-blue-500 rounded-lg' : 'hover:shadow-lg rounded-lg'
                 }`}
                 onClick={() => {
@@ -987,10 +988,11 @@ export default function AzureAuthPage() {
                 <p className="text-muted-foreground">
                   If you already have Aurora service principal credentials, you can enter them directly.
                 </p>
-              </div>
+              </button>
 
-              <div 
-                className={`flex-1 p-6 cursor-pointer transition-all duration-200 ${
+              <button
+                type="button"
+                className={`flex-1 p-6 cursor-pointer transition-all duration-200 text-left bg-transparent border-0 ${
                   currentStep === 1 ? 'ring-2 ring-blue-500 rounded-lg' : 'hover:shadow-lg rounded-lg'
                 }`}
                 onClick={() => setCurrentStep(1)}
@@ -999,7 +1001,7 @@ export default function AzureAuthPage() {
                 <p className="text-muted-foreground">
                   If this is your first time connecting Aurora to Azure, follow the steps below to create a new service principal.
                 </p>
-              </div>
+              </button>
             </div>
           </div>
         )}
@@ -1305,9 +1307,10 @@ kubectl create clusterrolebinding aurora-sp-admin-binding --clusterrole=cluster-
             ) : storedCredentials.length > 0 ? (
               <div className="space-y-4 mb-6">
                 {storedCredentials.map((cred: any, index: number) => (
-                  <div 
+                  <button
+                    type="button"
                     key={cred.subscriptionId || index}
-                    className={`p-4 border rounded-lg cursor-pointer transition-all ${
+                    className={`w-full p-4 border rounded-lg cursor-pointer transition-all text-left bg-transparent ${
                       subscriptionId === cred.subscriptionId
                         ? 'border-blue-500 bg-blue-50 dark:border-blue-400 dark:bg-gray-700'
                         : 'border-gray-200 dark:border-gray-600 hover:border-blue-300 dark:hover:border-blue-400'
@@ -1334,7 +1337,7 @@ kubectl create clusterrolebinding aurora-sp-admin-binding --clusterrole=cluster-
                         </div>
                       )}
                     </div>
-                  </div>
+                  </button>
                 ))}
               </div>
             ) : (

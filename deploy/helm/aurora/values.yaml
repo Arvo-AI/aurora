@@ -444,9 +444,11 @@ resources:
     requests:
       cpu: "50m"
       memory: "256Mi"
+      ephemeral-storage: "512Mi"
     limits:
       cpu: "300m"
       memory: "512Mi"
+      ephemeral-storage: "1Gi"
   redis:
     requests:
       cpu: "50m"
