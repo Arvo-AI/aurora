@@ -221,12 +221,14 @@ def _check_guardrails(args: Union[str, List[str]]) -> Optional[CompletedProcess]
         return None
 
     cmd = args if isinstance(args, str) else " ".join(str(a) for a in args)
+    from utils.security.command_safety import _fingerprint
+    cmd_fp = _fingerprint(cmd)
 
     if config.signature_check:
         from utils.security.signature_match import check_signature
         sig = check_signature(cmd)
         if sig.matched:
-            logger.warning("[Guardrails:L2] BLOCKED cmd=%s technique=%s rule=%s", cmd[:100], sig.technique, sig.rule_id)
+            logger.warning("[Guardrails:L2] BLOCKED cmd_fp=%s technique=%s rule=%s", cmd_fp, sig.technique, sig.rule_id)
             return CompletedProcess(args=args, returncode=126, stdout="", stderr=f"Blocked by safety guardrail: {sig.description}")
 
     if config.llm_judge:
@@ -235,11 +237,11 @@ def _check_guardrails(args: Union[str, List[str]]) -> Optional[CompletedProcess]
             ctx = get_user_context()
             uid, sid = ctx.get("user_id"), ctx.get("session_id")
         except Exception:
-            pass
+            logger.debug("[Guardrails] user context unavailable; proceeding without it", exc_info=True)
         from utils.security.command_safety import check_command_safety
         verdict = check_command_safety(cmd, tool_name="terminal_run", user_id=uid, session_id=sid)
         if verdict.conclusion:
-            logger.warning("[Guardrails:L4] BLOCKED cmd=%s reason=%s", cmd[:100], verdict.thought)
+            logger.warning("[Guardrails:L4] BLOCKED cmd_fp=%s", cmd_fp)
             return CompletedProcess(args=args, returncode=126, stdout="", stderr=f"Blocked by safety guardrail: {verdict.thought}")
 
     return None

@@ -21,12 +21,15 @@ class GuardrailsConfig:
 
 def _load() -> GuardrailsConfig:
     on = os.getenv("GUARDRAILS_ENABLED", "false").lower() == "true"
+    fail_mode = os.getenv("GUARDRAILS_LLM_FAIL_MODE", "open").strip().lower()
+    if fail_mode not in {"open", "closed"}:
+        fail_mode = "open"
     return GuardrailsConfig(
         enabled=on,
         signature_check=on and os.getenv("GUARDRAILS_SIGNATURE_CHECK", "true").lower() != "false",
         llm_judge=on and os.getenv("GUARDRAILS_LLM_JUDGE", "true").lower() != "false",
         llm_model=os.getenv("GUARDRAILS_LLM_MODEL", ""),
-        llm_fail_mode=os.getenv("GUARDRAILS_LLM_FAIL_MODE", "open"),
+        llm_fail_mode=fail_mode,
         llm_base_url=os.getenv("GUARDRAILS_LLM_BASE_URL", ""),
         llm_api_key=os.getenv("GUARDRAILS_LLM_API_KEY", ""),
     )

@@ -8,6 +8,7 @@ rewritten to evaluate inherent danger rather than intent alignment.
 """
 
 import concurrent.futures
+import hashlib
 import logging
 import time
 from functools import lru_cache
@@ -20,6 +21,11 @@ from utils.security.config import config
 logger = logging.getLogger(__name__)
 
 _TIMEOUT_SECONDS = 10
+
+
+def _fingerprint(command: str) -> str:
+    """Stable, non-reversible fingerprint for log correlation without leaking content."""
+    return hashlib.sha256(command.encode("utf-8", errors="replace")).hexdigest()[:16]
 
 
 SYSTEM_PROMPT: str = """
@@ -117,11 +123,7 @@ def check_command_safety(
 
     user_message = _get_latest_user_message()
     if not user_message:
-        return SafetyVerdict(
-            observation="no user context",
-            thought="cannot evaluate without original user message",
-            conclusion=False,
-        )
+        return _fail_verdict("missing user context")
 
     prompt = _USER_PROMPT.format(user_message=user_message, trace=f"[{tool_name}] {command}")
 
@@ -129,8 +131,8 @@ def check_command_safety(
         verdict = _call_llm(prompt, user_id, session_id)
         if verdict.conclusion:
             logger.warning(
-                "[CommandSafety] BLOCKED user=%s session=%s tool=%s cmd=%s reason=%s",
-                user_id, session_id, tool_name, command[:200], verdict.thought,
+                "[CommandSafety] BLOCKED user=%s session=%s tool=%s cmd_fp=%s",
+                user_id, session_id, tool_name, _fingerprint(command),
             )
         return verdict
     except concurrent.futures.TimeoutError:
@@ -218,7 +220,7 @@ def _track_usage(user_id, session_id, messages, start, error_msg):
             api_provider=os.getenv("LLM_PROVIDER_MODE", "direct"),
         )
     except Exception:
-        pass
+        logger.debug("[CommandSafety] Usage tracking failed", exc_info=True)
 
 
 def _get_latest_user_message() -> Optional[str]:
