@@ -262,12 +262,12 @@ OLLAMA_BASE_URL=http://host.docker.internal:11434
 
 ### AI Safety Guardrails
 
-Two-layer command safety: signature matcher + LLM safety judge. See [Command Safety](./command-safety.md) for details.
+Three-layer safety: input rail + signature matcher + LLM safety judge. See [Command Safety](./command-safety.md) for details.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `GUARDRAILS_ENABLED` | `false` | Master switch. When `true`, both layers run on every command and the judge fails closed on error. |
-| `GUARDRAILS_LLM_MODEL` | _(MAIN_MODEL)_ | Model used by the safety judge. Same format and routing as `MAIN_MODEL`. |
+| `GUARDRAILS_ENABLED` | `false` | Master switch. When `true`, all three layers run and every LLM check fails closed on error. |
+| `GUARDRAILS_LLM_MODEL` | _(MAIN_MODEL)_ | Model used by the safety judge and input rail. Same format and routing as `MAIN_MODEL`. |
 
 ## Cloud Providers
 
