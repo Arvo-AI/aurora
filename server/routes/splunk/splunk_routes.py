@@ -10,7 +10,6 @@ from flask import Blueprint, jsonify, request
 from routes.splunk.tasks import process_splunk_alert
 from utils.db.connection_pool import db_pool
 from utils.web.cors_utils import create_cors_response
-from utils.logging.secure_logging import mask_credential_value
 from utils.auth.stateless_auth import (
     get_org_id_from_request,
     get_user_preference,
@@ -19,7 +18,7 @@ from utils.auth.stateless_auth import (
 )
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.auth.rbac_decorators import require_permission
-from utils.log_sanitizer import sanitize
+from utils.log_sanitizer import sanitize, hash_for_log
 from utils.secrets.secret_ref_utils import delete_user_secret
 SPLUNK_TIMEOUT = 15
 
@@ -145,8 +144,7 @@ def connect(user_id):
     if not base_url:
         return jsonify({"error": "A valid Splunk instance URL is required (e.g., https://your-instance.splunkcloud.com:8089)"}), 400
 
-    masked_token = mask_credential_value(api_token)
-    logger.info(f"[SPLUNK] Connecting user {sanitize(user_id)} to {sanitize(base_url)} (token={masked_token})")
+    logger.info(f"[SPLUNK] Connecting user {sanitize(user_id)} to {sanitize(base_url)} (token_hash={hash_for_log(api_token)})")
 
     client = SplunkClient(base_url, api_token)
 

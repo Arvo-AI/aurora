@@ -7,7 +7,7 @@ from typing import Optional, List, Dict
 
 from utils.db.db_utils import connect_to_db_as_user, connect_to_db_as_admin
 from utils.auth.stateless_auth import set_rls_context
-from utils.log_sanitizer import sanitize
+from utils.log_sanitizer import sanitize, safe_provider, hash_for_log
 
 logger = logging.getLogger(__name__)
 
@@ -81,7 +81,7 @@ def save_connection_metadata(
                 ),
             )
         conn.commit()
-        logger.info("[CONN-META] Upsert successful for %s/%s/%s", sanitize(user_id), sanitize(provider), sanitize(account_id))
+        logger.info("[CONN-META] Upsert successful user=%s provider=%s account=%s", hash_for_log(user_id), safe_provider(provider), hash_for_log(account_id))
         return True
     except Exception as e:
         logger.error("Failed to save connection metadata: %s", e)
@@ -110,16 +110,16 @@ def set_connection_status(
         conn = connect_to_db_as_admin()
         logger.info(
             "[CONN-META] Updating status user=%s provider=%s account=%s → %s",
-            sanitize(user_id),
-            sanitize(provider),
-            sanitize(account_id),
+            hash_for_log(user_id),
+            safe_provider(provider),
+            hash_for_log(account_id),
             sanitize(status),
         )
         with conn.cursor() as cur:
             set_rls_context(cur, conn, user_id, log_prefix="[CONN-META:setStatus]")
             cur.execute(sql, (status, datetime.now(timezone.utc), user_id, provider, account_id))
         conn.commit()
-        logger.info("[CONN-META] Status update success for %s/%s/%s", sanitize(user_id), sanitize(provider), sanitize(account_id))
+        logger.info("[CONN-META] Status update success user=%s provider=%s account=%s", hash_for_log(user_id), safe_provider(provider), hash_for_log(account_id))
         return True
     except Exception as e:
         logger.error("Failed to set connection status: %s", e)
