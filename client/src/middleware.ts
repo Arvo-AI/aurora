@@ -86,8 +86,8 @@ export default auth((req) => {
 
   const response = NextResponse.next()
 
-  const backendOrigin = process.env.PUBLIC_API_URL || ''
-  const wsOrigin = process.env.PUBLIC_WS_URL || ''
+  const backendOrigin = process.env.PUBLIC_API_URL || process.env.NEXT_PUBLIC_BACKEND_URL || ''
+  const wsOrigin = process.env.PUBLIC_WS_URL || process.env.NEXT_PUBLIC_WEBSOCKET_URL || ''
   const connectSrc = [
     "'self'",
     backendOrigin,
