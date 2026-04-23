@@ -10,11 +10,6 @@ concurrency:
   group: publish-helm-${{ github.ref }}
   cancel-in-progress: true
 
-permissions:
-  contents: write   # GitHub Pages release assets
-  packages: write   # GHCR OCI push
-  pages: write      # gh-pages branch
-
 env:
   CHART_DIR: deploy/helm
   OCI_REGISTRY: ghcr.io
@@ -55,7 +50,9 @@ jobs:
     runs-on: ubuntu-24.04
     needs: [validate-version]
     if: github.repository == 'Arvo-AI/aurora' && needs.validate-version.result == 'success'
-
+    permissions:
+      contents: write   # GitHub Pages release assets + gh-pages branch
+      pages: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
@@ -87,6 +84,9 @@ jobs:
     runs-on: ubuntu-24.04
     needs: [validate-version]
     if: github.repository == 'Arvo-AI/aurora' && needs.validate-version.result == 'success'
+    permissions:
+      contents: read
+      packages: write   # GHCR OCI push
     outputs:
       chart_version: ${{ steps.package.outputs.chart_version }}
 

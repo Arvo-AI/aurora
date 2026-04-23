@@ -14,17 +14,16 @@ concurrency:
   group: publish-airtight-${{ github.ref }}
   cancel-in-progress: true
 
-permissions:
-  contents: read
-  id-token: write
-  attestations: write
-  artifact-metadata: write
-
 jobs:
   airtight:
     name: Airtight ${{ matrix.arch }}
     runs-on: ${{ matrix.runner }}
     if: github.repository == 'Arvo-AI/aurora'
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
 
     strategy:
       fail-fast: false
