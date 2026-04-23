@@ -312,7 +312,7 @@ def delete_connection_secret(
             row = cur.fetchone()
             
             if not row:
-                logger.warning("[CONN-META] No active connection found for %s/%s/%s", sanitize(user_id), sanitize(provider), sanitize(account_id))
+                logger.warning("[CONN-META] No active connection found for user=%s provider=%s account=%s", hash_for_log(user_id), safe_provider(provider), hash_for_log(account_id))
                 return False
 
             if provider in ['gcp', 'azure', 'github']:
@@ -332,7 +332,7 @@ def delete_connection_secret(
                         # Column doesn't exist or no secret_ref - that's fine
                         pass
                 except Exception as e:
-                    logger.warning("[CONN-META] Vault secret deletion skipped for %s/%s/%s: %s", sanitize(user_id), sanitize(provider), sanitize(account_id), e)
+                    logger.warning("[CONN-META] Vault secret deletion skipped for user=%s provider=%s account=%s: %s", hash_for_log(user_id), safe_provider(provider), hash_for_log(account_id), e)
 
             cur.execute(
                 sql_update,
@@ -346,10 +346,10 @@ def delete_connection_secret(
 
         conn.commit()
         logger.info(
-            "[CONN-META] Connection %s/%s/%s marked as inactive",
-            sanitize(user_id),
-            sanitize(provider),
-            sanitize(account_id),
+            "[CONN-META] Connection user=%s provider=%s account=%s marked as inactive",
+            hash_for_log(user_id),
+            safe_provider(provider),
+            hash_for_log(account_id),
         )
         return True
     except Exception as e:

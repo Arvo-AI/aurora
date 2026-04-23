@@ -168,9 +168,9 @@ class SecretRefManager:
             )
             if cursor.rowcount > 0:
                 conn.commit()
-                logger.info("Updated secret_ref for provider %s", provider)
+                logger.info("Updated secret_ref for provider %s", safe_provider(provider))
                 return True
-            logger.warning("No record found for provider %s", provider)
+            logger.warning("No record found for provider %s", safe_provider(provider))
             return False
         except Exception as e:
             logger.error("Failed to update secret_ref: %s", e)
@@ -207,7 +207,7 @@ class SecretRefManager:
             )
             return cursor.fetchone() is not None
         except Exception as e:
-            logger.debug("Error checking credentials for provider %s: %s", provider, e)
+            logger.debug("Error checking credentials for provider %s: %s", safe_provider(provider), e)
             return False
         finally:
             if cursor:
@@ -243,7 +243,7 @@ class SecretRefManager:
 
             result = cursor.fetchone()
             if not result:
-                logger.debug("No secret reference found for provider %s", provider)
+                logger.debug("No secret reference found for provider %s", safe_provider(provider))
                 return None
 
             secret_ref, role_arn, external_id_secret_ref = result
@@ -310,7 +310,7 @@ class SecretRefManager:
 
             result = cursor.fetchone()
             if not result:
-                logger.info("No token data to migrate for provider %s", provider)
+                logger.info("No token data to migrate for provider %s", safe_provider(provider))
                 return False
 
             token_data = result[0]
@@ -327,7 +327,7 @@ class SecretRefManager:
             )
 
             conn.commit()
-            logger.info("Successfully migrated token to Vault for provider %s", provider)
+            logger.info("Successfully migrated token to Vault for provider %s", safe_provider(provider))
             return True
 
         except Exception as e:
@@ -366,7 +366,7 @@ class SecretRefManager:
                 provider,
             )
         except Exception as e:
-            logger.warning("Failed to clear stale secret_ref for provider %s: %s", provider, e)
+            logger.warning("Failed to clear stale secret_ref for provider %s: %s", safe_provider(provider), e)
         finally:
             if cursor:
                 cursor.close()
@@ -421,7 +421,7 @@ class SecretRefManager:
             return delete_success, deleted_rows
 
         except Exception as e:
-            logger.error("Failed to delete user secret for provider %s: %s", provider, e)
+            logger.error("Failed to delete user secret for provider %s: %s", safe_provider(provider), e)
             if conn:
                 conn.rollback()
             return False, 0
