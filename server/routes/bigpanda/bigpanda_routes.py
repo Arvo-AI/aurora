@@ -163,7 +163,7 @@ def webhook(user_id: str):
         process_bigpanda_event.delay(payload, {"headers": sanitized_headers, "remote_addr": request.remote_addr}, user_id)
         return jsonify({"received": True})
     except Exception:
-        logger.exception("[BIGPANDA] Failed to enqueue webhook event for user %s", user_id)
+        logger.exception("[BIGPANDA] Failed to enqueue webhook event for user %s", sanitize(user_id))
         return jsonify({"error": "Failed to process webhook"}), 503
 
 

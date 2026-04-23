@@ -200,7 +200,7 @@ def set_aws_role(user_id, workspace_id):
                     "Read-only role validation failed for workspace %s using %s: %s",
                     sanitize(workspace_id),
                     sanitize(read_only_role_arn),
-                    read_only_error,
+                    sanitize(read_only_error),
                 )
                 return jsonify({
                     "error": "Read-only role assumption failed",

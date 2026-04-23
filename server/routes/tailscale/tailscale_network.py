@@ -66,7 +66,7 @@ def get_dns_config(user_id):
         response = {"dns": dns_config}
         if errors:
             response["partialErrors"] = errors
-            logger.warning(f"Partial DNS fetch errors for user {g.user_id}: {errors}")
+            logger.warning(f"Partial DNS fetch errors for user {sanitize(g.user_id)}: {sanitize(errors)}")
 
         return jsonify(response)
 
@@ -114,7 +114,7 @@ def dns_nameservers_post(user_id):
         if not success:
             return jsonify({"error": error}), 400
 
-        logger.info(f"DNS nameservers updated by user {g.user_id}")
+        logger.info(f"DNS nameservers updated by user {sanitize(g.user_id)}")
 
         return jsonify({
             "success": True,
@@ -162,7 +162,7 @@ def dns_preferences_post(user_id):
         if not success:
             return jsonify({"error": error}), 400
 
-        logger.info(f"DNS preferences updated by user {g.user_id}")
+        logger.info(f"DNS preferences updated by user {sanitize(g.user_id)}")
 
         return jsonify({
             "success": True,
@@ -213,7 +213,7 @@ def dns_searchpaths_post(user_id):
         if not success:
             return jsonify({"error": error}), 400
 
-        logger.info(f"DNS search paths updated by user {g.user_id}")
+        logger.info(f"DNS search paths updated by user {sanitize(g.user_id)}")
 
         return jsonify({
             "success": True,
@@ -312,7 +312,7 @@ def auth_keys_post(user_id):
         if not success:
             return jsonify({"error": error}), 400
 
-        logger.info(f"Auth key created by user {g.user_id}")
+        logger.info(f"Auth key created by user {sanitize(g.user_id)}")
 
         return jsonify({
             "success": True,
@@ -360,7 +360,7 @@ def auth_key_detail(user_id, key_id: str):
         return jsonify({"key": key_data})
 
     except Exception as e:
-        logger.error(f"Error with Tailscale auth key {key_id}: {e}", exc_info=True)
+        logger.error(f"Error with Tailscale auth key {sanitize(key_id)}: {sanitize(e)}", exc_info=True)
         return jsonify({"error": "Failed to process auth key request"}), 500
 
 

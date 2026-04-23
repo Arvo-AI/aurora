@@ -315,7 +315,7 @@ def delete_document_chunks(user_id: str, document_id: str) -> int:
         return deleted_count
 
     except Exception as e:
-        logger.error(f"[KB Weaviate] Error deleting chunks for doc {document_id}: {e}")
+        logger.error(f"[KB Weaviate] Error deleting chunks for doc {sanitize(document_id)}: {sanitize(e)}")
         return -1  # Return -1 to distinguish error from "deleted 0 chunks"
 
 
@@ -336,11 +336,11 @@ def delete_user_chunks(user_id: str) -> int:
         result = collection.data.delete_many(where=user_filter)
 
         deleted_count = result.successful if hasattr(result, "successful") else 0
-        logger.info(f"[KB Weaviate] Deleted {deleted_count} chunks for user {user_id}")
+        logger.info(f"[KB Weaviate] Deleted {deleted_count} chunks for user {sanitize(user_id)}")
         return deleted_count
 
     except Exception as e:
-        logger.error(f"[KB Weaviate] Error deleting chunks for user {user_id}: {e}")
+        logger.error(f"[KB Weaviate] Error deleting chunks for user {sanitize(user_id)}: {sanitize(e)}")
         return -1  # Return -1 to distinguish error from "deleted 0 chunks"
 
 

@@ -137,10 +137,10 @@ def backfill_user_org_data(cursor, user_id: str, org_id: str) -> dict:
         total = sum(results.values())
         logger.info(
             "Backfilled org_id for user %s across %d table(s): %d row(s) total — %s",
-            user_id, len(results), total, results,
+            sanitize(user_id), len(results), total, results,
         )
     else:
-        logger.info("No orphaned data to backfill for user %s", user_id)
+        logger.info("No orphaned data to backfill for user %s", sanitize(user_id))
 
     return results
 

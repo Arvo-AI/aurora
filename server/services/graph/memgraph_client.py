@@ -88,7 +88,7 @@ class MemgraphClient:
             with driver.session() as session:
                 session.run(query, params or {})
         except Exception as e:
-            logger.error(f"Memgraph execute error: {e}\nQuery: {query}")
+            logger.error(f"Memgraph execute error: {sanitize(e)}\nQuery: {sanitize(query)}")
             raise
 
     # =========================================================================

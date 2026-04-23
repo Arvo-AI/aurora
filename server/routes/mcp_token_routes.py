@@ -129,7 +129,7 @@ def revoke_mcp_token(user_id, token_id):
         if not result:
             return jsonify({'error': 'Token not found or unauthorized'}), 404
 
-        logger.info(f"Revoked MCP token {token_id} for user {user_id}")
+        logger.info(f"Revoked MCP token {token_id} for user {sanitize(user_id)}")
         return jsonify({'success': True, 'message': 'Token revoked'}), 200
     except Exception as e:
         logger.error(f"Error revoking MCP token: {e}", exc_info=True)

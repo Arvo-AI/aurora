@@ -58,7 +58,7 @@ def list_devices(user_id):
         return jsonify({"devices": devices})
 
     except Exception as e:
-        logger.error(f"Error listing Tailscale devices: {e}", exc_info=True)
+        logger.error(f"Error listing Tailscale devices: {sanitize(e)}", exc_info=True)
         return jsonify({"error": "Failed to list devices"}), 500
 
 
@@ -89,7 +89,7 @@ def device_detail(user_id, device_id: str):
         return jsonify({"device": device})
 
     except Exception as e:
-        logger.error(f"Error with Tailscale device {device_id}: {e}", exc_info=True)
+        logger.error(f"Error with Tailscale device {sanitize(device_id)}: {sanitize(e)}", exc_info=True)
         return jsonify({"error": "Failed to process device request"}), 500
 
 
@@ -113,7 +113,7 @@ def authorize_device(user_id, device_id: str):
         })
 
     except Exception as e:
-        logger.error(f"Error authorizing Tailscale device {device_id}: {e}", exc_info=True)
+        logger.error(f"Error authorizing Tailscale device {sanitize(device_id)}: {sanitize(e)}", exc_info=True)
         return jsonify({"error": "Failed to authorize device"}), 500
 
 
@@ -150,7 +150,7 @@ def set_device_tags(user_id, device_id: str):
         })
 
     except Exception as e:
-        logger.error(f"Error setting Tailscale device tags: {e}", exc_info=True)
+        logger.error(f"Error setting Tailscale device tags: {sanitize(e)}", exc_info=True)
         return jsonify({"error": "Failed to set device tags"}), 500
 
 
@@ -187,7 +187,7 @@ def set_device_routes(user_id, device_id: str):
         })
 
     except Exception as e:
-        logger.error(f"Error setting Tailscale device routes: {e}", exc_info=True)
+        logger.error(f"Error setting Tailscale device routes: {sanitize(e)}", exc_info=True)
         return jsonify({"error": "Failed to set device routes"}), 500
 
 
@@ -222,5 +222,5 @@ def set_device_key_expiry(user_id, device_id: str):
         })
 
     except Exception as e:
-        logger.error(f"Error setting Tailscale device key expiry: {e}", exc_info=True)
+        logger.error(f"Error setting Tailscale device key expiry: {sanitize(e)}", exc_info=True)
         return jsonify({"error": "Failed to set key expiry"}), 500

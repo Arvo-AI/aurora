@@ -122,7 +122,7 @@ def _get_stored_splunk_credentials(user_id: str) -> Optional[Dict[str, Any]]:
     try:
         return get_token_data(user_id, "splunk")
     except Exception as exc:
-        logger.error(f"Failed to retrieve Splunk credentials for user {user_id}: {exc}")
+        logger.error(f"Failed to retrieve Splunk credentials for user {sanitize(user_id)}: {sanitize(exc)}")
         return None
 
 
@@ -209,7 +209,7 @@ def status(user_id):
     base_url = creds.get("base_url")
 
     if not api_token or not base_url:
-        logger.warning(f"[SPLUNK] Incomplete credentials for user {user_id}")
+        logger.warning(f"[SPLUNK] Incomplete credentials for user {sanitize(user_id)}")
         return jsonify({"connected": False})
 
     client = SplunkClient(base_url, api_token)
@@ -218,7 +218,7 @@ def status(user_id):
         server_info = client.get_server_info()
         user_context = client.get_current_user()
     except SplunkAPIError as exc:
-        logger.warning(f"[SPLUNK] Status check failed for user {user_id}: {exc}")
+        logger.warning(f"[SPLUNK] Status check failed for user {sanitize(user_id)}: {sanitize(exc)}")
         return jsonify({"connected": False, "error": "Failed to validate stored Splunk credentials"})
 
     entry = server_info.get("entry", [{}])[0] if server_info.get("entry") else {}
@@ -374,7 +374,7 @@ def get_alerts(user_id):
             "offset": offset,
         })
     except Exception as exc:
-        logger.exception("[SPLUNK] Failed to fetch alerts for user %s: %s", user_id, exc)
+        logger.exception("[SPLUNK] Failed to fetch alerts for user %s: %s", sanitize(user_id), sanitize(exc))
         return jsonify({"error": "Failed to fetch alerts"}), 500
 
 

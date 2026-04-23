@@ -135,7 +135,8 @@ def create_user(user_id):
                 conn.commit()
 
                 logger.info("Admin %s created invitation %s for existing user %s (%s) to join org %s",
-                            user_id, invitation_id, target_id, target_email, org_id)
+                            sanitize(user_id), invitation_id, sanitize(target_id),
+                            sanitize(target_email), sanitize(org_id))
                 record_audit_event(org_id, user_id, "create_invitation", "user", target_id,
                                    {"email": target_email, "role": role, "invitation_id": invitation_id}, request)
                 return jsonify({
@@ -182,7 +183,7 @@ def create_user(user_id):
         except Exception as casbin_err:
             logger.warning("Failed to assign Casbin role for %s: %s", new_user_id, casbin_err)
 
-        logger.info("Admin %s created user %s (%s) with role '%s'", user_id, new_user_id, email, role)
+        logger.info("Admin %s created user %s (%s) with role '%s'", sanitize(user_id), sanitize(new_user_id), sanitize(email), sanitize(role))
         record_audit_event(org_id or "", user_id, "create_user", "user", new_user_id,
                            {"email": email, "role": role}, request)
         return jsonify({
@@ -388,6 +389,6 @@ def delete_user(user_id, target_user_id):
         logger.warning("Failed to clean up Casbin policies for deleted user %s: %s",
                         target_user_id, casbin_err)
 
-    logger.info("Admin %s deleted user %s (%s)", user_id, target_user_id, target_email)
+    logger.info("Admin %s deleted user %s (%s)", sanitize(user_id), sanitize(target_user_id), sanitize(target_email))
     record_audit_event(org_id or "", user_id, "delete_user", "user", target_user_id, {"email": target_email}, request)
     return jsonify({"message": "User deleted", "id": target_user_id}), 200

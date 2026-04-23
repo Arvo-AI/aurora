@@ -301,7 +301,7 @@ def deployment_webhook(user_id: str):
 
     creds = _get_stored_credentials(user_id)
     if not creds:
-        logger.warning("[SPINNAKER] Webhook rejected: invalid or unconfigured user_id %s", user_id[:50])
+        logger.warning("[SPINNAKER] Webhook rejected: invalid or unconfigured user_id %s", sanitize(user_id)[:50])
         return jsonify({"error": "Invalid webhook configuration"}), 403
 
     webhook_secret = creds.get("webhook_secret")
@@ -309,7 +309,7 @@ def deployment_webhook(user_id: str):
 
     if webhook_secret and signature:
         if not verify_webhook_signature(request.get_data(), signature, webhook_secret):
-            logger.warning("[SPINNAKER] Webhook rejected: invalid signature for user %s", user_id[:50])
+            logger.warning("[SPINNAKER] Webhook rejected: invalid signature for user %s", sanitize(user_id)[:50])
             return jsonify({"error": "Invalid webhook signature"}), 401
 
     payload = request.get_json(silent=True) or {}

@@ -49,7 +49,7 @@ def _get_splunk_client_for_user(user_id: str) -> Optional[Dict[str, Any]]:
             return None
         return {"base_url": base_url, "api_token": api_token}
     except Exception as exc:
-        logger.error(f"[SPLUNK-SEARCH] Failed to get credentials for user {user_id}: {exc}")
+        logger.error(f"[SPLUNK-SEARCH] Failed to get credentials for user {sanitize(user_id)}: {sanitize(exc)}")
         return None
 
 
@@ -117,7 +117,7 @@ def search_sync(user_id):
         # Limit response size to prevent memory issues
         MAX_RESPONSE_SIZE = 10 * 1024 * 1024  # 10MB
         if len(response.text) > MAX_RESPONSE_SIZE:
-            logger.warning(f"[SPLUNK-SEARCH] Response too large ({len(response.text)} bytes) for user {user_id}, truncating")
+            logger.warning(f"[SPLUNK-SEARCH] Response too large ({len(response.text)} bytes) for user {sanitize(user_id)}, truncating")
             response_text = response.text[:MAX_RESPONSE_SIZE]
         else:
             response_text = response.text
@@ -143,10 +143,10 @@ def search_sync(user_id):
         })
 
     except requests.exceptions.Timeout:
-        logger.error(f"[SPLUNK-SEARCH] Search timeout for user {user_id}")
+        logger.error(f"[SPLUNK-SEARCH] Search timeout for user {sanitize(user_id)}")
         return jsonify({"error": "Search timed out. Try a narrower time range or simpler query."}), 504
     except requests.exceptions.RequestException as exc:
-        logger.error(f"[SPLUNK-SEARCH] Search failed for user {user_id}: {exc}", exc_info=True)
+        logger.error(f"[SPLUNK-SEARCH] Search failed for user {sanitize(user_id)}: {sanitize(exc)}", exc_info=True)
         return jsonify({"error": "Search request failed"}), 502
 
 
@@ -202,7 +202,7 @@ def create_search_job(user_id):
         sid = result.get("sid") or result.get("entry", [{}])[0].get("content", {}).get("sid")
 
         if not sid:
-            logger.error(f"[SPLUNK-SEARCH] Failed to extract SID from response for user {user_id}")
+            logger.error(f"[SPLUNK-SEARCH] Failed to extract SID from response for user {sanitize(user_id)}")
             return jsonify({"success": False, "error": "Failed to extract job ID from Splunk response"}), 500
 
         return jsonify({
@@ -212,7 +212,7 @@ def create_search_job(user_id):
         })
 
     except requests.exceptions.RequestException as exc:
-        logger.error(f"[SPLUNK-SEARCH] Job creation failed for user {user_id}: {exc}", exc_info=True)
+        logger.error(f"[SPLUNK-SEARCH] Job creation failed for user {sanitize(user_id)}: {sanitize(exc)}", exc_info=True)
         return jsonify({"error": "Failed to create search job"}), 502
 
 
