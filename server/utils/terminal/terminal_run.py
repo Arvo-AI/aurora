@@ -234,4 +234,3 @@ def _check_guardrails(args: Union[str, List[str]]) -> Optional[CompletedProcess]
         args=args, returncode=126, stdout="",
         stderr=f"Blocked by safety guardrail: {decision.reason}",
     )
-
