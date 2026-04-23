@@ -10,8 +10,6 @@ import re
 from dataclasses import dataclass
 from typing import List, Tuple
 
-_PASS = None  # sentinel for no match
-
 
 @dataclass(frozen=True)
 class SignatureVerdict:
@@ -68,7 +66,7 @@ _r(r"\b(xmrig|cpuminer|minerd)\b", "T1496", "mining-binary", "Cryptocurrency min
 _r(r"stratum\+tcp://", "T1496", "mining-stratum", "Mining pool stratum protocol")
 
 # --- Resource destruction ---
-_r(r"\brm\s+-rf\s+/\s", "T1485", "destruct-rm-root", "Recursive deletion of root filesystem")
+_r(r"\brm\s+-(?:rf|fr)\s+/(?:\s|$)", "T1485", "destruct-rm-root", "Recursive deletion of root filesystem")
 _r(r"\brm\s+-rf\s+/home\b", "T1485", "destruct-rm-home", "Recursive deletion of /home")
 _r(r"\bdd\s+if=/dev/(zero|urandom)\b", "T1561", "destruct-dd", "Disk overwrite with dd")
 _r(r":\s*\(\s*\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;\s*:", "T1499.004", "destruct-forkbomb", "Fork bomb")

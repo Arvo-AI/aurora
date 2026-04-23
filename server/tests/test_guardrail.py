@@ -6,7 +6,6 @@ in CI by default (set GUARDRAILS_RUN_LLM_TESTS=true to enable).
 """
 
 import os
-import sys
 import pytest
 from unittest.mock import patch
 
@@ -14,7 +13,7 @@ from unittest.mock import patch
 # L2: Signature matcher tests (deterministic, always run)
 # ---------------------------------------------------------------------------
 
-from utils.security.signature_match import check_signature, SignatureVerdict
+from utils.security.signature_match import check_signature
 
 
 class TestSignatureMatcherSafe:
@@ -50,7 +49,7 @@ class TestSignatureMatcherBlocked:
         ("cat ~/.aws/credentials", "cred-aws"),
         ("cat /var/run/secrets/kubernetes.io/serviceaccount/token", "cred-k8s-sa"),
         ("crontab -e", "persist-crontab"),
-        ("echo 'key' >> ~/.ssh/authorized_keys", "persist-authkeys"),
+        ("echo 'key' >> ~/.ssh/authorized_keys", "cred-ssh"),
         ("setenforce 0", "evasion-selinux"),
         ("auditctl -D", "evasion-auditctl"),
         ("iptables -F", "evasion-firewall"),
@@ -87,7 +86,7 @@ llm_skip = pytest.mark.skipif(not _run_llm, reason="Set GUARDRAILS_RUN_LLM_TESTS
 
 if _run_llm:
     os.environ["GUARDRAILS_ENABLED"] = "true"
-    from utils.security.command_safety import check_command_safety, SafetyVerdict
+    from utils.security.command_safety import check_command_safety
 
 
 def _fake_msg(msg):

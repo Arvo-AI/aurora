@@ -97,4 +97,6 @@ GUARDRAILS_LLM_FAIL_MODE=closed
 
 Guardrails are enforced at the `terminal_run()` execution layer, covering all shell-executing tools automatically. Tools that bypass `terminal_run()` (SSH, on-prem kubectl) have direct L2+L4 checks.
 
-When a command is blocked, the response includes a `SIGNATURE_MATCHED` or `SAFETY_BLOCKED` code and the reasoning in the error message.
+When a command is blocked:
+- Through `terminal_run()`: the call returns `returncode=126` with stderr `Blocked by safety guardrail: <reason>`.
+- Through the inline-checked tools (`kubectl_onprem`, `tailscale_ssh`): the JSON response contains `code: "SIGNATURE_MATCHED"` or `code: "SAFETY_BLOCKED"` with the reason in `error`.
