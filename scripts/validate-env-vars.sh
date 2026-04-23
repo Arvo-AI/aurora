@@ -92,6 +92,9 @@ grep -v -E '^(AURORA_AGENT_TOKEN|AGENT_VERSION)$' "$USED_VARS_FILE" > "${USED_VA
 # Docker Compose static variables (hardcoded in docker-compose.yml, not user-configurable)
 grep -v -E '^(CHATBOT_HOST|CHATBOT_PORT|WEAVIATE_PORT)$' "$USED_VARS_FILE" > "${USED_VARS_FILE}.tmp" && mv "${USED_VARS_FILE}.tmp" "$USED_VARS_FILE"
 
+# Derived variables (set in docker-compose from NEXT_PUBLIC_* counterparts, not user-configurable)
+grep -v -E '^(PUBLIC_API_URL|PUBLIC_WS_URL)$' "$USED_VARS_FILE" > "${USED_VARS_FILE}.tmp" && mv "${USED_VARS_FILE}.tmp" "$USED_VARS_FILE"
+
 TOTAL_USED=$(wc -l < "$USED_VARS_FILE")
 echo -e "${GREEN}✓ Found ${TOTAL_USED} unique environment variables in code${NC}"
 echo ""
