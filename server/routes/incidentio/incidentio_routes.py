@@ -14,8 +14,8 @@ from flask import Blueprint, jsonify, request
 from routes.incidentio.tasks import process_incidentio_event
 from utils.db.connection_pool import db_pool
 from utils.auth.stateless_auth import (
-    get_org_id_from_request,
     get_user_preference,
+    set_rls_context,
     store_user_preference,
 )
 from utils.auth.token_management import get_token_data, store_tokens_in_db
@@ -238,7 +238,6 @@ def alert_webhook(user_id: str):
 @require_permission("connectors", "read")
 def get_alerts(user_id):
     """Fetch stored incident.io events."""
-    org_id = get_org_id_from_request()
     limit = min(max(request.args.get("limit", 50, type=int), 1), 200)
     offset = max(request.args.get("offset", 0, type=int), 0)
     severity_filter = request.args.get("severity")
@@ -246,7 +245,7 @@ def get_alerts(user_id):
     try:
         with db_pool.get_admin_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SET myapp.current_org_id = %s", (org_id,))
+            org_id = set_rls_context(cursor, conn, user_id, log_prefix="[INCIDENTIO:alerts]")
 
             where = "WHERE org_id = %s"
             params = [org_id]

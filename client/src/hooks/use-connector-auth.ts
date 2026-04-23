@@ -58,7 +58,6 @@ export function useConnectorAuth<T extends ConnectorStatus>({
       const parsed = JSON.parse(cached);
       setStatus(parsed);
       setIsCheckingStatus(false);
-      if (parsed?.connected) return;
     }
     refresh();
   }, [cacheKey, refresh]);
