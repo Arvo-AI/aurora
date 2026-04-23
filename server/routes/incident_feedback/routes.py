@@ -299,5 +299,5 @@ def set_aurora_learn_setting(user_id):
         logger.info("[AURORA LEARN] User %s set Aurora Learn to %s", sanitize(user_id), enabled)
         return jsonify({"success": True, "enabled": enabled}), 200
     except Exception as exc:
-        logger.exception("[AURORA LEARN] Failed to update setting for user %s", user_id)
+        logger.exception("[AURORA LEARN] Failed to update setting for user %s", sanitize(user_id))
         return jsonify({"error": "Failed to update setting"}), 500

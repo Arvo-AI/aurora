@@ -311,17 +311,17 @@ def connect(user_id):
     try:
         validation = client.validate_credentials()
         if not validation.get("valid"):
-            logger.warning("[DATADOG] Validation failed for user %s: %s", user_id, validation)
+            logger.warning("[DATADOG] Validation failed for user %s: %s", sanitize(user_id), validation)
             return jsonify({"error": "Unable to validate Datadog credentials"}), 400
     except DatadogAPIError as exc:
-        logger.error("[DATADOG] Credential validation failed for user %s: %s", user_id, exc)
+        logger.error("[DATADOG] Credential validation failed for user %s: %s", sanitize(user_id), exc)
         return jsonify({"error": "Failed to validate Datadog credentials"}), 502
 
     org_data = None
     try:
         org_data = client.get_org()
     except DatadogAPIError as exc:
-        logger.debug("[DATADOG] Org lookup failed for user %s: %s", user_id, exc)
+        logger.debug("[DATADOG] Org lookup failed for user %s: %s", sanitize(user_id), exc)
 
     token_payload = {
         "api_key": api_key,
@@ -336,7 +336,7 @@ def connect(user_id):
 
     try:
         store_tokens_in_db(user_id, token_payload, "datadog")
-        logger.info("[DATADOG] Stored credentials for user %s (site=%s)", user_id, site)
+        logger.info("[DATADOG] Stored credentials for user %s (site=%s)", sanitize(user_id), sanitize(site))
     except Exception as exc:
         logger.exception("[DATADOG] Failed to store credentials: %s", exc)
         return jsonify({"error": "Failed to store Datadog credentials"}), 500

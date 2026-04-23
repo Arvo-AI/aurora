@@ -154,7 +154,7 @@ def connect(user_id):
         server_info = client.get_server_info()
         user_context = client.get_current_user()
     except SplunkAPIError as exc:
-        logger.error(f"[SPLUNK] Connection validation failed for user {user_id}: {exc}")
+        logger.error(f"[SPLUNK] Connection validation failed for user {sanitize(user_id)}: {exc}")
         return jsonify({"error": "Failed to validate Splunk credentials"}), 502
 
     # Extract server details
@@ -180,9 +180,9 @@ def connect(user_id):
 
     try:
         store_tokens_in_db(user_id, token_payload, "splunk")
-        logger.info(f"[SPLUNK] Stored credentials for user {user_id} (server={server_name})")
+        logger.info(f"[SPLUNK] Stored credentials for user {sanitize(user_id)} (server={sanitize(server_name)})")
     except Exception as exc:
-        logger.exception(f"[SPLUNK] Failed to store credentials for user {user_id}: {exc}")
+        logger.exception(f"[SPLUNK] Failed to store credentials for user {sanitize(user_id)}: {exc}")
         return jsonify({"error": "Failed to store Splunk credentials"}), 500
 
     return jsonify({
