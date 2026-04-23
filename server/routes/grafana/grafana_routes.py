@@ -216,7 +216,7 @@ def get_alerts(user_id):
             "limit": limit,
             "offset": offset,
         })
-    except Exception as exc:
+    except Exception:
         logger.exception("[GRAFANA] Failed to fetch alerts for user %s", sanitize(user_id))
         return jsonify({"error": "Failed to fetch alerts"}), 500
 
