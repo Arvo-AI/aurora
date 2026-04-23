@@ -183,6 +183,7 @@ config:
   # Per-layer toggles (default to true when GUARDRAILS_ENABLED=true)
   GUARDRAILS_SIGNATURE_CHECK: "true"
   GUARDRAILS_LLM_JUDGE: "true"
+  GUARDRAILS_INPUT_RAIL: "true"
   # Model for L4 (provider/model format). Empty = use MAIN_MODEL.
   GUARDRAILS_LLM_MODEL: ""
   # Behavior on LLM error: "open" (allow) or "closed" (block)

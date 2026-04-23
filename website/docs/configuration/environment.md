@@ -267,8 +267,9 @@ Multi-layer command safety stack: L2 static signatures + L4 LLM judge. See [Comm
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `GUARDRAILS_ENABLED` | `false` | Master switch for the guardrail stack |
-| `GUARDRAILS_SIGNATURE_CHECK` | `true` | L2: static pattern matching (free, ~5ms) |
-| `GUARDRAILS_LLM_JUDGE` | `true` | L4: LLM-based command safety judge |
+| `GUARDRAILS_SIGNATURE_CHECK` | `true` | Static pattern matching (free, ~5ms) |
+| `GUARDRAILS_LLM_JUDGE` | `true` | LLM-based command safety evaluation |
+| `GUARDRAILS_INPUT_RAIL` | `true` | NeMo prompt injection detection (~$0.00007, ~200ms) |
 | `GUARDRAILS_LLM_MODEL` | _(MAIN_MODEL)_ | Provider/model for L4 (e.g., `openai/gpt-4o-mini`) |
 | `GUARDRAILS_LLM_FAIL_MODE` | `open` | L4 error behavior: `open` (allow) or `closed` (block) |
 | `GUARDRAILS_LLM_BASE_URL` | - | Custom API endpoint for self-hosted models |

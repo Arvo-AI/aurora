@@ -962,6 +962,16 @@ class Workflow:
         history_prefix_len = len(input_state.messages) - new_turn_input_count
         self._history_prefix_len = history_prefix_len
 
+        # --- Input rail: check user message for prompt injection ---
+        from guardrails.input_rail import check_input
+        last_msg = input_state.messages[-1] if input_state.messages else None
+        if last_msg and hasattr(last_msg, "type") and last_msg.type == "human":
+            msg_text = last_msg.content if isinstance(last_msg.content, str) else str(last_msg.content)
+            rail_result = await check_input(msg_text)
+            if rail_result.blocked:
+                yield ("token", "Your message was blocked by our safety system. Please rephrase your request.")
+                return
+
         # Log initial state
         logger.info(f"Starting workflow with session_id={input_state.session_id}, user_id={input_state.user_id}")
         

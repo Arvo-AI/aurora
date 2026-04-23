@@ -26,8 +26,9 @@ GUARDRAILS_ENABLED=true
 Both L2 and L4 activate by default. Disable either layer independently:
 
 ```bash
-GUARDRAILS_SIGNATURE_CHECK=false   # disable L2
-GUARDRAILS_LLM_JUDGE=false         # disable L4
+GUARDRAILS_SIGNATURE_CHECK=false   # disable static patterns
+GUARDRAILS_LLM_JUDGE=false         # disable LLM judge
+GUARDRAILS_INPUT_RAIL=false        # disable prompt injection detection
 ```
 
 ## Model Selection
@@ -79,8 +80,9 @@ GUARDRAILS_LLM_FAIL_MODE=closed
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `GUARDRAILS_ENABLED` | `false` | Master switch for the guardrail stack |
-| `GUARDRAILS_SIGNATURE_CHECK` | `true` | L2: static pattern matching |
-| `GUARDRAILS_LLM_JUDGE` | `true` | L4: LLM-based command safety judge |
+| `GUARDRAILS_SIGNATURE_CHECK` | `true` | Static pattern matching for known-malicious commands |
+| `GUARDRAILS_LLM_JUDGE` | `true` | LLM-based command safety evaluation |
+| `GUARDRAILS_INPUT_RAIL` | `true` | NeMo-based prompt injection detection on user messages |
 | `GUARDRAILS_LLM_MODEL` | _(MAIN_MODEL)_ | Provider/model for L4 |
 | `GUARDRAILS_LLM_FAIL_MODE` | `open` | L4 error behavior: `open` or `closed` |
 | `GUARDRAILS_LLM_BASE_URL` | _(empty)_ | Custom API endpoint override |

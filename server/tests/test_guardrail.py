@@ -1,16 +1,17 @@
-"""Tests for L2 signature matcher and L4 command safety judge.
+"""Tests for safety guardrails: signature matcher, LLM judge, input rail, audit events.
 
-L2 tests run without any external dependencies (no LLM, no network).
-L4 tests require GUARDRAILS_ENABLED=true and a working LLM; they are skipped
-in CI by default (set GUARDRAILS_RUN_LLM_TESTS=true to enable).
+Signature matcher tests run without any external dependencies.
+LLM judge and input rail tests require a working LLM; skipped in CI by default
+(set GUARDRAILS_RUN_LLM_TESTS=true to enable).
 """
 
+import json
 import os
 import pytest
-from unittest.mock import patch
+from unittest.mock import patch, AsyncMock, MagicMock
 
 # ---------------------------------------------------------------------------
-# L2: Signature matcher tests (deterministic, always run)
+# Signature matcher tests (deterministic, always run)
 # ---------------------------------------------------------------------------
 
 from utils.security.signature_match import check_signature
@@ -78,11 +79,65 @@ class TestSignatureMatcherBlocked:
 
 
 # ---------------------------------------------------------------------------
-# L4: LLM-based command safety (requires live LLM, skipped in CI by default)
+# Audit event tests (deterministic, always run)
+# ---------------------------------------------------------------------------
+
+import logging
+from utils.security.audit_events import emit_block_event
+
+
+class TestAuditEvents:
+    def test_emit_block_event_logs_json(self, caplog):
+        with caplog.at_level(logging.WARNING, logger="guardrails.audit"):
+            emit_block_event(
+                user_id="u1", session_id="s1", layer="signature_match",
+                command="cat /etc/shadow", tool="terminal_run",
+                reason="shadow file read", technique="T1003.008", rule_id="cred-shadow",
+            )
+        assert len(caplog.records) == 1
+        record = caplog.records[0]
+        assert "GUARDRAIL_AUDIT" in record.message
+        payload = json.loads(record.message.split("GUARDRAIL_AUDIT ")[1])
+        assert payload["layer"] == "signature_match"
+        assert payload["technique"] == "T1003.008"
+        assert payload["user_id"] == "u1"
+
+    def test_truncates_long_fields(self, caplog):
+        with caplog.at_level(logging.WARNING, logger="guardrails.audit"):
+            emit_block_event(
+                user_id="u1", session_id="s1", layer="llm_judge",
+                command="x" * 500, reason="y" * 1000,
+            )
+        payload = json.loads(caplog.records[0].message.split("GUARDRAIL_AUDIT ")[1])
+        assert len(payload["command"]) == 200
+        assert len(payload["reason"]) == 500
+
+
+# ---------------------------------------------------------------------------
+# Input rail config tests (deterministic, always run)
+# ---------------------------------------------------------------------------
+
+class TestGuardrailsConfig:
+    def test_input_rail_toggle(self):
+        with patch.dict(os.environ, {"GUARDRAILS_ENABLED": "true", "GUARDRAILS_INPUT_RAIL": "false"}):
+            from utils.security.config import _load
+            cfg = _load()
+            assert cfg.enabled
+            assert not cfg.input_rail
+
+    def test_input_rail_defaults_on(self):
+        with patch.dict(os.environ, {"GUARDRAILS_ENABLED": "true"}):
+            from utils.security.config import _load
+            cfg = _load()
+            assert cfg.input_rail
+
+
+# ---------------------------------------------------------------------------
+# LLM-based command safety (requires live LLM, skipped in CI by default)
 # ---------------------------------------------------------------------------
 
 _run_llm = os.getenv("GUARDRAILS_RUN_LLM_TESTS", "false").lower() == "true"
-llm_skip = pytest.mark.skipif(not _run_llm, reason="Set GUARDRAILS_RUN_LLM_TESTS=true to run L4 tests")
+llm_skip = pytest.mark.skipif(not _run_llm, reason="Set GUARDRAILS_RUN_LLM_TESTS=true to run LLM tests")
 
 if _run_llm:
     os.environ["GUARDRAILS_ENABLED"] = "true"
