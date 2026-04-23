@@ -119,7 +119,7 @@ def alert_webhook(user_id: str):
             logger.info("[GRAFANA] Auto-connecting user %s via webhook", sanitize(user_id))
             try:
                 store_tokens_in_db(user_id, {}, "grafana")
-            except Exception as exc:
+            except Exception:
                 logger.exception("[GRAFANA] Failed to auto-connect user %s", sanitize(user_id))
                 return jsonify({"error": "Failed to create Grafana connection"}), 500
         else:
