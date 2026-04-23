@@ -622,7 +622,7 @@ def iac_write(path: str, content: str, user_id: Optional[str] = None, session_id
         # Write main manifest
         encoded_content = base64.b64encode(tf_content.encode()).decode()
         write_cmd = f"mkdir -p {terraform_dir} && echo '{encoded_content}' | base64 -d > {file_path}"
-        result = terminal_run(write_cmd, shell=True, capture_output=True, text=True, timeout=30)
+        result = terminal_run(write_cmd, shell=True, capture_output=True, text=True, timeout=30, trusted=True)
         if result.returncode != 0:
             raise RuntimeError(f"Failed to write {path}: {result.stderr}")
         
@@ -647,7 +647,7 @@ def iac_write(path: str, content: str, user_id: Optional[str] = None, session_id
             
             encoded_provider = base64.b64encode(provider_config.encode()).decode()
             provider_cmd = f"echo '{encoded_provider}' | base64 -d > {provider_file}"
-            result = terminal_run(provider_cmd, shell=True, capture_output=True, text=True, timeout=30)
+            result = terminal_run(provider_cmd, shell=True, capture_output=True, text=True, timeout=30, trusted=True)
             if result.returncode != 0:
                 raise RuntimeError(f"Failed to write provider.tf: {result.stderr}")
             
@@ -658,7 +658,7 @@ def iac_write(path: str, content: str, user_id: Optional[str] = None, session_id
 
                 # Read provider.tf from terminal pod and upload
                 read_provider_cmd = f"cat {provider_file}"
-                result_read = terminal_run(read_provider_cmd, shell=True, capture_output=True, text=True, timeout=30)
+                result_read = terminal_run(read_provider_cmd, shell=True, capture_output=True, text=True, timeout=30, trusted=True)
                 if result_read.returncode == 0:
                     file_like = io.BytesIO(result_read.stdout.encode())
                     file_like.name = "provider.tf"
@@ -672,7 +672,7 @@ def iac_write(path: str, content: str, user_id: Optional[str] = None, session_id
             # DELETE any existing provider.tf to avoid "Duplicate required providers" conflict
             provider_file = terraform_dir / "provider.tf"
             delete_cmd = f"rm -f {provider_file}"
-            terminal_run(delete_cmd, shell=True, capture_output=True, text=True, timeout=10)
+            terminal_run(delete_cmd, shell=True, capture_output=True, text=True, timeout=10, trusted=True)
             logger.info(f"Deleted existing provider.tf to avoid conflicts")
 
         # Upload to storage for persistence (files written to terminal pod, read back for storage)
@@ -683,7 +683,7 @@ def iac_write(path: str, content: str, user_id: Optional[str] = None, session_id
 
             # Read file from terminal pod and upload
             read_cmd = f"cat {file_path}"
-            result_read = terminal_run(read_cmd, shell=True, capture_output=True, text=True, timeout=30)
+            result_read = terminal_run(read_cmd, shell=True, capture_output=True, text=True, timeout=30, trusted=True)
             if result_read.returncode == 0:
                 file_like = io.BytesIO(result_read.stdout.encode())
                 file_like.name = file_path.name

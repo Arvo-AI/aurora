@@ -177,19 +177,18 @@ config:
   AGENT_RECURSION_LIMIT: "240" #Maximum number of steps an agent can take
 
   # --- AI Safety Guardrails ---
-  # LLM-based alignment check that verifies agent actions match user intent before execution.
-  # Uses Meta's AlignmentCheck prompt (MIT licensed). Only fires after deterministic checks pass.
-  # Every command is checked independently -- no caching, no skipping.
-  ALIGNMENT_CHECK_ENABLED: "false"
-  # Model for the safety check (provider/model format). Empty = use MAIN_MODEL.
-  # Examples: openai/gpt-4o-mini, anthropic/claude-haiku-4.5, google/gemini-2.5-flash-lite
-  ALIGNMENT_CHECK_MODEL: ""
-  # Behavior on LLM error: "open" (allow command) or "closed" (block command)
-  ALIGNMENT_CHECK_FAIL_MODE: "open"
-  # Max seconds to wait for the alignment check LLM response
-  ALIGNMENT_CHECK_TIMEOUT: "10"
-  # Optional: custom API endpoint (for Together AI, self-hosted vLLM, etc.)
-  ALIGNMENT_CHECK_BASE_URL: ""
+  # Multi-layer defense: L2 static signatures (free, ~5ms) + L4 LLM judge (~$0.0002, ~250ms).
+  # Adapted from Meta's PurpleLlama AlignmentCheck architecture (MIT licensed).
+  GUARDRAILS_ENABLED: "false"
+  # Per-layer toggles (default to true when GUARDRAILS_ENABLED=true)
+  GUARDRAILS_SIGNATURE_CHECK: "true"
+  GUARDRAILS_LLM_JUDGE: "true"
+  # Model for L4 (provider/model format). Empty = use MAIN_MODEL.
+  GUARDRAILS_LLM_MODEL: ""
+  # Behavior on LLM error: "open" (allow) or "closed" (block)
+  GUARDRAILS_LLM_FAIL_MODE: "open"
+  # Optional: custom API endpoint (Together AI, vLLM, etc.)
+  GUARDRAILS_LLM_BASE_URL: ""
 
   # --- Performance & Caching ---
   AURORA_SETUP_CACHE_ENABLED: "true"
@@ -369,8 +368,8 @@ secrets:
     OPENAI_API_KEY: ""           # Get from: https://platform.openai.com/api-keys
     ANTHROPIC_API_KEY: ""        # Get from: https://console.anthropic.com/
     GOOGLE_AI_API_KEY: ""        # Get from: https://makersuite.google.com/app/apikey
-    # API key for custom alignment check endpoint (only needed if ALIGNMENT_CHECK_BASE_URL is set)
-    ALIGNMENT_CHECK_API_KEY: ""
+    # API key for custom guardrails LLM endpoint (only needed if GUARDRAILS_LLM_BASE_URL is set)
+    GUARDRAILS_LLM_API_KEY: ""
 
 # ------------------------------------------------------------------------------
 # Security contexts

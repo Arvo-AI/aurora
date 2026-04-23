@@ -62,14 +62,27 @@ def on_prem_kubectl(
             'provider': 'onprem_kubectl',
         })
 
-    from utils.security.alignment_check import check_alignment
-    alignment = check_alignment(full_command, tool_name="kubectl_onprem", user_id=user_id, session_id=session_id)
-    if alignment.conclusion:
+    from utils.security.signature_match import check_signature
+    sig = check_signature(full_command)
+    if sig.matched:
         return json.dumps({
             'success': False,
-            'error': f"Command blocked by safety guardrail: {alignment.thought}",
-            'code': 'ALIGNMENT_BLOCKED',
-            'chat_output': f"$ {full_command}\nBlocked by safety guardrail: {alignment.thought}",
+            'error': f"Command blocked: {sig.description}",
+            'code': 'SIGNATURE_MATCHED',
+            'chat_output': f"$ {full_command}\nBlocked: {sig.description}",
+            'command': full_command,
+            'return_code': 1,
+            'provider': 'onprem_kubectl',
+        })
+
+    from utils.security.command_safety import check_command_safety
+    verdict = check_command_safety(full_command, tool_name="kubectl_onprem", user_id=user_id, session_id=session_id)
+    if verdict.conclusion:
+        return json.dumps({
+            'success': False,
+            'error': f"Command blocked by safety guardrail: {verdict.thought}",
+            'code': 'SAFETY_BLOCKED',
+            'chat_output': f"$ {full_command}\nBlocked by safety guardrail: {verdict.thought}",
             'command': full_command,
             'return_code': 1,
             'provider': 'onprem_kubectl',

@@ -262,16 +262,17 @@ OLLAMA_BASE_URL=http://host.docker.internal:11434
 
 ### AI Safety Guardrails
 
-LLM-based alignment check that verifies agent actions match user intent before execution. See [Alignment Check](./alignment-check.md) for detailed configuration.
+Multi-layer command safety stack: L2 static signatures + L4 LLM judge. See [Command Safety](./command-safety.md) for detailed configuration.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ALIGNMENT_CHECK_ENABLED` | `false` | Enable the LLM alignment check |
-| `ALIGNMENT_CHECK_MODEL` | _(MAIN_MODEL)_ | Provider/model for safety check (e.g., `openai/gpt-4o-mini`) |
-| `ALIGNMENT_CHECK_FAIL_MODE` | `open` | Behavior on LLM error: `open` (allow) or `closed` (block) |
-| `ALIGNMENT_CHECK_TIMEOUT` | `10` | Max seconds to wait for alignment check LLM |
-| `ALIGNMENT_CHECK_BASE_URL` | - | Custom API endpoint for self-hosted models |
-| `ALIGNMENT_CHECK_API_KEY` | - | API key for custom endpoint (only when BASE_URL is set) |
+| `GUARDRAILS_ENABLED` | `false` | Master switch for the guardrail stack |
+| `GUARDRAILS_SIGNATURE_CHECK` | `true` | L2: static pattern matching (free, ~5ms) |
+| `GUARDRAILS_LLM_JUDGE` | `true` | L4: LLM-based command safety judge |
+| `GUARDRAILS_LLM_MODEL` | _(MAIN_MODEL)_ | Provider/model for L4 (e.g., `openai/gpt-4o-mini`) |
+| `GUARDRAILS_LLM_FAIL_MODE` | `open` | L4 error behavior: `open` (allow) or `closed` (block) |
+| `GUARDRAILS_LLM_BASE_URL` | - | Custom API endpoint for self-hosted models |
+| `GUARDRAILS_LLM_API_KEY` | - | API key for custom endpoint (only when BASE_URL is set) |
 
 ## Cloud Providers
 
