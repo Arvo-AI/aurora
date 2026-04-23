@@ -18,11 +18,23 @@ logger = logging.getLogger(__name__)
 
 _rails_instance = None
 
+_REFUSAL_PREFIXES = ("i'm sorry", "i am sorry", "i cannot", "i can't")
+
 
 @dataclass(frozen=True)
 class InputRailResult:
     blocked: bool
     reason: str = ""
+
+
+def _extract_response_text(result) -> str:
+    """Pull the assistant response text out of a NeMo GenerationResponse."""
+    resp = getattr(result, "response", None)
+    if isinstance(resp, list) and resp and isinstance(resp[0], dict):
+        return resp[0].get("content", "") or ""
+    if isinstance(result, dict):
+        return result.get("content", "") or ""
+    return ""
 
 
 def _resolve_model_and_credentials() -> tuple:
@@ -88,13 +100,9 @@ async def check_input(user_message: str) -> InputRailResult:
         )
 
         latency_ms = (time.perf_counter() - t0) * 1000
-        response_text = ""
-        if result and isinstance(result, dict):
-            response_text = result.get("content", "")
-        elif hasattr(result, "content"):
-            response_text = result.content or ""
-
-        blocked = "i'm sorry" in response_text.lower() or "i cannot" in response_text.lower()
+        response_text = _extract_response_text(result)
+        lowered = response_text.lower().lstrip()
+        blocked = lowered.startswith(_REFUSAL_PREFIXES)
 
         if blocked:
             logger.warning(
@@ -102,9 +110,7 @@ async def check_input(user_message: str) -> InputRailResult:
                 user_message[:80], latency_ms,
             )
         else:
-            logger.debug(
-                "[Guardrails:InputRail] PASSED latency_ms=%.0f", latency_ms,
-            )
+            logger.debug("[Guardrails:InputRail] PASSED latency_ms=%.0f", latency_ms)
 
         return InputRailResult(blocked=blocked, reason=response_text if blocked else "")
 

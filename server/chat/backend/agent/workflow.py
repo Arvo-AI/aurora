@@ -13,6 +13,7 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Optional
 from utils.auth.stateless_auth import set_rls_context
+from utils.security.audit_events import emit_block_event
 
 logger = logging.getLogger(__name__)
 
@@ -969,6 +970,14 @@ class Workflow:
             msg_text = last_msg.content if isinstance(last_msg.content, str) else str(last_msg.content)
             rail_result = await check_input(msg_text)
             if rail_result.blocked:
+                emit_block_event(
+                    user_id=getattr(input_state, "user_id", "") or "",
+                    session_id=getattr(input_state, "session_id", "") or "",
+                    layer="input_rail",
+                    tool="workflow",
+                    command=msg_text,
+                    reason=rail_result.reason,
+                )
                 yield ("token", "Your message was blocked by our safety system. Please rephrase your request.")
                 return
 
