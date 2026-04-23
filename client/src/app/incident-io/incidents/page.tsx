@@ -105,13 +105,15 @@ export default function IncidentIoIncidentsPage() {
         </Card>
       )}
 
-      {loading ? (
+      {loading && (
         <Card>
           <CardContent className="pt-6 text-center py-12">
             <p className="text-muted-foreground">Loading incidents...</p>
           </CardContent>
         </Card>
-      ) : incidents.length === 0 ? (
+      )}
+
+      {!loading && incidents.length === 0 && (
         <Card>
           <CardContent className="pt-6 text-center py-12">
             <svg className="h-12 w-12 mx-auto mb-4 text-muted-foreground" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
@@ -126,7 +128,9 @@ export default function IncidentIoIncidentsPage() {
             </Button>
           </CardContent>
         </Card>
-      ) : (
+      )}
+
+      {!loading && incidents.length > 0 && (
         <>
           <div className="space-y-4">
             {incidents.map((incident) => (

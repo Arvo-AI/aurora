@@ -35,7 +35,7 @@ export function useConnectorAuth<T extends ConnectorStatus>({
         localStorage.removeItem(storageKey);
       }
       if (fireEvent && wasConnected !== result.connected) {
-        window.dispatchEvent(new CustomEvent("providerStateChanged"));
+        globalThis.dispatchEvent(new CustomEvent("providerStateChanged"));
       }
     },
     [cacheKey, storageKey],

@@ -100,7 +100,7 @@ export default function IncidentIoAuthPage() {
 
         <div className="flex items-center justify-center mb-8">
           <div className="flex items-center">
-            <div className={`flex items-center justify-center w-10 h-10 rounded-full font-bold ${!isConnected ? 'text-white' : 'bg-gray-200 text-gray-600'}`} style={!isConnected ? { backgroundColor: '#F04438' } : undefined}>
+            <div className={`flex items-center justify-center w-10 h-10 rounded-full font-bold ${isConnected ? 'bg-gray-200 text-gray-600' : 'text-white'}`} style={isConnected ? undefined : { backgroundColor: '#F04438' }}>
               1
             </div>
             <div className="w-24 h-1" style={{ backgroundColor: isConnected ? '#F04438' : '#e5e7eb' }}></div>
@@ -111,7 +111,7 @@ export default function IncidentIoAuthPage() {
         </div>
 
         <div className="flex items-center justify-center mb-6 text-sm font-medium">
-          <span className={!isConnected ? 'text-foreground' : 'text-muted-foreground'} style={!isConnected ? { color: '#F04438' } : undefined}>
+          <span className={isConnected ? 'text-muted-foreground' : 'text-foreground'} style={isConnected ? undefined : { color: '#F04438' }}>
             Connect
           </span>
           <span className="mx-4 text-muted-foreground">&rarr;</span>
@@ -120,7 +120,12 @@ export default function IncidentIoAuthPage() {
           </span>
         </div>
 
-        {!isConnected ? (
+        {isConnected ? (
+          <IncidentIoWebhookStep
+            onDisconnect={handleDisconnect}
+            loading={loading}
+          />
+        ) : (
           <Card>
             <CardHeader>
               <CardTitle>Connect to incident.io</CardTitle>
@@ -158,11 +163,6 @@ export default function IncidentIoAuthPage() {
               </form>
             </CardContent>
           </Card>
-        ) : (
-          <IncidentIoWebhookStep
-            onDisconnect={handleDisconnect}
-            loading={loading}
-          />
         )}
       </div>
     </ConnectorAuthGuard>

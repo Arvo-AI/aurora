@@ -1208,6 +1208,29 @@ def build_opsgenie_rca_prompt(
     return build_rca_prompt('opsgenie', alert_details, providers, user_id)
 
 
+def _incidentio_dict_name(obj, default: str = "") -> str:
+    """Extract .name from a dict-or-scalar incident.io field."""
+    if isinstance(obj, dict):
+        return obj.get("name", default)
+    return str(obj) if obj else default
+
+
+def _incidentio_format_roles(roles: list) -> str:
+    return ", ".join(
+        f"{r.get('role', {}).get('name', '?')}: {r.get('assignee', {}).get('name', 'unassigned')}"
+        for r in roles[:5]
+    )
+
+
+def _incidentio_format_custom_fields(custom_fields: list) -> str:
+    return ", ".join(
+        f"{cf.get('custom_field', {}).get('name', '?')}="
+        f"{(cf.get('values') or [{}])[0].get('label', '?')}"
+        for cf in custom_fields[:5]
+        if cf.get("values")
+    )
+
+
 def build_incidentio_rca_prompt(
     payload: Dict[str, Any],
     providers: Optional[List[str]] = None,
@@ -1221,47 +1244,29 @@ def build_incidentio_rca_prompt(
     status = incident.get("status") or "unknown"
     summary = incident.get("summary") or ""
     permalink = incident.get("permalink") or ""
+    severity = _incidentio_dict_name(incident.get("severity"))
+    inc_type = _incidentio_dict_name(incident.get("incident_type"))
 
-    severity_obj = incident.get("severity") or {}
-    severity = severity_obj.get("name", "") if isinstance(severity_obj, dict) else str(severity_obj)
-
-    inc_type_obj = incident.get("incident_type") or {}
-    inc_type = inc_type_obj.get("name", "") if isinstance(inc_type_obj, dict) else str(inc_type_obj)
-
-    roles = incident.get("incident_role_assignments") or []
-    role_str = ", ".join(
-        f"{r.get('role', {}).get('name', '?')}: {r.get('assignee', {}).get('name', 'unassigned')}"
-        for r in roles[:5]
-    )
-
-    custom_fields = incident.get("custom_field_entries") or []
-    cf_str = ", ".join(
-        f"{cf.get('custom_field', {}).get('name', '?')}="
-        f"{(cf.get('values') or [{}])[0].get('label', '?')}"
-        for cf in custom_fields[:5]
-        if cf.get("values")
-    )
+    role_str = _incidentio_format_roles(incident.get("incident_role_assignments") or [])
+    cf_str = _incidentio_format_custom_fields(incident.get("custom_field_entries") or [])
 
     message_parts = [f"Incident: {name}"]
-    if summary:
-        message_parts.append(f"Summary: {summary}")
-    if role_str:
-        message_parts.append(f"Roles: {role_str}")
-    if cf_str:
-        message_parts.append(f"Fields: {cf_str}")
-    if permalink:
-        message_parts.append(f"Link: {permalink}")
+    for label, value in [("Summary", summary), ("Roles", role_str),
+                         ("Fields", cf_str), ("Link", permalink)]:
+        if value:
+            message_parts.append(f"{label}: {value}")
+
+    labels = {}
+    if severity:
+        labels['severity'] = severity
+    if inc_type:
+        labels['incident_type'] = inc_type
 
     alert_details = {
         'title': name,
         'status': f"{status} (severity: {severity})" if severity else status,
         'message': ". ".join(message_parts),
-        'labels': {},
+        'labels': labels,
     }
-
-    if severity:
-        alert_details['labels']['severity'] = severity
-    if inc_type:
-        alert_details['labels']['incident_type'] = inc_type
 
     return build_rca_prompt('incidentio', alert_details, providers, user_id)

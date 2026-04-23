@@ -183,7 +183,7 @@ def status(user_id):
 def disconnect(user_id):
     """Remove stored incident.io credentials."""
     try:
-        success, deleted_count = delete_user_secret(user_id, "incidentio")
+        success, _ = delete_user_secret(user_id, "incidentio")
         if not success:
             return jsonify({"error": "Failed to delete stored credentials"}), 500
 

@@ -14,6 +14,10 @@ from pydantic import BaseModel, Field
 
 from utils.auth.token_management import get_token_data
 
+_ERR_NO_USER = json.dumps({"error": "No user context available"})
+_ERR_NOT_CONNECTED = json.dumps({"error": "incident.io not connected"})
+_ERR_INVALID_ID = json.dumps({"error": "Invalid incident_id"})
+
 logger = logging.getLogger(__name__)
 
 INCIDENTIO_API_BASE = "https://api.incident.io/v2"
@@ -177,11 +181,11 @@ def list_incidentio_incidents(
 ) -> str:
     """List incidents from incident.io. Use 'after' cursor to paginate through large result sets."""
     if not user_id:
-        return json.dumps({"error": "No user context available"})
+        return _ERR_NO_USER
 
     api_key = _get_incidentio_credentials(user_id)
     if not api_key:
-        return json.dumps({"error": "incident.io not connected"})
+        return _ERR_NOT_CONNECTED
 
     page_size = min(max(page_size, 1), 100)
     params: Dict[str, Any] = {"page_size": page_size}
@@ -222,14 +226,14 @@ def get_incidentio_incident(
 ) -> str:
     """Get full details of a specific incident.io incident for deep-dive investigation."""
     if not user_id:
-        return json.dumps({"error": "No user context available"})
+        return _ERR_NO_USER
 
     api_key = _get_incidentio_credentials(user_id)
     if not api_key:
-        return json.dumps({"error": "incident.io not connected"})
+        return _ERR_NOT_CONNECTED
 
     if not incident_id or len(incident_id) > 100:
-        return json.dumps({"error": "Invalid incident_id"})
+        return _ERR_INVALID_ID
 
     result = _api_request(api_key, "GET", f"/incidents/{incident_id}")
     if "error" in result:
@@ -259,14 +263,14 @@ def get_incidentio_timeline(
 ) -> str:
     """Get timeline/updates for an incident to understand the sequence of events and decisions."""
     if not user_id:
-        return json.dumps({"error": "No user context available"})
+        return _ERR_NO_USER
 
     api_key = _get_incidentio_credentials(user_id)
     if not api_key:
-        return json.dumps({"error": "incident.io not connected"})
+        return _ERR_NOT_CONNECTED
 
     if not incident_id or len(incident_id) > 100:
-        return json.dumps({"error": "Invalid incident_id"})
+        return _ERR_INVALID_ID
 
     result = _api_request(api_key, "GET", "/incident_updates", params={"incident_id": incident_id})
     if "error" in result:

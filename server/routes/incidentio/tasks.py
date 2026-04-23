@@ -25,12 +25,8 @@ def _should_postback(user_id: str) -> bool:
     return get_user_preference(user_id, "incidentio_postback_enabled", default=False)
 
 
-def _extract_incident_fields(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """Extract normalized incident fields from the webhook event envelope.
-
-    incident.io nests incident data under the event-type key, e.g.
-    payload["public_incident.incident_updated_v2"]["incident"].
-    """
+def _resolve_incident_object(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Find the incident dict inside an incident.io webhook payload."""
     event = payload.get("event", {}) or {}
     incident = event.get("incident") or payload.get("incident") or None
 
@@ -40,17 +36,27 @@ def _extract_incident_fields(payload: Dict[str, Any]) -> Dict[str, Any]:
                 incident = value.get("incident") or value
                 break
 
-    incident = incident or {}
+    return incident or {}
 
-    severity_obj = incident.get("severity") or {}
-    incident_type_obj = incident.get("incident_type") or {}
+
+def _safe_name(obj, default: str = "") -> str:
+    """Extract .name from a dict-or-scalar field."""
+    if isinstance(obj, dict):
+        return obj.get("name", default)
+    return str(obj) if obj else default
+
+
+def _extract_incident_fields(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Extract normalized incident fields from the webhook event envelope."""
+    event = payload.get("event", {}) or {}
+    incident = _resolve_incident_object(payload)
 
     return {
         "incident_id": incident.get("id") or payload.get("id"),
         "incident_name": incident.get("name") or incident.get("title") or "Untitled Incident",
         "incident_status": incident.get("status") or event.get("status") or "unknown",
-        "severity": severity_obj.get("name", "unknown") if isinstance(severity_obj, dict) else str(severity_obj or "unknown"),
-        "incident_type": incident_type_obj.get("name") if isinstance(incident_type_obj, dict) else str(incident_type_obj or ""),
+        "severity": _safe_name(incident.get("severity"), "unknown"),
+        "incident_type": _safe_name(incident.get("incident_type")),
         "summary": incident.get("summary") or "",
         "created_at": incident.get("created_at"),
         "updated_at": incident.get("updated_at"),
@@ -72,6 +78,110 @@ def _map_severity(severity_name: str) -> str:
     if s in ("low", "minor", "sev4", "sev5", "p4", "p5"):
         return "low"
     return "unknown"
+
+
+_NEW_INCIDENT_EVENTS = frozenset((
+    "incident.created", "v2.incidents.created",
+    "incident.declared", "public_incident.incident_created",
+    "public_incident.incident_created_v2",
+))
+
+
+def _build_alert_metadata(fields: Dict[str, Any], event_type: str) -> Dict[str, Any]:
+    meta: Dict[str, Any] = {
+        "permalink": fields["permalink"],
+        "summary": fields["summary"],
+        "event_type": event_type,
+    }
+    if fields["roles"]:
+        meta["roles"] = [
+            {"role": r.get("role", {}).get("name", ""),
+             "assignee": r.get("assignee", {}).get("name", "")}
+            for r in fields["roles"][:5]
+        ]
+    return meta
+
+
+def _try_correlate(cursor, conn, *, user_id, alert_db_id, fields, service,
+                   normalized_severity, alert_metadata, payload, org_id) -> bool:
+    """Attempt alert correlation. Returns True if correlated (and committed)."""
+    try:
+        cursor.execute("SAVEPOINT sp_correlation")
+        correlator = AlertCorrelator()
+        result = correlator.correlate(
+            cursor=cursor, user_id=user_id, source_type="incidentio",
+            source_alert_id=alert_db_id, alert_title=fields["incident_name"],
+            alert_service=service, alert_severity=normalized_severity,
+            alert_metadata=alert_metadata, org_id=org_id,
+        )
+        if result.is_correlated:
+            handle_correlated_alert(
+                cursor=cursor, user_id=user_id, incident_id=result.incident_id,
+                source_type="incidentio", source_alert_id=alert_db_id,
+                alert_title=fields["incident_name"], alert_service=service,
+                alert_severity=normalized_severity, correlation_result=result,
+                alert_metadata=alert_metadata, raw_payload=payload, org_id=org_id,
+            )
+            conn.commit()
+            return True
+        cursor.execute("RELEASE SAVEPOINT sp_correlation")
+    except Exception as corr_exc:
+        cursor.execute("ROLLBACK TO SAVEPOINT sp_correlation")
+        logger.warning("[INCIDENTIO] Correlation failed, continuing: %s", corr_exc)
+    return False
+
+
+def _create_and_link_incident(cursor, conn, *, user_id, org_id, alert_db_id,
+                              fields, service, normalized_severity,
+                              alert_metadata, received_at) -> Optional[str]:
+    """Create Aurora incident record and link the alert. Returns incident_id or None."""
+    cursor.execute(
+        """
+        INSERT INTO incidents
+        (user_id, org_id, source_type, source_alert_id, alert_title,
+         alert_service, severity, status, started_at, alert_metadata)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (org_id, source_type, source_alert_id, user_id) DO UPDATE
+        SET updated_at = CURRENT_TIMESTAMP,
+            alert_metadata = EXCLUDED.alert_metadata
+        RETURNING id
+        """,
+        (
+            user_id, org_id, "incidentio", alert_db_id,
+            fields["incident_name"], service, normalized_severity,
+            "investigating", received_at, json.dumps(alert_metadata),
+        ),
+    )
+    row = cursor.fetchone()
+    incident_id = row[0] if row else None
+    conn.commit()
+
+    if not incident_id:
+        return None
+
+    try:
+        cursor.execute(
+            """INSERT INTO incident_alerts
+               (user_id, org_id, incident_id, source_type, source_alert_id,
+                alert_title, alert_service, alert_severity, correlation_strategy,
+                correlation_score, alert_metadata)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+            (
+                user_id, org_id, incident_id, "incidentio", alert_db_id,
+                fields["incident_name"], service, normalized_severity,
+                "primary", 1.0, json.dumps(alert_metadata),
+            ),
+        )
+        cursor.execute(
+            "UPDATE incidents SET affected_services = ARRAY[%s] WHERE id = %s",
+            (service, incident_id),
+        )
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        logger.warning("[INCIDENTIO] Failed to link alert: %s", e)
+
+    return str(incident_id)
 
 
 @celery_app.task(
@@ -97,183 +207,102 @@ def process_incidentio_event(
             logger.warning("[INCIDENTIO] No user_id — event not stored")
             return
 
-        from utils.db.connection_pool import db_pool
-
-        try:
-            with db_pool.get_admin_connection() as conn:
-                with conn.cursor() as cursor:
-                    from utils.auth.stateless_auth import set_rls_context
-                    org_id = set_rls_context(cursor, conn, user_id, log_prefix="[INCIDENTIO]")
-                    if not org_id:
-                        return
-
-                    received_at = datetime.now(timezone.utc)
-                    normalized_severity = _map_severity(fields["severity"])
-
-                    cursor.execute(
-                        """
-                        INSERT INTO incidentio_alerts
-                        (user_id, org_id, incident_id, incident_name, incident_status,
-                         severity, incident_type, payload, received_at)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-                        ON CONFLICT (org_id, incident_id) DO UPDATE
-                        SET incident_name = EXCLUDED.incident_name,
-                            incident_status = EXCLUDED.incident_status,
-                            severity = EXCLUDED.severity,
-                            incident_type = EXCLUDED.incident_type,
-                            payload = EXCLUDED.payload,
-                            received_at = EXCLUDED.received_at
-                        RETURNING id
-                        """,
-                        (
-                            user_id, org_id, fields["incident_id"],
-                            fields["incident_name"], fields["incident_status"],
-                            normalized_severity, fields["incident_type"],
-                            json.dumps(payload), received_at,
-                        ),
-                    )
-                    alert_row = cursor.fetchone()
-                    alert_db_id = alert_row[0] if alert_row else None
-
-                    if not alert_db_id:
-                        conn.rollback()
-                        logger.error("[INCIDENTIO] Failed to store event for user %s", user_id)
-                        return
-
-                    # Only trigger RCA on new incidents, not updates
-                    is_new_incident = event_type in (
-                        "incident.created", "v2.incidents.created",
-                        "incident.declared", "public_incident.incident_created",
-                        "public_incident.incident_created_v2",
-                    )
-
-                    if not is_new_incident:
-                        conn.commit()
-                        logger.info("[INCIDENTIO] Stored update event (no RCA trigger)")
-                        return
-
-                    service = _extract_service(fields)
-                    alert_metadata = {
-                        "permalink": fields["permalink"],
-                        "summary": fields["summary"],
-                        "event_type": event_type,
-                    }
-                    if fields["roles"]:
-                        alert_metadata["roles"] = [
-                            {"role": r.get("role", {}).get("name", ""),
-                             "assignee": r.get("assignee", {}).get("name", "")}
-                            for r in fields["roles"][:5]
-                        ]
-
-                    # Alert correlation
-                    try:
-                        cursor.execute("SAVEPOINT sp_correlation")
-                        correlator = AlertCorrelator()
-                        correlation_result = correlator.correlate(
-                            cursor=cursor,
-                            user_id=user_id,
-                            source_type="incidentio",
-                            source_alert_id=alert_db_id,
-                            alert_title=fields["incident_name"],
-                            alert_service=service,
-                            alert_severity=normalized_severity,
-                            alert_metadata=alert_metadata,
-                            org_id=org_id,
-                        )
-                        if correlation_result.is_correlated:
-                            handle_correlated_alert(
-                                cursor=cursor,
-                                user_id=user_id,
-                                incident_id=correlation_result.incident_id,
-                                source_type="incidentio",
-                                source_alert_id=alert_db_id,
-                                alert_title=fields["incident_name"],
-                                alert_service=service,
-                                alert_severity=normalized_severity,
-                                correlation_result=correlation_result,
-                                alert_metadata=alert_metadata,
-                                raw_payload=payload,
-                                org_id=org_id,
-                            )
-                            conn.commit()
-                            return
-                        cursor.execute("RELEASE SAVEPOINT sp_correlation")
-                    except Exception as corr_exc:
-                        cursor.execute("ROLLBACK TO SAVEPOINT sp_correlation")
-                        logger.warning("[INCIDENTIO] Correlation failed, continuing: %s", corr_exc)
-
-                    if not _should_trigger_rca(user_id):
-                        conn.commit()
-                        logger.info("[INCIDENTIO] Stored incident (RCA disabled)")
-                        return
-
-                    # Create Aurora incident record
-                    cursor.execute(
-                        """
-                        INSERT INTO incidents
-                        (user_id, org_id, source_type, source_alert_id, alert_title,
-                         alert_service, severity, status, started_at, alert_metadata)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                        ON CONFLICT (org_id, source_type, source_alert_id, user_id) DO UPDATE
-                        SET updated_at = CURRENT_TIMESTAMP,
-                            alert_metadata = EXCLUDED.alert_metadata
-                        RETURNING id
-                        """,
-                        (
-                            user_id, org_id, "incidentio", alert_db_id,
-                            fields["incident_name"], service, normalized_severity,
-                            "investigating", received_at, json.dumps(alert_metadata),
-                        ),
-                    )
-                    incident_row = cursor.fetchone()
-                    incident_id = incident_row[0] if incident_row else None
-                    conn.commit()
-
-                    if not incident_id:
-                        return
-
-                    # Link alert to incident
-                    try:
-                        cursor.execute(
-                            """INSERT INTO incident_alerts
-                               (user_id, org_id, incident_id, source_type, source_alert_id,
-                                alert_title, alert_service, alert_severity, correlation_strategy,
-                                correlation_score, alert_metadata)
-                               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
-                            (
-                                user_id, org_id, incident_id, "incidentio", alert_db_id,
-                                fields["incident_name"], service, normalized_severity,
-                                "primary", 1.0, json.dumps(alert_metadata),
-                            ),
-                        )
-                        cursor.execute(
-                            "UPDATE incidents SET affected_services = ARRAY[%s] WHERE id = %s",
-                            (service, incident_id),
-                        )
-                        conn.commit()
-                    except Exception as e:
-                        conn.rollback()
-                        logger.warning("[INCIDENTIO] Failed to link alert: %s", e)
-
-                # Trigger summary + RCA outside cursor context
-                if incident_id:
-                    _trigger_rca_pipeline(
-                        user_id=user_id,
-                        incident_id=incident_id,
-                        fields=fields,
-                        payload=payload,
-                        alert_metadata=alert_metadata,
-                        service=service,
-                        severity=normalized_severity,
-                    )
-
-        except Exception as db_exc:
-            logger.exception("[INCIDENTIO] Database error: %s", db_exc)
-            raise
+        _store_and_process_event(user_id, event_type, fields, payload)
 
     except Exception as exc:
         logger.exception("[INCIDENTIO] Failed to process event")
         raise self.retry(exc=exc)
+
+
+def _store_and_process_event(user_id: str, event_type: str,
+                             fields: Dict[str, Any], payload: Dict[str, Any]) -> None:
+    """Store the alert and optionally trigger correlation/RCA."""
+    from utils.db.connection_pool import db_pool
+    from utils.auth.stateless_auth import set_rls_context
+
+    incident_id = None
+    service = ""
+    normalized_severity = ""
+    alert_metadata: Dict[str, Any] = {}
+
+    with db_pool.get_admin_connection() as conn:
+        with conn.cursor() as cursor:
+            org_id = set_rls_context(cursor, conn, user_id, log_prefix="[INCIDENTIO]")
+            if not org_id:
+                return
+
+            received_at = datetime.now(timezone.utc)
+            normalized_severity = _map_severity(fields["severity"])
+
+            alert_db_id = _upsert_alert(cursor, conn, user_id=user_id, org_id=org_id,
+                                        fields=fields, payload=payload,
+                                        severity=normalized_severity, received_at=received_at)
+            if not alert_db_id:
+                conn.rollback()
+                logger.error("[INCIDENTIO] Failed to store event for user %s", user_id)
+                return
+
+            if event_type not in _NEW_INCIDENT_EVENTS:
+                conn.commit()
+                logger.info("[INCIDENTIO] Stored update event (no RCA trigger)")
+                return
+
+            service = _extract_service(fields)
+            alert_metadata = _build_alert_metadata(fields, event_type)
+
+            if _try_correlate(cursor, conn, user_id=user_id, alert_db_id=alert_db_id,
+                              fields=fields, service=service,
+                              normalized_severity=normalized_severity,
+                              alert_metadata=alert_metadata, payload=payload, org_id=org_id):
+                return
+
+            if not _should_trigger_rca(user_id):
+                conn.commit()
+                logger.info("[INCIDENTIO] Stored incident (RCA disabled)")
+                return
+
+            incident_id = _create_and_link_incident(
+                cursor, conn, user_id=user_id, org_id=org_id,
+                alert_db_id=alert_db_id, fields=fields, service=service,
+                normalized_severity=normalized_severity,
+                alert_metadata=alert_metadata, received_at=received_at,
+            )
+
+    if incident_id:
+        _trigger_rca_pipeline(
+            user_id=user_id, incident_id=incident_id, fields=fields,
+            payload=payload, alert_metadata=alert_metadata,
+            service=service, severity=normalized_severity,
+        )
+
+
+def _upsert_alert(cursor, conn, *, user_id, org_id, fields, payload,
+                   severity, received_at) -> Optional[int]:
+    """Insert or update the incidentio_alerts row. Returns the DB id or None."""
+    cursor.execute(
+        """
+        INSERT INTO incidentio_alerts
+        (user_id, org_id, incident_id, incident_name, incident_status,
+         severity, incident_type, payload, received_at)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (org_id, incident_id) DO UPDATE
+        SET incident_name = EXCLUDED.incident_name,
+            incident_status = EXCLUDED.incident_status,
+            severity = EXCLUDED.severity,
+            incident_type = EXCLUDED.incident_type,
+            payload = EXCLUDED.payload,
+            received_at = EXCLUDED.received_at
+        RETURNING id
+        """,
+        (
+            user_id, org_id, fields["incident_id"],
+            fields["incident_name"], fields["incident_status"],
+            severity, fields["incident_type"],
+            json.dumps(payload), received_at,
+        ),
+    )
+    row = cursor.fetchone()
+    return row[0] if row else None
 
 
 def _extract_service(fields: Dict[str, Any]) -> str:

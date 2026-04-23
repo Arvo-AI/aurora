@@ -366,46 +366,42 @@ def store_user_preference(user_id: str, key: str, value: Any):
         if 'conn' in locals() and conn:
             conn.close()
 
+def _parse_preference_value(raw, default=None):
+    """Decode a preference_value column, which may be JSON text or already decoded."""
+    if raw is None:
+        return default
+    if not isinstance(raw, str):
+        return raw
+    try:
+        return json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        return raw
+
 def get_user_preference(user_id: str, key: str, default=None):
     """Get user preference from database."""
+    conn = None
+    cursor = None
     try:
         conn = connect_to_db_as_user()
         cursor = conn.cursor()
         org_id = set_rls_context(cursor, conn, user_id, log_prefix="[Prefs:get]")
 
-        if org_id:
-            cursor.execute(
-                "SELECT preference_value FROM user_preferences WHERE org_id = %s AND preference_key = %s",
-                (org_id, key)
-            )
-        else:
-            cursor.execute(
-                "SELECT preference_value FROM user_preferences WHERE user_id = %s AND preference_key = %s",
-                (user_id, key)
-            )
+        lookup_col, lookup_val = ("org_id", org_id) if org_id else ("user_id", user_id)
+        cursor.execute(
+            f"SELECT preference_value FROM user_preferences WHERE {lookup_col} = %s AND preference_key = %s",
+            (lookup_val, key),
+        )
         result = cursor.fetchone()
-        if result:
-            logger.debug(f"Retrieved preference {key} for user {user_id}")
-            try:
-                # Try to parse as JSON, but handle cases where it might already be decoded
-                # Use 'is not None' to handle boolean False values correctly
-                value = result[0] if result[0] is not None else default
-                if isinstance(value, str):
-                    return json.loads(value)
-                return value
-            except json.JSONDecodeError:
-                # If JSON parsing fails, return the raw value
-                return result[0] if result[0] is not None else default
-        
-        logger.debug(f"No preference {key} found for user {user_id}, returning default")
-        return default
-    except Exception as e:
-        logger.error(f"Error retrieving user preference: {e}")
+        if not result:
+            return default
+        return _parse_preference_value(result[0], default)
+    except Exception:
+        logger.exception("Error retrieving user preference")
         return default
     finally:
-        if 'cursor' in locals() and cursor:
+        if cursor:
             cursor.close()
-        if 'conn' in locals() and conn:
+        if conn:
             conn.close()
 
 def get_connected_providers(user_id: str) -> List[str]:
