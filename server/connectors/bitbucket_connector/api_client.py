@@ -205,8 +205,16 @@ class BitbucketAPIClient:
     # ------------------------------------------------------------------
 
     def get_workspaces(self):
-        """List all workspaces the authenticated user has access to."""
-        return self._paginated_get(f"{BITBUCKET_API_BASE}/workspaces")
+        """List all workspaces the authenticated user has access to.
+
+        Uses ``/2.0/user/workspaces``. The legacy ``/2.0/workspaces`` and
+        ``/2.0/user/permissions/workspaces`` endpoints were removed in
+        CHANGE-2770 on 2026-04-14 (both return HTTP 410).
+        """
+        result = self._paginated_get(f"{BITBUCKET_API_BASE}/user/workspaces")
+        if isinstance(result, dict) and result.get("error"):
+            return result
+        return [entry["workspace"] for entry in result if isinstance(entry, dict) and entry.get("workspace")]
 
     def get_workspace(self, workspace):
         """Get a single workspace by slug."""
