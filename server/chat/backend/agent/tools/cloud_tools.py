@@ -17,6 +17,8 @@ from contextlib import asynccontextmanager
 from threading import local
 import concurrent.futures
 
+_background_tasks: set = set()
+
 from langchain_core.tools import StructuredTool
 from .output_sanitizer import truncate_json_fields
 
@@ -426,7 +428,9 @@ def send_tool_completion(tool_name: str, output: str, status: str = "completed",
                     loop = asyncio.get_event_loop()
                     if loop.is_running():
                         # If we're in an async context, schedule the send
-                        asyncio.create_task(agent_websocket_sender(result_data))
+                        task = asyncio.create_task(agent_websocket_sender(result_data))
+                        _background_tasks.add(task)
+                        task.add_done_callback(_background_tasks.discard)
                     else:
                         # If we're in a sync context, run in thread
                         loop.run_until_complete(agent_websocket_sender(result_data))
