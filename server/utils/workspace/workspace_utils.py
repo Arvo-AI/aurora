@@ -7,6 +7,7 @@ import uuid
 import json
 from typing import Dict, Optional, Any
 from utils.db.connection_pool import db_pool
+from utils.log_sanitizer import sanitize
 
 logger = logging.getLogger(__name__)
 
@@ -151,7 +152,7 @@ def update_workspace_aws_role(
         logger.info("Saved AWS connection to user_connections for user %s (account: %s)", user_id, account_id)
 
     except Exception as e:
-        logger.error(f"Failed to save AWS connection for workspace {workspace_id}: {e}")
+        logger.error(f"Failed to save AWS connection for workspace {sanitize(workspace_id)}: {e}")
         raise
 
 
@@ -205,7 +206,7 @@ def get_workspace_by_id(workspace_id: str) -> Optional[Dict[str, Any]]:
             }
             
     except Exception as e:
-        logger.error(f"Failed to get workspace {workspace_id}: {e}")
+        logger.error(f"Failed to get workspace {sanitize(workspace_id)}: {e}")
         return None
 
 

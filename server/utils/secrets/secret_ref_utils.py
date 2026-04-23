@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Optional, Dict, Any, Set, Tuple
 
 from utils.db.db_utils import connect_to_db_as_admin
 from utils.auth.stateless_auth import set_rls_context
+from utils.log_sanitizer import sanitize
 from utils.secrets.secret_cache import (
     get_cached_secret,
     update_secret_cache,
@@ -404,7 +405,7 @@ class SecretRefManager:
             )
             for row in cursor.fetchall():
                 if not self.delete_secret(row[0]):
-                    logger.warning("Failed to delete secret from Vault for provider %s", provider)
+                    logger.warning("Failed to delete secret from Vault for provider %s", sanitize(provider))
                     delete_success = False
 
             cursor.execute(
@@ -415,7 +416,7 @@ class SecretRefManager:
             conn.commit()
 
             if deleted_rows > 0:
-                logger.info("Deleted credentials for provider %s", provider)
+                logger.info("Deleted credentials for provider %s", sanitize(provider))
 
             return delete_success, deleted_rows
 

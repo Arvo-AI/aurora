@@ -6,6 +6,7 @@ from flask import Blueprint, jsonify, request
 
 from routes.grafana.tasks import process_grafana_alert
 from utils.db.connection_pool import db_pool
+from utils.log_sanitizer import sanitize
 from utils.web.cors_utils import create_cors_response
 from utils.auth.token_management import store_tokens_in_db
 from utils.auth.rbac_decorators import require_permission
@@ -115,20 +116,20 @@ def alert_webhook(user_id: str):
     if not row_exists or (row_exists and not is_active):
         skip_rca = True
         if not row_exists:
-            logger.info("[GRAFANA] Auto-connecting user %s via webhook", user_id)
+            logger.info("[GRAFANA] Auto-connecting user %s via webhook", sanitize(user_id))
             try:
                 store_tokens_in_db(user_id, {}, "grafana")
             except Exception as exc:
-                logger.exception("[GRAFANA] Failed to auto-connect user %s: %s", user_id, exc)
+                logger.exception("[GRAFANA] Failed to auto-connect user %s: %s", sanitize(user_id), exc)
                 return jsonify({"error": "Failed to create Grafana connection"}), 500
         else:
             reactivated = _set_grafana_active(user_id, True)
             if not reactivated:
-                logger.warning("[GRAFANA] Failed to re-activate connection for user %s via webhook", user_id)
+                logger.warning("[GRAFANA] Failed to re-activate connection for user %s via webhook", sanitize(user_id))
             else:
-                logger.info("[GRAFANA] Re-activated connection for user %s via webhook", user_id)
+                logger.info("[GRAFANA] Re-activated connection for user %s via webhook", sanitize(user_id))
 
-    logger.info("[GRAFANA] Received alert webhook for user %s: %s", user_id, payload.get("title", "unknown"))
+    logger.info("[GRAFANA] Received alert webhook for user %s: %s", sanitize(user_id), sanitize(payload.get("title", "unknown")))
 
     metadata = {
         "headers": dict(request.headers),

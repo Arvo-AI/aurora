@@ -8,6 +8,7 @@ from flask import Blueprint, jsonify, request
 
 from routes.netdata.tasks import process_netdata_alert
 from utils.db.connection_pool import db_pool
+from utils.log_sanitizer import sanitize
 from utils.web.cors_utils import create_cors_response
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.auth.rbac_decorators import require_permission
@@ -140,7 +141,7 @@ def alert_webhook(user_id: str):
     # Check if user has Netdata connected
     creds = get_token_data(user_id, "netdata")
     if not creds:
-        logger.warning("[NETDATA] Webhook received for user %s with no Netdata connection", user_id)
+        logger.warning("[NETDATA] Webhook received for user %s with no Netdata connection", sanitize(user_id))
         return jsonify({"error": "Netdata not connected for this user"}), 404
 
     payload = request.get_json(silent=True) or {}
@@ -152,7 +153,7 @@ def alert_webhook(user_id: str):
                   alert_obj.get("name") or 
                   "unknown")
                   
-    logger.info("[NETDATA] Received webhook for user %s: %s", user_id, alert_name)
+    logger.info("[NETDATA] Received webhook for user %s: %s", sanitize(user_id), sanitize(alert_name))
     logger.debug("[NETDATA] Payload keys: %s", list(payload.keys()) if payload else "empty")
     
     # Store verification token from test notifications directly in DB (not a secret)

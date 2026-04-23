@@ -15,6 +15,7 @@ from flask import Blueprint, jsonify, request
 from werkzeug.utils import secure_filename
 
 from utils.db.connection_pool import db_pool
+from utils.log_sanitizer import sanitize
 from utils.web.cors_utils import create_cors_response
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context
@@ -400,7 +401,7 @@ def get_document(user_id, doc_id: str):
             return jsonify(serialize_document(row)), 200
 
     except Exception as e:
-        logger.exception(f"[KB] Error getting document {doc_id} for user {user_id}: {e}")
+        logger.exception(f"[KB] Error getting document {sanitize(doc_id)} for user {sanitize(user_id)}: {e}")
         return jsonify({"error": "Failed to get document"}), 500
 
 
@@ -439,9 +440,9 @@ def delete_document(user_id, doc_id: str):
             try:
                 from routes.knowledge_base.weaviate_client import delete_document_chunks
                 delete_document_chunks(user_id, doc_id)
-                logger.info(f"[KB] Deleted Weaviate chunks for document {doc_id}")
+                logger.info(f"[KB] Deleted Weaviate chunks for document {sanitize(doc_id)}")
             except Exception as weaviate_error:
-                logger.warning(f"[KB] Failed to delete Weaviate chunks for {doc_id}: {weaviate_error}")
+                logger.warning(f"[KB] Failed to delete Weaviate chunks for {sanitize(doc_id)}: {weaviate_error}")
 
             # Delete from local filesystem
             if storage_path:
@@ -461,12 +462,12 @@ def delete_document(user_id, doc_id: str):
             )
             conn.commit()
 
-            logger.info(f"[KB] Deleted document {doc_id} ({original_filename}) for user {user_id}")
+            logger.info(f"[KB] Deleted document {sanitize(doc_id)} ({sanitize(original_filename)}) for user {sanitize(user_id)}")
 
             return jsonify({"success": True}), 200
 
     except Exception as e:
-        logger.exception(f"[KB] Error deleting document {doc_id} for user {user_id}: {e}")
+        logger.exception(f"[KB] Error deleting document {sanitize(doc_id)} for user {sanitize(user_id)}: {e}")
         return jsonify({"error": "Failed to delete document"}), 500
 
 

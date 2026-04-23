@@ -17,6 +17,7 @@ from utils.web.cors_utils import create_cors_response
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import set_rls_context
+from utils.log_sanitizer import sanitize
 from utils.secrets.secret_ref_utils import delete_user_secret
 
 logger = logging.getLogger(__name__)
@@ -124,16 +125,16 @@ def webhook(user_id: str):
         return jsonify({"error": "user_id is required"}), 400
 
     if not _verify_webhook_user(user_id):
-        logger.warning("[BIGPANDA] Webhook rejected: invalid or unconfigured user_id %s", user_id[:50])
+        logger.warning("[BIGPANDA] Webhook rejected: invalid or unconfigured user_id %s", sanitize(user_id)[:50])
         return jsonify({"error": "Invalid webhook configuration"}), 403
 
     try:
         creds = get_token_data(user_id, "bigpanda")
     except Exception as exc:
-        logger.error("[BIGPANDA] Failed to retrieve credentials for webhook user %s: %s", user_id, exc)
+        logger.error("[BIGPANDA] Failed to retrieve credentials for webhook user %s: %s", sanitize(user_id), exc)
         return jsonify({"error": "Internal error processing webhook"}), 500
     if not creds:
-        logger.warning("[BIGPANDA] Webhook received for user %s with no connection", user_id)
+        logger.warning("[BIGPANDA] Webhook received for user %s with no connection", sanitize(user_id))
         return jsonify({"error": "BigPanda not connected for this user"}), 404
 
     webhook_secret = creds.get("webhook_secret")
@@ -141,15 +142,15 @@ def webhook(user_id: str):
 
     if webhook_secret:
         if not signature:
-            logger.warning("[BIGPANDA] Webhook rejected: missing X-Aurora-Signature for user %s", user_id[:50])
+            logger.warning("[BIGPANDA] Webhook rejected: missing X-Aurora-Signature for user %s", sanitize(user_id)[:50])
             return jsonify({"error": "Missing X-Aurora-Signature header"}), 401
         expected = hmac.new(webhook_secret.encode(), request.get_data(), hashlib.sha256).hexdigest()
         if not hmac.compare_digest(expected, signature):
-            logger.warning("[BIGPANDA] Webhook rejected: invalid signature for user %s", user_id[:50])
+            logger.warning("[BIGPANDA] Webhook rejected: invalid signature for user %s", sanitize(user_id)[:50])
             return jsonify({"error": "Invalid webhook signature"}), 401
 
     payload = request.get_json(silent=True) or {}
-    logger.info("[BIGPANDA] Received webhook for user %s", user_id)
+    logger.info("[BIGPANDA] Received webhook for user %s", sanitize(user_id))
 
     _REDACTED_HEADERS = {"authorization", "cookie", "set-cookie", "proxy-authorization", "x-api-key"}
     sanitized_headers = {

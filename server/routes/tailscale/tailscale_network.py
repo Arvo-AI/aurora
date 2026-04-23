@@ -11,6 +11,7 @@ import logging
 from flask import request, jsonify, g
 from routes.tailscale import tailscale_bp, require_tailscale
 from utils.auth.rbac_decorators import require_permission
+from utils.log_sanitizer import sanitize
 from utils.web.limiter_ext import limiter
 
 logger = logging.getLogger(__name__)
@@ -343,7 +344,7 @@ def auth_key_detail(user_id, key_id: str):
             if not success:
                 return jsonify({"error": error}), 400
 
-            logger.info(f"Auth key {key_id} deleted by user {g.user_id}")
+            logger.info(f"Auth key {sanitize(key_id)} deleted by user {sanitize(g.user_id)}")
 
             return jsonify({
                 "success": True,

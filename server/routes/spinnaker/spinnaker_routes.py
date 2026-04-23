@@ -19,6 +19,7 @@ from utils.web.webhook_signature import SIGNATURE_HEADER, verify_webhook_signatu
 from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.auth.rbac_decorators import require_permission
+from utils.log_sanitizer import sanitize
 from utils.secrets.secret_ref_utils import delete_user_secret
 
 logger = logging.getLogger(__name__)
@@ -337,10 +338,10 @@ def deployment_webhook(user_id: str):
 
     logger.info(
         "[SPINNAKER] Received deployment webhook for user %s: app=%s pipeline=%s status=%s",
-        user_id,
-        payload.get("application", "unknown"),
-        payload.get("pipeline", payload.get("pipeline_name", "unknown")),
-        payload.get("status", payload.get("execution", {}).get("status", "unknown") if isinstance(payload.get("execution"), dict) else "unknown"),
+        sanitize(user_id),
+        sanitize(payload.get("application", "unknown")),
+        sanitize(payload.get("pipeline", payload.get("pipeline_name", "unknown"))),
+        sanitize(payload.get("status", payload.get("execution", {}).get("status", "unknown") if isinstance(payload.get("execution"), dict) else "unknown")),
     )
 
     from routes.spinnaker.tasks import process_spinnaker_deployment

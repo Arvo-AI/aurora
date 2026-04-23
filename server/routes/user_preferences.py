@@ -7,6 +7,7 @@ from utils.auth.stateless_auth import (
     get_credentials_from_db,
     set_rls_context,
 )
+from utils.log_sanitizer import sanitize
 from utils.web.cors_utils import create_cors_response
 from utils.auth.rbac_decorators import require_permission
 import json
@@ -96,10 +97,10 @@ def get_credentials(user_id, provider):
     """Get provider credentials from database."""
     credentials = get_credentials_from_db(user_id, provider)
     if credentials:
-        logger.info(f"Retrieved {provider} credentials for user {user_id}")
+        logger.info(f"Retrieved {sanitize(provider)} credentials for user {sanitize(user_id)}")
         return jsonify(credentials)
     else:
-        logger.warning(f"No {provider} credentials found for user {user_id}")
+        logger.warning(f"No {sanitize(provider)} credentials found for user {sanitize(user_id)}")
         return jsonify({"error": f"No {provider} credentials found"}), 404
 
 @user_preferences_bp.route('/api/user-preferences/batch', methods=['OPTIONS'])

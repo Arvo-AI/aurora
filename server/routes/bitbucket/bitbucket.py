@@ -11,6 +11,7 @@ from flask import Blueprint, jsonify, render_template, request
 from utils.auth.stateless_auth import get_credentials_from_db
 from utils.web.cors_utils import create_cors_response
 from utils.auth.rbac_decorators import require_permission
+from utils.log_sanitizer import sanitize
 
 bitbucket_bp = Blueprint("bitbucket", __name__)
 logger = logging.getLogger(__name__)
@@ -122,7 +123,7 @@ def bitbucket_callback():
                 frontend_url=FRONTEND_URL,
             )
 
-        logger.info(f"Received Bitbucket code: {code[:5]}...")
+        logger.info(f"Received Bitbucket code: {sanitize(code)[:5]}...")
 
         from connectors.bitbucket_connector.oauth_utils import exchange_code_for_token
 

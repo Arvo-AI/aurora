@@ -8,6 +8,7 @@ from flask import Blueprint, jsonify, request
 
 from routes.datadog.tasks import process_datadog_event
 from utils.db.connection_pool import db_pool
+from utils.log_sanitizer import sanitize
 from utils.web.cors_utils import create_cors_response
 from utils.logging.secure_logging import mask_credential_value
 from utils.auth.token_management import get_token_data, store_tokens_in_db
@@ -66,7 +67,7 @@ def _normalize_site(site: Optional[str]) -> Tuple[str, str]:
     if host_candidate in _SITE_BASE_URLS:
         return host_candidate, _SITE_BASE_URLS[host_candidate]
 
-    logger.warning("[DATADOG] Unknown site '%s', defaulting to datadoghq.com", site)
+    logger.warning("[DATADOG] Unknown site '%s', defaulting to datadoghq.com", sanitize(site))
     return candidate, _SITE_BASE_URLS["datadoghq.com"]
 
 
@@ -303,7 +304,7 @@ def connect(user_id):
 
     masked_api = mask_credential_value(api_key)
     masked_app = mask_credential_value(app_key)
-    logger.info("[DATADOG] Connecting user %s to site=%s api=%s app=%s", user_id, site, masked_api, masked_app)
+    logger.info("[DATADOG] Connecting user %s to site=%s api=%s app=%s", sanitize(user_id), sanitize(site), masked_api, masked_app)
 
     client = DatadogClient(api_key=api_key, app_key=app_key, site=site)
 
@@ -621,7 +622,7 @@ def webhook(user_id: str):
     # Check if user has Datadog connected
     creds = get_token_data(user_id, "datadog")
     if not creds:
-        logger.warning("[DATADOG] Webhook received for user %s with no Datadog connection", user_id)
+        logger.warning("[DATADOG] Webhook received for user %s with no Datadog connection", sanitize(user_id))
         return jsonify({"error": "Datadog not connected for this user"}), 404
 
     payload_text = request.get_data(as_text=True) or ""
@@ -632,7 +633,7 @@ def webhook(user_id: str):
         "headers": dict(request.headers),
         "remote_addr": request.remote_addr,
     }
-    logger.info("[DATADOG] Received webhook for user %s type=%s", user_id, payload.get("event_type"))
+    logger.info("[DATADOG] Received webhook for user %s type=%s", sanitize(user_id), sanitize(payload.get("event_type")))
 
     process_datadog_event.delay(payload, metadata, user_id)
     return jsonify({"received": True})

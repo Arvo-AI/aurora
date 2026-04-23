@@ -17,6 +17,7 @@ from utils.auth.rbac_decorators import require_permission
 from utils.auth.enforcer import get_enforcer, reload_policies
 from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context
 from utils.db.db_utils import connect_to_db_as_user
+from utils.log_sanitizer import sanitize
 
 logger = logging.getLogger(__name__)
 _LOG_PREFIX = "[Admin]"
@@ -271,7 +272,7 @@ def assign_role(user_id, target_user_id):
     finally:
         conn.close()
 
-    logger.info("User %s assigned role '%s' by admin %s", target_user_id, role, user_id)
+    logger.info("User %s assigned role '%s' by admin %s", sanitize(target_user_id), sanitize(role), sanitize(user_id))
     record_audit_event(org_id or "", user_id, "assign_role", "user", target_user_id, {"role": role}, request)
     return jsonify({"user_id": target_user_id, "role": role}), 200
 
@@ -326,7 +327,7 @@ def revoke_role(user_id, target_user_id, role):
         conn.close()
 
     logger.info("Role '%s' revoked from user %s by admin %s (now: %s)",
-                role, target_user_id, user_id, fallback_role)
+                sanitize(role), sanitize(target_user_id), sanitize(user_id), sanitize(fallback_role))
     record_audit_event(org_id or "", user_id, "revoke_role", "user", target_user_id, {"revoked_role": role, "new_role": fallback_role}, request)
     return jsonify({"user_id": target_user_id, "role": fallback_role}), 200
 

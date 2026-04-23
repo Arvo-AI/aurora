@@ -6,6 +6,7 @@ from psycopg2.extras import RealDictCursor
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context
 from utils.db.db_adapters import connect_to_db_as_user
+from utils.log_sanitizer import sanitize
 from utils.web.limiter_ext import limiter
 
 logger = logging.getLogger(__name__)
@@ -50,7 +51,7 @@ def create_token(user_id):
             cursor.close()
         finally:
             conn.close()
-        logger.info(f"Created kubectl token for user {user_id}, cluster: {cluster_name}")
+        logger.info(f"Created kubectl token for user {sanitize(user_id)}, cluster: {sanitize(cluster_name)}")
         return jsonify({
             'success': True,
             'token': result['token'],
@@ -151,7 +152,7 @@ def disconnect_cluster(user_id, cluster_id):
             cursor.close()
         finally:
             conn.close()
-        logger.info(f"Disconnected kubectl cluster {cluster_id} (revoked token) for user {user_id}")
+        logger.info(f"Disconnected kubectl cluster {sanitize(cluster_id)} (revoked token) for user {sanitize(user_id)}")
         
         # Return command to delete agent from cluster (Helm deployment)
         delete_command = "helm uninstall aurora-kubectl-agent -n <your-namespace>"

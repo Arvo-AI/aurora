@@ -11,6 +11,7 @@ from flask import Blueprint, Response, jsonify, request, stream_with_context
 from utils.web.cors_utils import create_cors_response
 from utils.auth.token_management import get_token_data
 from utils.auth.rbac_decorators import require_permission
+from utils.log_sanitizer import sanitize
 
 SPLUNK_TIMEOUT = 30
 SPLUNK_SEARCH_TIMEOUT = 120
@@ -82,7 +83,7 @@ def search_sync(user_id):
     if not search_query.strip().startswith("|") and not search_query.strip().lower().startswith("search"):
         search_query = f"search {search_query}"
 
-    logger.info(f"[SPLUNK-SEARCH] User {user_id} executing sync search: {search_query[:100]}...")
+    logger.info(f"[SPLUNK-SEARCH] User {sanitize(user_id)} executing sync search: {sanitize(search_query)[:100]}...")
 
     try:
         # Use export endpoint with oneshot mode for streaming results
@@ -169,7 +170,7 @@ def create_search_job(user_id):
     if not search_query.strip().startswith("|") and not search_query.strip().lower().startswith("search"):
         search_query = f"search {search_query}"
 
-    logger.info(f"[SPLUNK-SEARCH] User {user_id} creating async job: {search_query[:100]}...")
+    logger.info(f"[SPLUNK-SEARCH] User {sanitize(user_id)} creating async job: {sanitize(search_query)[:100]}...")
 
     try:
         url = f"{creds['base_url']}/services/search/v2/jobs"

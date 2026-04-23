@@ -10,6 +10,7 @@ from flask import Blueprint, jsonify, request
 
 from routes.dynatrace.tasks import process_dynatrace_problem
 from utils.db.connection_pool import db_pool
+from utils.log_sanitizer import sanitize
 from utils.web.cors_utils import create_cors_response
 from utils.auth.stateless_auth import (
     get_org_id_from_request,
@@ -169,11 +170,11 @@ def webhook(user_id: str):
 
     creds = get_token_data(user_id, "dynatrace")
     if not creds:
-        logger.warning("[DYNATRACE] Webhook received for user %s with no connection", user_id)
+        logger.warning("[DYNATRACE] Webhook received for user %s with no connection", sanitize(user_id))
         return jsonify({"error": "Dynatrace not connected for this user"}), 404
 
     payload = request.get_json(silent=True) or {}
-    logger.info("[DYNATRACE] Received webhook for user %s: %s", user_id, payload.get("ProblemTitle", "unknown"))
+    logger.info("[DYNATRACE] Received webhook for user %s: %s", sanitize(user_id), sanitize(payload.get("ProblemTitle", "unknown")))
 
     _REDACTED_HEADERS = {"authorization", "cookie", "set-cookie", "proxy-authorization", "x-api-key"}
     sanitized_headers = {
@@ -280,5 +281,5 @@ def update_rca_settings(user_id):
         return jsonify({"error": "rcaEnabled must be a boolean"}), 400
 
     store_user_preference(user_id, "dynatrace_rca_enabled", rca_enabled)
-    logger.info("[DYNATRACE] Updated RCA settings for user %s: rcaEnabled=%s", user_id, rca_enabled)
+    logger.info("[DYNATRACE] Updated RCA settings for user %s: rcaEnabled=%s", sanitize(user_id), rca_enabled)
     return jsonify({"success": True, "rcaEnabled": rca_enabled})

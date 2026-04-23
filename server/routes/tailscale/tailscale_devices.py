@@ -12,6 +12,7 @@ import logging
 from flask import request, jsonify, g
 from routes.tailscale import tailscale_bp, require_tailscale
 from utils.auth.rbac_decorators import require_permission
+from utils.log_sanitizer import sanitize
 from utils.web.limiter_ext import limiter
 
 logger = logging.getLogger(__name__)
@@ -104,7 +105,7 @@ def authorize_device(user_id, device_id: str):
         if not success:
             return jsonify({"error": error}), 400
 
-        logger.info(f"Device {device_id} authorized by user {g.user_id}")
+        logger.info(f"Device {sanitize(device_id)} authorized by user {sanitize(g.user_id)}")
 
         return jsonify({
             "success": True,
@@ -141,7 +142,7 @@ def set_device_tags(user_id, device_id: str):
         if not success:
             return jsonify({"error": error}), 400
 
-        logger.info(f"Tags set on device {device_id} by user {g.user_id}")
+        logger.info(f"Tags set on device {sanitize(device_id)} by user {sanitize(g.user_id)}")
 
         return jsonify({
             "success": True,
@@ -178,7 +179,7 @@ def set_device_routes(user_id, device_id: str):
         if not success:
             return jsonify({"error": error}), 400
 
-        logger.info(f"Routes set on device {device_id} by user {g.user_id}")
+        logger.info(f"Routes set on device {sanitize(device_id)} by user {sanitize(g.user_id)}")
 
         return jsonify({
             "success": True,
@@ -213,7 +214,7 @@ def set_device_key_expiry(user_id, device_id: str):
             return jsonify({"error": error}), 400
 
         status = "disabled" if key_expiry_disabled else "enabled"
-        logger.info(f"Key expiry {status} for device {device_id} by user {g.user_id}")
+        logger.info(f"Key expiry {status} for device {sanitize(device_id)} by user {sanitize(g.user_id)}")
 
         return jsonify({
             "success": True,

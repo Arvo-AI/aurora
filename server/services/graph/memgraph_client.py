@@ -11,6 +11,8 @@ from collections import Counter
 
 from neo4j import GraphDatabase
 
+from utils.log_sanitizer import sanitize
+
 logger = logging.getLogger(__name__)
 
 _client_instance = None
@@ -76,7 +78,7 @@ class MemgraphClient:
                 result = session.run(query, params or {})
                 return [dict(record) for record in result]
         except Exception as e:
-            logger.error(f"Memgraph query error: {e}\nQuery: {query}\nParams: {params}")
+            logger.error(f"Memgraph query error: {sanitize(e)}\nQuery: {sanitize(query)}\nParams: {sanitize(params)}")
             raise
 
     def _execute_no_fetch(self, query, params=None):

@@ -15,6 +15,7 @@ from flask import Blueprint, jsonify, request
 
 from connectors.newrelic_connector.client import NewRelicClient, NewRelicAPIError
 from utils.db.connection_pool import db_pool
+from utils.log_sanitizer import sanitize
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context
@@ -102,7 +103,7 @@ def connect(user_id):
 
     logger.info(
         "[NEWRELIC] Connecting user %s account=%s region=%s",
-        user_id, account_id, region,
+        sanitize(user_id), sanitize(account_id), sanitize(region),
     )
 
     client = NewRelicClient(api_key=api_key, account_id=account_id, region=region)
@@ -141,7 +142,7 @@ def connect(user_id):
 
     try:
         store_tokens_in_db(user_id, token_payload, "newrelic")
-        logger.info("[NEWRELIC] Stored credentials for user %s (account=%s)", user_id, account_id)
+        logger.info("[NEWRELIC] Stored credentials for user %s (account=%s)", sanitize(user_id), sanitize(account_id))
     except Exception as exc:
         logger.exception("[NEWRELIC] Failed to store credentials: %s", exc)
         return jsonify({"error": "Failed to store New Relic credentials"}), 500
@@ -363,7 +364,7 @@ def webhook(user_id: str):
 
     creds = _get_stored_newrelic_credentials(user_id)
     if not creds:
-        logger.warning("[NEWRELIC] Webhook received for user %s with no connection", user_id)
+        logger.warning("[NEWRELIC] Webhook received for user %s with no connection", sanitize(user_id))
         return jsonify({"error": "New Relic not connected for this user"}), 404
 
     payload = request.get_json(force=True, silent=True) or {}
@@ -387,7 +388,7 @@ def webhook(user_id: str):
 
     logger.info(
         "[NEWRELIC][WEBHOOK] Received alert for user %s: %s (issue=%s)",
-        user_id, title, issue_id,
+        sanitize(user_id), sanitize(title), sanitize(issue_id),
     )
 
     process_newrelic_event.delay(payload, metadata, user_id)

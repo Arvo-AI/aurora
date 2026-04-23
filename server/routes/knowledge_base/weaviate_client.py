@@ -16,6 +16,8 @@ from weaviate.classes.init import AdditionalConfig, Timeout
 from weaviate.classes.query import Filter, HybridFusion
 from weaviate.util import generate_uuid5
 
+from utils.log_sanitizer import sanitize
+
 logger = logging.getLogger(__name__)
 
 COLLECTION_NAME = "KnowledgeBaseChunk"
@@ -274,7 +276,7 @@ def search_knowledge_base(
             })
 
         logger.info(
-            f"[KB Weaviate] Search for '{query[:50]}...' returned {len(results)} results"
+            f"[KB Weaviate] Search for '{sanitize(query)[:50]}...' returned {len(results)} results"
         )
         return results
 
@@ -308,7 +310,7 @@ def delete_document_chunks(user_id: str, document_id: str) -> int:
 
         deleted_count = result.successful if hasattr(result, "successful") else 0
         logger.info(
-            f"[KB Weaviate] Deleted {deleted_count} chunks for doc {document_id}"
+            f"[KB Weaviate] Deleted {deleted_count} chunks for doc {sanitize(document_id)}"
         )
         return deleted_count
 

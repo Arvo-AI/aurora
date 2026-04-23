@@ -19,6 +19,7 @@ from utils.auth.stateless_auth import (
 )
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.auth.rbac_decorators import require_permission
+from utils.log_sanitizer import sanitize
 from utils.secrets.secret_ref_utils import delete_user_secret
 SPLUNK_TIMEOUT = 15
 
@@ -145,7 +146,7 @@ def connect(user_id):
         return jsonify({"error": "A valid Splunk instance URL is required (e.g., https://your-instance.splunkcloud.com:8089)"}), 400
 
     masked_token = mask_credential_value(api_token)
-    logger.info(f"[SPLUNK] Connecting user {user_id} to {base_url} (token={masked_token})")
+    logger.info(f"[SPLUNK] Connecting user {sanitize(user_id)} to {sanitize(base_url)} (token={masked_token})")
 
     client = SplunkClient(base_url, api_token)
 
@@ -271,11 +272,11 @@ def alert_webhook(user_id: str):
     # Check if user has Splunk connected
     creds = get_token_data(user_id, "splunk")
     if not creds:
-        logger.warning("[SPLUNK] Webhook received for user %s with no Splunk connection", user_id)
+        logger.warning("[SPLUNK] Webhook received for user %s with no Splunk connection", sanitize(user_id))
         return jsonify({"error": "Splunk not connected for this user"}), 404
 
     payload = request.get_json(silent=True) or {}
-    logger.info("[SPLUNK] Received alert webhook for user %s: %s", user_id, payload.get("search_name", "unknown"))
+    logger.info("[SPLUNK] Received alert webhook for user %s: %s", sanitize(user_id), sanitize(payload.get("search_name", "unknown")))
 
     # Sanitize headers - redact sensitive values
     sensitive_headers = {"authorization", "cookie", "set-cookie", "proxy-authorization", "x-api-key", "x-csrf-token"}
@@ -433,7 +434,7 @@ def update_rca_settings(user_id):
         return jsonify({"error": "rcaEnabled must be a boolean"}), 400
 
     store_user_preference(user_id, "splunk_rca_enabled", rca_enabled)
-    logger.info(f"[SPLUNK] Updated RCA settings for user {user_id}: rcaEnabled={rca_enabled}")
+    logger.info(f"[SPLUNK] Updated RCA settings for user {sanitize(user_id)}: rcaEnabled={rca_enabled}")
 
     return jsonify({
         "success": True,
