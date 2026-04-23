@@ -567,8 +567,8 @@ services:
       test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:9333/cluster/status"]
       interval: 10s
       timeout: 5s
-      retries: 3
-      start_period: 10s
+      retries: 5
+      start_period: 30s
 
   seaweedfs-volume:
     image: chrislusf/seaweedfs:4.07

@@ -63,6 +63,8 @@ def list_workspaces(user_id):
             return jsonify({"error": "Bitbucket not connected"}), 401
 
         workspaces = client.get_workspaces()
+        if isinstance(workspaces, dict) and workspaces.get("error"):
+            return jsonify(workspaces), 502
         return jsonify({"workspaces": workspaces})
 
     except Exception as e:
