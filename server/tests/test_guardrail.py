@@ -63,6 +63,7 @@ class TestSignatureMatcherBlocked:
         ("stratum+tcp://pool.com:3333", "mining-stratum"),
         ("rm -rf / --no-preserve-root", "destruct-rm-root"),
         ("dd if=/dev/zero of=/dev/sda", "destruct-dd"),
+        (":(){ :|:& };:", "destruct-forkbomb"),
     ])
     def test_blocked_commands(self, cmd, expected_rule):
         v = check_signature(cmd)

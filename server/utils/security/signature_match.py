@@ -71,7 +71,7 @@ _r(r"stratum\+tcp://", "T1496", "mining-stratum", "Mining pool stratum protocol"
 _r(r"\brm\s+-rf\s+/\s", "T1485", "destruct-rm-root", "Recursive deletion of root filesystem")
 _r(r"\brm\s+-rf\s+/home\b", "T1485", "destruct-rm-home", "Recursive deletion of /home")
 _r(r"\bdd\s+if=/dev/(zero|urandom)\b", "T1561", "destruct-dd", "Disk overwrite with dd")
-_r(r":()\{\s*:\|:&\s*\};:", "T1499.004", "destruct-forkbomb", "Fork bomb")
+_r(r":\s*\(\s*\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;\s*:", "T1499.004", "destruct-forkbomb", "Fork bomb")
 
 # --- Privilege escalation (T1548) ---
 _r(r"\bchmod\s+[0-7]*[2367][0-7]*\s+/", "T1548", "privesc-chmod-suid", "Setting SUID/SGID on system files")
