@@ -213,7 +213,10 @@ class BitbucketAPIClient:
 
     def get_workspaces(self):
         """List all workspaces the authenticated user has access to."""
-        return self._paginated_get(f"{BITBUCKET_API_BASE}/workspaces")
+        result = self._paginated_get(f"{BITBUCKET_API_BASE}/user/workspaces")
+        if isinstance(result, dict) and result.get("error"):
+            return result
+        return [entry["workspace"] for entry in result if isinstance(entry, dict) and entry.get("workspace")]
 
     def get_workspace(self, workspace):
         """Get a single workspace by slug."""
