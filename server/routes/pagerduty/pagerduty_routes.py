@@ -258,7 +258,7 @@ def webhook(user_id: str):
     payload = request.get_json(silent=True) or {}
     
     # Log raw payload
-    logger.info("[PAGERDUTY] Raw webhook payload for user %s: %s", sanitize(user_id), json.dumps(payload))
+    logger.info("[PAGERDUTY] Raw webhook payload for user %s: %s", sanitize(user_id), sanitize(json.dumps(payload)))
     
     # Validate V3 webhook structure
     is_valid, error_msg = _validate_v3_webhook(payload)

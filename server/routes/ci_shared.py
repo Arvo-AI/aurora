@@ -35,6 +35,6 @@ def register_rca_settings_routes(blueprint, provider: str, preference_key: str):
             return jsonify({"error": "rcaEnabled must be a boolean"}), 400
 
         store_user_preference(user_id, preference_key, rca_enabled)
-        logger.info("[%s] Updated RCA settings for user %s: rcaEnabled=%s", label, sanitize(user_id), rca_enabled)
+        logger.info("[%s] Updated RCA settings for user %s: rcaEnabled=%s", sanitize(label), sanitize(user_id), rca_enabled)
 
         return jsonify({"success": True, "rcaEnabled": rca_enabled})
