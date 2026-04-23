@@ -2,6 +2,9 @@
 
 This module provides a terminal_run() function that mimics subprocess.run() API
 but executes commands in isolated terminal pods via kubectl exec.
+
+Safety guardrails (L2 signature check + L4 LLM judge) run automatically unless
+the caller passes ``trusted=True`` for known-safe internal operations.
 """
 
 import logging
@@ -36,6 +39,7 @@ def terminal_run(
     timeout: Optional[int] = None,
     cwd: Optional[str] = None,
     env: Optional[Dict[str, str]] = None,
+    trusted: bool = False,
     **kwargs
 ) -> CompletedProcess:
     """
@@ -56,11 +60,17 @@ def terminal_run(
         timeout: Command timeout in seconds (default: 300)
         cwd: Working directory
         env: Environment variables to set
+        trusted: If True, skip safety guardrail checks (for internal infra ops)
         **kwargs: Other subprocess.run() arguments
     
     Returns:
         CompletedProcess with returncode, stdout, stderr
     """
+    # --- Safety guardrails (L2 + L4) ---
+    if not trusted:
+        blocked = _check_guardrails(args)
+        if blocked is not None:
+            return blocked
     # Check if pod isolation is enabled (default: true for security)
     # Only explicitly set to "false" for local development
     enable_pod_isolation = os.getenv('ENABLE_POD_ISOLATION', 'true') == 'true'
@@ -202,4 +212,35 @@ def terminal_run(
         stdout=stdout,
         stderr=stderr
     )
+
+
+def _check_guardrails(args: Union[str, List[str]]) -> Optional[CompletedProcess]:
+    """Run L2 signature check + L4 LLM judge. Returns CompletedProcess if blocked, else None."""
+    from utils.security.config import config
+    if not config.enabled:
+        return None
+
+    cmd = args if isinstance(args, str) else " ".join(str(a) for a in args)
+
+    if config.signature_check:
+        from utils.security.signature_match import check_signature
+        sig = check_signature(cmd)
+        if sig.matched:
+            logger.warning("[Guardrails:L2] BLOCKED cmd=%s technique=%s rule=%s", cmd[:100], sig.technique, sig.rule_id)
+            return CompletedProcess(args=args, returncode=126, stdout="", stderr=f"Blocked by safety guardrail: {sig.description}")
+
+    if config.llm_judge:
+        uid, sid = None, None
+        try:
+            ctx = get_user_context()
+            uid, sid = ctx.get("user_id"), ctx.get("session_id")
+        except Exception:
+            pass
+        from utils.security.command_safety import check_command_safety
+        verdict = check_command_safety(cmd, tool_name="terminal_run", user_id=uid, session_id=sid)
+        if verdict.conclusion:
+            logger.warning("[Guardrails:L4] BLOCKED cmd=%s reason=%s", cmd[:100], verdict.thought)
+            return CompletedProcess(args=args, returncode=126, stdout="", stderr=f"Blocked by safety guardrail: {verdict.thought}")
+
+    return None
 
