@@ -13,7 +13,6 @@ from connectors.coroot_connector.client import (
 from chat.backend.agent.tools.mcp_tools import clear_credentials_cache
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.secrets.secret_ref_utils import delete_user_secret
-from utils.web.cors_utils import create_cors_response
 from utils.auth.rbac_decorators import require_permission
 
 logger = logging.getLogger(__name__)
@@ -55,7 +54,7 @@ def _build_client_from_creds(
 # Connection management
 # ------------------------------------------------------------------
 
-@coroot_bp.route("/connect", methods=["POST", "OPTIONS"])
+@coroot_bp.route("/connect", methods=["POST"])
 @require_permission("connectors", "write")
 def connect(user_id):
     try:
@@ -112,7 +111,7 @@ def connect(user_id):
     })
 
 
-@coroot_bp.route("/status", methods=["GET", "OPTIONS"])
+@coroot_bp.route("/status", methods=["GET"])
 @require_permission("connectors", "read")
 def status(user_id):
     creds = _get_stored_coroot_credentials(user_id)
@@ -141,7 +140,7 @@ def status(user_id):
     })
 
 
-@coroot_bp.route("/disconnect", methods=["DELETE", "POST", "OPTIONS"])
+@coroot_bp.route("/disconnect", methods=["DELETE", "POST"])
 @require_permission("connectors", "write")
 def disconnect(user_id):
     try:

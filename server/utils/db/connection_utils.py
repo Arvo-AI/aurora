@@ -7,6 +7,7 @@ from typing import Optional, List, Dict
 
 from utils.db.db_utils import connect_to_db_as_user, connect_to_db_as_admin
 from utils.auth.stateless_auth import set_rls_context
+from utils.log_sanitizer import sanitize, safe_provider, hash_for_log
 
 logger = logging.getLogger(__name__)
 
@@ -80,7 +81,7 @@ def save_connection_metadata(
                 ),
             )
         conn.commit()
-        logger.info("[CONN-META] Upsert successful for %s/%s/%s", user_id, provider, account_id)
+        logger.info("[CONN-META] Upsert successful user=%s provider=%s account=%s", hash_for_log(user_id), safe_provider(provider), hash_for_log(account_id))
         return True
     except Exception as e:
         logger.error("Failed to save connection metadata: %s", e)
@@ -109,16 +110,16 @@ def set_connection_status(
         conn = connect_to_db_as_admin()
         logger.info(
             "[CONN-META] Updating status user=%s provider=%s account=%s → %s",
-            user_id,
-            provider,
-            account_id,
-            status,
+            hash_for_log(user_id),
+            safe_provider(provider),
+            hash_for_log(account_id),
+            sanitize(status),
         )
         with conn.cursor() as cur:
             set_rls_context(cur, conn, user_id, log_prefix="[CONN-META:setStatus]")
             cur.execute(sql, (status, datetime.now(timezone.utc), user_id, provider, account_id))
         conn.commit()
-        logger.info("[CONN-META] Status update success for %s/%s/%s", user_id, provider, account_id)
+        logger.info("[CONN-META] Status update success user=%s provider=%s account=%s", hash_for_log(user_id), safe_provider(provider), hash_for_log(account_id))
         return True
     except Exception as e:
         logger.error("Failed to set connection status: %s", e)
@@ -311,7 +312,7 @@ def delete_connection_secret(
             row = cur.fetchone()
             
             if not row:
-                logger.warning("[CONN-META] No active connection found for %s/%s/%s", user_id, provider, account_id)
+                logger.warning("[CONN-META] No active connection found for user=%s provider=%s account=%s", hash_for_log(user_id), safe_provider(provider), hash_for_log(account_id))
                 return False
 
             if provider in ['gcp', 'azure', 'github']:
@@ -331,7 +332,7 @@ def delete_connection_secret(
                         # Column doesn't exist or no secret_ref - that's fine
                         pass
                 except Exception as e:
-                    logger.warning("[CONN-META] Vault secret deletion skipped for %s/%s/%s: %s", user_id, provider, account_id, e)
+                    logger.warning("[CONN-META] Vault secret deletion skipped for user=%s provider=%s account=%s: %s", hash_for_log(user_id), safe_provider(provider), hash_for_log(account_id), e)
 
             cur.execute(
                 sql_update,
@@ -345,10 +346,10 @@ def delete_connection_secret(
 
         conn.commit()
         logger.info(
-            "[CONN-META] Connection %s/%s/%s marked as inactive",
-            user_id,
-            provider,
-            account_id,
+            "[CONN-META] Connection user=%s provider=%s account=%s marked as inactive",
+            hash_for_log(user_id),
+            safe_provider(provider),
+            hash_for_log(account_id),
         )
         return True
     except Exception as e:

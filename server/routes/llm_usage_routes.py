@@ -3,18 +3,13 @@ import logging
 from flask import Blueprint, request, jsonify
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context
-from utils.web.cors_utils import create_cors_response
 from utils.db.connection_pool import db_pool
+from utils.log_sanitizer import sanitize
 
 logger = logging.getLogger(__name__)
 
 llm_usage_bp = Blueprint('llm_usage', __name__)
 _LOG_PREFIX = "[LLMUsage]"
-
-@llm_usage_bp.route('/api/llm-usage/models', methods=['OPTIONS'])
-def get_available_models_options():
-    return create_cors_response()
-
 
 @llm_usage_bp.route('/api/llm-usage/models', methods=['GET'])
 @require_permission("llm_usage", "read")
@@ -105,21 +100,6 @@ def get_available_models(user_id):
         return jsonify({"error": "Failed to retrieve models"}), 500
 
 
-@llm_usage_bp.route('/api/llm-usage/session/<session_id>', methods=['OPTIONS'])
-def get_session_usage_options(session_id):
-    return create_cors_response()
-
-
-@llm_usage_bp.route('/api/llm-usage/cost-over-time', methods=['OPTIONS'])
-def get_cost_over_time_options():
-    return create_cors_response()
-
-
-@llm_usage_bp.route('/api/llm-usage/summary', methods=['OPTIONS'])
-def get_usage_summary_options():
-    return create_cors_response()
-
-
 @llm_usage_bp.route('/api/llm-usage/cost-over-time', methods=['GET'])
 @require_permission("llm_usage", "read")
 def get_cost_over_time(user_id):
@@ -184,7 +164,7 @@ def get_cost_over_time(user_id):
 
         logger.info(
             "Cost-over-time fetched: %d points, group_by=%s, period=%s, granularity=%s",
-            len(data), group_by, period, trunc,
+            len(data), sanitize(group_by), sanitize(period), sanitize(trunc),
         )
         return jsonify({"data": data, "group_by": group_by, "period": period, "granularity": trunc})
     except Exception as e:
@@ -233,7 +213,7 @@ def get_usage_summary(user_id):
 
         logger.info(
             "Usage summary fetched: total_cost=%.4f, total_requests=%d, error_count=%d, error_rate=%s, avg_response_ms=%s, models_used=%d, period=%s",
-            total_cost, total_requests, error_count, error_rate, avg_response_ms, models_used, period,
+            total_cost, total_requests, error_count, error_rate, avg_response_ms, models_used, sanitize(period),
         )
 
         return jsonify({

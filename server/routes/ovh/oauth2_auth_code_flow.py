@@ -60,7 +60,7 @@ OAUTH2_TOKEN_ENDPOINTS = {
 }
 
 
-@ovh_bp.route('/ovh/oauth2/initiate', methods=['POST', 'OPTIONS'])
+@ovh_bp.route('/ovh/oauth2/initiate', methods=['POST'])
 @limiter.limit("5 per minute;20 per hour;100 per day")
 @require_permission("connectors", "write")
 def ovh_oauth2_initiate(user_id):
@@ -81,11 +81,6 @@ def ovh_oauth2_initiate(user_id):
         "authorizationUrl": "https://www.ovh.com/auth/oauth2/authorize?..."
     }
     """
-    # Handle CORS preflight
-    if request.method == 'OPTIONS':
-        from utils.web.cors_utils import create_cors_response
-        return create_cors_response()
-    
     try:
         data = request.get_json() or {}
         endpoint = data.get('endpoint')
@@ -149,7 +144,7 @@ def ovh_oauth2_initiate(user_id):
         return jsonify({"error": "Failed to initiate OAuth2 flow"}), 500
 
 
-@ovh_bp.route('/ovh/oauth2/callback', methods=['GET', 'POST', 'OPTIONS'])
+@ovh_bp.route('/ovh/oauth2/callback', methods=['GET', 'POST'])
 @limiter.limit("5 per minute;20 per hour;100 per day")
 def ovh_oauth2_callback():
     """
@@ -165,11 +160,6 @@ def ovh_oauth2_callback():
         code: authorization-code-from-ovh
         state: csrf-state-token
     """
-    # Handle CORS preflight
-    if request.method == 'OPTIONS':
-        from utils.web.cors_utils import create_cors_response
-        return create_cors_response()
-    
     # Determine frontend URL for redirects
     frontend_url = os.environ.get('FRONTEND_URL')
     is_get_request = request.method == 'GET'

@@ -21,6 +21,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
+from utils.log_sanitizer import sanitize
+
 logger = logging.getLogger(__name__)
 
 _CACHE_TTL = 30  # seconds
@@ -108,7 +110,7 @@ def _fetch(org_id: str) -> Tuple[List[PolicyRule], List[PolicyRule], ListStates]
             denylist_enabled=(str(dl_raw).lower() == "on"),
         )
     except Exception:
-        logger.exception("Failed to fetch command policies for org %s, fail-open", org_id)
+        logger.exception("Failed to fetch command policies for org %s, fail-open", sanitize(org_id))
 
     return allow_rules, deny_rules, states
 

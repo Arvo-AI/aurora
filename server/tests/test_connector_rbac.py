@@ -17,44 +17,9 @@ from typing import List, Set, Tuple
 
 import pytest
 
-ROUTES_DIR = Path(__file__).resolve().parent.parent / "routes"
+from utils.providers import CONNECTOR_DIRS
 
-# Directories that contain connector route files.  Non-connector route
-# files (auth_routes, admin_routes, health_routes, etc.) are excluded.
-CONNECTOR_DIRS: Set[str] = {
-    "aws",
-    "atlassian",
-    "azure",
-    "bigpanda",
-    "bitbucket",
-    "cloudbees",
-    "cloudflare",
-    "confluence",
-    "coroot",
-    "datadog",
-    "dynatrace",
-    "gcp",
-    "github",
-    "google_chat",
-    "grafana",
-    "incidentio",
-    "jenkins",
-    "jira",
-    "netdata",
-    "newrelic",
-    "notion",
-    "opsgenie",
-    "ovh",
-    "pagerduty",
-    "scaleway",
-    "sharepoint",
-    "slack",
-    "spinnaker",
-    "splunk",
-    "tailscale",
-    "terraform",
-    "thousandeyes",
-}
+ROUTES_DIR = Path(__file__).resolve().parent.parent / "routes"
 
 # Files that are legitimately exempt from RBAC (webhook receivers that
 # validate via HMAC/signing secret, internal task modules, helpers, etc.).

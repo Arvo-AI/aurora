@@ -20,6 +20,8 @@ No other file should contain org_id backfill logic.
 
 import logging
 
+from utils.log_sanitizer import sanitize
+
 logger = logging.getLogger(__name__)
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -135,10 +137,10 @@ def backfill_user_org_data(cursor, user_id: str, org_id: str) -> dict:
         total = sum(results.values())
         logger.info(
             "Backfilled org_id for user %s across %d table(s): %d row(s) total — %s",
-            user_id, len(results), total, results,
+            sanitize(user_id), len(results), total, results,
         )
     else:
-        logger.info("No orphaned data to backfill for user %s", user_id)
+        logger.info("No orphaned data to backfill for user %s", sanitize(user_id))
 
     return results
 
@@ -192,10 +194,10 @@ def migrate_user_to_org(cursor, user_id: str, new_org_id: str) -> dict:
         total = sum(results.values())
         logger.info(
             "Migrated user %s to org %s across %d table(s): %d row(s) total — %s",
-            user_id, new_org_id, len(results), total, results,
+            sanitize(user_id), sanitize(new_org_id), len(results), total, results,
         )
     else:
-        logger.info("No data to migrate for user %s to org %s", user_id, new_org_id)
+        logger.info("No data to migrate for user %s to org %s", sanitize(user_id), sanitize(new_org_id))
 
     return results
 

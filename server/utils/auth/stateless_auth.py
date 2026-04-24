@@ -101,7 +101,7 @@ def validate_user_exists(user_id: str) -> bool:
                 cursor.execute("SELECT 1 FROM users WHERE id = %s", (user_id,))
                 return cursor.fetchone() is not None
     except Exception as e:
-        logger.warning("Failed to validate user_id %s: %s", user_id, e)
+        logger.warning("Failed to validate user_id %s: %s", sanitize(user_id), e)
         return False
 
 
@@ -159,7 +159,7 @@ def get_org_id_from_request() -> Optional[str]:
                         g._org_id_resolved = row[0]
                         return row[0]
         except Exception as e:
-            logger.warning(f"Error looking up org_id for user {user_id}: {e}")
+            logger.warning(f"Error looking up org_id for user {sanitize(user_id)}: {e}")
 
     g._org_id_resolved = ''
     return None

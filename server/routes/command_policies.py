@@ -43,12 +43,9 @@ def _list_states(org_id: str) -> dict:
     }
 
 
-@command_policies_bp.route("/command-policies", methods=["GET", "OPTIONS"])
+@command_policies_bp.route("/command-policies", methods=["GET"])
 @require_auth_only
 def list_policies(user_id):
-    if request.method == "OPTIONS":
-        return jsonify({}), 200
-
     org_id = get_org_id_from_request()
     if not org_id:
         return jsonify({"error": "No organization context"}), 403
@@ -134,12 +131,9 @@ def create_policy(user_id):
     return jsonify({"id": new_id, "status": "created"}), 201
 
 
-@command_policies_bp.route("/command-policies/<int:rule_id>", methods=["PUT", "OPTIONS"])
+@command_policies_bp.route("/command-policies/<int:rule_id>", methods=["PUT"])
 @require_permission("admin", "access")
 def update_policy(user_id, rule_id):
-    if request.method == "OPTIONS":
-        return jsonify({}), 200
-
     org_id = get_org_id_from_request()
     if not org_id:
         return jsonify({"error": "No organization context"}), 403
@@ -212,12 +206,9 @@ def delete_policy(user_id, rule_id):
     return jsonify({"status": "deleted"})
 
 
-@command_policies_bp.route("/command-policies/test", methods=["POST", "OPTIONS"])
+@command_policies_bp.route("/command-policies/test", methods=["POST"])
 @require_auth_only
 def test_command(user_id):
-    if request.method == "OPTIONS":
-        return jsonify({}), 200
-
     org_id = get_org_id_from_request()
     if not org_id:
         return jsonify({"error": "No organization context"}), 403
@@ -235,12 +226,9 @@ def test_command(user_id):
     })
 
 
-@command_policies_bp.route("/command-policy-toggle", methods=["PUT", "OPTIONS"])
+@command_policies_bp.route("/command-policy-toggle", methods=["PUT"])
 @require_permission("admin", "access")
 def toggle_list(user_id):
-    if request.method == "OPTIONS":
-        return jsonify({}), 200
-
     org_id = get_org_id_from_request()
     if not org_id:
         return jsonify({"error": "No organization context"}), 403
@@ -292,12 +280,9 @@ def toggle_list(user_id):
 # Template library endpoints
 # ---------------------------------------------------------------------------
 
-@command_policies_bp.route("/command-policy-templates", methods=["GET", "OPTIONS"])
+@command_policies_bp.route("/command-policy-templates", methods=["GET"])
 @require_auth_only
 def list_templates(user_id):
-    if request.method == "OPTIONS":
-        return jsonify({}), 200
-
     templates = get_policy_templates()
     result = []
     for tpl in templates:
@@ -313,12 +298,9 @@ def list_templates(user_id):
     return jsonify(result)
 
 
-@command_policies_bp.route("/command-policy-templates/apply", methods=["POST", "OPTIONS"])
+@command_policies_bp.route("/command-policy-templates/apply", methods=["POST"])
 @require_permission("admin", "access")
 def apply_template(user_id):
-    if request.method == "OPTIONS":
-        return jsonify({}), 200
-
     org_id = get_org_id_from_request()
     if not org_id:
         return jsonify({"error": "No organization context"}), 403
@@ -366,12 +348,9 @@ def apply_template(user_id):
     return jsonify({"status": "applied", "template_id": template_id, **_list_states(org_id)})
 
 
-@command_policies_bp.route("/command-policy-templates/active", methods=["DELETE", "OPTIONS"])
+@command_policies_bp.route("/command-policy-templates/active", methods=["DELETE"])
 @require_permission("admin", "access")
 def clear_active_template(user_id):
-    if request.method == "OPTIONS":
-        return jsonify({}), 200
-
     org_id = get_org_id_from_request()
     if not org_id:
         return jsonify({"error": "No organization context"}), 403

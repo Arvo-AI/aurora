@@ -19,6 +19,7 @@ from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context
 from connectors.confluence_connector.auth import refresh_access_token
 from utils.db.connection_pool import db_pool
+from utils.log_sanitizer import sanitize
 
 logger = logging.getLogger(__name__)
 
@@ -221,7 +222,7 @@ def export_to_confluence(user_id, incident_id):
     except Exception as e:
         logger.error(
             "[POSTMORTEM] Failed to fetch postmortem for export, incident %s: %s",
-            incident_id,
+            sanitize(incident_id),
             e,
         )
         return jsonify({"error": "Failed to fetch postmortem"}), 500
@@ -303,7 +304,7 @@ def export_to_confluence(user_id, incident_id):
     if not page_id:
         logger.error(
             "[POSTMORTEM] Confluence export returned no page id for incident %s",
-            incident_id,
+            sanitize(incident_id),
         )
         return jsonify({"error": "Invalid response from Confluence"}), 502
 
@@ -514,7 +515,7 @@ def export_to_jira(user_id, incident_id):
     except Exception as e:
         logger.error(
             "[POSTMORTEM] Failed to fetch postmortem for Jira export, incident %s: %s",
-            incident_id,
+            sanitize(incident_id),
             e,
         )
         return jsonify({"error": "Failed to fetch postmortem"}), 500

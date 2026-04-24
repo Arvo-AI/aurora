@@ -33,6 +33,7 @@ from botocore.exceptions import ClientError, EndpointConnectionError, NoCredenti
 from werkzeug.datastructures import FileStorage
 
 from utils.cache.redis_client import get_redis_client
+from utils.log_sanitizer import sanitize
 
 logger = logging.getLogger(__name__)
 
@@ -656,7 +657,7 @@ class S3Backend(StorageBackend):
                 deleted += len(response.get("Deleted", []))
 
             if deleted:
-                logger.info(f"Deleted {deleted} files with prefix: {prefix}")
+                logger.info(f"Deleted {deleted} files with prefix: {sanitize(prefix)}")
             return deleted
 
         except ClientError as e:

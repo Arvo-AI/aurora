@@ -1,7 +1,6 @@
 """Account management routes for connected accounts."""
 import logging
 from flask import Blueprint, request, jsonify
-from utils.web.cors_utils import create_cors_response
 from utils.auth.rbac_decorators import require_auth_only
 from utils.db.db_utils import connect_to_db_as_admin, connect_to_db_as_user
 from utils.auth.token_management import get_token_data
@@ -32,11 +31,6 @@ def _validate_provider_connection(provider: str, token_data: dict) -> bool:
         return result.get("connected", False)
     except Exception:
         return False
-
-
-@account_management_bp.route("/api/connected-accounts/<target_user_id>", methods=["OPTIONS"])
-def get_connected_accounts_options(target_user_id):
-    return create_cors_response()
 
 
 @account_management_bp.route("/api/connected-accounts/<target_user_id>", methods=["GET"])
@@ -212,11 +206,6 @@ def get_connected_accounts(user_id, target_user_id):
             conn.close()
 
 
-@account_management_bp.route("/api/connected-accounts/<target_user_id>/<provider>", methods=["OPTIONS"])
-def delete_connected_account_options(target_user_id, provider):
-    return create_cors_response()
-
-
 @account_management_bp.route("/api/connected-accounts/<target_user_id>/<provider>", methods=["DELETE"])
 @require_auth_only
 def delete_connected_account(user_id, target_user_id, provider):
@@ -355,11 +344,6 @@ def delete_connected_account(user_id, target_user_id, provider):
         return jsonify({"error": "Failed to delete connected account"}), 500
 
 
-@account_management_bp.route("/api/getUserId", methods=["OPTIONS"])
-def get_user_id_options():
-    return create_cors_response()
-
-
 @account_management_bp.route("/api/getUserId", methods=["GET"])
 @require_auth_only
 def get_user_id(user_id):
@@ -370,11 +354,6 @@ def get_user_id(user_id):
     except Exception as e:
         logging.error(f"Error getting user ID: {e}", exc_info=True)
         return jsonify({"error": "Failed to get user ID"}), 500
-
-
-@account_management_bp.route("/user_tokens", methods=["OPTIONS"])
-def get_user_tokens_options():
-    return create_cors_response()
 
 
 @account_management_bp.route("/user_tokens", methods=["GET"])

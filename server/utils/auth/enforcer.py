@@ -16,6 +16,8 @@ import threading
 import casbin
 from casbin_sqlalchemy_adapter import Adapter
 
+from utils.log_sanitizer import sanitize
+
 logger = logging.getLogger(__name__)
 
 _enforcer: casbin.Enforcer | None = None
@@ -183,7 +185,7 @@ def assign_role_to_user(user_id: str, role: str, org_id: str) -> None:
             enforcer.add_grouping_policy(user_id, role, org_id)
         enforcer.save_policy()
         enforcer.load_policy()
-    logger.info("Assigned role %s to user %s in org %s (replaced: %s)", role, user_id, org_id, current_roles)
+    logger.info("Assigned role %s to user %s in org %s (replaced: %s)", sanitize(role), sanitize(user_id), sanitize(org_id), current_roles)
 
 
 def remove_role_from_user(user_id: str, role: str, org_id: str) -> None:
@@ -193,7 +195,7 @@ def remove_role_from_user(user_id: str, role: str, org_id: str) -> None:
         enforcer.remove_grouping_policy(user_id, role, org_id)
         enforcer.save_policy()
         enforcer.load_policy()
-    logger.info("Removed role %s from user %s in org %s", role, user_id, org_id)
+    logger.info("Removed role %s from user %s in org %s", sanitize(role), sanitize(user_id), sanitize(org_id))
 
 
 def get_user_roles_in_org(user_id: str, org_id: str) -> list[str]:

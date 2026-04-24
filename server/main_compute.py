@@ -17,6 +17,7 @@ import hmac
 from flask_cors import CORS
 from werkzeug.middleware.proxy_fix import ProxyFix
 from utils.db.db_utils import ensure_database_exists, initialize_tables
+from utils.log_sanitizer import sanitize
 
 # Configure logging first, before importing any modules
 logging.basicConfig(level=logging.DEBUG, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
@@ -291,7 +292,7 @@ def enforce_user_org_binding():
     if actual_org != claimed_org:
         logging.getLogger(__name__).warning(
             "Tenant mismatch: user=%s claimed_org=%s actual_org=%s",
-            user_id, claimed_org, actual_org,
+            sanitize(user_id), sanitize(claimed_org), sanitize(actual_org),
         )
         return jsonify({"error": "Forbidden - organization mismatch"}), 403
 

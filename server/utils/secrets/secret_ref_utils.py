@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Optional, Dict, Any, Set, Tuple
 
 from utils.db.db_utils import connect_to_db_as_admin
 from utils.auth.stateless_auth import set_rls_context
+from utils.log_sanitizer import safe_provider
 from utils.secrets.secret_cache import (
     get_cached_secret,
     update_secret_cache,
@@ -168,9 +169,9 @@ class SecretRefManager:
             )
             if cursor.rowcount > 0:
                 conn.commit()
-                logger.info("Updated secret_ref for provider %s", provider)
+                logger.info("Updated secret_ref for provider %s", safe_provider(provider))
                 return True
-            logger.warning("No record found for provider %s", provider)
+            logger.warning("No record found for provider %s", safe_provider(provider))
             return False
         except Exception as e:
             logger.error("Failed to update secret_ref: %s", e)
@@ -207,7 +208,7 @@ class SecretRefManager:
             )
             return cursor.fetchone() is not None
         except Exception as e:
-            logger.debug("Error checking credentials for provider %s: %s", provider, e)
+            logger.debug("Error checking credentials for provider %s: %s", safe_provider(provider), e)
             return False
         finally:
             if cursor:
@@ -243,7 +244,7 @@ class SecretRefManager:
 
             result = cursor.fetchone()
             if not result:
-                logger.debug("No secret reference found for provider %s", provider)
+                logger.debug("No secret reference found for provider %s", safe_provider(provider))
                 return None
 
             secret_ref, role_arn, external_id_secret_ref = result
@@ -310,7 +311,7 @@ class SecretRefManager:
 
             result = cursor.fetchone()
             if not result:
-                logger.info("No token data to migrate for provider %s", provider)
+                logger.info("No token data to migrate for provider %s", safe_provider(provider))
                 return False
 
             token_data = result[0]
@@ -327,7 +328,7 @@ class SecretRefManager:
             )
 
             conn.commit()
-            logger.info("Successfully migrated token to Vault for provider %s", provider)
+            logger.info("Successfully migrated token to Vault for provider %s", safe_provider(provider))
             return True
 
         except Exception as e:
@@ -366,7 +367,7 @@ class SecretRefManager:
                 provider,
             )
         except Exception as e:
-            logger.warning("Failed to clear stale secret_ref for provider %s: %s", provider, e)
+            logger.warning("Failed to clear stale secret_ref for provider %s: %s", safe_provider(provider), e)
         finally:
             if cursor:
                 cursor.close()
@@ -405,7 +406,7 @@ class SecretRefManager:
             )
             for row in cursor.fetchall():
                 if not self.delete_secret(row[0]):
-                    logger.warning("Failed to delete secret from Vault for provider %s", provider)
+                    logger.warning("Failed to delete secret from Vault for provider %s", safe_provider(provider))
                     delete_success = False
 
             cursor.execute(
@@ -416,12 +417,12 @@ class SecretRefManager:
             conn.commit()
 
             if deleted_rows > 0:
-                logger.info("Deleted credentials for provider %s", provider)
+                logger.info("Deleted credentials for provider %s", safe_provider(provider))
 
             return delete_success, deleted_rows
 
         except Exception as e:
-            logger.error("Failed to delete user secret for provider %s: %s", provider, e)
+            logger.error("Failed to delete user secret for provider %s: %s", safe_provider(provider), e)
             if conn:
                 conn.rollback()
             return False, 0
