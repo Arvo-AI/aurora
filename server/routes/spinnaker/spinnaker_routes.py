@@ -14,7 +14,6 @@ from connectors.spinnaker_connector.client import (
     invalidate_spinnaker_client,
 )
 from utils.db.connection_pool import db_pool
-from utils.web.cors_utils import create_cors_response
 from utils.web.webhook_signature import SIGNATURE_HEADER, verify_webhook_signature
 from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context
 from utils.auth.token_management import get_token_data, store_tokens_in_db
@@ -136,7 +135,7 @@ def connect(user_id):
     })
 
 
-@spinnaker_bp.route("/status", methods=["GET", "OPTIONS"])
+@spinnaker_bp.route("/status", methods=["GET"])
 @require_permission("connectors", "read")
 def status(user_id):
     """Check whether Spinnaker is connected and return summary data."""
@@ -189,7 +188,7 @@ def disconnect(user_id):
 # ------------------------------------------------------------------
 
 
-@spinnaker_bp.route("/applications", methods=["GET", "OPTIONS"])
+@spinnaker_bp.route("/applications", methods=["GET"])
 @require_permission("connectors", "read")
 def list_applications(user_id):
     """List Spinnaker applications."""
@@ -205,7 +204,7 @@ def list_applications(user_id):
         return jsonify({"error": "Spinnaker API request failed"}), 502
 
 
-@spinnaker_bp.route("/applications/<app>/pipelines", methods=["GET", "OPTIONS"])
+@spinnaker_bp.route("/applications/<app>/pipelines", methods=["GET"])
 @require_permission("connectors", "read")
 def list_pipelines(user_id, app: str):
     """List pipeline executions for an application."""
@@ -224,7 +223,7 @@ def list_pipelines(user_id, app: str):
         return jsonify({"error": "Spinnaker API request failed"}), 502
 
 
-@spinnaker_bp.route("/applications/<app>/pipeline-configs", methods=["GET", "OPTIONS"])
+@spinnaker_bp.route("/applications/<app>/pipeline-configs", methods=["GET"])
 @require_permission("connectors", "read")
 def list_pipeline_configs(user_id, app: str):
     """List pipeline definitions for an application."""
@@ -259,7 +258,7 @@ def trigger_pipeline(user_id, app: str, name: str):
         return jsonify({"error": "Spinnaker API request failed"}), 502
 
 
-@spinnaker_bp.route("/applications/<app>/health", methods=["GET", "OPTIONS"])
+@spinnaker_bp.route("/applications/<app>/health", methods=["GET"])
 @require_permission("connectors", "read")
 def application_health(user_id, app: str):
     """Get cluster + server group health for an application."""
@@ -348,7 +347,7 @@ def deployment_webhook(user_id: str):
     return jsonify({"received": True})
 
 
-@spinnaker_bp.route("/webhook-url", methods=["GET", "OPTIONS"])
+@spinnaker_bp.route("/webhook-url", methods=["GET"])
 @require_permission("connectors", "read")
 def get_webhook_url(user_id):
     """Return the webhook URL and Spinnaker Echo config snippets."""
@@ -386,7 +385,7 @@ rest:
 # ------------------------------------------------------------------
 
 
-@spinnaker_bp.route("/deployments", methods=["GET", "OPTIONS"])
+@spinnaker_bp.route("/deployments", methods=["GET"])
 @require_permission("connectors", "read")
 def list_deployments(user_id):
     """List recent Spinnaker deployment events for the authenticated user."""

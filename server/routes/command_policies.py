@@ -43,12 +43,9 @@ def _list_states(org_id: str) -> dict:
     }
 
 
-@command_policies_bp.route("/command-policies", methods=["GET", "OPTIONS"])
+@command_policies_bp.route("/command-policies", methods=["GET"])
 @require_auth_only
 def list_policies(user_id):
-    if request.method == "OPTIONS":
-        return jsonify({}), 200
-
     org_id = get_org_id_from_request()
     if not org_id:
         return jsonify({"error": "No organization context"}), 403
@@ -283,12 +280,9 @@ def toggle_list(user_id):
 # Template library endpoints
 # ---------------------------------------------------------------------------
 
-@command_policies_bp.route("/command-policy-templates", methods=["GET", "OPTIONS"])
+@command_policies_bp.route("/command-policy-templates", methods=["GET"])
 @require_auth_only
 def list_templates(user_id):
-    if request.method == "OPTIONS":
-        return jsonify({}), 200
-
     templates = get_policy_templates()
     result = []
     for tpl in templates:

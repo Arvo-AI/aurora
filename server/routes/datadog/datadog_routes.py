@@ -9,7 +9,6 @@ from flask import Blueprint, jsonify, request
 from routes.datadog.tasks import process_datadog_event
 from utils.db.connection_pool import db_pool
 from utils.log_sanitizer import sanitize, hash_for_log
-from utils.web.cors_utils import create_cors_response
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context
@@ -349,7 +348,7 @@ def connect(user_id):
     return jsonify(response)
 
 
-@datadog_bp.route("/status", methods=["GET", "OPTIONS"])
+@datadog_bp.route("/status", methods=["GET"])
 @require_permission("connectors", "read")
 def status(user_id):
     creds = _get_stored_datadog_credentials(user_id)
@@ -474,7 +473,7 @@ def query_metrics(user_id):
         return jsonify({"error": "Failed to query Datadog metrics"}), 502
 
 
-@datadog_bp.route("/events", methods=["GET", "OPTIONS"])
+@datadog_bp.route("/events", methods=["GET"])
 @require_permission("connectors", "read")
 def list_events(user_id):
     creds = _get_stored_datadog_credentials(user_id)
@@ -509,7 +508,7 @@ def list_events(user_id):
         return jsonify({"error": "Failed to list Datadog events"}), 502
 
 
-@datadog_bp.route("/monitors", methods=["GET", "OPTIONS"])
+@datadog_bp.route("/monitors", methods=["GET"])
 @require_permission("connectors", "read")
 def list_monitors(user_id):
     creds = _get_stored_datadog_credentials(user_id)
@@ -538,7 +537,7 @@ def list_monitors(user_id):
         return jsonify({"error": "Failed to list Datadog monitors"}), 502
 
 
-@datadog_bp.route("/events/ingested", methods=["GET", "OPTIONS"])
+@datadog_bp.route("/events/ingested", methods=["GET"])
 @require_permission("connectors", "read")
 def list_ingested_events(user_id):
     org_id = get_org_id_from_request()
@@ -633,7 +632,7 @@ def webhook(user_id: str):
     return jsonify({"received": True})
 
 
-@datadog_bp.route("/webhook-url", methods=["GET", "OPTIONS"])
+@datadog_bp.route("/webhook-url", methods=["GET"])
 @require_permission("connectors", "read")
 def webhook_url(user_id):
     # Use ngrok URL for development if available, otherwise use backend URL

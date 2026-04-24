@@ -105,6 +105,16 @@ def _load_gcp_token(user_id):
     return token_data, None
 
 
+def _refresh_and_reload_gcp_token(user_id):
+    """Refresh GCP token if needed, then re-fetch token_data; return (token_data, None) or (None, error_response)."""
+    try:
+        refresh_token_if_needed(user_id, "gcp")
+    except Exception as e:
+        logging.error(f"Token refresh failed: {e}", exc_info=True)
+        return None, (jsonify({"error": "Token refresh failed"}), 401)
+    return get_token_data(user_id, "gcp"), None
+
+
 def _sa_mode_project_list(token_data, root_project):
     """Build project list for service-account mode (no IAM enumeration)."""
     accessible = token_data.get("accessible_projects") or []
@@ -184,13 +194,10 @@ def sa_project_access_get(user_id):
             result = _sa_mode_project_list(token_data, root_project)
             return jsonify({"projects": result, "root_project": root_project}), 200
 
-        try:
-            refresh_token_if_needed(user_id, "gcp")
-        except Exception as e:
-            logging.error(f"Token refresh failed: {e}", exc_info=True)
-            return jsonify({"error": "Token refresh failed"}), 401
+        token_data, err = _refresh_and_reload_gcp_token(user_id)
+        if err:
+            return err
 
-        token_data = get_token_data(user_id, "gcp")
         credentials = get_credentials(token_data)
         sa_email = get_aurora_service_account_email(user_id)
         result = _oauth_mode_project_list(credentials, sa_email, root_project)
@@ -229,13 +236,10 @@ def sa_project_access_post(user_id):
             if pid:
                 selections[pid] = enabled
 
-        try:
-            refresh_token_if_needed(user_id, "gcp")
-        except Exception as e:
-            logging.error(f"Token refresh failed: {e}", exc_info=True)
-            return jsonify({"error": "Token refresh failed"}), 401
+        token_data, err = _refresh_and_reload_gcp_token(user_id)
+        if err:
+            return err
 
-        token_data = get_token_data(user_id, "gcp")
         credentials = get_credentials(token_data)
         sa_email = get_aurora_service_account_email(user_id)
         update_service_account_project_access(credentials, sa_email, selections)

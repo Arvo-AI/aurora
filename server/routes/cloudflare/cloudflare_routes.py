@@ -120,7 +120,7 @@ def cloudflare_connect(user_id):
         return jsonify({"error": "Failed to connect Cloudflare"}), 500
 
 
-@cloudflare_bp.route('/cloudflare/zones', methods=['GET', 'OPTIONS'])
+@cloudflare_bp.route('/cloudflare/zones', methods=['GET'])
 @limiter.limit("30 per minute")
 @require_permission("connectors", "read")
 def cloudflare_zones_get(user_id):
@@ -207,7 +207,7 @@ def cloudflare_zones_post(user_id):
         return jsonify({"error": "Failed to save zones"}), 500
 
 
-@cloudflare_bp.route('/cloudflare/status', methods=['GET', 'OPTIONS'])
+@cloudflare_bp.route('/cloudflare/status', methods=['GET'])
 @limiter.limit("60 per minute")
 @require_permission("connectors", "read")
 def cloudflare_status(user_id):

@@ -13,7 +13,6 @@ from flask import Blueprint, jsonify, request
 
 from connectors.jenkins_connector.api_client import JenkinsClient
 from utils.db.connection_pool import db_pool
-from utils.web.cors_utils import create_cors_response
 from utils.web.webhook_signature import SIGNATURE_HEADER, verify_webhook_signature
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.auth.rbac_decorators import require_permission
@@ -113,7 +112,7 @@ def connect(user_id):
     })
 
 
-@cloudbees_bp.route("/status", methods=["GET", "OPTIONS"])
+@cloudbees_bp.route("/status", methods=["GET"])
 @require_permission("connectors", "read")
 def status(user_id):
     """Check whether CloudBees CI is connected and return summary dashboard data."""
@@ -302,7 +301,7 @@ def deployment_webhook(user_id: str):
     return jsonify({"received": True})
 
 
-@cloudbees_bp.route("/webhook-url", methods=["GET", "OPTIONS"])
+@cloudbees_bp.route("/webhook-url", methods=["GET"])
 @require_permission("connectors", "read")
 def get_webhook_url(user_id):
     """Return the webhook URL and Jenkinsfile snippets for the authenticated user."""
@@ -381,7 +380,7 @@ def get_webhook_url(user_id):
     })
 
 
-@cloudbees_bp.route("/deployments", methods=["GET", "OPTIONS"])
+@cloudbees_bp.route("/deployments", methods=["GET"])
 @require_permission("connectors", "read")
 def list_deployments(user_id):
     """List recent CloudBees CI deployment events for the authenticated user."""

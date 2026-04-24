@@ -5,17 +5,11 @@ from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context
 from utils.db.connection_pool import db_pool
 from utils.log_sanitizer import sanitize
-from utils.web.cors_utils import create_cors_response
 
 logger = logging.getLogger(__name__)
 
 llm_usage_bp = Blueprint('llm_usage', __name__)
 _LOG_PREFIX = "[LLMUsage]"
-
-@llm_usage_bp.route('/api/llm-usage/models', methods=['OPTIONS'])
-def get_available_models_options():
-    return create_cors_response()
-
 
 @llm_usage_bp.route('/api/llm-usage/models', methods=['GET'])
 @require_permission("llm_usage", "read")
@@ -104,21 +98,6 @@ def get_available_models(user_id):
     except Exception as e:
         logger.error(f"Error retrieving available models: {e}")
         return jsonify({"error": "Failed to retrieve models"}), 500
-
-
-@llm_usage_bp.route('/api/llm-usage/session/<session_id>', methods=['OPTIONS'])
-def get_session_usage_options(session_id):
-    return create_cors_response()
-
-
-@llm_usage_bp.route('/api/llm-usage/cost-over-time', methods=['OPTIONS'])
-def get_cost_over_time_options():
-    return create_cors_response()
-
-
-@llm_usage_bp.route('/api/llm-usage/summary', methods=['OPTIONS'])
-def get_usage_summary_options():
-    return create_cors_response()
 
 
 @llm_usage_bp.route('/api/llm-usage/cost-over-time', methods=['GET'])

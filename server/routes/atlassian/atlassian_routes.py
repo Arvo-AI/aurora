@@ -288,7 +288,7 @@ def connect(user_id):
 # GET /atlassian/status
 # ------------------------------------------------------------------
 
-@atlassian_bp.route("/status", methods=["GET", "OPTIONS"])
+@atlassian_bp.route("/status", methods=["GET"])
 @require_permission("connectors", "read")
 def status(user_id):
     """Return connection status for all Atlassian products."""

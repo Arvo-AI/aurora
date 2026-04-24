@@ -11,7 +11,6 @@ from routes.opsgenie.config import OPSGENIE_TIMEOUT, REGION_URLS
 from routes.opsgenie.tasks import process_opsgenie_event
 from utils.db.connection_pool import db_pool
 from utils.log_sanitizer import sanitize
-from utils.web.cors_utils import create_cors_response
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context
@@ -572,7 +571,7 @@ def connect(user_id):
     return jsonify(response)
 
 
-@opsgenie_bp.route("/status", methods=["GET", "OPTIONS"])
+@opsgenie_bp.route("/status", methods=["GET"])
 @require_permission("connectors", "read")
 def status(user_id):
     creds = _get_stored_opsgenie_credentials(user_id)
@@ -654,7 +653,7 @@ def webhook(user_id: str):
     return jsonify({"received": True})
 
 
-@opsgenie_bp.route("/webhook-url", methods=["GET", "OPTIONS"])
+@opsgenie_bp.route("/webhook-url", methods=["GET"])
 @require_permission("connectors", "read")
 def webhook_url(user_id):
     # Use ngrok URL for development if available, otherwise use backend URL
@@ -702,7 +701,7 @@ def webhook_url(user_id):
     })
 
 
-@opsgenie_bp.route("/events/ingested", methods=["GET", "OPTIONS"])
+@opsgenie_bp.route("/events/ingested", methods=["GET"])
 @require_permission("connectors", "read")
 def list_ingested_events(user_id):
     org_id = get_org_id_from_request()

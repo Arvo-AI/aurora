@@ -22,7 +22,6 @@ from connectors.confluence_connector.client import (
     parse_confluence_page_id,
 )
 from connectors.confluence_connector.runbook_parser import parse_confluence_runbook
-from utils.web.cors_utils import create_cors_response
 from utils.auth.oauth2_state_cache import retrieve_oauth2_state, store_oauth2_state
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.auth.rbac_decorators import require_permission
@@ -269,13 +268,10 @@ def connect(user_id):
     })
 
 
-@confluence_bp.route("/status", methods=["GET", "OPTIONS"])
+@confluence_bp.route("/status", methods=["GET"])
 @require_permission("connectors", "read")
 def status(user_id):
     """Check Confluence connection status."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
     creds = _get_stored_confluence_credentials(user_id)
     if not creds:
         return jsonify({"connected": False})

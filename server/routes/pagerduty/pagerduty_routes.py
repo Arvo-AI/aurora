@@ -10,7 +10,6 @@ import os
 import urllib.parse
 from flask import Blueprint, jsonify, request, redirect
 
-from utils.web.cors_utils import create_cors_response
 from utils.flags.feature_flags import is_pagerduty_oauth_enabled
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.auth.rbac_decorators import require_permission
@@ -53,13 +52,10 @@ def _validate_v3_webhook(payload: dict) -> tuple[bool, str]:
     return True, ""
 
 
-@pagerduty_bp.route("", methods=["GET", "OPTIONS"])
+@pagerduty_bp.route("", methods=["GET"])
 @require_permission("connectors", "read")
 def pagerduty_status(user_id):
     """Get PagerDuty connection status."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
     creds = get_token_data(user_id, "pagerduty")
     if not creds:
         return jsonify({"connected": False})
@@ -205,13 +201,10 @@ def oauth_callback():
         return redirect(f"{callback_url}?oauth=failed&error=unexpected")
 
 
-@pagerduty_bp.route("/webhook-url", methods=["GET", "OPTIONS"])
+@pagerduty_bp.route("/webhook-url", methods=["GET"])
 @require_permission("connectors", "read")
 def get_webhook_url(user_id):
     """Get the webhook URL that should be configured in PagerDuty."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-    
     # Use ngrok URL for development if available, otherwise use backend URL
     ngrok_url = os.getenv("NGROK_URL", "").rstrip("/")
     backend_url = os.getenv("NEXT_PUBLIC_BACKEND_URL", "").rstrip("/")

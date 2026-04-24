@@ -6,7 +6,6 @@ from flask import Blueprint, request, jsonify, session
 import flask
 import boto3
 from botocore.exceptions import ClientError
-from utils.web.cors_utils import create_cors_response
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import get_org_id_from_request
 from utils.logging.secure_logging import mask_credential_value

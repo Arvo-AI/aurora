@@ -16,7 +16,6 @@ from werkzeug.utils import secure_filename
 
 from utils.db.connection_pool import db_pool
 from utils.log_sanitizer import sanitize
-from utils.web.cors_utils import create_cors_response
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context
 
@@ -65,13 +64,10 @@ def serialize_document(row: tuple) -> dict[str, Any]:
 # Memory Endpoints
 # =============================================================================
 
-@knowledge_base_bp.route("/memory", methods=["GET", "OPTIONS"])
+@knowledge_base_bp.route("/memory", methods=["GET"])
 @require_permission("knowledge_base", "read")
 def get_memory(user_id):
     """Get the org's knowledge base memory content."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
     org_id = get_org_id_from_request()
 
     try:
@@ -162,13 +158,10 @@ def update_memory(user_id):
 # Document Endpoints
 # =============================================================================
 
-@knowledge_base_bp.route("/documents", methods=["GET", "OPTIONS"])
+@knowledge_base_bp.route("/documents", methods=["GET"])
 @require_permission("knowledge_base", "read")
 def list_documents(user_id):
     """List all documents for the user."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
     org_id = get_org_id_from_request()
 
     try:
@@ -364,13 +357,10 @@ def upload_document(user_id):
         return jsonify({"error": "Failed to upload document"}), 500
 
 
-@knowledge_base_bp.route("/documents/<doc_id>", methods=["GET", "OPTIONS"])
+@knowledge_base_bp.route("/documents/<doc_id>", methods=["GET"])
 @require_permission("knowledge_base", "read")
 def get_document(user_id, doc_id: str):
     """Get a specific document's details."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
     org_id = get_org_id_from_request()
 
     try:

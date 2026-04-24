@@ -241,12 +241,10 @@ def _transfer_user_to_org(cursor, user_id: str, old_org_id, new_org_id: str, new
     return cursor.fetchone()
 
 
-@org_bp.route("/current", methods=["GET", "OPTIONS"])
+@org_bp.route("/current", methods=["GET"])
 @require_auth_only
 def get_current_org(user_id):
     """Get the current user's organization details and member list."""
-    if request.method == "OPTIONS":
-        return jsonify({}), 200
 
     org_id = get_org_id_from_request()
     if not org_id:
@@ -295,12 +293,10 @@ def get_current_org(user_id):
         return jsonify({"error": "Failed to fetch organization"}), 500
 
 
-@org_bp.route("", methods=["PATCH", "OPTIONS"])
+@org_bp.route("", methods=["PATCH"])
 @require_permission("org", "manage")
 def update_org(user_id):
     """Update organization name or slug (admin only)."""
-    if request.method == "OPTIONS":
-        return jsonify({}), 200
 
     org_id = get_org_id_from_request()
     if not org_id:
@@ -499,12 +495,10 @@ def remove_member(user_id, target_user_id):
         return jsonify({"error": "Failed to remove member"}), 500
 
 
-@org_bp.route("/my-invitations", methods=["GET", "OPTIONS"])
+@org_bp.route("/my-invitations", methods=["GET"])
 @require_auth_only
 def my_invitations(user_id):
     """Return pending invitations addressed to the current user's email."""
-    if request.method == "OPTIONS":
-        return jsonify({}), 200
 
     try:
         with db_pool.get_admin_connection() as conn:
@@ -877,12 +871,10 @@ def join_org(user_id):
         return jsonify({"error": "Failed to join organization"}), 500
 
 
-@org_bp.route("/stats", methods=["GET", "OPTIONS"])
+@org_bp.route("/stats", methods=["GET"])
 @require_auth_only
 def get_org_stats(user_id):
     """Return aggregate stats for the current org."""
-    if request.method == "OPTIONS":
-        return jsonify({}), 200
 
     org_id = get_org_id_from_request()
     if not org_id:
@@ -925,12 +917,10 @@ def get_org_stats(user_id):
         return jsonify({"error": "Failed to fetch stats"}), 500
 
 
-@org_bp.route("/activity", methods=["GET", "OPTIONS"])
+@org_bp.route("/activity", methods=["GET"])
 @require_auth_only
 def get_org_activity(user_id):
     """Return recent activity events for the org (member joins, role changes)."""
-    if request.method == "OPTIONS":
-        return jsonify({}), 200
 
     org_id = get_org_id_from_request()
     if not org_id:
@@ -1036,12 +1026,10 @@ def get_org_activity(user_id):
         return jsonify({"error": "Failed to fetch activity"}), 500
 
 
-@org_bp.route("/preferences", methods=["GET", "OPTIONS"])
+@org_bp.route("/preferences", methods=["GET"])
 @require_auth_only
 def get_org_preferences(user_id):
     """Get org-level preferences stored in user_preferences with user_id='__org__'."""
-    if request.method == "OPTIONS":
-        return jsonify({}), 200
 
     org_id = get_org_id_from_request()
     if not org_id:

@@ -1,7 +1,6 @@
 from flask import Blueprint, jsonify, request
 import logging
 from utils.auth.rbac_decorators import require_permission
-from utils.web.cors_utils import create_cors_response
 from utils.db.connection_utils import list_active_connections, set_connection_status
 
 user_connections_bp = Blueprint('user_connections_bp', __name__)
@@ -11,11 +10,6 @@ logger = logging.getLogger(__name__)
 def get_user_connections_from_db(user_id: str):
     """Return active connections using user_connections table."""
     return list_active_connections(user_id)
-
-@user_connections_bp.route('/api/user_connections', methods=['OPTIONS'])
-def get_user_connections_options():
-    return create_cors_response()
-
 
 @user_connections_bp.route('/api/user_connections', methods=['GET'])
 @require_permission("connectors", "read")

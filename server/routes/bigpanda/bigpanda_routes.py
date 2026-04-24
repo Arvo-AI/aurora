@@ -13,7 +13,6 @@ from flask import Blueprint, jsonify, request
 
 from connectors.bigpanda_connector.api_client import BigPandaClient, BigPandaAPIError
 from utils.db.connection_pool import db_pool
-from utils.web.cors_utils import create_cors_response
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import set_rls_context
@@ -69,7 +68,7 @@ def connect(user_id):
     return jsonify({"success": True, "connected": True, "environmentCount": validation.get("environment_count", 0)})
 
 
-@bigpanda_bp.route("/status", methods=["GET", "OPTIONS"])
+@bigpanda_bp.route("/status", methods=["GET"])
 @require_permission("connectors", "read")
 def status(user_id):
     creds = _get_stored_credentials(user_id)
@@ -164,7 +163,7 @@ def webhook(user_id: str):
         return jsonify({"error": "Failed to process webhook"}), 503
 
 
-@bigpanda_bp.route("/webhook-url", methods=["GET", "OPTIONS"])
+@bigpanda_bp.route("/webhook-url", methods=["GET"])
 @require_permission("connectors", "read")
 def get_webhook_url(user_id):
     ngrok_url = os.getenv("NGROK_URL", "").rstrip("/")

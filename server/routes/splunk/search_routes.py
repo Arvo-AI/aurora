@@ -8,7 +8,6 @@ from urllib.parse import quote
 import requests
 from flask import Blueprint, Response, jsonify, request, stream_with_context
 
-from utils.web.cors_utils import create_cors_response
 from utils.auth.token_management import get_token_data
 from utils.auth.rbac_decorators import require_permission
 from utils.log_sanitizer import sanitize
@@ -216,7 +215,7 @@ def create_search_job(user_id):
         return jsonify({"error": "Failed to create search job"}), 502
 
 
-@search_bp.route("/search/jobs/<sid>", methods=["GET", "OPTIONS"])
+@search_bp.route("/search/jobs/<sid>", methods=["GET"])
 @require_permission("connectors", "read")
 def get_job_status(user_id, sid: str):
     """Get the status of a search job."""
@@ -269,7 +268,7 @@ def get_job_status(user_id, sid: str):
         return jsonify({"error": "Failed to get job status"}), 502
 
 
-@search_bp.route("/search/jobs/<sid>/results", methods=["GET", "OPTIONS"])
+@search_bp.route("/search/jobs/<sid>/results", methods=["GET"])
 @require_permission("connectors", "read")
 def get_job_results(user_id, sid: str):
     """Get the results of a completed search job."""

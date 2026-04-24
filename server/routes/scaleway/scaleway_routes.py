@@ -30,7 +30,6 @@ from utils.secrets.secret_ref_utils import has_user_credentials, delete_user_sec
 from utils.db.connection_utils import set_connection_status
 from utils.web.limiter_ext import limiter
 from utils.logging.secure_logging import mask_credential_value
-from utils.web.cors_utils import create_cors_response
 from utils.ssh.ssh_utils import (
     check_if_user_has_vms,
     delete_ssh_credentials,
@@ -155,14 +154,11 @@ def scaleway_connect(user_id):
         return jsonify({"error": "Failed to connect Scaleway"}), 500
 
 
-@scaleway_bp.route('/scaleway/projects', methods=['GET', 'OPTIONS'])
+@scaleway_bp.route('/scaleway/projects', methods=['GET'])
 @limiter.limit("30 per minute")
 @require_permission("connectors", "read")
 def scaleway_projects_read(user_id):
     """GET - Fetch Scaleway projects."""
-    if request.method == 'OPTIONS':
-        return create_cors_response()
-    
     try:
         token_data = get_token_data(user_id, "scaleway")
         if not token_data:
@@ -235,14 +231,11 @@ def scaleway_projects_write(user_id):
         return jsonify({"error": "Failed to save projects"}), 500
 
 
-@scaleway_bp.route('/scaleway/status', methods=['GET', 'OPTIONS'])
+@scaleway_bp.route('/scaleway/status', methods=['GET'])
 @limiter.limit("60 per minute")
 @require_permission("connectors", "read")
 def scaleway_status(user_id):
     """Check Scaleway connection status and validate credentials with API call."""
-    if request.method == 'OPTIONS':
-        return create_cors_response()
-    
     try:
         
         has_creds = has_user_credentials(user_id, "scaleway")
@@ -309,14 +302,11 @@ def scaleway_disconnect(user_id):
         return jsonify({"error": "Failed to disconnect Scaleway"}), 500
 
 
-@scaleway_bp.route('/scaleway/root-project', methods=['GET', 'OPTIONS'])
+@scaleway_bp.route('/scaleway/root-project', methods=['GET'])
 @limiter.limit("30 per minute")
 @require_permission("connectors", "read")
 def scaleway_root_project_read(user_id):
     """Get the current root project for Scaleway."""
-    if request.method == 'OPTIONS':
-        return create_cors_response()
-    
     try:
         root_project = get_user_preference(user_id, 'scaleway_root_project')
         
@@ -364,7 +354,7 @@ def scaleway_root_project_write(user_id):
         return jsonify({"error": "Failed to set root project"}), 500
 
 
-@scaleway_bp.route('/scaleway/instances', methods=['GET', 'OPTIONS'])
+@scaleway_bp.route('/scaleway/instances', methods=['GET'])
 @limiter.limit("30 per minute")
 @require_permission("connectors", "read")
 def scaleway_instances(user_id):
@@ -385,9 +375,6 @@ def scaleway_instances(user_id):
         ]
     }
     """
-    if request.method == 'OPTIONS':
-        return create_cors_response()
-    
     try:
         logger.info(f"Fetching Scaleway instances for user: {user_id}")
         
