@@ -618,17 +618,23 @@ def cancel_invitation(user_id, invitation_id):
         return jsonify({"error": "Failed to cancel invitation"}), 500
 
 
-@org_bp.route("/invitations", methods=["GET", "POST"])
+@org_bp.route("/invitations", methods=["GET"])
 @require_permission("users", "manage")
-def invitations(user_id):
-    """Create or list invitations for this org (admin only)."""
+def list_invitations(user_id):
+    """List pending invitations for this org (admin only)."""
     org_id = get_org_id_from_request()
     if not org_id:
         return jsonify({"error": "No organization found"}), 404
+    return _list_invitations(org_id)
 
-    if request.method == "GET":
-        return _list_invitations(org_id)
 
+@org_bp.route("/invitations", methods=["POST"])
+@require_permission("users", "manage")
+def create_invitation(user_id):
+    """Create a new invitation for this org (admin only)."""
+    org_id = get_org_id_from_request()
+    if not org_id:
+        return jsonify({"error": "No organization found"}), 404
     return _create_invitation(org_id, user_id)
 
 
