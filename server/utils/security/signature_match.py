@@ -96,7 +96,10 @@ _r(r"\bdd\s+if=/dev/(zero|urandom)\b", T_DISK_WIPE, "destruct-dd", "Disk overwri
 _r(r":\s*\(\s*\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;\s*:", T_ENDPOINT_DOS, "destruct-forkbomb", "Fork bomb")
 
 # --- Privilege escalation (T1548) ---
-_r(r"\bchmod\s+[0-7]*[2367][0-7]*\s+/", T_ABUSE_ELEVATION, "privesc-chmod-suid", "Setting SUID/SGID on system files")
+# Match 4-digit octal modes whose leading bit sets SUID/SGID/both (2/4/6/7),
+# or symbolic forms that explicitly add the SUID/SGID bit. Plain 3-digit modes
+# like "chmod 755 /etc/..." are routine ops and must not match.
+_r(r"\bchmod\s+(?:[2467][0-7]{3}\b|[ugo]*\+[st]\b)", T_ABUSE_ELEVATION, "privesc-chmod-suid", "Setting SUID/SGID bits")
 
 
 def check_signature(command: str) -> SignatureVerdict:
