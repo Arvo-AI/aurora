@@ -106,6 +106,67 @@ def _load_gcp_token(user_id):
     return token_data, None
 
 
+def _sa_mode_project_list(token_data, root_project):
+    """Build project list for service-account mode (no IAM enumeration)."""
+    accessible = token_data.get("accessible_projects") or []
+    result = []
+    for proj in accessible:
+        pid = proj.get("project_id")
+        if not pid:
+            continue
+        result.append({
+            "projectId": pid,
+            "name": proj.get("name") or pid,
+            "enabled": True,
+            "hasPermission": True,
+            "isRootProject": pid == root_project,
+        })
+    result.sort(key=lambda x: x['name'])
+    return result
+
+
+def _check_project_iam(crm_service, pid, name, member_sa, root_project):
+    """Check IAM access for one project; return project info dict."""
+    has_permission = True
+    enabled = False
+    try:
+        policy = crm_service.projects().getIamPolicy(resource=pid, body={}).execute()
+        for binding in policy.get('bindings', []):
+            if member_sa in binding.get('members', []):
+                enabled = True
+                break
+    except Exception as e:
+        logging.warning(f"Cannot read IAM policy for project {pid}: {e}")
+        has_permission = False
+        enabled = False
+
+    return {
+        "projectId": pid,
+        "name": name,
+        "enabled": enabled,
+        "hasPermission": has_permission,
+        "isRootProject": pid == root_project,
+    }
+
+
+def _oauth_mode_project_list(credentials, sa_email, root_project):
+    """Build project list for OAuth mode by enumerating projects + IAM."""
+    projects = get_project_list(credentials)
+    crm_service = build('cloudresourcemanager', 'v1', credentials=credentials)
+    member_sa = f"serviceAccount:{sa_email}"
+
+    result = []
+    for proj in projects:
+        pid = proj.get('projectId')
+        if not pid:
+            continue
+        result.append(_check_project_iam(
+            crm_service, pid, proj.get('name', pid), member_sa, root_project,
+        ))
+    result.sort(key=lambda x: x['name'])
+    return result
+
+
 @gcp_projects_bp.route("/api/gcp/sa-project-access", methods=["GET", "OPTIONS"])
 @require_permission("connectors", "read")
 def sa_project_access_get(user_id):
@@ -118,26 +179,13 @@ def sa_project_access_get(user_id):
         if err:
             return err
 
-        # Service-account mode: surface auto-discovered accessible_projects
-        # list with all entries marked enabled. Aurora doesn't manage IAM
-        # bindings in SA mode — the uploaded SA already has whatever roles
-        # the user granted it directly in GCP.
+        root_project = get_user_preference(user_id, 'gcp_root_project')
+
+        # SA mode: surface auto-discovered accessible_projects (no IAM enumeration).
+        # Aurora doesn't manage IAM bindings in SA mode — the uploaded SA already
+        # has whatever roles the user granted it directly in GCP.
         if get_gcp_auth_type(token_data) == GCP_AUTH_TYPE_SA:
-            accessible = token_data.get("accessible_projects") or []
-            root_project = get_user_preference(user_id, 'gcp_root_project')
-            result = []
-            for proj in accessible:
-                pid = proj.get("project_id")
-                if not pid:
-                    continue
-                result.append({
-                    "projectId": pid,
-                    "name": proj.get("name") or pid,
-                    "enabled": True,
-                    "hasPermission": True,
-                    "isRootProject": pid == root_project,
-                })
-            result.sort(key=lambda x: x['name'])
+            result = _sa_mode_project_list(token_data, root_project)
             return jsonify({"projects": result, "root_project": root_project}), 200
 
         try:
@@ -149,44 +197,7 @@ def sa_project_access_get(user_id):
         token_data = get_token_data(user_id, "gcp")
         credentials = get_credentials(token_data)
         sa_email = get_aurora_service_account_email(user_id)
-        projects = get_project_list(credentials)
-
-        crm_service = build('cloudresourcemanager', 'v1', credentials=credentials)
-        member_sa = f"serviceAccount:{sa_email}"
-
-        result = []
-        for proj in projects:
-            pid = proj.get('projectId')
-            if not pid:
-                continue
-            name = proj.get('name', pid)
-
-            has_permission = True
-            enabled = False
-            try:
-                policy = crm_service.projects().getIamPolicy(resource=pid, body={}).execute()
-                sa_roles = []
-                for binding in policy.get('bindings', []):
-                    if member_sa in binding.get('members', []):
-                        sa_roles.append(binding.get('role'))
-                enabled = len(sa_roles) > 0
-            except Exception as e:
-                logging.warning(f"Cannot read IAM policy for project {pid}: {e}")
-                has_permission = False
-                enabled = False
-
-            result.append({
-                "projectId": pid,
-                "name": name,
-                "enabled": enabled,
-                "hasPermission": has_permission,
-            })
-
-        root_project = get_user_preference(user_id, 'gcp_root_project')
-        for project in result:
-            project['isRootProject'] = project['projectId'] == root_project
-
-        result.sort(key=lambda x: x['name'])
+        result = _oauth_mode_project_list(credentials, sa_email, root_project)
         return jsonify({"projects": result, "root_project": root_project}), 200
 
     except ValueError as e:
