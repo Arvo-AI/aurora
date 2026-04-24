@@ -159,15 +159,15 @@ class ConnectorRegistry {
       });
 
     this.register({
-        id: "confluence",
-        name: "Confluence",
-        description: "Fetch runbooks and documentation from Confluence pages to automate incident response workflows.",
-        iconPath: "/confluence.svg",
-        iconBgColor: "bg-white dark:bg-white",
-        category: "Documentation",
-        path: "/confluence/connect",
-        storageKey: "isConfluenceConnected",
-      });
+      id: "confluence",
+      name: "Confluence",
+      description: "Fetch runbooks and documentation from Confluence pages to automate incident response workflows.",
+      iconPath: "/confluence.svg",
+      iconBgColor: "bg-white dark:bg-white",
+      category: "Documentation",
+      path: "/confluence/connect",
+      storageKey: "isConfluenceConnected",
+    });
 
     if (isJiraEnabled()) {
       this.register({

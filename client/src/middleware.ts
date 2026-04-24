@@ -103,6 +103,9 @@ export default auth((req) => {
     "font-src 'self' data:",
     `connect-src ${connectSrc}`,
     "frame-ancestors 'none'",
+    "base-uri 'self'",
+    "object-src 'none'",
+    "form-action 'self'",
   ].join('; '))
 
   return response
