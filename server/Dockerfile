@@ -175,18 +175,24 @@ CMD ["python", "main_chatbot.py"]
 # ============================================
 FROM base AS prod
 
+RUN useradd -m -u 1000 -s /bin/bash app && \
+    mkdir -p /tmp/.cache/uv && \
+    chown -R app:app /app /tmp/.cache
+
 # Copy the project sources directly to /app (not /app/server)
-COPY ./chat /app/chat/
-COPY ./config /app/config/
-COPY ./connectors /app/connectors/
-COPY ./routes /app/routes/
-COPY ./services /app/services/
-COPY ./utils /app/utils/
-COPY ./celery_config.py /app/celery_config.py
-COPY ./main_chatbot.py /app/main_chatbot.py
-COPY ./main_compute.py /app/main_compute.py
-COPY ./mcp_server.py /app/mcp_server.py
-COPY ./rbac_model.conf /app/rbac_model.conf
+COPY --chown=app:app ./chat /app/chat/
+COPY --chown=app:app ./config /app/config/
+COPY --chown=app:app ./connectors /app/connectors/
+COPY --chown=app:app ./routes /app/routes/
+COPY --chown=app:app ./services /app/services/
+COPY --chown=app:app ./utils /app/utils/
+COPY --chown=app:app ./celery_config.py /app/celery_config.py
+COPY --chown=app:app ./main_chatbot.py /app/main_chatbot.py
+COPY --chown=app:app ./main_compute.py /app/main_compute.py
+COPY --chown=app:app ./mcp_server.py /app/mcp_server.py
+COPY --chown=app:app ./rbac_model.conf /app/rbac_model.conf
+
+USER app
 
 EXPOSE 5006
 # Entrypoint for chat container:
