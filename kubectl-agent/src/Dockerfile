@@ -11,9 +11,9 @@ FROM python:3.12-slim
 WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/* && apt-get clean
 RUN useradd -m -u 1000 -s /bin/bash kubectl-agent
-COPY --from=builder --chown=kubectl-agent:kubectl-agent --chmod=0555 /root/.local /home/kubectl-agent/.local
+COPY --from=builder --chmod=0555 /root/.local /home/kubectl-agent/.local
 COPY --from=builder /build/kubectl /usr/local/bin/kubectl
-COPY --chown=kubectl-agent:kubectl-agent --chmod=0444 agent.py .
+COPY --chmod=0444 agent.py .
 USER kubectl-agent
 ENV PATH=/home/kubectl-agent/.local/bin:$PATH \
     PYTHONPATH=/home/kubectl-agent/.local/lib/python3.12/site-packages:$PYTHONPATH \
