@@ -266,9 +266,9 @@ class RealMCPServerManager:
                     env["AWS_DEFAULT_REGION"] = str(aws_creds.get("region", "us-east-1"))
                     env["AWS_REGION"] = str(aws_creds.get("region", "us-east-1")) 
                     
-                    # Create AWS config directory in /tmp to ensure it's writable
-                    aws_dir = "/tmp/.aws"
-                    os.makedirs(aws_dir, exist_ok=True)
+                    # Per-invocation AWS config dir (0o700) so concurrent users in the same
+                    # worker cannot overwrite each other's credentials via a shared path.
+                    aws_dir = tempfile.mkdtemp(prefix=".aws-")
                     
                     # Create credentials file
                     credentials_content = f"""[default]
