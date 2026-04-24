@@ -24,6 +24,7 @@ CONNECTOR_DIRS: frozenset = frozenset({
     "github",
     "google_chat",
     "grafana",
+    "incidentio",
     "jenkins",
     "jira",
     "netdata",

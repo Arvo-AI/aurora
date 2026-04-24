@@ -52,25 +52,41 @@ def load_skill(skill_id: str, **kwargs) -> str:
         logger.warning("load_skill called without user_id — with_user_context wrapper may have failed")
         return json.dumps({"error": "No user context available — this indicates a system configuration issue."})
 
-    # Dedup: if this skill was already loaded in this session, return short ack
     key = _session_key(user_id, session_id)
-    with _loaded_skills_lock:
-        already_loaded = _loaded_skills.get(key, set())
-        if skill_id in already_loaded:
-            return f"Skill '{skill_id}' is already loaded in this conversation — no need to reload."
 
     try:
         from .registry import SkillRegistry
 
         registry = SkillRegistry.get_instance()
+
+        # Normalize: strip dots/dashes/underscores/spaces for typo tolerance
+        # (e.g. "incident.io" or "incident-io" → "incidentio")
+        # No prefix matching — avoids false positives like "google" → "google_chat"
+        if skill_id not in registry.get_all_skill_ids():
+            normalized = skill_id.lower().replace("dot", ".").replace(".", "").replace("-", "").replace("_", "").replace(" ", "")
+            for candidate in sorted(registry.get_all_skill_ids()):
+                candidate_norm = candidate.lower().replace(".", "").replace("-", "").replace("_", "")
+                if normalized == candidate_norm:
+                    logger.info("load_skill normalized '%s' -> '%s'", skill_id, candidate)
+                    skill_id = candidate
+                    break
+
+        # Dedup after canonicalization so aliases don't bypass cache
+        with _loaded_skills_lock:
+            already_loaded = _loaded_skills.get(key, set())
+            if skill_id in already_loaded:
+                return f"Skill '{skill_id}' is already loaded in this conversation — no need to reload."
+
         result = registry.load_skill(skill_id, user_id)
 
         if not result.is_connected:
             all_ids = registry.get_all_skill_ids()
             if skill_id not in all_ids:
+                connected = registry.get_connected_skill_ids(user_id)
+                hint = f"Only these integrations have skills: {', '.join(connected)}. Cloud providers (aws, gcp, azure) use cloud_exec directly — no load_skill needed."
                 return json.dumps({
-                    "error": f"Unknown skill '{skill_id}'. Check the CONNECTED INTEGRATIONS index for valid skill IDs.",
-                    "available": registry.get_connected_skill_ids(user_id),
+                    "error": f"No skill '{skill_id}'. {hint}",
+                    "available_skills": connected,
                 })
             return json.dumps({
                 "error": f"Integration '{skill_id}' is not connected for this user.",
@@ -86,6 +102,6 @@ def load_skill(skill_id: str, **kwargs) -> str:
 
         return result.content
 
-    except Exception as e:
-        logger.error(f"Error loading skill '{skill_id}': {e}", exc_info=True)
-        return json.dumps({"error": f"Failed to load skill: {e}"})
+    except Exception:
+        logger.exception("Error loading skill '%s'", skill_id)
+        return json.dumps({"error": "Failed to load skill. Please retry or contact support if the issue persists."})

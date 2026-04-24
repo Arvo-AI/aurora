@@ -244,6 +244,14 @@ const logos = {
       onError={(e) => console.error('Failed to load OpsGenie logo:', e)}
     />
   ),
+  incidentio: (
+    <img
+      src="/incidentio.svg"
+      className="w-4 h-4 min-w-4 min-h-4 object-contain rounded-sm"
+      alt="incident.io"
+      onError={(e) => console.error('Failed to load incident.io logo:', e)}
+    />
+  ),
   web: (
     <svg
       className="w-4 h-4 min-w-4 min-h-4 text-blue-600 dark:text-blue-400"
@@ -428,6 +436,11 @@ const getLogoForCommand = (command: string | any, toolName: string, provider?: s
   // OpsGenie / JSM Operations tools
   if (tool === 'query_opsgenie' || tool.includes('opsgenie')) {
     return 'opsgenie'
+  }
+
+  // incident.io tools
+  if (tool.includes('incidentio')) {
+    return 'incidentio'
   }
 
   // IAC tools

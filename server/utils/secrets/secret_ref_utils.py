@@ -66,6 +66,7 @@ SUPPORTED_SECRET_PROVIDERS: Set[str] = {
     "newrelic",  # New Relic connector tokens
     "notion",   # Notion (documentation platform)
     "google",   # Google Chat — provider is "google_chat", split('_')[0] matches this
+    "incidentio",  # incident.io connector tokens
 }
 
 
