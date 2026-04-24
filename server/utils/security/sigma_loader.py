@@ -121,36 +121,32 @@ def _or_all(patterns) -> str:
     return "|".join(f"(?:{p})" for p in patterns)
 
 
-def _translate_selection(selection: Any) -> Optional[str]:
-    """Translate one Sigma selection dict (or list of dicts) into a regex.
+def _translate_selection_dict(selection: dict) -> Optional[str]:
+    """Translate a single Sigma selection dict into a regex.
 
-    Returns None if any field in the selection is unsupported — dropping AND
-    conditions would silently widen the match and cause false positives.
+    Returns None if any field is unsupported to avoid false positives.
     """
-    if isinstance(selection, list):
-        parts = []
-        for item in selection:
-            if isinstance(item, dict):
-                p = _translate_selection(item)
-                if p:
-                    parts.append(p)
-        return _or_all(parts) if parts else None
-
-    if not isinstance(selection, dict):
-        return None
-
     patterns = []
-    has_unsupported = False
     for field_spec, values in selection.items():
         pat = _field_to_regex(field_spec, values)
         if pat:
             patterns.append(pat)
         else:
-            has_unsupported = True
+            return None
+    return _and_all(patterns) if patterns else None
 
-    if not patterns or has_unsupported:
-        return None
-    return _and_all(patterns)
+
+def _translate_selection(selection: Any) -> Optional[str]:
+    """Translate one Sigma selection (dict or list of dicts) into a regex."""
+    if isinstance(selection, list):
+        parts = [_translate_selection(item) for item in selection if isinstance(item, dict)]
+        parts = [p for p in parts if p]
+        return _or_all(parts) if parts else None
+
+    if isinstance(selection, dict):
+        return _translate_selection_dict(selection)
+
+    return None
 
 
 def _extract_selections(detection: Dict[str, Any]) -> Dict[str, str]:
@@ -200,7 +196,48 @@ def _translate_rule(rule: Dict[str, Any]) -> Optional[str]:
     return _resolve_condition(condition.lower().strip(), selections)
 
 
-def load_sigma_rules() -> List[Tuple[re.Pattern, str, str, str]]:
+_SigmaRule = Tuple[re.Pattern, str, str, str]
+
+
+def _process_sigma_file(yml_path: Path) -> Optional[_SigmaRule]:
+    """Parse and transpile a single Sigma YAML file. Returns None on skip."""
+    try:
+        with open(yml_path) as f:
+            rule = yaml.safe_load(f)
+    except Exception:
+        logger.warning("Failed to parse Sigma rule: %s", yml_path.name)
+        return None
+
+    if not isinstance(rule, dict):
+        return None
+
+    sigma_id = rule.get("id", "")
+    if sigma_id in _SUPPRESSIONS:
+        logger.debug("Suppressed Sigma rule: %s", sigma_id)
+        return None
+
+    level = (rule.get("level") or "").lower()
+    if level not in ("high", "critical"):
+        return None
+
+    regex_str = _translate_rule(rule)
+    if not regex_str:
+        logger.debug("Could not translate Sigma rule: %s", yml_path.name)
+        return None
+
+    try:
+        compiled = re.compile(regex_str, re.IGNORECASE)
+    except re.error:
+        logger.warning("Invalid regex from Sigma rule %s: %s", yml_path.name, regex_str[:100].replace("\n", "\\n"))
+        return None
+
+    technique = _extract_mitre_technique(rule.get("tags"))
+    title = rule.get("title", yml_path.stem)
+    rule_id = f"sigma-{sigma_id[:8]}" if sigma_id else f"sigma-{yml_path.stem}"
+    return compiled, technique, rule_id, title
+
+
+def load_sigma_rules() -> List[_SigmaRule]:
     """Load and transpile all vendored Sigma rules.
 
     Returns a list of (compiled_pattern, technique, rule_id, description)
@@ -213,44 +250,11 @@ def load_sigma_rules() -> List[Tuple[re.Pattern, str, str, str]]:
         logger.debug("Sigma rules directory not found: %s", _SIGMA_DIR)
         return []
 
-    rules: List[Tuple[re.Pattern, str, str, str]] = []
-
+    rules: List[_SigmaRule] = []
     for yml_path in sorted(_SIGMA_DIR.glob("*.yml")):
-        try:
-            with open(yml_path) as f:
-                rule = yaml.safe_load(f)
-        except Exception:
-            logger.warning("Failed to parse Sigma rule: %s", yml_path.name)
-            continue
-
-        if not isinstance(rule, dict):
-            continue
-
-        sigma_id = rule.get("id", "")
-        if sigma_id in _SUPPRESSIONS:
-            logger.debug("Suppressed Sigma rule: %s", sigma_id)
-            continue
-
-        title = rule.get("title", yml_path.stem)
-        level = (rule.get("level") or "").lower()
-        if level not in ("high", "critical"):
-            continue
-
-        technique = _extract_mitre_technique(rule.get("tags"))
-        rule_id = f"sigma-{sigma_id[:8]}" if sigma_id else f"sigma-{yml_path.stem}"
-
-        regex_str = _translate_rule(rule)
-        if not regex_str:
-            logger.debug("Could not translate Sigma rule: %s", yml_path.name)
-            continue
-
-        try:
-            compiled = re.compile(regex_str, re.IGNORECASE)
-        except re.error:
-            logger.warning("Invalid regex from Sigma rule %s: %s", yml_path.name, regex_str[:100].replace("\n", "\\n"))
-            continue
-
-        rules.append((compiled, technique, rule_id, title))
+        result = _process_sigma_file(yml_path)
+        if result:
+            rules.append(result)
 
     logger.info("Loaded %d Sigma rules from %s", len(rules), _SIGMA_DIR)
     return rules
