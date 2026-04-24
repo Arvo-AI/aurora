@@ -12,6 +12,7 @@ from dataclasses import dataclass
 class GuardrailsConfig:
     enabled: bool
     signature_check: bool
+    sigma_enabled: bool
     llm_judge: bool
     input_rail: bool
     llm_model: str
@@ -28,6 +29,7 @@ def _load() -> GuardrailsConfig:
     return GuardrailsConfig(
         enabled=on,
         signature_check=on and os.getenv("GUARDRAILS_SIGNATURE_CHECK", "true").lower() != "false",
+        sigma_enabled=on and os.getenv("GUARDRAILS_SIGMA_ENABLED", "true").lower() != "false",
         llm_judge=on and os.getenv("GUARDRAILS_LLM_JUDGE", "true").lower() != "false",
         input_rail=on and os.getenv("GUARDRAILS_INPUT_RAIL", "true").lower() != "false",
         llm_model=os.getenv("GUARDRAILS_LLM_MODEL", ""),

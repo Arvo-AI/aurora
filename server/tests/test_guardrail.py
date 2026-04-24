@@ -7,6 +7,7 @@ LLM judge and input rail tests require a working LLM; skipped in CI by default
 
 import json
 import os
+import re
 import pytest
 from unittest.mock import patch, AsyncMock, MagicMock
 
@@ -76,6 +77,66 @@ class TestSignatureMatcherBlocked:
         assert v.technique.startswith("T")
         assert v.rule_id
         assert v.description
+
+
+# ---------------------------------------------------------------------------
+# Sigma loader tests (deterministic, always run)
+# ---------------------------------------------------------------------------
+
+from utils.security.sigma_loader import load_sigma_rules, _field_to_regex, _translate_rule
+
+
+class TestSigmaLoader:
+    def test_loads_rules(self):
+        rules = load_sigma_rules()
+        assert len(rules) >= 20, f"Expected >=20 Sigma rules, got {len(rules)}"
+        for pattern, technique, rule_id, desc in rules:
+            assert rule_id.startswith("sigma-")
+            assert desc
+
+    def test_field_to_regex_commandline_contains(self):
+        pat = _field_to_regex("CommandLine|contains", ["/bin/sh", "/bin/bash"])
+        assert pat is not None
+        assert "/bin/sh" in pat
+        assert "/bin/bash" in pat
+
+    def test_field_to_regex_image_endswith(self):
+        pat = _field_to_regex("Image|endswith", ["/awk", "/gawk"])
+        assert pat is not None
+        assert re.search(pat, "/usr/bin/awk -f script", re.IGNORECASE)
+        assert not re.search(pat, "echo awk is great", re.IGNORECASE)
+
+    def test_field_to_regex_unsupported_field_returns_none(self):
+        assert _field_to_regex("ParentImage|endswith", ["/java"]) is None
+        assert _field_to_regex("User", ["root"]) is None
+
+    def test_field_to_regex_contains_all(self):
+        pat = _field_to_regex("CommandLine|contains|all", ["stop", "kesl"])
+        assert pat is not None
+        assert re.search(pat, "systemctl stop kesl", re.IGNORECASE)
+        assert not re.search(pat, "systemctl stop nginx", re.IGNORECASE)
+
+    def test_suppressions_respected(self):
+        """Suppressed rule IDs should not appear in loaded rules."""
+        rules = load_sigma_rules()
+        rule_ids = {rid for _, _, rid, _ in rules}
+        from utils.security.sigma_loader import _SUPPRESSIONS
+        for sid in _SUPPRESSIONS:
+            assert f"sigma-{sid[:8]}" not in rule_ids
+
+
+class TestSigmaConfig:
+    def test_sigma_enabled_default(self):
+        with patch.dict(os.environ, {"GUARDRAILS_ENABLED": "true"}):
+            from utils.security.config import _load
+            cfg = _load()
+            assert cfg.sigma_enabled
+
+    def test_sigma_disabled(self):
+        with patch.dict(os.environ, {"GUARDRAILS_ENABLED": "true", "GUARDRAILS_SIGMA_ENABLED": "false"}):
+            from utils.security.config import _load
+            cfg = _load()
+            assert not cfg.sigma_enabled
 
 
 # ---------------------------------------------------------------------------
