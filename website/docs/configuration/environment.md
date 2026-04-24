@@ -262,17 +262,12 @@ OLLAMA_BASE_URL=http://host.docker.internal:11434
 
 ### AI Safety Guardrails
 
-Multi-layer command safety stack: L2 static signatures + L4 LLM judge. See [Command Safety](./command-safety.md) for detailed configuration.
+Two-layer command safety: signature matcher + LLM safety judge. See [Command Safety](./command-safety.md) for details.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `GUARDRAILS_ENABLED` | `false` | Master switch for the guardrail stack |
-| `GUARDRAILS_SIGNATURE_CHECK` | `true` | L2: static pattern matching (free, ~5ms) |
-| `GUARDRAILS_LLM_JUDGE` | `true` | L4: LLM-based command safety judge |
-| `GUARDRAILS_LLM_MODEL` | _(MAIN_MODEL)_ | Provider/model for L4 (e.g., `openai/gpt-4o-mini`) |
-| `GUARDRAILS_LLM_FAIL_MODE` | `open` | L4 error behavior: `open` (allow) or `closed` (block) |
-| `GUARDRAILS_LLM_BASE_URL` | - | Custom API endpoint for self-hosted models |
-| `GUARDRAILS_LLM_API_KEY` | - | API key for custom endpoint (only when BASE_URL is set) |
+| `GUARDRAILS_ENABLED` | `false` | Master switch. When `true`, both layers run on every command and the judge fails closed on error. |
+| `GUARDRAILS_LLM_MODEL` | _(MAIN_MODEL)_ | Model used by the safety judge. Same format and routing as `MAIN_MODEL`. |
 
 ## Cloud Providers
 

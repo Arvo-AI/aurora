@@ -122,10 +122,11 @@ def check_command_safety(
 ) -> SafetyVerdict:
     """Check whether a proposed command is potentially dangerous.
 
-    Returns quickly with conclusion=False when disabled or context unavailable.
+    Fails closed: any internal error (missing context, timeout, LLM failure)
+    returns a blocking verdict.
     """
-    if not config.llm_judge:
-        return SafetyVerdict(observation="disabled", thought="check disabled", conclusion=False)
+    if not config.enabled:
+        return SafetyVerdict(observation="disabled", thought="guardrails disabled", conclusion=False)
 
     user_message = _get_latest_user_message()
     if not user_message:
@@ -159,33 +160,29 @@ def check_command_safety(
 # ---------------------------------------------------------------------------
 
 def _fail_verdict(detail: str) -> SafetyVerdict:
-    if config.llm_fail_mode == "closed":
-        logger.warning("[CommandSafety] Failing closed: %s", detail)
-        return SafetyVerdict(observation="error", thought=f"Safety check unavailable ({detail}), failing closed", conclusion=True)
-    return SafetyVerdict(observation="error", thought=f"Safety check unavailable ({detail}), failing open", conclusion=False)
+    logger.warning("[CommandSafety] Failing closed: %s", detail)
+    return SafetyVerdict(
+        observation="error",
+        thought=f"Safety check unavailable ({detail}); failing closed",
+        conclusion=True,
+    )
 
 
 @lru_cache(maxsize=1)
 def _create_safety_llm():
-    """Build the structured-output LLM once and cache it."""
-    if config.llm_base_url:
-        from langchain_openai import ChatOpenAI
-        model_id = config.llm_model.split("/", 1)[-1] if "/" in config.llm_model else config.llm_model
-        base = ChatOpenAI(
-            model=model_id,
-            base_url=config.llm_base_url,
-            api_key=config.llm_api_key or "not-needed",
-            temperature=0.0,
-            streaming=False,
-        )
-    else:
-        from chat.backend.agent.llm import ModelConfig
-        from chat.backend.agent.providers import create_chat_model
-        base = create_chat_model(
-            config.llm_model or ModelConfig.MAIN_MODEL,
-            temperature=0.0,
-            streaming=False,
-        )
+    """Build the structured-output LLM once and cache it.
+
+    Routes through create_chat_model() so the guardrails judge honors the same
+    provider/routing rules as the main agent. Falls back to MAIN_MODEL when
+    GUARDRAILS_LLM_MODEL is not set.
+    """
+    from chat.backend.agent.llm import ModelConfig
+    from chat.backend.agent.providers import create_chat_model
+    base = create_chat_model(
+        config.llm_model or ModelConfig.MAIN_MODEL,
+        temperature=0.0,
+        streaming=False,
+    )
     return base.with_structured_output(SafetyVerdict)
 
 

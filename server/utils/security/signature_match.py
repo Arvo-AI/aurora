@@ -1,4 +1,4 @@
-"""Static signature matcher (L2) for known-malicious command patterns.
+"""Static signature matcher for known-malicious command patterns.
 
 Compiled regex rules run against every command before the LLM judge.
 Catches ~80% of dangerous commands in <5ms with zero cost.

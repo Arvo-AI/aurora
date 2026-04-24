@@ -240,7 +240,7 @@ def tailscale_ssh(
         })
 
     from utils.security.config import config as _guardrails_config
-    if _guardrails_config.signature_check:
+    if _guardrails_config.enabled:
         from utils.security.signature_match import check_signature
         sig = check_signature(command)
         if sig.matched:
@@ -251,7 +251,6 @@ def tailscale_ssh(
                 "provider": "tailscale_ssh",
             })
 
-    if _guardrails_config.llm_judge:
         from utils.security.command_safety import check_command_safety
         verdict = check_command_safety(command, tool_name="tailscale_ssh", user_id=user_id, session_id=session_id)
         if verdict.conclusion:

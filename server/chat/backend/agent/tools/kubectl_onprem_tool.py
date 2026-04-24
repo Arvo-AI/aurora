@@ -63,7 +63,7 @@ def on_prem_kubectl(
         })
 
     from utils.security.config import config as _guardrails_config
-    if _guardrails_config.signature_check:
+    if _guardrails_config.enabled:
         from utils.security.signature_match import check_signature
         sig = check_signature(full_command)
         if sig.matched:
@@ -77,7 +77,6 @@ def on_prem_kubectl(
                 'provider': 'onprem_kubectl',
             })
 
-    if _guardrails_config.llm_judge:
         from utils.security.command_safety import check_command_safety
         verdict = check_command_safety(full_command, tool_name="kubectl_onprem", user_id=user_id, session_id=session_id)
         if verdict.conclusion:
