@@ -268,7 +268,7 @@ class SpinnakerClient:
         try:
             resp = self._session.request(method, url, **kwargs)
         except requests.RequestException as exc:
-            logger.error("[SPINNAKER] %s %s network error: %s", sanitize(method), sanitize(path), exc)
+            logger.error("[SPINNAKER] %s %s network error: %s", method, sanitize(path), exc)
             raise SpinnakerAPIError("Unable to reach Spinnaker Gate API") from exc
 
         if resp.status_code == 401:
@@ -282,7 +282,7 @@ class SpinnakerClient:
         if not resp.ok:
             logger.error(
                 "[SPINNAKER] %s %s failed (HTTP %s)",
-                sanitize(method), sanitize(path), resp.status_code,
+                method, sanitize(path), resp.status_code,
             )
             raise SpinnakerAPIError(
                 f"Spinnaker API request failed (HTTP {resp.status_code})"
