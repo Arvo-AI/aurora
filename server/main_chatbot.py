@@ -459,8 +459,18 @@ async def process_workflow_async(wf, state, websocket, user_id, incident_id=None
         except Exception as e:
             logger.error(f"[BackgroundChat] Failed to save streaming chat message: {e}")
 
-    def finalize_streaming_chat_message():
-        """Clear the _streaming flag from the last bot message in chat_sessions.messages."""
+    def finalize_streaming_chat_message(remove: bool = False):
+        """Finalize streaming bot messages in chat_sessions.messages.
+
+        When *remove=False* (mid-stream), clear the ``_streaming`` flag so the
+        message is "committed" for live polling while a new streaming message
+        starts.
+
+        When *remove=True* (end of workflow), delete all ``_streaming``-flagged
+        messages entirely.  The authoritative UI messages are written by
+        ``_append_new_turn_ui_messages`` after the workflow completes, so any
+        remaining streaming copies must be removed to avoid duplicates.
+        """
         if not is_background or not session_id or session_id == 'unknown':
             return
 
@@ -483,10 +493,18 @@ async def process_workflow_async(wf, state, websocket, user_id, incident_id=None
                         messages = json.loads(messages)
 
                     modified = False
-                    for msg in messages:
-                        if msg.get("_streaming"):
-                            del msg["_streaming"]
-                            modified = True
+                    if remove:
+                        original_len = len(messages)
+                        messages = [
+                            msg for msg in messages
+                            if not msg.get("_streaming")
+                        ]
+                        modified = len(messages) < original_len
+                    else:
+                        for msg in messages:
+                            if msg.get("_streaming"):
+                                del msg["_streaming"]
+                                modified = True
 
                     if modified:
                         cursor.execute(
@@ -494,7 +512,10 @@ async def process_workflow_async(wf, state, websocket, user_id, incident_id=None
                             (json.dumps(messages), datetime.now(), session_id),
                         )
                         conn.commit()
-                        logger.debug(f"[BackgroundChat] Finalized streaming flags for session {session_id}")
+                        logger.debug(
+                            f"[BackgroundChat] Finalized streaming messages for session {session_id} "
+                            f"(remove={remove})"
+                        )
         except Exception as e:
             logger.error(f"[BackgroundChat] Failed to finalize streaming chat message: {e}")
 
@@ -792,13 +813,15 @@ async def process_workflow_async(wf, state, websocket, user_id, incident_id=None
         # Force save any remaining accumulated thought
         save_incident_thought("", force=True)
 
-        # Finalize streaming: clear _streaming flags from chat messages
-        finalize_streaming_chat_message()
+        # Finalize streaming: remove temporary streaming messages before the
+        # authoritative UI messages are written by _append_new_turn_ui_messages
+        finalize_streaming_chat_message(remove=True)
         
         await send_end_status("completed")
         
     except asyncio.TimeoutError:
         logger.error(f"Workflow timeout after {workflow_timeout}s for session {session_id}")
+        finalize_streaming_chat_message(remove=True)
         if websocket_connected:
             timeout_msg = {
                 "type": "error",
@@ -811,6 +834,7 @@ async def process_workflow_async(wf, state, websocket, user_id, incident_id=None
         
     except Exception as e:
         logger.error(f"Error in workflow processing for session {session_id}: {e}", exc_info=True)
+        finalize_streaming_chat_message(remove=True)
         if websocket_connected:
             error_msg = {
                 "type": "error",
