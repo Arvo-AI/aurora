@@ -47,7 +47,6 @@ def register():
     - Users within an existing org are created by an admin via
       /api/admin/users (invite-only).
     """
-    
     try:
         data = request.get_json()
         if not data:

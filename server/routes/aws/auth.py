@@ -87,7 +87,7 @@ def auth(user_id):
     """
     logging.info("=== AWS AUTH ENDPOINT STARTED ===")
     try:
-        data = flask.request.get_json()
+        data = flask.request.get_json(silent=True) or {}
         role_arn = data.get('role_arn')
         read_only_role_arn = data.get('read_only_role_arn') or data.get('readOnlyRoleArn')
         external_id = data.get('external_id')

@@ -6,6 +6,7 @@ from utils.auth.rbac_decorators import require_permission
 from utils.auth.token_refresh import refresh_token_if_needed
 from connectors.gcp_connector.auth.oauth import get_credentials
 from utils.auth.token_management import get_token_data
+from utils.log_sanitizer import sanitize
 from connectors.gcp_connector.gcp.projects import get_project_list
 from connectors.gcp_connector.auth.service_accounts import (
     get_aurora_service_account_email,
@@ -100,7 +101,7 @@ def _load_gcp_token(user_id):
     """Fetch GCP token data; return (token_data, None) or (None, error_response)."""
     token_data = get_token_data(user_id, "gcp")
     if not token_data:
-        logging.warning(f"No token data found for user_id: {user_id}, provider: gcp")
+        logging.warning("No token data found for user_id: %s, provider: gcp", sanitize(user_id))
         return None, (jsonify({"error": "No GCP credentials found. Please authenticate with GCP."}), 401)
     return token_data, None
 

@@ -10,6 +10,7 @@ from connectors.azure_connector.k8s_client import (
 )
 from utils.logging.secure_logging import mask_credential_value
 from utils.auth.token_management import get_token_data
+from utils.log_sanitizer import sanitize
 import json
 
 azure_bp = Blueprint("azure_bp", __name__)
@@ -153,12 +154,12 @@ def azure_subscriptions_get(user_id):
         org_id = get_org_id_from_request()
         token_data = get_token_data(user_id, "azure", org_id=org_id)
         if not token_data:
-            logging.warning(f"[AZURE API] No Azure token data found for user {user_id}")
+            logging.warning("[AZURE API] No Azure token data found for user %s", sanitize(user_id))
             return jsonify({"error": "No Azure credentials found. Please authenticate with Azure."}), 401
         subscription_id = token_data.get("subscription_id")
         subscription_name = token_data.get("subscription_name", "Azure Subscription")
         if not subscription_id:
-            logging.warning(f"[AZURE API] No Azure subscription found for user {user_id}")
+            logging.warning("[AZURE API] No Azure subscription found for user %s", sanitize(user_id))
             return jsonify({"error": "No Azure subscription found. Please configure your Azure subscription."}), 401
         projects = [{"projectId": subscription_id, "name": subscription_name, "enabled": True}]
         return jsonify({"projects": projects}), 200
