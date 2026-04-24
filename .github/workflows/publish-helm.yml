@@ -127,6 +127,7 @@ jobs:
     runs-on: ubuntu-24.04
     needs: [publish-ghpages, publish-oci]
     if: always()
+    permissions: {}
     steps:
       - name: Summary
         run: |

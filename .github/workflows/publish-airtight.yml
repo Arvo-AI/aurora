@@ -182,6 +182,7 @@ jobs:
     runs-on: ubuntu-24.04
     needs: [airtight]
     if: always()
+    permissions: {}
     steps:
       - name: Summary
         run: |
