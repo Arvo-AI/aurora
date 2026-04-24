@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { GitHubIntegrationService } from "@/components/github-provider-integration";
 import { BitbucketIntegrationService } from "@/components/bitbucket-provider-integration";
-import { isOvhEnabled, isScalewayEnabled } from "@/lib/feature-flags";
+import { isOvhEnabled } from "@/lib/feature-flags";
 import type { ConnectorConfig } from "@/components/connectors/types";
 import { slackService } from "@/lib/services/slack";
 import { googleChatService } from "@/lib/services/google-chat";
@@ -167,17 +167,15 @@ export function useConnectorStatus(
         } catch { /* not configured */ }
       }
 
-      if (isScalewayEnabled()) {
-        try {
-          const r = await fetchR(`/api/proxy/scaleway/instances`, {
-            credentials: "include",
-          });
-          if (r.ok) {
-            const d = await r.json();
-            if ((d.servers || []).some((s: any) => s.sshConfig)) { setIsConnected(true); return; }
-          }
-        } catch { /* not configured */ }
-      }
+      try {
+        const r = await fetchR(`/api/proxy/scaleway/instances`, {
+          credentials: "include",
+        });
+        if (r.ok) {
+          const d = await r.json();
+          if ((d.servers || []).some((s: any) => s.sshConfig)) { setIsConnected(true); return; }
+        }
+      } catch { /* not configured */ }
 
       setIsConnected(false);
     } catch {

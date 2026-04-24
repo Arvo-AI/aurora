@@ -84,7 +84,31 @@ export default auth((req) => {
     }
   }
 
-  return NextResponse.next()
+  const response = NextResponse.next()
+
+  const backendOrigin = process.env.PUBLIC_API_URL || process.env.NEXT_PUBLIC_BACKEND_URL || ''
+  const wsOrigin = process.env.PUBLIC_WS_URL || process.env.NEXT_PUBLIC_WEBSOCKET_URL || ''
+  const connectSrc = [
+    "'self'",
+    backendOrigin,
+    wsOrigin,
+    backendOrigin ? backendOrigin.replace(/^http/, 'ws') : '',
+  ].filter(Boolean).join(' ')
+
+  response.headers.set('Content-Security-Policy', [
+    "default-src 'self'",
+    "script-src 'self' 'unsafe-inline'",
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data: blob: https:",
+    "font-src 'self' data:",
+    `connect-src ${connectSrc}`,
+    "frame-ancestors 'none'",
+    "base-uri 'self'",
+    "object-src 'none'",
+    "form-action 'self'",
+  ].join('; '))
+
+  return response
 })
 
 export const config = {

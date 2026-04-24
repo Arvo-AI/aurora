@@ -194,8 +194,10 @@ config:
   # NEXT_PUBLIC_* feature flags — written to window.__ENV by docker-entrypoint.sh at startup, no image rebuild needed
   NEXT_PUBLIC_ENABLE_OVH: "false"            # OVH Cloud integration
   NEXT_PUBLIC_ENABLE_PAGERDUTY_OAUTH: "false" # PagerDuty integration
-  NEXT_PUBLIC_ENABLE_SCALEWAY: "false"       # Scaleway integration
   NEXT_PUBLIC_ENABLE_SHAREPOINT: "false"     # SharePoint integration
+  NEXT_PUBLIC_ENABLE_JIRA: "false"           # Jira integration
+  NEXT_PUBLIC_ENABLE_NOTION: "false"         # Notion integration
+  NEXT_PUBLIC_ENABLE_SPINNAKER: "false"      # Spinnaker integration
   
   # --- Pod Isolation Settings ---
   # When enabled, the chart automatically creates:

@@ -21,14 +21,18 @@ data:
   # Backend needs this for OAuth callbacks (derived from ingress if not set)
   NEXT_PUBLIC_BACKEND_URL: {{ default (printf "https://%s" .Values.ingress.hosts.api) .Values.config.NEXT_PUBLIC_BACKEND_URL | quote }}
 
+  # Non-NEXT_PUBLIC mirrors for server-side middleware (NEXT_PUBLIC_ vars are inlined at build time by Next.js)
+  PUBLIC_API_URL: {{ default (printf "https://%s" .Values.ingress.hosts.api) .Values.config.NEXT_PUBLIC_BACKEND_URL | quote }}
+  PUBLIC_WS_URL: {{ default (printf "wss://%s" .Values.ingress.hosts.ws) .Values.config.NEXT_PUBLIC_WEBSOCKET_URL | quote }}
+
   # Auth.js requires AUTH_URL for redirects; derive from FRONTEND_URL (mirrors docker-compose behavior)
   AUTH_URL: {{ default .Values.config.FRONTEND_URL .Values.config.AUTH_URL | quote }}
 
   # All other config values from .Values.config (excluding keys with computed defaults above)
   # NOTE: NEXT_PUBLIC_* vars are included because the backend reads feature flags like
-  # NEXT_PUBLIC_ENABLE_OVH, NEXT_PUBLIC_ENABLE_SCALEWAY, etc. to conditionally register routes.
+  # NEXT_PUBLIC_ENABLE_OVH, NEXT_PUBLIC_ENABLE_SHAREPOINT, etc. to conditionally register routes.
   {{- range $key, $value := .Values.config }}
-  {{- if not (has $key (list "POSTGRES_HOST" "REDIS_URL" "WEAVIATE_HOST" "MEMGRAPH_HOST" "BACKEND_URL" "CHATBOT_INTERNAL_URL" "VAULT_ADDR" "SEARXNG_URL" "NEXT_PUBLIC_BACKEND_URL" "AUTH_URL" (ternary "STORAGE_ENDPOINT_URL" "" (and $.Values.services.minio.enabled (not $.Values.config.STORAGE_ENDPOINT_URL))))) }}
+  {{- if not (has $key (list "POSTGRES_HOST" "REDIS_URL" "WEAVIATE_HOST" "MEMGRAPH_HOST" "BACKEND_URL" "CHATBOT_INTERNAL_URL" "VAULT_ADDR" "SEARXNG_URL" "NEXT_PUBLIC_BACKEND_URL" "PUBLIC_API_URL" "PUBLIC_WS_URL" "AUTH_URL" (ternary "STORAGE_ENDPOINT_URL" "" (and $.Values.services.minio.enabled (not $.Values.config.STORAGE_ENDPOINT_URL))))) }}
   {{ $key }}: {{ $value | quote }}
   {{- end }}
   {{- end }}

@@ -41,7 +41,7 @@ find server/ -type f -name "*.py" -exec grep -oh \
 
 # Extract env vars from TypeScript/JavaScript code (frontend)
 # Patterns: process.env.VAR, process.env["VAR"]
-find client/ -type f \( -name "*.ts" -o -name "*.tsx" -o -name "*.js" -o -name "*.jsx" \) -exec grep -oh \
+find client/ -type f \( -name "*.ts" -o -name "*.tsx" -o -name "*.js" -o -name "*.jsx" \) -not -path "*/node_modules/*" -not -path "*/.next/*" -exec grep -oh \
   -e 'process\.env\.[A-Z_][A-Z0-9_]*' \
   -e 'process\.env\[[^]]*' \
   {} + 2>/dev/null | \
@@ -91,6 +91,9 @@ grep -v -E '^(AURORA_AGENT_TOKEN|AGENT_VERSION)$' "$USED_VARS_FILE" > "${USED_VA
 
 # Docker Compose static variables (hardcoded in docker-compose.yml, not user-configurable)
 grep -v -E '^(CHATBOT_HOST|CHATBOT_PORT|WEAVIATE_PORT)$' "$USED_VARS_FILE" > "${USED_VARS_FILE}.tmp" && mv "${USED_VARS_FILE}.tmp" "$USED_VARS_FILE"
+
+# Derived variables (set in docker-compose from NEXT_PUBLIC_* counterparts, not user-configurable)
+grep -v -E '^(PUBLIC_API_URL|PUBLIC_WS_URL)$' "$USED_VARS_FILE" > "${USED_VARS_FILE}.tmp" && mv "${USED_VARS_FILE}.tmp" "$USED_VARS_FILE"
 
 TOTAL_USED=$(wc -l < "$USED_VARS_FILE")
 echo -e "${GREEN}✓ Found ${TOTAL_USED} unique environment variables in code${NC}"

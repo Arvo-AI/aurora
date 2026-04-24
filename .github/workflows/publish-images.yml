@@ -102,7 +102,6 @@ jobs:
             NEXT_PUBLIC_WEBSOCKET_URL=ws://localhost:5006
             NEXT_PUBLIC_ENABLE_OVH=true
             NEXT_PUBLIC_ENABLE_PAGERDUTY_OAUTH=true
-            NEXT_PUBLIC_ENABLE_SCALEWAY=true
             NEXT_PUBLIC_ENABLE_SHAREPOINT=true
           outputs: type=image,name=ghcr.io/arvo-ai/aurora-${{ matrix.image }},push-by-digest=true,name-canonical=true,push=true
           cache-from: type=gha,scope=${{ matrix.image }}-${{ matrix.arch }}
