@@ -146,6 +146,7 @@ def sa_project_access_get(user_id):
             logging.error(f"Token refresh failed: {e}", exc_info=True)
             return jsonify({"error": "Token refresh failed"}), 401
 
+        token_data = get_token_data(user_id, "gcp")
         credentials = get_credentials(token_data)
         sa_email = get_aurora_service_account_email(user_id)
         projects = get_project_list(credentials)
@@ -227,6 +228,7 @@ def sa_project_access_post(user_id):
             logging.error(f"Token refresh failed: {e}", exc_info=True)
             return jsonify({"error": "Token refresh failed"}), 401
 
+        token_data = get_token_data(user_id, "gcp")
         credentials = get_credentials(token_data)
         sa_email = get_aurora_service_account_email(user_id)
         update_service_account_project_access(credentials, sa_email, selections)
