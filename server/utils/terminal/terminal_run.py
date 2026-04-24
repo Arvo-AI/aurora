@@ -220,7 +220,7 @@ def _check_guardrails(args: Union[str, List[str]]) -> Optional[CompletedProcess]
     if not config.enabled:
         return None
 
-    cmd = args if isinstance(args, str) else " ".join(str(a) for a in args)
+    cmd = args if isinstance(args, str) else shlex.join(str(a) for a in args)
     from utils.security.command_safety import _fingerprint
     cmd_fp = _fingerprint(cmd)
 
