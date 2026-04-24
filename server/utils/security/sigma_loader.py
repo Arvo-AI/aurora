@@ -1,8 +1,8 @@
 """Sigma YAML → regex transpiler for the L2 signature matcher.
 
-Loads vendored SigmaHQ rules from ``sigma_rules/`` at import time and
-converts them to compiled regex patterns compatible with
-``signature_match.SignatureVerdict``.
+Loads vendored SigmaHQ rules from ``sigma_rules/`` when
+``config.sigma_enabled`` is True, converting them to compiled regex
+patterns compatible with ``signature_match.SignatureVerdict``.
 
 Only supports a narrow Sigma subset:
 - product: linux, category: process_creation
@@ -16,7 +16,7 @@ import logging
 import os
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import yaml
 
@@ -38,7 +38,7 @@ def _load_suppressions() -> set:
                 suppressed.add(sid)
     supp_file = _SIGMA_DIR / "suppressions.txt"
     if supp_file.exists():
-        for line in supp_file.read_text().splitlines():
+        for line in supp_file.read_text(encoding="utf-8").splitlines():
             line = line.strip()
             if line and not line.startswith("#"):
                 suppressed.add(line)
@@ -108,7 +108,7 @@ def _field_to_regex(field_spec: str, values: Any) -> Optional[str]:
     return "|".join(alternatives) if alternatives else None
 
 
-def _and_all(patterns) -> str:
+def _and_all(patterns: Iterable[str]) -> str:
     """Combine patterns with AND semantics using lookaheads."""
     items = list(patterns)
     if len(items) == 1:
@@ -116,7 +116,7 @@ def _and_all(patterns) -> str:
     return "".join(f"(?=.*(?:{p}))" for p in items) + ".*"
 
 
-def _or_all(patterns) -> str:
+def _or_all(patterns: Iterable[str]) -> str:
     """Combine patterns with OR semantics."""
     return "|".join(f"(?:{p})" for p in patterns)
 
@@ -202,10 +202,10 @@ _SigmaRule = Tuple[re.Pattern, str, str, str]
 def _process_sigma_file(yml_path: Path) -> Optional[_SigmaRule]:
     """Parse and transpile a single Sigma YAML file. Returns None on skip."""
     try:
-        with open(yml_path) as f:
+        with open(yml_path, encoding="utf-8") as f:
             rule = yaml.safe_load(f)
     except Exception:
-        logger.warning("Failed to parse Sigma rule: %s", yml_path.name)
+        logger.warning("Failed to parse Sigma rule: %s", yml_path.name, exc_info=True)
         return None
 
     if not isinstance(rule, dict):
