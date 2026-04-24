@@ -14,6 +14,7 @@ from connectors.jira_connector.adf_converter import markdown_to_adf, text_to_adf
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import get_user_preference, store_user_preference
 from utils.auth.token_management import get_token_data, store_tokens_in_db
+from utils.log_sanitizer import sanitize
 from utils.secrets.secret_ref_utils import delete_user_secret
 
 logger = logging.getLogger(__name__)
@@ -286,7 +287,7 @@ def update_settings(user_id):
         return jsonify({"error": f"jiraMode must be one of: {', '.join(VALID_MODES)}"}), 400
 
     store_user_preference(user_id, JIRA_MODE_KEY, mode)
-    logger.info("[JIRA] Updated settings for user %s: jiraMode=%s", user_id, mode)
+    logger.info("[JIRA] Updated settings for user %s: jiraMode=%s", sanitize(user_id), sanitize(mode))
 
     return jsonify({"success": True, "jiraMode": mode})
 

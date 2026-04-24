@@ -17,15 +17,14 @@ concurrency:
 env:
   REGISTRY: ghcr.io
 
-permissions:
-  contents: read
-  packages: write
-
 jobs:
   build:
     name: Build ${{ matrix.image }} (${{ matrix.platform }})
     if: github.repository == 'Arvo-AI/aurora'
     runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
     strategy:
       fail-fast: false
       matrix:
@@ -139,6 +138,9 @@ jobs:
     needs: build
     if: github.repository == 'Arvo-AI/aurora'
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
     strategy:
       fail-fast: false
       matrix:
@@ -223,6 +225,7 @@ jobs:
     runs-on: ubuntu-24.04
     needs: [build, merge]
     if: always()
+    permissions: {}
     steps:
       - name: Summary
         run: |

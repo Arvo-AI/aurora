@@ -14,6 +14,7 @@ from utils.web.cors_utils import create_cors_response
 from utils.flags.feature_flags import is_pagerduty_oauth_enabled
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.auth.rbac_decorators import require_permission
+from utils.log_sanitizer import sanitize
 from routes.pagerduty.oauth_utils import get_auth_url, exchange_code_for_token, refresh_token_if_needed
 from routes.pagerduty.pagerduty_helpers import PagerDutyClient, PagerDutyAPIError, validate_token, error_response
 from utils.secrets.secret_ref_utils import delete_user_secret
@@ -251,18 +252,18 @@ def webhook(user_id: str):
     # Check if user has PagerDuty connected
     creds = get_token_data(user_id, "pagerduty")
     if not creds:
-        logger.warning("[PAGERDUTY] Webhook received for user %s with no PagerDuty connection", user_id)
+        logger.warning("[PAGERDUTY] Webhook received for user %s with no PagerDuty connection", sanitize(user_id))
         return jsonify({"error": "PagerDuty not connected for this user"}), 404
     
     payload = request.get_json(silent=True) or {}
     
     # Log raw payload
-    logger.info("[PAGERDUTY] Raw webhook payload for user %s: %s", user_id, json.dumps(payload))
+    logger.info("[PAGERDUTY] Raw webhook payload for user %s: %s", sanitize(user_id), sanitize(json.dumps(payload)))
     
     # Validate V3 webhook structure
     is_valid, error_msg = _validate_v3_webhook(payload)
     if not is_valid:
-        logger.warning("[PAGERDUTY] Invalid V3 webhook for user %s: %s", user_id, error_msg)
+        logger.warning("[PAGERDUTY] Invalid V3 webhook for user %s: %s", sanitize(user_id), error_msg)
         return jsonify({"error": error_msg}), 400
     
     event = payload["event"]
@@ -272,10 +273,10 @@ def webhook(user_id: str):
     # Log V3 webhook receipt
     logger.info(
         "[PAGERDUTY] V3 webhook received for user %s: type=%s, resource=%s, id=%s",
-        user_id,
-        event_type,
-        resource_type,
-        event.get("id")
+        sanitize(user_id),
+        sanitize(event_type),
+        sanitize(resource_type),
+        sanitize(event.get("id"))
     )
     
     # Only process incident events
@@ -299,7 +300,7 @@ def webhook(user_id: str):
         user_id=user_id
     )
     
-    logger.info("[PAGERDUTY] Enqueued event for processing: user=%s, type=%s", user_id, event_type)
+    logger.info("[PAGERDUTY] Enqueued event for processing: user=%s, type=%s", sanitize(user_id), sanitize(event_type))
     return jsonify({"received": True})
 
 

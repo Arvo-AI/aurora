@@ -6,13 +6,12 @@ on:
   # pull_request:
   #   branches: [ main, release ]
 
-permissions:
-  contents: read
-
 jobs:
   build-dev:
     name: Dev - ${{ matrix.service }}
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
     # Only run builds on the main repository, not on forks
     if: github.event.pull_request.head.repo.full_name == github.repository || github.event_name != 'pull_request'
     environment: ${{ github.ref == 'refs/heads/main' && 'staging' || (startsWith(github.ref, 'refs/heads/release/') && 'production' || 'development') }}
@@ -95,6 +94,8 @@ jobs:
     # Only run builds on the main repository, not on forks
     if: github.event.pull_request.head.repo.full_name == github.repository || github.event_name != 'pull_request'
     environment: ${{ github.ref == 'refs/heads/main' && 'staging' || (startsWith(github.ref, 'refs/heads/release/') && 'production' || 'development') }}
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -173,6 +174,7 @@ jobs:
     runs-on: ubuntu-24.04
     needs: [build-dev, build-prod]
     if: always()
+    permissions: {}
     steps:
       - name: Check build results
         run: |

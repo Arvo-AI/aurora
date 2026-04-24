@@ -16,6 +16,7 @@ from connectors.notion_connector.client import (
 from utils.auth.oauth2_state_cache import retrieve_oauth2_state, store_oauth2_state
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.token_management import get_token_data, store_tokens_in_db
+from utils.log_sanitizer import sanitize
 from utils.secrets.secret_ref_utils import delete_user_secret
 
 logger = logging.getLogger(__name__)
@@ -411,8 +412,8 @@ def get_database(user_id, db_id: str):
     except Exception as exc:
         logger.exception(
             "[NOTION] get_database failed for user %s (db=%s): %s",
-            user_id,
-            db_id,
+            sanitize(user_id),
+            sanitize(db_id),
             exc,
         )
         return jsonify({"error": "Failed to fetch Notion database"}), 502

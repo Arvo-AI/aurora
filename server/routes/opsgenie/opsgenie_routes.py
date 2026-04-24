@@ -10,6 +10,7 @@ from flask import Blueprint, jsonify, request
 from routes.opsgenie.config import OPSGENIE_TIMEOUT, REGION_URLS
 from routes.opsgenie.tasks import process_opsgenie_event
 from utils.db.connection_pool import db_pool
+from utils.log_sanitizer import sanitize
 from utils.web.cors_utils import create_cors_response
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.auth.rbac_decorators import require_permission
@@ -534,7 +535,7 @@ def connect(user_id):
     if region not in REGION_URLS:
         return jsonify({"error": f"Invalid region '{region}'. Must be one of: {', '.join(REGION_URLS)}"}), 400
 
-    logger.info("[OPSGENIE] Connecting user %s to region=%s", user_id, region)
+    logger.info("[OPSGENIE] Connecting user %s to region=%s", sanitize(user_id), sanitize(region))
 
     client = OpsGenieClient(api_key=api_key, region=region)
 
@@ -556,7 +557,7 @@ def connect(user_id):
 
     try:
         store_tokens_in_db(user_id, token_payload, "opsgenie")
-        logger.info("[OPSGENIE] Stored credentials for user %s (region=%s)", user_id, region)
+        logger.info("[OPSGENIE] Stored credentials for user %s (region=%s)", sanitize(user_id), sanitize(region))
     except Exception as exc:
         logger.exception("[OPSGENIE] Failed to store credentials: %s", exc)
         return jsonify({"error": "Failed to store OpsGenie credentials"}), 500
@@ -642,7 +643,7 @@ def webhook(user_id: str):
     # Check if user has OpsGenie connected
     creds = get_token_data(user_id, "opsgenie")
     if not creds:
-        logger.warning("[OPSGENIE] Webhook received for user %s with no OpsGenie connection", user_id)
+        logger.warning("[OPSGENIE] Webhook received for user %s with no OpsGenie connection", sanitize(user_id))
         return jsonify({"error": "OpsGenie not connected for this user"}), 404
 
     payload = request.get_json(silent=True) or {}
@@ -650,7 +651,7 @@ def webhook(user_id: str):
         "headers": dict(request.headers),
         "remote_addr": request.remote_addr,
     }
-    logger.info("[OPSGENIE] Received webhook for user %s action=%s", user_id, payload.get("action"))
+    logger.info("[OPSGENIE] Received webhook for user %s action=%s", sanitize(user_id), sanitize(payload.get("action")))
 
     process_opsgenie_event.delay(payload=payload, metadata=metadata, user_id=user_id)
     return jsonify({"received": True})

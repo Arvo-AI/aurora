@@ -8,8 +8,8 @@ from flask import Blueprint, jsonify, request
 
 from routes.datadog.tasks import process_datadog_event
 from utils.db.connection_pool import db_pool
+from utils.log_sanitizer import sanitize, hash_for_log
 from utils.web.cors_utils import create_cors_response
-from utils.logging.secure_logging import mask_credential_value
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context
@@ -66,7 +66,7 @@ def _normalize_site(site: Optional[str]) -> Tuple[str, str]:
     if host_candidate in _SITE_BASE_URLS:
         return host_candidate, _SITE_BASE_URLS[host_candidate]
 
-    logger.warning("[DATADOG] Unknown site '%s', defaulting to datadoghq.com", site)
+    logger.warning("[DATADOG] Unknown site provided, defaulting to datadoghq.com")
     return candidate, _SITE_BASE_URLS["datadoghq.com"]
 
 
@@ -301,26 +301,24 @@ def connect(user_id):
 
     site, base_url = _normalize_site(raw_site)
 
-    masked_api = mask_credential_value(api_key)
-    masked_app = mask_credential_value(app_key)
-    logger.info("[DATADOG] Connecting user %s to site=%s api=%s app=%s", user_id, site, masked_api, masked_app)
+    logger.info("[DATADOG] Connecting user %s to site=%s api_hash=%s app_hash=%s", sanitize(user_id), sanitize(site), hash_for_log(api_key), hash_for_log(app_key))
 
     client = DatadogClient(api_key=api_key, app_key=app_key, site=site)
 
     try:
         validation = client.validate_credentials()
         if not validation.get("valid"):
-            logger.warning("[DATADOG] Validation failed for user %s: %s", user_id, validation)
+            logger.warning("[DATADOG] Validation failed for user %s: %s", sanitize(user_id), validation)
             return jsonify({"error": "Unable to validate Datadog credentials"}), 400
     except DatadogAPIError as exc:
-        logger.error("[DATADOG] Credential validation failed for user %s: %s", user_id, exc)
+        logger.error("[DATADOG] Credential validation failed for user %s: %s", sanitize(user_id), exc)
         return jsonify({"error": "Failed to validate Datadog credentials"}), 502
 
     org_data = None
     try:
         org_data = client.get_org()
     except DatadogAPIError as exc:
-        logger.debug("[DATADOG] Org lookup failed for user %s: %s", user_id, exc)
+        logger.debug("[DATADOG] Org lookup failed for user %s: %s", sanitize(user_id), exc)
 
     token_payload = {
         "api_key": api_key,
@@ -335,7 +333,7 @@ def connect(user_id):
 
     try:
         store_tokens_in_db(user_id, token_payload, "datadog")
-        logger.info("[DATADOG] Stored credentials for user %s (site=%s)", user_id, site)
+        logger.info("[DATADOG] Stored credentials for user %s (site=%s)", sanitize(user_id), sanitize(site))
     except Exception as exc:
         logger.exception("[DATADOG] Failed to store credentials: %s", exc)
         return jsonify({"error": "Failed to store Datadog credentials"}), 500
@@ -621,7 +619,7 @@ def webhook(user_id: str):
     # Check if user has Datadog connected
     creds = get_token_data(user_id, "datadog")
     if not creds:
-        logger.warning("[DATADOG] Webhook received for user %s with no Datadog connection", user_id)
+        logger.warning("[DATADOG] Webhook received for user %s with no Datadog connection", sanitize(user_id))
         return jsonify({"error": "Datadog not connected for this user"}), 404
 
     payload_text = request.get_data(as_text=True) or ""
@@ -632,7 +630,7 @@ def webhook(user_id: str):
         "headers": dict(request.headers),
         "remote_addr": request.remote_addr,
     }
-    logger.info("[DATADOG] Received webhook for user %s type=%s", user_id, payload.get("event_type"))
+    logger.info("[DATADOG] Received webhook for user %s type=%s", sanitize(user_id), sanitize(payload.get("event_type")))
 
     process_datadog_event.delay(payload, metadata, user_id)
     return jsonify({"received": True})

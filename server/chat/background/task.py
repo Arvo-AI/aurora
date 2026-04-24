@@ -16,6 +16,7 @@ from typing import Any, Dict, List, Optional
 from celery_config import celery_app
 from langchain_core.messages import HumanMessage
 from utils.cache.redis_client import get_redis_client
+from utils.log_sanitizer import sanitize
 from utils.notifications.email_service import get_email_service
 from utils.auth.stateless_auth import get_user_email, get_credentials_from_db, set_rls_context
 from utils.notifications.slack_notification_service import (
@@ -2001,7 +2002,7 @@ def create_background_chat_session(
                 ))
             conn.commit()
             
-            logger.info(f"[BackgroundChat] Created session {session_id} for user {user_id} org {org_id} (status=in_progress, incident_id={incident_id})")
+            logger.info(f"[BackgroundChat] Created session {sanitize(session_id)} for user {sanitize(user_id)} org {sanitize(org_id)} (status=in_progress, incident_id={sanitize(incident_id)})")
             
     except Exception as e:
         logger.exception(f"[BackgroundChat] Failed to create session: {e}")

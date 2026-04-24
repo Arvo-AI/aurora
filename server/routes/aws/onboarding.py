@@ -8,6 +8,7 @@ import os
 from flask import Blueprint, request, jsonify, Response
 from utils.web.cors_utils import create_cors_response
 from utils.auth.rbac_decorators import require_permission
+from utils.log_sanitizer import sanitize
 from utils.workspace.workspace_utils import (
     get_or_create_workspace,
     get_workspace_by_id,
@@ -104,11 +105,11 @@ def get_aws_onboarding_links(user_id, workspace_id):
         if aws_conn and aws_conn.get('role_arn'):
             response_data["roleArn"] = aws_conn['role_arn']
         
-        logger.info(f"Retrieved AWS onboarding info for workspace {workspace_id}")
+        logger.info(f"Retrieved AWS onboarding info for workspace {sanitize(workspace_id)}")
         return jsonify(response_data)
         
     except Exception as e:
-        logger.error(f"Failed to get AWS onboarding info for workspace {workspace_id}: {e}")
+        logger.error(f"Failed to get AWS onboarding info for workspace {sanitize(workspace_id)}: {sanitize(e)}")
         return jsonify({"error": "Internal server error"}), 500
 
 
@@ -162,7 +163,7 @@ def set_aws_role(user_id, workspace_id):
             # We only need to know if the call succeeds; short session (15 min) is enough
             assume_workspace_role(role_arn, workspace['aws_external_id'], workspace_id, duration_seconds=900)
         except Exception as e:
-            logger.warning(f"Role validation failed for workspace {workspace_id} using {role_arn}: {e}")
+            logger.warning(f"Role validation failed for workspace {sanitize(workspace_id)} using {sanitize(role_arn)}: {sanitize(e)}")
             
             try:
                 account_id = role_arn.split(':')[4]
@@ -197,9 +198,9 @@ def set_aws_role(user_id, workspace_id):
             except Exception as read_only_error:
                 logger.warning(
                     "Read-only role validation failed for workspace %s using %s: %s",
-                    workspace_id,
-                    read_only_role_arn,
-                    read_only_error,
+                    sanitize(workspace_id),
+                    sanitize(read_only_role_arn),
+                    sanitize(read_only_error),
                 )
                 return jsonify({
                     "error": "Read-only role assumption failed",
@@ -218,14 +219,14 @@ def set_aws_role(user_id, workspace_id):
 
         logger.info(
             "Set AWS role for workspace %s: %s (read-only: %s) - saved to user_connections",
-            workspace_id,
-            role_arn,
-            read_only_role_arn,
+            sanitize(workspace_id),
+            sanitize(role_arn),
+            sanitize(read_only_role_arn) if read_only_role_arn else read_only_role_arn,
         )
         return jsonify({"ok": True})
         
     except Exception as e:
-        logger.error(f"Failed to set AWS role for workspace {workspace_id}: {e}")
+        logger.error(f"Failed to set AWS role for workspace {sanitize(workspace_id)}: {sanitize(e)}")
         return jsonify({"error": "Internal server error"}), 500
 
 
@@ -355,7 +356,7 @@ def workspace_cleanup(user_id, workspace_id):
                 )
                 conn.commit()
         except Exception as db_exc:
-            logger.warning("Failed to clear workspace discovery fields for %s: %s", workspace_id, db_exc)
+            logger.warning("Failed to clear workspace discovery fields for %s: %s", sanitize(workspace_id), db_exc)
             # Don't fail the request - connection is already removed from user_connections
 
         message = (
@@ -367,7 +368,7 @@ def workspace_cleanup(user_id, workspace_id):
         return jsonify({"success": True, "message": message})
 
     except Exception as e:
-        logger.error(f"Failed workspace cleanup for {workspace_id}: {e}")
+        logger.error(f"Failed workspace cleanup for {sanitize(workspace_id)}: {sanitize(e)}")
         return jsonify({"error": "Internal server error"}), 500
 
 
@@ -494,13 +495,13 @@ def bulk_register_aws_accounts(user_id, workspace_id):
         failed = len(results) - succeeded
         logger.info(
             "Bulk register for workspace %s: %d succeeded, %d failed out of %d",
-            workspace_id, succeeded, failed, len(results),
+            sanitize(workspace_id), succeeded, failed, len(results),
         )
 
         return jsonify({"results": results, "succeeded": succeeded, "failed": failed})
 
     except Exception as e:
-        logger.error("Bulk register failed for workspace %s: %s", workspace_id, e)
+        logger.error("Bulk register failed for workspace %s: %s", sanitize(workspace_id), e)
         return jsonify({"error": "Internal server error"}), 500
 
 
@@ -592,7 +593,7 @@ def reconnect_aws_account(user_id, workspace_id, account_id):
                 region=region,
             )
         except Exception as e:
-            logger.warning("Role assumption failed for reconnect of account %s: %s", account_id, e)
+            logger.warning("Role assumption failed for reconnect of account %s: %s", sanitize(account_id), e)
             return jsonify({
                 "error": "Role assumption failed -- the IAM role may have been deleted or the trust policy changed",
             }), 400
@@ -612,7 +613,7 @@ def reconnect_aws_account(user_id, workspace_id, account_id):
         return jsonify({"success": True, "message": f"Account {account_id} reconnected."})
 
     except Exception as e:
-        logger.error("Failed to reconnect account %s for workspace %s: %s", account_id, workspace_id, e)
+        logger.error("Failed to reconnect account %s for workspace %s: %s", sanitize(account_id), sanitize(workspace_id), e)
         return jsonify({"error": "Internal server error"}), 500
 
 

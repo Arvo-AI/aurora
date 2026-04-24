@@ -18,6 +18,7 @@ from utils.web.webhook_signature import SIGNATURE_HEADER, verify_webhook_signatu
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context
+from utils.log_sanitizer import sanitize
 from utils.secrets.secret_ref_utils import delete_user_secret
 
 logger = logging.getLogger(__name__)
@@ -269,7 +270,7 @@ def deployment_webhook(user_id: str):
         return jsonify({"error": "user_id is required"}), 400
 
     if not _verify_webhook_user(user_id):
-        logger.warning("[CLOUDBEES] Webhook rejected: invalid or unconfigured user_id %s", user_id[:50])
+        logger.warning("[CLOUDBEES] Webhook rejected: invalid or unconfigured user_id %s", sanitize(user_id)[:50])
         return jsonify({"error": "Invalid webhook configuration"}), 403
 
     webhook_secret = _get_webhook_secret(user_id)
@@ -277,10 +278,10 @@ def deployment_webhook(user_id: str):
 
     if webhook_secret:
         if not signature:
-            logger.warning("[CLOUDBEES] Webhook rejected: missing %s for user %s", SIGNATURE_HEADER, user_id[:50])
+            logger.warning("[CLOUDBEES] Webhook rejected: missing %s for user %s", SIGNATURE_HEADER, sanitize(user_id)[:50])
             return jsonify({"error": f"Missing {SIGNATURE_HEADER} header"}), 401
         if not verify_webhook_signature(request.get_data(), signature, webhook_secret):
-            logger.warning("[CLOUDBEES] Webhook rejected: invalid signature for user %s", user_id[:50])
+            logger.warning("[CLOUDBEES] Webhook rejected: invalid signature for user %s", sanitize(user_id)[:50])
             return jsonify({"error": "Invalid webhook signature"}), 401
 
     payload = request.get_json(silent=True) or {}
@@ -292,9 +293,9 @@ def deployment_webhook(user_id: str):
 
     logger.info(
         "[CLOUDBEES] Received deployment webhook for user %s: service=%s result=%s",
-        user_id,
-        payload.get("service") or payload.get("job_name", "unknown"),
-        payload.get("result", "unknown"),
+        sanitize(user_id),
+        sanitize(payload.get("service") or payload.get("job_name", "unknown")),
+        sanitize(payload.get("result", "unknown")),
     )
 
     from routes.jenkins.tasks import process_jenkins_deployment
