@@ -22,9 +22,11 @@ def _validate_bitbucket_url(url: str) -> None:
         raise ValueError(f"URL scheme '{parts.scheme}' is not allowed; only HTTPS is permitted")
     if parts.hostname not in _BITBUCKET_ALLOWED_HOSTS:
         raise ValueError(f"URL host '{parts.hostname}' is not a known Bitbucket domain")
-    # Reject path traversal. Decode each segment to a fixed point so that
-    # doubly-encoded forms like ``%252e%252e`` (which downstream clients may
-    # re-decode into ``..``) are also rejected.
+    # Reject path traversal. Decode each segment to a fixed point (to catch
+    # doubly-encoded forms like ``%252e%252e``) AND re-split on "/" afterwards,
+    # because ``%2f`` inside a single segment decodes to a slash that would
+    # otherwise smuggle a ".." component past a naive whole-segment equality
+    # check (e.g. ``%2e%2e%2fsecret`` is one segment but decodes to ``../secret``).
     for segment in parts.path.split("/"):
         decoded = segment
         for _ in range(3):
@@ -32,7 +34,7 @@ def _validate_bitbucket_url(url: str) -> None:
             decoded = unquote(decoded)
             if decoded == previous:
                 break
-        if decoded == "..":
+        if any(sub == ".." for sub in decoded.split("/")):
             raise ValueError("URL path contains a traversal segment")
 
 
@@ -395,7 +397,13 @@ class BitbucketAPIClient:
         if ".." in spec:
             parts = spec.split("..")
             if len(parts) != 2:
-                raise ValueError("diff spec must contain exactly one '..' separator")
+                # Match the rest of this client's error contract (callers use
+                # forward_if_error on the result rather than try/except).
+                return {
+                    "error": True,
+                    "status": None,
+                    "message": "diff spec must contain exactly one '..' separator",
+                }
             base, head = parts
             encoded_spec = f"{quote(base, safe='')}..{quote(head, safe='')}"
         else:
