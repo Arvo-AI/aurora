@@ -179,19 +179,19 @@ RUN useradd -m -u 1000 -s /bin/bash app && \
     mkdir -p /tmp/.cache/uv && \
     chown -R app:app /app /tmp/.cache
 
-# Copy the project sources directly to /app (not /app/server).
-# --chmod=0555 makes source read+execute-only so the runtime can't self-modify.
-COPY --chown=app:app --chmod=0555 ./chat /app/chat/
-COPY --chown=app:app --chmod=0555 ./config /app/config/
-COPY --chown=app:app --chmod=0555 ./connectors /app/connectors/
-COPY --chown=app:app --chmod=0555 ./routes /app/routes/
-COPY --chown=app:app --chmod=0555 ./services /app/services/
-COPY --chown=app:app --chmod=0555 ./utils /app/utils/
-COPY --chown=app:app --chmod=0444 ./celery_config.py /app/celery_config.py
-COPY --chown=app:app --chmod=0444 ./main_chatbot.py /app/main_chatbot.py
-COPY --chown=app:app --chmod=0444 ./main_compute.py /app/main_compute.py
-COPY --chown=app:app --chmod=0444 ./mcp_server.py /app/mcp_server.py
-COPY --chown=app:app --chmod=0444 ./rbac_model.conf /app/rbac_model.conf
+# Copy project sources with root:root ownership + world-read so the `app`
+# user can read+execute but cannot self-modify the image contents.
+COPY --chmod=0555 ./chat /app/chat/
+COPY --chmod=0555 ./config /app/config/
+COPY --chmod=0555 ./connectors /app/connectors/
+COPY --chmod=0555 ./routes /app/routes/
+COPY --chmod=0555 ./services /app/services/
+COPY --chmod=0555 ./utils /app/utils/
+COPY --chmod=0444 ./celery_config.py /app/celery_config.py
+COPY --chmod=0444 ./main_chatbot.py /app/main_chatbot.py
+COPY --chmod=0444 ./main_compute.py /app/main_compute.py
+COPY --chmod=0444 ./mcp_server.py /app/mcp_server.py
+COPY --chmod=0444 ./rbac_model.conf /app/rbac_model.conf
 
 USER app
 
