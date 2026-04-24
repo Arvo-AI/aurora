@@ -226,7 +226,7 @@ def force_disconnect_gcp(user_id):
     return jsonify({"success": True, "message": "GCP disconnected successfully"}), 200
 
 
-@gcp_auth_bp.route("/api/gcp/service-account/connect", methods=["POST", "OPTIONS"])
+@gcp_auth_bp.route("/api/gcp/service-account/connect", methods=["POST"])
 @require_permission("connectors", "write")
 def connect_service_account(user_id):
     """Connect a GCP service account by uploading its JSON key.

@@ -9,7 +9,6 @@ from flask import Blueprint, jsonify, request
 from routes.netdata.tasks import process_netdata_alert
 from utils.db.connection_pool import db_pool
 from utils.log_sanitizer import sanitize
-from utils.web.cors_utils import create_cors_response
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context
@@ -29,7 +28,7 @@ def _get_stored_netdata_credentials(user_id: str) -> Optional[Dict[str, Any]]:
         return None
 
 
-@netdata_bp.route("/connect", methods=["POST", "OPTIONS"])
+@netdata_bp.route("/connect", methods=["POST"])
 @require_permission("connectors", "write")
 def connect(user_id):
     """Store Netdata API token and space info."""
@@ -68,7 +67,7 @@ def connect(user_id):
     })
 
 
-@netdata_bp.route("/status", methods=["GET", "OPTIONS"])
+@netdata_bp.route("/status", methods=["GET"])
 @require_permission("connectors", "read")
 def status(user_id):
     """Check Netdata connection status."""
@@ -94,7 +93,7 @@ def status(user_id):
     })
 
 
-@netdata_bp.route("/disconnect", methods=["POST", "DELETE", "OPTIONS"])
+@netdata_bp.route("/disconnect", methods=["POST", "DELETE"])
 @require_permission("connectors", "write")
 def disconnect(user_id):
     """Disconnect Netdata by removing stored credentials."""
@@ -128,12 +127,9 @@ def disconnect(user_id):
         return jsonify({"error": "Failed to disconnect Netdata"}), 500
 
 
-@netdata_bp.route("/alerts/webhook/<user_id>", methods=["POST", "OPTIONS"])
+@netdata_bp.route("/alerts/webhook/<user_id>", methods=["POST"])
 def alert_webhook(user_id: str):
     """Receive alert webhook from Netdata."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
     if not user_id:
         logger.warning("[NETDATA] Webhook received without user_id")
         return jsonify({"error": "user_id is required"}), 400
@@ -183,7 +179,7 @@ def alert_webhook(user_id: str):
     return jsonify({"received": True})
 
 
-@netdata_bp.route("/alerts", methods=["GET", "OPTIONS"])
+@netdata_bp.route("/alerts", methods=["GET"])
 @require_permission("connectors", "read")
 def get_alerts(user_id):
     """Fetch stored Netdata alerts for user."""
@@ -264,7 +260,7 @@ def get_alerts(user_id):
         return jsonify({"error": "Failed to fetch alerts"}), 500
 
 
-@netdata_bp.route("/alerts/webhook-url", methods=["GET", "OPTIONS"])
+@netdata_bp.route("/alerts/webhook-url", methods=["GET"])
 @require_permission("connectors", "read")
 def get_webhook_url(user_id):
     """Get the webhook URL and verification token for Netdata configuration."""

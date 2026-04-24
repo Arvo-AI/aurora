@@ -6,7 +6,6 @@ Supports single-account and multi-account (bulk) onboarding.
 import logging
 import os
 from flask import Blueprint, request, jsonify, Response
-from utils.web.cors_utils import create_cors_response
 from utils.auth.rbac_decorators import require_permission
 from utils.log_sanitizer import sanitize
 from utils.workspace.workspace_utils import (
@@ -24,13 +23,13 @@ CLOUDFORMATION_TEMPLATE_URL = "https://aurora-cfn-templates-390403884122.s3.ca-c
 onboarding_bp = Blueprint("aws_onboarding_bp", __name__)
 
 
-@onboarding_bp.route('/aws/env/check', methods=['GET', 'OPTIONS'])
+@onboarding_bp.route('/aws/env/check', methods=['GET'])
 @require_permission("connectors", "read")
 def check_aws_environment(_user_id):
     """
     Check if Aurora has AWS credentials available via any method
     (env vars, IRSA web identity, instance profile, etc.).
-    
+
     Returns:
         {
             "configured": bool,
@@ -39,9 +38,6 @@ def check_aws_environment(_user_id):
             "accountId": str | null  # Only if credentials are configured and valid
         }
     """
-    if request.method == 'OPTIONS':
-        return create_cors_response()
-    
     try:
         access_key_id = os.getenv('AWS_ACCESS_KEY_ID')
         secret_access_key = os.getenv('AWS_SECRET_ACCESS_KEY')
@@ -69,7 +65,7 @@ def check_aws_environment(_user_id):
         return jsonify({"error": "Internal server error"}), 500
 
 
-@onboarding_bp.route('/workspaces/<workspace_id>/aws/links', methods=['GET', 'OPTIONS'])
+@onboarding_bp.route('/workspaces/<workspace_id>/aws/links', methods=['GET'])
 @require_permission("connectors", "read")
 def get_aws_onboarding_links(user_id, workspace_id):
     """
@@ -77,9 +73,6 @@ def get_aws_onboarding_links(user_id, workspace_id):
     
     Returns basic information needed for manual role setup.
     """
-    if request.method == 'OPTIONS':
-        return create_cors_response()
-    
     try:
         workspace = get_workspace_by_id(workspace_id)
         if not workspace:
@@ -113,21 +106,18 @@ def get_aws_onboarding_links(user_id, workspace_id):
         return jsonify({"error": "Internal server error"}), 500
 
 
-@onboarding_bp.route('/workspaces/<workspace_id>/aws/role', methods=['POST', 'OPTIONS'])
+@onboarding_bp.route('/workspaces/<workspace_id>/aws/role', methods=['POST'])
 @require_permission("connectors", "write")
 def set_aws_role(user_id, workspace_id):
     """
     Manually set the AWS role ARN for a workspace.
-    
+
     Expected payload:
     {
         "roleArn": "arn:aws:iam::123456789012:role/AuroraRole",
         "readOnlyRoleArn": "arn:aws:iam::123456789012:role/AuroraReadOnly"  // optional
     }
     """
-    if request.method == 'OPTIONS':
-        return create_cors_response()
-    
     try:
         workspace = get_workspace_by_id(workspace_id)
         if not workspace:
@@ -230,15 +220,12 @@ def set_aws_role(user_id, workspace_id):
         return jsonify({"error": "Internal server error"}), 500
 
 
-@onboarding_bp.route('/workspaces/<workspace_id>/aws/status', methods=['GET', 'OPTIONS'])
+@onboarding_bp.route('/workspaces/<workspace_id>/aws/status', methods=['GET'])
 @require_permission("connectors", "read")
 def get_aws_onboarding_status(user_id, workspace_id):
     """
     Get current AWS onboarding status for a workspace.
     """
-    if request.method == 'OPTIONS':
-        return create_cors_response()
-    
     try:
         workspace = get_workspace_by_id(workspace_id)
         if not workspace:
@@ -268,13 +255,10 @@ def get_aws_onboarding_status(user_id, workspace_id):
 
 
 
-@onboarding_bp.route('/users/<user_id>/workspaces', methods=['GET', 'OPTIONS'])
+@onboarding_bp.route('/users/<user_id>/workspaces', methods=['GET'])
 @require_permission("connectors", "read")
 def list_user_workspaces(authenticated_user_id, user_id):
     """Get user workspaces."""
-    if request.method == 'OPTIONS':
-        return create_cors_response()
-    
     try:
         if authenticated_user_id != user_id:
             return jsonify({"error": "Access denied"}), 403
@@ -306,16 +290,13 @@ def create_user_workspace(authenticated_user_id, user_id):
         return jsonify({"error": "Internal server error"}), 500
 
 
-
-@onboarding_bp.route('/workspaces/<workspace_id>/aws/cleanup', methods=['POST', 'OPTIONS'])
+@onboarding_bp.route('/workspaces/<workspace_id>/aws/cleanup', methods=['POST'])
 @require_permission("connectors", "write")
 def workspace_cleanup(user_id, workspace_id):
     """Disconnect AWS connection by removing it from user_connections (single source of truth).
-    
+
     Users must manually remove IAM roles and other AWS resources in their AWS console.
     """
-    if request.method == 'OPTIONS':
-        return create_cors_response()
 
     try:
         workspace = get_workspace_by_id(workspace_id)
@@ -377,12 +358,10 @@ def workspace_cleanup(user_id, workspace_id):
 # ---------------------------------------------------------------------------
 
 
-@onboarding_bp.route('/workspaces/<workspace_id>/aws/accounts', methods=['GET', 'OPTIONS'])
+@onboarding_bp.route('/workspaces/<workspace_id>/aws/accounts', methods=['GET'])
 @require_permission("connectors", "read")
 def list_aws_accounts(user_id, workspace_id):
     """Return all active AWS accounts connected to this workspace's owner."""
-    if request.method == 'OPTIONS':
-        return create_cors_response()
 
     try:
         workspace = get_workspace_by_id(workspace_id)
@@ -398,7 +377,7 @@ def list_aws_accounts(user_id, workspace_id):
         return jsonify({"error": "Internal server error"}), 500
 
 
-@onboarding_bp.route('/workspaces/<workspace_id>/aws/accounts/bulk', methods=['POST', 'OPTIONS'])
+@onboarding_bp.route('/workspaces/<workspace_id>/aws/accounts/bulk', methods=['POST'])
 @require_permission("connectors", "write")
 def bulk_register_aws_accounts(user_id, workspace_id):
     """Register multiple AWS accounts at once.
@@ -416,9 +395,6 @@ def bulk_register_aws_accounts(user_id, workspace_id):
     Returns per-account success/failure so partially-successful bulk imports
     are surfaced clearly to the caller.
     """
-    if request.method == 'OPTIONS':
-        return create_cors_response()
-
     try:
         workspace = get_workspace_by_id(workspace_id)
         if not workspace or workspace['user_id'] != user_id:
@@ -505,13 +481,10 @@ def bulk_register_aws_accounts(user_id, workspace_id):
         return jsonify({"error": "Internal server error"}), 500
 
 
-@onboarding_bp.route('/workspaces/<workspace_id>/aws/accounts/<account_id>', methods=['DELETE', 'OPTIONS'])
+@onboarding_bp.route('/workspaces/<workspace_id>/aws/accounts/<account_id>', methods=['DELETE'])
 @require_permission("connectors", "write")
 def delete_aws_account(user_id, workspace_id, account_id):
     """Disconnect a single AWS account from the workspace."""
-    if request.method == 'OPTIONS':
-        return create_cors_response()
-
     try:
         workspace = get_workspace_by_id(workspace_id)
         if not workspace or workspace['user_id'] != user_id:
@@ -529,7 +502,7 @@ def delete_aws_account(user_id, workspace_id, account_id):
         return jsonify({"error": "Internal server error"}), 500
 
 
-@onboarding_bp.route('/workspaces/<workspace_id>/aws/accounts/inactive', methods=['GET', 'OPTIONS'])
+@onboarding_bp.route('/workspaces/<workspace_id>/aws/accounts/inactive', methods=['GET'])
 @require_permission("connectors", "read")
 def list_inactive_aws_accounts(user_id, workspace_id):
     """Return recently disconnected AWS accounts that can be reconnected.
@@ -537,8 +510,6 @@ def list_inactive_aws_accounts(user_id, workspace_id):
     The IAM role likely still exists in these accounts, so the user can
     reconnect without redeploying the CloudFormation template.
     """
-    if request.method == 'OPTIONS':
-        return create_cors_response()
 
     try:
         workspace = get_workspace_by_id(workspace_id)
@@ -554,7 +525,7 @@ def list_inactive_aws_accounts(user_id, workspace_id):
         return jsonify({"error": "Internal server error"}), 500
 
 
-@onboarding_bp.route('/workspaces/<workspace_id>/aws/accounts/<account_id>/reconnect', methods=['POST', 'OPTIONS'])
+@onboarding_bp.route('/workspaces/<workspace_id>/aws/accounts/<account_id>/reconnect', methods=['POST'])
 @require_permission("connectors", "write")
 def reconnect_aws_account(user_id, workspace_id, account_id):
     """Reconnect a previously disconnected AWS account.
@@ -562,9 +533,6 @@ def reconnect_aws_account(user_id, workspace_id, account_id):
     Validates the role still works via STS AssumeRole, then re-activates
     the connection. No CloudFormation redeployment needed.
     """
-    if request.method == 'OPTIONS':
-        return create_cors_response()
-
     try:
         workspace = get_workspace_by_id(workspace_id)
         if not workspace or workspace['user_id'] != user_id:
@@ -622,7 +590,7 @@ def reconnect_aws_account(user_id, workspace_id, account_id):
 # ---------------------------------------------------------------------------
 
 
-@onboarding_bp.route('/workspaces/<workspace_id>/aws/cfn-template', methods=['GET', 'OPTIONS'])
+@onboarding_bp.route('/workspaces/<workspace_id>/aws/cfn-template', methods=['GET'])
 @require_permission("connectors", "read")
 def get_cfn_template(user_id, workspace_id):
     """Return the CloudFormation template with ExternalId and Aurora account ID pre-filled.
@@ -630,8 +598,6 @@ def get_cfn_template(user_id, workspace_id):
     Query params:
         format: 'raw' returns plain YAML (default), 'json' returns JSON wrapper
     """
-    if request.method == 'OPTIONS':
-        return create_cors_response()
 
     try:
         workspace = get_workspace_by_id(workspace_id)
@@ -720,7 +686,7 @@ def get_cfn_template(user_id, workspace_id):
         return jsonify({"error": "Internal server error"}), 500
 
 
-@onboarding_bp.route('/workspaces/<workspace_id>/aws/cfn-quickcreate', methods=['GET', 'OPTIONS'])
+@onboarding_bp.route('/workspaces/<workspace_id>/aws/cfn-quickcreate', methods=['GET'])
 @require_permission("connectors", "read")
 def get_cfn_quickcreate_link(user_id, workspace_id):
     """Return a CloudFormation Quick-Create URL that opens the AWS Console
@@ -737,8 +703,6 @@ def get_cfn_quickcreate_link(user_id, workspace_id):
         templateUrl: override the S3 URL for the template (optional,
             for self-hosted deployments that upload the template to S3)
     """
-    if request.method == 'OPTIONS':
-        return create_cors_response()
 
     try:
         workspace = get_workspace_by_id(workspace_id)

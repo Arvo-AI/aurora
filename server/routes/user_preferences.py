@@ -8,7 +8,6 @@ from utils.auth.stateless_auth import (
     set_rls_context,
 )
 from utils.log_sanitizer import sanitize
-from utils.web.cors_utils import create_cors_response
 from utils.auth.rbac_decorators import require_permission
 import json
 
@@ -16,11 +15,6 @@ import json
 logger = logging.getLogger(__name__)
 
 user_preferences_bp = Blueprint('user_preferences', __name__)
-
-@user_preferences_bp.route('/api/user-preferences', methods=['OPTIONS'])
-def handle_user_preferences_options():
-    return create_cors_response()
-
 
 @user_preferences_bp.route('/api/user-preferences', methods=['GET'])
 @require_permission("user_preferences", "read")
@@ -52,11 +46,6 @@ def set_user_preferences(user_id):
     logger.info(f"Stored preference {key} for user {user_id}")
     return jsonify({"status": "success"})
 
-@user_preferences_bp.route('/api/clear-session', methods=['OPTIONS'])
-def clear_session_options():
-    return create_cors_response()
-
-
 @user_preferences_bp.route('/api/clear-session', methods=['POST'])
 @require_permission("user_preferences", "write")
 def clear_session(user_id):
@@ -86,11 +75,6 @@ def clear_session(user_id):
         if 'conn' in locals() and conn:
             conn.close()
 
-@user_preferences_bp.route('/api/credentials/<provider>', methods=['OPTIONS'])
-def get_credentials_options(provider):
-    return create_cors_response()
-
-
 @user_preferences_bp.route('/api/credentials/<provider>', methods=['GET'])
 @require_permission("user_preferences", "read")
 def get_credentials(user_id, provider):
@@ -102,11 +86,6 @@ def get_credentials(user_id, provider):
     else:
         logger.warning(f"No {sanitize(provider)} credentials found for user {sanitize(user_id)}")
         return jsonify({"error": f"No {provider} credentials found"}), 404
-
-@user_preferences_bp.route('/api/user-preferences/batch', methods=['OPTIONS'])
-def handle_batch_preferences_options():
-    return create_cors_response()
-
 
 @user_preferences_bp.route('/api/user-preferences/batch', methods=['GET'])
 @require_permission("user_preferences", "read")
@@ -179,11 +158,6 @@ def set_batch_preferences(user_id):
     except Exception as e:
         logger.error(f"Error storing batch preferences for user {user_id}: {e}")
         return jsonify({"error": "Failed to store preferences"}), 500
-
-@user_preferences_bp.route('/api/terraform/clear-state', methods=['OPTIONS'])
-def clear_terraform_state_options():
-    return create_cors_response()
-
 
 @user_preferences_bp.route('/api/terraform/clear-state', methods=['POST'])
 @require_permission("incidents", "write")

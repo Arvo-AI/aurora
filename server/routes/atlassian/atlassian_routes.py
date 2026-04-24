@@ -117,7 +117,7 @@ def _validate_jsm_ops(access_token: str, cloud_id: str) -> Optional[Dict[str, An
 # POST /atlassian/connect
 # ------------------------------------------------------------------
 
-@atlassian_bp.route("/connect", methods=["POST", "OPTIONS"])
+@atlassian_bp.route("/connect", methods=["POST"])
 @require_permission("connectors", "write")
 def connect(user_id):
     """Unified connect for Atlassian products (Confluence/Jira/both)."""
@@ -288,7 +288,7 @@ def connect(user_id):
 # GET /atlassian/status
 # ------------------------------------------------------------------
 
-@atlassian_bp.route("/status", methods=["GET", "OPTIONS"])
+@atlassian_bp.route("/status", methods=["GET"])
 @require_permission("connectors", "read")
 def status(user_id):
     """Return connection status for all Atlassian products."""
@@ -363,7 +363,7 @@ def status(user_id):
 # POST /atlassian/disconnect
 # ------------------------------------------------------------------
 
-@atlassian_bp.route("/disconnect", methods=["POST", "OPTIONS"])
+@atlassian_bp.route("/disconnect", methods=["POST"])
 @require_permission("connectors", "write")
 def disconnect(user_id):
     """Disconnect one or all Atlassian products."""

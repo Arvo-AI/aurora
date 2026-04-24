@@ -1,19 +1,15 @@
 import logging
 from datetime import datetime, timezone
 from flask import Blueprint, request, jsonify, session, Response
-import flask
-from utils.web.cors_utils import create_cors_response
 from utils.auth.rbac_decorators import require_auth_only
 from utils.auth.token_management import get_token_data
 
 debug_util_bp = Blueprint("debug_util_bp", __name__)
 
 
-@debug_util_bp.route("/debug/user-info", methods=["GET", "OPTIONS"])
+@debug_util_bp.route("/debug/user-info", methods=["GET"])
 @require_auth_only
 def debug_user_info(user_id):
-    if request.method == "OPTIONS":
-        return create_cors_response()
     try:
         debug_info = {
             "time": datetime.now(timezone.utc).isoformat(),
@@ -30,10 +26,8 @@ def debug_user_info(user_id):
         return jsonify({"error": "Failed to retrieve debug info"}), 500
 
 
-@debug_util_bp.route("/test-endpoint", methods=["GET", "OPTIONS"])
+@debug_util_bp.route("/test-endpoint", methods=["GET"])
 def test_endpoint():
-    if flask.request.method == 'OPTIONS':
-        return create_cors_response()
     return jsonify({
         "message": "Test endpoint working",
         "method": request.method,

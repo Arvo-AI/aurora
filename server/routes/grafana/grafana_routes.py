@@ -7,7 +7,6 @@ from flask import Blueprint, jsonify, request
 from routes.grafana.tasks import process_grafana_alert
 from utils.db.connection_pool import db_pool
 from utils.log_sanitizer import sanitize
-from utils.web.cors_utils import create_cors_response
 from utils.auth.token_management import store_tokens_in_db
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import get_org_id_from_request, validate_user_exists, set_rls_context
@@ -58,7 +57,7 @@ def _set_grafana_active(user_id: str, active: bool) -> bool:
         return False
 
 
-@grafana_bp.route("/status", methods=["GET", "OPTIONS"])
+@grafana_bp.route("/status", methods=["GET"])
 @require_permission("connectors", "read")
 def status(user_id):
     row_exists, is_active = _has_grafana_row(user_id)
@@ -69,7 +68,7 @@ def status(user_id):
     return jsonify({"connected": True})
 
 
-@grafana_bp.route("/disconnect", methods=["POST", "DELETE", "OPTIONS"])
+@grafana_bp.route("/disconnect", methods=["POST", "DELETE"])
 @require_permission("connectors", "write")
 def disconnect(user_id):
     """Disconnect Grafana by deactivating the stored connection."""
@@ -91,16 +90,13 @@ def disconnect(user_id):
         return jsonify({"error": "Failed to disconnect Grafana"}), 500
 
 
-@grafana_bp.route("/alerts/webhook/<user_id>", methods=["POST", "OPTIONS"])
+@grafana_bp.route("/alerts/webhook/<user_id>", methods=["POST"])
 def alert_webhook(user_id: str):
     """Receive alert webhook from Grafana for a specific user.
 
     Auto-creates or re-activates a connection record when needed.
     Always stores the alert; skips RCA for connection webhooks.
     """
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
     if not user_id:
         logger.warning("[GRAFANA] Webhook received without user_id")
         return jsonify({"error": "user_id is required"}), 400
@@ -141,7 +137,7 @@ def alert_webhook(user_id: str):
     return jsonify({"received": True})
 
 
-@grafana_bp.route("/alerts", methods=["GET", "OPTIONS"])
+@grafana_bp.route("/alerts", methods=["GET"])
 @require_permission("connectors", "read")
 def get_alerts(user_id):
     """Fetch Grafana alerts for the authenticated user."""
@@ -221,7 +217,7 @@ def get_alerts(user_id):
         return jsonify({"error": "Failed to fetch alerts"}), 500
 
 
-@grafana_bp.route("/alerts/webhook-url", methods=["GET", "OPTIONS"])
+@grafana_bp.route("/alerts/webhook-url", methods=["GET"])
 @require_permission("connectors", "read")
 def get_webhook_url(user_id):
     """Get the webhook URL that should be configured in Grafana."""

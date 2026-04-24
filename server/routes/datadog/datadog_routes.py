@@ -9,7 +9,6 @@ from flask import Blueprint, jsonify, request
 from routes.datadog.tasks import process_datadog_event
 from utils.db.connection_pool import db_pool
 from utils.log_sanitizer import sanitize, hash_for_log
-from utils.web.cors_utils import create_cors_response
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context
@@ -281,7 +280,7 @@ def _build_client_from_creds(creds: Dict[str, Any]) -> Optional[DatadogClient]:
     return DatadogClient(api_key=api_key, app_key=app_key, site=site)
 
 
-@datadog_bp.route("/connect", methods=["POST", "OPTIONS"])
+@datadog_bp.route("/connect", methods=["POST"])
 @require_permission("connectors", "write")
 def connect(user_id):
     try:
@@ -349,7 +348,7 @@ def connect(user_id):
     return jsonify(response)
 
 
-@datadog_bp.route("/status", methods=["GET", "OPTIONS"])
+@datadog_bp.route("/status", methods=["GET"])
 @require_permission("connectors", "read")
 def status(user_id):
     creds = _get_stored_datadog_credentials(user_id)
@@ -381,7 +380,7 @@ def status(user_id):
     })
 
 
-@datadog_bp.route("/disconnect", methods=["DELETE", "POST", "OPTIONS"])
+@datadog_bp.route("/disconnect", methods=["DELETE", "POST"])
 @require_permission("connectors", "write")
 def disconnect(user_id):
     try:
@@ -411,7 +410,7 @@ def disconnect(user_id):
         return jsonify({"error": "Failed to disconnect Datadog"}), 500
 
 
-@datadog_bp.route("/logs/search", methods=["POST", "OPTIONS"])
+@datadog_bp.route("/logs/search", methods=["POST"])
 @require_permission("connectors", "read")
 def search_logs(user_id):
     creds = _get_stored_datadog_credentials(user_id)
@@ -441,7 +440,7 @@ def search_logs(user_id):
         return jsonify({"error": "Failed to search Datadog logs"}), 502
 
 
-@datadog_bp.route("/metrics/query", methods=["POST", "OPTIONS"])
+@datadog_bp.route("/metrics/query", methods=["POST"])
 @require_permission("connectors", "read")
 def query_metrics(user_id):
     creds = _get_stored_datadog_credentials(user_id)
@@ -474,7 +473,7 @@ def query_metrics(user_id):
         return jsonify({"error": "Failed to query Datadog metrics"}), 502
 
 
-@datadog_bp.route("/events", methods=["GET", "OPTIONS"])
+@datadog_bp.route("/events", methods=["GET"])
 @require_permission("connectors", "read")
 def list_events(user_id):
     creds = _get_stored_datadog_credentials(user_id)
@@ -509,7 +508,7 @@ def list_events(user_id):
         return jsonify({"error": "Failed to list Datadog events"}), 502
 
 
-@datadog_bp.route("/monitors", methods=["GET", "OPTIONS"])
+@datadog_bp.route("/monitors", methods=["GET"])
 @require_permission("connectors", "read")
 def list_monitors(user_id):
     creds = _get_stored_datadog_credentials(user_id)
@@ -538,7 +537,7 @@ def list_monitors(user_id):
         return jsonify({"error": "Failed to list Datadog monitors"}), 502
 
 
-@datadog_bp.route("/events/ingested", methods=["GET", "OPTIONS"])
+@datadog_bp.route("/events/ingested", methods=["GET"])
 @require_permission("connectors", "read")
 def list_ingested_events(user_id):
     org_id = get_org_id_from_request()
@@ -607,11 +606,8 @@ def list_ingested_events(user_id):
         return jsonify({"error": "Failed to load Datadog webhook events"}), 500
 
 
-@datadog_bp.route("/webhook/<user_id>", methods=["POST", "OPTIONS"])
+@datadog_bp.route("/webhook/<user_id>", methods=["POST"])
 def webhook(user_id: str):
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
     if not user_id:
         logger.warning("[DATADOG] Webhook received without user_id")
         return jsonify({"error": "user_id is required"}), 400
@@ -636,7 +632,7 @@ def webhook(user_id: str):
     return jsonify({"received": True})
 
 
-@datadog_bp.route("/webhook-url", methods=["GET", "OPTIONS"])
+@datadog_bp.route("/webhook-url", methods=["GET"])
 @require_permission("connectors", "read")
 def webhook_url(user_id):
     # Use ngrok URL for development if available, otherwise use backend URL

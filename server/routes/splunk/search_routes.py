@@ -8,7 +8,6 @@ from urllib.parse import quote
 import requests
 from flask import Blueprint, Response, jsonify, request, stream_with_context
 
-from utils.web.cors_utils import create_cors_response
 from utils.auth.token_management import get_token_data
 from utils.auth.rbac_decorators import require_permission
 from utils.log_sanitizer import sanitize
@@ -62,7 +61,7 @@ def _splunk_headers(api_token: str) -> Dict[str, str]:
     }
 
 
-@search_bp.route("/search", methods=["POST", "OPTIONS"])
+@search_bp.route("/search", methods=["POST"])
 @require_permission("connectors", "read")
 def search_sync(user_id):
     """Execute a synchronous SPL search (oneshot mode)."""
@@ -150,7 +149,7 @@ def search_sync(user_id):
         return jsonify({"error": "Search request failed"}), 502
 
 
-@search_bp.route("/search/jobs", methods=["POST", "OPTIONS"])
+@search_bp.route("/search/jobs", methods=["POST"])
 @require_permission("connectors", "read")
 def create_search_job(user_id):
     """Create an asynchronous search job."""
@@ -216,7 +215,7 @@ def create_search_job(user_id):
         return jsonify({"error": "Failed to create search job"}), 502
 
 
-@search_bp.route("/search/jobs/<sid>", methods=["GET", "OPTIONS"])
+@search_bp.route("/search/jobs/<sid>", methods=["GET"])
 @require_permission("connectors", "read")
 def get_job_status(user_id, sid: str):
     """Get the status of a search job."""
@@ -269,7 +268,7 @@ def get_job_status(user_id, sid: str):
         return jsonify({"error": "Failed to get job status"}), 502
 
 
-@search_bp.route("/search/jobs/<sid>/results", methods=["GET", "OPTIONS"])
+@search_bp.route("/search/jobs/<sid>/results", methods=["GET"])
 @require_permission("connectors", "read")
 def get_job_results(user_id, sid: str):
     """Get the results of a completed search job."""
@@ -323,7 +322,7 @@ def get_job_results(user_id, sid: str):
         return jsonify({"error": "Failed to get search results"}), 502
 
 
-@search_bp.route("/search/jobs/<sid>", methods=["DELETE", "OPTIONS"])
+@search_bp.route("/search/jobs/<sid>", methods=["DELETE"])
 @require_permission("connectors", "write")
 def cancel_job(user_id, sid: str):
     """Cancel a running search job."""
