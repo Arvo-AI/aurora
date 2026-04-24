@@ -24,6 +24,7 @@ const nextConfig: NextConfig = {
     ignoreDuringBuilds: true,
   },
   cacheMaxMemorySize: 0,
+  poweredByHeader: false,
   webpack: (config, { isServer, dev }) => {
     // Aggressive tree shaking configuration
     if (!isServer && !dev) {

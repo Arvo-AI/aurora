@@ -108,6 +108,13 @@ export default auth((req) => {
     "form-action 'self'",
   ].join('; '))
 
+  // Strip framework fingerprint headers so ZAP/StackHawk can't fingerprint Next.js
+  response.headers.delete('x-powered-by')
+  response.headers.delete('x-nextjs-cache')
+  response.headers.delete('x-nextjs-prerender')
+  response.headers.delete('x-nextjs-stale-time')
+  response.headers.delete('server-timing')
+
   return response
 })
 
