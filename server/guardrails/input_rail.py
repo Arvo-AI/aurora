@@ -1,24 +1,34 @@
 """NeMo Guardrails input rail for prompt injection detection.
 
-Uses LLMRails.generate_async() as a pre-flight check on user messages
-*before* the LangGraph agent runs. This preserves streaming -- NeMo only
-gates the input; the existing agent handles generation untouched.
+Runs as a pre-flight check on the user message *before* the LangGraph agent
+starts planning, so compromised inputs never reach tool selection. The judge's
+streaming path is untouched: NeMo only evaluates the input.
 
-Model and credentials are resolved from the same config the LLM safety
-judge uses (GUARDRAILS_LLM_MODEL -> MAIN_MODEL fallback, with provider
-auto-detection from LLM_PROVIDER_MODE).
+The underlying LLM is the same one the command-safety judge uses
+(``GUARDRAILS_LLM_MODEL`` -> ``MAIN_MODEL`` fallback). It is built through the
+central ``create_chat_model()`` factory, so provider routing, API keys, and any
+future providers are inherited automatically.
+
+Failure policy mirrors the command-safety judge: any unexpected error blocks
+the request. Callers can detect this via ``InputRailResult.blocked`` and
+``reason``.
 """
 
+from __future__ import annotations
+
 import logging
-import os
 import time
 from dataclasses import dataclass
+
+from langchain_core.language_models import BaseChatModel
 
 logger = logging.getLogger(__name__)
 
 _rails_instance = None
 
 _REFUSAL_PREFIXES = ("i'm sorry", "i am sorry", "i cannot", "i can't")
+
+_FAIL_CLOSED_REASON = "input rail unavailable"
 
 
 @dataclass(frozen=True)
@@ -37,55 +47,42 @@ def _extract_response_text(result) -> str:
     return ""
 
 
-def _resolve_model_and_credentials() -> tuple:
-    """Resolve (model_name, base_url, api_key) using the same logic as the LLM judge."""
+def _build_llm() -> BaseChatModel:
+    """Build the chat model for the input rail using the shared factory."""
+    from chat.backend.agent.llm import ModelConfig
+    from chat.backend.agent.providers import create_chat_model
     from utils.security.config import config as gc
 
-    model_name = gc.llm_model
-    if not model_name:
-        from chat.backend.agent.llm import ModelConfig
-        model_name = ModelConfig.MAIN_MODEL
-
-    if gc.llm_base_url:
-        return model_name, gc.llm_base_url, gc.llm_api_key or ""
-
-    provider = os.getenv("LLM_PROVIDER_MODE", "").lower()
-    if provider == "openrouter":
-        return model_name, "https://openrouter.ai/api/v1", os.getenv("OPENROUTER_API_KEY", "")
-    if provider == "google":
-        return model_name, "https://generativelanguage.googleapis.com/v1beta/openai", os.getenv("GOOGLE_AI_API_KEY", "")
-
-    return model_name, "", os.getenv("OPENAI_API_KEY", "")
+    return create_chat_model(
+        gc.llm_model or ModelConfig.MAIN_MODEL,
+        temperature=0.0,
+        streaming=False,
+    )
 
 
 def _get_rails():
-    """Lazily create and cache the NeMo LLMRails instance."""
+    """Lazily build and cache the NeMo LLMRails instance."""
     global _rails_instance
     if _rails_instance is not None:
         return _rails_instance
 
-    model_name, base_url, api_key = _resolve_model_and_credentials()
-    if not api_key:
-        raise RuntimeError("No API key available for NeMo input rail LLM")
+    import os
 
     from nemoguardrails import LLMRails, RailsConfig
-    from nemoguardrails.rails.llm.config import Model
 
     config_path = os.path.join(os.path.dirname(__file__), "config")
-    config = RailsConfig.from_path(config_path)
+    rails_config = RailsConfig.from_path(config_path)
 
-    params = {"openai_api_key": api_key}
-    if base_url:
-        params["openai_api_base"] = base_url
-
-    config.models = [Model(type="main", engine="openai", model=model_name, parameters=params)]
-
-    _rails_instance = LLMRails(config)
+    _rails_instance = LLMRails(config=rails_config, llm=_build_llm())
     return _rails_instance
 
 
 async def check_input(user_message: str) -> InputRailResult:
-    """Run NeMo input rail on a user message. Returns blocked=True if unsafe."""
+    """Run the NeMo input rail. Returns ``blocked=True`` on unsafe input.
+
+    Fails closed: if the rail itself errors (missing provider creds, model
+    unavailable, etc.) the request is blocked with a diagnostic reason.
+    """
     from utils.security.config import config
 
     if not config.enabled:
@@ -98,22 +95,20 @@ async def check_input(user_message: str) -> InputRailResult:
             messages=[{"role": "user", "content": user_message}],
             options={"rails": ["input"]},
         )
-
-        latency_ms = (time.perf_counter() - t0) * 1000
-        response_text = _extract_response_text(result)
-        lowered = response_text.lower().lstrip()
-        blocked = lowered.startswith(_REFUSAL_PREFIXES)
-
-        if blocked:
-            logger.warning(
-                "[Guardrails:InputRail] BLOCKED user_message=%s latency_ms=%.0f",
-                user_message[:80], latency_ms,
-            )
-        else:
-            logger.debug("[Guardrails:InputRail] PASSED latency_ms=%.0f", latency_ms)
-
-        return InputRailResult(blocked=blocked, reason=response_text if blocked else "")
-
     except Exception:
-        logger.exception("[Guardrails:InputRail] Error running input rail, failing open")
-        return InputRailResult(blocked=False)
+        logger.exception("[Guardrails:InputRail] Error running input rail; failing closed")
+        return InputRailResult(blocked=True, reason=_FAIL_CLOSED_REASON)
+
+    latency_ms = (time.perf_counter() - t0) * 1000
+    response_text = _extract_response_text(result)
+    blocked = response_text.lower().lstrip().startswith(_REFUSAL_PREFIXES)
+
+    if blocked:
+        logger.warning(
+            "[Guardrails:InputRail] BLOCKED user_message=%s latency_ms=%.0f",
+            user_message[:80], latency_ms,
+        )
+    else:
+        logger.debug("[Guardrails:InputRail] PASSED latency_ms=%.0f", latency_ms)
+
+    return InputRailResult(blocked=blocked, reason=response_text if blocked else "")
