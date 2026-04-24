@@ -22,11 +22,17 @@ def _validate_bitbucket_url(url: str) -> None:
         raise ValueError(f"URL scheme '{parts.scheme}' is not allowed; only HTTPS is permitted")
     if parts.hostname not in _BITBUCKET_ALLOWED_HOSTS:
         raise ValueError(f"URL host '{parts.hostname}' is not a known Bitbucket domain")
-    # Reject path traversal: inspect each decoded path segment so that `..`
-    # embedded inside a legitimate segment (e.g. a diff spec like `abc..def`)
-    # is allowed, while a standalone `..` segment is rejected.
+    # Reject path traversal. Decode each segment to a fixed point so that
+    # doubly-encoded forms like ``%252e%252e`` (which downstream clients may
+    # re-decode into ``..``) are also rejected.
     for segment in parts.path.split("/"):
-        if unquote(segment) == "..":
+        decoded = segment
+        for _ in range(3):
+            previous = decoded
+            decoded = unquote(decoded)
+            if decoded == previous:
+                break
+        if decoded == "..":
             raise ValueError("URL path contains a traversal segment")
 
 
@@ -387,7 +393,10 @@ class BitbucketAPIClient:
         ``..`` separator is preserved as a single path segment.
         """
         if ".." in spec:
-            base, _, head = spec.partition("..")
+            parts = spec.split("..")
+            if len(parts) != 2:
+                raise ValueError("diff spec must contain exactly one '..' separator")
+            base, head = parts
             encoded_spec = f"{quote(base, safe='')}..{quote(head, safe='')}"
         else:
             encoded_spec = quote(spec, safe='')
