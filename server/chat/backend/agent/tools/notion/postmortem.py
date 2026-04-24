@@ -21,11 +21,14 @@ logger = logging.getLogger(__name__)
 
 
 _ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s.]+\.[^@\s]+$")
 
 
 def _looks_like_email(value: Optional[str]) -> bool:
-    return bool(value and _EMAIL_RE.match(value.strip()))
+    if not value:
+        return False
+    stripped = value.strip()
+    return len(stripped) <= 320 and bool(_EMAIL_RE.match(stripped))
 
 
 def _looks_like_iso_date(value: Optional[str]) -> bool:

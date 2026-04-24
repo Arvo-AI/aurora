@@ -14,11 +14,11 @@ from connectors.spinnaker_connector.client import (
     invalidate_spinnaker_client,
 )
 from utils.db.connection_pool import db_pool
-from utils.web.cors_utils import create_cors_response
 from utils.web.webhook_signature import SIGNATURE_HEADER, verify_webhook_signature
 from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.auth.rbac_decorators import require_permission
+from utils.log_sanitizer import sanitize
 from utils.secrets.secret_ref_utils import delete_user_secret
 
 logger = logging.getLogger(__name__)
@@ -46,7 +46,7 @@ def _get_cached_client(user_id: str) -> Optional["SpinnakerClient"]:
 # ------------------------------------------------------------------
 
 
-@spinnaker_bp.route("/connect", methods=["POST", "OPTIONS"])
+@spinnaker_bp.route("/connect", methods=["POST"])
 @require_permission("connectors", "write")
 def connect(user_id):
     """Validate and store Spinnaker credentials (token or x509)."""
@@ -135,7 +135,7 @@ def connect(user_id):
     })
 
 
-@spinnaker_bp.route("/status", methods=["GET", "OPTIONS"])
+@spinnaker_bp.route("/status", methods=["GET"])
 @require_permission("connectors", "read")
 def status(user_id):
     """Check whether Spinnaker is connected and return summary data."""
@@ -165,7 +165,7 @@ def status(user_id):
     })
 
 
-@spinnaker_bp.route("/disconnect", methods=["POST", "DELETE", "OPTIONS"])
+@spinnaker_bp.route("/disconnect", methods=["POST", "DELETE"])
 @require_permission("connectors", "write")
 def disconnect(user_id):
     """Disconnect Spinnaker by removing stored credentials."""
@@ -188,7 +188,7 @@ def disconnect(user_id):
 # ------------------------------------------------------------------
 
 
-@spinnaker_bp.route("/applications", methods=["GET", "OPTIONS"])
+@spinnaker_bp.route("/applications", methods=["GET"])
 @require_permission("connectors", "read")
 def list_applications(user_id):
     """List Spinnaker applications."""
@@ -204,7 +204,7 @@ def list_applications(user_id):
         return jsonify({"error": "Spinnaker API request failed"}), 502
 
 
-@spinnaker_bp.route("/applications/<app>/pipelines", methods=["GET", "OPTIONS"])
+@spinnaker_bp.route("/applications/<app>/pipelines", methods=["GET"])
 @require_permission("connectors", "read")
 def list_pipelines(user_id, app: str):
     """List pipeline executions for an application."""
@@ -223,7 +223,7 @@ def list_pipelines(user_id, app: str):
         return jsonify({"error": "Spinnaker API request failed"}), 502
 
 
-@spinnaker_bp.route("/applications/<app>/pipeline-configs", methods=["GET", "OPTIONS"])
+@spinnaker_bp.route("/applications/<app>/pipeline-configs", methods=["GET"])
 @require_permission("connectors", "read")
 def list_pipeline_configs(user_id, app: str):
     """List pipeline definitions for an application."""
@@ -239,7 +239,7 @@ def list_pipeline_configs(user_id, app: str):
         return jsonify({"error": "Spinnaker API request failed"}), 502
 
 
-@spinnaker_bp.route("/applications/<app>/pipelines/<name>/trigger", methods=["POST", "OPTIONS"])
+@spinnaker_bp.route("/applications/<app>/pipelines/<name>/trigger", methods=["POST"])
 @require_permission("connectors", "write")
 def trigger_pipeline(user_id, app: str, name: str):
     """Trigger a named pipeline for an application."""
@@ -258,7 +258,7 @@ def trigger_pipeline(user_id, app: str, name: str):
         return jsonify({"error": "Spinnaker API request failed"}), 502
 
 
-@spinnaker_bp.route("/applications/<app>/health", methods=["GET", "OPTIONS"])
+@spinnaker_bp.route("/applications/<app>/health", methods=["GET"])
 @require_permission("connectors", "read")
 def application_health(user_id, app: str):
     """Get cluster + server group health for an application."""
@@ -279,7 +279,7 @@ def application_health(user_id, app: str):
 # ------------------------------------------------------------------
 
 
-@spinnaker_bp.route("/webhook/<user_id>", methods=["POST", "OPTIONS"], strict_slashes=False)
+@spinnaker_bp.route("/webhook/<user_id>", methods=["POST"], strict_slashes=False)
 def deployment_webhook(user_id: str):
     """Receive a deployment event webhook from Spinnaker Echo.
 
@@ -287,9 +287,6 @@ def deployment_webhook(user_id: str):
     when present.  Echo does not support HMAC signing, so the signature check is
     only enforced when the header is actually provided.
     """
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
     if not user_id or len(user_id) > 255:
         return jsonify({"error": "user_id is required"}), 400
 
@@ -300,7 +297,7 @@ def deployment_webhook(user_id: str):
 
     creds = _get_stored_credentials(user_id)
     if not creds:
-        logger.warning("[SPINNAKER] Webhook rejected: invalid or unconfigured user_id %s", user_id[:50])
+        logger.warning("[SPINNAKER] Webhook rejected: invalid or unconfigured user_id %s", sanitize(user_id)[:50])
         return jsonify({"error": "Invalid webhook configuration"}), 403
 
     webhook_secret = creds.get("webhook_secret")
@@ -308,7 +305,7 @@ def deployment_webhook(user_id: str):
 
     if webhook_secret and signature:
         if not verify_webhook_signature(request.get_data(), signature, webhook_secret):
-            logger.warning("[SPINNAKER] Webhook rejected: invalid signature for user %s", user_id[:50])
+            logger.warning("[SPINNAKER] Webhook rejected: invalid signature for user %s", sanitize(user_id)[:50])
             return jsonify({"error": "Invalid webhook signature"}), 401
 
     payload = request.get_json(silent=True) or {}
@@ -337,10 +334,10 @@ def deployment_webhook(user_id: str):
 
     logger.info(
         "[SPINNAKER] Received deployment webhook for user %s: app=%s pipeline=%s status=%s",
-        user_id,
-        payload.get("application", "unknown"),
-        payload.get("pipeline", payload.get("pipeline_name", "unknown")),
-        payload.get("status", payload.get("execution", {}).get("status", "unknown") if isinstance(payload.get("execution"), dict) else "unknown"),
+        sanitize(user_id),
+        sanitize(payload.get("application", "unknown")),
+        sanitize(payload.get("pipeline", payload.get("pipeline_name", "unknown"))),
+        sanitize(payload.get("status", payload.get("execution", {}).get("status", "unknown") if isinstance(payload.get("execution"), dict) else "unknown")),
     )
 
     from routes.spinnaker.tasks import process_spinnaker_deployment
@@ -350,7 +347,7 @@ def deployment_webhook(user_id: str):
     return jsonify({"received": True})
 
 
-@spinnaker_bp.route("/webhook-url", methods=["GET", "OPTIONS"])
+@spinnaker_bp.route("/webhook-url", methods=["GET"])
 @require_permission("connectors", "read")
 def get_webhook_url(user_id):
     """Return the webhook URL and Spinnaker Echo config snippets."""
@@ -388,7 +385,7 @@ rest:
 # ------------------------------------------------------------------
 
 
-@spinnaker_bp.route("/deployments", methods=["GET", "OPTIONS"])
+@spinnaker_bp.route("/deployments", methods=["GET"])
 @require_permission("connectors", "read")
 def list_deployments(user_id):
     """List recent Spinnaker deployment events for the authenticated user."""

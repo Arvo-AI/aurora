@@ -10,7 +10,7 @@ from flask import Blueprint, jsonify, request
 from routes.opsgenie.config import OPSGENIE_TIMEOUT, REGION_URLS
 from routes.opsgenie.tasks import process_opsgenie_event
 from utils.db.connection_pool import db_pool
-from utils.web.cors_utils import create_cors_response
+from utils.log_sanitizer import sanitize
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context
@@ -453,7 +453,7 @@ def _build_client_from_creds(creds: Dict[str, Any]) -> Optional[Union[OpsGenieCl
 # ── Routes ────────────────────────────────────────────────────────────
 
 
-@opsgenie_bp.route("/connect", methods=["POST", "OPTIONS"])
+@opsgenie_bp.route("/connect", methods=["POST"])
 @require_permission("connectors", "write")
 def connect(user_id):
     try:
@@ -534,7 +534,7 @@ def connect(user_id):
     if region not in REGION_URLS:
         return jsonify({"error": f"Invalid region '{region}'. Must be one of: {', '.join(REGION_URLS)}"}), 400
 
-    logger.info("[OPSGENIE] Connecting user %s to region=%s", user_id, region)
+    logger.info("[OPSGENIE] Connecting user %s to region=%s", sanitize(user_id), sanitize(region))
 
     client = OpsGenieClient(api_key=api_key, region=region)
 
@@ -556,7 +556,7 @@ def connect(user_id):
 
     try:
         store_tokens_in_db(user_id, token_payload, "opsgenie")
-        logger.info("[OPSGENIE] Stored credentials for user %s (region=%s)", user_id, region)
+        logger.info("[OPSGENIE] Stored credentials for user %s (region=%s)", sanitize(user_id), sanitize(region))
     except Exception as exc:
         logger.exception("[OPSGENIE] Failed to store credentials: %s", exc)
         return jsonify({"error": "Failed to store OpsGenie credentials"}), 500
@@ -571,7 +571,7 @@ def connect(user_id):
     return jsonify(response)
 
 
-@opsgenie_bp.route("/status", methods=["GET", "OPTIONS"])
+@opsgenie_bp.route("/status", methods=["GET"])
 @require_permission("connectors", "read")
 def status(user_id):
     creds = _get_stored_opsgenie_credentials(user_id)
@@ -604,7 +604,7 @@ def status(user_id):
     return jsonify(result)
 
 
-@opsgenie_bp.route("/disconnect", methods=["DELETE", "POST", "OPTIONS"])
+@opsgenie_bp.route("/disconnect", methods=["DELETE", "POST"])
 @require_permission("connectors", "write")
 def disconnect(user_id):
     try:
@@ -634,15 +634,12 @@ def disconnect(user_id):
         return jsonify({"error": "Failed to disconnect OpsGenie"}), 500
 
 
-@opsgenie_bp.route("/webhook/<user_id>", methods=["POST", "OPTIONS"])
+@opsgenie_bp.route("/webhook/<user_id>", methods=["POST"])
 def webhook(user_id: str):
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
     # Check if user has OpsGenie connected
     creds = get_token_data(user_id, "opsgenie")
     if not creds:
-        logger.warning("[OPSGENIE] Webhook received for user %s with no OpsGenie connection", user_id)
+        logger.warning("[OPSGENIE] Webhook received for user %s with no OpsGenie connection", sanitize(user_id))
         return jsonify({"error": "OpsGenie not connected for this user"}), 404
 
     payload = request.get_json(silent=True) or {}
@@ -650,13 +647,13 @@ def webhook(user_id: str):
         "headers": dict(request.headers),
         "remote_addr": request.remote_addr,
     }
-    logger.info("[OPSGENIE] Received webhook for user %s action=%s", user_id, payload.get("action"))
+    logger.info("[OPSGENIE] Received webhook for user %s action=%s", sanitize(user_id), sanitize(payload.get("action")))
 
     process_opsgenie_event.delay(payload=payload, metadata=metadata, user_id=user_id)
     return jsonify({"received": True})
 
 
-@opsgenie_bp.route("/webhook-url", methods=["GET", "OPTIONS"])
+@opsgenie_bp.route("/webhook-url", methods=["GET"])
 @require_permission("connectors", "read")
 def webhook_url(user_id):
     # Use ngrok URL for development if available, otherwise use backend URL
@@ -704,7 +701,7 @@ def webhook_url(user_id):
     })
 
 
-@opsgenie_bp.route("/events/ingested", methods=["GET", "OPTIONS"])
+@opsgenie_bp.route("/events/ingested", methods=["GET"])
 @require_permission("connectors", "read")
 def list_ingested_events(user_id):
     org_id = get_org_id_from_request()

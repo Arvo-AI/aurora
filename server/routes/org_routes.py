@@ -11,6 +11,7 @@ from utils.auth import VALID_ROLES
 from utils.auth.rbac_decorators import require_permission, require_auth_only
 from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context
 from utils.auth.enforcer import assign_role_to_user, remove_role_from_user, get_user_roles_in_org
+from utils.log_sanitizer import sanitize
 from routes.audit_routes import record_audit_event
 
 logger = logging.getLogger(__name__)
@@ -115,7 +116,7 @@ def _delete_user_org_data(cursor, user_id: str, org_id: str):
         try:
             cursor.execute(f'DELETE FROM "{tbl}" WHERE user_id = %s AND org_id = %s', (user_id, org_id))
         except Exception as e:
-            logger.warning("Failed to delete %s data for user %s in org %s: %s", tbl, user_id, org_id, e)
+            logger.warning("Failed to delete %s data for user %s in org %s: %s", tbl, sanitize(user_id), sanitize(org_id), e)
 
 
 _SHARED_ORG_TABLES = frozenset({
@@ -134,7 +135,7 @@ def _migrate_user_data_only(cursor, user_id: str, new_org_id: str, old_org_id: s
     """
     from utils.db.org_backfill import _safe_update
 
-    logger.info("[DBG] _migrate_user_data_only: user=%s old_org=%s new_org=%s", user_id, old_org_id, new_org_id)
+    logger.info("[DBG] _migrate_user_data_only: user=%s old_org=%s new_org=%s", sanitize(user_id), sanitize(old_org_id), sanitize(new_org_id))
 
     cursor.execute(_USER_SCOPED_TABLES_SQL)
     for (tbl,) in cursor.fetchall():
@@ -144,9 +145,9 @@ def _migrate_user_data_only(cursor, user_id: str, new_org_id: str, old_org_id: s
                     f'DELETE FROM "{tbl}" WHERE user_id = %s AND org_id = %s',
                     (user_id, old_org_id),
                 )
-                logger.info("[DBG] _migrate_user_data_only: DELETED %d rows from %s (user=%s, old_org=%s)", cursor.rowcount, tbl, user_id, old_org_id)
+                logger.info("[DBG] _migrate_user_data_only: DELETED %d rows from %s (user=%s, old_org=%s)", cursor.rowcount, tbl, sanitize(user_id), sanitize(old_org_id))
             except Exception as e:
-                logger.warning("Failed to delete %s for user %s in org %s: %s", tbl, user_id, old_org_id, e)
+                logger.warning("Failed to delete %s for user %s in org %s: %s", tbl, sanitize(user_id), sanitize(old_org_id), e)
             continue
         _safe_update(
             cursor, f"partial_migrate_{tbl}",
@@ -164,7 +165,7 @@ def _migrate_user_data_only(cursor, user_id: str, new_org_id: str, old_org_id: s
             (new_org_id, user_id),
         )
 
-    logger.info("Migrated user-specific data for %s to org %s (deleted shared resources from old org)", user_id, new_org_id)
+    logger.info("Migrated user-specific data for %s to org %s (deleted shared resources from old org)", sanitize(user_id), sanitize(new_org_id))
 
 
 def _transfer_user_to_org(cursor, user_id: str, old_org_id, new_org_id: str, new_role: str, is_new_org: bool = False):
@@ -180,7 +181,7 @@ def _transfer_user_to_org(cursor, user_id: str, old_org_id, new_org_id: str, new
     Otherwise (joining an established org from another established org),
     old connections/tokens are deleted.
     """
-    logger.info("[DBG] _transfer_user_to_org: user=%s old_org=%s new_org=%s is_new_org=%s", user_id, old_org_id, new_org_id, is_new_org)
+    logger.info("[DBG] _transfer_user_to_org: user=%s old_org=%s new_org=%s is_new_org=%s", sanitize(user_id), sanitize(old_org_id), sanitize(new_org_id), is_new_org)
 
     if old_org_id and old_org_id != new_org_id:
         should_migrate = is_new_org
@@ -226,9 +227,9 @@ def _transfer_user_to_org(cursor, user_id: str, old_org_id, new_org_id: str, new
             if tbl in _SHARED_ORG_TABLES:
                 try:
                     cursor.execute(f'DELETE FROM "{tbl}" WHERE user_id = %s', (user_id,))
-                    logger.info("[DBG] _transfer_user_to_org: DELETED %d rows from %s for orgless user %s", cursor.rowcount, tbl, user_id)
+                    logger.info("[DBG] _transfer_user_to_org: DELETED %d rows from %s for orgless user %s", cursor.rowcount, tbl, sanitize(user_id))
                 except Exception as e:
-                    logger.warning("Failed to delete %s for orgless user %s: %s", tbl, user_id, e)
+                    logger.warning("Failed to delete %s for orgless user %s: %s", tbl, sanitize(user_id), e)
                 continue
             from utils.db.org_backfill import _safe_update
             _safe_update(
@@ -240,12 +241,10 @@ def _transfer_user_to_org(cursor, user_id: str, old_org_id, new_org_id: str, new
     return cursor.fetchone()
 
 
-@org_bp.route("/current", methods=["GET", "OPTIONS"])
+@org_bp.route("/current", methods=["GET"])
 @require_auth_only
 def get_current_org(user_id):
     """Get the current user's organization details and member list."""
-    if request.method == "OPTIONS":
-        return jsonify({}), 200
 
     org_id = get_org_id_from_request()
     if not org_id:
@@ -294,12 +293,10 @@ def get_current_org(user_id):
         return jsonify({"error": "Failed to fetch organization"}), 500
 
 
-@org_bp.route("", methods=["PATCH", "OPTIONS"])
+@org_bp.route("", methods=["PATCH"])
 @require_permission("org", "manage")
 def update_org(user_id):
     """Update organization name or slug (admin only)."""
-    if request.method == "OPTIONS":
-        return jsonify({}), 200
 
     org_id = get_org_id_from_request()
     if not org_id:
@@ -367,13 +364,10 @@ def update_org(user_id):
         return jsonify({"error": "Failed to update organization"}), 500
 
 
-@org_bp.route("/members", methods=["POST", "OPTIONS"])
+@org_bp.route("/members", methods=["POST"])
 @require_permission("users", "manage")
 def add_member(user_id):
     """Add an existing user to this org with a role (admin only)."""
-    if request.method == "OPTIONS":
-        return jsonify({}), 200
-
     org_id = get_org_id_from_request()
     if not org_id:
         return jsonify({"error": "No organization found"}), 404
@@ -436,13 +430,10 @@ def add_member(user_id):
         return jsonify({"error": "Failed to add member"}), 500
 
 
-@org_bp.route("/members/<target_user_id>", methods=["DELETE", "OPTIONS"])
+@org_bp.route("/members/<target_user_id>", methods=["DELETE"])
 @require_permission("users", "manage")
 def remove_member(user_id, target_user_id):
     """Remove a user from this org (admin only)."""
-    if request.method == "OPTIONS":
-        return jsonify({}), 200
-
     org_id = get_org_id_from_request()
     if not org_id:
         return jsonify({"error": "No organization found"}), 404
@@ -504,12 +495,10 @@ def remove_member(user_id, target_user_id):
         return jsonify({"error": "Failed to remove member"}), 500
 
 
-@org_bp.route("/my-invitations", methods=["GET", "OPTIONS"])
+@org_bp.route("/my-invitations", methods=["GET"])
 @require_auth_only
 def my_invitations(user_id):
     """Return pending invitations addressed to the current user's email."""
-    if request.method == "OPTIONS":
-        return jsonify({}), 200
 
     try:
         with db_pool.get_admin_connection() as conn:
@@ -558,13 +547,10 @@ def my_invitations(user_id):
         return jsonify({"error": "Failed to fetch invitations"}), 500
 
 
-@org_bp.route("/my-invitations/<invitation_id>/decline", methods=["POST", "OPTIONS"])
+@org_bp.route("/my-invitations/<invitation_id>/decline", methods=["POST"])
 @require_auth_only
 def decline_invitation(user_id, invitation_id):
     """Decline a pending invitation addressed to the current user."""
-    if request.method == "OPTIONS":
-        return jsonify({}), 200
-
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
@@ -594,13 +580,10 @@ def decline_invitation(user_id, invitation_id):
         return jsonify({"error": "Failed to decline invitation"}), 500
 
 
-@org_bp.route("/invitations/<invitation_id>/cancel", methods=["POST", "OPTIONS"])
+@org_bp.route("/invitations/<invitation_id>/cancel", methods=["POST"])
 @require_permission("users", "manage")
 def cancel_invitation(user_id, invitation_id):
     """Cancel a pending invitation (admin only)."""
-    if request.method == "OPTIONS":
-        return jsonify({}), 200
-
     org_id = get_org_id_from_request()
     if not org_id:
         return jsonify({"error": "No organization found"}), 404
@@ -629,20 +612,23 @@ def cancel_invitation(user_id, invitation_id):
         return jsonify({"error": "Failed to cancel invitation"}), 500
 
 
-@org_bp.route("/invitations", methods=["GET", "POST", "OPTIONS"])
+@org_bp.route("/invitations", methods=["GET"])
 @require_permission("users", "manage")
-def invitations(user_id):
-    """Create or list invitations for this org (admin only)."""
-    if request.method == "OPTIONS":
-        return jsonify({}), 200
-
+def list_invitations(user_id):
+    """List pending invitations for this org (admin only)."""
     org_id = get_org_id_from_request()
     if not org_id:
         return jsonify({"error": "No organization found"}), 404
+    return _list_invitations(org_id)
 
-    if request.method == "GET":
-        return _list_invitations(org_id)
 
+@org_bp.route("/invitations", methods=["POST"])
+@require_permission("users", "manage")
+def create_invitation(user_id):
+    """Create a new invitation for this org (admin only)."""
+    org_id = get_org_id_from_request()
+    if not org_id:
+        return jsonify({"error": "No organization found"}), 404
     return _create_invitation(org_id, user_id)
 
 
@@ -755,13 +741,10 @@ def _create_invitation(org_id: str, user_id: str):
         return jsonify({"error": "Failed to create invitation"}), 500
 
 
-@org_bp.route("/join", methods=["POST", "OPTIONS"])
+@org_bp.route("/join", methods=["POST"])
 @require_auth_only
 def join_org(user_id):
     """Accept an invitation and transfer user data to the new org."""
-    if request.method == "OPTIONS":
-        return jsonify({}), 200
-
     data = request.get_json() or {}
     invitation_id = data.get("invitation_id")
     direct_org_id = data.get("org_id")
@@ -888,12 +871,10 @@ def join_org(user_id):
         return jsonify({"error": "Failed to join organization"}), 500
 
 
-@org_bp.route("/stats", methods=["GET", "OPTIONS"])
+@org_bp.route("/stats", methods=["GET"])
 @require_auth_only
 def get_org_stats(user_id):
     """Return aggregate stats for the current org."""
-    if request.method == "OPTIONS":
-        return jsonify({}), 200
 
     org_id = get_org_id_from_request()
     if not org_id:
@@ -936,12 +917,10 @@ def get_org_stats(user_id):
         return jsonify({"error": "Failed to fetch stats"}), 500
 
 
-@org_bp.route("/activity", methods=["GET", "OPTIONS"])
+@org_bp.route("/activity", methods=["GET"])
 @require_auth_only
 def get_org_activity(user_id):
     """Return recent activity events for the org (member joins, role changes)."""
-    if request.method == "OPTIONS":
-        return jsonify({}), 200
 
     org_id = get_org_id_from_request()
     if not org_id:
@@ -1047,12 +1026,10 @@ def get_org_activity(user_id):
         return jsonify({"error": "Failed to fetch activity"}), 500
 
 
-@org_bp.route("/preferences", methods=["GET", "OPTIONS"])
+@org_bp.route("/preferences", methods=["GET"])
 @require_auth_only
 def get_org_preferences(user_id):
     """Get org-level preferences stored in user_preferences with user_id='__org__'."""
-    if request.method == "OPTIONS":
-        return jsonify({}), 200
 
     org_id = get_org_id_from_request()
     if not org_id:
@@ -1082,13 +1059,10 @@ def get_org_preferences(user_id):
         return jsonify({"error": "Failed to fetch preferences"}), 500
 
 
-@org_bp.route("/preferences", methods=["PUT", "OPTIONS"])
+@org_bp.route("/preferences", methods=["PUT"])
 @require_permission("org", "manage")
 def update_org_preferences(user_id):
     """Update org-level preferences (admin only)."""
-    if request.method == "OPTIONS":
-        return jsonify({}), 200
-
     org_id = get_org_id_from_request()
     if not org_id:
         return jsonify({"error": "No organization found"}), 404

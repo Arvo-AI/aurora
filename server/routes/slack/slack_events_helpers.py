@@ -9,6 +9,7 @@ import hashlib
 import time
 from typing import Optional
 from utils.db.connection_pool import db_pool
+from utils.log_sanitizer import sanitize
 import re
 from datetime import datetime
 
@@ -88,7 +89,7 @@ def get_user_id_from_slack_team(team_id: str) -> Optional[str]:
                 
                 return None
     except Exception as e:
-        logger.error(f"Error looking up user from Slack team_id {team_id}: {e}", exc_info=True)
+        logger.error(f"Error looking up user from Slack team_id {sanitize(team_id)}: {e}", exc_info=True)
         return None
 
 
@@ -137,7 +138,7 @@ def get_user_id_from_slack_user(slack_user_id: str, team_id: str) -> Optional[st
                 
                 return None
     except Exception as e:
-        logger.error(f"Error looking up user from Slack user_id {slack_user_id}: {e}", exc_info=True)
+        logger.error(f"Error looking up user from Slack user_id {sanitize(slack_user_id)}: {e}", exc_info=True)
         return None
 
 

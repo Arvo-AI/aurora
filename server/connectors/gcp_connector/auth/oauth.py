@@ -13,6 +13,8 @@ from google.oauth2 import service_account
 from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 
+from utils.log_sanitizer import sanitize
+
 # Load environment variables
 load_dotenv()
 
@@ -108,12 +110,12 @@ def get_credentials(token_data=None):
             if has_request_context():
                 user_id = get_user_id_from_request()
                 if user_id:
-                    logger.info(f"No token_data provided, attempting to fetch from database for user: {user_id}")
+                    logger.info(f"No token_data provided, attempting to fetch from database for user: {sanitize(user_id)}")
                     token_data = get_token_data(user_id, "gcp")
                     if token_data:
                         logger.info("Successfully retrieved token data from database")
                     else:
-                        logger.warning(f"No GCP token data found in database for user: {user_id}")
+                        logger.warning(f"No GCP token data found in database for user: {sanitize(user_id)}")
                         raise ValueError("No GCP credentials found in database. Please authenticate first.")
                 else:
                     logger.warning("No user_id found in request context")

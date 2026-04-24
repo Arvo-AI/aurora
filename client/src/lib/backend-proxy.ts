@@ -140,3 +140,15 @@ export async function forwardRequest(
     return NextResponse.json({ error: `Failed to load ${errorLabel}` }, { status: 500 });
   }
 }
+
+/**
+ * Forward an authenticated GET request to a backend API path,
+ * passing through query-string parameters and auth headers.
+ */
+export async function forwardAuthenticatedGet(
+  request: NextRequest,
+  backendPath: string,
+  errorLabel: string,
+): Promise<NextResponse> {
+  return forwardRequest(request, 'GET', backendPath, errorLabel);
+}

@@ -10,7 +10,7 @@ from flask import Blueprint, jsonify, request
 
 from routes.dynatrace.tasks import process_dynatrace_problem
 from utils.db.connection_pool import db_pool
-from utils.web.cors_utils import create_cors_response
+from utils.log_sanitizer import sanitize
 from utils.auth.stateless_auth import (
     get_org_id_from_request,
     get_user_preference,
@@ -98,7 +98,7 @@ def _get_stored_credentials(user_id: str) -> dict[str, Any] | None:
         return None
 
 
-@dynatrace_bp.route("/connect", methods=["POST", "OPTIONS"])
+@dynatrace_bp.route("/connect", methods=["POST"])
 @require_permission("connectors", "write")
 def connect(user_id):
     data = request.get_json(force=True, silent=True) or {}
@@ -132,7 +132,7 @@ def connect(user_id):
     return jsonify({"success": True, "environmentUrl": environment_url, "version": version})
 
 
-@dynatrace_bp.route("/status", methods=["GET", "OPTIONS"])
+@dynatrace_bp.route("/status", methods=["GET"])
 @require_permission("connectors", "read")
 def status(user_id):
     creds = _get_stored_credentials(user_id)
@@ -146,7 +146,7 @@ def status(user_id):
     })
 
 
-@dynatrace_bp.route("/disconnect", methods=["POST", "DELETE", "OPTIONS"])
+@dynatrace_bp.route("/disconnect", methods=["POST", "DELETE"])
 @require_permission("connectors", "write")
 def disconnect(user_id):
     try:
@@ -162,18 +162,15 @@ def disconnect(user_id):
         return jsonify({"error": "Failed to disconnect Dynatrace"}), 500
 
 
-@dynatrace_bp.route("/webhook/<user_id>", methods=["POST", "OPTIONS"])
+@dynatrace_bp.route("/webhook/<user_id>", methods=["POST"])
 def webhook(user_id: str):
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
     creds = get_token_data(user_id, "dynatrace")
     if not creds:
-        logger.warning("[DYNATRACE] Webhook received for user %s with no connection", user_id)
+        logger.warning("[DYNATRACE] Webhook received for user %s with no connection", sanitize(user_id))
         return jsonify({"error": "Dynatrace not connected for this user"}), 404
 
     payload = request.get_json(silent=True) or {}
-    logger.info("[DYNATRACE] Received webhook for user %s: %s", user_id, payload.get("ProblemTitle", "unknown"))
+    logger.info("[DYNATRACE] Received webhook for user %s: %s", sanitize(user_id), sanitize(payload.get("ProblemTitle", "unknown")))
 
     _REDACTED_HEADERS = {"authorization", "cookie", "set-cookie", "proxy-authorization", "x-api-key"}
     sanitized_headers = {
@@ -185,7 +182,7 @@ def webhook(user_id: str):
     return jsonify({"received": True})
 
 
-@dynatrace_bp.route("/alerts", methods=["GET", "OPTIONS"])
+@dynatrace_bp.route("/alerts", methods=["GET"])
 @require_permission("connectors", "read")
 def get_alerts(user_id):
     org_id = get_org_id_from_request()
@@ -234,7 +231,7 @@ def get_alerts(user_id):
         return jsonify({"error": "Failed to fetch alerts"}), 500
 
 
-@dynatrace_bp.route("/webhook-url", methods=["GET", "OPTIONS"])
+@dynatrace_bp.route("/webhook-url", methods=["GET"])
 @require_permission("connectors", "read")
 def get_webhook_url(user_id):
     ngrok_url = os.getenv("NGROK_URL", "").rstrip("/")
@@ -265,13 +262,13 @@ def get_webhook_url(user_id):
     })
 
 
-@dynatrace_bp.route("/rca-settings", methods=["GET", "OPTIONS"])
+@dynatrace_bp.route("/rca-settings", methods=["GET"])
 @require_permission("connectors", "read")
 def get_rca_settings(user_id):
     return jsonify({"rcaEnabled": get_user_preference(user_id, "dynatrace_rca_enabled", default=False)})
 
 
-@dynatrace_bp.route("/rca-settings", methods=["PUT", "OPTIONS"])
+@dynatrace_bp.route("/rca-settings", methods=["PUT"])
 @require_permission("connectors", "write")
 def update_rca_settings(user_id):
     data = request.get_json(force=True, silent=True) or {}
@@ -280,5 +277,5 @@ def update_rca_settings(user_id):
         return jsonify({"error": "rcaEnabled must be a boolean"}), 400
 
     store_user_preference(user_id, "dynatrace_rca_enabled", rca_enabled)
-    logger.info("[DYNATRACE] Updated RCA settings for user %s: rcaEnabled=%s", user_id, rca_enabled)
+    logger.info("[DYNATRACE] Updated RCA settings for user %s: rcaEnabled=%s", sanitize(user_id), rca_enabled)
     return jsonify({"success": True, "rcaEnabled": rca_enabled})

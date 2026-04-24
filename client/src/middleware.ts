@@ -27,8 +27,8 @@ export default auth((req) => {
   const { nextUrl } = req
   const isLoggedIn = !!req.auth?.user?.id
   
-  const isPublicRoute = publicRoutes.some(route => 
-    nextUrl.pathname.startsWith(route)
+  const isPublicRoute = publicRoutes.some(route =>
+    nextUrl.pathname === route || nextUrl.pathname.startsWith(`${route}/`)
   )
   const isAuthRoute = authRoutes.some(route =>
     nextUrl.pathname.startsWith(route)

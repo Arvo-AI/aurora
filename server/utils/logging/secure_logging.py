@@ -15,21 +15,27 @@ CREDENTIAL_PATTERNS = [
     'api_key', 'webhook_secret', 'session_token', 'refresh_token'
 ]
 
+_LOG_CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]")
+
+
 def mask_credential_value(value: str, show_prefix: int = 4) -> str:
     """
     Mask a credential value, showing only a prefix for identification.
-    
+
     Args:
         value: The credential value to mask
         show_prefix: Number of characters to show at the beginning
-        
+
     Returns:
         Masked string like "sk_te***MASKED***"
     """
     if not value or len(value) <= show_prefix:
         return "***MASKED***"
-    
-    return f"{value[:show_prefix]}***MASKED***"
+
+    # Strip control chars from the prefix so a crafted credential that starts
+    # with CR/LF cannot forge log entries via the masked output (S5145).
+    safe_prefix = _LOG_CONTROL_CHARS.sub("", value[:show_prefix])
+    return f"{safe_prefix}***MASKED***"
 
 def is_credential_field(field_name: str) -> bool:
     """

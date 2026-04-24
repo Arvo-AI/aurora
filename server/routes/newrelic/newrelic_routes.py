@@ -15,6 +15,7 @@ from flask import Blueprint, jsonify, request
 
 from connectors.newrelic_connector.client import NewRelicClient, NewRelicAPIError
 from utils.db.connection_pool import db_pool
+from utils.log_sanitizer import sanitize
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context
@@ -76,7 +77,7 @@ def _build_client_from_creds(creds: Dict[str, Any]) -> Optional[NewRelicClient]:
 # ------------------------------------------------------------------
 
 
-@newrelic_bp.route("/connect", methods=["POST", "OPTIONS"])
+@newrelic_bp.route("/connect", methods=["POST"])
 @require_permission("connectors", "write")
 def connect(user_id):
     """Store and validate New Relic credentials."""
@@ -102,7 +103,7 @@ def connect(user_id):
 
     logger.info(
         "[NEWRELIC] Connecting user %s account=%s region=%s",
-        user_id, account_id, region,
+        sanitize(user_id), sanitize(account_id), sanitize(region),
     )
 
     client = NewRelicClient(api_key=api_key, account_id=account_id, region=region)
@@ -141,7 +142,7 @@ def connect(user_id):
 
     try:
         store_tokens_in_db(user_id, token_payload, "newrelic")
-        logger.info("[NEWRELIC] Stored credentials for user %s (account=%s)", user_id, account_id)
+        logger.info("[NEWRELIC] Stored credentials for user %s (account=%s)", sanitize(user_id), sanitize(account_id))
     except Exception as exc:
         logger.exception("[NEWRELIC] Failed to store credentials: %s", exc)
         return jsonify({"error": "Failed to store New Relic credentials"}), 500
@@ -158,7 +159,7 @@ def connect(user_id):
     })
 
 
-@newrelic_bp.route("/status", methods=["GET", "OPTIONS"])
+@newrelic_bp.route("/status", methods=["GET"])
 @require_permission("connectors", "read")
 def status(user_id):
     """Check connection status by validating stored credentials."""
@@ -190,7 +191,7 @@ def status(user_id):
     })
 
 
-@newrelic_bp.route("/disconnect", methods=["DELETE", "POST", "OPTIONS"])
+@newrelic_bp.route("/disconnect", methods=["DELETE", "POST"])
 @require_permission("connectors", "write")
 def disconnect(user_id):
     """Remove stored New Relic credentials and backing Vault secrets."""
@@ -216,7 +217,7 @@ def disconnect(user_id):
 # ------------------------------------------------------------------
 
 
-@newrelic_bp.route("/webhook-url", methods=["GET", "OPTIONS"])
+@newrelic_bp.route("/webhook-url", methods=["GET"])
 @require_permission("connectors", "read")
 def webhook_url(user_id):
     """Get the webhook URL to configure in New Relic."""
@@ -250,7 +251,7 @@ def webhook_url(user_id):
 # ------------------------------------------------------------------
 
 
-@newrelic_bp.route("/issues", methods=["GET", "OPTIONS"])
+@newrelic_bp.route("/issues", methods=["GET"])
 @require_permission("connectors", "read")
 def list_issues(user_id):
     """Fetch active alert issues from New Relic via NerdGraph."""
@@ -282,7 +283,7 @@ def list_issues(user_id):
 # ------------------------------------------------------------------
 
 
-@newrelic_bp.route("/events/ingested", methods=["GET", "OPTIONS"])
+@newrelic_bp.route("/events/ingested", methods=["GET"])
 @require_permission("connectors", "read")
 def list_ingested_events(user_id):
     """List New Relic webhook events stored in the database."""
@@ -352,18 +353,15 @@ def list_ingested_events(user_id):
 # ------------------------------------------------------------------
 
 
-@newrelic_bp.route("/webhook/<user_id>", methods=["POST", "OPTIONS"])
+@newrelic_bp.route("/webhook/<user_id>", methods=["POST"])
 def webhook(user_id: str):
     """Receive alert notifications from New Relic and enqueue RCA processing."""
-    if request.method == "OPTIONS":
-        return jsonify({}), 200
-
     if not user_id:
         return jsonify({"error": "user_id is required"}), 400
 
     creds = _get_stored_newrelic_credentials(user_id)
     if not creds:
-        logger.warning("[NEWRELIC] Webhook received for user %s with no connection", user_id)
+        logger.warning("[NEWRELIC] Webhook received for user %s with no connection", sanitize(user_id))
         return jsonify({"error": "New Relic not connected for this user"}), 404
 
     payload = request.get_json(force=True, silent=True) or {}
@@ -387,7 +385,7 @@ def webhook(user_id: str):
 
     logger.info(
         "[NEWRELIC][WEBHOOK] Received alert for user %s: %s (issue=%s)",
-        user_id, title, issue_id,
+        sanitize(user_id), sanitize(title), sanitize(issue_id),
     )
 
     process_newrelic_event.delay(payload, metadata, user_id)

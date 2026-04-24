@@ -17,6 +17,7 @@ import hmac
 from flask_cors import CORS
 from werkzeug.middleware.proxy_fix import ProxyFix
 from utils.db.db_utils import ensure_database_exists, initialize_tables
+from utils.log_sanitizer import sanitize
 
 # Configure logging first, before importing any modules
 logging.basicConfig(level=logging.DEBUG, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
@@ -109,6 +110,10 @@ CORS(app, origins=FRONTEND_URL, supports_credentials=True,
                        "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
                                          "Authorization", "X-Provider-Preference"],
                        "methods": ["GET", "POST", "DELETE", "OPTIONS"]},
+        r"/incidentio/*": {"origins": FRONTEND_URL, "supports_credentials": True,
+                           "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
+                                             "Authorization", "X-Provider-Preference"],
+                           "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"]},
          r"/bigpanda/*": {"origins": FRONTEND_URL, "supports_credentials": True,
                           "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
                                             "Authorization", "X-Provider-Preference"],
@@ -209,6 +214,7 @@ _OPEN_PREFIXES = (
     "/jenkins/webhook/",
     "/cloudbees/webhook/",
     "/spinnaker/webhook/",
+    "/incidentio/alerts/webhook/",
     "/ovh_api/ovh/oauth2/callback",
     "/azure/callback",
     "/azure/setup-script",
@@ -286,7 +292,7 @@ def enforce_user_org_binding():
     if actual_org != claimed_org:
         logging.getLogger(__name__).warning(
             "Tenant mismatch: user=%s claimed_org=%s actual_org=%s",
-            user_id, claimed_org, actual_org,
+            sanitize(user_id), sanitize(claimed_org), sanitize(actual_org),
         )
         return jsonify({"error": "Forbidden - organization mismatch"}), 403
 
@@ -378,6 +384,11 @@ from routes.splunk import bp as splunk_bp, search_bp as splunk_search_bp  # noqa
 import routes.splunk.tasks  # noqa: F401
 app.register_blueprint(splunk_bp, url_prefix="/splunk")
 app.register_blueprint(splunk_search_bp, url_prefix="/splunk")
+
+# --- incident.io Integration Routes ---
+from routes.incidentio import bp as incidentio_bp  # noqa: F401
+import routes.incidentio.tasks  # noqa: F401
+app.register_blueprint(incidentio_bp, url_prefix="/incidentio")
 
 # --- Coroot Integration Routes ---
 from routes.coroot import bp as coroot_bp  # noqa: F401

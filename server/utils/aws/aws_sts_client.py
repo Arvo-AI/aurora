@@ -8,6 +8,8 @@ import time
 from typing import Dict, Optional, Any
 from botocore.exceptions import ClientError, NoCredentialsError
 from dotenv import load_dotenv
+
+from utils.log_sanitizer import hash_for_log, sanitize
 load_dotenv()
 
 # ------------------------------------------------------------------
@@ -122,9 +124,14 @@ class STSAssumeRoleClient:
             raise ValueError(f"Workspace {workspace_id} does not have an aws_external_id configured")
         
         if external_id != workspace_external_id:
+            # Never log the expected external_id: it's the trust-policy shared
+            # secret and log-read access would turn into secret exposure. The
+            # provided value is an attacker-controlled attempt, so we only log
+            # a sanitized fingerprint to correlate repeat probes.
             logger.error(
-                f"SECURITY: External ID mismatch for workspace {workspace_id}. "
-                f"Provided: '{external_id}', Expected: '{workspace_external_id}'. Rejecting role assumption."
+                "SECURITY: External ID mismatch for workspace %s (provided_fp=%s). Rejecting role assumption.",
+                sanitize(workspace_id),
+                hash_for_log(external_id),
             )
             raise ValueError(
                 f"External ID mismatch. Provided external_id does not match workspace's expected external_id. "
@@ -151,7 +158,7 @@ class STSAssumeRoleClient:
         
         # Assume role with STS
         try:
-            logger.info(f"Assuming role {role_arn} for workspace {workspace_id} (policy: {'restricted' if session_policy else 'full'})")
+            logger.info(f"Assuming role {sanitize(role_arn)} for workspace {sanitize(workspace_id)} (policy: {'restricted' if session_policy else 'full'})")
 
             assume_role_params = {
                 "RoleArn": role_arn,
@@ -180,7 +187,7 @@ class STSAssumeRoleClient:
             except Exception as verify_error:
                 # If verification fails, we should reject the role assumption
                 logger.error(
-                    f"SECURITY: Role {role_arn} for workspace {workspace_id} does not properly require ExternalId. "
+                    f"SECURITY: Role {sanitize(role_arn)} for workspace {sanitize(workspace_id)} does not properly require ExternalId. "
                     f"Rejecting role assumption. Error: {verify_error}"
                 )
                 raise ValueError(
@@ -204,7 +211,7 @@ class STSAssumeRoleClient:
             # Clean up expired entries from cache
             self._cleanup_cache()
             
-            logger.info(f"Successfully assumed role for workspace {workspace_id}, expires at {expiration}")
+            logger.info(f"Successfully assumed role for workspace {sanitize(workspace_id)}, expires at {expiration}")
             return credential_dict
             
         except ClientError as e:
@@ -212,16 +219,16 @@ class STSAssumeRoleClient:
             error_message = e.response.get('Error', {}).get('Message', str(e))
             
             if error_code == 'AccessDenied':
-                logger.error(f"Access denied assuming role {role_arn} for workspace {workspace_id}: {error_message}")
+                logger.error(f"Access denied assuming role {sanitize(role_arn)} for workspace {sanitize(workspace_id)}: {sanitize(error_message)}")
                 raise ClientError(
                     {'Error': {'Code': 'AccessDenied', 'Message': 'Role assumption failed - check ExternalId and trust policy'}},
                     'AssumeRole'
                 )
             elif error_code == 'InvalidParameterValue':
-                logger.error(f"Invalid parameter for role {role_arn}: {error_message}")
+                logger.error(f"Invalid parameter for role {sanitize(role_arn)}: {sanitize(error_message)}")
                 raise ValueError(f"Invalid role parameter: {error_message}")
             else:
-                logger.error(f"Failed to assume role {role_arn} for workspace {workspace_id}: {error_code} - {error_message}")
+                logger.error(f"Failed to assume role {sanitize(role_arn)} for workspace {sanitize(workspace_id)}: {sanitize(error_code)} - {sanitize(error_message)}")
                 raise
         except NoCredentialsError:
             logger.error(
@@ -231,7 +238,7 @@ class STSAssumeRoleClient:
             raise
                 
         except Exception as e:
-            logger.error(f"Unexpected error assuming role {role_arn} for workspace {workspace_id}: {e}")
+            logger.error(f"Unexpected error assuming role {sanitize(role_arn)} for workspace {sanitize(workspace_id)}: {e}")
             raise
     
     def create_boto3_session(
@@ -301,8 +308,8 @@ class STSAssumeRoleClient:
                 # If we get here, the role assumption succeeded WITHOUT ExternalId
                 # This means the role doesn't require ExternalId - REJECT IT
                 logger.error(
-                    f"SECURITY VIOLATION: Role {role_arn} can be assumed WITHOUT ExternalId. "
-                    f"This is insecure. Rejecting role assumption for workspace {workspace_id}."
+                    f"SECURITY VIOLATION: Role {sanitize(role_arn)} can be assumed WITHOUT ExternalId. "
+                    f"This is insecure. Rejecting role assumption for workspace {sanitize(workspace_id)}."
                 )
                 raise ValueError(
                     f"Role {role_arn} does not require ExternalId in its trust policy. "

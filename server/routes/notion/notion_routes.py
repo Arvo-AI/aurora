@@ -16,6 +16,7 @@ from connectors.notion_connector.client import (
 from utils.auth.oauth2_state_cache import retrieve_oauth2_state, store_oauth2_state
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.token_management import get_token_data, store_tokens_in_db
+from utils.log_sanitizer import sanitize
 from utils.secrets.secret_ref_utils import delete_user_secret
 
 logger = logging.getLogger(__name__)
@@ -99,7 +100,7 @@ def _handle_oauth_callback(
 # ── Routes ──────────────────────────────────────────────────────────
 
 
-@notion_bp.route("/connect", methods=["POST", "OPTIONS"])
+@notion_bp.route("/connect", methods=["POST"])
 @require_permission("connectors", "write")
 def connect(user_id):
     """Dual-purpose: OAuth handshake (start + callback) and IIT submission."""
@@ -190,7 +191,7 @@ def connect(user_id):
     return _handle_oauth_callback(user_id, code, data.get("state"))
 
 
-@notion_bp.route("/oauth/callback", methods=["POST", "OPTIONS"])
+@notion_bp.route("/oauth/callback", methods=["POST"])
 @require_permission("connectors", "write")
 def oauth_callback(user_id):
     """OAuth callback endpoint — frontend exchanges ?code/?state from popup here."""
@@ -202,7 +203,7 @@ def oauth_callback(user_id):
     return _handle_oauth_callback(user_id, data.get("code"), data.get("state"))
 
 
-@notion_bp.route("/status", methods=["GET", "OPTIONS"])
+@notion_bp.route("/status", methods=["GET"])
 @require_permission("connectors", "read")
 def status(user_id):
     """Check Notion connection status.
@@ -271,7 +272,7 @@ def status(user_id):
     return jsonify(result)
 
 
-@notion_bp.route("/disconnect", methods=["POST", "DELETE", "OPTIONS"])
+@notion_bp.route("/disconnect", methods=["POST", "DELETE"])
 @require_permission("connectors", "write")
 def disconnect(user_id):
     """Disconnect Notion by removing stored credentials (and revoking OAuth token)."""
@@ -319,7 +320,7 @@ def disconnect(user_id):
     )
 
 
-@notion_bp.route("/databases", methods=["GET", "OPTIONS"])
+@notion_bp.route("/databases", methods=["GET"])
 @require_permission("connectors", "read")
 def list_databases(user_id):
     """List Notion databases matching an optional search query (for DB picker)."""
@@ -382,7 +383,7 @@ def list_databases(user_id):
     return jsonify(payload)
 
 
-@notion_bp.route("/databases/<db_id>", methods=["GET", "OPTIONS"])
+@notion_bp.route("/databases/<db_id>", methods=["GET"])
 @require_permission("connectors", "read")
 def get_database(user_id, db_id: str):
     """Return a shallow summary of a Notion database (for property-mapping UI)."""
@@ -411,8 +412,8 @@ def get_database(user_id, db_id: str):
     except Exception as exc:
         logger.exception(
             "[NOTION] get_database failed for user %s (db=%s): %s",
-            user_id,
-            db_id,
+            sanitize(user_id),
+            sanitize(db_id),
             exc,
         )
         return jsonify({"error": "Failed to fetch Notion database"}), 502

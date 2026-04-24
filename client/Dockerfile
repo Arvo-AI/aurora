@@ -71,6 +71,8 @@ COPY --from=builder /app/package.json ./package.json
 COPY docker-entrypoint.sh /docker-entrypoint.sh
 RUN chmod +x /docker-entrypoint.sh && chown -R 1000:1000 /app
 
+USER bun
+
 # Expose port and run Next.js
 EXPOSE 3000
 ENTRYPOINT ["/docker-entrypoint.sh"]

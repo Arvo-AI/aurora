@@ -713,7 +713,7 @@ PROVIDER_CHECKERS = {
 # ── Route + batch logic ─────────────────────────────────────────────
 
 
-@connector_status_bp.route("/api/connectors/status", methods=["GET", "OPTIONS"])
+@connector_status_bp.route("/api/connectors/status", methods=["GET"])
 @require_permission("connectors", "read")
 def all_connector_status(user_id):
     org_id = get_org_id_from_request() or ""

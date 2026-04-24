@@ -175,18 +175,25 @@ CMD ["python", "main_chatbot.py"]
 # ============================================
 FROM base AS prod
 
-# Copy the project sources directly to /app (not /app/server)
-COPY ./chat /app/chat/
-COPY ./config /app/config/
-COPY ./connectors /app/connectors/
-COPY ./routes /app/routes/
-COPY ./services /app/services/
-COPY ./utils /app/utils/
-COPY ./celery_config.py /app/celery_config.py
-COPY ./main_chatbot.py /app/main_chatbot.py
-COPY ./main_compute.py /app/main_compute.py
-COPY ./mcp_server.py /app/mcp_server.py
-COPY ./rbac_model.conf /app/rbac_model.conf
+RUN useradd -m -u 1000 -s /bin/bash app && \
+    mkdir -p /tmp/.cache/uv && \
+    chown -R app:app /app /tmp/.cache
+
+# Copy project sources with root:root ownership + world-read so the `app`
+# user can read+execute but cannot self-modify the image contents.
+COPY --chmod=0555 ./chat /app/chat/
+COPY --chmod=0555 ./config /app/config/
+COPY --chmod=0555 ./connectors /app/connectors/
+COPY --chmod=0555 ./routes /app/routes/
+COPY --chmod=0555 ./services /app/services/
+COPY --chmod=0555 ./utils /app/utils/
+COPY --chmod=0444 ./celery_config.py /app/celery_config.py
+COPY --chmod=0444 ./main_chatbot.py /app/main_chatbot.py
+COPY --chmod=0444 ./main_compute.py /app/main_compute.py
+COPY --chmod=0444 ./mcp_server.py /app/mcp_server.py
+COPY --chmod=0444 ./rbac_model.conf /app/rbac_model.conf
+
+USER app
 
 EXPOSE 5006
 # Entrypoint for chat container:

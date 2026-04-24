@@ -823,6 +823,30 @@ def initialize_tables():
                     CREATE INDEX IF NOT EXISTS idx_splunk_alerts_state ON splunk_alerts(alert_state);
                     CREATE INDEX IF NOT EXISTS idx_splunk_alerts_received_at ON splunk_alerts(received_at DESC);
                 """,
+                "incidentio_alerts": """
+                    CREATE TABLE IF NOT EXISTS incidentio_alerts (
+                        id SERIAL PRIMARY KEY,
+                        user_id VARCHAR(255) NOT NULL,
+                        org_id VARCHAR(255),
+                        incident_id VARCHAR(255),
+                        incident_name TEXT,
+                        incident_status VARCHAR(100),
+                        severity VARCHAR(50),
+                        incident_type VARCHAR(255),
+                        payload JSONB NOT NULL,
+                        received_at TIMESTAMP NOT NULL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_incidentio_alerts_org_incident
+                        ON incidentio_alerts(org_id, incident_id);
+                    CREATE INDEX IF NOT EXISTS idx_incidentio_alerts_user_id
+                        ON incidentio_alerts(user_id, received_at DESC);
+                    CREATE INDEX IF NOT EXISTS idx_incidentio_alerts_status
+                        ON incidentio_alerts(incident_status);
+                    CREATE INDEX IF NOT EXISTS idx_incidentio_alerts_severity
+                        ON incidentio_alerts(severity);
+                """,
                 "jenkins_deployment_events": """
                     CREATE TABLE IF NOT EXISTS jenkins_deployment_events (
                         id SERIAL PRIMARY KEY,
@@ -990,7 +1014,7 @@ def initialize_tables():
                         created_at TIMESTAMP DEFAULT NOW(),
                         updated_at TIMESTAMP DEFAULT NOW()
                     );
-                    
+
                     CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
                 """,
                 "organizations": """
@@ -1179,6 +1203,7 @@ def initialize_tables():
             rls_tables.append("netdata_alerts")
             rls_tables.append("netdata_verification_tokens")
             rls_tables.append("splunk_alerts")
+            rls_tables.append("incidentio_alerts")
             rls_tables.append("bigpanda_events")
             rls_tables.append("jenkins_deployment_events")
             rls_tables.append("spinnaker_deployment_events")

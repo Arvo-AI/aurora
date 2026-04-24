@@ -279,7 +279,7 @@ export default function GitHubProviderIntegration() {
           variant: "destructive",
           action: (
             <ToastAction altText="View setup guide"
-              onClick={() => window.open("https://github.com/arvo-ai/aurora/blob/main/server/connectors/github_connector/README.md", "_blank")}>
+              onClick={() => window.open("https://github.com/arvo-ai/aurora/blob/main/server/connectors/github_connector/README.md", "_blank", "noopener,noreferrer")}>
               <ExternalLink className="h-3 w-3 mr-1" />Setup Guide
             </ToastAction>
           ),

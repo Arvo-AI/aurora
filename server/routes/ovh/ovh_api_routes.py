@@ -25,7 +25,7 @@ from utils.web.limiter_ext import limiter
 from config.rate_limiting import OVH_READ_LIMITS
 from utils.secrets.secret_ref_utils import has_user_credentials, delete_user_secret
 from utils.db.connection_utils import set_connection_status
-from utils.web.cors_utils import create_cors_response
+from utils.log_sanitizer import sanitize
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.ssh.ssh_utils import (
     delete_ssh_credentials,
@@ -46,16 +46,14 @@ OVH_API_ENDPOINTS = {
 }
 
 
-@ovh_bp.route('/ovh/projects', methods=['GET', 'OPTIONS'])
+@ovh_bp.route('/ovh/projects', methods=['GET'])
 @limiter.limit(OVH_READ_LIMITS)
 @require_permission("connectors", "read")
 def ovh_projects_read(user_id):
     """GET /ovh_api/ovh/projects - Fetch list of OVH cloud projects."""
-    if request.method == 'OPTIONS':
-        return create_cors_response()
 
     try:
-        logger.info(f"Fetching OVH projects for user: {user_id} (from header: {request.headers.get('X-User-ID')})")
+        logger.info(f"Fetching OVH projects for user: {sanitize(user_id)} (from header: {sanitize(request.headers.get('X-User-ID'))})")
 
         token_data = get_valid_access_token(user_id)
         if not token_data:
@@ -188,7 +186,7 @@ def ovh_projects_write(user_id):
         return jsonify({"error": "Failed to save project preferences"}), 500
 
 
-@ovh_bp.route('/ovh/instances', methods=['GET', 'OPTIONS'])
+@ovh_bp.route('/ovh/instances', methods=['GET'])
 @limiter.limit(OVH_READ_LIMITS)
 @require_permission("connectors", "read")
 def ovh_instances(user_id):
@@ -210,9 +208,6 @@ def ovh_instances(user_id):
     }
     """
     # Handle CORS preflight
-    if request.method == 'OPTIONS':
-        return create_cors_response()
-    
     try:
         logger.info(f"Fetching OVH instances for user: {user_id}")
         
@@ -340,7 +335,7 @@ def save_ovh_ssh_keys(user_id, instance_id):
         return jsonify({"success": success, "message": message} if success else {"error": message}), status_code
     
     # Handle POST request
-    logger.info(f"Saving SSH key for OVH instance {instance_id}, user: {user_id}")
+    logger.info(f"Saving SSH key for OVH instance {sanitize(instance_id)}, user: {sanitize(user_id)}")
     
     data = request.get_json() or {}
     private_key = data.get("privateKey")
@@ -367,7 +362,7 @@ def save_ovh_ssh_keys(user_id, instance_id):
         except ValueError as e:
             return jsonify({"error": "Invalid private key format"}), 400
     
-    logger.info(f"Received private key for instance {instance_id}, length: {len(private_key)} chars")
+    logger.info(f"Received private key for instance {sanitize(instance_id)}, length: {len(private_key)} chars")
     
     # Fetch instance details and test SSH connection
     
@@ -380,7 +375,7 @@ def save_ovh_ssh_keys(user_id, instance_id):
     api_base_url = OVH_API_ENDPOINTS.get(endpoint)
     headers = {'Authorization': f'Bearer {access_token}', 'Content-Type': 'application/json'}
     
-    logger.info(f"Starting SSH validation for instance {instance_id}")
+    logger.info(f"Starting SSH validation for instance {sanitize(instance_id)}")
     
     # Find instance IP and determine SSH username
     instance_ip = None
@@ -463,21 +458,18 @@ def save_ovh_ssh_keys(user_id, instance_id):
     
     store_tokens_in_db(user_id, ssh_data, f"ovh_ssh_{instance_id}")
     
-    logger.info(f"Successfully saved SSH key for instance {instance_id}, user {user_id}")
+    logger.info(f"Successfully saved SSH key for instance {sanitize(instance_id)}, user {sanitize(user_id)}")
     return jsonify({
         "success": True,
         "message": f"SSH key validated and saved successfully (connected as {connected_as})"
     })
 
 
-@ovh_bp.route('/ovh/root-project', methods=['GET', 'OPTIONS'])
+@ovh_bp.route('/ovh/root-project', methods=['GET'])
 @limiter.limit(OVH_READ_LIMITS)
 @require_permission("connectors", "read")
 def ovh_root_project_read(user_id):
     """GET /ovh_api/ovh/root-project - Get current root project."""
-    if request.method == 'OPTIONS':
-        return create_cors_response()
-    
     try:
         root_project = get_user_preference(user_id, 'ovh_root_project')
         return jsonify({"root_project": root_project})
@@ -498,7 +490,7 @@ def ovh_root_project_write(user_id):
         if not project_id:
             return jsonify({"error": "projectId is required"}), 400
         
-        logger.info(f"Storing OVH root project preference: user={user_id}, project={project_id}")
+        logger.info(f"Storing OVH root project preference: user={sanitize(user_id)}, project={sanitize(project_id)}")
         store_user_preference(user_id, 'ovh_root_project', project_id)
         
         stored_value = get_user_preference(user_id, 'ovh_root_project')
@@ -714,7 +706,7 @@ def ovh_grant_access(user_id):
         return jsonify({"error": "Failed to grant OVH access"}), 500
 
 
-@ovh_bp.route('/ovh/status', methods=['GET', 'OPTIONS'])
+@ovh_bp.route('/ovh/status', methods=['GET'])
 @limiter.limit(OVH_READ_LIMITS)
 @require_permission("connectors", "read")
 def ovh_connection_status(user_id):
@@ -731,9 +723,6 @@ def ovh_connection_status(user_id):
     }
     """
     # Handle CORS preflight
-    if request.method == 'OPTIONS':
-        return create_cors_response()
-    
     try:
 
         # Check if user has OVH credentials stored
@@ -809,7 +798,7 @@ def ovh_connection_status(user_id):
         return jsonify({"error": "Failed to check OVH status"}), 500
 
 
-@ovh_bp.route('/ovh/disconnect', methods=['POST', 'OPTIONS'])
+@ovh_bp.route('/ovh/disconnect', methods=['POST'])
 @limiter.limit("5 per minute;20 per hour")
 @require_permission("connectors", "write")
 def ovh_disconnect(user_id):
@@ -824,10 +813,6 @@ def ovh_disconnect(user_id):
         "message": "OVH account disconnected successfully"
     }
     """
-    # Handle CORS preflight
-    if request.method == 'OPTIONS':
-        return create_cors_response()
-    
     try:
         logger.info(f"Disconnecting OVH account for user: {user_id}")
 

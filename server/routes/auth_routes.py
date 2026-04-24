@@ -10,7 +10,6 @@ from flask import Blueprint, request, jsonify
 from utils.db.db_utils import connect_to_db_as_user
 from utils.db.connection_pool import db_pool
 from utils.auth.rbac_decorators import require_auth_only
-from utils.web.cors_utils import create_cors_response
 import os
 
 auth_bp = Blueprint('auth', __name__, url_prefix='/api/auth')
@@ -35,11 +34,11 @@ def add_cors_headers(response):
     origin = request.headers.get('Origin', FRONTEND_URL)
     response.headers['Access-Control-Allow-Origin'] = origin
     response.headers['Access-Control-Allow-Credentials'] = 'true'
-    response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
+    response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
     response.headers['Access-Control-Allow-Headers'] = 'Content-Type, X-Provider, X-Requested-With, X-User-ID, Authorization'
     return response
 
-@auth_bp.route('/register', methods=['POST', 'OPTIONS'])
+@auth_bp.route('/register', methods=['POST'])
 def register():
     """Register a new organization with its first admin user.
 
@@ -48,9 +47,6 @@ def register():
     - Users within an existing org are created by an admin via
       /api/admin/users (invite-only).
     """
-    if request.method == 'OPTIONS':
-        return create_cors_response()
-    
     try:
         data = request.get_json()
         if not data:
@@ -162,15 +158,13 @@ def register():
         return jsonify({"error": "Registration failed"}), 500
 
 
-@auth_bp.route('/setup-org', methods=['POST', 'OPTIONS'])
+@auth_bp.route('/setup-org', methods=['POST'])
 @require_auth_only
 def setup_org(user_id):
     """Create an organization for an authenticated user who doesn't have one.
 
     Body: { org_name }
     """
-    if request.method == 'OPTIONS':
-        return create_cors_response()
     try:
         data = request.get_json()
         if not data:
@@ -273,12 +267,9 @@ def setup_org(user_id):
         return jsonify({"error": "Organization setup failed"}), 500
 
 
-@auth_bp.route('/login', methods=['POST', 'OPTIONS'])
+@auth_bp.route('/login', methods=['POST'])
 def login():
     """Authenticate user with email and password."""
-    if request.method == 'OPTIONS':
-        return create_cors_response()
-    
     try:
         data = request.get_json()
         if not data:
@@ -339,12 +330,10 @@ def login():
         return jsonify({"error": "Login failed"}), 500
 
 
-@auth_bp.route('/change-password', methods=['POST', 'OPTIONS'])
+@auth_bp.route('/change-password', methods=['POST'])
 @require_auth_only
 def change_password(user_id):
     """Change user password (requires authentication)."""
-    if request.method == 'OPTIONS':
-        return create_cors_response()
     try:
         data = request.get_json()
         if not data:
