@@ -16,7 +16,7 @@ import json
 azure_bp = Blueprint("azure_bp", __name__)
 
 # ---- Azure Routes ------------------------------------------------------#
-@azure_bp.route("/azure/login", methods=["POST", "GET"])
+@azure_bp.route("/azure/login", methods=["POST"])
 @require_permission("connectors", "write")
 def azure_login_route(user_id):
     return azure_login()
