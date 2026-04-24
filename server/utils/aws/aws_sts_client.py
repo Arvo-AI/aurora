@@ -9,7 +9,7 @@ from typing import Dict, Optional, Any
 from botocore.exceptions import ClientError, NoCredentialsError
 from dotenv import load_dotenv
 
-from utils.log_sanitizer import sanitize
+from utils.log_sanitizer import hash_for_log, sanitize
 load_dotenv()
 
 # ------------------------------------------------------------------
@@ -124,9 +124,14 @@ class STSAssumeRoleClient:
             raise ValueError(f"Workspace {workspace_id} does not have an aws_external_id configured")
         
         if external_id != workspace_external_id:
+            # Never log the expected external_id: it's the trust-policy shared
+            # secret and log-read access would turn into secret exposure. The
+            # provided value is an attacker-controlled attempt, so we only log
+            # a sanitized fingerprint to correlate repeat probes.
             logger.error(
-                f"SECURITY: External ID mismatch for workspace {sanitize(workspace_id)}. "
-                f"Provided: '{sanitize(external_id)}', Expected: '{sanitize(workspace_external_id)}'. Rejecting role assumption."
+                "SECURITY: External ID mismatch for workspace %s (provided_fp=%s). Rejecting role assumption.",
+                sanitize(workspace_id),
+                hash_for_log(external_id),
             )
             raise ValueError(
                 f"External ID mismatch. Provided external_id does not match workspace's expected external_id. "
