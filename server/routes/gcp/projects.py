@@ -1,7 +1,6 @@
 """GCP project management routes."""
 import logging
 from flask import Blueprint, request, jsonify
-from utils.web.cors_utils import create_cors_response
 from utils.auth.stateless_auth import get_user_preference
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.token_refresh import refresh_token_if_needed
@@ -167,13 +166,10 @@ def _oauth_mode_project_list(credentials, sa_email, root_project):
     return result
 
 
-@gcp_projects_bp.route("/api/gcp/sa-project-access", methods=["GET", "OPTIONS"])
+@gcp_projects_bp.route("/api/gcp/sa-project-access", methods=["GET"])
 @require_permission("connectors", "read")
 def sa_project_access_get(user_id):
     """List projects with SA access flag."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
     try:
         token_data, err = _load_gcp_token(user_id)
         if err:

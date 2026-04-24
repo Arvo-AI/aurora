@@ -145,11 +145,9 @@ def azure_clusters(user_id):
         return jsonify({"error": "Failed to fetch AKS clusters"}), 500
 
 
-@azure_bp.route("/api/azure-subscriptions", methods=["GET", "OPTIONS"])
+@azure_bp.route("/api/azure-subscriptions", methods=["GET"])
 @require_permission("connectors", "read")
 def azure_subscriptions_get(user_id):
-    if request.method == "OPTIONS":
-        return create_cors_response()
     try:
         from utils.auth.stateless_auth import get_org_id_from_request
         org_id = get_org_id_from_request()
@@ -175,7 +173,7 @@ def azure_subscriptions_post(user_id):
     try:
         data = request.get_json() or {}
         projects = data.get("projects", [])
-        logging.info(f"Azure subscription selection update received: {projects}")
+        logging.info("Azure subscription selection update received (count=%d)", len(projects))
         return jsonify({"status": "success"})
     except Exception as e:
         logging.error("Error in azure_subscriptions_post", exc_info=e)
