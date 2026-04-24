@@ -196,10 +196,11 @@ def run_prediscovery(
 
         prompt = build_prediscovery_prompt(user_id, providers, integrations)
 
+        task_id = self.request.id
         session_id = create_background_chat_session(
             user_id=user_id,
             title=f"Infrastructure Pre-Discovery ({trigger})",
-            trigger_metadata={"source": "prediscovery", "trigger": trigger},
+            trigger_metadata={"source": "prediscovery", "trigger": trigger, "task_id": task_id},
         )
 
         asyncio.run(_execute_background_chat(
@@ -237,6 +238,9 @@ def _should_run_for_user(user_id: str) -> bool:
     from utils.auth.stateless_auth import get_user_preference
     from utils.db.connection_pool import db_pool
     from datetime import datetime, timedelta
+
+    if not get_user_preference(user_id, "prediscovery_enabled", True):
+        return False
 
     interval = get_user_preference(user_id, "prediscovery_interval_hours", DEFAULT_INTERVAL_HOURS)
     interval = max(MIN_INTERVAL_HOURS, int(interval or DEFAULT_INTERVAL_HOURS))
