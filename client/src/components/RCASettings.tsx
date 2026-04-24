@@ -182,9 +182,9 @@ export function RCASettings() {
       return;
     }
 
-    // Simple email validation
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(newEmail)) {
+    // Simple email validation (length-capped per RFC 5321; `.` excluded from the middle class to avoid backtracking).
+    const emailRegex = /^[^\s@]+@[^\s@.]+\.[^\s@]+$/;
+    if (newEmail.length > 320 || !emailRegex.test(newEmail)) {
       toast({
         title: "Error",
         description: "Please enter a valid email address",
