@@ -77,7 +77,7 @@ def _build_client_from_creds(creds: Dict[str, Any]) -> Optional[NewRelicClient]:
 # ------------------------------------------------------------------
 
 
-@newrelic_bp.route("/connect", methods=["POST", "OPTIONS"])
+@newrelic_bp.route("/connect", methods=["POST"])
 @require_permission("connectors", "write")
 def connect(user_id):
     """Store and validate New Relic credentials."""
@@ -191,7 +191,7 @@ def status(user_id):
     })
 
 
-@newrelic_bp.route("/disconnect", methods=["DELETE", "POST", "OPTIONS"])
+@newrelic_bp.route("/disconnect", methods=["DELETE", "POST"])
 @require_permission("connectors", "write")
 def disconnect(user_id):
     """Remove stored New Relic credentials and backing Vault secrets."""
@@ -353,12 +353,9 @@ def list_ingested_events(user_id):
 # ------------------------------------------------------------------
 
 
-@newrelic_bp.route("/webhook/<user_id>", methods=["POST", "OPTIONS"])
+@newrelic_bp.route("/webhook/<user_id>", methods=["POST"])
 def webhook(user_id: str):
     """Receive alert notifications from New Relic and enqueue RCA processing."""
-    if request.method == "OPTIONS":
-        return jsonify({}), 200
-
     if not user_id:
         return jsonify({"error": "user_id is required"}), 400
 

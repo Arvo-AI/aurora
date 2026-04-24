@@ -107,13 +107,10 @@ def get_memory(user_id):
         return jsonify({"error": "Failed to retrieve memory"}), 500
 
 
-@knowledge_base_bp.route("/memory", methods=["PUT", "OPTIONS"])
+@knowledge_base_bp.route("/memory", methods=["PUT"])
 @require_permission("knowledge_base", "write")
 def update_memory(user_id):
     """Update user's knowledge base memory content."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
     try:
         data = request.get_json(force=True, silent=True) or {}
     except Exception:
@@ -207,13 +204,10 @@ def list_documents(user_id):
         return jsonify({"error": "Failed to list documents"}), 500
 
 
-@knowledge_base_bp.route("/upload", methods=["POST", "OPTIONS"])
+@knowledge_base_bp.route("/upload", methods=["POST"])
 @require_permission("knowledge_base", "write")
 def upload_document(user_id):
     """Upload a new document for processing."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
     org_id = get_org_id_from_request()
 
     # Check if file is in request
@@ -405,13 +399,10 @@ def get_document(user_id, doc_id: str):
         return jsonify({"error": "Failed to get document"}), 500
 
 
-@knowledge_base_bp.route("/documents/<doc_id>", methods=["DELETE", "OPTIONS"])
+@knowledge_base_bp.route("/documents/<doc_id>", methods=["DELETE"])
 @require_permission("knowledge_base", "write")
 def delete_document(user_id, doc_id: str):
     """Delete a document and its chunks."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
     org_id = get_org_id_from_request()
 
     try:
@@ -471,13 +462,10 @@ def delete_document(user_id, doc_id: str):
         return jsonify({"error": "Failed to delete document"}), 500
 
 
-@knowledge_base_bp.route("/search", methods=["POST", "OPTIONS"])
+@knowledge_base_bp.route("/search", methods=["POST"])
 @require_permission("knowledge_base", "read")
 def search_documents(user_id):
     """Search the knowledge base (for direct API usage, not agent tool)."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
     try:
         data = request.get_json(force=True, silent=True) or {}
     except Exception:

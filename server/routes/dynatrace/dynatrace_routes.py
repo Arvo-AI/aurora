@@ -99,7 +99,7 @@ def _get_stored_credentials(user_id: str) -> dict[str, Any] | None:
         return None
 
 
-@dynatrace_bp.route("/connect", methods=["POST", "OPTIONS"])
+@dynatrace_bp.route("/connect", methods=["POST"])
 @require_permission("connectors", "write")
 def connect(user_id):
     data = request.get_json(force=True, silent=True) or {}
@@ -147,7 +147,7 @@ def status(user_id):
     })
 
 
-@dynatrace_bp.route("/disconnect", methods=["POST", "DELETE", "OPTIONS"])
+@dynatrace_bp.route("/disconnect", methods=["POST", "DELETE"])
 @require_permission("connectors", "write")
 def disconnect(user_id):
     try:
@@ -163,11 +163,8 @@ def disconnect(user_id):
         return jsonify({"error": "Failed to disconnect Dynatrace"}), 500
 
 
-@dynatrace_bp.route("/webhook/<user_id>", methods=["POST", "OPTIONS"])
+@dynatrace_bp.route("/webhook/<user_id>", methods=["POST"])
 def webhook(user_id: str):
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
     creds = get_token_data(user_id, "dynatrace")
     if not creds:
         logger.warning("[DYNATRACE] Webhook received for user %s with no connection", sanitize(user_id))
@@ -272,7 +269,7 @@ def get_rca_settings(user_id):
     return jsonify({"rcaEnabled": get_user_preference(user_id, "dynatrace_rca_enabled", default=False)})
 
 
-@dynatrace_bp.route("/rca-settings", methods=["PUT", "OPTIONS"])
+@dynatrace_bp.route("/rca-settings", methods=["PUT"])
 @require_permission("connectors", "write")
 def update_rca_settings(user_id):
     data = request.get_json(force=True, silent=True) or {}

@@ -22,7 +22,7 @@ def register_rca_settings_routes(blueprint, provider: str, preference_key: str):
         rca_enabled = get_user_preference(user_id, preference_key, default=True)
         return jsonify({"rcaEnabled": rca_enabled})
 
-    @blueprint.route("/rca-settings", methods=["PUT", "OPTIONS"])
+    @blueprint.route("/rca-settings", methods=["PUT"])
     @require_permission("connectors", "write")
     def update_rca_settings(user_id):
         try:

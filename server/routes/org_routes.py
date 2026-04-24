@@ -368,13 +368,10 @@ def update_org(user_id):
         return jsonify({"error": "Failed to update organization"}), 500
 
 
-@org_bp.route("/members", methods=["POST", "OPTIONS"])
+@org_bp.route("/members", methods=["POST"])
 @require_permission("users", "manage")
 def add_member(user_id):
     """Add an existing user to this org with a role (admin only)."""
-    if request.method == "OPTIONS":
-        return jsonify({}), 200
-
     org_id = get_org_id_from_request()
     if not org_id:
         return jsonify({"error": "No organization found"}), 404
@@ -437,13 +434,10 @@ def add_member(user_id):
         return jsonify({"error": "Failed to add member"}), 500
 
 
-@org_bp.route("/members/<target_user_id>", methods=["DELETE", "OPTIONS"])
+@org_bp.route("/members/<target_user_id>", methods=["DELETE"])
 @require_permission("users", "manage")
 def remove_member(user_id, target_user_id):
     """Remove a user from this org (admin only)."""
-    if request.method == "OPTIONS":
-        return jsonify({}), 200
-
     org_id = get_org_id_from_request()
     if not org_id:
         return jsonify({"error": "No organization found"}), 404
@@ -559,13 +553,10 @@ def my_invitations(user_id):
         return jsonify({"error": "Failed to fetch invitations"}), 500
 
 
-@org_bp.route("/my-invitations/<invitation_id>/decline", methods=["POST", "OPTIONS"])
+@org_bp.route("/my-invitations/<invitation_id>/decline", methods=["POST"])
 @require_auth_only
 def decline_invitation(user_id, invitation_id):
     """Decline a pending invitation addressed to the current user."""
-    if request.method == "OPTIONS":
-        return jsonify({}), 200
-
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
@@ -595,13 +586,10 @@ def decline_invitation(user_id, invitation_id):
         return jsonify({"error": "Failed to decline invitation"}), 500
 
 
-@org_bp.route("/invitations/<invitation_id>/cancel", methods=["POST", "OPTIONS"])
+@org_bp.route("/invitations/<invitation_id>/cancel", methods=["POST"])
 @require_permission("users", "manage")
 def cancel_invitation(user_id, invitation_id):
     """Cancel a pending invitation (admin only)."""
-    if request.method == "OPTIONS":
-        return jsonify({}), 200
-
     org_id = get_org_id_from_request()
     if not org_id:
         return jsonify({"error": "No organization found"}), 404
@@ -630,13 +618,10 @@ def cancel_invitation(user_id, invitation_id):
         return jsonify({"error": "Failed to cancel invitation"}), 500
 
 
-@org_bp.route("/invitations", methods=["GET", "POST", "OPTIONS"])
+@org_bp.route("/invitations", methods=["GET", "POST"])
 @require_permission("users", "manage")
 def invitations(user_id):
     """Create or list invitations for this org (admin only)."""
-    if request.method == "OPTIONS":
-        return jsonify({}), 200
-
     org_id = get_org_id_from_request()
     if not org_id:
         return jsonify({"error": "No organization found"}), 404
@@ -756,13 +741,10 @@ def _create_invitation(org_id: str, user_id: str):
         return jsonify({"error": "Failed to create invitation"}), 500
 
 
-@org_bp.route("/join", methods=["POST", "OPTIONS"])
+@org_bp.route("/join", methods=["POST"])
 @require_auth_only
 def join_org(user_id):
     """Accept an invitation and transfer user data to the new org."""
-    if request.method == "OPTIONS":
-        return jsonify({}), 200
-
     data = request.get_json() or {}
     invitation_id = data.get("invitation_id")
     direct_org_id = data.get("org_id")
@@ -1083,13 +1065,10 @@ def get_org_preferences(user_id):
         return jsonify({"error": "Failed to fetch preferences"}), 500
 
 
-@org_bp.route("/preferences", methods=["PUT", "OPTIONS"])
+@org_bp.route("/preferences", methods=["PUT"])
 @require_permission("org", "manage")
 def update_org_preferences(user_id):
     """Update org-level preferences (admin only)."""
-    if request.method == "OPTIONS":
-        return jsonify({}), 200
-
     org_id = get_org_id_from_request()
     if not org_id:
         return jsonify({"error": "No organization found"}), 404

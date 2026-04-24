@@ -11,13 +11,10 @@ github_bp = Blueprint("github", __name__)
 FRONTEND_URL = os.getenv("FRONTEND_URL")
 GITHUB_TIMEOUT = 20
 
-@github_bp.route("/login", methods=["POST", "OPTIONS"])
+@github_bp.route("/login", methods=["POST"])
 @require_permission("connectors", "write")
 def github_login(user_id):
     """Handle GitHub OAuth login initiation and manual token storage"""
-    if request.method == 'OPTIONS':
-        return create_cors_response()
-    
     try:
         data = request.get_json()
         
@@ -132,15 +129,12 @@ def github_status(user_id):
         logging.error(f"Error checking GitHub status: {e}", exc_info=True)
         return jsonify({"connected": False, "error": "Failed to check GitHub status"}), 500
 
-@github_bp.route("/disconnect", methods=["POST", "OPTIONS"])
+@github_bp.route("/disconnect", methods=["POST"])
 @require_permission("connectors", "write")
 def github_disconnect(user_id):
     """Disconnect GitHub account for a user"""
-    if request.method == 'OPTIONS':
-        return create_cors_response()
-    
     try:
-        
+
         # Remove GitHub credentials from database and Vault
         from utils.secrets.secret_ref_utils import delete_user_secret
         
@@ -447,13 +441,10 @@ def github_token_info(user_id):
         logging.error(f"Error in token info endpoint: {e}", exc_info=True)
         return jsonify({"error": "Failed to retrieve token info"}), 500
 
-@github_bp.route("/download-repo", methods=["POST", "OPTIONS"])
+@github_bp.route("/download-repo", methods=["POST"])
 @require_permission("connectors", "read")
 def download_github_repo(user_id):
     """Download a GitHub repository as a zip file and return it"""
-    if request.method == 'OPTIONS':
-        return create_cors_response()
-        
     try:
         # Get request data
         data = request.get_json()

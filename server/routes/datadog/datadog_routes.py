@@ -281,7 +281,7 @@ def _build_client_from_creds(creds: Dict[str, Any]) -> Optional[DatadogClient]:
     return DatadogClient(api_key=api_key, app_key=app_key, site=site)
 
 
-@datadog_bp.route("/connect", methods=["POST", "OPTIONS"])
+@datadog_bp.route("/connect", methods=["POST"])
 @require_permission("connectors", "write")
 def connect(user_id):
     try:
@@ -381,7 +381,7 @@ def status(user_id):
     })
 
 
-@datadog_bp.route("/disconnect", methods=["DELETE", "POST", "OPTIONS"])
+@datadog_bp.route("/disconnect", methods=["DELETE", "POST"])
 @require_permission("connectors", "write")
 def disconnect(user_id):
     try:
@@ -411,7 +411,7 @@ def disconnect(user_id):
         return jsonify({"error": "Failed to disconnect Datadog"}), 500
 
 
-@datadog_bp.route("/logs/search", methods=["POST", "OPTIONS"])
+@datadog_bp.route("/logs/search", methods=["POST"])
 @require_permission("connectors", "read")
 def search_logs(user_id):
     creds = _get_stored_datadog_credentials(user_id)
@@ -441,7 +441,7 @@ def search_logs(user_id):
         return jsonify({"error": "Failed to search Datadog logs"}), 502
 
 
-@datadog_bp.route("/metrics/query", methods=["POST", "OPTIONS"])
+@datadog_bp.route("/metrics/query", methods=["POST"])
 @require_permission("connectors", "read")
 def query_metrics(user_id):
     creds = _get_stored_datadog_credentials(user_id)
@@ -607,11 +607,8 @@ def list_ingested_events(user_id):
         return jsonify({"error": "Failed to load Datadog webhook events"}), 500
 
 
-@datadog_bp.route("/webhook/<user_id>", methods=["POST", "OPTIONS"])
+@datadog_bp.route("/webhook/<user_id>", methods=["POST"])
 def webhook(user_id: str):
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
     if not user_id:
         logger.warning("[DATADOG] Webhook received without user_id")
         return jsonify({"error": "user_id is required"}), 400

@@ -141,13 +141,10 @@ def _fetch_page_payload(
     return page_payload, creds, None, None
 
 
-@confluence_bp.route("/connect", methods=["POST", "OPTIONS"])
+@confluence_bp.route("/connect", methods=["POST"])
 @require_permission("connectors", "write")
 def connect(user_id):
     """Connect Confluence Cloud (OAuth) or Data Center (PAT)."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
     try:
         data = request.get_json(force=True, silent=True) or {}
     except Exception:
@@ -327,13 +324,10 @@ def status(user_id):
     })
 
 
-@confluence_bp.route("/disconnect", methods=["POST", "DELETE", "OPTIONS"])
+@confluence_bp.route("/disconnect", methods=["POST", "DELETE"])
 @require_permission("connectors", "write")
 def disconnect(user_id):
     """Disconnect Confluence by removing stored credentials."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
     try:
         success, deleted_count = delete_user_secret(user_id, "confluence")
         if not success:
@@ -347,13 +341,10 @@ def disconnect(user_id):
         return jsonify({"error": "Failed to disconnect Confluence"}), 500
 
 
-@confluence_bp.route("/fetch", methods=["POST", "OPTIONS"])
+@confluence_bp.route("/fetch", methods=["POST"])
 @require_permission("connectors", "read")
 def fetch_page(user_id):
     """Fetch a Confluence page by URL and return the raw page payload."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
     try:
         data = request.get_json(force=True, silent=True) or {}
     except Exception:
@@ -369,13 +360,10 @@ def fetch_page(user_id):
     return jsonify(page_payload)
 
 
-@confluence_bp.route("/parse", methods=["POST", "OPTIONS"])
+@confluence_bp.route("/parse", methods=["POST"])
 @require_permission("connectors", "read")
 def parse_page(user_id):
     """Fetch a Confluence page and return cleaned runbook content."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
     try:
         data = request.get_json(force=True, silent=True) or {}
     except Exception:

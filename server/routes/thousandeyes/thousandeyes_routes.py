@@ -37,7 +37,7 @@ def _get_stored_credentials(user_id: str) -> Optional[Dict[str, Any]]:
 # Connection management
 # ------------------------------------------------------------------
 
-@thousandeyes_bp.route("/connect", methods=["POST", "OPTIONS"])
+@thousandeyes_bp.route("/connect", methods=["POST"])
 @require_permission("connectors", "write")
 def connect(user_id):
     payload = request.get_json(force=True, silent=True) or {}
@@ -112,7 +112,7 @@ def status(user_id):
     })
 
 
-@thousandeyes_bp.route("/disconnect", methods=["DELETE", "POST", "OPTIONS"])
+@thousandeyes_bp.route("/disconnect", methods=["DELETE", "POST"])
 @require_permission("connectors", "write")
 def disconnect(user_id):
     try:

@@ -143,13 +143,10 @@ def pagerduty_disconnect(user_id):
         return jsonify({"error": "Disconnect failed"}), 500
 
 
-@pagerduty_bp.route("/oauth/login", methods=["POST", "OPTIONS"])
+@pagerduty_bp.route("/oauth/login", methods=["POST"])
 @require_permission("connectors", "write")
 def oauth_login(user_id):
     """Initiate OAuth flow."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-    
     if not is_pagerduty_oauth_enabled():
         return jsonify({"error": "PagerDuty OAuth is not enabled"}), 403
     
@@ -240,12 +237,9 @@ def get_webhook_url(user_id):
     })
 
 
-@pagerduty_bp.route("/webhook/<user_id>", methods=["POST", "OPTIONS"])
+@pagerduty_bp.route("/webhook/<user_id>", methods=["POST"])
 def webhook(user_id: str):
     """Receive V3 webhook events from PagerDuty."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-    
     if not user_id:
         return jsonify({"error": "user_id is required"}), 400
     

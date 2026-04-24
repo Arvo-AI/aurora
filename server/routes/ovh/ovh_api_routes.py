@@ -810,7 +810,7 @@ def ovh_connection_status(user_id):
         return jsonify({"error": "Failed to check OVH status"}), 500
 
 
-@ovh_bp.route('/ovh/disconnect', methods=['POST', 'OPTIONS'])
+@ovh_bp.route('/ovh/disconnect', methods=['POST'])
 @limiter.limit("5 per minute;20 per hour")
 @require_permission("connectors", "write")
 def ovh_disconnect(user_id):
@@ -825,10 +825,6 @@ def ovh_disconnect(user_id):
         "message": "OVH account disconnected successfully"
     }
     """
-    # Handle CORS preflight
-    if request.method == 'OPTIONS':
-        return create_cors_response()
-    
     try:
         logger.info(f"Disconnecting OVH account for user: {user_id}")
 

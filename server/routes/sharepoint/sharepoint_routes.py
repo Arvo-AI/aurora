@@ -118,7 +118,7 @@ def _refresh_sharepoint_credentials(user_id: str, creds: Dict[str, Any]) -> Opti
     return updated_creds
 
 
-@sharepoint_bp.route("/connect", methods=["POST", "OPTIONS"])
+@sharepoint_bp.route("/connect", methods=["POST"])
 @require_permission("connectors", "write")
 def connect(user_id):
     """Connect SharePoint via Microsoft OAuth2."""
@@ -241,7 +241,7 @@ def _validate_sharepoint_token(user_id: str, creds: Dict[str, Any]) -> Optional[
         return None
 
 
-@sharepoint_bp.route("/disconnect", methods=["POST", "DELETE", "OPTIONS"])
+@sharepoint_bp.route("/disconnect", methods=["POST", "DELETE"])
 @require_permission("connectors", "write")
 def disconnect(user_id):
     """Disconnect SharePoint by removing stored credentials."""
@@ -279,7 +279,7 @@ def disconnect(user_id):
         return jsonify({"error": "Failed to disconnect SharePoint"}), 500
 
 
-@sharepoint_bp.route("/search", methods=["POST", "OPTIONS"])
+@sharepoint_bp.route("/search", methods=["POST"])
 @require_permission("connectors", "read")
 def search(user_id):
     """Search SharePoint for content matching query."""
@@ -307,7 +307,7 @@ def search(user_id):
     return _safe_json_response({"results": results, "count": len(results)})
 
 
-@sharepoint_bp.route("/fetch-page", methods=["POST", "OPTIONS"])
+@sharepoint_bp.route("/fetch-page", methods=["POST"])
 @require_permission("connectors", "read")
 def fetch_page(user_id):
     """Fetch a SharePoint page and return its content as markdown."""
@@ -333,7 +333,7 @@ def fetch_page(user_id):
     return _safe_json_response(result)
 
 
-@sharepoint_bp.route("/fetch-document", methods=["POST", "OPTIONS"])
+@sharepoint_bp.route("/fetch-document", methods=["POST"])
 @require_permission("connectors", "read")
 def fetch_document(user_id):
     """Fetch a SharePoint document and return extracted text."""
@@ -359,7 +359,7 @@ def fetch_document(user_id):
     return _safe_json_response(result)
 
 
-@sharepoint_bp.route("/create-page", methods=["POST", "OPTIONS"])
+@sharepoint_bp.route("/create-page", methods=["POST"])
 @require_permission("connectors", "write")
 def create_page(user_id):
     """Create a new SharePoint page."""

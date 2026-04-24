@@ -64,7 +64,7 @@ SECRET_KEY_PATTERN = re.compile(r'^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{
 UUID_PATTERN = re.compile(r'^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$')
 
 
-@scaleway_bp.route('/scaleway/connect', methods=['POST', 'OPTIONS'])
+@scaleway_bp.route('/scaleway/connect', methods=['POST'])
 @limiter.limit("5 per minute")
 @require_permission("connectors", "write")
 def scaleway_connect(user_id):
@@ -282,14 +282,11 @@ def scaleway_status(user_id):
         return jsonify({"connected": has_creds, "provider": "scaleway"}), 200
 
 
-@scaleway_bp.route('/scaleway/disconnect', methods=['POST', 'OPTIONS'])
+@scaleway_bp.route('/scaleway/disconnect', methods=['POST'])
 @limiter.limit("10 per minute")
 @require_permission("connectors", "write")
 def scaleway_disconnect(user_id):
     """Disconnect Scaleway account."""
-    if request.method == 'OPTIONS':
-        return create_cors_response()
-    
     try:
         
         # Get access_key before deleting for status update
@@ -487,7 +484,7 @@ def scaleway_instances(user_id):
         return jsonify({"error": "Failed to fetch Scaleway instances"}), 500
 
 
-@scaleway_bp.route('/scaleway/instances/<server_id>/ssh-keys', methods=['POST', 'DELETE', 'OPTIONS'])
+@scaleway_bp.route('/scaleway/instances/<server_id>/ssh-keys', methods=['POST', 'DELETE'])
 @limiter.limit("10 per minute")
 @require_permission("connectors", "write")
 def save_scaleway_ssh_keys(user_id, server_id):
@@ -507,9 +504,7 @@ def save_scaleway_ssh_keys(user_id, server_id):
         "message": "SSH key saved successfully"
     }
     """
-    if request.method == 'OPTIONS':
-        return create_cors_response()
-    
+
     try:
         
         # Validate server_id format

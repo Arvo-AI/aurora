@@ -36,13 +36,10 @@ def get_workspace_selection(user_id):
         return jsonify({"error": "Failed to get workspace selection"}), 500
 
 
-@bitbucket_selection_bp.route("/workspace-selection", methods=["POST", "PUT", "OPTIONS"])
+@bitbucket_selection_bp.route("/workspace-selection", methods=["POST", "PUT"])
 @require_permission("connectors", "write")
 def save_workspace_selection(user_id):
     """Save the Bitbucket workspace selection for a user."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
     try:
         data = request.get_json()
         if not data:
@@ -80,13 +77,10 @@ def save_workspace_selection(user_id):
         return jsonify({"error": "Failed to save workspace selection"}), 500
 
 
-@bitbucket_selection_bp.route("/workspace-selection", methods=["DELETE", "OPTIONS"])
+@bitbucket_selection_bp.route("/workspace-selection", methods=["DELETE"])
 @require_permission("connectors", "write")
 def clear_workspace_selection(user_id):
     """Clear the Bitbucket workspace selection for a user."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
     try:
         from utils.secrets.secret_ref_utils import delete_user_secret
 

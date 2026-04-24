@@ -47,7 +47,7 @@ def _get_cached_client(user_id: str) -> Optional["SpinnakerClient"]:
 # ------------------------------------------------------------------
 
 
-@spinnaker_bp.route("/connect", methods=["POST", "OPTIONS"])
+@spinnaker_bp.route("/connect", methods=["POST"])
 @require_permission("connectors", "write")
 def connect(user_id):
     """Validate and store Spinnaker credentials (token or x509)."""
@@ -166,7 +166,7 @@ def status(user_id):
     })
 
 
-@spinnaker_bp.route("/disconnect", methods=["POST", "DELETE", "OPTIONS"])
+@spinnaker_bp.route("/disconnect", methods=["POST", "DELETE"])
 @require_permission("connectors", "write")
 def disconnect(user_id):
     """Disconnect Spinnaker by removing stored credentials."""
@@ -240,7 +240,7 @@ def list_pipeline_configs(user_id, app: str):
         return jsonify({"error": "Spinnaker API request failed"}), 502
 
 
-@spinnaker_bp.route("/applications/<app>/pipelines/<name>/trigger", methods=["POST", "OPTIONS"])
+@spinnaker_bp.route("/applications/<app>/pipelines/<name>/trigger", methods=["POST"])
 @require_permission("connectors", "write")
 def trigger_pipeline(user_id, app: str, name: str):
     """Trigger a named pipeline for an application."""
@@ -280,7 +280,7 @@ def application_health(user_id, app: str):
 # ------------------------------------------------------------------
 
 
-@spinnaker_bp.route("/webhook/<user_id>", methods=["POST", "OPTIONS"], strict_slashes=False)
+@spinnaker_bp.route("/webhook/<user_id>", methods=["POST"], strict_slashes=False)
 def deployment_webhook(user_id: str):
     """Receive a deployment event webhook from Spinnaker Echo.
 
@@ -288,9 +288,6 @@ def deployment_webhook(user_id: str):
     when present.  Echo does not support HMAC signing, so the signature check is
     only enforced when the header is actually provided.
     """
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
     if not user_id or len(user_id) > 255:
         return jsonify({"error": "user_id is required"}), 400
 

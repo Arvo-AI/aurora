@@ -29,7 +29,7 @@ def _get_stored_netdata_credentials(user_id: str) -> Optional[Dict[str, Any]]:
         return None
 
 
-@netdata_bp.route("/connect", methods=["POST", "OPTIONS"])
+@netdata_bp.route("/connect", methods=["POST"])
 @require_permission("connectors", "write")
 def connect(user_id):
     """Store Netdata API token and space info."""
@@ -94,7 +94,7 @@ def status(user_id):
     })
 
 
-@netdata_bp.route("/disconnect", methods=["POST", "DELETE", "OPTIONS"])
+@netdata_bp.route("/disconnect", methods=["POST", "DELETE"])
 @require_permission("connectors", "write")
 def disconnect(user_id):
     """Disconnect Netdata by removing stored credentials."""
@@ -128,12 +128,9 @@ def disconnect(user_id):
         return jsonify({"error": "Failed to disconnect Netdata"}), 500
 
 
-@netdata_bp.route("/alerts/webhook/<user_id>", methods=["POST", "OPTIONS"])
+@netdata_bp.route("/alerts/webhook/<user_id>", methods=["POST"])
 def alert_webhook(user_id: str):
     """Receive alert webhook from Netdata."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
     if not user_id:
         logger.warning("[NETDATA] Webhook received without user_id")
         return jsonify({"error": "user_id is required"}), 400

@@ -33,7 +33,7 @@ def _get_stored_credentials(user_id: str) -> dict | None:
         return None
 
 
-@bigpanda_bp.route("/connect", methods=["POST", "OPTIONS"])
+@bigpanda_bp.route("/connect", methods=["POST"])
 @require_permission("connectors", "write")
 def connect(user_id):
     data = request.get_json(force=True, silent=True) or {}
@@ -82,7 +82,7 @@ def status(user_id):
     })
 
 
-@bigpanda_bp.route("/disconnect", methods=["POST", "DELETE", "OPTIONS"])
+@bigpanda_bp.route("/disconnect", methods=["POST", "DELETE"])
 @require_permission("connectors", "write")
 def disconnect(user_id):
     try:
@@ -116,11 +116,8 @@ def _verify_webhook_user(user_id: str) -> bool:
         return False
 
 
-@bigpanda_bp.route("/webhook/<user_id>", methods=["POST", "OPTIONS"])
+@bigpanda_bp.route("/webhook/<user_id>", methods=["POST"])
 def webhook(user_id: str):
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
     if not user_id:
         return jsonify({"error": "user_id is required"}), 400
 

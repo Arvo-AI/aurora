@@ -113,21 +113,18 @@ def get_aws_onboarding_links(user_id, workspace_id):
         return jsonify({"error": "Internal server error"}), 500
 
 
-@onboarding_bp.route('/workspaces/<workspace_id>/aws/role', methods=['POST', 'OPTIONS'])
+@onboarding_bp.route('/workspaces/<workspace_id>/aws/role', methods=['POST'])
 @require_permission("connectors", "write")
 def set_aws_role(user_id, workspace_id):
     """
     Manually set the AWS role ARN for a workspace.
-    
+
     Expected payload:
     {
         "roleArn": "arn:aws:iam::123456789012:role/AuroraRole",
         "readOnlyRoleArn": "arn:aws:iam::123456789012:role/AuroraReadOnly"  // optional
     }
     """
-    if request.method == 'OPTIONS':
-        return create_cors_response()
-    
     try:
         workspace = get_workspace_by_id(workspace_id)
         if not workspace:
@@ -306,16 +303,13 @@ def create_user_workspace(authenticated_user_id, user_id):
         return jsonify({"error": "Internal server error"}), 500
 
 
-
-@onboarding_bp.route('/workspaces/<workspace_id>/aws/cleanup', methods=['POST', 'OPTIONS'])
+@onboarding_bp.route('/workspaces/<workspace_id>/aws/cleanup', methods=['POST'])
 @require_permission("connectors", "write")
 def workspace_cleanup(user_id, workspace_id):
     """Disconnect AWS connection by removing it from user_connections (single source of truth).
-    
+
     Users must manually remove IAM roles and other AWS resources in their AWS console.
     """
-    if request.method == 'OPTIONS':
-        return create_cors_response()
 
     try:
         workspace = get_workspace_by_id(workspace_id)
@@ -398,7 +392,7 @@ def list_aws_accounts(user_id, workspace_id):
         return jsonify({"error": "Internal server error"}), 500
 
 
-@onboarding_bp.route('/workspaces/<workspace_id>/aws/accounts/bulk', methods=['POST', 'OPTIONS'])
+@onboarding_bp.route('/workspaces/<workspace_id>/aws/accounts/bulk', methods=['POST'])
 @require_permission("connectors", "write")
 def bulk_register_aws_accounts(user_id, workspace_id):
     """Register multiple AWS accounts at once.
@@ -416,9 +410,6 @@ def bulk_register_aws_accounts(user_id, workspace_id):
     Returns per-account success/failure so partially-successful bulk imports
     are surfaced clearly to the caller.
     """
-    if request.method == 'OPTIONS':
-        return create_cors_response()
-
     try:
         workspace = get_workspace_by_id(workspace_id)
         if not workspace or workspace['user_id'] != user_id:
@@ -505,13 +496,10 @@ def bulk_register_aws_accounts(user_id, workspace_id):
         return jsonify({"error": "Internal server error"}), 500
 
 
-@onboarding_bp.route('/workspaces/<workspace_id>/aws/accounts/<account_id>', methods=['DELETE', 'OPTIONS'])
+@onboarding_bp.route('/workspaces/<workspace_id>/aws/accounts/<account_id>', methods=['DELETE'])
 @require_permission("connectors", "write")
 def delete_aws_account(user_id, workspace_id, account_id):
     """Disconnect a single AWS account from the workspace."""
-    if request.method == 'OPTIONS':
-        return create_cors_response()
-
     try:
         workspace = get_workspace_by_id(workspace_id)
         if not workspace or workspace['user_id'] != user_id:
@@ -554,7 +542,7 @@ def list_inactive_aws_accounts(user_id, workspace_id):
         return jsonify({"error": "Internal server error"}), 500
 
 
-@onboarding_bp.route('/workspaces/<workspace_id>/aws/accounts/<account_id>/reconnect', methods=['POST', 'OPTIONS'])
+@onboarding_bp.route('/workspaces/<workspace_id>/aws/accounts/<account_id>/reconnect', methods=['POST'])
 @require_permission("connectors", "write")
 def reconnect_aws_account(user_id, workspace_id, account_id):
     """Reconnect a previously disconnected AWS account.
@@ -562,9 +550,6 @@ def reconnect_aws_account(user_id, workspace_id, account_id):
     Validates the role still works via STS AssumeRole, then re-activates
     the connection. No CloudFormation redeployment needed.
     """
-    if request.method == 'OPTIONS':
-        return create_cors_response()
-
     try:
         workspace = get_workspace_by_id(workspace_id)
         if not workspace or workspace['user_id'] != user_id:

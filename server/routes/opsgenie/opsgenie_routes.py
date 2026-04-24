@@ -454,7 +454,7 @@ def _build_client_from_creds(creds: Dict[str, Any]) -> Optional[Union[OpsGenieCl
 # ── Routes ────────────────────────────────────────────────────────────
 
 
-@opsgenie_bp.route("/connect", methods=["POST", "OPTIONS"])
+@opsgenie_bp.route("/connect", methods=["POST"])
 @require_permission("connectors", "write")
 def connect(user_id):
     try:
@@ -605,7 +605,7 @@ def status(user_id):
     return jsonify(result)
 
 
-@opsgenie_bp.route("/disconnect", methods=["DELETE", "POST", "OPTIONS"])
+@opsgenie_bp.route("/disconnect", methods=["DELETE", "POST"])
 @require_permission("connectors", "write")
 def disconnect(user_id):
     try:
@@ -635,11 +635,8 @@ def disconnect(user_id):
         return jsonify({"error": "Failed to disconnect OpsGenie"}), 500
 
 
-@opsgenie_bp.route("/webhook/<user_id>", methods=["POST", "OPTIONS"])
+@opsgenie_bp.route("/webhook/<user_id>", methods=["POST"])
 def webhook(user_id: str):
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
     # Check if user has OpsGenie connected
     creds = get_token_data(user_id, "opsgenie")
     if not creds:

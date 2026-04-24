@@ -69,7 +69,7 @@ def status(user_id):
     return jsonify({"connected": True})
 
 
-@grafana_bp.route("/disconnect", methods=["POST", "DELETE", "OPTIONS"])
+@grafana_bp.route("/disconnect", methods=["POST", "DELETE"])
 @require_permission("connectors", "write")
 def disconnect(user_id):
     """Disconnect Grafana by deactivating the stored connection."""
@@ -91,16 +91,13 @@ def disconnect(user_id):
         return jsonify({"error": "Failed to disconnect Grafana"}), 500
 
 
-@grafana_bp.route("/alerts/webhook/<user_id>", methods=["POST", "OPTIONS"])
+@grafana_bp.route("/alerts/webhook/<user_id>", methods=["POST"])
 def alert_webhook(user_id: str):
     """Receive alert webhook from Grafana for a specific user.
 
     Auto-creates or re-activates a connection record when needed.
     Always stores the alert; skips RCA for connection webhooks.
     """
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
     if not user_id:
         logger.warning("[GRAFANA] Webhook received without user_id")
         return jsonify({"error": "user_id is required"}), 400

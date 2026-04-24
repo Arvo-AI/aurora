@@ -62,7 +62,7 @@ def _splunk_headers(api_token: str) -> Dict[str, str]:
     }
 
 
-@search_bp.route("/search", methods=["POST", "OPTIONS"])
+@search_bp.route("/search", methods=["POST"])
 @require_permission("connectors", "read")
 def search_sync(user_id):
     """Execute a synchronous SPL search (oneshot mode)."""
@@ -150,7 +150,7 @@ def search_sync(user_id):
         return jsonify({"error": "Search request failed"}), 502
 
 
-@search_bp.route("/search/jobs", methods=["POST", "OPTIONS"])
+@search_bp.route("/search/jobs", methods=["POST"])
 @require_permission("connectors", "read")
 def create_search_job(user_id):
     """Create an asynchronous search job."""
@@ -323,7 +323,7 @@ def get_job_results(user_id, sid: str):
         return jsonify({"error": "Failed to get search results"}), 502
 
 
-@search_bp.route("/search/jobs/<sid>", methods=["DELETE", "OPTIONS"])
+@search_bp.route("/search/jobs/<sid>", methods=["DELETE"])
 @require_permission("connectors", "write")
 def cancel_job(user_id, sid: str):
     """Cancel a running search job."""

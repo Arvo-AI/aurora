@@ -19,13 +19,10 @@ logger = logging.getLogger(__name__)
 FRONTEND_URL = os.getenv("FRONTEND_URL")
 
 
-@bitbucket_bp.route("/login", methods=["POST", "OPTIONS"])
+@bitbucket_bp.route("/login", methods=["POST"])
 @require_permission("connectors", "write")
 def bitbucket_login(user_id):
     """Handle Bitbucket login - either API token or OAuth initiation."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
     try:
         data = request.get_json() or {}
 
@@ -272,13 +269,10 @@ def bitbucket_status(user_id):
         return jsonify({"connected": False, "error": "Failed to check Bitbucket status"}), 500
 
 
-@bitbucket_bp.route("/disconnect", methods=["POST", "OPTIONS"])
+@bitbucket_bp.route("/disconnect", methods=["POST"])
 @require_permission("connectors", "write")
 def bitbucket_disconnect(user_id):
     """Disconnect Bitbucket account for a user."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
     try:
         from utils.secrets.secret_ref_utils import delete_user_secret
 

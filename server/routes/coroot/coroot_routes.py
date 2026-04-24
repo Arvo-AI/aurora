@@ -55,7 +55,7 @@ def _build_client_from_creds(
 # Connection management
 # ------------------------------------------------------------------
 
-@coroot_bp.route("/connect", methods=["POST", "OPTIONS"])
+@coroot_bp.route("/connect", methods=["POST"])
 @require_permission("connectors", "write")
 def connect(user_id):
     try:
@@ -141,7 +141,7 @@ def status(user_id):
     })
 
 
-@coroot_bp.route("/disconnect", methods=["DELETE", "POST", "OPTIONS"])
+@coroot_bp.route("/disconnect", methods=["DELETE", "POST"])
 @require_permission("connectors", "write")
 def disconnect(user_id):
     try:
