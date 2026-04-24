@@ -1194,8 +1194,9 @@ def _update_session_status(session_id: str, status: str, user_id: str) -> None:
                 if not set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat]"):
                     return
                 cursor.execute(
-                    "UPDATE chat_sessions SET status = %s, updated_at = %s WHERE id = %s",
-                    (status, datetime.now(), session_id)
+                    "UPDATE chat_sessions SET status = %s, updated_at = %s "
+                    "WHERE id = %s AND status != ALL(%s)",
+                    (status, datetime.now(), session_id, list(TERMINAL_SESSION_STATUSES))
                 )
                 rows_updated = cursor.rowcount
             conn.commit()

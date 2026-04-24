@@ -65,10 +65,16 @@ def cancel_prediscovery(user_id):
                         celery_app.control.revoke(task_id, terminate=True, signal="SIGTERM")
                     except Exception as e:
                         logger.warning(f"[Prediscovery API] Failed to revoke {task_id}: {e}")
+                else:
+                    logger.warning(
+                        f"[Prediscovery API] in_progress session {session_id} has no task_id; "
+                        "any running Celery worker will not be revoked"
+                    )
                 _update_session_status(str(session_id), "cancelled", user_id=user_id)
                 cancelled.append(str(session_id))
 
-        return jsonify({"status": "cancelled", "sessions": cancelled})
+        status = "cancelled" if cancelled else "no_active_sessions"
+        return jsonify({"status": status, "sessions": cancelled})
     except Exception as e:
         logger.exception(f"[Prediscovery API] Failed to cancel: {e}")
         return jsonify({"error": "Failed to cancel discovery"}), 500
