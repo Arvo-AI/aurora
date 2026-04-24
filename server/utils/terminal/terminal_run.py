@@ -3,7 +3,7 @@
 This module provides a terminal_run() function that mimics subprocess.run() API
 but executes commands in isolated terminal pods via kubectl exec.
 
-Safety guardrails (L2 signature check + L4 LLM judge) run automatically unless
+Safety guardrails (signature matcher + LLM judge) run automatically unless
 the caller passes ``trusted=True`` for known-safe internal operations.
 """
 
@@ -66,7 +66,7 @@ def terminal_run(
     Returns:
         CompletedProcess with returncode, stdout, stderr
     """
-    # --- Safety guardrails (L2 + L4) ---
+    # --- Safety guardrails ---
     if not trusted:
         blocked = _check_guardrails(args)
         if blocked is not None:
