@@ -9,6 +9,10 @@ The underlying LLM is the same one the command-safety judge uses
 central ``create_chat_model()`` factory, so provider routing, API keys, and any
 future providers are inherited automatically.
 
+Block detection uses NeMo's structured ``triggered_input_rail`` output variable
+rather than string-matching refusal text: it is the official signal and is
+immune to model-specific wording changes.
+
 Failure policy mirrors the command-safety judge: any unexpected error blocks
 the request. Callers can detect this via ``InputRailResult.blocked`` and
 ``reason``.
@@ -22,29 +26,20 @@ from dataclasses import dataclass
 
 from langchain_core.language_models import BaseChatModel
 
+from utils.security.command_safety import _fingerprint
+
 logger = logging.getLogger(__name__)
 
 _rails_instance = None
 
-_REFUSAL_PREFIXES = ("i'm sorry", "i am sorry", "i cannot", "i can't")
-
 _FAIL_CLOSED_REASON = "input rail unavailable"
+_BLOCKED_REASON = "input flagged by safety policy"
 
 
 @dataclass(frozen=True)
 class InputRailResult:
     blocked: bool
     reason: str = ""
-
-
-def _extract_response_text(result) -> str:
-    """Pull the assistant response text out of a NeMo GenerationResponse."""
-    resp = getattr(result, "response", None)
-    if isinstance(resp, list) and resp and isinstance(resp[0], dict):
-        return resp[0].get("content", "") or ""
-    if isinstance(result, dict):
-        return result.get("content", "") or ""
-    return ""
 
 
 def _build_llm() -> BaseChatModel:
@@ -77,6 +72,19 @@ def _get_rails():
     return _rails_instance
 
 
+def _triggered_rail_name(result) -> str:
+    """Pull the ``triggered_input_rail`` output variable from a NeMo response.
+
+    Returns an empty string when the rail did not fire or the field is absent.
+    """
+    output_data = getattr(result, "output_data", None)
+    if isinstance(output_data, dict):
+        name = output_data.get("triggered_input_rail")
+        if isinstance(name, str) and name:
+            return name
+    return ""
+
+
 async def check_input(user_message: str) -> InputRailResult:
     """Run the NeMo input rail. Returns ``blocked=True`` on unsafe input.
 
@@ -93,22 +101,24 @@ async def check_input(user_message: str) -> InputRailResult:
         rails = _get_rails()
         result = await rails.generate_async(
             messages=[{"role": "user", "content": user_message}],
-            options={"rails": ["input"]},
+            options={
+                "rails": ["input"],
+                "output_vars": ["triggered_input_rail"],
+            },
         )
     except Exception:
         logger.exception("[Guardrails:InputRail] Error running input rail; failing closed")
         return InputRailResult(blocked=True, reason=_FAIL_CLOSED_REASON)
 
     latency_ms = (time.perf_counter() - t0) * 1000
-    response_text = _extract_response_text(result)
-    blocked = response_text.lower().lstrip().startswith(_REFUSAL_PREFIXES)
+    triggered = _triggered_rail_name(result)
 
-    if blocked:
+    if triggered:
         logger.warning(
-            "[Guardrails:InputRail] BLOCKED user_message=%s latency_ms=%.0f",
-            user_message[:80], latency_ms,
+            "[Guardrails:InputRail] BLOCKED msg_fp=%s msg_len=%d rail=%s latency_ms=%.0f",
+            _fingerprint(user_message), len(user_message), triggered, latency_ms,
         )
-    else:
-        logger.debug("[Guardrails:InputRail] PASSED latency_ms=%.0f", latency_ms)
+        return InputRailResult(blocked=True, reason=_BLOCKED_REASON)
 
-    return InputRailResult(blocked=blocked, reason=response_text if blocked else "")
+    logger.debug("[Guardrails:InputRail] PASSED latency_ms=%.0f", latency_ms)
+    return InputRailResult(blocked=False)
