@@ -41,7 +41,7 @@ find server/ -type f -name "*.py" -exec grep -oh \
 
 # Extract env vars from TypeScript/JavaScript code (frontend)
 # Patterns: process.env.VAR, process.env["VAR"]
-find client/ -type f \( -name "*.ts" -o -name "*.tsx" -o -name "*.js" -o -name "*.jsx" \) -exec grep -oh \
+find client/ -type f \( -name "*.ts" -o -name "*.tsx" -o -name "*.js" -o -name "*.jsx" \) -not -path "*/node_modules/*" -not -path "*/.next/*" -exec grep -oh \
   -e 'process\.env\.[A-Z_][A-Z0-9_]*' \
   -e 'process\.env\[[^]]*' \
   {} + 2>/dev/null | \
