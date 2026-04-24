@@ -11,7 +11,6 @@ from flask import Blueprint, jsonify, request
 from routes.dynatrace.tasks import process_dynatrace_problem
 from utils.db.connection_pool import db_pool
 from utils.log_sanitizer import sanitize
-from utils.web.cors_utils import create_cors_response
 from utils.auth.stateless_auth import (
     get_org_id_from_request,
     get_user_preference,
@@ -133,7 +132,7 @@ def connect(user_id):
     return jsonify({"success": True, "environmentUrl": environment_url, "version": version})
 
 
-@dynatrace_bp.route("/status", methods=["GET", "OPTIONS"])
+@dynatrace_bp.route("/status", methods=["GET"])
 @require_permission("connectors", "read")
 def status(user_id):
     creds = _get_stored_credentials(user_id)
@@ -183,7 +182,7 @@ def webhook(user_id: str):
     return jsonify({"received": True})
 
 
-@dynatrace_bp.route("/alerts", methods=["GET", "OPTIONS"])
+@dynatrace_bp.route("/alerts", methods=["GET"])
 @require_permission("connectors", "read")
 def get_alerts(user_id):
     org_id = get_org_id_from_request()
@@ -232,7 +231,7 @@ def get_alerts(user_id):
         return jsonify({"error": "Failed to fetch alerts"}), 500
 
 
-@dynatrace_bp.route("/webhook-url", methods=["GET", "OPTIONS"])
+@dynatrace_bp.route("/webhook-url", methods=["GET"])
 @require_permission("connectors", "read")
 def get_webhook_url(user_id):
     ngrok_url = os.getenv("NGROK_URL", "").rstrip("/")
@@ -263,7 +262,7 @@ def get_webhook_url(user_id):
     })
 
 
-@dynatrace_bp.route("/rca-settings", methods=["GET", "OPTIONS"])
+@dynatrace_bp.route("/rca-settings", methods=["GET"])
 @require_permission("connectors", "read")
 def get_rca_settings(user_id):
     return jsonify({"rcaEnabled": get_user_preference(user_id, "dynatrace_rca_enabled", default=False)})

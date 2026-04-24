@@ -8,20 +8,16 @@ from flask import Blueprint, jsonify, request
 
 from utils.auth.stateless_auth import get_credentials_from_db
 from utils.auth.token_management import store_tokens_in_db
-from utils.web.cors_utils import create_cors_response
 from utils.auth.rbac_decorators import require_permission
 
 bitbucket_selection_bp = Blueprint("bitbucket_selection", __name__)
 logger = logging.getLogger(__name__)
 
 
-@bitbucket_selection_bp.route("/workspace-selection", methods=["GET", "OPTIONS"])
+@bitbucket_selection_bp.route("/workspace-selection", methods=["GET"])
 @require_permission("connectors", "read")
 def get_workspace_selection(user_id):
     """Get the stored Bitbucket workspace selection for a user."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
     try:
         selection = get_credentials_from_db(user_id, "bitbucket_workspace_selection") or {}
 

@@ -9,7 +9,6 @@ from flask import Blueprint, jsonify, request
 
 from routes.splunk.tasks import process_splunk_alert
 from utils.db.connection_pool import db_pool
-from utils.web.cors_utils import create_cors_response
 from utils.auth.stateless_auth import (
     get_org_id_from_request,
     get_user_preference,
@@ -195,7 +194,7 @@ def connect(user_id):
     })
 
 
-@splunk_bp.route("/status", methods=["GET", "OPTIONS"])
+@splunk_bp.route("/status", methods=["GET"])
 @require_permission("connectors", "read")
 def status(user_id):
     """Check Splunk connection status."""
@@ -293,7 +292,7 @@ def alert_webhook(user_id: str):
     return jsonify({"received": True})
 
 
-@splunk_bp.route("/alerts", methods=["GET", "OPTIONS"])
+@splunk_bp.route("/alerts", methods=["GET"])
 @require_permission("connectors", "read")
 def get_alerts(user_id):
     """Fetch Splunk alerts for the authenticated user."""
@@ -373,7 +372,7 @@ def get_alerts(user_id):
         return jsonify({"error": "Failed to fetch alerts"}), 500
 
 
-@splunk_bp.route("/alerts/webhook-url", methods=["GET", "OPTIONS"])
+@splunk_bp.route("/alerts/webhook-url", methods=["GET"])
 @require_permission("connectors", "read")
 def get_webhook_url(user_id):
     """Get the webhook URL that should be configured in Splunk."""
@@ -403,7 +402,7 @@ def get_webhook_url(user_id):
     })
 
 
-@splunk_bp.route("/rca-settings", methods=["GET", "OPTIONS"])
+@splunk_bp.route("/rca-settings", methods=["GET"])
 @require_permission("connectors", "read")
 def get_rca_settings(user_id):
     """Get Splunk RCA settings for the authenticated user."""

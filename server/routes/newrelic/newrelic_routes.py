@@ -159,7 +159,7 @@ def connect(user_id):
     })
 
 
-@newrelic_bp.route("/status", methods=["GET", "OPTIONS"])
+@newrelic_bp.route("/status", methods=["GET"])
 @require_permission("connectors", "read")
 def status(user_id):
     """Check connection status by validating stored credentials."""
@@ -217,7 +217,7 @@ def disconnect(user_id):
 # ------------------------------------------------------------------
 
 
-@newrelic_bp.route("/webhook-url", methods=["GET", "OPTIONS"])
+@newrelic_bp.route("/webhook-url", methods=["GET"])
 @require_permission("connectors", "read")
 def webhook_url(user_id):
     """Get the webhook URL to configure in New Relic."""
@@ -251,7 +251,7 @@ def webhook_url(user_id):
 # ------------------------------------------------------------------
 
 
-@newrelic_bp.route("/issues", methods=["GET", "OPTIONS"])
+@newrelic_bp.route("/issues", methods=["GET"])
 @require_permission("connectors", "read")
 def list_issues(user_id):
     """Fetch active alert issues from New Relic via NerdGraph."""
@@ -283,7 +283,7 @@ def list_issues(user_id):
 # ------------------------------------------------------------------
 
 
-@newrelic_bp.route("/events/ingested", methods=["GET", "OPTIONS"])
+@newrelic_bp.route("/events/ingested", methods=["GET"])
 @require_permission("connectors", "read")
 def list_ingested_events(user_id):
     """List New Relic webhook events stored in the database."""

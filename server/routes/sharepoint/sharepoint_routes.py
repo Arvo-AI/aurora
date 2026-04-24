@@ -190,7 +190,7 @@ def _exchange_oauth_code(user_id: str, data: dict, code: str):
     })
 
 
-@sharepoint_bp.route("/status", methods=["GET", "OPTIONS"])
+@sharepoint_bp.route("/status", methods=["GET"])
 @require_permission("connectors", "read")
 def status(user_id):
     """Check SharePoint connection status."""
@@ -387,7 +387,7 @@ def create_page(user_id):
     return _safe_json_response(result)
 
 
-@sharepoint_bp.route("/sites", methods=["GET", "OPTIONS"])
+@sharepoint_bp.route("/sites", methods=["GET"])
 @require_permission("connectors", "read")
 def list_sites(user_id):
     """List SharePoint sites, optionally filtered by search query."""

@@ -128,7 +128,7 @@ def search(user_id):
 # GET /jira/issue/<issue_key>
 # ------------------------------------------------------------------
 
-@jira_bp.route("/issue/<issue_key>", methods=["GET", "OPTIONS"])
+@jira_bp.route("/issue/<issue_key>", methods=["GET"])
 @require_permission("connectors", "read")
 def get_issue(user_id, issue_key):
     client, creds, error = _get_jira_client(user_id)
@@ -185,7 +185,7 @@ def create_issue(user_id):
 # PATCH /jira/issue/<issue_key> (update)
 # ------------------------------------------------------------------
 
-@jira_bp.route("/issue/<issue_key>", methods=["PATCH", "OPTIONS"])
+@jira_bp.route("/issue/<issue_key>", methods=["PATCH"])
 @require_permission("connectors", "write")
 def update_issue(user_id, issue_key):
     client, creds, error = _get_jira_client(user_id)
@@ -266,7 +266,7 @@ JIRA_MODE_KEY = "jira_mode"
 VALID_MODES = ("full", "comment_only")
 
 
-@jira_bp.route("/settings", methods=["GET", "OPTIONS"])
+@jira_bp.route("/settings", methods=["GET"])
 @require_permission("connectors", "read")
 def get_settings(user_id):
     mode = get_user_preference(user_id, JIRA_MODE_KEY, default="comment_only")
@@ -296,7 +296,7 @@ def update_settings(user_id):
 # GET /jira/status
 # ------------------------------------------------------------------
 
-@jira_bp.route("/status", methods=["GET", "OPTIONS"])
+@jira_bp.route("/status", methods=["GET"])
 @require_permission("connectors", "read")
 def jira_status(user_id):
     """Check Jira connection status."""
