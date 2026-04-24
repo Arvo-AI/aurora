@@ -1176,12 +1176,15 @@ async def _execute_background_chat(
                 logger.error(f"[BackgroundChat] Failed to close weaviate client - potential connection leak: {e}")
 
 
+TERMINAL_SESSION_STATUSES = frozenset({"completed", "failed", "cancelled"})
+
+
 def _update_session_status(session_id: str, status: str, user_id: str) -> None:
     """Update the status of a chat session.
     
     Args:
         session_id: The chat session ID
-        status: New status ('in_progress', 'completed', 'failed', 'active')
+        status: New status ('in_progress', 'completed', 'failed', 'cancelled', 'active')
         user_id: User ID for RLS context (required from Celery workers)
     """
     rows_updated = 0
@@ -1201,7 +1204,7 @@ def _update_session_status(session_id: str, status: str, user_id: str) -> None:
         logger.error(f"[BackgroundChat] Failed to update session {session_id} status to '{status}': {e}")
         return
 
-    if rows_updated > 0 and status in ("completed", "failed"):
+    if rows_updated > 0 and status in TERMINAL_SESSION_STATUSES:
         _propagate_suggestion_status(session_id, status)
 
 
