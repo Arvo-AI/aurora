@@ -8,7 +8,6 @@ Rule categories map to MITRE ATT&CK techniques where applicable.
 
 import re
 from dataclasses import dataclass
-from typing import List, Tuple
 
 
 @dataclass(frozen=True)
@@ -45,12 +44,12 @@ T_ABUSE_ELEVATION = "T1548"         # Abuse Elevation Control Mechanism
 
 
 # Each rule: (compiled_pattern, technique, rule_id, description)
-_Rule = Tuple[re.Pattern, str, str, str]
+_Rule = tuple[re.Pattern, str, str, str]
 
-_RULES: List[_Rule] = []
+_RULES: list[_Rule] = []
 
 
-def _r(pattern: str, technique: str, rule_id: str, desc: str):
+def _r(pattern: str, technique: str, rule_id: str, desc: str) -> None:
     _RULES.append((re.compile(pattern, re.IGNORECASE), technique, rule_id, desc))
 
 
@@ -69,7 +68,7 @@ _r(r"\blsass\b", T_OS_CRED_LSASS, "cred-lsass", "LSASS memory access")
 
 # --- Persistence (T1053 / T1136) ---
 _r(r"\bcrontab\s+-[ei]", T_SCHED_TASK_CRON, "persist-crontab", "Crontab modification")
-_r(r"(>>?\s*~/?\.)?(bashrc|bash_profile|profile|zshrc)\b", T_BOOT_AUTOSTART_RC, "persist-shell-rc", "Shell RC file modification")
+_r(r">>?\s*(?:~|/[^\s]*)?/\.(bashrc|bash_profile|zshrc|profile)\b", T_BOOT_AUTOSTART_RC, "persist-shell-rc", "Shell RC file write/append")
 _r(r">>\s*.*authorized_keys", T_ACCOUNT_MANIP_SSH, "persist-authkeys", "Appending to authorized_keys")
 _r(r"\bsystemctl\s+(enable|start)\b.*\.(service|timer)", T_SYSTEMD_SERVICE, "persist-systemd", "Systemd unit enable/start")
 
@@ -91,7 +90,7 @@ _r(r"\b(xmrig|cpuminer|minerd)\b", T_RESOURCE_HIJACK, "mining-binary", "Cryptocu
 _r(r"stratum\+tcp://", T_RESOURCE_HIJACK, "mining-stratum", "Mining pool stratum protocol")
 
 # --- Resource destruction ---
-_r(r"\brm\s+-(?:rf|fr)\s+/(?:\s|$)", T_DATA_DESTRUCTION, "destruct-rm-root", "Recursive deletion of root filesystem")
+_r(r"\brm\s+-(?:rf|fr)\s+/(?:\s|$|['\"])", T_DATA_DESTRUCTION, "destruct-rm-root", "Recursive deletion of root filesystem")
 _r(r"\brm\s+-rf\s+/home\b", T_DATA_DESTRUCTION, "destruct-rm-home", "Recursive deletion of /home")
 _r(r"\bdd\s+if=/dev/(zero|urandom)\b", T_DISK_WIPE, "destruct-dd", "Disk overwrite with dd")
 _r(r":\s*\(\s*\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;\s*:", T_ENDPOINT_DOS, "destruct-forkbomb", "Fork bomb")

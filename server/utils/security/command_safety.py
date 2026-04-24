@@ -148,10 +148,10 @@ def check_command_safety(
             )
         return verdict
     except concurrent.futures.TimeoutError:
-        logger.error("[CommandSafety] LLM timed out after %ds", _TIMEOUT_SECONDS)
+        logger.exception("[CommandSafety] LLM timed out after %ds", _TIMEOUT_SECONDS)
         return _fail_verdict("timeout")
     except Exception as e:
-        logger.error("[CommandSafety] LLM call failed: %s", e)
+        logger.exception("[CommandSafety] LLM call failed")
         return _fail_verdict(str(e))
 
 
