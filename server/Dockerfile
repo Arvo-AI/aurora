@@ -179,6 +179,7 @@ FROM base AS prod
 COPY ./chat /app/chat/
 COPY ./config /app/config/
 COPY ./connectors /app/connectors/
+COPY ./guardrails /app/guardrails/
 COPY ./routes /app/routes/
 COPY ./services /app/services/
 COPY ./utils /app/utils/
