@@ -16,7 +16,7 @@ class GuardrailsConfig:
 
 def _load() -> GuardrailsConfig:
     return GuardrailsConfig(
-        enabled=os.getenv("GUARDRAILS_ENABLED", "false").lower() == "true",
+        enabled=os.getenv("GUARDRAILS_ENABLED", "true").lower() != "false",
         llm_model=os.getenv("GUARDRAILS_LLM_MODEL", ""),
     )
 

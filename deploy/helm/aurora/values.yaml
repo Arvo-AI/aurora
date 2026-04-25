@@ -180,7 +180,7 @@ config:
   # Input rail + signature matcher + LLM safety judge. All three activate with
   # the master switch; LLM checks fail closed. Adapted from Meta's PurpleLlama
   # (MIT licensed).
-  GUARDRAILS_ENABLED: "false"
+  GUARDRAILS_ENABLED: "true"
   # Safety judge / input rail model (provider/model format). Empty = use MAIN_MODEL.
   GUARDRAILS_LLM_MODEL: ""
 
