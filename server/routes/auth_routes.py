@@ -4,6 +4,7 @@ Replaces the previous authentication system.
 """
 import logging
 from routes.audit_routes import record_audit_event
+import hashlib
 import re
 import bcrypt
 from flask import Blueprint, request, jsonify
@@ -306,12 +307,29 @@ def login():
                 # Verify password (runs regardless of whether user exists)
                 password_valid = bcrypt.checkpw(password.encode('utf-8'), password_hash.encode('utf-8'))
                 
-                if not user or not password_valid:
+                # Resolve audit identifiers before branching so the variable
+                # lookups don't create a measurable timing difference.
+                _audit_org = (user_org_id or "") if user else ""
+                _audit_uid = user_id if user else ""
+                _login_failed = not user or not password_valid
+
+                # Always perform one DB round-trip (audit INSERT) regardless of
+                # success/failure to preserve the timing-attack protection from
+                # _DUMMY_BCRYPT_HASH.
+                if _login_failed:
+                    _detail = {"reason": "invalid_password", "email": email} if user else {
+                        "reason": "unknown_email",
+                        "email_sha256": hashlib.sha256(email[:254].lower().encode()).hexdigest(),
+                    }
+                    record_audit_event(
+                        _audit_org, _audit_uid,
+                        "login_failed", "session", None,
+                        _detail,
+                        request,
+                    )
                     return jsonify({"error": "Invalid credentials"}), 401
                 
-                logging.info(f"User logged in: {email}")
-
-                record_audit_event(user_org_id or "", user_id, "login", "session", user_id, {"email": email}, request)
+                record_audit_event(_audit_org, _audit_uid, "login", "session", _audit_uid, {"email": email}, request)
 
                 return jsonify({
                     "id": user_id,
@@ -364,8 +382,15 @@ def change_password(user_id):
                 
                 password_hash = result[0]
                 
+                from utils.auth.stateless_auth import resolve_org_id
+                org_id = resolve_org_id(user_id) or ""
+
                 # Verify current password
                 if not bcrypt.checkpw(current_password.encode('utf-8'), password_hash.encode('utf-8')):
+                    record_audit_event(
+                        org_id, user_id, "change_password_failed",
+                        "user", user_id, {"reason": "wrong_current_password"}, request,
+                    )
                     return jsonify({"error": "Current password is incorrect"}), 401
                 
                 # Hash and update new password
@@ -378,9 +403,7 @@ def change_password(user_id):
                 
                 logging.info(f"Password changed for user: {user_id}")
 
-                from utils.auth.stateless_auth import get_org_id_from_request as _get_org
-                _org = _get_org() or ""
-                record_audit_event(_org, user_id, "change_password", "user", user_id, {}, request)
+                record_audit_event(org_id, user_id, "change_password", "user", user_id, {}, request)
 
                 return jsonify({"message": "Password changed successfully"}), 200
         finally:

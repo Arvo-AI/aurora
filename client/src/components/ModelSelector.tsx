@@ -41,7 +41,7 @@ const modelPricing: Record<string, string> = {
   'openai/gpt-5.2': 'Premium Cost ($1.75/$14 per 1M)',
   'anthropic/claude-sonnet-4-5': 'Medium Cost ($3/$15 per 1M)',
   'anthropic/claude-opus-4-5': 'High Cost ($5/$25 per 1M)',
-  'google/gemini-3-pro-preview': 'Medium Cost ($1.25/$10 per 1M)',
+  'google/gemini-3.1-pro-preview': 'Medium Cost ($2/$12 per 1M)',
 };
 
 const modelOptions: ModelOption[] = [
@@ -74,9 +74,9 @@ const modelOptions: ModelOption[] = [
     isSlow: true
   },
   {
-    id: 'google/gemini-3-pro-preview',
-    name: 'gemini-3-pro-preview',
-    displayName: 'Gemini 3 Pro',
+    id: 'google/gemini-3.1-pro-preview',
+    name: 'gemini-3.1-pro-preview',
+    displayName: 'Gemini 3.1 Pro',
     provider: 'Google',
     tier: 'pro',
     contextLength: '1M',
