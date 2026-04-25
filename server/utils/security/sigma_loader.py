@@ -19,7 +19,6 @@ basename at the start of the command line. See ``_BARE_BASENAME_ALLOWED``.
 """
 
 import logging
-import os
 import re
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
@@ -31,14 +30,8 @@ logger = logging.getLogger(__name__)
 _SIGMA_DIR = Path(__file__).parent / "sigma_rules"
 
 def _load_suppressions() -> set:
-    """Load suppressed rule IDs from env var and suppressions.txt."""
+    """Load suppressed rule IDs from suppressions.txt."""
     suppressed: set = set()
-    env = os.getenv("GUARDRAILS_SIGMA_SUPPRESS", "")
-    if env:
-        for sid in env.split(","):
-            sid = sid.strip()
-            if sid:
-                suppressed.add(sid)
     supp_file = _SIGMA_DIR / "suppressions.txt"
     if supp_file.exists():
         for line in supp_file.read_text(encoding="utf-8").splitlines():
