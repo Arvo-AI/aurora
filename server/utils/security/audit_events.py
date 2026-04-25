@@ -4,10 +4,12 @@ Emits a JSON-structured log line for every block event, suitable for
 ingestion by SIEM systems. All safety layers (regex patterns, LLM judge,
 input rail, command policy) call emit_block_event() on block.
 
-Commands are never logged in raw form. Instead, a stable sha256 fingerprint
-is recorded so incidents can be correlated across layers without exposing
-attacker-controlled content (prompt-injection payloads, credentials in
-args, etc.).
+The blocked content is never logged in raw form. Instead, a stable sha256
+fingerprint is recorded as ``subject_fp`` so incidents can be correlated
+across layers without exposing attacker-controlled content (prompt-injection
+payloads, credentials in args, etc.). ``subject`` is neutral across layers:
+shell command strings for the command layers, raw user text for the input
+rail.
 """
 
 import json
@@ -27,7 +29,7 @@ def emit_block_event(
     session_id: str,
     layer: str,
     decision: str = "blocked",
-    command: str = "",
+    subject: str = "",
     tool: str = "",
     reason: str = "",
     technique: str = "",
@@ -42,11 +44,11 @@ def emit_block_event(
         "session_id": session_id or "",
         "layer": layer,
         "decision": decision,
-        "command_fp": _fingerprint(command) if command else "",
+        "subject_fp": _fingerprint(subject) if subject else "",
         "tool": tool,
         "reason": (reason or "")[:_REASON_MAX_LEN],
         "technique": technique,
         "rule_id": rule_id,
-        "latency_ms": round(latency_ms, 1),
+        "latency_ms": round(latency_ms, 2),
     }
     logger.warning("GUARDRAIL_AUDIT %s", json.dumps(event, separators=(",", ":")))

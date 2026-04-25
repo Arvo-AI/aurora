@@ -20,6 +20,7 @@ the request. Callers can detect this via ``InputRailResult.blocked`` and
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from dataclasses import dataclass
@@ -31,15 +32,27 @@ from utils.security.command_safety import _fingerprint
 logger = logging.getLogger(__name__)
 
 _rails_instance = None
+_rails_lock: asyncio.Lock | None = None
+_last_init_failure_ts: float = 0.0
+_INIT_FAILURE_BACKOFF_S = 30.0
 
 _FAIL_CLOSED_REASON = "input rail unavailable"
 _BLOCKED_REASON = "input flagged by safety policy"
+
+
+def _get_lock() -> asyncio.Lock:
+    """Create the init lock lazily so it binds to the active event loop."""
+    global _rails_lock
+    if _rails_lock is None:
+        _rails_lock = asyncio.Lock()
+    return _rails_lock
 
 
 @dataclass(frozen=True)
 class InputRailResult:
     blocked: bool
     reason: str = ""
+    latency_ms: float = 0.0
 
 
 def _build_llm() -> BaseChatModel:
@@ -55,20 +68,39 @@ def _build_llm() -> BaseChatModel:
     )
 
 
-def _get_rails():
-    """Lazily build and cache the NeMo LLMRails instance."""
-    global _rails_instance
-    if _rails_instance is not None:
-        return _rails_instance
-
+def _build_rails_sync():
+    """Blocking NeMo rails construction. Runs off the event loop via to_thread."""
     import os
 
     from nemoguardrails import LLMRails, RailsConfig
 
     config_path = os.path.join(os.path.dirname(__file__), "config")
     rails_config = RailsConfig.from_path(config_path)
+    return LLMRails(config=rails_config, llm=_build_llm())
 
-    _rails_instance = LLMRails(config=rails_config, llm=_build_llm())
+
+async def _get_rails():
+    """Lazily build and cache the NeMo LLMRails instance.
+
+    Construction is synchronous (YAML parse + model build) so we run it off
+    the event loop. Failures are negative-cached for a short window so a
+    flapping provider does not block the loop on every request.
+    """
+    global _rails_instance, _last_init_failure_ts
+    if _rails_instance is not None:
+        return _rails_instance
+
+    if time.monotonic() - _last_init_failure_ts < _INIT_FAILURE_BACKOFF_S:
+        raise RuntimeError("input rail init recently failed; backing off")
+
+    async with _get_lock():
+        if _rails_instance is not None:
+            return _rails_instance
+        try:
+            _rails_instance = await asyncio.to_thread(_build_rails_sync)
+        except Exception:
+            _last_init_failure_ts = time.monotonic()
+            raise
     return _rails_instance
 
 
@@ -98,7 +130,7 @@ async def check_input(user_message: str) -> InputRailResult:
 
     t0 = time.perf_counter()
     try:
-        rails = _get_rails()
+        rails = await _get_rails()
         result = await rails.generate_async(
             messages=[{"role": "user", "content": user_message}],
             options={
@@ -107,8 +139,9 @@ async def check_input(user_message: str) -> InputRailResult:
             },
         )
     except Exception:
+        latency_ms = (time.perf_counter() - t0) * 1000
         logger.exception("[Guardrails:InputRail] Error running input rail; failing closed")
-        return InputRailResult(blocked=True, reason=_FAIL_CLOSED_REASON)
+        return InputRailResult(blocked=True, reason=_FAIL_CLOSED_REASON, latency_ms=latency_ms)
 
     latency_ms = (time.perf_counter() - t0) * 1000
     triggered = _triggered_rail_name(result)
@@ -118,7 +151,7 @@ async def check_input(user_message: str) -> InputRailResult:
             "[Guardrails:InputRail] BLOCKED msg_fp=%s msg_len=%d rail=%s latency_ms=%.0f",
             _fingerprint(user_message), len(user_message), triggered, latency_ms,
         )
-        return InputRailResult(blocked=True, reason=_BLOCKED_REASON)
+        return InputRailResult(blocked=True, reason=_BLOCKED_REASON, latency_ms=latency_ms)
 
     logger.debug("[Guardrails:InputRail] PASSED latency_ms=%.0f", latency_ms)
-    return InputRailResult(blocked=False)
+    return InputRailResult(blocked=False, latency_ms=latency_ms)
