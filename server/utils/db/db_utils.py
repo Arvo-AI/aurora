@@ -1202,8 +1202,9 @@ def initialize_tables():
             # - audit_log: written via record_audit_event() which passes org_id explicitly;
             #   RLS would silently drop inserts when session org_id doesn't match or isn't set
             # - org_invitations: queried during invite/join flows before org context is set
-            rls_tables.append("knowledge_base_documents")
-            rls_tables.append("knowledge_base_memory")
+            # - knowledge_base_documents, knowledge_base_memory: cleanup_stale_documents
+            #   Celery task runs cross-org sweeps with no user context; needs SECURITY
+            #   DEFINER function or BYPASSRLS role before RLS can be added
             rls_tables.append("workspaces")
             rls_tables.append("aurora_deployments")
             rls_tables.append("cloud_feed_metadata")
@@ -2104,28 +2105,6 @@ def initialize_tables():
             """)
             logging.info("Added MCP token resolve RLS policies on mcp_tokens.")
 
-            conn.commit()
-
-            # SECURITY DEFINER function: allows the Celery cleanup task to
-            # update stale KB documents across all orgs without needing a
-            # BYPASSRLS role.  The function body is a fixed UPDATE — callers
-            # cannot inject arbitrary queries.
-            cursor.execute("""
-                CREATE OR REPLACE FUNCTION cleanup_stale_kb_documents()
-                RETURNS TABLE(doc_id UUID, doc_user_id VARCHAR, doc_filename VARCHAR)
-                LANGUAGE sql
-                SECURITY DEFINER
-                AS $$
-                    UPDATE knowledge_base_documents
-                    SET status = 'failed',
-                        error_message = 'Processing timed out. Please try uploading again.',
-                        updated_at = CURRENT_TIMESTAMP
-                    WHERE status IN ('processing', 'uploading')
-                      AND updated_at < CURRENT_TIMESTAMP - INTERVAL '3 minutes'
-                    RETURNING id, user_id, original_filename;
-                $$;
-            """)
-            logging.info("Created SECURITY DEFINER function cleanup_stale_kb_documents().")
             conn.commit()
 
             # Migration: Add role column to users table for RBAC

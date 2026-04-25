@@ -12,7 +12,7 @@ import logging
 
 from celery_config import celery_app
 from utils.db.connection_pool import db_pool
-from utils.auth.stateless_auth import get_org_id_for_user, set_rls_context
+from utils.auth.stateless_auth import get_org_id_for_user
 
 logger = logging.getLogger(__name__)
 
@@ -122,7 +122,8 @@ def _update_document_status(
     try:
         with db_pool.get_admin_connection() as conn:
             cursor = conn.cursor()
-            set_rls_context(cursor, conn, user_id, log_prefix="[KB Task]")
+
+            # No RLS needed — knowledge_base_documents not RLS-protected
             cursor.execute(
                 """
                 UPDATE knowledge_base_documents
@@ -139,7 +140,7 @@ def _update_document_status(
 
     except Exception as e:
         logger.error(f"[KB Task] Error updating document status: {e}")
-        raise
+        raise  # Propagate to allow retry or alerting
 
 
 def _get_document_info(document_id: str, user_id: str) -> dict | None:
@@ -154,7 +155,7 @@ def _get_document_info(document_id: str, user_id: str) -> dict | None:
     try:
         with db_pool.get_admin_connection() as conn:
             cursor = conn.cursor()
-            set_rls_context(cursor, conn, user_id, log_prefix="[KB Task]")
+            # No RLS needed — knowledge_base_documents not RLS-protected
             cursor.execute(
                 """
                 SELECT original_filename, file_type, storage_path
@@ -175,7 +176,7 @@ def _get_document_info(document_id: str, user_id: str) -> dict | None:
 
     except Exception as e:
         logger.error(f"[KB Task] Error getting document info: {e}")
-        raise
+        raise  # Re-raise to distinguish DB errors from "not found"
 
 
 def _download_file(storage_path: str) -> bytes | None:
@@ -221,9 +222,6 @@ def cleanup_stale_documents() -> dict:
     """
     Mark documents stuck in 'processing' or 'uploading' for >3 minutes as failed.
 
-    Uses the cleanup_stale_kb_documents() SECURITY DEFINER function so this
-    cross-org sweep works even though knowledge_base_documents is RLS-protected.
-
     This handles edge cases where:
     - Celery worker crashed mid-processing
     - DB update failed after max retries
@@ -232,7 +230,19 @@ def cleanup_stale_documents() -> dict:
     try:
         with db_pool.get_admin_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT * FROM cleanup_stale_kb_documents()")
+
+            # No RLS needed — knowledge_base_documents not RLS-protected
+            cursor.execute(
+                """
+                UPDATE knowledge_base_documents
+                SET status = 'failed',
+                    error_message = 'Processing timed out. Please try uploading again.',
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE status IN ('processing', 'uploading')
+                  AND updated_at < CURRENT_TIMESTAMP - INTERVAL '3 minutes'
+                RETURNING id, user_id, original_filename
+                """
+            )
             stale_docs = cursor.fetchall()
             conn.commit()
 

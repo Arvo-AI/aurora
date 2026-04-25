@@ -82,11 +82,14 @@ def build_knowledge_base_memory_segment(user_id: Optional[str]) -> str:
     kb_logger = logging.getLogger(__name__)
 
     try:
-        from utils.auth.stateless_auth import set_rls_context
-
         with db_pool.get_admin_connection() as conn:
             cursor = conn.cursor()
-            org_id = set_rls_context(cursor, conn, user_id, log_prefix="[KB Memory]")
+            # No RLS needed — users, knowledge_base_memory not RLS-protected
+            cursor.execute(
+                "SELECT org_id FROM users WHERE id = %s", (user_id,)
+            )
+            user_row = cursor.fetchone()
+            org_id = user_row[0] if user_row else None
 
             if org_id:
                 cursor.execute(
