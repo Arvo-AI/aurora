@@ -60,7 +60,7 @@ grep -v -E '^(__NEXT_|NEXT_PHASE$|NEXT_DEBUG_BUILD$|NEXT_PRIVATE_|NEXT_SSG_FETCH
 grep -v '^VERCEL' "$USED_VARS_FILE" > "${USED_VARS_FILE}.tmp" && mv "${USED_VARS_FILE}.tmp" "$USED_VARS_FILE"
 
 # System/Shell variables
-grep -v -E '^(NODE_ENV|PATH|HOME|USER|PWD|PORT)$' "$USED_VARS_FILE" > "${USED_VARS_FILE}.tmp" && mv "${USED_VARS_FILE}.tmp" "$USED_VARS_FILE"
+grep -v -E '^(NODE_ENV|NODE_PATH|PATH|HOME|USER|PWD|PORT)$' "$USED_VARS_FILE" > "${USED_VARS_FILE}.tmp" && mv "${USED_VARS_FILE}.tmp" "$USED_VARS_FILE"
 
 # Build/Test environment variables
 grep -v -E '^(DEBUG|ANALYZE|PLAYWRIGHT_BASE_URL|GITHUB_ACTIONS|CI)$' "$USED_VARS_FILE" > "${USED_VARS_FILE}.tmp" && mv "${USED_VARS_FILE}.tmp" "$USED_VARS_FILE"
